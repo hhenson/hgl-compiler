@@ -272,6 +272,7 @@ impl Program {
                 (&taken, &map),
                 &mut body,
                 graph_diagnostics,
+                &|expression| self.place(expression, &arguments, &functions),
             );
         } else {
             crate::values::record(self, &mut body, graph);

@@ -500,7 +500,7 @@ fn lifts(program: &Program, callee: &Callee) -> bool {
 /// category or fills a hole in an inferred type. In a graph this
 /// includes a no-else `if` whose type depends on the categories (CTRL-13).
 pub(crate) fn record(program: &Program, body: &mut Body, composition: bool) {
-    record_with(program, body, composition, None);
+    record_with(program, body, composition, None, None);
 }
 
 /// Settle a concrete graph with source branch and field inference available.
@@ -509,6 +509,7 @@ pub(super) fn record_with(
     body: &mut Body,
     composition: bool,
     mut typer: Option<&mut Typer<'_>>,
+    place_required: Option<&dyn Fn(&mut Expr)>,
 ) {
     use ValueCategory::{Connection, Unsettled};
     let Body { locals, statements } = body;
@@ -620,6 +621,19 @@ pub(super) fn record_with(
                         if let Some((kind, ty)) = selected {
                             value.kind = kind;
                             value.ty = ty;
+                            // GEN-16: a requirement found on replay uses
+                            // the evidence supplied to the enclosing instance.
+                            if let Some(place) = place_required
+                                && matches!(
+                                    value.kind,
+                                    ExprKind::Call {
+                                        callee: Callee::Required { .. },
+                                        ..
+                                    }
+                                )
+                            {
+                                place(value);
+                            }
                             settling = true;
                         }
                     }

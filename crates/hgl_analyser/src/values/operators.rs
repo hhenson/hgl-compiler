@@ -27,6 +27,15 @@ use crate::types::{
 };
 use crate::{codes, error};
 
+/// A deferred named call's arguments and its place as written in the
+/// generic body. Requirement matching still uses that source place.
+#[derive(Clone, Copy)]
+struct ReplayedCall<'a> {
+    arguments: &'a [hir::Argument],
+    contextual: &'a [bool],
+    source_expected: Option<&'a Type>,
+}
+
 impl<'a> Typer<'a> {
     /// The output a call of `operator` requests of its candidates
     /// (GEN-5), from what is known of the operator's generic parameters
@@ -216,7 +225,7 @@ impl<'a> Typer<'a> {
         operator: OperatorRef,
         expected: Option<&Type>,
         generics: Option<&CallArguments>,
-        replay: Option<(&[hir::Argument], &[bool])>,
+        replay: Option<ReplayedCall<'_>>,
     ) -> (ExprKind, Type) {
         let program = self.program;
         let Some(Detail::Callable(public)) = program.modules[operator.module]
@@ -418,7 +427,10 @@ impl<'a> Typer<'a> {
                 .iter()
                 .filter(|argument| value_argument(argument))
                 .collect::<Vec<_>>(),
-            (requested.as_ref(), expected),
+            (
+                requested.as_ref(),
+                replay.map_or(expected, |call| call.source_expected),
+            ),
             written_generics.as_deref(),
         ) {
             given.retain(value_argument);
@@ -521,7 +533,7 @@ impl<'a> Typer<'a> {
     }
 
     /// GEN-5 and GEN-7: reapply named selection to the original written
-    /// call with the types and categories of the cooked arguments.
+    /// call with the types and categories of its settled arguments.
     pub(super) fn settle_operator(&mut self, call: &Expr) -> Option<(ExprKind, Type)> {
         let ExprKind::Call {
             callee: Callee::DeferredOperator(deferred),
@@ -580,7 +592,11 @@ impl<'a> Typer<'a> {
             deferred.identity,
             expected.as_ref(),
             written.as_ref(),
-            Some((arguments, &deferred.contextual)),
+            Some(ReplayedCall {
+                arguments,
+                contextual: &deferred.contextual,
+                source_expected: deferred.expected.as_ref(),
+            }),
         );
         self.callable = previous;
         Some(selected)
@@ -594,7 +610,7 @@ impl<'a> Typer<'a> {
         written: impl IntoIterator<Item = (Key, SyntaxNode)>,
         context: Option<&[Option<Argument>]>,
         pack: Option<&hir::TypePackArgument>,
-        replay: Option<(&[hir::Argument], &[bool])>,
+        replay: Option<ReplayedCall<'_>>,
     ) -> Vec<Given> {
         let resolved: Vec<_> = context
             .unwrap_or_default()
@@ -622,12 +638,12 @@ impl<'a> Typer<'a> {
                         .and_then(|index| pack?.types.get(index)),
                     _ => None,
                 };
-                if let Some((arguments, contextual)) = replay {
-                    let by_place = contextual[position];
+                if let Some(replayed) = replay {
+                    let by_place = replayed.contextual[position];
                     Given {
                         key,
                         node,
-                        value: arguments[position].value.clone(),
+                        value: replayed.arguments[position].value.clone(),
                         by_place,
                         explicit: explicit.cloned(),
                         retried: by_place,

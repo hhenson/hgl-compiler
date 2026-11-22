@@ -97,6 +97,7 @@ impl GraphDestinations {
         (signature, map): (&Signature, &[(Location, &Argument)]),
         body: &mut Body,
         diagnostics: &mut Diagnostics,
+        place_required: &dyn Fn(&mut Expr),
     ) {
         // In source a later assignment may have a known category while
         // the initializer still awaits selection. The first value now
@@ -151,7 +152,7 @@ impl GraphDestinations {
                 .collect();
         }
         typer.graph = true;
-        record_with(program, body, true, Some(&mut typer));
+        record_with(program, body, true, Some(&mut typer), Some(place_required));
         typer.locals.clone_from(&body.locals);
         if !self.expressions.is_empty() {
             hir::walk_statement_nodes_mut(&mut body.statements, &mut |node| {

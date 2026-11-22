@@ -1951,6 +1951,47 @@ fn graph_instances_select_named_operators_after_types_settle() {
     );
 }
 
+/// GEN-16: the generic result place chooses among the stated calls,
+/// and the replay uses the candidate evidence already supplied to it.
+#[test]
+fn graph_instances_use_requirements_for_deferred_named_operators() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "operator shape<A, R>(input: A) -> R\n",
+        "impl const fn shape(input: i64) -> i64 => input + 1\n",
+        "impl const fn shape(input: i64) -> f64 => input + 0.5\n",
+        "fn wrapped<I, A, B>(const input: I) -> B requires shape(i64) -> A && shape(i64) -> B {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return shape(chosen)\n",
+        "}\n",
+        "fn admitted() -> f64 => wrapped<i64, i64, f64>(1)\n",
+        "fn rejected() -> str => wrapped<i64, i64, str>(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:13:25 constraint/requires.unmet GEN-3"],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    let Some(Stmt::Return {
+        value: Some(value), ..
+    }) = instance.statements.last()
+    else {
+        panic!("the graph returns the required operator's call");
+    };
+    assert!(matches!(
+        value.kind,
+        ExprKind::Call {
+            callee: Callee::Candidate { .. },
+            ..
+        }
+    ));
+    assert_eq!(value.ty.to_string(), "f64");
+}
+
 /// GEN-7 and EXPR-7: a member name and base survive the source pass
 /// until selection can check the field and choose its read form.
 #[test]

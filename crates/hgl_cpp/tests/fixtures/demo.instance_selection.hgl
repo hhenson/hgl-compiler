@@ -259,6 +259,16 @@ fn deferred_named_option<T>(const value: T) -> f64 {
     return copied
 }
 
+# GEN-16: the source result chooses the stated operation answered by this instance.
+operator shaped<A, R>(value: A) -> R
+impl const fn shaped(value: i64) -> i64 => value + 1
+impl const fn shaped(value: i64) -> f64 => value + 0.5
+
+fn deferred_named_required<I, A, B>(const value: I) -> B requires shaped(i64) -> A && shaped(i64) -> B {
+    let x = if live_helper(value) > 0 { 1 }
+    return shaped(x)
+}
+
 test an_instance_selects_unary_minus {
     assert eval deferred_negation(value: 3) == [-1]
     assert eval deferred_negation(value: 0) == []
@@ -316,6 +326,7 @@ test an_instance_settles_its_graph_conditions {
     assert eval deferred_configured_division(value: 3) == [1.25]
     assert eval deferred_named_add(value: 3) == [2]
     assert eval deferred_named_option(value: 3) == [6.5]
+    assert eval deferred_named_required<i64, i64, f64>(value: 3) == [1.5]
     assert eval loop_scalar(value: "s") == [5]
     assert eval wiring_if(value: 3) == [1]
     assert eval wiring_if(value: "s") == [-1]
