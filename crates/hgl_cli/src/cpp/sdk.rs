@@ -1374,14 +1374,18 @@ mod tests {
         }
     }
 
-    /// A library at `path`: on a Unix, a link to this test's own
-    /// executable, an object file whose headers parse whole.
+    /// A library at `path`: a link to this test's executable on Unix,
+    /// or a recognised static archive elsewhere.
     fn library(path: &Path) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(std::env::current_exe().unwrap(), path).unwrap();
         #[cfg(not(unix))]
-        fs::write(path, "").unwrap();
+        {
+            let mut archive = b"!<arch>\n".to_vec();
+            archive.extend([b' '; 60]);
+            fs::write(path, archive).unwrap();
+        }
     }
 
     /// Lays out in `directory` hgraph's libraries built for debugging, of
