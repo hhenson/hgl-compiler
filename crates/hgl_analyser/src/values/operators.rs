@@ -882,7 +882,7 @@ impl<'a> Typer<'a> {
                         by_place,
                         by_function,
                         explicit: explicit.cloned(),
-                        retried: by_place,
+                        retried: by_place || by_function,
                     }
                 } else if let Some(value) = ready {
                     Given {
@@ -922,7 +922,7 @@ impl<'a> Typer<'a> {
                         by_place: false,
                         by_function,
                         explicit: None,
-                        retried: false,
+                        retried: by_function,
                     }
                 } else if let Some(ty) = explicit {
                     let value = self.expression(&node, Some(ty));
@@ -1532,7 +1532,7 @@ impl<'a> Typer<'a> {
             .map(|given| hir::Argument {
                 parameter: None,
                 pack: None,
-                value: if given.retried {
+                value: if given.retried && !given.by_function {
                     self.expression(&given.node, Some(&Type::Unknown))
                 } else {
                     given.value

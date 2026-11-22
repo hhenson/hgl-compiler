@@ -31,7 +31,8 @@ use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{
-    Argument, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Pack, Signature, Type,
+    Argument, Constant, ConstantValue, Detail, FunctionType, GenericKind, GenericParameter, Pack,
+    Signature, Type,
 };
 use crate::{codes, error};
 
@@ -878,6 +879,7 @@ impl<'a> Typer<'a> {
                 // static argument now takes the candidate's template.
                 let mut input = if given.by_function
                     && let Type::Function(template) = ty
+                    && (given.retried || !keeps_function_read(&given.value, template))
                 {
                     self.operator_function_argument(
                         &given.node,
@@ -895,6 +897,9 @@ impl<'a> Typer<'a> {
                 }
                 if let Some(selecting) = &mut selecting {
                     selecting.arguments[position].value = input.clone();
+                    if given.by_function {
+                        selecting.arguments[position].retried = false;
+                    }
                 }
                 let value = if matches!(input.kind, ExprKind::StaticCallable(_)) {
                     input
@@ -1365,13 +1370,7 @@ impl<'a> Typer<'a> {
             let Type::Function(template) = substitute_within(&parameter.ty, &map) else {
                 return None;
             };
-            if let Type::Function(actual) = given.ty()
-                && whole(given.ty())
-                && template.value == actual.value
-                && template.parameters.iter().all(|input| whole(input.ty()))
-                && template.result.as_ref().is_none_or(whole)
-                && matches_template(&template, actual)
-            {
+            if keeps_function_read(&given.value, &template) {
                 checking[position].value = given.value.clone();
                 continue;
             }
@@ -1707,7 +1706,7 @@ impl<'a> Typer<'a> {
                         ty: in_place(&given.value.ty),
                         ..given.value.clone()
                     });
-                given.retried = false;
+                given.retried &= given.by_function;
                 given
             })
             .collect();
@@ -1750,9 +1749,11 @@ impl<'a> Typer<'a> {
                 // place. Its HIR can contain local declarations and nested
                 // calls that the instance walk specializes in turn.
                 for (given, &place) in given.iter_mut().zip(&chosen.bound) {
-                    given.retried = given.by_place
-                        && parameter_type(&chosen.taken, &chosen.type_packs, place)
-                            .is_some_and(|ty| ty != given.ty() || !whole(given.ty()));
+                    if !given.by_function {
+                        given.retried = given.by_place
+                            && parameter_type(&chosen.taken, &chosen.type_packs, place)
+                                .is_some_and(|ty| ty != given.ty() || !whole(given.ty()));
+                    }
                 }
             }
             return AtInstance::Selected(Box::new(chosen), given);
@@ -2537,6 +2538,20 @@ impl CallbackRequest<'_> {
                 _ => false,
             }
     }
+}
+
+/// An already typed static argument can keep its body and captures when
+/// the candidate gives the same complete function context (FN-17, GEN-7).
+fn keeps_function_read(value: &Expr, template: &FunctionType) -> bool {
+    let Type::Function(actual) = &value.ty else {
+        return false;
+    };
+    matches!(value.kind, ExprKind::StaticCallable(_))
+        && whole(&value.ty)
+        && template.value == actual.value
+        && template.parameters.iter().all(|input| whole(input.ty()))
+        && template.result.as_ref().is_none_or(whole)
+        && matches_template(template, actual)
 }
 
 /// What an argument of a call is given to in a candidate.

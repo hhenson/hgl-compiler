@@ -9,6 +9,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
 use super::arguments::{Slot, Takes};
+use crate::declared::substitute_within;
 use crate::hir::{
     Body, Callee, ExprKind, Form, LocalId, Node, NodeMut, Stmt, ValueCategory,
     walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
@@ -55,11 +56,21 @@ impl Typer<'_> {
     /// The type written on an anonymous parameter or result (FN-7).
     pub(super) fn anonymous_type(&self, annotation: &SyntaxNode) -> Option<Type> {
         let ty = annotation.children().find(|part| is_type(part.kind()))?;
-        Some(
-            self.written
-                .get(&(self.file, ty.span().start))
-                .map_or(Type::Unknown, |ty| (*ty).clone()),
-        )
+        let ty = self
+            .written
+            .get(&(self.file, ty.span().start))
+            .map_or(Type::Unknown, |ty| (*ty).clone());
+        if self.instance.is_empty() {
+            return Some(ty);
+        }
+        // GEN-7: a callback tested in a concrete instance reads its
+        // written annotations with the enclosing instance's types.
+        let map: Vec<_> = self
+            .instance
+            .iter()
+            .map(|(at, argument)| (*at, argument))
+            .collect();
+        Some(substitute_within(&ty, &map))
     }
 
     /// The body of the anonymous function, read where it is written,
