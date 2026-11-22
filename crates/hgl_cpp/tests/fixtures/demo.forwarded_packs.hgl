@@ -105,3 +105,14 @@ fn graph_context<...Args>(values: ...Args) -> i64 {
 test forward_graph_inference {
     assert eval graph_context([2]) == [3]
 }
+
+fn node_context<...Args>(values: ...Args) -> i64 {
+    when {
+        let item = generic_id(...values)
+        return item + 1
+    }
+}
+
+test forward_hook_inference {
+    assert eval node_context([2, 3]) == [3, 4]
+}

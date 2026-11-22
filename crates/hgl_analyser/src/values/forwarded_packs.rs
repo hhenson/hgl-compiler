@@ -148,9 +148,9 @@ fn is_forwarded_call(value: &Expr) -> bool {
 
 /// Reread a deferred call with the concrete pack inputs (FN-19).
 ///
-/// A value body where a call's result type also depends on its pack
-/// needs its source scope checked with that result in place. Returns
-/// whether the caller must specialize that newly read body.
+/// A value body or node hook where a call's result type also depends
+/// on its pack needs its source scope checked with that result in place.
+/// Returns whether the caller must specialize that newly read body.
 pub(crate) fn resolve_forwarded_calls(
     program: &crate::Program,
     (module, declaration): (usize, usize),
@@ -182,8 +182,10 @@ pub(crate) fn resolve_forwarded_calls(
         calls: &calls,
         selecting: &selecting,
     };
+    let phase = owner.phases[declaration];
+    let graph = phase == Some(crate::program::Phase::Graph);
     let mut needs_scope = false;
-    if declared.kind.role() == Some(crate::program::Role::Value) {
+    if !graph {
         crate::hir::walk_statements(&body.statements, &mut |value| {
             needs_scope |= is_forwarded_call(value) && !super::fit::whole(&value.ty);
         });
@@ -202,13 +204,19 @@ pub(crate) fn resolve_forwarded_calls(
     typer.pack_inputs = Some(inputs.to_vec());
     typer.pack_functions = functions.to_vec();
     if needs_scope {
-        if let Some(reread) = typer.body() {
+        let reread = match phase {
+            Some(crate::program::Phase::Node) if crate::phases::is_source(declared) => {
+                typer.source()
+            }
+            Some(crate::program::Phase::Node) => typer.node(),
+            _ => typer.body(),
+        };
+        if let Some(reread) = reread {
             *body = reread;
             return true;
         }
         return false;
     }
-    let graph = owner.phases[declaration] == Some(crate::program::Phase::Graph);
     crate::hir::walk_statements_mut(&mut body.statements, &mut |value| {
         let ExprKind::Call {
             callee: Callee::DeferredPackCall(call),
@@ -432,6 +440,9 @@ pub(super) fn check_instances(
             );
             seen.push(instance);
             for report in graph_reports.as_slice() {
+                if diagnostics.as_slice().contains(report) {
+                    continue;
+                }
                 let mut report = report
                     .clone()
                     .with_related(report.primary, "the forwarded call is written here");
