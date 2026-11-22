@@ -41,6 +41,7 @@ use std::process::Command;
 use serde_json::Value;
 
 use super::build::{lock, quoted, write_if_changed};
+use super::stamp::file_digest;
 
 /// The variable that names hgraph's C++ SDK.
 pub(super) const SDK: &str = "HGL_HGRAPH_SDK";
@@ -233,7 +234,7 @@ pub(super) struct Toolchain {
     /// Its version, as [`Family::identify`] gives it.
     version: String,
     /// `ninja`.
-    pub(super) ninja: PathBuf,
+    ninja: Option<PathBuf>,
     /// True where the family links with `ld.lld` and it is on the
     /// `PATH`, and links are made with it.
     lld: bool,
@@ -288,10 +289,7 @@ impl Toolchain {
         )?;
         let family = Family::of_platform();
         let (compiler, version) = compiler(family)?;
-        let ninja = which::which("ninja").map_err(|_| {
-            "`ninja` is not on the PATH: the cpp target builds with it (https://ninja-build.org)"
-                .to_string()
-        })?;
+        let ninja = which::which("ninja").ok();
         let flags = std::env::var(FLAGS)
             .unwrap_or_default()
             .split_whitespace()
@@ -309,11 +307,19 @@ impl Toolchain {
         })
     }
 
+    /// Ninja is needed on a build miss, after reuse has been considered.
+    pub(super) fn ninja(&self) -> Result<&Path, String> {
+        self.ninja.as_deref().ok_or_else(|| {
+            "`ninja` is not on the PATH: the cpp target builds with it (https://ninja-build.org)"
+                .to_string()
+        })
+    }
+
     /// The name of the directory what is made for this toolchain is
     /// kept in: a hash of all it depends on. The hash is the standard
     /// library's, which may change with Rust's release: a cache made by
     /// an `hgl` built with another is then made again.
-    fn key(&self) -> String {
+    pub(super) fn key(&self) -> String {
         let mut hash = DefaultHasher::new();
         FORMAT.hash(&mut hash);
         for path in [&self.sdk, &self.deps, &self.compiler] {
@@ -334,10 +340,8 @@ impl Toolchain {
             format!("lib/libhgraph_runtime{suffix}"),
             format!("lib/libhgraph_wiring{suffix}"),
         ] {
-            if let Ok(metadata) = fs::metadata(self.sdk.join(&file)) {
-                metadata.len().hash(&mut hash);
-                metadata.modified().ok().hash(&mut hash);
-            }
+            let digest = file_digest(&self.sdk.join(file)).ok();
+            digest.as_ref().map(blake3::Hash::as_bytes).hash(&mut hash);
         }
         hgl_cpp::runtime::FILES.hash(&mut hash);
         format!("{:016x}", hash.finish())
@@ -347,7 +351,12 @@ impl Toolchain {
     /// time it is asked for and read from there after (see the head of
     /// this file). `jobs` is how many jobs a build may run at once, as
     /// `ninja -j` takes it; `None` for the build's own choice.
-    pub(super) fn prepare(&self, cache: &Path, jobs: Option<&str>) -> Result<Description, String> {
+    pub(super) fn prepare(
+        &self,
+        cache: &Path,
+        key: &str,
+        jobs: Option<&str>,
+    ) -> Result<Description, String> {
         if !hgl_cpp::runtime::available() {
             return Err(
                 "this hgl was built without the C++ runtime library: `runtime/cpp` was not in \
@@ -355,15 +364,13 @@ impl Toolchain {
                     .to_string(),
             );
         }
-        let directory = cache.join("toolchains").join(self.key());
+        let directory = cache.join("toolchains").join(key);
         fs::create_dir_all(&directory)
             .map_err(|error| format!("{} could not be made: {error}", directory.display()))?;
         // Two runs that both find the toolchain unprepared make it once.
         let _held = lock(&directory)?;
         let described = directory.join(DESCRIPTION);
-        if let Ok(text) = fs::read_to_string(&described)
-            && let Some(description) = read_description(&text)
-        {
+        if let Some(description) = self.prepared(cache, key) {
             return Ok(description);
         }
         let cmake = which::which("cmake").map_err(|_| {
@@ -389,12 +396,22 @@ impl Toolchain {
         Ok(description)
     }
 
+    /// Reads a toolchain that has already been prepared. Its description
+    /// is published by an atomic rename after preparation succeeds.
+    pub(super) fn prepared(&self, cache: &Path, key: &str) -> Option<Description> {
+        let text = fs::read_to_string(cache.join("toolchains").join(key).join(DESCRIPTION)).ok()?;
+        let description = read_description(&text)?;
+        let pch =
+            Path::new(&description.header).with_extension(self.family.precompiled_extension());
+        pch.is_file().then_some(description)
+    }
+
     /// The flags every CMake configure of this toolchain is given.
-    fn configure_flags(&self) -> Vec<String> {
-        vec![
+    fn configure_flags(&self) -> Result<Vec<String>, String> {
+        Ok(vec![
             "-G".to_string(),
             "Ninja".to_string(),
-            format!("-DCMAKE_MAKE_PROGRAM={}", self.ninja.display()),
+            format!("-DCMAKE_MAKE_PROGRAM={}", self.ninja()?.display()),
             format!("-DCMAKE_CXX_COMPILER={}", self.compiler.display()),
             // The flags are these and no others: CMake would otherwise
             // take `CXXFLAGS` and `LDFLAGS` from the environment, which
@@ -404,7 +421,7 @@ impl Toolchain {
             "-DCMAKE_SHARED_LINKER_FLAGS=".to_string(),
             format!("-D{SDK}={}", self.sdk.display()),
             format!("-D{DEPS}={}", self.deps.display()),
-        ]
+        ])
     }
 
     /// Writes out the runtime library's sources under `directory`, and
@@ -442,7 +459,7 @@ impl Toolchain {
             .arg(&source)
             .arg("-B")
             .arg(&build)
-            .args(self.configure_flags())
+            .args(self.configure_flags()?)
             .arg("-DCMAKE_BUILD_TYPE=Release")
             .arg(format!("-DCMAKE_INSTALL_PREFIX={}", installed.display()))
             // The library is installed in `lib` on every system, where the
@@ -489,7 +506,7 @@ impl Toolchain {
             .arg(&source)
             .arg("-B")
             .arg(&build)
-            .args(self.configure_flags())
+            .args(self.configure_flags()?)
             .arg(format!("-DHGL_RUNTIME={}", runtime.display()));
         run("the description of a build against the SDK", &mut configure)?;
         let target = probe_target(&build.join(".cmake/api/v1/reply"))?;
