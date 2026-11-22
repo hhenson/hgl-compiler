@@ -1410,11 +1410,10 @@ source and its conformance cases there is none. Core declares the public
 endpoint functions. The analyser recognises endpoint forms such as the
 `valid` and `modified` selectors and `scheduled()` in a node (TIME-9).
 A call to core's `is_active` follows ordinary name and argument binding.
-`types(Ts)` and
-`schemas(pack)` are forms of the language too (GEN-9, GEN-10), which no
-pass reads yet: neither name is reported. A program given with no module
-`core` has no prelude and is no whole program: its unbound names are
-listed in the analysed program and not reported.
+The resolver leaves the language forms `types(Ts)` and `schemas(pack)` to
+their own checks (GEN-9, GEN-10). Value checking rejects a borrowed schema
+view in an ordinary value context. A program without `core` has no prelude.
+Its unbound names are listed in the analysed program.
 
 ### Leaving declarations out
 
