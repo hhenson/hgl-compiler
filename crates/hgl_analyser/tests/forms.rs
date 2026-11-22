@@ -127,6 +127,49 @@ fn pack_parameters_are_accepted_in_their_forms() {
     assert_eq!(checked.summary(), NONE);
 }
 
+/// FN-8: the second pack of either kind is reported at its name. A
+/// declaration may have one positional and one named pack together.
+#[test]
+fn a_declaration_accepts_one_pack_of_each_kind() {
+    let checked = module(concat!(
+        "const fn either(a: ...i64{0:1}, b: ...i64{0:1}) -> i64 => 0\n",
+        "const fn named_twice<...Fs, ...Gs>(a: ...{Fs}, b: ...{Gs}) -> i64 => 0\n",
+        "const fn both<...Fields>(items: ...i64, named: ...{Fields}) -> i64 => 0\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:33 type/pack.duplicate FN-8",
+            "m.hgl:3:48 type/pack.duplicate FN-8",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6: a fixed parameter cannot replace a pack. A pack with
+/// cardinality one is legal, including in a candidate with configuration.
+#[test]
+fn a_candidate_keeps_the_operator_pack_slot() {
+    let checked = module(concat!(
+        "operator first_of<T>(values: ...T{1:*}) -> T\n",
+        "impl const fn first_of(values: i64) -> i64 => values\n",
+        "impl const fn first_of(values: ...i64{1}) -> i64 => 0\n",
+        "operator configured{offset: i64 = 1}(items: ...i64) -> i64\n",
+        "impl const fn configured{extra: i64 = 2, offset: i64}(item: i64) -> i64 => item\n",
+        "impl const fn configured{extra: i64 = 2, offset: i64}(items: ...i64{1}) -> i64 => offset\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:24 operator/impl.pack GEN-6",
+            "m.hgl:6:55 operator/impl.pack GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// FN-8 and GEN-10: capture in written order, keeping the pack slot,
 /// positional indexes or named keys, and the resolved argument types.
 #[test]
@@ -267,6 +310,34 @@ fn a_written_type_checks_the_argument_in_its_pack_position() {
             "m.hgl:5:37 type/type.mismatch EXPR-5",
             "m.hgl:6:41 type/pack.cardinality GEN-10",
             "m.hgl:7:44 type/pack.cardinality GEN-10",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-8 and EXPR-9: a type pack must resolve every captured type.
+/// An explicit positional type or an already typed named value can
+/// give a literal the context it needs.
+#[test]
+fn a_type_pack_cannot_infer_from_untyped_arguments() {
+    let checked = module(concat!(
+        "const fn positional<...Ts>(items: ...Ts) -> i64 => 0\n",
+        "const fn named<...Ts>(items: ...{Ts}) -> i64 => 0\n",
+        "const fn null_pos() -> i64 => positional(null)\n",
+        "const fn empty_pos() -> i64 => positional([])\n",
+        "const fn result_pos() -> i64 => positional(ok(1))\n",
+        "const fn null_named() -> i64 => named(x: null)\n",
+        "const fn explicit() -> i64 => positional<i64?, list<i64>, result<i64, error>>(null, [], ok(1))\n",
+        "const fn typed(item: i64?) -> i64 => named(x: item)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:31 type/generic.unresolved GEN-8",
+            "m.hgl:5:43 type/sequence.context_type EXPR-9",
+            "m.hgl:6:33 type/generic.unresolved GEN-8",
+            "m.hgl:7:33 type/generic.unresolved GEN-8",
         ],
         "{}",
         checked.report
