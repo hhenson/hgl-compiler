@@ -1726,6 +1726,34 @@ fn ranges_and_list_comprehensions_run_on_the_sdk() {
     );
 }
 
+/// GEN-7, GEN-13 and TYPE-10: an inferred list size is an integer
+/// constant in value code, a node handler and graph composition.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn inferred_list_sizes_are_values_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("list-size-values");
+    let file = write(
+        &root,
+        "demo.list_size_values.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.list_size_values.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-19: value, operator and callback calls forward a pack; graph
 /// calls forward the individual connections. Constructors, defaults and
 /// lexical captures retain the concrete shape (FN-8, FN-14, TYPE-5).

@@ -432,6 +432,9 @@ impl Reader<'_> {
             Err(_) => ConstantValue::Unknown,
         };
         self.note_values_in(node);
+        if let ConstantValue::Parameter { at, .. } = &value {
+            self.note_list_size(*at);
+        }
         Constant {
             text: text_of(node),
             value,
