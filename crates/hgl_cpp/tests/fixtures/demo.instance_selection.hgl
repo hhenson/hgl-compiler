@@ -303,6 +303,31 @@ fn deferred_generic_result<T>(const value: T) -> i64 {
     return copied
 }
 
+# GEN-2, GEN-12 and EXPR-9: the first argument fixes the element type
+# of the later list literal, including one with no entries.
+const fn first_fallback<U>(input: U, fallback: list<U>) -> U {
+    for item in fallback { return item }
+    return input
+}
+
+fn deferred_contextual_list<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let from_input = first_fallback(chosen, [])
+    let from_list = first_fallback(chosen, [2])
+    return from_input * 10 + from_list
+}
+
+# ERR-2: the generic result gives ok its success and error types.
+const fn preferred_result<U>(input: U, preferred: result<U, error>) -> U {
+    if is_ok(preferred) { return preferred.value }
+    return input
+}
+
+fn deferred_contextual_result<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    return preferred_result(chosen, ok(2))
+}
+
 # ERR-2: the local keeps its inferred result's type at both consumers.
 const fn boxed_result<U>(value: U) -> result<U, error> => ok(value)
 
@@ -418,6 +443,8 @@ test an_instance_settles_its_graph_conditions {
     assert eval deferred_member(value: 3) == [3]
     assert eval deferred_enum_constructor(value: "s") == [GraphSide.left]
     assert eval deferred_generic_result(value: 3) == [1]
+    assert eval deferred_contextual_list(value: 3) == [12]
+    assert eval deferred_contextual_result(value: 3) == [2]
     assert eval deferred_result_data(value: 3) == [ok(1)]
     assert eval deferred_result_payload(value: 3) == [1]
     assert eval deferred_dictionary_data(value: 3) == [["key": 1]]
