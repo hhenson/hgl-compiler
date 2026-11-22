@@ -1769,6 +1769,58 @@ fn graph_instances_select_unary_minus_after_types_settle() {
     assert!(called(&checked, &instance).contains(&"neg_(i64)".to_string()));
 }
 
+/// EXPR-10 and EXPR-13: options survive instance selection, retain their
+/// written order, and get the same checks as on a source-known symbol.
+#[test]
+fn graph_instances_select_configured_symbols_after_types_settle() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn close<T, const Tolerance: f64 = 0.1>(const input: T) -> bool {\n",
+        "    let chosen = if predicate(input) { 2.5 }\n",
+        "    return chosen =={rel: 0.0, abs: {\n",
+        "        let observer = Tolerance + 0.1\n",
+        "        1\n",
+        "    }} 2.55\n",
+        "}\n",
+        "fn incompatible<T>(const input: T) -> bool {\n",
+        "    let chosen = if predicate(input) { 2.5 }\n",
+        "    return chosen =={abs: \"x\"} 2.55\n",
+        "}\n",
+        "fn accepted() -> bool => close(1)\n",
+        "fn rejected() -> bool => incompatible(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:17:26 operator/operator.no_candidate OPS-2"],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    let Some(Stmt::Return {
+        value: Some(value), ..
+    }) = instance.statements.last()
+    else {
+        panic!("return with the specialized comparison");
+    };
+    let ExprKind::Call {
+        callee: Callee::Candidate { .. },
+        arguments,
+        ..
+    } = &value.kind
+    else {
+        panic!("comparison candidate: {:?}", value.kind);
+    };
+    let slots: Vec<_> = arguments
+        .iter()
+        .map(|argument| argument.parameter)
+        .collect();
+    assert_eq!(slots, [Some(0), Some(3), Some(2), Some(1)]);
+    assert!(matches!(arguments[2].value.kind, ExprKind::Block { .. }));
+    assert_eq!(arguments[2].value.ty.to_string(), "f64");
+}
+
 /// GEN-7 and EXPR-7: a member name and base survive the source pass
 /// until selection can check the field and choose its read form.
 #[test]

@@ -269,7 +269,7 @@ impl Program {
             destinations.settle(
                 self,
                 (module, declaration),
-                &taken,
+                (&taken, &map),
                 &mut body,
                 graph_diagnostics,
             );
@@ -463,7 +463,12 @@ impl Program {
     /// `ty`, as the expression that reads it, written at `at`: `None`
     /// for one whose value is not held. A list and a tuple are each
     /// element as its own expression.
-    fn constant(&self, value: &ConstantValue, ty: &Type, at: Location) -> Option<ExprKind> {
+    pub(crate) fn constant(
+        &self,
+        value: &ConstantValue,
+        ty: &Type,
+        at: Location,
+    ) -> Option<ExprKind> {
         // TYPE-14: "`T?` denotes an ordinary value that is either a T or
         // null": a value of it other than null is a T.
         let of = match ty {

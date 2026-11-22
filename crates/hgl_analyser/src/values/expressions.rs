@@ -17,7 +17,7 @@ use crate::hir::{
 };
 use crate::program::{Binding, LocalKind};
 use crate::syntax::{child, name_token, tokens, ungrouped};
-use crate::types::{ConstantValue, Detail, GenericKind, Scalar, Type};
+use crate::types::{Argument, ConstantValue, Detail, GenericKind, Scalar, Type};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -322,10 +322,24 @@ impl<'a> Typer<'a> {
             .find(|generic| generic.at == *declared);
         match generic.map(|generic| &generic.kind) {
             Some(GenericKind::Value(ty)) => Expr {
-                kind: ExprKind::GenericValue {
-                    name: name.text().to_string(),
-                    at: *declared,
-                },
+                kind: self
+                    .instance
+                    .iter()
+                    .find_map(|(parameter, argument)| {
+                        // GEN-13: a contextual argument reread in an instance
+                        // can use a value the instance has already supplied.
+                        if parameter == declared
+                            && let Argument::Constant(given) = argument
+                        {
+                            self.program.constant(&given.value, ty, at)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| ExprKind::GenericValue {
+                        name: name.text().to_string(),
+                        at: *declared,
+                    }),
                 ty: ty.clone(),
                 at,
                 category: ValueCategory::Unsettled,

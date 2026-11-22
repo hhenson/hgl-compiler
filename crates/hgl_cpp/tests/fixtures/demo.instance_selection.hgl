@@ -209,9 +209,29 @@ fn deferred_negation<T>(const value: T) -> i64 {
     return y
 }
 
+# EXPR-10: candidate options also survive a deferred unary or binary operand.
+impl const fn neg_(value: i64, twice: bool) -> i64 => if twice { 0 - 2 * value } else { 0 - value }
+
+fn deferred_configured_negation<T>(const value: T) -> i64 {
+    let x = if live_helper(value) > 0 { 2 }
+    return -{twice: true} x
+}
+
+fn deferred_configured_comparison<T>(const value: T) -> bool {
+    let x = if live_helper(value) > 0 { 2.5 }
+    return x =={rel: 0.0, abs: 0.1} 2.55
+}
+
+# GEN-8: a named generic option can forward an instance constant.
+fn deferred_configured_division<T, const Policy: ZeroPolicy = .ieee>(const value: T) -> f64 {
+    let x = if live_helper(value) > 0 { 2.5 }
+    return x /{zero: Policy} 2
+}
+
 test an_instance_selects_unary_minus {
     assert eval deferred_negation(value: 3) == [-1]
     assert eval deferred_negation(value: 0) == []
+    assert eval deferred_configured_negation(value: 3) == [-4]
 }
 
 # TYPE-7: an ordinary instance settles and narrows the operand of a
@@ -251,6 +271,8 @@ fn selected_case<T>(const value: T) -> i64 {
 }
 
 test an_instance_settles_its_graph_conditions {
+    assert eval deferred_configured_comparison(value: 3) == [true]
+    assert eval deferred_configured_division(value: 3) == [1.25]
     assert eval loop_scalar(value: "s") == [5]
     assert eval wiring_if(value: 3) == [1]
     assert eval wiring_if(value: "s") == [-1]

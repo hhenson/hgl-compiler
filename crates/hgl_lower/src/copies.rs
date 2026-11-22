@@ -585,7 +585,6 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
             into.extend(otherwise.iter().map(|other| &**other));
         }
         ExprKind::Unary { operand: inner, .. }
-        | ExprKind::DeferredNegation { operand: inner, .. }
         | ExprKind::Widen(inner)
         | ExprKind::ParentList(inner)
         | ExprKind::EnumFrom { value: inner, .. }
@@ -608,13 +607,38 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         | ExprKind::CheckedDelta(inner)
         | ExprKind::Publications(inner) => into.push(inner),
         ExprKind::Binary { left, right, .. }
-        | ExprKind::DeferredBinary { left, right, .. }
         | ExprKind::Index {
             base: left,
             index: right,
         }
         | ExprKind::TraceCompare { left, right, .. } => {
             into.push(left);
+            into.push(right);
+        }
+        ExprKind::DeferredNegation {
+            configuration,
+            operand,
+            ..
+        } => {
+            into.extend(
+                configuration
+                    .iter()
+                    .filter_map(|entry| entry.value.as_ref()),
+            );
+            into.push(operand);
+        }
+        ExprKind::DeferredBinary {
+            left,
+            configuration,
+            right,
+            ..
+        } => {
+            into.push(left);
+            into.extend(
+                configuration
+                    .iter()
+                    .filter_map(|entry| entry.value.as_ref()),
+            );
             into.push(right);
         }
         ExprKind::Call { arguments, .. }

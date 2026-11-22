@@ -614,7 +614,7 @@ pub enum ExprKind {
         /// The operand.
         operand: Box<Expr>,
     },
-    /// An unconfigured unary minus awaiting its operand's type in a graph.
+    /// A unary minus awaiting its operand's type in a graph.
     DeferredNegation {
         /// The operator this symbol binds.
         identity: OperatorRef,
@@ -624,6 +624,8 @@ pub enum ExprKind {
         expected: Option<Box<Type>>,
         /// Where the operand was written.
         operand_at: Location,
+        /// Configuration entries in written order (EXPR-13).
+        configuration: Vec<DeferredOption>,
         /// The operand, already read.
         operand: Box<Expr>,
     },
@@ -637,7 +639,7 @@ pub enum ExprKind {
         /// The right operand.
         right: Box<Expr>,
     },
-    /// An unconfigured binary symbol awaiting an operand's type in a graph.
+    /// A binary symbol awaiting an operand's type in a graph.
     DeferredBinary {
         /// The binary form written in source.
         operator: BinaryOperator,
@@ -649,6 +651,8 @@ pub enum ExprKind {
         expected: Option<Box<Type>>,
         /// The source locations of the two written operands.
         operands: [Location; 2],
+        /// Configuration entries in written order (EXPR-13).
+        configuration: Vec<DeferredOption>,
         /// The left operand, already read in source order.
         left: Box<Expr>,
         /// The right operand, already read in source order.
@@ -999,6 +1003,17 @@ pub struct ConfigurationRead {
     pub result: Option<Type>,
     /// Whether the result belongs to an anonymous function.
     pub anonymous: bool,
+}
+
+/// A configuration entry of a graph symbol awaiting candidate selection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeferredOption {
+    /// The written option name (EXPR-10).
+    pub name: String,
+    /// The source expression that gives the option.
+    pub at: Location,
+    /// The existing reading, absent when the candidate must supply its place.
+    pub value: Option<Expr>,
 }
 
 /// What a call calls.
@@ -1433,8 +1448,35 @@ impl Expr {
                     otherwise.walk_nodes(visit);
                 }
             }
+            ExprKind::DeferredNegation {
+                configuration,
+                operand,
+                ..
+            } => {
+                for value in configuration
+                    .iter()
+                    .filter_map(|entry| entry.value.as_ref())
+                {
+                    value.walk_nodes(visit);
+                }
+                operand.walk_nodes(visit);
+            }
+            ExprKind::DeferredBinary {
+                left,
+                configuration,
+                right,
+                ..
+            } => {
+                left.walk_nodes(visit);
+                for value in configuration
+                    .iter()
+                    .filter_map(|entry| entry.value.as_ref())
+                {
+                    value.walk_nodes(visit);
+                }
+                right.walk_nodes(visit);
+            }
             ExprKind::Unary { operand: inner, .. }
-            | ExprKind::DeferredNegation { operand: inner, .. }
             | ExprKind::Widen(inner)
             | ExprKind::ParentList(inner)
             | ExprKind::EnumFrom { value: inner, .. }
@@ -1457,7 +1499,6 @@ impl Expr {
             | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes(visit),
             ExprKind::Binary { left, right, .. }
-            | ExprKind::DeferredBinary { left, right, .. }
             | ExprKind::Index {
                 base: left,
                 index: right,
@@ -1549,8 +1590,35 @@ impl Expr {
                     otherwise.walk_nodes_mut(visit);
                 }
             }
+            ExprKind::DeferredNegation {
+                configuration,
+                operand,
+                ..
+            } => {
+                for value in configuration
+                    .iter_mut()
+                    .filter_map(|entry| entry.value.as_mut())
+                {
+                    value.walk_nodes_mut(visit);
+                }
+                operand.walk_nodes_mut(visit);
+            }
+            ExprKind::DeferredBinary {
+                left,
+                configuration,
+                right,
+                ..
+            } => {
+                left.walk_nodes_mut(visit);
+                for value in configuration
+                    .iter_mut()
+                    .filter_map(|entry| entry.value.as_mut())
+                {
+                    value.walk_nodes_mut(visit);
+                }
+                right.walk_nodes_mut(visit);
+            }
             ExprKind::Unary { operand: inner, .. }
-            | ExprKind::DeferredNegation { operand: inner, .. }
             | ExprKind::Widen(inner)
             | ExprKind::ParentList(inner)
             | ExprKind::EnumFrom { value: inner, .. }
@@ -1573,7 +1641,6 @@ impl Expr {
             | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes_mut(visit),
             ExprKind::Binary { left, right, .. }
-            | ExprKind::DeferredBinary { left, right, .. }
             | ExprKind::Index {
                 base: left,
                 index: right,

@@ -578,11 +578,35 @@ impl<'a> Typer<'a> {
             ExprKind::EnumFrom { value, .. } | ExprKind::DeferredEnumFrom(value) => {
                 self.is_fixed(value)
             }
-            ExprKind::Unary { operand, .. } | ExprKind::DeferredNegation { operand, .. } => {
+            ExprKind::Unary { operand, .. } => self.is_fixed(operand),
+            ExprKind::Binary { left, right, .. } => self.is_fixed(left) && self.is_fixed(right),
+            ExprKind::DeferredNegation {
+                configuration,
+                operand,
+                ..
+            } => {
                 self.is_fixed(operand)
+                    && configuration.iter().all(|entry| {
+                        entry
+                            .value
+                            .as_ref()
+                            .is_some_and(|value| self.is_fixed(value))
+                    })
             }
-            ExprKind::Binary { left, right, .. } | ExprKind::DeferredBinary { left, right, .. } => {
-                self.is_fixed(left) && self.is_fixed(right)
+            ExprKind::DeferredBinary {
+                left,
+                configuration,
+                right,
+                ..
+            } => {
+                self.is_fixed(left)
+                    && self.is_fixed(right)
+                    && configuration.iter().all(|entry| {
+                        entry
+                            .value
+                            .as_ref()
+                            .is_some_and(|value| self.is_fixed(value))
+                    })
             }
             // A symbol over constants: `-1`, `1 + 2`.
             ExprKind::Call {

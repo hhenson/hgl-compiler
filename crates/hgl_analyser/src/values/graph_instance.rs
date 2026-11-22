@@ -22,7 +22,7 @@ use crate::hir::{
     UnaryOperator, Value, ValueCategory,
 };
 use crate::program::{Program, Role};
-use crate::types::{Detail, Signature, Type};
+use crate::types::{Argument, Detail, Signature, Type};
 
 /// Source checks awaiting concrete types and categories in a graph instance.
 pub(crate) struct GraphDestinations {
@@ -30,12 +30,14 @@ pub(crate) struct GraphDestinations {
     captures: HashSet<Location>,
     store_arguments: HashSet<Location>,
     tuple_indices: HashSet<Location>,
+    configured_symbols: bool,
 }
 
 impl GraphDestinations {
     /// Remembers what the generic body could not check before selection.
     pub(crate) fn pending(body: &Body) -> Self {
         let mut expressions = HashSet::new();
+        let mut configured_symbols = false;
         let mut captures = HashSet::new();
         let mut store_arguments = HashSet::new();
         let mut tuple_indices = HashSet::new();
@@ -65,12 +67,18 @@ impl GraphDestinations {
                         .map(|value| value.at),
                 );
             }
+            if let ExprKind::DeferredBinary { configuration, .. }
+            | ExprKind::DeferredNegation { configuration, .. } = &value.kind
+            {
+                configured_symbols |= !configuration.is_empty();
+            }
         });
         Self {
             expressions,
             captures,
             store_arguments,
             tuple_indices,
+            configured_symbols,
         }
     }
 
@@ -80,7 +88,7 @@ impl GraphDestinations {
         &self,
         program: &Program,
         (module, declaration): (usize, usize),
-        signature: &Signature,
+        (signature, map): (&Signature, &[(Location, &Argument)]),
         body: &mut Body,
         diagnostics: &mut Diagnostics,
     ) {
@@ -99,13 +107,29 @@ impl GraphDestinations {
             _ => {}
         });
         let owner = &program.modules[module];
-        let (bindings, written, calls) = (HashMap::new(), HashMap::new(), HashMap::new());
+        let (bindings, written, calls) = if self.configured_symbols {
+            super::tables(owner)
+        } else {
+            (HashMap::new(), HashMap::new(), HashMap::new())
+        };
+        let reading = if self.configured_symbols
+            && let Detail::Callable(declared) = &owner.details[declaration]
+        {
+            // EXPR-10 and GEN-8: a contextual option is still read in
+            // the scope and generic instance that wrote it.
+            Some(Signature {
+                generics: super::candidates::in_instance(declared, map).generics,
+                ..signature.clone()
+            })
+        } else {
+            None
+        };
         let selecting = RefCell::new(Vec::new());
         let mut typer = Typer::bare(
             program,
             owner,
             &owner.declarations[declaration],
-            signature,
+            reading.as_ref().unwrap_or(signature),
             Tables {
                 bindings: &bindings,
                 written: &written,
@@ -114,6 +138,12 @@ impl GraphDestinations {
             },
             diagnostics,
         );
+        if self.configured_symbols {
+            typer.instance = map
+                .iter()
+                .map(|(at, argument)| (*at, (*argument).clone()))
+                .collect();
+        }
         typer.graph = true;
         record_with(program, body, true, Some(&mut typer));
         typer.locals.clone_from(&body.locals);

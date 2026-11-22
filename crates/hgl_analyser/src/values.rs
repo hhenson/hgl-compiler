@@ -752,13 +752,19 @@ impl<'a> Typer<'a> {
     /// Installs the lexical scope used for operator selection in an instance.
     /// Contextual operands can read these bindings by name (EXPR-5, GEN-7).
     fn use_instance_locals(&mut self, locals: Vec<Local>) {
-        self.declared = locals
+        self.locals = locals;
+        self.index_instance_locals();
+    }
+
+    /// Rebuilds lookup tables for the concrete locals of the current graph.
+    fn index_instance_locals(&mut self) {
+        self.declared = self
+            .locals
             .iter()
             .enumerate()
             .map(|(id, local)| (local.at, id))
             .collect();
-        self.assigned = vec![true; locals.len()];
-        self.locals = locals;
+        self.assigned = vec![true; self.locals.len()];
     }
 
     /// What a reading may change, as it stands now: see

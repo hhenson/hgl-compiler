@@ -15,7 +15,9 @@ use super::operators::{
 };
 use super::{BOOL, Typer};
 use crate::constant::is_least_magnitude;
-use crate::hir::{BinaryOperator, Expr, ExprKind, Form, UnaryOperator, Value, ValueCategory};
+use crate::hir::{
+    BinaryOperator, DeferredOption, Expr, ExprKind, Form, UnaryOperator, Value, ValueCategory,
+};
 use crate::program::{DeclarationKind, OperatorRef};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{Detail, Scalar, Signature, Type};
@@ -122,7 +124,7 @@ impl<'a> Typer<'a> {
         // A graph operand can gain its type from an instance selection.
         // Remember what the minus asks of its candidate until then (GEN-7).
         if self.graph
-            && !configured
+            && !faulty
             && let Some(identity) = identity
             && matches!(only.value.ty, Type::Unknown)
         {
@@ -132,6 +134,7 @@ impl<'a> Typer<'a> {
                     at,
                     expected: symbol.place.map(Box::new),
                     operand_at: self.at(&only.node),
+                    configuration: self.deferred_configuration(given),
                     operand: Box::new(only.value),
                 },
                 Type::Unknown,
@@ -424,7 +427,6 @@ impl<'a> Typer<'a> {
         // operands prevent selection, and leave intrinsic forms alone.
         if blocked
             && self.graph
-            && !configured
             && !faulty
             && let Some(identity) = identity
             && [&left, &right].into_iter().all(|operand| {
@@ -442,6 +444,7 @@ impl<'a> Typer<'a> {
                     at,
                     expected: symbol.place.map(Box::new),
                     operands,
+                    configuration: self.deferred_configuration(entries),
                     left: Box::new(left),
                     right: Box::new(right),
                 },
@@ -488,14 +491,16 @@ impl<'a> Typer<'a> {
                 at,
                 expected,
                 operand_at,
+                configuration,
                 operand,
             } if whole(&operand.ty) => {
                 let only = Given::read(0, self.node_at(*operand_at)?, (**operand).clone());
+                let entries = self.settle_configuration(*identity, configuration)?;
                 Some(self.negation(
                     Some(*identity),
                     *at,
                     only,
-                    (Vec::new(), false, false),
+                    (entries, false, !configuration.is_empty()),
                     expected.as_deref(),
                 ))
             }
@@ -505,21 +510,75 @@ impl<'a> Typer<'a> {
                 at,
                 expected,
                 operands,
+                configuration,
                 left,
                 right,
             } if whole(&left.ty) && whole(&right.ty) => {
                 let left = Given::read(0, self.node_at(operands[0])?, (**left).clone());
                 let right = Given::read(1, self.node_at(operands[1])?, (**right).clone());
+                let entries = self.settle_configuration(*identity, configuration)?;
                 Some(self.symbol(
                     (*operator, *at),
                     Some(*identity),
                     (left, right),
-                    (Vec::new(), false, false),
+                    (entries, false, !configuration.is_empty()),
                     expected.as_deref(),
                 ))
             }
             _ => None,
         }
+    }
+
+    /// Keep the EXPR-10 options without retaining a tentative reading
+    /// whose locals and flow were already rolled back.
+    fn deferred_configuration(&self, entries: Vec<Given>) -> Vec<DeferredOption> {
+        entries
+            .into_iter()
+            .filter_map(|given| {
+                Some(DeferredOption {
+                    name: given.key.name()?.to_string(),
+                    at: self.at(&given.node),
+                    value: (!given.retried).then_some(given.value),
+                })
+            })
+            .collect()
+    }
+
+    /// Restore the original EXPR-10 options for ordinary candidate selection.
+    fn settle_configuration(
+        &mut self,
+        operator: OperatorRef,
+        configuration: &[DeferredOption],
+    ) -> Option<Vec<Given>> {
+        if configuration.is_empty() {
+            return Some(Vec::new());
+        }
+        let Detail::Callable(public) =
+            &self.program.modules[operator.module].details[operator.declaration]
+        else {
+            return None;
+        };
+        let candidates = self.value_candidates(operator);
+        let options = options_of(public, &candidates);
+        self.index_instance_locals();
+        configuration
+            .iter()
+            .map(|entry| {
+                let node = self.node_at(entry.at)?;
+                let key = options.name_key(&entry.name, true);
+                Some(match &entry.value {
+                    Some(value) => Given {
+                        key,
+                        by_place: typed_by_place(&node),
+                        node,
+                        value: value.clone(),
+                        explicit: None,
+                        retried: false,
+                    },
+                    None => self.give(key, node),
+                })
+            })
+            .collect()
     }
 
     /// An operand `value` of `==` or another symbol recorded as it is
@@ -809,6 +868,18 @@ impl<'a> Typer<'a> {
         );
         if self.diagnostics.len() != reported {
             return (self.unselected(given, symbol.form), symbol.unjudged);
+        }
+        if said && !self.instance.is_empty() {
+            // GEN-8: a public option can forward a constant from the
+            // enclosing instance, just as a candidate's option can.
+            let map: Vec<_> = self
+                .instance
+                .iter()
+                .map(|(at, argument)| (*at, argument))
+                .collect();
+            for argument in found.iter_mut().flatten() {
+                *argument = crate::instance::placed(argument, &map);
+            }
         }
         // An implicit configuration default can read the operator's
         // generics without changing what the symbol asks of its candidates.

@@ -374,10 +374,30 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
             all(&mut arguments.iter().map(|argument| &argument.value))
         }
         ExprKind::Unary { operand, .. } => category(operand),
-        ExprKind::DeferredNegation { operand, .. } => join(category(operand), Unsettled),
+        ExprKind::DeferredNegation {
+            configuration,
+            operand,
+            ..
+        } => {
+            let given = all(&mut configuration
+                .iter()
+                .filter_map(|entry| entry.value.as_ref()));
+            join(join(given, category(operand)), Unsettled)
+        }
         ExprKind::Binary { left, right, .. } => join(category(left), category(right)),
-        ExprKind::DeferredBinary { left, right, .. } => {
-            join(join(category(left), category(right)), Unsettled)
+        ExprKind::DeferredBinary {
+            left,
+            configuration,
+            right,
+            ..
+        } => {
+            let given = all(&mut configuration
+                .iter()
+                .filter_map(|entry| entry.value.as_ref()));
+            join(
+                join(join(category(left), given), category(right)),
+                Unsettled,
+            )
         }
         ExprKind::Widen(inner) => category(inner),
         // OPS-6: the list converted is what it is given, lifted
@@ -487,7 +507,7 @@ pub(super) fn record_with(
 ) {
     use ValueCategory::{Connection, Unsettled};
     let Body { locals, statements } = body;
-    let first_values = first_values(locals, statements);
+    let mut first = first_values(locals, statements);
     let mut settling = true;
     while settling {
         settling = false;
@@ -617,7 +637,9 @@ pub(super) fn record_with(
                 }
                 _ => return,
             };
-            if first_values[local] == Some(at) && locals[local].category == Unsettled {
+            if first.get(local).copied().flatten() == Some(at)
+                && locals[local].category == Unsettled
+            {
                 let given = category(program, locals, value);
                 if given != Unsettled {
                     locals[local].category = given;
@@ -628,6 +650,11 @@ pub(super) fn record_with(
                 settling |= fill_type(&mut locals[local].ty, value.ty.clone());
             }
         });
+        // A contextual symbol option can introduce locals in its block
+        // when its candidate is selected. Include them in the next pass.
+        if first.len() != locals.len() {
+            first = first_values(locals, statements);
+        }
     }
     walk_statements_mut(statements, &mut |value| {
         recorded(program, locals, composition, value);
