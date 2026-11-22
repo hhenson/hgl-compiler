@@ -114,6 +114,10 @@ impl Parser<'_> {
         if !(can_start_type(kind) || can_start_expression(kind)) {
             return false;
         }
+        if self.at_bare_pack_member() {
+            self.expression();
+            return false;
+        }
         let verdict = self.choose(Choice::GenericArgument, |parser| {
             let snapshot = parser.snapshot();
             let errors = parser.errors;
@@ -353,6 +357,10 @@ impl Parser<'_> {
         let kind = self.current();
         if !(can_start_type(kind) || can_start_expression(kind)) {
             self.expected("a type or a value");
+            return;
+        }
+        if self.at_bare_pack_member() {
+            self.binary_expr(ADDITIVE);
             return;
         }
         // A name is a type and an expression both. It is read as a type

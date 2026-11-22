@@ -115,6 +115,7 @@ pub(crate) fn assemble<'a>(
             uses: Vec::new(),
             decisions: Vec::new(),
             details: Vec::new(),
+            dependent_packs: Default::default(),
             bodies: Vec::new(),
             test_bodies: Vec::new(),
             constants: Vec::new(),

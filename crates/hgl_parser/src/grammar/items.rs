@@ -581,8 +581,6 @@ impl Parser<'_> {
     ///           | "var", IDENTIFIER, ":", value_type
     ///           | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ]
     ///           | IDENTIFIER, ":", function_type ;
-    /// pack = "...", type, [ cardinality ]
-    ///      | "...", "{", type, "}", [ cardinality ] ;
     /// ```
     ///
     /// One permissive form is parsed: an optional `const`, a name, a type
@@ -629,24 +627,8 @@ impl Parser<'_> {
                 self.finish();
                 return;
             }
-            if !var && !reference && self.eat(Ellipsis) {
-                // FN-8: a pack takes any number of arguments. `...T` is a
-                // positional pack; `...{T}` a named one.
-                if self.at(LBrace) {
-                    self.start(PackType);
-                    self.bump();
-                    self.nested(Context::PLAIN, |parser| {
-                        parser.type_();
-                        parser.close(RBrace);
-                    });
-                    self.finish();
-                } else {
-                    self.type_();
-                }
-                // GEN-10: a cardinality follows the pack it bounds.
-                if self.at(LBrace) {
-                    self.cardinality();
-                }
+            if !var && !reference && self.at(Ellipsis) {
+                self.pack();
             } else {
                 self.type_();
             }
@@ -660,9 +642,55 @@ impl Parser<'_> {
         self.finish();
     }
 
+    /// FN-8: `...T` is positional, `...{T}` named. A named pack may name
+    /// the function parameter its arguments are declared for.
+    ///
+    /// ```text
+    /// pack = "...", type, [ cardinality ]
+    ///      | "...", "{", type, [ "for", IDENTIFIER, [ "without", without_names ] ],
+    ///        "}", [ cardinality ] ;
+    /// ```
+    fn pack(&mut self) {
+        self.bump();
+        if self.at(LBrace) {
+            self.start(PackType);
+            self.bump();
+            self.nested(Context::PLAIN, |parser| {
+                parser.type_();
+                if parser.at(KwFor) {
+                    parser.pack_for();
+                }
+                parser.close(RBrace);
+            });
+            self.finish();
+        } else {
+            self.type_();
+        }
+        // GEN-10: a cardinality follows the pack it bounds.
+        if self.at(LBrace) {
+            self.cardinality();
+        }
+    }
+
+    /// FN-8: `"for", IDENTIFIER, [ "without", IDENTIFIER, { ",", IDENTIFIER } ]`.
+    fn pack_for(&mut self) {
+        self.start(PackFor);
+        self.bump();
+        self.expect_name("a function parameter's name");
+        // LEX-10: `without` is contextual; it can also be a name.
+        if self.at_word("without") {
+            self.bump();
+            self.expect_name("an exclusion name");
+            while self.eat(Comma) {
+                self.expect_name("an exclusion name");
+            }
+        }
+        self.finish();
+    }
+
     /// FN-17: `[ "const" ], "fn", "(", [ function_type_parameters ],
-    /// ")", [ "->", [ "ref" ], type ]`. Fixed inputs may name a position.
-    /// Named packs in this template await GEN-17.
+    /// ")", [ "->", [ "ref" ], type ]`. An input is a type with an
+    /// optional name, or a pack (GEN-17).
     fn function_type(&mut self) {
         self.start(FunctionType);
         if self.at_word("const") {
@@ -676,11 +704,15 @@ impl Parser<'_> {
             self.nested(Context::LIST, |parser| {
                 parser.list(RParen, "a function type parameter", true, |parser| {
                     parser.start(FunctionTypeParam);
-                    if parser.at(Ident) && parser.nth(1) == Colon {
-                        parser.bump();
-                        parser.bump();
+                    if parser.at(Ellipsis) {
+                        parser.pack();
+                    } else {
+                        if parser.at(Ident) && parser.nth(1) == Colon {
+                            parser.bump();
+                            parser.bump();
+                        }
+                        parser.type_();
                     }
-                    parser.type_();
                     parser.finish();
                 });
             });

@@ -205,12 +205,12 @@ pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring>
     let instance = if generics.is_empty() {
         None
     } else {
-        program.instance_with_functions(
-            *module,
-            *declaration,
+        program.instance_with_packs(
+            (*module, *declaration),
             generics,
             requirements,
             &functions_of(arguments),
+            callee.type_packs(),
         )
     };
     // Where the target's own types are known, its inputs and result are
@@ -595,12 +595,12 @@ impl Instances {
                 continue;
             }
             *count += 1;
-            let Some((mut signature, mut body)) = program.instance_with_functions(
-                next.module,
-                next.declaration,
+            let Some((mut signature, mut body)) = program.instance_with_packs(
+                (next.module, next.declaration),
                 &next.generics,
                 &next.requirements,
                 &next.functions,
+                &next.type_packs,
             ) else {
                 continue;
             };

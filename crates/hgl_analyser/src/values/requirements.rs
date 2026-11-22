@@ -478,11 +478,16 @@ impl<'a> Typer<'a> {
         generics: &[Argument],
         type_packs: &[hir::TypePackArgument],
     ) {
+        let member_fault = std::cell::RefCell::new(None);
         let Some((condition, held, unvalued)) =
-            self.requires_told_with_packs(callee, generics, type_packs)
+            self.requires_told_with_packs(callee, generics, type_packs, Some(&member_fault))
         else {
             return;
         };
+        if let Some(fault) = member_fault.into_inner() {
+            self.pack_member_fault(at, &fault);
+            return;
+        }
         if self.unmet_reported(at) {
             return;
         }
@@ -598,6 +603,7 @@ impl<'a> Typer<'a> {
                 .map(|pack| hir::TypePackArgument {
                     parameter: pack.parameter,
                     infer_from_arguments: false,
+                    keys: pack.keys.clone(),
                     types: pack
                         .types
                         .iter()
@@ -626,7 +632,7 @@ impl<'a> Typer<'a> {
                 });
             }
             let held = self
-                .requires_told_with_packs(callee, &placed_generics, &placed_packs)
+                .requires_told_with_packs(callee, &placed_generics, &placed_packs, None)
                 .map(|(_, held, _)| held);
             if held == Some(Some(true)) {
                 continue;
@@ -727,16 +733,17 @@ impl<'a> Typer<'a> {
         callee: (usize, usize),
         generics: &[Argument],
     ) -> Option<(SyntaxNode, Option<bool>, bool)> {
-        self.requires_told_with_packs(callee, generics, &[])
+        self.requires_told_with_packs(callee, generics, &[], None)
     }
 
     /// The same check with any resolved type packs available to GEN-10
     /// quantifiers in the condition.
-    fn requires_told_with_packs(
+    pub(super) fn requires_told_with_packs(
         &mut self,
         (module, declaration): (usize, usize),
         generics: &[Argument],
         type_packs: &[hir::TypePackArgument],
+        member_fault: Option<&std::cell::RefCell<Option<super::dependent_packs::MemberFault>>>,
     ) -> Option<(SyntaxNode, Option<bool>, bool)> {
         let program = self.program;
         let (parameters, condition) = required(program, (module, declaration))?;
@@ -771,6 +778,7 @@ impl<'a> Typer<'a> {
                 callable: &callable,
                 unvalued: &unvalued,
                 type_packs,
+                member_fault,
             },
         );
         Some((condition, held, unvalued.get()))
@@ -1751,6 +1759,7 @@ fn nesting<'t>(ty: &'t Type) -> usize {
             Type::Function(function) => function.types().for_each(&mut inside),
             Type::Scalar(_)
             | Type::Parameter { .. }
+            | Type::PackMember { .. }
             | Type::Signal
             | Type::Error
             | Type::ErrorContext
@@ -1979,7 +1988,7 @@ pub(super) fn instances_hold(
                     made.callee,
                     &made.generics,
                     &made.answers,
-                    &[],
+                    (&[], &[]),
                     &RefCell::new(Diagnostics::new()),
                     &mut graph_reports,
                 )
@@ -2898,6 +2907,8 @@ struct Told<'t> {
     unvalued: &'t std::cell::Cell<bool>,
     /// The types each pack parameter takes at the call (GEN-10).
     type_packs: &'t [hir::TypePackArgument],
+    /// A failed pack member lookup while judging this condition.
+    member_fault: Option<&'t std::cell::RefCell<Option<super::dependent_packs::MemberFault>>>,
 }
 
 /// Whether `condition`, the `requires` of `declaration` of `module`,
@@ -2941,7 +2952,7 @@ fn requires_holds(
         }
     };
     let file = declared_in.files[declared.file].file;
-    let pack_types = |view: &SyntaxToken, name: &str| -> Option<&[Type]> {
+    let pack = |view: &SyntaxToken, name: &str| -> Option<&hir::TypePackArgument> {
         // `types` here is the language's pack view. A resolved name
         // belongs to a different declaration.
         if declared_in
@@ -2956,16 +2967,34 @@ fn requires_holds(
             .type_packs
             .iter()
             .find(|pack| pack.parameter == parameter)
-            .map(|pack| pack.types.as_slice())
     };
-    let written = |node: &SyntaxNode| -> Option<Type> {
+    let pack_types = super::dependent_packs::PackTypes::new(parameters, place.type_packs);
+    let keyed_type = |node: &SyntaxNode, keys: &[ConstraintKey<'_>]| -> Option<Type> {
         let start = node.span().start;
         let read = declared_in
             .written
             .iter()
             .find(|written| written.at.file == file && written.at.span.start == start)?;
-        told(placed(substitute_within(&read.ty, &map), &own))
+        if !matches!(read.ty, Type::PackMember { .. })
+            && !read
+                .ty
+                .any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false)
+        {
+            return told(placed(substitute_within(&read.ty, &map), &own));
+        }
+        let mut map = map.clone();
+        map.extend(keys.iter().map(|key| (key.at, &key.argument)));
+        match pack_types.project(&read.ty, &map) {
+            Ok(ty) => told(placed(ty, &own)),
+            Err(fault) => {
+                if let Some(target) = place.member_fault {
+                    target.borrow_mut().get_or_insert(fault);
+                }
+                None
+            }
+        }
     };
+    let written = |node: &SyntaxNode| keyed_type(node, &[]);
     // A constant the condition compares an option with is a value of
     // the option's type (EXPR-5), its generic parameters in place.
     let constant = |node: &SyntaxNode, name: &str| -> Option<ConstantValue> {
@@ -2985,7 +3014,13 @@ fn requires_holds(
             callable: place.callable,
             unvalued: place.unvalued,
         },
-        &pack_types,
+        Some(&PackScope {
+            file,
+            pack: &pack,
+            written: &keyed_type,
+            constant: place.constant,
+        }),
+        &[],
     )
 }
 
@@ -3115,6 +3150,7 @@ fn struct_applications(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>
             .for_each(|ty| struct_applications(ty, found)),
         Type::Scalar(_)
         | Type::Parameter { .. }
+        | Type::PackMember { .. }
         | Type::Signal
         | Type::Error
         | Type::ErrorContext
@@ -3132,28 +3168,61 @@ fn struct_applications(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>
 /// generic parameter, `T == i64` or `T in {i64, f64}`. GEN-15:
 /// "negation binds before conjunction, which binds before disjunction".
 pub(super) fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
-    holds_with_packs(node, of, &|_, _| None)
+    holds_with_packs(node, of, None, &[])
+}
+
+/// A compile-time key bound by a GEN-17 quantifier.
+#[derive(Clone)]
+struct ConstraintKey<'a> {
+    name: &'a str,
+    at: Location,
+    argument: Argument,
+}
+
+impl ConstraintKey<'_> {
+    fn value(&self) -> &ConstantValue {
+        let Argument::Constant(constant) = &self.argument else {
+            unreachable!("a pack key is a constant");
+        };
+        &constant.value
+    }
+}
+
+type PackView<'a> = dyn Fn(&SyntaxToken, &str) -> Option<&'a hir::TypePackArgument> + 'a;
+type KeyedType<'a> = dyn Fn(&SyntaxNode, &[ConstraintKey<'_>]) -> Option<Type> + 'a;
+type ScopedConstant<'a> = dyn Fn(&SyntaxNode, Option<&Type>) -> Option<ConstantValue> + 'a;
+
+/// The known packs and written types of a declaration being specialized.
+struct PackScope<'a> {
+    file: FileId,
+    pack: &'a PackView<'a>,
+    written: &'a KeyedType<'a>,
+    constant: &'a ScopedConstant<'a>,
 }
 
 /// The verdict for a condition with any resolved type packs in scope.
-fn holds_with_packs<'p>(
+fn holds_with_packs(
     node: &SyntaxNode,
     of: &Condition,
-    pack_types: &dyn Fn(&SyntaxToken, &str) -> Option<&'p [Type]>,
+    scope: Option<&PackScope<'_>>,
+    keys: &[ConstraintKey<'_>],
 ) -> Option<bool> {
     match node.kind() {
-        SyntaxKind::ConstraintParen => holds_with_packs(&node.children().next()?, of, pack_types),
+        SyntaxKind::ConstraintParen => holds_with_packs(&node.children().next()?, of, scope, keys),
         SyntaxKind::ConstraintNot => {
-            holds_with_packs(&node.children().next()?, of, pack_types).map(|held| !held)
+            holds_with_packs(&node.children().next()?, of, scope, keys).map(|held| !held)
         }
-        SyntaxKind::ConstraintEach => each_holds(node, of, pack_types),
+        SyntaxKind::ConstraintEach => each_holds(node, of, scope?, keys),
         // GEN-16: a named operator requirement.
         SyntaxKind::ConstraintCall => (of.callable)(node),
         SyntaxKind::ConstraintBinary => {
             let mut sides = node.children();
-            let left = holds_with_packs(&sides.next()?, of, pack_types);
-            let right = holds_with_packs(&sides.next()?, of, pack_types);
+            let left = holds_with_packs(&sides.next()?, of, scope, keys);
             let both = has_token(node, SyntaxKind::AmpAmp);
+            if left == Some(!both) {
+                return left;
+            }
+            let right = holds_with_packs(&sides.next()?, of, scope, keys);
             match (left, right) {
                 (Some(left), Some(right)) if both => Some(left && right),
                 (Some(left), Some(right)) => Some(left || right),
@@ -3175,18 +3244,52 @@ fn holds_with_packs<'p>(
                     .then(|| operand.text().to_string().trim().to_string())
             };
             let within = tokens(node).any(|token| token.text() == "in");
+            let key = |operand: &SyntaxNode| {
+                let name = option(operand)?;
+                keys.iter()
+                    .rev()
+                    .find(|key| key.name == name)
+                    .map(ConstraintKey::value)
+            };
+            if let Some(left_key) = key(left) {
+                let scope = scope?;
+                if within
+                    && let Some((view, pack)) = pack_view(right.clone())
+                    && view.text() == "arg_keys"
+                {
+                    return Some((scope.pack)(&view, pack.text())?.member(left_key).is_some());
+                }
+            }
+            if has_token(node, SyntaxKind::EqEq) || has_token(node, SyntaxKind::BangEq) {
+                let equal = has_token(node, SyntaxKind::EqEq);
+                if let Some((known, operand)) = key(left)
+                    .map(|key| (key, right))
+                    .or_else(|| key(right).map(|key| (key, left)))
+                {
+                    let other = key(operand)
+                        .cloned()
+                        .or_else(|| (scope?.constant)(operand, None))?;
+                    return known.equals(&other).map(|same| same == equal);
+                }
+            }
+            let written = |operand: &SyntaxNode| {
+                (of.written)(operand).or_else(|| (scope?.written)(operand, keys))
+            };
             // A generic parameter of the candidate: the condition is of
             // the type it stands for. `T == i64`, `T in {i64, f64}`.
             // Each is told as a constant's equality is, in three answers
             // ([`same_type`]): `FBox<X>` is not known to be `FBox<2.0>`
             // while `X` is not given.
-            if let Some(ty) = option(left).and_then(|name| (of.type_of)(&name)) {
+            if let Some(ty) = option(left)
+                .and_then(|name| (of.type_of)(&name))
+                .or_else(|| (scope?.written)(left, keys))
+            {
                 return if has_token(node, SyntaxKind::EqEq) {
-                    typed_alike(&(of.written)(right)?, &ty, of)
+                    typed_alike(&written(right)?, &ty, of)
                 } else if within && right.kind() == SyntaxKind::ConstraintSet {
                     let mut found = Some(false);
                     for member in right.children() {
-                        match typed_alike(&(of.written)(&member)?, &ty, of) {
+                        match typed_alike(&written(&member)?, &ty, of) {
                             Some(true) => return Some(true),
                             Some(false) => {}
                             None => found = None,
@@ -3196,6 +3299,13 @@ fn holds_with_packs<'p>(
                 } else {
                     None
                 };
+            }
+            if has_token(node, SyntaxKind::EqEq)
+                && let Some(ty) = option(right)
+                    .and_then(|name| (of.type_of)(&name))
+                    .or_else(|| (scope?.written)(right, keys))
+            {
+                return typed_alike(&written(left)?, &ty, of);
             }
             // What an operand that is a constant comes to as a value of
             // the option `name`'s type: the value another option has at
@@ -3255,20 +3365,49 @@ fn holds_with_packs<'p>(
 /// GEN-10: test every selected type, with the quantifier's name bound
 /// to that member. One false test settles the verdict even where
 /// another is untold. An empty pack has no false or untold test.
-fn each_holds<'p>(
+fn each_holds(
     node: &SyntaxNode,
     of: &Condition,
-    pack_types: &dyn Fn(&SyntaxToken, &str) -> Option<&'p [Type]>,
+    scope: &PackScope<'_>,
+    keys: &[ConstraintKey<'_>],
 ) -> Option<bool> {
     let bound = tokens(node)
         .filter(|token| token.kind() == SyntaxKind::Ident)
         .nth(1)?;
     let mut parts = node.children();
-    let (view, pack) = types_view(parts.next()?)?;
+    let (view, pack) = pack_view(parts.next()?)?;
     let body = parts.next()?;
-    let types = pack_types(&view, pack.text())?;
+    let pack = (scope.pack)(&view, pack.text())?;
     let mut held = Some(true);
-    for ty in types {
+    if view.text() == "arg_keys" {
+        let at = Location::new(scope.file, bound.span());
+        let mut nested = keys.to_vec();
+        for key in &pack.keys {
+            let value = match key {
+                hir::PackKey::Name(name) => ConstantValue::Str(name.clone()),
+                hir::PackKey::Position(position) => {
+                    ConstantValue::Int(i64::try_from(*position).ok()?)
+                }
+            };
+            nested.push(ConstraintKey {
+                name: bound.text(),
+                at,
+                argument: Argument::Constant(Constant {
+                    text: bound.text().to_string(),
+                    value,
+                }),
+            });
+            let checked = holds_with_packs(&body, of, Some(scope), &nested);
+            nested.pop();
+            match checked {
+                Some(false) => return Some(false),
+                Some(true) => {}
+                None => held = None,
+            }
+        }
+        return held;
+    }
+    for ty in &pack.types {
         let type_of = |name: &str| {
             if name == bound.text() {
                 (whole(ty) && !names_parameter(ty)).then(|| ty.clone())
@@ -3288,7 +3427,7 @@ fn each_holds<'p>(
             written: &written,
             ..*of
         };
-        match holds_with_packs(&body, &here, pack_types) {
+        match holds_with_packs(&body, &here, Some(scope), keys) {
             Some(false) => return Some(false),
             Some(true) => {}
             None => held = None,
@@ -3297,16 +3436,17 @@ fn each_holds<'p>(
     held
 }
 
-/// The view name and pack name in the GEN-10 form `types(Ts)`. Forms
-/// that do not select a known type sequence are left untold.
-fn types_view(source: SyntaxNode) -> Option<(SyntaxToken, SyntaxToken)> {
+/// The view name and pack name in a `types(Ts)` or `arg_keys(Ps)` form.
+fn pack_view(source: SyntaxNode) -> Option<(SyntaxToken, SyntaxToken)> {
     let source = ungrouped(source);
     if source.kind() != SyntaxKind::CallExpr {
         return None;
     }
     let callee = child(&source, SyntaxKind::NameExpr)?;
     let view = name_token(&callee)?;
-    if view.text() != "types" || child(&callee, SyntaxKind::QualifiedName).is_some() {
+    if !matches!(view.text(), "types" | "arg_keys")
+        || child(&callee, SyntaxKind::QualifiedName).is_some()
+    {
         return None;
     }
     let arguments = child(&source, SyntaxKind::ArgList)?;

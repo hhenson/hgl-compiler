@@ -49,7 +49,8 @@ impl Parser<'_> {
     /// ```text
     /// type_base = scalar_type | named_type | tuple_type | list_type | set_type
     ///           | dict_type | rolling_window_type | "signal" | endpoint_type
-    ///           | "atomic", "<", value_type, ">" | result_type | "error" | delta_type ;
+    ///           | "atomic", "<", value_type, ">" | result_type | "error" | delta_type
+    ///           | pack_member ;
     /// ```
     ///
     /// TYPE-12: "`ref` is no type": `ref<f64>`, `list<ref<f64>>` and
@@ -80,8 +81,37 @@ impl Parser<'_> {
             self.expected("a type");
             return false;
         }
-        self.named_type();
+        if self.nth(1) == LBracket && self.suffix_at(1) {
+            self.pack_member();
+        } else {
+            self.named_type();
+        }
         true
+    }
+
+    /// GEN-17: `pack_member = IDENTIFIER, "[", IDENTIFIER, "]" ;`
+    fn pack_member(&mut self) {
+        self.start(PackMemberType);
+        self.bump();
+        self.attached(Bracket::Index);
+        self.bump();
+        self.nested(Context::PLAIN, |parser| {
+            parser.expect_name("a pack key's name");
+            parser.close(RBracket);
+        });
+        self.finish();
+    }
+
+    /// True for `Ps[arg]` with no type suffix. In a type-or-value position
+    /// the analyser needs both readings. Keep the ordinary index tree
+    /// there and let the pack's binding decide whether it denotes a type.
+    pub(crate) fn at_bare_pack_member(&self) -> bool {
+        self.at(Ident)
+            && self.nth(1) == LBracket
+            && self.suffix_at(1)
+            && self.nth(2) == Ident
+            && self.nth(3) == RBracket
+            && self.nth(4) != Question
     }
 
     /// `named_type = ( IDENTIFIER | qualified_name ), [ generic_arguments ] ;`
