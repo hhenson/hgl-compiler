@@ -12,7 +12,7 @@ analyser: partial
 
 - A `native impl fn` or `native impl const fn` is a candidate of the operator it names, with its role
 - A native function whose declaration is exported is public
-- Left: a native declaration checked as an HGL callable
+- Native calls are checked against the declared parameter and result types (NATIVE-7).
 
 ## NATIVE-2
 
@@ -62,8 +62,8 @@ parser: done
 analyser: partial
 
 - A native type's properties are read: each an ordinary value type, no two of one name (`field.duplicate`); `value.property` has the property's type, and a name the type does not declare is `member.unknown`
-- `name.property = value` on a local of a native type, a capability among them, is `binding.immutable`, and a call of a native type's name `call.not_callable`
-- Left: a property assigned through a longer place, which is not read yet; identity and capabilities as a payload or key
+- Assigning a native property is `binding.immutable`, including through a struct field or list index. A call of a native type's name is `call.not_callable`.
+- Left: provider identity and capabilities as a payload or key
 
 ## NATIVE-7
 

@@ -533,6 +533,14 @@ pub enum ExprKind {
     /// where the local is a `T?` that a test against null has proved is
     /// not null there (ERR-12).
     Local(LocalId),
+    /// One concrete entry of an argument pack (FN-19). Lowering maps
+    /// it to the runtime input created for that key.
+    PackEntry {
+        /// The local for the pack parameter in the unexpanded signature.
+        pack: LocalId,
+        /// The entry's original name or position.
+        key: PackKey,
+    },
     /// An immutable graph binding read where a null test proved its
     /// presence, before the instance has determined its ordinary type (ERR-12).
     DeferredPresent(LocalId),
@@ -1174,6 +1182,8 @@ pub enum Callee {
     Anonymous(Box<AnonymousFunction>),
     /// A named operator awaiting an argument type before selection (GEN-7).
     DeferredOperator(Box<DeferredOperator>),
+    /// A call waiting for the entries of its pack arguments (FN-19).
+    DeferredPackCall,
     /// A deferred operator call whose candidates are all value functions.
     DeferredValue,
     /// No callee: a name left for the prelude, a function that is
@@ -1204,6 +1214,7 @@ impl Callee {
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
             | Callee::DeferredOperator(_)
+            | Callee::DeferredPackCall
             | Callee::DeferredValue
             | Callee::Unread => None,
         }
@@ -1219,6 +1230,7 @@ impl Callee {
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
             | Callee::DeferredOperator(_)
+            | Callee::DeferredPackCall
             | Callee::DeferredValue
             | Callee::Unread => &[],
         }
@@ -1234,6 +1246,7 @@ impl Callee {
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
             | Callee::DeferredOperator(_)
+            | Callee::DeferredPackCall
             | Callee::DeferredValue
             | Callee::Unread => &[],
         }
@@ -1436,6 +1449,17 @@ pub enum PackKey {
     Name(String),
 }
 
+/// The type and key of one input of an instantiated pack parameter (FN-19).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PackInput {
+    /// The parameter slot before expansion.
+    pub parameter: usize,
+    /// The key in that parameter's pack.
+    pub key: PackKey,
+    /// The type of the entry after ordinary argument fitting.
+    pub ty: Type,
+}
+
 /// The value of a literal.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -1579,6 +1603,7 @@ impl Expr {
             | ExprKind::Constant { .. }
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
+            | ExprKind::PackEntry { .. }
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
@@ -1724,6 +1749,7 @@ impl Expr {
             | ExprKind::Constant { .. }
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
+            | ExprKind::PackEntry { .. }
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
