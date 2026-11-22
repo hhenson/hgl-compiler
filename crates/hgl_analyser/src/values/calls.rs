@@ -13,8 +13,8 @@ use super::constants::generic_default;
 use super::evals::{trace_input_type, trace_pack_type};
 use super::fit::{not_null, open, whole};
 use super::inference::{
-    ExplicitGenerics, Inferred, Places, infer, infer_from_place, mentions, pack_bounds, placed,
-    type_pack,
+    ExplicitGenerics, Inferred, Places, bare_parameter, infer, infer_from_place, mentions,
+    pack_bounds, placed, type_pack,
 };
 use super::lifting::fill_type;
 use super::node::RefRead;
@@ -1102,6 +1102,7 @@ impl<'a> Typer<'a> {
         supplied.sort_by_key(|(slot, _)| *slot);
         let declared = &owner.declarations[*declaration];
         let listed = declared.kind.role() == Some(Role::Value);
+        let inferred_here: Vec<_> = found.iter().map(Option::is_none).collect();
         let mut unfound: Vec<_> = signature
             .generics
             .iter()
@@ -1139,12 +1140,26 @@ impl<'a> Typer<'a> {
             if !whole(&value.ty) || self.category(value) == ValueCategory::Unsettled {
                 return false;
             }
-            if !mentions(&parameter.ty, &unfound) {
+            let widenable = bare_parameter(&parameter.ty, &signature.generics).filter(|&index| {
+                inferred_here[index]
+                    && matches!(&found[index], Some(Argument::Type(Type::Named { .. })))
+            });
+            if !mentions(&parameter.ty, &unfound) && widenable.is_none() {
                 continue;
             }
             let actual = self.inferred_from(listed, value, Takes::Parameters);
             let actual =
                 self.inference_input(&parameter.ty, &actual, &signature.generics, &found, None);
+            // GEN-2: a later abstract parent can widen a bare
+            // parameter inferred from an earlier argument.
+            if let Some(index) = widenable {
+                if let Some(Argument::Type(decided)) = &found[index]
+                    && self.widens(decided, actual)
+                {
+                    found[index] = Some(Argument::Type(actual.clone()));
+                }
+                continue;
+            }
             infer(&parameter.ty, actual, &signature.generics, &mut found);
             unfound = signature
                 .generics

@@ -571,8 +571,9 @@ impl<'a> Typer<'a> {
         // The generic parameters an argument decided: what the call
         // writes, or its place expects, is not widened (GEN-2).
         let mut by_argument = vec![false; generics.len()];
-        // A written value argument or a static function template is
-        // checked against its type during the source pass.
+        // Written value arguments and static function templates are
+        // checked during the source pass. Preserve the precedence of
+        // argument inference over the result payload fallback, too.
         let source_contexts: Vec<_> = generics
             .iter()
             .zip(&found)
@@ -586,6 +587,7 @@ impl<'a> Typer<'a> {
                     .copied()
                     .filter(|ty| matches!(ty, Type::Function(_))),
             )
+            .chain(result_fallback.iter().map(|(result, _)| *result))
             .collect();
         let mut late = std::collections::HashSet::new();
         for position in order {

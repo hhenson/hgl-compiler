@@ -3762,3 +3762,52 @@ fn output_fixed() -> i64 => required_output(1)"#,
     }
     assert_eq!(checked_locals, locals.len());
 }
+
+/// GEN-2 and ERR-15: specialization preserves abstract widening and
+/// the argument's nullable binding ahead of the result payload fallback.
+#[test]
+fn graph_argument_inference_preserves_widening_and_result_fallback() {
+    let checked = module(
+        r#"operator predicate<T>(input: T) -> bool
+impl const fn predicate<T>(input: T) -> bool => false
+impl fn predicate(input: i64) -> bool { when { return input > 0 } }
+abstract struct Base { count: i64 }
+struct Child : Base {}
+const fn as_base() -> Base => Child(count: 2)
+const fn first<U>(a: U, b: U) -> U => a
+const fn first_result<U>(a: U, b: U) -> result<U, error> => ok(a)
+const fn fallback() -> f64? => null
+
+fn wide<T>(const input: T) -> i64 {
+    let chosen = if predicate(input) { Child(count: 1) }
+    let copied = first(chosen, as_base())
+    return 0
+}
+
+fn nullable<T>(const input: T) -> bool {
+    let chosen = if predicate(input) { 2.5 }
+    let copied: f64? = first_result(chosen, fallback())
+    return copied == null
+}
+
+fn widened() -> i64 => wide(1)
+fn null_allowed() -> bool => nullable("s")"#,
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let widened = instance_called_by(&checked, body(&checked, "widened"));
+    let widened_calls = called(&checked, &widened);
+    assert!(
+        widened_calls
+            .iter()
+            .any(|call| call == "first(U, U) <Base>"),
+        "{widened_calls:?}"
+    );
+    let nullable = instance_called_by(&checked, body(&checked, "null_allowed"));
+    let nullable_calls = called(&checked, &nullable);
+    assert!(
+        nullable_calls
+            .iter()
+            .any(|call| call == "first_result(U, U) <f64?>"),
+        "{nullable_calls:?}"
+    );
+}
