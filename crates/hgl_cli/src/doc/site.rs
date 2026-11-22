@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use hgl_doc::SiteFile;
 use tempfile::NamedTempFile;
 
-const MARKER: &str = ".hgl-doc";
-const MAGIC: &str = "hgl doc HTML site version 1\n";
+const MARKER: &str = ".hgl-doc-site-v2";
+const LEGACY_MARKER: &str = ".hgl-doc";
+const LEGACY_MAGIC: &str = "hgl doc HTML site version 1\n";
 const MANIFEST: &str = ".hgl-doc-files";
 
 /// Replaces generated files and removes stale outputs. The stable marker
@@ -70,44 +71,64 @@ pub(super) fn write(directory: &Path, files: Vec<SiteFile>) -> io::Result<()> {
     write_manifest(directory, &next)
 }
 
-/// Claims only an empty directory. An existing marker must be the exact
-/// format this command writes before it can be used as the lock.
+/// Claims an empty directory with an empty, versioned lock file. The
+/// first creation makes the marker immediately valid for every writer.
 fn lock_site(directory: &Path) -> io::Result<File> {
     if fs::symlink_metadata(directory)?.file_type().is_symlink() {
         return Err(io::Error::other("documentation output is a symbolic link"));
     }
-    let path = directory.join(MARKER);
-    if !output_exists(directory, MARKER)? {
-        if fs::read_dir(directory)?.next().transpose()?.is_some()
-            && !output_exists(directory, MARKER)?
-        {
-            return Err(io::Error::new(
-                ErrorKind::AlreadyExists,
-                "documentation output is neither empty nor an hgl doc site",
-            ));
+    let marker = match existing_marker(directory)? {
+        Some(marker) => marker,
+        None if fs::read_dir(directory)?.next().transpose()?.is_some() => {
+            // Another writer may have claimed the directory after the
+            // first lookup. Its marker appears before any generated file.
+            existing_marker(directory)?.ok_or_else(|| {
+                io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "documentation output is neither empty nor an hgl doc site",
+                )
+            })?
         }
-        let mut marker = NamedTempFile::new_in(directory)?;
-        marker.write_all(MAGIC.as_bytes())?;
-        if let Err(error) = marker.persist_noclobber(&path)
-            && error.error.kind() != ErrorKind::AlreadyExists
-        {
-            return Err(error.error);
+        None => {
+            if let Err(error) = File::create_new(directory.join(MARKER))
+                && error.kind() != ErrorKind::AlreadyExists
+            {
+                return Err(error);
+            }
+            MARKER
         }
-    }
-    output_exists(directory, MARKER)?;
-    let mut lock = OpenOptions::new().read(true).write(true).open(path)?;
+    };
+    output_exists(directory, marker)?;
+    let mut lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.join(marker))?;
     lock.lock()?;
-    let mut contents = String::new();
-    (&mut lock)
-        .take((MAGIC.len() + 1) as u64)
-        .read_to_string(&mut contents)?;
-    if contents != MAGIC {
+    let valid = if marker == LEGACY_MARKER {
+        let mut contents = String::new();
+        (&mut lock)
+            .take((LEGACY_MAGIC.len() + 1) as u64)
+            .read_to_string(&mut contents)?;
+        contents == LEGACY_MAGIC
+    } else {
+        lock.metadata()?.len() == 0
+    };
+    if !valid {
         return Err(io::Error::new(
             ErrorKind::InvalidData,
             "unrecognized hgl doc site marker",
         ));
     }
     Ok(lock)
+}
+
+fn existing_marker(directory: &Path) -> io::Result<Option<&'static str>> {
+    for marker in [LEGACY_MARKER, MARKER] {
+        if output_exists(directory, marker)? {
+            return Ok(Some(marker));
+        }
+    }
+    Ok(None)
 }
 
 fn manifest(directory: &Path) -> io::Result<BTreeSet<String>> {
