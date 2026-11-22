@@ -104,7 +104,7 @@ analyser: partial
 
 - Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration
 - Function and operator calls bind leftover positional and named arguments to their corresponding packs and check the known element type. The HIR keeps each argument's pack slot and position or source name.
-- The analyser still accepts duplicate pack declarations. It does not yet report the pinned `pack.duplicate` code.
+- A second positional pack or a second named pack in one declaration reports `pack.duplicate` at its parameter name. A declaration may have one of each kind.
 - Binding a pack declared for a function awaits #366.
 
 transpiler: partial
@@ -172,6 +172,7 @@ transpiler: done
 analyser: done
 
 - What an anonymous function may use from around it
+- An enclosing `var` parameter follows the same capture rule as a `var` local (`name.captured`). An anonymous function may read a `let` holding the parameter's value.
 - A call's callee is read as any expression is, so an anonymous function chosen by an `if` or taken from a list reads the node's inputs where it is written (TIME-1)
 - An endpoint operation in one, `scheduled()` among them, is judged where the function is written, in a hook, an initialiser, a source, a value function, a graph or a test (TIME-9); the guards of TIME-4 and the phases of TIME-5 hold in it as around it
 

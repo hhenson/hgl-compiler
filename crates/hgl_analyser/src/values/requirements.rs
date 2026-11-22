@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Code, Diagnostics, Location};
-use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
 use super::candidates::{AtInstance, Given, Wanted};
@@ -19,7 +19,7 @@ use crate::declared::{names_parameter, same_type, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
 use crate::program::{Binding, Declaration, DeclarationKind, OperatorRef, Phase, Program, Role};
 use crate::read::is_type;
-use crate::syntax::{child, has_token, name_token, tokens};
+use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
 use crate::types::{
     Argument, Constant, ConstantValue, Detail, GenericKind, GenericParameter, NamedKind, Signature,
     Type,
@@ -380,7 +380,15 @@ impl<'a> Typer<'a> {
     ) -> Vec<(u32, Option<bool>)> {
         let calls: Vec<SyntaxNode> = condition
             .descendants()
-            .filter(|node| node.kind() == SyntaxKind::ConstraintCall)
+            .filter(|node| {
+                node.kind() == SyntaxKind::ConstraintCall
+                    // GEN-10: calls within `each` need a verdict under
+                    // its bound type, which this evaluator does not yet
+                    // supply to named operator requirements (GEN-16).
+                    && !node
+                        .ancestors()
+                        .any(|parent| parent.kind() == SyntaxKind::ConstraintEach)
+            })
             .collect();
         if calls.is_empty() {
             return Vec::new();
@@ -447,7 +455,9 @@ impl<'a> Typer<'a> {
             // generic arguments a call of it gives" (hhenson/hgl_spec#144:
             // so is a call in it of another generic function).
             None if function && passes_on(generics, &own) => {
-                if let Some(report) = self.unmet_under_stated(at, callee, generics, &condition) {
+                if let Some(report) =
+                    self.unmet_under_stated(at, callee, (generics, &[]), &condition)
+                {
                     self.diagnostics.emit(report);
                 }
             }
@@ -456,6 +466,54 @@ impl<'a> Typer<'a> {
                 .emit(untold(program, callee, at, &condition)),
             _ => {}
         }
+    }
+
+    /// GEN-3 and GEN-10: a function that receives resolved type packs
+    /// must have a requirement known to hold for those types. Report
+    /// both a false condition and a form this pass cannot judge.
+    pub(super) fn pack_requires_met(
+        &mut self,
+        at: Location,
+        callee: (usize, usize),
+        generics: &[Argument],
+        type_packs: &[hir::TypePackArgument],
+    ) {
+        let Some((condition, held, unvalued)) =
+            self.requires_told_with_packs(callee, generics, type_packs)
+        else {
+            return;
+        };
+        if self.unmet_reported(at) {
+            return;
+        }
+        let program = self.program;
+        let own: Vec<_> = self
+            .signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        let report = match held {
+            Some(true) => return,
+            Some(false) => unmet(program, callee, at, &condition),
+            None if passes_on(generics, &own) || packs_pass_on(type_packs, &own) => {
+                if let Some(report) =
+                    self.unmet_under_stated(at, callee, (generics, type_packs), &condition)
+                {
+                    self.diagnostics.emit(report);
+                }
+                return;
+            }
+            None if unvalued => untold(program, callee, at, &condition),
+            None => untold_with_reason(
+                program,
+                callee,
+                at,
+                &condition,
+                "this compiler cannot judge the condition for these type packs",
+            ),
+        };
+        self.diagnostics.emit(report);
     }
 
     /// Each member of `combination`, by the generic parameter it is of:
@@ -501,7 +559,7 @@ impl<'a> Typer<'a> {
         &mut self,
         at: Location,
         callee: (usize, usize),
-        generics: &[Argument],
+        (generics, type_packs): (&[Argument], &[hir::TypePackArgument]),
         condition: &SyntaxNode,
     ) -> Option<hgl_diagnostics::Diagnostic> {
         let program = self.program;
@@ -514,7 +572,9 @@ impl<'a> Typer<'a> {
         let memberships: Vec<(Location, Vec<Argument>)> = self
             .memberships()
             .into_iter()
-            .filter(|(parameter, _)| passes_on(generics, &[*parameter]))
+            .filter(|(parameter, _)| {
+                passes_on(generics, &[*parameter]) || packs_pass_on(type_packs, &[*parameter])
+            })
             .collect();
         let mut combinations = super::candidates::combinations(&memberships);
         if memberships.is_empty() {
@@ -532,6 +592,18 @@ impl<'a> Typer<'a> {
             let placed_generics: Vec<Argument> = generics
                 .iter()
                 .map(|argument| given_in(argument, &given, &own))
+                .collect();
+            let placed_packs: Vec<_> = type_packs
+                .iter()
+                .map(|pack| hir::TypePackArgument {
+                    parameter: pack.parameter,
+                    infer_from_arguments: false,
+                    types: pack
+                        .types
+                        .iter()
+                        .map(|ty| placed(substitute_within(ty, &given), &own))
+                        .collect(),
+                })
                 .collect();
             // ERR-9: "Failure during argument evaluation precedes later
             // admission checks": a generic argument worked out from the
@@ -554,7 +626,7 @@ impl<'a> Typer<'a> {
                 });
             }
             let held = self
-                .requires_told(callee, &placed_generics)
+                .requires_told_with_packs(callee, &placed_generics, &placed_packs)
                 .map(|(_, held, _)| held);
             if held == Some(Some(true)) {
                 continue;
@@ -652,8 +724,19 @@ impl<'a> Typer<'a> {
     /// callee that states no `requires`.
     fn requires_told(
         &mut self,
+        callee: (usize, usize),
+        generics: &[Argument],
+    ) -> Option<(SyntaxNode, Option<bool>, bool)> {
+        self.requires_told_with_packs(callee, generics, &[])
+    }
+
+    /// The same check with any resolved type packs available to GEN-10
+    /// quantifiers in the condition.
+    fn requires_told_with_packs(
+        &mut self,
         (module, declaration): (usize, usize),
         generics: &[Argument],
+        type_packs: &[hir::TypePackArgument],
     ) -> Option<(SyntaxNode, Option<bool>, bool)> {
         let program = self.program;
         let (parameters, condition) = required(program, (module, declaration))?;
@@ -687,6 +770,7 @@ impl<'a> Typer<'a> {
                 constant: &constant,
                 callable: &callable,
                 unvalued: &unvalued,
+                type_packs,
             },
         );
         Some((condition, held, unvalued.get()))
@@ -2495,6 +2579,14 @@ fn passes_on(generics: &[Argument], declared: &[Location]) -> bool {
         })
 }
 
+/// An inferred pack can pass on a type of the enclosing generic body too.
+fn packs_pass_on(packs: &[hir::TypePackArgument], declared: &[Location]) -> bool {
+    packs
+        .iter()
+        .flat_map(|pack| &pack.types)
+        .any(|ty| mentions(ty, declared))
+}
+
 /// `argument`, a generic argument a call in a generic body gives, with
 /// what a call of that body gives its parameters, `map`, in place.
 fn given_in(argument: &Argument, map: &[(Location, &Argument)], declared: &[Location]) -> Argument {
@@ -2807,6 +2899,8 @@ struct Told<'t> {
     callable: &'t dyn Fn(&SyntaxNode) -> Option<bool>,
     /// See [`Condition::unvalued`].
     unvalued: &'t std::cell::Cell<bool>,
+    /// The types each pack parameter takes at the call (GEN-10).
+    type_packs: &'t [hir::TypePackArgument],
 }
 
 /// Whether `condition`, the `requires` of `declaration` of `module`,
@@ -2850,6 +2944,23 @@ fn requires_holds(
         }
     };
     let file = declared_in.files[declared.file].file;
+    let pack_types = |view: &SyntaxToken, name: &str| -> Option<&[Type]> {
+        // `types` here is the language's pack view. A resolved name
+        // belongs to a different declaration.
+        if declared_in
+            .uses
+            .iter()
+            .any(|used| used.at == Location::new(file, view.span()))
+        {
+            return None;
+        }
+        let parameter = parameters.iter().position(|generic| generic.name == name)?;
+        place
+            .type_packs
+            .iter()
+            .find(|pack| pack.parameter == parameter)
+            .map(|pack| pack.types.as_slice())
+    };
     let written = |node: &SyntaxNode| -> Option<Type> {
         let start = node.span().start;
         let read = declared_in
@@ -2867,7 +2978,7 @@ fn requires_holds(
         };
         (place.constant)(node, Some(&ty))
     };
-    holds(
+    holds_with_packs(
         condition,
         &Condition {
             value_of: &value_of,
@@ -2877,6 +2988,7 @@ fn requires_holds(
             callable: place.callable,
             unvalued: place.unvalued,
         },
+        &pack_types,
     )
 }
 
@@ -2922,6 +3034,24 @@ fn untold(
     at: Location,
     condition: &SyntaxNode,
 ) -> hgl_diagnostics::Diagnostic {
+    untold_with_reason(
+        program,
+        (module, declaration),
+        at,
+        condition,
+        "this compiler does not work out a constant it compares",
+    )
+}
+
+/// A condition that cannot be judged has the diagnostic of an unmet
+/// requirement and says why this compiler cannot tell whether it holds.
+fn untold_with_reason(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    at: Location,
+    condition: &SyntaxNode,
+    reason: &str,
+) -> hgl_diagnostics::Diagnostic {
     let declared_in = &program.modules[module];
     let declared = &declared_in.declarations[declaration];
     let what = match declared.kind {
@@ -2933,8 +3063,7 @@ fn untold(
         codes::REQUIRES_UNMET,
         at,
         format!(
-            "the `requires` of `{}` is not known to hold for this {what}: this compiler does \
-             not work out a constant it compares",
+            "the `requires` of `{}` is not known to hold for this {what}: {reason}",
             declared.name
         ),
         "GEN-3",
@@ -3006,15 +3135,27 @@ fn struct_applications(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>
 /// generic parameter, `T == i64` or `T in {i64, f64}`. GEN-15:
 /// "negation binds before conjunction, which binds before disjunction".
 pub(super) fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
+    holds_with_packs(node, of, &|_, _| None)
+}
+
+/// The verdict for a condition with any resolved type packs in scope.
+fn holds_with_packs<'p>(
+    node: &SyntaxNode,
+    of: &Condition,
+    pack_types: &dyn Fn(&SyntaxToken, &str) -> Option<&'p [Type]>,
+) -> Option<bool> {
     match node.kind() {
-        SyntaxKind::ConstraintParen => holds(&node.children().next()?, of),
-        SyntaxKind::ConstraintNot => holds(&node.children().next()?, of).map(|held| !held),
+        SyntaxKind::ConstraintParen => holds_with_packs(&node.children().next()?, of, pack_types),
+        SyntaxKind::ConstraintNot => {
+            holds_with_packs(&node.children().next()?, of, pack_types).map(|held| !held)
+        }
+        SyntaxKind::ConstraintEach => each_holds(node, of, pack_types),
         // GEN-16: a named operator requirement.
         SyntaxKind::ConstraintCall => (of.callable)(node),
         SyntaxKind::ConstraintBinary => {
             let mut sides = node.children();
-            let left = holds(&sides.next()?, of);
-            let right = holds(&sides.next()?, of);
+            let left = holds_with_packs(&sides.next()?, of, pack_types);
+            let right = holds_with_packs(&sides.next()?, of, pack_types);
             let both = has_token(node, SyntaxKind::AmpAmp);
             match (left, right) {
                 (Some(left), Some(right)) if both => Some(left && right),
@@ -3112,4 +3253,74 @@ pub(super) fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
         }
         _ => None,
     }
+}
+
+/// GEN-10: test every selected type, with the quantifier's name bound
+/// to that member. One false test settles the verdict even where
+/// another is untold. An empty pack has no false or untold test.
+fn each_holds<'p>(
+    node: &SyntaxNode,
+    of: &Condition,
+    pack_types: &dyn Fn(&SyntaxToken, &str) -> Option<&'p [Type]>,
+) -> Option<bool> {
+    let bound = tokens(node)
+        .filter(|token| token.kind() == SyntaxKind::Ident)
+        .nth(1)?;
+    let mut parts = node.children();
+    let (view, pack) = types_view(parts.next()?)?;
+    let body = parts.next()?;
+    let types = pack_types(&view, pack.text())?;
+    let mut held = Some(true);
+    for ty in types {
+        let type_of = |name: &str| {
+            if name == bound.text() {
+                (whole(ty) && !names_parameter(ty)).then(|| ty.clone())
+            } else {
+                (of.type_of)(name)
+            }
+        };
+        let written = |operand: &SyntaxNode| {
+            if operand.kind() == SyntaxKind::NamedType && operand.text() == bound.text() {
+                type_of(bound.text())
+            } else {
+                (of.written)(operand)
+            }
+        };
+        let here = Condition {
+            type_of: &type_of,
+            written: &written,
+            ..*of
+        };
+        match holds_with_packs(&body, &here, pack_types) {
+            Some(false) => return Some(false),
+            Some(true) => {}
+            None => held = None,
+        }
+    }
+    held
+}
+
+/// The view name and pack name in the GEN-10 form `types(Ts)`. Forms
+/// that do not select a known type sequence are left untold.
+fn types_view(source: SyntaxNode) -> Option<(SyntaxToken, SyntaxToken)> {
+    let source = ungrouped(source);
+    if source.kind() != SyntaxKind::CallExpr {
+        return None;
+    }
+    let callee = child(&source, SyntaxKind::NameExpr)?;
+    let view = name_token(&callee)?;
+    if view.text() != "types" || child(&callee, SyntaxKind::QualifiedName).is_some() {
+        return None;
+    }
+    let arguments = child(&source, SyntaxKind::ArgList)?;
+    let mut arguments = arguments.children();
+    let argument = arguments.next()?;
+    if argument.kind() != SyntaxKind::Arg || arguments.next().is_some() {
+        return None;
+    }
+    let pack = ungrouped(argument.children().next()?);
+    if pack.kind() != SyntaxKind::NameExpr || child(&pack, SyntaxKind::QualifiedName).is_some() {
+        return None;
+    }
+    Some((view, name_token(&pack)?))
 }

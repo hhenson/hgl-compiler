@@ -2805,6 +2805,34 @@ fn graph_instances_complete_inferred_function_type_packs() {
     assert_eq!(packed[4].0, ["tuple<i64, bool>"]);
 }
 
+/// GEN-10: a graph's deferred pack is checked once its elements settle.
+#[test]
+fn graph_instances_check_requirements_on_settled_type_packs() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn numeric<...Ts>(items: ...Ts) -> i64\n",
+        "    requires each U in types(Ts) { U == i64 } => 1\n",
+        "fn accepted<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return numeric(chosen)\n",
+        "}\n",
+        "fn rejected<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { \"text\" }\n",
+        "    return numeric(chosen)\n",
+        "}\n",
+        "fn admitted() -> i64 => accepted(1)\n",
+        "fn rejected_instance() -> i64 => rejected(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:16:34 constraint/requires.unmet GEN-3"],
+        "{}",
+        checked.report
+    );
+}
+
 /// ERR-2 and GEN-2: inferred result bindings carry the types of both
 /// the success and the error after the generic argument types settle.
 #[test]

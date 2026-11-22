@@ -335,11 +335,11 @@ pub(super) fn temporary(word: &str, number: usize) -> String {
     format!("{word}_0{number}_")
 }
 
-/// The unchecked input that watches a result on `local` (ERR-15).
+/// The unchecked input that watches `local` for failure (ERR-12, ERR-15).
 /// It ends in `_` and contains `_w`, which [`identifier`] never does
 /// in a name ending in `_`.
-pub(super) fn result_watch(local: usize) -> String {
-    format!("result_watch_{local}_")
+pub(super) fn input_watch(local: usize) -> String {
+    format!("input_watch_{local}_")
 }
 
 /// The suffix that distinguishes a physical reader variant (ERR-15).

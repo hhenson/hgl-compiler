@@ -258,6 +258,41 @@ test rejected {
     );
 }
 
+/// GEN-8 and TST-5: a packed trace containing only contextual cells
+/// needs a resolved pack type even when it has publications.
+#[test]
+fn a_pack_cannot_infer_from_contextual_cells_in_an_eval() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+fn positional<...Ts>(rest: ...Ts) -> i64 { when { return 1 } }
+fn named<...Ts>(rest: ...{Ts}) -> i64 { when { return 1 } }
+test traces {
+    assert eval positional([null]) == []
+    assert eval positional([ok(1)]) == []
+    assert eval named(x: [0s: null]) == []
+    assert eval named(x: [0s: ok(1)]) == []
+    assert eval positional([(null, 1)]) == []
+    assert eval positional<i64?, result<i64, error>>([null], [ok(1)]) == [1]
+    assert eval positional([(null, not_here)]) == []
+}
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:17 type/generic.unresolved GEN-8",
+            "m.hgl:6:17 type/generic.unresolved GEN-8",
+            "m.hgl:7:17 type/generic.unresolved GEN-8",
+            "m.hgl:8:17 type/generic.unresolved GEN-8",
+            "m.hgl:9:17 type/generic.unresolved GEN-8",
+            "m.hgl:11:36 name/name.unknown UNIT-10",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// EXPR-13: operands are evaluated in the order written, and CTRL-10
 /// has a block among them assign what a later one reads. A trace
 /// written out on the left of an eval takes its type from the eval,
@@ -737,6 +772,46 @@ fn a_const_fn_is_given_a_trace_as_the_list_of_its_publications() {
     };
     assert_eq!(given.ty.to_string(), "list<tuple<datetime, i64>>");
     assert_eq!(trace.ty.to_string(), "trace of i64");
+}
+
+/// TST-16 and GEN-10: a captured trace becomes a publication list
+/// before the const function's type pack and its `each` are resolved.
+#[test]
+fn an_inferred_const_fn_pack_captures_the_publications_of_a_trace() {
+    let checked = module(concat!(
+        "const fn collect<...Ts>(items: ...Ts) -> i64\n",
+        "    requires each T in types(Ts) { T == list<tuple<datetime, i64>> } => 1\n",
+        "const fn named<...Ts>(items: ...{Ts}) -> i64\n",
+        "    requires each T in types(Ts) { T == list<tuple<datetime, i64>> } => 2\n",
+        "test collected {\n",
+        "    let seen = eval pass(value: [7, _, 9])\n",
+        "    let positional = collect(seen)\n",
+        "    let keyed = named(trace: seen)\n",
+        "}\n",
+    ));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+    let body = checked.program.module("m").unwrap().test_bodies[0]
+        .as_ref()
+        .unwrap();
+    for statement in &body.statements[1..] {
+        let Stmt::Declare {
+            value: Some(call), ..
+        } = statement
+        else {
+            panic!("expected a declaration with a call");
+        };
+        let ExprKind::Call {
+            callee, arguments, ..
+        } = &call.kind
+        else {
+            panic!("expected a call with a captured argument");
+        };
+        let [pack] = callee.type_packs() else {
+            panic!("expected a single inferred type pack");
+        };
+        assert_eq!(pack.types[0].to_string(), "list<tuple<datetime, i64>>");
+        assert!(matches!(arguments[0].value.kind, ExprKind::Publications(_)));
+    }
 }
 
 /// TST-5: "Each cell is one cycle's publication, written as a `return`

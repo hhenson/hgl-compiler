@@ -384,7 +384,8 @@ fn deferred_generic_default<T>(const value: T) -> f64 {
 }
 
 # FN-8 and GEN-10: each instance gets the settled types of its captured arguments.
-const fn deferred_pack<...Ts>(items: ...Ts) -> i64 => 1
+const fn deferred_pack<...Ts>(items: ...Ts) -> i64
+    requires each T in types(Ts) { T in {i64, bool} } => 1
 const fn deferred_named_pack<...Fields>(items: ...{Fields}) -> i64 => 2
 const fn deferred_fixed_pack<U, ...Ts>(head: U, items: ...Ts) -> U => head
 

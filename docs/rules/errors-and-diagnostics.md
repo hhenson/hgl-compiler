@@ -151,7 +151,7 @@ analyser: done
 
 transpiler: done
 
-- C++ reads the payload at the recorded expression and reports `value.null` in its recorded phase. A connection's reading node performs that read.
+- C++ reads the payload at the recorded expression and reports `value.null` in its recorded phase. A null publication on a required connection fails its consumer that cycle, before handler or lifted-call admission. This includes an input bound through a pack.
 
 ## ERR-13
 

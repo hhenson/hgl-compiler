@@ -1405,12 +1405,10 @@ pub(super) fn from_place(
     }
 }
 
-/// True when a call still has no supported candidate shape. A fixed
-/// candidate in a public pack's place will reject at its declaration
-/// when the pinned catalogue has `impl.pack` (#336).
+/// True when the call cannot bind the public or candidate pack slots.
+/// Duplicate packs and fixed candidate parameters in pack slots are
+/// reported at their declarations (FN-8, GEN-6).
 pub(super) fn unreadable(public: &Signature, candidates: &[(usize, usize, &Signature)]) -> bool {
-    // A second pack of the same kind remains untyped until the
-    // declaration check can report `pack.duplicate` (#336).
     let duplicate = |signature: &Signature| {
         [Pack::Positional, Pack::Named].into_iter().any(|kind| {
             signature

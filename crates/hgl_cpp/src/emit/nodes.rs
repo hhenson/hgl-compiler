@@ -569,8 +569,8 @@ impl Emitter<'_> {
         // validity includes only requirements common to executable
         // handlers; other guards stay per-handler."
         let active = subscribed_inputs(&inputs, &running);
-        // ERR-15: a new Err can fail this node before any handler's
-        // admission is met. In these variants validity stays per handler.
+        // ERR-12 and ERR-15: a null or Err can fail this node before any
+        // handler is admitted. In these variants validity stays per handler.
         let valid = if running.is_empty() || !watched.is_empty() {
             Vec::new()
         } else {
@@ -597,13 +597,13 @@ impl Emitter<'_> {
             let Some(schema) = self.temporal_schema(&parameter.ty, form.at) else {
                 return;
             };
-            let view = names::result_watch(local);
-            // The extra subscription sees Err even if the HGL input is
-            // passive. A successful observation does not wake a handler.
+            let view = names::input_watch(local);
+            // The extra subscription sees failures on passive inputs.
+            // A successful observation does not wake a handler.
             parameters.push(format!(
-                "::hgraph::In<\"hgl.result.input.{local}\", {schema}, ::hgraph::InputValidity::Unchecked> {view}"
+                "::hgraph::In<\"hgl.failure.input.{local}\", {schema}, ::hgraph::InputValidity::Unchecked> {view}"
             ));
-            checks.push_str(&self.check_result_tick(form, &view, &indent));
+            checks.push_str(&self.check_read_tick(form, &view, &indent));
         }
         let output = if let Some(forms) = &forms {
             Some(forms.output_parameter())
