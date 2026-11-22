@@ -1056,17 +1056,6 @@ pub struct DeferredOption {
     pub value: Option<Expr>,
 }
 
-/// A call whose spread arguments are known only in the enclosing instance (FN-19).
-#[derive(Debug, Clone, PartialEq)]
-pub struct DeferredPackCall {
-    /// The complete written call, including any generic arguments.
-    pub source: Location,
-    /// The type expected where the source call is written.
-    pub expected: Option<Type>,
-    /// The source hook, if the call runs in a node.
-    pub hook: Option<Hook>,
-}
-
 /// A named operator whose arguments need the concrete graph instance.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeferredOperator {
@@ -1194,7 +1183,7 @@ pub enum Callee {
     /// A named operator awaiting an argument type before selection (GEN-7).
     DeferredOperator(Box<DeferredOperator>),
     /// A call waiting for the entries of its pack arguments (FN-19).
-    DeferredPackCall(Box<DeferredPackCall>),
+    DeferredPackCall,
     /// A deferred operator call whose candidates are all value functions.
     DeferredValue,
     /// No callee: a name left for the prelude, a function that is
@@ -1225,7 +1214,7 @@ impl Callee {
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
             | Callee::DeferredOperator(_)
-            | Callee::DeferredPackCall(_)
+            | Callee::DeferredPackCall
             | Callee::DeferredValue
             | Callee::Unread => None,
         }
@@ -1241,7 +1230,7 @@ impl Callee {
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
             | Callee::DeferredOperator(_)
-            | Callee::DeferredPackCall(_)
+            | Callee::DeferredPackCall
             | Callee::DeferredValue
             | Callee::Unread => &[],
         }
@@ -1257,7 +1246,7 @@ impl Callee {
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
             | Callee::DeferredOperator(_)
-            | Callee::DeferredPackCall(_)
+            | Callee::DeferredPackCall
             | Callee::DeferredValue
             | Callee::Unread => &[],
         }

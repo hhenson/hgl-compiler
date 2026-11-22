@@ -42,3 +42,21 @@ test extra_operator_position {
     # expect-error(type, "argument.unexpected")
     assert relay_operator(1, 2) == 0
 }
+
+const fn generic_id<T>(value: T) -> T => value
+const fn wrong_result<...Args>(args: ...Args) -> i64 => generic_id<str>(...args)
+
+test result_mismatch {
+    # expect-error(type, "type.mismatch")
+    assert wrong_result("a string") == 0
+}
+
+const fn unassigned<...Args>(args: ...Args) -> i64 {
+    var value: i64
+    return receive(value, b: 2, ...args)
+}
+
+test unassigned_written_argument {
+    # expect-error(name, "binding.unassigned")
+    assert unassigned() == 0
+}

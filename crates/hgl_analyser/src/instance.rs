@@ -321,25 +321,23 @@ impl Program {
         let pending_forwards = inputs
             .pack_inputs
             .filter(|_| crate::values::has_forwarded_calls(&body));
+        if let Some(pack_inputs) = pending_forwards
+            && let Some(reread) = crate::values::resolve_forwarded_calls(
+                self,
+                (module, declaration),
+                (&taken, &map),
+                (&functions, pack_inputs),
+                graph_diagnostics,
+            )
+        {
+            body = reread;
+        }
         let recheck = graph
             && (!declared.selecting[declaration].is_empty()
                 || !requirements.is_empty()
                 || pending_forwards.is_some());
         let destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
         self.place_body(&mut body, &arguments, &functions);
-        if let Some(pack_inputs) = pending_forwards
-            && crate::values::resolve_forwarded_calls(
-                self,
-                (module, declaration),
-                (&taken, &map),
-                (&functions, pack_inputs),
-                &mut body,
-                graph_diagnostics,
-                &project,
-            )
-        {
-            self.place_body(&mut body, &arguments, &functions);
-        }
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
         // could not say of an operation it requires or a pack it forwards.
@@ -878,7 +876,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
         Callee::Parameter { .. }
         | Callee::Anonymous(_)
         | Callee::DeferredOperator(_)
-        | Callee::DeferredPackCall(_)
+        | Callee::DeferredPackCall
         | Callee::DeferredValue
         | Callee::Unread => {}
     }

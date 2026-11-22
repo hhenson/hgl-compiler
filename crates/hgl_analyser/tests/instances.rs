@@ -46,7 +46,7 @@ fn calls(body: &Body) -> Vec<Called> {
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
             | Callee::DeferredOperator(_)
-            | Callee::DeferredPackCall(_)
+            | Callee::DeferredPackCall
             | Callee::DeferredValue
             | Callee::Unread => {}
         }

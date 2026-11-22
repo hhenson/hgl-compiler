@@ -3,11 +3,11 @@
 //! slot that holds it.
 
 use hgl_diagnostics::Category;
-use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
+use hgl_parser::{SyntaxKind, SyntaxNode};
 
 use super::Typer;
 use crate::declared::names_parameter;
-use crate::hir::{Callee, DeferredPackCall, Expr, ExprKind, Form, PackKey};
+use crate::hir::{Callee, Expr, ExprKind, Form, PackKey};
 use crate::syntax::ungrouped;
 use crate::types::Type;
 use crate::{codes, error};
@@ -43,7 +43,6 @@ impl Typer<'_> {
         }
         let mut spreads = spread_operands(list).peekable();
         spreads.peek()?;
-        let source = list.parent()?;
         let before = self.diagnostics.len();
         for spread in spreads {
             let operand = ungrouped(spread.clone());
@@ -71,11 +70,7 @@ impl Typer<'_> {
             .unwrap_or(Type::Unknown);
         Some((
             ExprKind::Call {
-                callee: Callee::DeferredPackCall(Box::new(DeferredPackCall {
-                    source: self.at(&source),
-                    expected: expected.cloned(),
-                    hook: self.hook,
-                })),
+                callee: Callee::DeferredPackCall,
                 arguments: Vec::new(),
                 form: Form::Named,
                 braced: Vec::new(),
@@ -140,17 +135,17 @@ fn is_forwarded_call(value: &Expr) -> bool {
     matches!(
         &value.kind,
         ExprKind::Call {
-            callee: Callee::DeferredPackCall(_),
+            callee: Callee::DeferredPackCall,
             ..
         }
     )
 }
 
-/// Reread a deferred call with the concrete pack inputs (FN-19).
+/// Reread a scope that forwards a parameter pack (FN-19).
 ///
-/// A value body or node hook where a call's result type also depends
-/// on its pack needs its source scope checked with that result in place.
-/// Returns whether the caller must specialize that newly read body.
+/// The concrete calls are checked in their surrounding flow, including
+/// definite assignment of written arguments and the destination that
+/// receives the call's result.
 pub(crate) fn resolve_forwarded_calls(
     program: &crate::Program,
     (module, declaration): (usize, usize),
@@ -159,10 +154,10 @@ pub(crate) fn resolve_forwarded_calls(
         &[(hgl_diagnostics::Location, &crate::Argument)],
     ),
     (functions, inputs): (&[(usize, Callee)], &[crate::hir::PackInput]),
-    body: &mut crate::hir::Body,
     diagnostics: &mut hgl_diagnostics::Diagnostics,
-    project: &dyn Fn(&Type) -> Type,
-) -> bool {
+) -> Option<crate::hir::Body> {
+    use crate::program::Phase;
+
     let owner = &program.modules[module];
     let declared = &owner.declarations[declaration];
     let (bindings, written, calls) = super::tables(owner);
@@ -176,71 +171,31 @@ pub(crate) fn resolve_forwarded_calls(
         },
         ..signature.clone()
     };
-    let tables = super::Tables {
-        bindings: &bindings,
-        written: &written,
-        calls: &calls,
-        selecting: &selecting,
-    };
-    let phase = owner.phases[declaration];
-    let graph = phase == Some(crate::program::Phase::Graph);
-    let mut needs_scope = false;
-    if !graph {
-        crate::hir::walk_statements(&body.statements, &mut |value| {
-            needs_scope |= is_forwarded_call(value) && !super::fit::whole(&value.ty);
-        });
-    }
-    let mut typer = if needs_scope {
-        Typer::new(program, owner, declared, &reading, tables, diagnostics)
-    } else {
-        let mut typer = Typer::bare(program, owner, declared, &reading, tables, diagnostics);
-        typer.use_instance_locals(std::mem::take(&mut body.locals));
-        typer
-    };
+    let mut typer = Typer::new(
+        program,
+        owner,
+        declared,
+        &reading,
+        super::Tables {
+            bindings: &bindings,
+            written: &written,
+            calls: &calls,
+            selecting: &selecting,
+        },
+        diagnostics,
+    );
     typer.instance = map
         .iter()
         .map(|(at, argument)| (*at, (*argument).clone()))
         .collect();
     typer.pack_inputs = Some(inputs.to_vec());
     typer.pack_functions = functions.to_vec();
-    if needs_scope {
-        let reread = match phase {
-            Some(crate::program::Phase::Node) if crate::phases::is_source(declared) => {
-                typer.source()
-            }
-            Some(crate::program::Phase::Node) => typer.node(),
-            _ => typer.body(),
-        };
-        if let Some(reread) = reread {
-            *body = reread;
-            return true;
-        }
-        return false;
+    match owner.phases[declaration] {
+        Some(Phase::Graph) => typer.graph().0,
+        Some(Phase::Node) if crate::phases::is_source(declared) => typer.source(),
+        Some(Phase::Node) => typer.node(),
+        _ => typer.body(),
     }
-    crate::hir::walk_statements_mut(&mut body.statements, &mut |value| {
-        let ExprKind::Call {
-            callee: Callee::DeferredPackCall(call),
-            ..
-        } = &value.kind
-        else {
-            return;
-        };
-        let Some(source) = declared.syntax.descendants().find(|node| {
-            node.span() == call.source.span
-                && matches!(
-                    node.kind(),
-                    SyntaxKind::CallExpr | SyntaxKind::TypedConstructor
-                )
-        }) else {
-            return;
-        };
-        typer.hook = call.hook;
-        typer.graph = graph && call.hook.is_none();
-        let expected = call.expected.as_ref().map(project);
-        *value = typer.expression(&source, expected.as_ref());
-    });
-    body.locals = typer.locals;
-    false
 }
 
 /// One concrete specialization reached by a call with a forwarding path.
@@ -364,7 +319,7 @@ pub(super) fn check_instances(
             let owner = (module, declaration);
             walk_statements(&body.statements, &mut |value| {
                 if let ExprKind::Call { callee, .. } = &value.kind {
-                    if matches!(callee, Callee::DeferredPackCall(_)) {
+                    if matches!(callee, Callee::DeferredPackCall) {
                         forwarding.insert(owner);
                     } else if let Some(called) = callee.declaration() {
                         callers.entry(called).or_default().push(owner);
