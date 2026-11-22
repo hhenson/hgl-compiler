@@ -37,6 +37,13 @@ Notes:
     graph LR; A --> B
     ~~~
 
+    ~~~mermaid
+    %%{init: {"htmlLabels": true, "flowchart": {"htmlLabels": true}, "themeCSS": ".hgl-theme-override { color: red; }", "themeVariables": {"primaryColor": "#010203"}, "fontFamily": "hgl-font-override", "securityLevel": "loose"}}%%
+    flowchart LR
+        A["<b>bold</b>"] --> B["plain"]
+        click A href "https://renderer-probe.invalid/"
+    ~~~
+
     Unrenderable source stays visible:
 
     ~~~math

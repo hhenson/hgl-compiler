@@ -1,5 +1,5 @@
-// Use local classic scripts so every renderer works on file://. Source stays
-// visible until its renderer has produced a replacement successfully.
+// SDOC-7: use local classic scripts to render formulas and diagrams on file://.
+// Keep the source visible until the renderer produces a replacement.
 (() => {
   const base = new URL(".", document.currentScript.src);
   function load(path) {
@@ -12,11 +12,11 @@
     });
   }
 
-  const math = document.querySelectorAll("code.formula-inline, code.language-math");
+  const math = document.querySelectorAll("code.formula-inline, code[data-renderer=math]");
   if (math.length) {
     load("vendor/katex/katex.min.js").then(() => {
       for (const source of math) {
-        const displayMode = source.classList.contains("language-math");
+        const displayMode = source.dataset.renderer === "math";
         const rendered = document.createElement(displayMode ? "div" : "span");
         rendered.className = displayMode ? "formula-block" : "formula";
         try {
@@ -24,6 +24,9 @@
             displayMode,
             output: "mathml",
             trust: false,
+            strict: "error",
+            maxExpand: 1000,
+            maxSize: 20,
             throwOnError: true,
           });
           if (displayMode) {
@@ -46,7 +49,7 @@
     }).catch(() => {});
   }
 
-  const diagrams = document.querySelectorAll("code.language-mermaid");
+  const diagrams = document.querySelectorAll("code[data-renderer=mermaid]");
   if (diagrams.length) {
     load("vendor/mermaid/mermaid.min.js").then(async () => {
       mermaid.initialize({
@@ -54,19 +57,32 @@
         securityLevel: "strict",
         suppressErrorRendering: true,
         theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default",
-        flowchart: { htmlLabels: false },
+        htmlLabels: false,
+        secure: [...new Set([
+          ...mermaid.mermaidAPI.defaultConfig.secure,
+          "htmlLabels", "themeCSS", "themeVariables", "fontFamily", "securityLevel",
+        ])],
       });
-      const parser = new DOMParser();
+      const template = document.createElement("template");
       for (const [index, source] of diagrams.entries()) {
         try {
           const { svg } = await mermaid.render("diagram-" + index, source.textContent);
-          const tree = parser.parseFromString(svg, "image/svg+xml").documentElement;
-          if (tree.localName === "svg") {
-            const rendered = document.createElement("div");
-            rendered.className = "diagram";
-            rendered.append(document.importNode(tree, true));
-            source.parentElement.replaceWith(rendered);
+          // Mermaid serializes a browser SVG fragment. Parse it as such:
+          // its xlink attributes need no explicit XML namespace declaration.
+          template.innerHTML = svg;
+          const tree = template.content.firstElementChild;
+          if (tree?.localName !== "svg" || tree.querySelector("foreignObject")) {
+            continue;
           }
+          for (const link of tree.querySelectorAll("a")) {
+            // Diagram links never leave the offline reference.
+            link.removeAttribute("href");
+            link.removeAttributeNS("http://www.w3.org/1999/xlink", "href");
+          }
+          const rendered = document.createElement("div");
+          rendered.className = "diagram";
+          rendered.append(tree);
+          source.parentElement.replaceWith(rendered);
         } catch {
           // The original diagram remains readable.
         }

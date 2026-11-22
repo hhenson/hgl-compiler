@@ -272,8 +272,70 @@ fn the_site_copies_the_renderer_bundles_and_their_licenses() {
             "vendor/mermaid/LICENSE",
             include_bytes!("../../hgl_doc/vendor/mermaid/LICENSE").as_slice(),
         ),
+        (
+            "vendor/mermaid/THIRD-PARTY-NOTICES.txt",
+            include_bytes!("../../hgl_doc/vendor/mermaid/THIRD-PARTY-NOTICES.txt").as_slice(),
+        ),
     ] {
         assert_eq!(fs::read(site.join(file)).unwrap(), expected, "{file}");
+    }
+}
+
+#[test]
+fn renderer_assets_follow_the_pages_that_use_them() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("core.hgl"), "module core\n").unwrap();
+    for (output, comment, math, mermaid) in [
+        (
+            "plain",
+            "Ordinary text.\n\n~~~mermaid ignored\nA --> B\n~~~",
+            false,
+            false,
+        ),
+        ("math", "A formula $`x^2`$.", true, false),
+        (
+            "diagram",
+            "~~~mermaid\nflowchart LR; A --> B\n~~~",
+            false,
+            true,
+        ),
+    ] {
+        fs::write(
+            source.join("assets.hgl"),
+            format!("module guide.assets\n/**\n{comment}\n*/\nexport const marker: i64 = 1\n"),
+        )
+        .unwrap();
+        write_site(root.path(), &source, &["--out", output]);
+        let site = root.path().join(output);
+        let page = fs::read_to_string(site.join("modules/mod-guide.assets.html")).unwrap();
+        assert_eq!(
+            page.contains("../renderers.js"),
+            math || mermaid,
+            "{output}"
+        );
+        assert_eq!(
+            site.join("renderers.js").is_file(),
+            math || mermaid,
+            "{output}"
+        );
+        assert_eq!(
+            site.join("vendor/katex/katex.min.js").is_file(),
+            math,
+            "{output}"
+        );
+        assert_eq!(
+            site.join("vendor/mermaid/mermaid.min.js").is_file(),
+            mermaid,
+            "{output}"
+        );
+        assert_eq!(
+            site.join("vendor/mermaid/THIRD-PARTY-NOTICES.txt")
+                .is_file(),
+            mermaid,
+            "{output}"
+        );
     }
 }
 

@@ -5,7 +5,6 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; font-src 'self' file:; img-src data:; base-uri 'none'">
 <title>guide.api</title>
 <link rel="stylesheet" href="../site.css">
-<script defer src="../renderers.js"></script>
 <body>
 <header><nav><a href="../index.html">API reference</a></nav></header>
 <main>
@@ -15,7 +14,7 @@
 <article id="decl-increment-0">
 <h3>increment</h3>
 <pre class="signature"><code>export const fn increment{const offset: i64 = 1}(value: i64) -&gt; i64</code></pre>
-<p class="source">api.hgl:55</p>
+<p class="source">api.hgl:62</p>
 <p>Describe the <a href="mod-guide.types.html#decl-shared-3"><code>shared</code></a> value and the <a href="mod-guide.types.html#decl-buy-1"><code>foreign::Side.buy</code></a> case.</p>
 <p><a href="mod-guide.types.html#decl-sell-2"><code>guide.types.Side.sell</code></a> uses its full name. <code>value</code> is the parameter.
 <code>hidden_elsewhere</code> stays code. See also <code>private_marker</code>.</p>
@@ -43,14 +42,19 @@ See <a href="mod-guide.types.html#decl-shared-3"><code>shared</code></a> for ano
 <p>External label
 External picture</p>
 <p>Inline formula $<code class="formula-inline">shared</code>$ with a formula and diagram below:</p>
-<pre><code class="language-math">a^2+b^2=c^2
+<pre><code data-renderer="math" class="language-math">a^2+b^2=c^2
 </code></pre>
-<pre><code class="language-mermaid">graph LR; A --&gt; B
+<pre><code data-renderer="mermaid" class="language-mermaid">graph LR; A --&gt; B
+</code></pre>
+<pre><code data-renderer="mermaid" class="language-mermaid">%%{init: {&quot;htmlLabels&quot;: true, &quot;flowchart&quot;: {&quot;htmlLabels&quot;: true}, &quot;themeCSS&quot;: &quot;.hgl-theme-override { color: red; }&quot;, &quot;themeVariables&quot;: {&quot;primaryColor&quot;: &quot;#010203&quot;}, &quot;fontFamily&quot;: &quot;hgl-font-override&quot;, &quot;securityLevel&quot;: &quot;loose&quot;}}%%
+flowchart LR
+    A[&quot;&lt;b&gt;bold&lt;/b&gt;&quot;] --&gt; B[&quot;plain&quot;]
+    click A href &quot;https://renderer-probe.invalid/&quot;
 </code></pre>
 <p>Unrenderable source stays visible:</p>
-<pre><code class="language-math">\badHglCommand{b}
+<pre><code data-renderer="math" class="language-math">\badHglCommand{b}
 </code></pre>
-<pre><code class="language-mermaid">not a diagram
+<pre><code data-renderer="mermaid" class="language-mermaid">not a diagram
 </code></pre>
 <h4>Examples</h4>
 <pre><code class="language-hgl"><span class="keyword">assert</span> increment(<span class="literal">2</span>) == <span class="literal">3</span>
@@ -60,7 +64,7 @@ External picture</p>
 <article id="decl-choose-1">
 <h3>choose</h3>
 <pre class="signature"><code>export operator choose&lt;T&gt;(value: T) -&gt; i64</code></pre>
-<p class="source">api.hgl:63</p>
+<p class="source">api.hgl:70</p>
 <p>Choose the result for the argument.</p>
 <h4>Type arguments</h4>
 <table><thead><tr><th scope="col">Name</th><th scope="col">Type</th>
@@ -77,7 +81,7 @@ External picture</p>
 <article id="decl-choose-2">
 <h5>choose</h5>
 <pre class="signature"><code>impl const fn choose(value: i64) -&gt; i64</code></pre>
-<p class="source">api.hgl:65</p>
+<p class="source">api.hgl:72</p>
 <p>The integer candidate.</p>
 <h4>Arguments</h4>
 <table><thead><tr><th scope="col">Name</th><th scope="col">Type</th>
@@ -88,7 +92,7 @@ External picture</p>
 <article id="decl-choose-3">
 <h5>choose</h5>
 <pre class="signature"><code>impl const fn choose(value: str) -&gt; i64</code></pre>
-<p class="source">api.hgl:67</p>
+<p class="source">api.hgl:74</p>
 <p>The text candidate.</p>
 <h4>Arguments</h4>
 <table><thead><tr><th scope="col">Name</th><th scope="col">Type</th>
@@ -97,6 +101,7 @@ External picture</p>
 </tbody></table>
 </article>
 </article>
+<script defer src="../renderers.js"></script>
 </main>
 </body>
 </html>

@@ -9,13 +9,13 @@ use hgl_analyser::Program;
 use hgl_diagnostics::Location;
 use serde::Serialize;
 
-use crate::markdown::{escaped, render};
+use crate::markdown::{Markup, Renderers, escaped, render};
 use crate::model::{Declaration, Documentation, Interface, Model, Module, Section, Source};
 use crate::{LinkContext, links};
 
 /// The browser builds and notices from the exact npm releases in
 /// vendor/README.md. Embedding them also carries them in release binaries.
-const VENDOR: &[(&str, &[u8])] = &[
+const KATEX: &[(&str, &[u8])] = &[
     (
         "vendor/katex/katex.min.js",
         include_bytes!("../vendor/katex/katex.min.js"),
@@ -24,6 +24,9 @@ const VENDOR: &[(&str, &[u8])] = &[
         "vendor/katex/LICENSE",
         include_bytes!("../vendor/katex/LICENSE"),
     ),
+];
+
+const MERMAID: &[(&str, &[u8])] = &[
     (
         "vendor/mermaid/mermaid.min.js",
         include_bytes!("../vendor/mermaid/mermaid.min.js"),
@@ -31,6 +34,10 @@ const VENDOR: &[(&str, &[u8])] = &[
     (
         "vendor/mermaid/LICENSE",
         include_bytes!("../vendor/mermaid/LICENSE"),
+    ),
+    (
+        "vendor/mermaid/THIRD-PARTY-NOTICES.txt",
+        include_bytes!("../vendor/mermaid/THIRD-PARTY-NOTICES.txt"),
     ),
 ];
 
@@ -100,20 +107,34 @@ pub(crate) fn build(program: &Program, model: Model<'_>) -> Vec<SiteFile> {
             format!("const hglDeclarations = {search};\n"),
         ),
         SiteFile::text("search.js", include_str!("search.js").replace("\r\n", "\n")),
-        SiteFile::text(
-            "renderers.js",
-            include_str!("renderers.js").replace("\r\n", "\n"),
-        ),
     ];
-    files.extend(VENDOR.iter().map(|&(path, contents)| SiteFile {
-        path: path.to_owned(),
-        contents: Cow::Borrowed(contents),
-    }));
+    let mut renderers = Renderers::default();
     for (module, page) in model.modules.iter().zip(&pages) {
+        let mut markup = site.module(module, page);
+        renderers.include(&markup.renderers);
+        if markup.renderers.any() {
+            markup
+                .html
+                .push_str("<script defer src=\"../renderers.js\"></script>\n");
+        }
         files.push(SiteFile::text(
             format!("modules/{page}"),
-            site.module(module, page),
+            finish_page(markup.html),
         ));
+    }
+    if renderers.any() {
+        files.push(SiteFile::text(
+            "renderers.js",
+            include_str!("renderers.js").replace("\r\n", "\n"),
+        ));
+    }
+    for (needed, assets) in [(renderers.math, KATEX), (renderers.mermaid, MERMAID)] {
+        if needed {
+            files.extend(assets.iter().map(|&(path, contents)| SiteFile {
+                path: path.to_owned(),
+                contents: Cow::Borrowed(contents),
+            }));
+        }
     }
     // Publish the entry page after all of its targets have been written.
     files.push(SiteFile::text("index.html", index(&model, &pages)));
@@ -173,7 +194,6 @@ fn page(title: &str, root: &str) -> String {
          script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; \
          font-src 'self' file:; img-src data:; base-uri 'none'\">\n\
          <title>{}</title>\n<link rel=\"stylesheet\" href=\"{root}site.css\">\n\
-         <script defer src=\"{root}renderers.js\"></script>\n\
          <body>\n<header><nav><a href=\"{root}index.html\">API reference</a></nav></header>\n<main>\n",
         escaped(title),
     )
@@ -206,13 +226,16 @@ impl<'a> Site<'a> {
         }
     }
 
-    fn module(&self, module: &Module<'_>, page_name: &str) -> String {
-        let mut output = page(module.name, "../");
-        writeln!(output, "<h1>{}</h1>", escaped(module.name)).unwrap();
+    fn module(&self, module: &Module<'_>, page_name: &str) -> Markup {
+        let mut output = Markup {
+            html: page(module.name, "../"),
+            renderers: Renderers::default(),
+        };
+        writeln!(output.html, "<h1>{}</h1>", escaped(module.name)).unwrap();
         for part in &module.parts {
             if let Some(comment) = &part.documentation {
                 if let Some(name) = part.name {
-                    writeln!(output, "<h2>Part {}</h2>", escaped(name)).unwrap();
+                    writeln!(output.html, "<h2>Part {}</h2>", escaped(name)).unwrap();
                 }
                 self.documentation(&mut output, comment, &part.source, page_name, None);
             }
@@ -226,24 +249,24 @@ impl<'a> Site<'a> {
                 .push(declaration);
         }
         for (kind, declarations) in kinds {
-            writeln!(output, "<h2>{kind}</h2>").unwrap();
+            writeln!(output.html, "<h2>{kind}</h2>").unwrap();
             for declaration in declarations {
                 self.declaration(&mut output, declaration, page_name, 3);
             }
         }
-        finish_page(output)
+        output
     }
 
     fn declaration(
         &self,
-        output: &mut String,
+        output: &mut Markup,
         declaration: &Declaration<'_>,
         page: &str,
         level: u8,
     ) {
         let Target { anchor, .. } = &self.targets[&declaration.source.at];
         writeln!(
-            output,
+            output.html,
             "<article id=\"{}\">\n<h{level}>{}</h{level}>\n<pre class=\"signature\"><code>{}</code></pre>\n\
              <p class=\"source\">{}:{}</p>",
             escaped(anchor),
@@ -271,18 +294,18 @@ impl<'a> Site<'a> {
             ("Members", &declaration.members),
         ] {
             if !nested.is_empty() {
-                writeln!(output, "<h4>{label}</h4>").unwrap();
+                writeln!(output.html, "<h4>{label}</h4>").unwrap();
                 for item in nested {
                     self.declaration(output, item, page, 5);
                 }
             }
         }
-        output.push_str("</article>\n");
+        output.html.push_str("</article>\n");
     }
 
     fn documentation(
         &self,
-        output: &mut String,
+        output: &mut Markup,
         comment: &Documentation,
         source: &Source<'_>,
         page: &str,
@@ -327,7 +350,7 @@ impl<'a> Site<'a> {
                 _ => {
                     if let Some(heading) = &section.heading {
                         writeln!(
-                            output,
+                            output.html,
                             "<h4>{}</h4>",
                             escaped(heading.trim_end_matches(':'))
                         )
@@ -369,7 +392,7 @@ struct Row<'a> {
 }
 
 fn generic_table(
-    output: &mut String,
+    output: &mut Markup,
     interface: &Interface<'_>,
     section: Option<&Section>,
     link: impl Fn(&str) -> Option<String> + Copy,
@@ -391,7 +414,7 @@ fn generic_table(
 }
 
 fn parameter_tables(
-    output: &mut String,
+    output: &mut Markup,
     interface: &Interface<'_>,
     section: Option<&Section>,
     link: impl Fn(&str) -> Option<String> + Copy,
@@ -415,7 +438,7 @@ fn parameter_tables(
 }
 
 fn table<'a>(
-    output: &mut String,
+    output: &mut Markup,
     heading: &str,
     rows: impl ExactSizeIterator<Item = Row<'a>>,
     section: Option<&Section>,
@@ -425,31 +448,31 @@ fn table<'a>(
         return;
     }
     writeln!(
-        output,
+        output.html,
         "<h4>{heading}</h4>\n<table><thead><tr><th scope=\"col\">Name</th><th scope=\"col\">Type</th>\n\
          <th scope=\"col\">Default</th><th scope=\"col\">Description</th></tr></thead><tbody>"
     )
     .unwrap();
     for row in rows {
         write!(
-            output,
+            output.html,
             "<tr><th scope=\"row\"><code>{}</code></th><td><code>{}</code></td><td>",
             escaped(row.name),
             escaped(row.ty)
         )
         .unwrap();
         if let Some(value) = row.default {
-            write!(output, "<code>{}</code>", escaped(value)).unwrap();
+            write!(output.html, "<code>{}</code>", escaped(value)).unwrap();
         } else {
-            output.push('—');
+            output.html.push('—');
         }
-        output.push_str("</td><td>");
+        output.html.push_str("</td><td>");
         for entry in section.into_iter().flat_map(|section| &section.entries) {
             if entry.key == row.name {
                 render(output, &entry.text, link);
             }
         }
-        output.push_str("</td></tr>\n");
+        output.html.push_str("</td></tr>\n");
     }
-    output.push_str("</tbody></table>\n");
+    output.html.push_str("</tbody></table>\n");
 }
