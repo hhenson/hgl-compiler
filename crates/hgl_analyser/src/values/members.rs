@@ -334,8 +334,8 @@ impl<'a> Typer<'a> {
 
     /// `base[index]`: an element of a list or a tuple, or the value a
     /// dictionary has for a key (EXPR-7; ERR-6: "Ordinary/atomic
-    /// dictionary brackets ... are strict point-in-time reads"). Any
-    /// other base is for a later part.
+    /// dictionary brackets ... are strict point-in-time reads"), or a
+    /// pack entry under a constant key (FN-19).
     pub(super) fn index(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
         let mut parts = node.children();
         let (Some(base), Some(index)) = (parts.next(), parts.next()) else {

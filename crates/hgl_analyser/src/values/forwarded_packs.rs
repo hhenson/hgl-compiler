@@ -126,12 +126,12 @@ pub(super) fn spread_operands(list: &SyntaxNode) -> impl Iterator<Item = SyntaxN
 pub(crate) fn has_forwarded_calls(body: &crate::hir::Body) -> bool {
     let mut pending = false;
     walk_nested_calls(&body.statements, &mut |value| {
-        pending |= is_forwarded_call(value);
+        pending |= needs_pack_inputs(value);
     });
     pending
 }
 
-fn is_forwarded_call(value: &Expr) -> bool {
+fn needs_pack_inputs(value: &Expr) -> bool {
     matches!(
         &value.kind,
         ExprKind::Call {
@@ -314,8 +314,8 @@ pub(super) fn walk_nested_calls(statements: &[crate::hir::Stmt], visit: &mut dyn
     });
 }
 
-/// Check forwarded calls under the concrete shapes that reach them (FN-19).
-/// A forwarding error belongs to the call that supplies that pack shape.
+/// Check pack spreads and reads under the concrete shapes that reach them
+/// (FN-19). A pack error belongs to the call that supplies its shape.
 /// Concrete calls discovered here also reach the ordinary GEN-7 checks.
 pub(super) fn check_instances(
     program: &crate::Program,
@@ -332,9 +332,11 @@ pub(super) fn check_instances(
             let Some(body) = body else { continue };
             let owner = (module, declaration);
             walk_nested_calls(&body.statements, &mut |value| {
+                if needs_pack_inputs(value) {
+                    forwarding.insert(owner);
+                }
                 if let ExprKind::Call { callee, .. } = &value.kind {
                     if matches!(callee, Callee::DeferredPackCall) {
-                        forwarding.insert(owner);
                         deferred_at.insert(value.at);
                     } else if let Some(called) = callee.declaration() {
                         callers.entry(called).or_default().push(owner);
