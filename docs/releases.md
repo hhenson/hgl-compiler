@@ -47,11 +47,14 @@ the debug link, 112 bytes a library. On Linux the debug sections of both
 the symbol files and the debug libraries are compressed (zlib), which gdb
 and lldb read as they are.
 
-A frame's file is under `/hgl-release/hgraph/` for hgraph's source and
-`/hgl-release/` for the dependencies' (`-ffile-prefix-map`). To see the
-source, give the debugger a checkout of the tag: `set substitute-path
-/hgl-release/hgraph DIR` in gdb, `settings set target.source-map
-/hgl-release/hgraph DIR` in lldb.
+The release maps source and build paths under `/hgl-release`.
+Map `/hgl-release/hgraph` to a checkout of the pinned hgraph tag using
+`set substitute-path /hgl-release/hgraph DIR` in gdb or
+`settings set target.source-map /hgl-release/hgraph DIR` in lldb.
+Generated headers use `/hgl-release/hgraph-build/build`, and the fetched
+date sources use `/hgl-release/hgraph-build/build/_deps/date-src`.
+The other dependency source roots are `/hgl-release/fmt`,
+`/hgl-release/spdlog`, and `/hgl-release/simdjson`.
 
 On Linux (hgraph 0.9.23, GCC 15.2) the release archive is 10.1 MB and the
 debug archive 126.6 MB: the debug libraries 106.4 MB unpacked (62.1 MB in
