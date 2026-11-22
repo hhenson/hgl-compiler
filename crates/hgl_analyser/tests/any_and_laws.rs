@@ -55,6 +55,18 @@ fn any_binds_the_first_matching_type_and_preserves_explicit_bindings() {
 }
 
 #[test]
+fn a_grouped_pack_view_preserves_existential_binding_inference() {
+    // GEN-3, GEN-10, EXPR-1: inference and checking accept the same grouped view.
+    for view in ["types(Ts)", "(types(Ts))", "((types((Ts))))"] {
+        let source = format!(
+            "module m\nnative const fn first<U, ...Ts>(xs: ...Ts) -> U requires any T in {view} {{ T == list<U> }}\nconst fn good() -> i64 {{ let selected = first(true, [1], [\"later\"])\n return selected }}\n"
+        );
+        let accepted = check(&[("m.hgl", &source)]);
+        assert!(!accepted.rejected, "{view}: {}", accepted.report);
+    }
+}
+
+#[test]
 fn a_bool_generic_is_a_requirement_term_in_functions_and_candidates() {
     // GEN-3: bare values compose by !, && and ||, and false rejects a call.
     let declarations =
@@ -399,4 +411,35 @@ fn parentheses_inside_a_negated_law_preserve_the_guarantee() {
     );
     let accepted = check(&[("m.hgl", &source)]);
     assert!(!accepted.rejected, "{}", accepted.report);
+}
+
+#[test]
+fn parentheses_inside_a_negated_bool_preserve_the_forwarded_binding() {
+    // GEN-3, GEN-7, GEN-15: grouping preserves the false bound of !enabled.
+    for term in ["!enabled", "!(enabled)", "!((enabled))"] {
+        let declarations = format!(
+            "{LAWS}impl const fn fold<V, const law: bool = associative(f)>(f: const fn(V, V) -> V, a: V, b: V) -> V requires !law => f(b, a)\nconst fn stated<V, const enabled: bool>(f: const fn(V, V) -> V, a: V, b: V) -> V requires {term} => fold{{law: enabled}}(f, a, b)\n"
+        );
+        let accepted = check(&[(
+            "m.hgl",
+            &format!(
+                "{declarations}const fn good() -> i64 => stated{{enabled: false}}(ordinary, 1, 2)\n"
+            ),
+        )]);
+        assert!(!accepted.rejected, "{term}: {}", accepted.report);
+        let rejected = check(&[(
+            "m.hgl",
+            &format!(
+                "{declarations}const fn bad() -> i64 => stated{{enabled: true}}(ordinary, 1, 2)\n"
+            ),
+        )]);
+        assert!(
+            rejected
+                .findings
+                .iter()
+                .any(|finding| finding.code == "constraint/requires.unmet"),
+            "{term}: {}",
+            rejected.report
+        );
+    }
 }

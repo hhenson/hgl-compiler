@@ -2,12 +2,20 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; font-src 'self' file:; img-src data:; base-uri 'none'">
 <title>API reference</title>
 <link rel="stylesheet" href="site.css">
 <body>
 <header><nav><a href="index.html">API reference</a></nav></header>
 <main>
 <h1>API reference</h1>
+<div id="declaration-search" hidden>
+<label for="declaration-query">Search declarations</label>
+<input id="declaration-query" type="search" autocomplete="off" aria-controls="search-results">
+<p role="status"></p><ul id="search-results"></ul>
+</div>
+<script defer src="search-index.js"></script>
+<script defer src="search.js"></script>
 <h2>Modules</h2>
 <ul>
 <li><a href="modules/mod-core.html">core</a></li>

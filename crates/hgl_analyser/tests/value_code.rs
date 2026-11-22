@@ -225,3 +225,62 @@ fn a_delta_that_is_another_type_has_no_constructor() {
         value.kind
     );
 }
+
+/// GEN-10: a schema view cannot be stored, returned, or supplied to an
+/// ordinary value parameter.
+#[test]
+fn a_schema_view_is_rejected_in_an_ordinary_value_context() {
+    let checked = check(&[(
+        "schemas.hgl",
+        r#"module probes.schemas_return
+const fn schema_result<...Ts>(args: ...{Ts}) -> i64 => schemas(args)
+const fn caller() -> i64 => schema_result(probe: 1)
+
+const fn schema_binding<...Ts>(args: ...{Ts}) -> i64 {
+    let view = {
+        (schemas)(args)
+    }
+    return 0
+}
+
+const fn schema_explicit_return<...Ts>(args: ...{Ts}) -> i64 {
+    return schemas(args)
+}
+
+const fn takes_value(value: i64) -> i64 => value
+const fn schema_argument<...Ts>(args: ...{Ts}) -> i64 => takes_value(schemas(args))
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "schemas.hgl:2:56 type/type.mismatch GEN-10",
+            "schemas.hgl:7:9 type/type.mismatch GEN-10",
+            "schemas.hgl:13:12 type/type.mismatch GEN-10",
+            "schemas.hgl:17:70 type/type.mismatch GEN-10",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// UNIT-10: a declaration or parameter named schemas still binds its call.
+#[test]
+fn a_callable_named_schemas_keeps_ordinary_binding() {
+    let checked = check(&[
+        (
+            "declared.hgl",
+            r#"module probes.declared
+const fn schemas(value: i64) -> i64 => value
+const fn named() -> i64 => schemas(1)
+"#,
+        ),
+        (
+            "parameter.hgl",
+            r#"module probes.parameter
+const fn through_parameter(schemas: const fn(i64) -> i64) -> i64 => schemas(2)
+"#,
+        ),
+    ]);
+    assert!(checked.summary().is_empty(), "{}", checked.report);
+}

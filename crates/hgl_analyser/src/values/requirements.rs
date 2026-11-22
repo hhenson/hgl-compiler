@@ -108,8 +108,17 @@ impl<'a> Typer<'a> {
                     }
                 }
                 SyntaxKind::ConstraintNot => {
-                    if let Some(inside) = node.children().next()
-                        && inside.kind() == SyntaxKind::ConstraintValue
+                    let Some(mut inside) = node.children().next() else {
+                        return;
+                    };
+                    // GEN-15: grouping does not change the negated term.
+                    while inside.kind() == SyntaxKind::ConstraintParen {
+                        let Some(inner) = inside.children().next() else {
+                            return;
+                        };
+                        inside = inner;
+                    }
+                    if inside.kind() == SyntaxKind::ConstraintValue
                         && let Some(name) = name_token(&inside)
                     {
                         found.push((name, false));

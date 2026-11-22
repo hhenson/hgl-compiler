@@ -41,6 +41,8 @@ analyser: partial
 
 - A positive conjunctive `any` equality binds one unresolved generic from the first matching pack entry, with tentative bindings discarded on a failed trial and conjuncts revisited to a fixed point. Negation and disjunction only test supplied bindings.
 - Bare bool generic terms and their negations are checked at calls and candidates; positive terms also state a bool bound in a generic body.
+- Inequality constraints parse and test resolved operands without binding. Named module constant operands of `!=` remain for the F5 follow-up of #367.
+- Naming a capability type in an operator declaration's type membership is planned in #562 (TIME-8).
 
 - A parameter compared in a constraint is a const option or is rejected, and each constant it is compared with is a value of the option's type (`type.mismatch`, `member.unknown`, `enum.context_type`, at the declaration); a constant of a module among those is its value (UNIT-13)
 - At a named operator call in a value function, a candidate's `T in {types}` and `T == type` are checked against what `T` stands for, and a named operator requirement is tested with the call's types (GEN-16)
@@ -156,6 +158,7 @@ analyser: partial
 - A function's `each T in types(Ts)` checks its condition for every resolved type in the pack. An empty capture satisfies it. Equality and membership can test the bound type by name. A verdict the analyser cannot give rejects as untold (GEN-3).
 - GEN-17 adds quantification over pack keys. `any` succeeds for at least one entry and rejects an empty pack. Type and key bindings project within nested type expressions.
 - Left: named operator requirements bound by a quantifier.
+- An ordinary value context rejects the borrowed view from `schemas(pack)`.
 
 transpiler: partial
 
