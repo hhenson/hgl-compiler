@@ -174,6 +174,9 @@ impl Typer<'_> {
         list: &SyntaxNode,
         expected: Option<&Type>,
     ) -> (ExprKind, Type) {
+        if let Some(unread) = self.unread_pack_call(list) {
+            return unread;
+        }
         let mut parameters = self.anonymous_parameters(function);
         let slots: Vec<_> = parameters
             .iter()
