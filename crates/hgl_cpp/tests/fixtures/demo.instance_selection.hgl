@@ -175,7 +175,9 @@ fn widened_list<T>(const value: T) -> f64 {
     let forward = [1, chosen]
     let reverse = [chosen, 1]
     let copied = forward
-    return copied[0] + reverse[0]
+    var reassigned = [1, chosen]
+    reassigned = [3, 4]
+    return copied[0] + reverse[0] + reassigned[0]
 }
 
 # ERR-12 and GEN-7: a nullable list payload keeps its inferred element
@@ -474,7 +476,7 @@ test an_instance_settles_its_graph_conditions {
     assert raises("value.null") { eval contextual_choice(value: "s") }
     assert eval inferred_list(value: 3) == [2]
     assert eval inferred_list(value: "s") == [-1]
-    assert eval widened_list(value: "s") == [3.5]
+    assert eval widened_list(value: "s") == [6.5]
     assert eval indexed_elements(value: 3) == [5]
     assert eval indexed_elements(value: "s") == [-2]
     assert eval folded_tuple_index(value: "s") == ["selected"]

@@ -34,6 +34,7 @@ pub(crate) struct GraphDestinations {
     captures: HashSet<Location>,
     unsettled_arguments: HashSet<Location>,
     index_bases: HashSet<Location>,
+    list_assignments: HashSet<Location>,
     replay_source: bool,
 }
 
@@ -45,7 +46,25 @@ impl GraphDestinations {
         let mut captures = HashSet::new();
         let mut unsettled_arguments = HashSet::new();
         let mut index_bases = HashSet::new();
-        hir::walk_statements(&body.statements, &mut |value| {
+        let mut list_assignments = HashSet::new();
+        hir::walk_statement_nodes(&body.statements, &mut |node| {
+            let value = match node {
+                Node::Expression(value) => value,
+                Node::Statement(Stmt::Assign {
+                    local,
+                    operator: None,
+                    value,
+                    ..
+                }) => {
+                    if matches!(&body.locals[*local].ty, Type::List { element, .. } if !whole(element))
+                        && matches!(&value.kind, ExprKind::Sequence(_))
+                    {
+                        list_assignments.insert(value.at);
+                    }
+                    return;
+                }
+                _ => return,
+            };
             if !whole(&value.ty) {
                 expressions.insert(value.at);
             }
@@ -90,6 +109,7 @@ impl GraphDestinations {
             captures,
             unsettled_arguments,
             index_bases,
+            list_assignments,
             replay_source,
         }
     }
@@ -160,7 +180,7 @@ impl GraphDestinations {
         typer.graph = true;
         record_with(program, body, true, Some(&mut typer), Some(place_required));
         typer.locals.clone_from(&body.locals);
-        if !self.expressions.is_empty() {
+        if !self.expressions.is_empty() || !self.list_assignments.is_empty() {
             hir::walk_statement_nodes_mut(&mut body.statements, &mut |node| {
                 self.fit_destination(&mut typer, node);
             });
@@ -259,12 +279,25 @@ impl GraphDestinations {
                 "the type written for it",
                 false,
             ),
-            NodeMut::Statement(Stmt::Assign { local, value, .. }) => (
-                value,
-                typer.locals[*local].ty.clone(),
-                "the type of the `var`",
-                false,
-            ),
+            NodeMut::Statement(Stmt::Assign { local, value, .. }) => {
+                let expected = typer.locals[*local].ty.clone();
+                if self.list_assignments.contains(&value.at)
+                    && let Type::List { element, size } = &expected
+                    && matches!(&value.ty, Type::List { size: given, .. } if given == size)
+                    && whole(element)
+                    && let ExprKind::Sequence(entries) = &mut value.kind
+                    && entries.iter().all(|entry| whole(&entry.ty))
+                {
+                    // EXPR-3, EXPR-5: the initializer's type is the
+                    // expected type of the assigned literal and its entries.
+                    for entry in entries {
+                        *entry = typer.fit(entry.clone(), element, "an element");
+                    }
+                    value.ty = expected;
+                    return;
+                }
+                (value, expected, "the type of the `var`", false)
+            }
             NodeMut::Statement(Stmt::AssignPlace { place, value, .. }) => {
                 (value, place.ty.clone(), "the type of the place", false)
             }
@@ -450,7 +483,7 @@ impl GraphDestinations {
                 ty: Type::List { element, .. },
                 at,
                 ..
-            }) if whole(element) => {
+            }) if whole(element) && !self.list_assignments.contains(at) => {
                 for entry in entries {
                     if self.expressions.contains(at) {
                         // A newly inferred type constrains earlier known

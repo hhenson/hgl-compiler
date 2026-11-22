@@ -61,6 +61,7 @@ analyser: partial
 
 - A value fits the type its place expects, in a value function, a hook and a graph; an integer literal is an `f64` where one is expected, the `f64` of its value (UNIT-13: `let x: f64 = 1` binds `1.0`), and a result or nullable value takes the form its place expects (ERR-12, ERR-15); `null`, a tuple and a sequence take the expected type, and so does a child read checked when it runs (ERR-14)
 - A graph instance rechecks newly known values against established field, tuple, list, set and dictionary entry types (GEN-7).
+- A graph instance refits an assigned list literal's known entries against the element type established by the inferred variable's initializer (EXPR-3, GEN-7).
 - What is read again to learn its place's type is counted for each statement, so a statement is judged the same whatever comes before it; one that needs more than its bound, 10,000 and 16 for each node of its syntax, is local `reading.limit`, and is not accepted
 - Left: const expression restrictions
 

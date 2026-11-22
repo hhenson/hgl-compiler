@@ -1676,6 +1676,61 @@ fn wrong_element() -> f64 => nonliteral(1)"#,
     assert_eq!(lists, 4);
 }
 
+/// EXPR-3, EXPR-5 and GEN-7: a list literal assigned to an inferred
+/// variable takes the type established by its initializer.
+#[test]
+fn graph_instances_contextualize_a_list_assigned_after_inference() {
+    let checked = module(
+        r#"operator predicate<T>(input: T) -> bool
+impl const fn predicate<T>(input: T) -> bool => true
+impl fn predicate(input: i64) -> bool { when { return input > 0 } }
+
+fn reassigned<T>(const input: T) -> f64 {
+    let chosen = if predicate(input) { 2.5 }
+    if chosen == null { return 0.0 }
+    var values = [1, chosen]
+    values = [3, 4]
+    return values[0]
+}
+
+fn mismatched<T>(const input: T) -> f64 {
+    let chosen = if predicate(input) { 2.5 }
+    if chosen == null { return 0.0 }
+    var values = [1, chosen]
+    let integer = 3
+    values = [integer, 4]
+    return values[0]
+}
+
+fn accepted() -> f64 => reassigned("s")
+fn rejected() -> f64 => mismatched("s")"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:24:25 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    let value = instance
+        .statements
+        .iter()
+        .find_map(|statement| match statement {
+            Stmt::Assign { value, .. } => Some(value),
+            _ => None,
+        })
+        .expect("the graph assigns its inferred list");
+    assert_eq!(value.ty.to_string(), "list<f64>");
+    let ExprKind::Sequence(entries) = &value.kind else {
+        panic!("the assignment still writes the list literal");
+    };
+    assert_eq!(entries.len(), 2);
+    for entry in entries {
+        assert_eq!(entry.ty.to_string(), "f64");
+        assert!(matches!(entry.kind, ExprKind::Widen(_)));
+    }
+}
+
 /// GEN-7, CTRL-12 and CTRL-15: the selected input determines what a
 /// deferred switch accepts as its selector and label types.
 #[test]
