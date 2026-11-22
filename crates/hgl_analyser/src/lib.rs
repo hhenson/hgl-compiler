@@ -579,7 +579,7 @@ pub mod codes {
         pub const IMPL_CONFIGURATION: &str = "impl.configuration";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 6] = [
+        pub const ALL: [&str; 5] = [
             READING_LIMIT,
             LOOP_CARRIED,
             FUNCTION_VALUE,
