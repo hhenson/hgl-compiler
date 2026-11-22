@@ -15,6 +15,23 @@ use crate::syntax::{child, name_token, tokens};
 use crate::types::{Detail, Scalar, Type};
 use crate::{codes, error};
 
+/// The immutable name a tag or null test can prove. An inferred child
+/// binding keeps its identity through an endpoint read (ERR-3, ERR-12, ERR-14).
+pub(super) fn proof_binding(value: &Expr) -> Option<crate::hir::LocalId> {
+    match &value.kind {
+        ExprKind::BoundChild(local) => Some(*local),
+        ExprKind::CheckedChild {
+            read,
+            result: false,
+        } => match &read.kind {
+            ExprKind::BoundChild(local) => Some(*local),
+            _ => None,
+        },
+        ExprKind::PresentChild(read) => proof_binding(read),
+        _ => value.named_local(),
+    }
+}
+
 /// ERR-7: a `let` initialized by a capture names its boundary.
 pub(super) fn captured_binding(kind: LocalKind, value: &Expr) -> Option<&Expr> {
     match &value.kind {
@@ -231,7 +248,7 @@ impl<'a> Typer<'a> {
 
     /// The lexical fact a direct field projection needs on this binding.
     pub(super) fn payload_proven(&self, base: &Expr, name: &str) -> bool {
-        let fact = match (name, base.named_local()) {
+        let fact = match (name, proof_binding(base)) {
             ("value", Some(local)) => Fact::Success(local),
             ("error", Some(local)) => Fact::Failure(local),
             _ => return false,
@@ -268,16 +285,17 @@ impl<'a> Typer<'a> {
                 return (ExprKind::Unread, Type::Unknown);
             }
         };
+        let binding = proof_binding(&base);
         if !variant_proven {
             let (test, tag) = if success {
                 ("is_ok", "a success")
             } else {
                 ("is_err", "a failure")
             };
-            let message = match &base.kind {
-                ExprKind::Local(local) => format!(
+            let message = match binding {
+                Some(local) => format!(
                     "`.{}` is read where `{}` is {tag}, and nothing here proves it one",
-                    name, self.locals[*local].name
+                    name, self.locals[local].name
                 ),
                 _ => format!(
                     "`.{}` is read of a binding a guard has proved {tag}, and this is no \

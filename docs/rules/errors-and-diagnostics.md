@@ -38,6 +38,7 @@ analyser: partial
 - `is_ok` and `is_err` take one result by position and give a `bool`. A graph instance checks the argument when its type first settles (GEN-7).
 - A direct guard on an immutable result binding proves its tag: in the branch it holds for, across `!` and the Boolean connectives, and after a branch that returns
 - `binding.value` and `binding.error` need the matching fact (`result.required_variant`), and have the T and the E
+- A tag proof for a child held by an inferred `let` applies to that binding. The read still has the child admission and validity checks (ERR-14, TIME-1).
 - In a graph a test of a connection gives no fact. A deferred projection checks its
   saved lexical fact against the settled category of the result (GEN-7).
 - Left: a fact carried through a `switch` or a loop
@@ -146,6 +147,7 @@ transpiler: done
 analyser: done
 
 - In a value function, a hook and a graph a direct test against null refines an immutable nullable parameter, `let` or loop binding to its payload's type: in the branch the test holds for, across `!` and the Boolean connectives, and after a branch that returns
+- The proof of an inferred nullable child applies to value reads of that alias and retains the child's separate admission check (ERR-14, TIME-1).
 - A generic graph keeps a non-null proof for an ordinary binding and fills incomplete payload types, including in reads that already record a possible null failure (GEN-7).
 - A nullable read in a place that expects its payload records a possible `value.null` failure and its phase. A written null still needs a nullable type (TYPE-14).
 
@@ -167,15 +169,22 @@ analyser: done
 
 analyser: done
 
-- A child read checked when it runs (`CheckedChild`) where the place expects `result<T, error>`, T the child's type, is of that result (EXPR-5); elsewhere it is the T
-- So is a read of a window's value, of an input, `out` or a child named when compiled (`CheckedWindow`), where the place expects `result<list<V>, error>`, "T being the `list<V>` it reads as (TYPE-11)"
-- So is `delta_value` of any endpoint, an input, `out` or a child, where the place expects `result<delta<T>, error>`, and core's `removed_value` of a window where it expects `result<V, error>` (`CheckedDelta`), the place saying what V is; where the place takes no `result` a window of a duration's delta and any `removed_value` are `payload.unguarded` (TYPE-11)
+- An inferred `let` given a child holds the endpoint. Endpoint operations
+  name it and a value use reads it under TIME-1 admission. A hook's `var`
+  reads the child at initialization. A graph's `var` given a child denotes
+  its connection (EXPR-4).
+- A runtime-checked child read, or an admitted whole read of a dictionary, an unsized list or a window, gives T, `result<T, error>`, or `T?` according to its place. The nullable form discards the error as ERR-15 does.
+- `delta_value` takes the same forms. TYPE-11 restricts a duration-window delta to a result or nullable place, and `removed_value` to a result place for every window.
 
 transpiler: partial
 
-- Writes checked child and window reads, preserving the analysed result or value form
-  for unset or out-of-range reads. A dictionary's tuple entry that is valid
-  but cannot be read whole gives `err` with `value.unset_read` in the result form.
+- Holds the position or key of an inferred child binding through pack expansion
+  and static value-function captures (FN-8, FN-14, FN-17). A payload read happens at
+  the use, and a failed plain read reports the use's HGL location. A child bound
+  inside a value helper borrows its captured parent's endpoint.
+- Writes checked child, dictionary, unsized-list and window reads in the analysed
+  value, result or nullable form. A dictionary omits wholly unset entries and a
+  partial valid entry fails its whole read.
 - Left: Deltas or window reads outside the supported endpoint forms are reported. List
   children and nested dictionary entries have the EXPR-7 limits, and reading a node's
   own window result during its `when` is reported (END-9).

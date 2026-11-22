@@ -227,7 +227,9 @@ impl Captures {
                 match &mut expression.kind {
                     ExprKind::Call { callee, .. } => remap_captures(callee),
                     ExprKind::StaticCallable(callee) => remap_captures(callee),
-                    ExprKind::Local(local) | ExprKind::EndpointOf(local) => read(local),
+                    ExprKind::Local(local)
+                    | ExprKind::EndpointOf(local)
+                    | ExprKind::BoundChild(local) => read(local),
                     ExprKind::Endpoint {
                         inputs: Some(locals),
                         ..

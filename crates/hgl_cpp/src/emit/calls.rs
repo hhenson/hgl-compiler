@@ -287,6 +287,23 @@ impl Emitter<'_> {
                 return self.missing(argument.value.at, "an argument given to a pack");
             };
             let parameter = &signature.parameters[index];
+            if let Type::Endpoint(payload) = &parameter.ty {
+                // A hidden FN-14 capture passes the selector itself,
+                // without checking its position or reading its payload (ERR-14).
+                let value = match argument.value.kind {
+                    ExprKind::Local(local) => Some(identifier(&scope.body.locals[local].name)),
+                    ExprKind::EndpointOf(local) => self.view(&scope.body.locals, local),
+                    _ => None,
+                };
+                let Some(value) = value else {
+                    return self.missing(argument.value.at, "this captured endpoint");
+                };
+                let Some(ty) = self.bound_child_type(payload, argument.value.at) else {
+                    return "0".to_string();
+                };
+                written.push((index, value, false, Held::Value(ty)));
+                continue;
+            }
             if parameter.var {
                 // A `list<bool>` is a `std::vector<bool>`, which holds its
                 // elements as bits: an element is no `bool` a `bool&`

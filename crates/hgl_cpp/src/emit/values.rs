@@ -208,8 +208,15 @@ impl Emitter<'_> {
         let mut parameters = Vec::new();
         let mut defined = Vec::new();
         for parameter in &signature.parameters {
-            let ty = self.written_type(&parameter.ty, parameter.at)?;
-            let taken = parameter_type(self.program, &parameter.ty, parameter.var, &ty);
+            let taken = match &parameter.ty {
+                // FN-14, ERR-14: hidden captures hold the endpoint;
+                // the callable decides when to read it.
+                Type::Endpoint(payload) => self.bound_child_type(payload, parameter.at)?,
+                ty => {
+                    let written = self.written_type(ty, parameter.at)?;
+                    parameter_type(self.program, ty, parameter.var, &written)
+                }
+            };
             let parameter = format!("{taken} {}", identifier(&parameter.name));
             defined.push(format!("[[maybe_unused]] {parameter}"));
             parameters.push(parameter);

@@ -555,10 +555,15 @@ pub enum ExprKind {
         child: Box<Expr>,
     },
     /// The endpoint of a child of a temporal input, given to an
-    /// `endpoint<T>` parameter (TIME-9: "a child of one, `parts[1]`,
-    /// `quote.bid` or `parts[i]`"), named as in
-    /// [`ExprKind::ChildEndpoint`].
+    /// `endpoint<T>` parameter or retained by an inferred `let`
+    /// (TIME-9, ERR-14). It is named as in [`ExprKind::ChildEndpoint`].
     ChildEndpointOf(Box<Expr>),
+    /// The child endpoint held by an inferred `let` (ERR-14). This
+    /// names the endpoint selected when the binding was evaluated,
+    /// with its payload type. An endpoint operation uses it directly.
+    /// It also names a captured parent's endpoint when a value helper
+    /// binds a child of that parent (FN-14).
+    BoundChild(LocalId),
     /// A read of a collection's child that is checked when it runs
     /// (TIME-1, ERR-14): `parts[i]` in a hook, whose child is known only
     /// then. A child that is not valid fails the read with
@@ -568,7 +573,7 @@ pub enum ExprKind {
     /// result; otherwise it is of the child's T.
     CheckedChild {
         /// The read: an [`ExprKind::Index`] or [`ExprKind::Field`]
-        /// rooted at a temporal input.
+        /// rooted at a temporal input, or a [`ExprKind::BoundChild`].
         read: Box<Expr>,
         /// True where the place expects `result<T, error>`.
         result: bool,
@@ -582,6 +587,10 @@ pub enum ExprKind {
     /// an index known only when it runs is a
     /// [`ExprKind::CheckedChild`]. The expression is of the result.
     CheckedWindow(Box<Expr>),
+    /// An admitted read of a whole dictionary or unsized list into a
+    /// `result<T, error>` place (TIME-1, ERR-14). An incomplete valid
+    /// entry or a gap without a value gives `err(value.unset_read)`.
+    CheckedWhole(Box<Expr>),
     /// A read of what an endpoint published in the cycle, its
     /// `delta_value`, or of what a window lost in it, its
     /// `removed_value`, where its place expects `result<T, error>`, T
@@ -873,6 +882,10 @@ pub enum ExprKind {
         /// The code of the failure a null gives: [`NULL_READ_CODE`].
         code: &'static str,
     },
+    /// A nullable bound child's payload on a path that proves this
+    /// alias is present (ERR-12). The inner read retains its endpoint
+    /// admission and failure checks (ERR-14, TIME-1).
+    PresentChild(Box<Expr>),
     /// `capture(callable, args...)`: a temporal error boundary around
     /// the call it holds (ERR-7).
     Capture(Box<Expr>),
@@ -1241,6 +1254,32 @@ pub struct AnonymousFunction {
     pub specialization: Vec<GenericArgument>,
 }
 
+impl AnonymousFunction {
+    /// The type of the captured input in this function's local table.
+    pub fn capture_type(&self, index: usize) -> &Type {
+        &self.body.locals[self.template.parameters.len() + index].ty
+    }
+
+    /// What a caller passes for this lexical capture (FN-14). A child
+    /// selected in the helper still needs its parent's endpoint (ERR-14).
+    pub fn capture_value(&self, index: usize, binding: &Local, at: Location) -> Expr {
+        let capture = self.captures[index];
+        let ty = self.capture_type(index);
+        let (kind, ty) =
+            if matches!(ty, Type::Endpoint(_)) && !matches!(binding.ty, Type::Endpoint(_)) {
+                (ExprKind::EndpointOf(capture), ty.clone())
+            } else {
+                (ExprKind::Local(capture), binding.ty.clone())
+            };
+        Expr {
+            kind,
+            ty,
+            at,
+            category: binding.category,
+        }
+    }
+}
+
 /// The ordered list of types that a call gives one generic type pack.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypePackArgument {
@@ -1539,6 +1578,7 @@ impl Expr {
             | ExprKind::Constant { .. }
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
+            | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
             | ExprKind::GenericValue { .. }
@@ -1605,12 +1645,14 @@ impl Expr {
             | ExprKind::Raised { result: inner, .. }
             | ExprKind::OrNull { result: inner, .. }
             | ExprKind::NullRead { value: inner, .. }
+            | ExprKind::PresentChild(inner)
             | ExprKind::Capture(inner)
             | ExprKind::Captured { capture: inner, .. }
             | ExprKind::ChildEndpoint { child: inner, .. }
             | ExprKind::ChildEndpointOf(inner)
             | ExprKind::CheckedChild { read: inner, .. }
             | ExprKind::CheckedWindow(inner)
+            | ExprKind::CheckedWhole(inner)
             | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes(visit),
             ExprKind::Binary { left, right, .. }
@@ -1681,6 +1723,7 @@ impl Expr {
             | ExprKind::Constant { .. }
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
+            | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
             | ExprKind::GenericValue { .. }
@@ -1747,12 +1790,14 @@ impl Expr {
             | ExprKind::Raised { result: inner, .. }
             | ExprKind::OrNull { result: inner, .. }
             | ExprKind::NullRead { value: inner, .. }
+            | ExprKind::PresentChild(inner)
             | ExprKind::Capture(inner)
             | ExprKind::Captured { capture: inner, .. }
             | ExprKind::ChildEndpoint { child: inner, .. }
             | ExprKind::ChildEndpointOf(inner)
             | ExprKind::CheckedChild { read: inner, .. }
             | ExprKind::CheckedWindow(inner)
+            | ExprKind::CheckedWhole(inner)
             | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes_mut(visit),
             ExprKind::Binary { left, right, .. }

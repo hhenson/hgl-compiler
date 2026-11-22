@@ -447,7 +447,8 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
         // value they take is: a connection of the form where it is one.
         ExprKind::Raised { result: inner, .. }
         | ExprKind::OrNull { result: inner, .. }
-        | ExprKind::NullRead { value: inner, .. } => category(inner),
+        | ExprKind::NullRead { value: inner, .. }
+        | ExprKind::PresentChild(inner) => category(inner),
         // ERR-7: a capture is a temporal boundary, and what is read
         // of it a connection.
         ExprKind::Capture(_) | ExprKind::Captured { .. } => Connection,
@@ -1102,25 +1103,31 @@ fn function_capture_arguments(
     arguments: &mut Vec<crate::hir::Argument>,
     original: usize,
 ) {
-    let captures = |argument: &crate::hir::Argument| -> Option<(usize, Vec<LocalId>)> {
+    fn captures(
+        argument: &crate::hir::Argument,
+    ) -> Option<(usize, &crate::hir::AnonymousFunction)> {
         let ExprKind::StaticCallable(callee) = &argument.value.kind else {
             return None;
         };
         let Callee::Anonymous(function) = &**callee else {
             return None;
         };
-        Some((argument.parameter?, function.captures.clone()))
-    };
-    let mut captured: Vec<_> = arguments.iter().filter_map(captures).collect();
-    if captured.iter().all(|(_, captures)| captures.is_empty()) {
+        Some((argument.parameter?, function))
+    }
+    let mut captured: Vec<_> = arguments
+        .iter()
+        .filter_map(captures)
+        .map(|(parameter, function)| (parameter, function.captures.len()))
+        .collect();
+    if captured.iter().all(|&(_, count)| count == 0) {
         return;
     }
     captured.sort_by_key(|(parameter, _)| *parameter);
     let mut next = original;
     let mut ranges = vec![None; original];
-    for (parameter, captures) in captured {
+    for (parameter, count) in captured {
         ranges[parameter] = Some(next);
-        next += captures.len();
+        next += count;
     }
     // An instance may already carry captures from its uninstantiated
     // body. Rebuild them from the now concrete arguments.
@@ -1132,25 +1139,24 @@ fn function_capture_arguments(
         {
             continue;
         }
-        let holds = captures(&argument);
+        let holds = captures(&argument).map(|(parameter, function)| {
+            let start = ranges[parameter].expect("capture slots were reserved");
+            function
+                .captures
+                .iter()
+                .enumerate()
+                .map(|(offset, &local)| {
+                    let binding = &locals[local];
+                    crate::hir::Argument {
+                        parameter: Some(start + offset),
+                        pack: None,
+                        value: function.capture_value(offset, binding, binding.at),
+                    }
+                })
+                .collect::<Vec<_>>()
+        });
         arguments.push(argument);
-        let Some((parameter, captured)) = holds else {
-            continue;
-        };
-        let start = ranges[parameter].expect("capture slots were reserved");
-        for (offset, local) in captured.into_iter().enumerate() {
-            let binding = &locals[local];
-            arguments.push(crate::hir::Argument {
-                parameter: Some(start + offset),
-                pack: None,
-                value: Expr {
-                    kind: ExprKind::Local(local),
-                    ty: binding.ty.clone(),
-                    at: binding.at,
-                    category: binding.category,
-                },
-            });
-        }
+        arguments.extend(holds.into_iter().flatten());
     }
 }
 

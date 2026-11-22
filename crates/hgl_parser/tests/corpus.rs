@@ -34,6 +34,7 @@ struct Pending {
 const FUNCTIONS: &str = "hgl_spec/spec/language/functions-and-phases.md";
 const GENERICS: &str = "hgl_spec/spec/language/generics-and-operators.md";
 const MAPPING: &str = "hgl_core/spec/mapping.md";
+const DIAGNOSTICS: &str = "hgl_core/spec/diagnostics.md";
 
 const PENDING: &[Pending] = &[
     Pending {
@@ -50,6 +51,16 @@ const PENDING: &[Pending] = &[
         file: MAPPING,
         opening: "export enum Join { inner, outer, left }",
         reason: "GEN-10 and GEN-18 (#367), EXPR-16, EXPR-17 and FN-19 (#368)",
+    },
+    Pending {
+        file: "hgl_core/spec/formatting.md",
+        opening: "export operator format<...As, ...Ks>(",
+        reason: "FMT-6 and FMT-8 graph candidate body (#434)",
+    },
+    Pending {
+        file: DIAGNOSTICS,
+        opening: "export operator debug_print<...As, ...Ks>(",
+        reason: "FN-19 pack spreading (#434)",
     },
 ];
 

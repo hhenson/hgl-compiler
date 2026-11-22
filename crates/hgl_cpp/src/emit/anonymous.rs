@@ -2,7 +2,7 @@
 //! (FN-14, FN-17). Its identity selects code at compile time and only
 //! its ordinary arguments and captures reach the helper it calls.
 
-use hgl_analyser::hir::{AnonymousFunction, Argument, Expr, ExprKind, ValueCategory};
+use hgl_analyser::hir::{AnonymousFunction, Argument, ValueCategory};
 use hgl_analyser::{Parameter, Signature};
 
 use super::Emitter;
@@ -114,12 +114,7 @@ pub(super) fn anonymous_arguments(
         bound.push(Argument {
             parameter,
             pack: None,
-            value: Expr {
-                kind: ExprKind::Local(capture),
-                at: function.at,
-                category: local.category,
-                ty: local.ty.clone(),
-            },
+            value: function.capture_value(index, local, function.at),
         });
     }
     Some(bound)

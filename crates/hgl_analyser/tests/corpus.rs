@@ -62,6 +62,21 @@ const STATED_IN_PROSE: &[(&str, &[(usize, &str)])] = &[(
 /// Named specification examples that still need pending syntax or analysis.
 const PENDING_MODULES: &[(&str, &str, &str)] = &[
     (
+        "hgl_core/spec/diagnostics.md",
+        "examples.diagnostics",
+        "DBG-1 to DBG-6 (#434, #435)",
+    ),
+    (
+        "hgl_core/spec/formatting.md",
+        "examples.formatting",
+        "FMT-1 to FMT-6 (#434)",
+    ),
+    (
+        "hgl_core/spec/output.md",
+        "examples.output",
+        "OUT-1, OUT-2 and FMT-1 (#434)",
+    ),
+    (
         "hgl_core/spec/mapping.md",
         "examples.mapping",
         "MAP-1 and RED-1 (#369, #370)",
