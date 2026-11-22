@@ -106,8 +106,8 @@ fn public_constant_selector_defaults_are_kept() {
         r#"module m
 enum Mode { slow, fast }
 operator step(value: i64, const mode: Mode = .slow) -> i64
-impl const fn step(value: i64, const mode: Mode) -> i64 requires mode == .slow => value + 1
-impl const fn step(value: i64, const mode: Mode) -> i64 requires mode == .fast => value + 2
+impl const fn step(value: i64, mode: Mode) -> i64 requires mode == .slow => value + 1
+impl const fn step(value: i64, mode: Mode) -> i64 requires mode == .fast => value + 2
 test observed { assert step(1) == 2
 assert step(1, mode: .fast) == 3 }
 "#,

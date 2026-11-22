@@ -907,21 +907,27 @@ impl<'a> Typer<'a> {
                 // GEN-6, UNIT-8: an ordinary public default does not
                 // supply a selected candidate's required argument. Check
                 // after selection, as for `var`; RED-5 depends on this.
-                // Constant selector parameters keep their public defaults.
+                // Constant selectors keep their public defaults, including
+                // when the candidate does not repeat the `const` mark.
                 let operator_name =
                     &program.modules[operator.module].declarations[operator.declaration].name;
-                let public_name =
-                    match &program.modules[operator.module].details[operator.declaration] {
-                        Detail::Callable(public) => public
-                            .parameters
-                            .iter()
-                            .zip(public.candidate_parameters(signature))
-                            .find_map(|(parameter, slot)| {
-                                (slot == Some(index)).then_some(parameter.name.as_str())
-                            }),
-                        _ => None,
-                    }
-                    .unwrap_or(&parameter.name);
+                let public_parameter = match &program.modules[operator.module].details
+                    [operator.declaration]
+                {
+                    Detail::Callable(public) => public
+                        .parameters
+                        .iter()
+                        .zip(public.candidate_parameters(signature))
+                        .find_map(|(parameter, slot)| (slot == Some(index)).then_some(parameter)),
+                    _ => None,
+                };
+                if public_parameter
+                    .is_some_and(|parameter| parameter.constant || parameter.configuration)
+                {
+                    continue;
+                }
+                let public_name = public_parameter
+                    .map_or(parameter.name.as_str(), |parameter| parameter.name.as_str());
                 self.diagnostics.emit(
                     error(
                         Category::Type,
