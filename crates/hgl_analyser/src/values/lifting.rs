@@ -907,7 +907,7 @@ fn contextual_type(value: &Expr, typer: Option<&Typer<'_>>) -> Option<Type> {
 }
 
 /// CTRL-10: nested blocks take their value and type from their tail.
-fn block_tail(mut entry: &Expr) -> &Expr {
+pub(super) fn block_tail(mut entry: &Expr) -> &Expr {
     while let ExprKind::Block {
         value: Some(tail), ..
     } = &entry.kind
@@ -923,19 +923,24 @@ fn contextual_member(typer: &Typer<'_>, tail: &Expr) -> Option<SyntaxNode> {
     if !matches!(tail.kind, ExprKind::Unread) || whole(&tail.ty) {
         return None;
     }
+    let node = contextual_tail_syntax(typer, tail)?;
+    (node.kind() == SyntaxKind::ImpliedMember).then_some(node)
+}
+
+/// The expression written at a contextual tail's source location.
+pub(super) fn contextual_tail_syntax(typer: &Typer<'_>, tail: &Expr) -> Option<SyntaxNode> {
     let node = typer.syntax_of(tail)?;
     // A block's tail and its expression statement share a span.
-    let expression = if node.kind() == SyntaxKind::ExprStmt {
-        node.children().next()?
+    if node.kind() == SyntaxKind::ExprStmt {
+        node.children().next()
     } else {
-        node
-    };
-    (expression.kind() == SyntaxKind::ImpliedMember).then_some(expression)
+        Some(node)
+    }
 }
 
 /// Replace only the contextual tail, keeping any statements already
 /// checked in the block's own scope.
-fn resolve_contextual_tail(entry: &mut Expr, resolved: (ExprKind, Type)) {
+pub(super) fn resolve_contextual_tail(entry: &mut Expr, resolved: (ExprKind, Type)) {
     if let ExprKind::Block {
         value: Some(tail), ..
     } = &mut entry.kind
