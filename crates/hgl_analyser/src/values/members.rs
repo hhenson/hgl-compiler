@@ -321,6 +321,7 @@ impl<'a> Typer<'a> {
         // ERR-15, ERR-12: what an index is read from expects the T: a
         // result's, and a nullable list's, tuple's or dictionary's.
         let base = self.received(base, index_collection);
+        self.check_index_base(&base.ty, base.at);
         let (index, ty) = match &base.ty {
             Type::List { .. } | Type::Dict { .. } => {
                 let (expected, place) =
@@ -337,23 +338,6 @@ impl<'a> Typer<'a> {
                 let ty = self.tuple_index(&base.ty, &mut value, Some(&index), true);
                 (self.fit(value, integer, place), ty)
             }
-            // EXPR-7: "Brackets read an element of a list or a tuple by
-            // an `i64` index, and the value a dictionary has for a
-            // key." EXPR-3: "A set has no place to assign."
-            Type::Set(_) => {
-                self.diagnostics.emit(error(
-                    Category::Type,
-                    codes::TYPE_MISMATCH,
-                    base.at,
-                    format!(
-                        "this is `{}`, and a set has no element at an index: brackets read a \
-                         list, a tuple, or a dictionary",
-                        base.ty
-                    ),
-                    "EXPR-7",
-                ));
-                (self.expression(&index, Some(&Type::Unknown)), Type::Unknown)
-            }
             _ => (self.expression(&index, Some(&Type::Unknown)), Type::Unknown),
         };
         let kind = ExprKind::Index {
@@ -361,6 +345,23 @@ impl<'a> Typer<'a> {
             index: Box::new(index),
         };
         (kind, ty)
+    }
+
+    /// EXPR-7: brackets read a list, tuple or dictionary. A set has no
+    /// element at an index, and no indexed place to assign (EXPR-3).
+    pub(super) fn check_index_base(&mut self, ty: &Type, at: Location) {
+        if matches!(ty, Type::Set(_)) {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                at,
+                format!(
+                    "this is `{ty}`, and a set has no element at an index: brackets read a \
+                     list, a tuple, or a dictionary"
+                ),
+                "EXPR-7",
+            ));
+        }
     }
 
     /// EXPR-7: a tuple index is a constant within its length. Read it

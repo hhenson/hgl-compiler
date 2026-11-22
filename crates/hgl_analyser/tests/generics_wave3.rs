@@ -1586,6 +1586,61 @@ fn graph_instances_propagate_indexed_types_and_reads() {
     }
 }
 
+/// GEN-7 and EXPR-7: a deferred base must satisfy the same bracket
+/// rules once the instance knows the collection it reads.
+#[test]
+fn graph_instances_reject_indexed_sets() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn items() -> set<i64> => [1]\n",
+        "const fn result_items() -> result<set<i64>, error> => ok(items())\n",
+        "fn bad<T>(const input: T) -> i64 {\n",
+        "    let values = if predicate(input) { items() }\n",
+        "    let item = values[0]\n",
+        "    return 0\n",
+        "}\n",
+        "fn bad_result<T>(const input: T) -> i64 {\n",
+        "    let values = if predicate(input) { result_items() }\n",
+        "    let item = values[0]\n",
+        "    return 0\n",
+        "}\n",
+        "fn already_checked<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let item = result_items()[0]\n",
+        "    return 0\n",
+        "}\n",
+        "fn good<T>(const input: T) -> i64 {\n",
+        "    let values = if predicate(input) { [1] }\n",
+        "    return values[0]\n",
+        "}\n",
+        "fn live_set() -> i64 => bad(1)\n",
+        "fn live_result_set() -> i64 => bad_result(1)\n",
+        "fn direct_once() -> i64 => already_checked(1)\n",
+        "fn live_list() -> i64 => good(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:19:16 type/type.mismatch EXPR-7",
+            "m.hgl:26:25 type/type.mismatch EXPR-7",
+            "m.hgl:27:32 type/type.mismatch EXPR-7",
+        ],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "live_list"));
+    let Some(Stmt::Return {
+        value: Some(value), ..
+    }) = instance.statements.last()
+    else {
+        panic!("the instance returns the list element");
+    };
+    assert_eq!(value.ty.to_string(), "i64");
+    assert!(matches!(value.kind, ExprKind::Index { .. }));
+}
+
 /// GEN-7 and EXPR-7: a tuple that settles in the instance takes a
 /// constant index within its bounds, and that position selects a type.
 #[test]

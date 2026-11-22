@@ -31,7 +31,7 @@ pub(crate) struct GraphDestinations {
     expressions: HashSet<Location>,
     captures: HashSet<Location>,
     unsettled_arguments: HashSet<Location>,
-    tuple_indices: HashSet<Location>,
+    index_bases: HashSet<Location>,
     replay_source: bool,
 }
 
@@ -42,18 +42,18 @@ impl GraphDestinations {
         let mut replay_source = false;
         let mut captures = HashSet::new();
         let mut unsettled_arguments = HashSet::new();
-        let mut tuple_indices = HashSet::new();
+        let mut index_bases = HashSet::new();
         hir::walk_statements(&body.statements, &mut |value| {
             if !whole(&value.ty) {
                 expressions.insert(value.at);
             }
             if let ExprKind::Index { base, .. } = &value.kind
                 && !whole(&base.ty)
-                && !matches!(indexed_payload(&base.ty), Type::Tuple(_))
+                && !matches!(indexed_payload(&base.ty), Type::Tuple(_) | Type::Set(_))
             {
-                // A known tuple shape already checked the constant and
-                // its bounds, even if some elements had unknown types.
-                tuple_indices.insert(value.at);
+                // Source already checked a known tuple's position or
+                // rejected a set, even with unknown element types.
+                index_bases.insert(value.at);
             }
             if let ExprKind::Capture(call) = &value.kind
                 && call.category == ValueCategory::Unsettled
@@ -83,7 +83,7 @@ impl GraphDestinations {
             expressions,
             captures,
             unsettled_arguments,
-            tuple_indices,
+            index_bases,
             replay_source,
         }
     }
@@ -493,7 +493,7 @@ impl GraphDestinations {
                 at,
                 ..
             }) => {
-                self.fit_index(typer, base, index, self.tuple_indices.contains(at));
+                self.fit_index(typer, base, index, self.index_bases.contains(at));
                 return;
             }
             _ => return,
@@ -528,14 +528,17 @@ impl GraphDestinations {
         typer: &mut Typer<'_>,
         base: &mut Expr,
         index: &mut Expr,
-        tuple_pending: bool,
+        base_kind_pending: bool,
     ) {
         let base_settled = self.known(base);
         let received = indexed_payload(&base.ty);
+        if base_kind_pending {
+            typer.check_index_base(received, base.at);
+        }
         if base_settled && received != &base.ty && index_collection(received) {
             *base = typer.received(base.clone(), index_collection);
         }
-        if tuple_pending && whole(&index.ty) && matches!(base.ty, Type::Tuple(_)) {
+        if base_kind_pending && whole(&index.ty) && matches!(base.ty, Type::Tuple(_)) {
             typer.tuple_index(&base.ty, index, None, true);
         }
         if let Some((expected, place)) = index_operand(&base.ty)
