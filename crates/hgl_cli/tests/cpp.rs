@@ -3112,14 +3112,38 @@ fn an_interrupt_of_hgl_alone_stops_a_run_in_real_time() {
     let root = scratch("interrupted");
     write(&root, "ticks.hgl", TICKS);
     write(&root, "endless.hgl", ENDLESS);
-    let child = Command::new(env!("CARGO_BIN_EXE_hgl"))
-        .args(["run", &argument(&root), "--target", "cpp"])
+    let kept = root.join("build");
+    let results = kept.join("results/app-demo-ticks-endless.run.txt");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hgl"))
+        .args([
+            "run",
+            &argument(&root),
+            "--target",
+            "cpp",
+            "--keep",
+            &argument(&kept),
+        ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("the hgl binary runs");
-    // Long enough for the program to be built and its run started.
-    std::thread::sleep(std::time::Duration::from_millis(8000));
+    // Wait for the running application rather than guessing how long its
+    // build takes. An interrupt during the build has a different outcome.
+    let started = std::time::Instant::now();
+    loop {
+        let recorded = fs::read_to_string(&results).unwrap_or_default();
+        if recorded.starts_with("start\n") {
+            break;
+        }
+        if started.elapsed() >= std::time::Duration::from_secs(120)
+            || child.try_wait().expect("hgl can be polled").is_some()
+        {
+            let _ = child.kill();
+            let output = child.wait_with_output().expect("hgl ends");
+            panic!("the application never started: {}", text(&output.stderr));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     // To `hgl` alone: its process, and not its group.
     let sent = Command::new("kill")
         .args(["-INT", &child.id().to_string()])
@@ -3136,8 +3160,8 @@ fn an_interrupt_of_hgl_alone_stops_a_run_in_real_time() {
     );
     let lines: Vec<&str> = printed.lines().collect();
     let (summary, published) = lines.split_last().expect("something is printed");
-    // It counted from 1 for as long as it ran: on a slow host that may be
-    // no time at all, where the interrupt comes before the run starts.
+    // It counted from 1 for as long as it ran. The host can receive the
+    // stop before the engine publishes its first value.
     for (position, line) in published.iter().enumerate() {
         assert!(line.ends_with(&format!("Z  {}", position + 1)), "{printed}");
     }
