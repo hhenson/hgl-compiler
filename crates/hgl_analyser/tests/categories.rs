@@ -108,6 +108,19 @@ fn what_each_expression_of_a_graph_is_is_recorded() {
     );
 }
 
+/// EXPR-6: scalar Boolean forms inside graphs keep their first reading
+/// when no flow facts change, including under explicit grouping.
+#[test]
+fn nested_scalar_boolean_forms_fit_the_reading_budget() {
+    let expression = (0..20).fold("value".to_string(), |inside, _| {
+        format!("({inside} || false)")
+    });
+    let checked = module(&format!(
+        "fn nested(const value: bool) -> bool => {expression}\n"
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
 /// FN-6: a value helper "with temporal arguments in composition is
 /// lifted ... All-scalar calls execute directly and invent no source
 /// timing". A temporal function's call is the node or the graph itself,

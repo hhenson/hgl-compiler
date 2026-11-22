@@ -380,8 +380,23 @@ impl<'a> Typer<'a> {
             && given
                 .iter()
                 .all(|given| self.category(&given.value) == ValueCategory::Value)
+            && (self.diagnostics.len() != reported
+                || !self.assigned.starts_with(&mark.assigned)
+                || self.returned != mark.returned
+                || given[..given.len() - 1].iter().any(|given| {
+                    let (when_true, when_false) = self.null_tests(&given.value);
+                    let facts = if operator == BinaryOperator::And {
+                        when_true
+                    } else {
+                        when_false
+                    };
+                    facts.iter().any(|fact| !self.present.contains(fact))
+                }))
             && self.may_reread()
         {
+            // Only reread when short-circuit flow can change the typing
+            // of a later operand. Plain nested Boolean expressions keep
+            // their first reading.
             self.take_back(mark, false);
             let mut nodes = given.into_iter().map(|given| given.node);
             let first = nodes.next().expect("a Boolean connective has operands");
