@@ -3,7 +3,7 @@
 mod common;
 
 use common::run;
-use hgl_parser::ast::{AstNode, TestDecl};
+use hgl_parser::ast::{AstNode, Item, TestDecl};
 use hgl_parser::{Entry, SyntaxKind};
 
 #[test]
@@ -125,19 +125,22 @@ fn a_named_test_rejects_a_helper_after_a_statement() {
 fn test_helpers_are_private_and_end_with_a_line_break() {
     // TST-1: the test_block grammar admits private helpers followed
     // by NL, including when the block ends after the helper.
-    for modifier in ["export ", "impl "] {
+    for item in [
+        "export fn helper() {}",
+        "export struct Helper {}",
+        "export operator helper() -> i64",
+        "native fn helper()",
+        "native type Helper",
+        "use anything::{helper}",
+    ] {
         let outcome = run(
             Entry::Declarations,
-            &format!("test helpers {{\n    {modifier}fn helper() {{}}\n}}"),
+            &format!("test helpers {{\n    {item}\n}}"),
         );
         assert_eq!(outcome.findings.len(), 1, "{}", outcome.report);
         assert_eq!(outcome.findings[0].code, "syntax.expected_token");
         assert_eq!(outcome.findings[0].rule, Some("TST-1"));
         assert_eq!(outcome.findings[0].at, "2:5");
-        assert_eq!(
-            outcome.findings[0].message,
-            "a test helper must be a private `fn` or `const fn`"
-        );
     }
     let outcome = run(Entry::Declarations, "test helpers { fn helper() {} }");
     assert_eq!(outcome.findings.len(), 1, "{}", outcome.report);
@@ -169,4 +172,57 @@ fn an_anonymous_function_remains_a_statement_in_a_named_test() {
         body.children().map(|node| node.kind()).collect::<Vec<_>>(),
         [SyntaxKind::ExprStmt, SyntaxKind::AssertStmt]
     );
+}
+
+/// TST-1: test-local declarations use the same syntax as the module's,
+/// and stop before the test's first statement.
+#[test]
+fn a_test_prefix_accepts_types_constants_operators_and_candidates() {
+    let outcome = run(
+        Entry::Declarations,
+        r#"test with_a_type {
+    const cutoff: date = @2026-01-05
+    struct Closed {
+        day: date
+    }
+    enum Schedule { regular, holiday }
+    operator open_on<C>(calendar: C, day: date) -> bool
+    impl const fn open_on(calendar: Closed, day: date) -> bool =>
+        day != calendar.day
+    assert !open_on(Closed(day: cutoff), cutoff)
+}
+"#,
+    );
+    assert_eq!(outcome.findings, [], "{}", outcome.report);
+    assert!(!outcome.has_error_node());
+    let test = outcome.tree.children().find_map(TestDecl::cast).unwrap();
+    let declarations = test.declarations().collect::<Vec<_>>();
+    assert!(matches!(
+        declarations.as_slice(),
+        [
+            Item::Constant(_),
+            Item::Struct(_),
+            Item::Enum(_),
+            Item::Operator(_),
+            Item::Function(_)
+        ]
+    ));
+    let Item::Function(candidate) = &declarations[4] else {
+        unreachable!()
+    };
+    assert!(candidate.is_impl());
+}
+
+#[test]
+fn a_type_after_a_test_statement_is_an_error() {
+    let outcome = run(
+        Entry::Declarations,
+        "test misplaced {\n    assert true\n    struct Late { value: i64 }\n    assert false\n}",
+    );
+    assert_eq!(outcome.findings.len(), 1, "{}", outcome.report);
+    assert_eq!(outcome.findings[0].code, "syntax.expected_token");
+    assert_eq!(outcome.findings[0].rule, Some("TST-1"));
+    assert_eq!(outcome.findings[0].at, "3:5");
+    let test = outcome.tree.children().find_map(TestDecl::cast).unwrap();
+    assert_eq!(test.declarations().count(), 0);
 }
