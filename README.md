@@ -101,7 +101,10 @@ and prints the publications recorded before it stopped.
 use when none is named. It builds against hgraph's C++ SDK, whose
 install prefix `HGL_HGRAPH_SDK` names and whose dependency prefix
 `HGL_HGRAPH_DEPS` names. The [macOS release bundle](docs/releases.md)
-provides both prefixes. The target builds with GCC 15 or later on Linux
+provides both prefixes. A debug build (`hgl run --debug-build DIR`) links
+hgraph's libraries built for debugging where `HGL_HGRAPH_DEBUG` names
+them or the optional `hgl-debug` package is installed beside `hgl`, and
+the optimised ones otherwise. The target builds with GCC 15 or later on Linux
 or Apple clang 21 or later on macOS, and uses CMake and Ninja. See
 [docs/architecture.md](docs/architecture.md#cpp).
 `--target` takes no other value. `--target unknown` is refused

@@ -319,6 +319,7 @@ fn legacy_debug(
         &session.workspace,
         &app.path,
         sdk::library_path(&description),
+        session.toolchain.hgraph(),
     )
     .map_err(build_error)?;
     let _ = directory.keep();
@@ -399,6 +400,7 @@ pub(crate) fn build(arguments: &BuildArgs) -> ExitCode {
         }
         BuildFormat::Json => match build_description(
             &session.workspace,
+            session.toolchain.hgraph(),
             &built,
             arguments,
             compile_commands.as_deref(),
@@ -424,6 +426,7 @@ fn test_executables(program: &plan::Program) -> BTreeSet<&str> {
 
 fn build_description(
     workspace: &Workspace,
+    hgraph: &sdk::Hgraph,
     built: &BuiltProgram,
     arguments: &BuildArgs,
     compile_commands: Option<&Path>,
@@ -471,8 +474,12 @@ fn build_description(
     if arguments.debug
         && let Some(path) = debug_app
     {
-        let launch =
-            application::debug_launch(workspace, path, sdk::library_path(&built.description))?;
+        let launch = application::debug_launch(
+            workspace,
+            path,
+            sdk::library_path(&built.description),
+            hgraph,
+        )?;
         description["debugLaunch"] = serde_json::json!(launch);
     }
     Ok(description)

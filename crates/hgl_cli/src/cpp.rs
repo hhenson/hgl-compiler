@@ -80,7 +80,12 @@ impl BuildSession {
         let cache = build::cache()?;
         let workspace = Workspace::open(keep, roots, &cache, debug)?;
         let previous = PreviousBuild::read(&workspace);
-        let mut toolchain = match Toolchain::find() {
+        let found = if debug {
+            Toolchain::find_debug()
+        } else {
+            Toolchain::find()
+        };
+        let toolchain = match found {
             Ok(toolchain) => toolchain,
             Err(reason) => {
                 PreviousBuild::invalidate(&workspace, previous.as_ref())?;
@@ -88,7 +93,9 @@ impl BuildSession {
             }
         };
         if debug {
-            toolchain.enable_debug();
+            // Said before the build, which may fail. Standard output is
+            // left to what a debugger's integration reads.
+            eprintln!("hgl: {}", toolchain.hgraph().said());
         }
         let toolchain_key = toolchain.key();
         let jobs = std::env::var(build::JOBS)

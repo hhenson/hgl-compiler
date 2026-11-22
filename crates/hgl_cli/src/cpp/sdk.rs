@@ -6,7 +6,10 @@
 //!
 //! `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS` name the SDK's install
 //! prefix and its dependency prefix. Either can also come from the
-//! release's `libexec` alongside the resolved executable. The
+//! release's `libexec` alongside the resolved executable. A debug build
+//! links hgraph's libraries built for debugging where they are given
+//! ([`choose`]): those `HGL_HGRAPH_DEBUG` names, or those the optional
+//! `hgl-debug` package installs in the release's `libexec`. The
 //! compiler is of the platform's family (`docs/cpp-target.md`): GCC 15
 //! or later on Linux, Apple clang 21 or later on macOS; the one `CXX`
 //! names, or else the first of the family's on the `PATH`. What the
@@ -15,7 +18,8 @@
 //! library's too: `-O2`, `-g`, or the sanitizers.
 //!
 //! What is made for a toolchain is kept under the cache, in a directory
-//! named by a hash of everything it depends on: the SDK's and the
+//! named by a hash of everything it depends on: which build of hgraph's
+//! libraries it links, the SDK's and the
 //! dependencies' paths and the SDK's own files, the compiler, its family
 //! and version and what it reads from the environment, the linker, the
 //! flags, and the runtime library's sources.
@@ -43,11 +47,36 @@ use serde_json::Value;
 use super::build::{lock, quoted, write_if_changed};
 use super::stamp::file_digest;
 
+mod package;
+
 /// The variable that names hgraph's C++ SDK.
 pub(super) const SDK: &str = "HGL_HGRAPH_SDK";
 
 /// The variable that names the SDK's dependency prefix.
 pub(super) const DEPS: &str = "HGL_HGRAPH_DEPS";
+
+/// The variable that names hgraph's libraries built for debugging, which
+/// a debug build links: a directory laid out as a release's `libexec`,
+/// with the SDK in `hgraph-sdk` and its dependency prefix in
+/// `hgraph-deps`.
+pub(super) const DEBUG: &str = "HGL_HGRAPH_DEBUG";
+
+/// The directory of a release's `libexec` that the `hgl-debug` package
+/// installs hgraph's libraries built for debugging in, laid out as
+/// [`DEBUG`] names one.
+const BUNDLED_DEBUG: &str = "hgraph-debug";
+
+/// What a directory of hgraph's libraries holds, as [`DEBUG`] names one
+/// and [`BUNDLED_DEBUG`] is: the SDK's CMake package and the dependency
+/// prefix's two directories.
+const DEBUG_HOLDS: [&str; 3] = [
+    "hgraph-sdk/lib/cmake/hgraph/hgraphConfig.cmake",
+    "hgraph-deps/include",
+    "hgraph-deps/lib",
+];
+
+/// The hgraph tag this `hgl` writes C++ for (`HGRAPH_TAG`).
+const HGRAPH_TAG: &str = env!("HGL_HGRAPH_TAG");
 
 /// The variable whose flags are added to every compile and link.
 pub(super) const FLAGS: &str = "HGL_CPP_FLAGS";
@@ -55,6 +84,94 @@ pub(super) const FLAGS: &str = "HGL_CPP_FLAGS";
 /// The file a prepared toolchain's description is kept in. It is
 /// written last: a directory that holds it is ready.
 const DESCRIPTION: &str = "description.json";
+
+/// The flags that confine every CMake configure of a toolchain to the SDK
+/// and the dependency prefix it names (`CMAKE_PREFIX_PATH`): no package is
+/// looked for through `PATH`, the environment, the system's prefixes or a
+/// package registry, and hgraph's package does not fetch one it misses.
+/// One program can then never link fmt, spdlog or simdjson twice, the
+/// prefix's and another's.
+const CONFINED: [&str; 7] = [
+    "-DCMAKE_FIND_USE_PACKAGE_ROOT_PATH=OFF",
+    "-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=OFF",
+    "-DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=OFF",
+    "-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=OFF",
+    "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF",
+    "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF",
+    "-DHGRAPH_FETCH_MISSING_DEPENDENCIES=OFF",
+];
+
+/// The variables of the environment CMake reads for itself in finding
+/// packages, choosing its generator, compilers and flags, and placing what
+/// it installs, which are taken out of the environment of every CMake
+/// `hgl` runs ([`cmake_command`]): what they would change is given on the command
+/// line, or is not to change at all, and the toolchain's hash holds none
+/// of them. `CMAKE_FIND_ROOT_PATH` and `CMAKE_MODULE_PATH` are no
+/// variables of CMake's environment, and are taken out all the same. Kept:
+/// `PATH`, which finds no package ([`CONFINED`]); `MACOSX_DEPLOYMENT_TARGET`
+/// and `SDKROOT`, which the hash holds ([`Family::environment`]); and
+/// `CMAKE_BUILD_PARALLEL_LEVEL`, how many jobs, which changes nothing made.
+const CMAKE_READS: [&str; 33] = [
+    "CMAKE_TOOLCHAIN_FILE",
+    "CMAKE_PREFIX_PATH",
+    "CMAKE_FRAMEWORK_PATH",
+    "CMAKE_APPBUNDLE_PATH",
+    "CMAKE_INCLUDE_PATH",
+    "CMAKE_LIBRARY_PATH",
+    "CMAKE_PROGRAM_PATH",
+    "CMAKE_FIND_ROOT_PATH",
+    "CMAKE_MODULE_PATH",
+    "CMAKE_GENERATOR",
+    "CMAKE_GENERATOR_INSTANCE",
+    "CMAKE_GENERATOR_PLATFORM",
+    "CMAKE_GENERATOR_TOOLSET",
+    "CMAKE_BUILD_TYPE",
+    "CMAKE_CONFIGURATION_TYPES",
+    "CMAKE_CONFIG_TYPE",
+    "CMAKE_CROSSCOMPILING_EMULATOR",
+    "CMAKE_C_COMPILER_LAUNCHER",
+    "CMAKE_CXX_COMPILER_LAUNCHER",
+    "CMAKE_C_LINKER_LAUNCHER",
+    "CMAKE_CXX_LINKER_LAUNCHER",
+    "CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES_EXCLUDE",
+    "CMAKE_OSX_ARCHITECTURES",
+    "CMAKE_APPLE_SILICON_PROCESSOR",
+    "CMAKE_INSTALL_PREFIX",
+    "CMAKE_INSTALL_MODE",
+    "CMAKE_POLICY_VERSION_MINIMUM",
+    "DESTDIR",
+    "CC",
+    "CXX",
+    "CFLAGS",
+    "CXXFLAGS",
+    "LDFLAGS",
+];
+
+/// The packages a configure of a toolchain finds, whose `<Package>_DIR`,
+/// `<Package>_ROOT` and `<PACKAGE>_ROOT` CMake reads from the environment
+/// too, and which are taken out with [`CMAKE_READS`].
+const FOUND_PACKAGES: [&str; 6] = ["hgraph", "fmt", "spdlog", "simdjson", "Threads", "doctest"];
+
+/// `cmake`, to be run with none of what [`CMAKE_READS`] and
+/// [`FOUND_PACKAGES`] name in its environment.
+fn cmake_command(program: &Path) -> Command {
+    let mut command = Command::new(program);
+    for variable in CMAKE_READS {
+        command.env_remove(variable);
+    }
+    for package in FOUND_PACKAGES {
+        let upper = package.to_uppercase();
+        for variable in [
+            format!("{package}_DIR"),
+            format!("{package}_ROOT"),
+            format!("{upper}_DIR"),
+            format!("{upper}_ROOT"),
+        ] {
+            command.env_remove(variable);
+        }
+    }
+    command
+}
 
 /// A version of what is made for a toolchain: raised when what this
 /// driver makes changes, so that what an older `hgl` made is not used.
@@ -220,13 +337,64 @@ impl Family {
     }
 }
 
+/// Which build of hgraph's SDK and of its dependencies a toolchain links.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum Build {
+    /// The build a release ships: optimised, with no debug information.
+    Optimised,
+    /// The build for debugging: no optimisation, debug information.
+    Debug,
+}
+
+impl Build {
+    /// The build's word, as a message and a description's JSON say it.
+    pub(super) fn word(self) -> &'static str {
+        match self {
+            Build::Optimised => "optimised",
+            Build::Debug => "debug",
+        }
+    }
+}
+
+/// hgraph's SDK and its dependency prefix, as [`choose`] chose them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Hgraph {
+    /// Which build they are.
+    pub(super) build: Build,
+    /// The SDK's install prefix.
+    pub(super) sdk: PathBuf,
+    /// The dependency prefix.
+    pub(super) deps: PathBuf,
+    /// Where they were found and, for a debug build that links the
+    /// optimised ones, why: what `hgl` prints of a debug build.
+    pub(super) found: String,
+}
+
+impl Hgraph {
+    /// What `hgl` prints of the libraries a debug build links.
+    pub(super) fn said(&self) -> String {
+        format!(
+            "a debug build, with hgraph's {} libraries {}",
+            self.build.word(),
+            self.found
+        )
+    }
+
+    /// The libraries, as a debug build's JSON description gives them.
+    pub(super) fn json(&self) -> Value {
+        serde_json::json!({
+            "libraries": self.build.word(),
+            "sdk": self.sdk.display().to_string(),
+            "dependencies": self.deps.display().to_string(),
+        })
+    }
+}
+
 /// Everything the cpp target builds with, as it was found.
 #[derive(Debug, Clone)]
 pub(super) struct Toolchain {
-    /// The SDK's install prefix.
-    sdk: PathBuf,
-    /// The dependency prefix.
-    deps: PathBuf,
+    /// hgraph's SDK and its dependencies.
+    hgraph: Hgraph,
     /// The C++ compiler.
     compiler: PathBuf,
     /// Its family, the platform's.
@@ -238,8 +406,12 @@ pub(super) struct Toolchain {
     /// True where the family links with `ld.lld` and it is on the
     /// `PATH`, and links are made with it.
     lld: bool,
-    /// What `HGL_CPP_FLAGS` adds.
+    /// What `HGL_CPP_FLAGS` adds, and for a debug build `-O0 -g`.
     flags: Vec<String>,
+    /// True for a debug build: generated units and the runtime library
+    /// are built for debugging, whichever build of hgraph's libraries
+    /// [`choose`] gave.
+    debug: bool,
 }
 
 /// How a generated unit is compiled and an executable linked, for one
@@ -267,26 +439,35 @@ pub(super) struct Description {
 }
 
 impl Toolchain {
-    /// Build generated units and their precompiled header with matching
-    /// symbols and optimization. These flags also distinguish the toolchain cache.
-    pub(super) fn enable_debug(&mut self) {
-        self.flags.extend(["-O0".to_string(), "-g".to_string()]);
+    /// The configured or bundled toolchain of an ordinary build, or why
+    /// it could not be used.
+    pub(super) fn find() -> Result<Toolchain, String> {
+        Toolchain::with(chosen(false)?)
     }
 
-    /// The configured or bundled toolchain, or why it could not be used.
-    pub(super) fn find() -> Result<Toolchain, String> {
-        let sdk = prefix(
-            SDK,
-            "hgraph-sdk",
-            "the install prefix of hgraph's C++ SDK, the directory that holds `lib/cmake/hgraph`",
-            &["lib/cmake/hgraph/hgraphConfig.cmake"],
-        )?;
-        let deps = prefix(
-            DEPS,
-            "hgraph-deps",
-            "the prefix of the libraries hgraph's C++ SDK was built against, which holds `include` and `lib`",
-            &["include", "lib"],
-        )?;
+    /// The toolchain of a debug build: hgraph's libraries built for
+    /// debugging where they are given ([`choose`]); generated units and
+    /// their precompiled header built with matching symbols and no
+    /// optimisation; and the runtime library built as CMake's `Debug`.
+    /// The libraries, the flags and the debug build distinguish the
+    /// toolchain's cache.
+    pub(super) fn find_debug() -> Result<Toolchain, String> {
+        let mut toolchain = Toolchain::with(chosen(true)?)?;
+        toolchain
+            .flags
+            .extend(["-O0".to_string(), "-g".to_string()]);
+        toolchain.debug = true;
+        Ok(toolchain)
+    }
+
+    /// hgraph's libraries this toolchain links.
+    pub(super) fn hgraph(&self) -> &Hgraph {
+        &self.hgraph
+    }
+
+    /// The toolchain that links `hgraph`, with the compiler and the
+    /// tools found as the environment says.
+    fn with(hgraph: Hgraph) -> Result<Toolchain, String> {
         let family = Family::of_platform();
         let (compiler, version) = compiler(family)?;
         let ninja = which::which("ninja").ok();
@@ -296,15 +477,43 @@ impl Toolchain {
             .map(str::to_string)
             .collect();
         Ok(Toolchain {
-            sdk,
-            deps,
+            hgraph,
             compiler,
             family,
             version,
             ninja,
             lld: family.links_with_lld() && which::which("ld.lld").is_ok(),
             flags,
+            debug: false,
         })
+    }
+
+    /// CMake's build type of the runtime library and of the description of
+    /// a program, which picks the configuration of what a package imports
+    /// where it imports more than one: the libraries' own, `Debug` for
+    /// hgraph's libraries built for debugging and `Release` for the
+    /// optimised ones, so that a program links the build of fmt and spdlog
+    /// hgraph's libraries were built against.
+    fn build_type(&self) -> &'static str {
+        match self.hgraph.build {
+            Build::Debug => "Debug",
+            Build::Optimised => "Release",
+        }
+    }
+
+    /// `reason`, a configure's failure, said of this toolchain's prefixes
+    /// where hgraph's package found no package of a dependency: the prefix
+    /// is incomplete. hgraph's own message asks for its package's fetching,
+    /// which every configure here turns off ([`CONFINED`]).
+    fn incomplete(&self, reason: String) -> String {
+        match missing_package(&reason) {
+            Some(package) => format!(
+                "the dependency prefix {} is incomplete: it holds no CMake package of {package}, \
+                 which hgraph's package needs",
+                self.hgraph.deps.display()
+            ),
+            None => reason,
+        }
     }
 
     /// Ninja is needed on a build miss, after reuse has been considered.
@@ -322,7 +531,8 @@ impl Toolchain {
     pub(super) fn key(&self) -> String {
         let mut hash = DefaultHasher::new();
         FORMAT.hash(&mut hash);
-        for path in [&self.sdk, &self.deps, &self.compiler] {
+        self.hgraph.build.hash(&mut hash);
+        for path in [&self.hgraph.sdk, &self.hgraph.deps, &self.compiler] {
             path.hash(&mut hash);
         }
         self.family.hash(&mut hash);
@@ -332,6 +542,7 @@ impl Toolchain {
         }
         self.lld.hash(&mut hash);
         self.flags.hash(&mut hash);
+        self.debug.hash(&mut hash);
         // The SDK's own files: one rebuilt in place is another SDK. A
         // shared library is `.so` on Linux, `.dylib` on macOS.
         let suffix = std::env::consts::DLL_SUFFIX;
@@ -340,7 +551,7 @@ impl Toolchain {
             format!("lib/libhgraph_runtime{suffix}"),
             format!("lib/libhgraph_wiring{suffix}"),
         ] {
-            let digest = file_digest(&self.sdk.join(file)).ok();
+            let digest = file_digest(&self.hgraph.sdk.join(file)).ok();
             digest.as_ref().map(blake3::Hash::as_bytes).hash(&mut hash);
         }
         hgl_cpp::runtime::FILES.hash(&mut hash);
@@ -408,7 +619,7 @@ impl Toolchain {
 
     /// The flags every CMake configure of this toolchain is given.
     fn configure_flags(&self) -> Result<Vec<String>, String> {
-        Ok(vec![
+        let mut flags = vec![
             "-G".to_string(),
             "Ninja".to_string(),
             format!("-DCMAKE_MAKE_PROGRAM={}", self.ninja()?.display()),
@@ -419,9 +630,11 @@ impl Toolchain {
             format!("-DCMAKE_CXX_FLAGS={}", self.flags.join(" ")),
             "-DCMAKE_EXE_LINKER_FLAGS=".to_string(),
             "-DCMAKE_SHARED_LINKER_FLAGS=".to_string(),
-            format!("-D{SDK}={}", self.sdk.display()),
-            format!("-D{DEPS}={}", self.deps.display()),
-        ])
+            format!("-D{SDK}={}", self.hgraph.sdk.display()),
+            format!("-D{DEPS}={}", self.hgraph.deps.display()),
+        ];
+        flags.extend(CONFINED.iter().map(|flag| flag.to_string()));
+        Ok(flags)
     }
 
     /// Writes out the runtime library's sources under `directory`, and
@@ -453,21 +666,37 @@ impl Toolchain {
             fs::write(&file, bytes)
                 .map_err(|error| format!("{} could not be written: {error}", file.display()))?;
         }
-        let mut configure = Command::new(cmake);
+        let mut configure = cmake_command(cmake);
         configure
             .arg("-S")
             .arg(&source)
             .arg("-B")
             .arg(&build)
             .args(self.configure_flags()?)
-            .arg("-DCMAKE_BUILD_TYPE=Release")
+            .arg(format!("-DCMAKE_BUILD_TYPE={}", self.build_type()))
+            // A debug build's runtime library is built for debugging, with
+            // the toolchain's `-O0 -g` alone: a Release build's own `-O3
+            // -DNDEBUG` would follow them.
+            .args(
+                self.debug
+                    .then(|| {
+                        let configuration = self.build_type().to_uppercase();
+                        [
+                            format!("-DCMAKE_CXX_FLAGS_{configuration}="),
+                            format!("-DCMAKE_SHARED_LINKER_FLAGS_{configuration}="),
+                        ]
+                    })
+                    .into_iter()
+                    .flatten(),
+            )
             .arg(format!("-DCMAKE_INSTALL_PREFIX={}", installed.display()))
             // The library is installed in `lib` on every system, where the
             // description's program finds it.
             .arg("-DCMAKE_INSTALL_LIBDIR=lib")
             .arg("-DBUILD_TESTING=OFF");
-        run("the runtime library's configuration", &mut configure)?;
-        let mut built = Command::new(cmake);
+        run("the runtime library's configuration", &mut configure)
+            .map_err(|reason| self.incomplete(reason))?;
+        let mut built = cmake_command(cmake);
         built.arg("--build").arg(&build);
         if let Some(jobs) = jobs {
             built.arg("--parallel").arg(jobs);
@@ -475,7 +704,7 @@ impl Toolchain {
         run("the runtime library's build", &mut built)?;
         run(
             "the runtime library's installation",
-            Command::new(cmake).arg("--install").arg(&build),
+            cmake_command(cmake).arg("--install").arg(&build),
         )?;
         Ok(installed)
     }
@@ -500,22 +729,36 @@ impl Toolchain {
         // A file under `.cmake/api/v1/query` asks CMake to describe the
         // build; an empty one named `codemodel-v2` asks for the targets.
         write_if_changed(&build.join(".cmake/api/v1/query/codemodel-v2"), "")?;
-        let mut configure = Command::new(cmake);
+        let mut configure = cmake_command(cmake);
         configure
             .arg("-S")
             .arg(&source)
             .arg("-B")
             .arg(&build)
             .args(self.configure_flags()?)
+            // The runtime library's build type, so that where a package
+            // imports a library of each configuration the program links
+            // the one the runtime library does; and none of its flags, so
+            // that a generated unit is compiled with the toolchain's alone.
+            .arg(format!("-DCMAKE_BUILD_TYPE={}", self.build_type()))
+            .arg(format!(
+                "-DCMAKE_CXX_FLAGS_{}=",
+                self.build_type().to_uppercase()
+            ))
+            .arg(format!(
+                "-DCMAKE_EXE_LINKER_FLAGS_{}=",
+                self.build_type().to_uppercase()
+            ))
             .arg(format!("-DHGL_RUNTIME={}", runtime.display()));
-        run("the description of a build against the SDK", &mut configure)?;
+        run("the description of a build against the SDK", &mut configure)
+            .map_err(|reason| self.incomplete(reason))?;
         let target = probe_target(&build.join(".cmake/api/v1/reply"))?;
         let mut description = description_of(&target, self.family, &self.compiler)?;
         description.link.extend(self.family.link_flags(self.lld));
         description.libraries = [
             runtime.join("lib"),
-            self.sdk.join("lib"),
-            self.deps.join("lib"),
+            self.hgraph.sdk.join("lib"),
+            self.hgraph.deps.join("lib"),
         ]
         .iter()
         .map(|directory| directory.display().to_string())
@@ -580,15 +823,166 @@ set_target_properties(hgl_probe PROPERTIES CXX_EXTENSIONS OFF)
 target_link_libraries(hgl_probe PRIVATE hglrt)
 "#;
 
-/// The prefix named by the variable or supplied beside the real executable.
-/// Each required file or directory in `holds` must be present.
-fn prefix(variable: &str, bundled: &str, what: &str, holds: &[&str]) -> Result<PathBuf, String> {
+/// What [`SDK`] names, as a message says it.
+const WHAT_SDK: &str =
+    "the install prefix of hgraph's C++ SDK, the directory that holds `lib/cmake/hgraph`";
+
+/// What [`DEPS`] names, as a message says it.
+const WHAT_DEPS: &str = "the prefix of the libraries hgraph's C++ SDK was built against, which holds `include` and `lib`";
+
+/// What [`DEBUG`] names, as a message says it.
+const WHAT_DEBUG: &str = "the directory of hgraph's libraries built for debugging, which holds the SDK in `hgraph-sdk` and its dependencies in `hgraph-deps`";
+
+/// The variables of the environment, read by name: what [`choose`]
+/// reads them through, so that a test can give its own.
+type Variables<'a> = &'a dyn Fn(&str) -> Option<OsString>;
+
+/// The directory a release unpacks to, which the resolved executable is
+/// in as `bin/hgl`; `None` where the executable cannot be resolved.
+fn bundle() -> Option<PathBuf> {
+    let executable = fs::canonicalize(std::env::current_exe().ok()?).ok()?;
+    Some(executable.parent()?.parent()?.to_path_buf())
+}
+
+/// [`choose`] with this process's environment and the release this
+/// executable is in.
+fn chosen(debug: bool) -> Result<Hgraph, String> {
+    choose(debug, &|name| std::env::var_os(name), bundle().as_deref())
+}
+
+/// hgraph's SDK and dependency prefix that a build links, with the
+/// environment's `variables` and the release unpacked in `bundle`.
+///
+/// An ordinary build links the optimised libraries, always: those
+/// `HGL_HGRAPH_SDK` and `HGL_HGRAPH_DEPS` name, or else the release's
+/// own. A debug build links the libraries built for debugging where they
+/// are given, and the optimised ones otherwise:
+///
+/// 1. those `HGL_HGRAPH_DEBUG` names, which must be whole and built for
+///    debugging (`package::usable`), or it is an error;
+/// 2. else, where neither `HGL_HGRAPH_SDK` nor `HGL_HGRAPH_DEPS` names
+///    libraries of the user's own, those the `hgl-debug` package
+///    installs in the release's `libexec/hgraph-debug`, where they are
+///    whole, built for debugging and of the hgraph tag this `hgl` writes
+///    for;
+/// 3. else the optimised ones, saying why.
+fn choose(debug: bool, variables: Variables, bundle: Option<&Path>) -> Result<Hgraph, String> {
+    let libexec = bundle.map(|bundle| bundle.join("libexec"));
+    let optimised = |why: String| -> Result<Hgraph, String> {
+        let sdk = prefix(
+            SDK,
+            variables(SDK),
+            libexec.as_deref(),
+            "hgraph-sdk",
+            WHAT_SDK,
+            &["lib/cmake/hgraph/hgraphConfig.cmake"],
+        )?;
+        let deps = prefix(
+            DEPS,
+            variables(DEPS),
+            libexec.as_deref(),
+            "hgraph-deps",
+            WHAT_DEPS,
+            &["include", "lib"],
+        )?;
+        Ok(Hgraph {
+            build: Build::Optimised,
+            found: format!("in {}{why}", sdk.display()),
+            sdk,
+            deps,
+        })
+    };
+    if !debug {
+        return optimised(String::new());
+    }
+    if let Some(named) = variables(DEBUG) {
+        if named.is_empty() {
+            return Err(format!(
+                "{DEBUG} is empty: set it to {WHAT_DEBUG}, or unset it"
+            ));
+        }
+        let directory = PathBuf::from(named);
+        let notes = package::usable(&directory).map_err(|problem| {
+            format!(
+                "{DEBUG} names {}, which {problem}: set it to {WHAT_DEBUG}",
+                directory.display()
+            )
+        })?;
+        return debug_libraries(&directory, &format!("named by {DEBUG}"), &notes);
+    }
+    if let Some(own) = [SDK, DEPS]
+        .into_iter()
+        .find(|name| variables(name).is_some())
+    {
+        return optimised(format!(
+            ": {own} names them, and {DEBUG} names no debug libraries"
+        ));
+    }
+    let beside = libexec.as_ref().map(|libexec| libexec.join(BUNDLED_DEBUG));
+    let Some(beside) = beside.filter(|beside| beside.exists()) else {
+        return optimised(format!(
+            ": the `hgl-debug` package is not installed beside hgl, and {DEBUG} is not set"
+        ));
+    };
+    let notes = match package::usable(&beside) {
+        Ok(notes) => notes,
+        Err(problem) => {
+            return optimised(format!(
+                ": the `hgl-debug` package beside hgl, in {}, {problem}",
+                beside.display()
+            ));
+        }
+    };
+    let tag = package::stamp(&beside.join("hgraph-sdk")).and_then(|stamp| stamp.tag);
+    if tag.as_deref() != Some(HGRAPH_TAG) {
+        return optimised(format!(
+            ": those installed beside hgl, in {}, are hgraph {}'s, and this hgl writes for hgraph \
+             {HGRAPH_TAG}",
+            beside.display(),
+            tag.as_deref().unwrap_or("no tag")
+        ));
+    }
+    debug_libraries(&beside, "installed beside hgl", &notes)
+}
+
+/// The libraries built for debugging in `directory`, which
+/// `package::usable` finds nothing wrong with, found as `how` says, with
+/// what the check could not read of them, `notes`.
+fn debug_libraries(directory: &Path, how: &str, notes: &[String]) -> Result<Hgraph, String> {
+    let resolved = |path: PathBuf| {
+        fs::canonicalize(&path).map_err(|error| format!("{}: {error}", path.display()))
+    };
+    let directory = resolved(directory.to_path_buf())?;
+    Ok(Hgraph {
+        build: Build::Debug,
+        sdk: resolved(directory.join("hgraph-sdk"))?,
+        deps: resolved(directory.join("hgraph-deps"))?,
+        found: format!(
+            "in {}, {how}{}",
+            directory.display(),
+            notes
+                .iter()
+                .map(|note| format!("; {note}"))
+                .collect::<String>()
+        ),
+    })
+}
+
+/// The prefix `named`, the value of `variable`, names; or, where it is
+/// not set, the one `bundled` names in the release's `libexec`. Each
+/// file or directory of `holds` must be in it.
+fn prefix(
+    variable: &str,
+    named: Option<OsString>,
+    libexec: Option<&Path>,
+    bundled: &str,
+    what: &str,
+    holds: &[&str],
+) -> Result<PathBuf, String> {
     let valid = |path: &Path| holds.iter().all(|part| path.join(part).exists());
-    let Some(named) = std::env::var_os(variable) else {
-        return std::env::current_exe()
-            .and_then(fs::canonicalize)
-            .ok()
-            .and_then(|exe| Some(exe.parent()?.parent()?.join("libexec").join(bundled)))
+    let Some(named) = named else {
+        return libexec
+            .map(|libexec| libexec.join(bundled))
             .filter(|path| valid(path))
             .ok_or_else(|| {
                 format!(
@@ -699,6 +1093,17 @@ pub(super) fn library_path(description: &Description) -> Option<(&'static str, O
         .or(inherited)
         .filter(|value| !value.is_empty())
         .map(|value| (variable, value))
+}
+
+/// The dependency hgraph's CMake package found no package of, where a
+/// configure's output says so: `Missing NAME; install its CMake package`.
+fn missing_package(printed: &str) -> Option<&str> {
+    printed.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("Missing ")?
+            .split_once("; install its CMake package")
+            .map(|(name, _)| name)
+    })
 }
 
 /// Runs `command` to its end; `what` names it in the reason it failed,
@@ -834,7 +1239,527 @@ fn read_description(text: &str) -> Option<Description> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Family, read_description};
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    use super::{
+        Build, CONFINED, Family, HGRAPH_TAG, Hgraph, Toolchain, choose, cmake_command,
+        read_description,
+    };
+
+    /// The suffix of a shared library on this platform.
+    const SUFFIX: &str = std::env::consts::DLL_SUFFIX;
+
+    /// Lays out in `directory` an SDK in `hgraph-sdk`, stamped as an
+    /// optimised build of `tag`, and a dependency prefix in `hgraph-deps`,
+    /// as a release's `libexec` holds them: what the choice looks for of
+    /// optimised libraries.
+    fn lay_out(directory: &Path, tag: &str) {
+        let package = directory.join("hgraph-sdk/lib/cmake/hgraph");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(package.join("hgraphConfig.cmake"), "").unwrap();
+        fs::write(
+            directory.join("hgraph-sdk/hgl-sdk.txt"),
+            format!("tag={tag}\n"),
+        )
+        .unwrap();
+        for part in ["include", "lib"] {
+            fs::create_dir_all(directory.join("hgraph-deps").join(part)).unwrap();
+        }
+    }
+
+    /// A library at `path`: on a Unix, a link to this test's own
+    /// executable, an object file whose headers parse whole.
+    fn library(path: &Path) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(std::env::current_exe().unwrap(), path).unwrap();
+        #[cfg(not(unix))]
+        fs::write(path, "").unwrap();
+    }
+
+    /// Lays out in `directory` hgraph's libraries built for debugging, of
+    /// `tag`, as the `hgl-debug` package installs them: the SDK, stamped
+    /// as a Debug build, and the dependency prefix, each CMake package with
+    /// the libraries it imports.
+    fn lay_out_debug(directory: &Path, tag: &str) {
+        lay_out(directory, tag);
+        fs::write(
+            directory.join("hgraph-sdk/hgl-sdk.txt"),
+            format!("tag={tag}\nbuild-type=Debug\n"),
+        )
+        .unwrap();
+        let packages: [(&str, &str, &str, &[&str]); 4] = [
+            (
+                "hgraph-sdk",
+                "hgraph",
+                "Config",
+                &["libhgraph_runtime", "libhgraph_wiring"],
+            ),
+            ("hgraph-deps", "fmt", "-config", &["libfmtd"]),
+            ("hgraph-deps", "spdlog", "Config", &["libspdlogd"]),
+            ("hgraph-deps", "simdjson", "-config", &["libsimdjson"]),
+        ];
+        for (prefix, name, config, libraries) in packages {
+            let package = directory.join(prefix).join("lib/cmake").join(name);
+            fs::create_dir_all(&package).unwrap();
+            fs::write(package.join(format!("{name}{config}.cmake")), "").unwrap();
+            let mut targets = String::new();
+            for file in libraries {
+                library(&directory.join(prefix).join(format!("lib/{file}{SUFFIX}")));
+                targets.push_str(&format!(
+                    "list(APPEND _cmake_import_check_files_for_{name}::{name} \
+                     \"${{_IMPORT_PREFIX}}/lib/{file}{SUFFIX}\" )\n"
+                ));
+            }
+            fs::write(package.join(format!("{name}-targets-debug.cmake")), targets).unwrap();
+        }
+    }
+
+    /// A release unpacked in a new directory, with its optimised
+    /// libraries; and, where `debug` gives a tag, the `hgl-debug`
+    /// package's libraries of that tag installed beside them.
+    fn release(debug: Option<&str>) -> tempfile::TempDir {
+        let bundle = tempfile::tempdir().unwrap();
+        let libexec = bundle.path().join("libexec");
+        lay_out(&libexec, HGRAPH_TAG);
+        if let Some(tag) = debug {
+            lay_out_debug(&libexec.join("hgraph-debug"), tag);
+        }
+        bundle
+    }
+
+    /// `path` resolved, as the choice gives its paths.
+    fn real(path: PathBuf) -> PathBuf {
+        fs::canonicalize(path).unwrap()
+    }
+
+    /// The choice with only `set` in the environment, and the release
+    /// unpacked in `bundle`, resolved as [`super::bundle`] gives it.
+    fn chosen_with(
+        debug: bool,
+        set: &[(&str, &Path)],
+        bundle: Option<&Path>,
+    ) -> Result<Hgraph, String> {
+        let variables = |name: &str| {
+            set.iter()
+                .find(|(named, _)| *named == name)
+                .map(|(_, value)| OsString::from(value))
+        };
+        let bundle = bundle.map(|bundle| real(bundle.to_path_buf()));
+        choose(debug, &variables, bundle.as_deref())
+    }
+
+    /// The choice of a debug build of a release with the `hgl-debug`
+    /// package beside it, after `damage` is done to the package: the
+    /// optimised libraries, and why.
+    fn passed_over(damage: impl Fn(&Path)) -> String {
+        let bundle = release(Some(HGRAPH_TAG));
+        let beside = bundle.path().join("libexec/hgraph-debug");
+        damage(&beside);
+        let hgraph = chosen_with(true, &[], Some(bundle.path())).unwrap();
+        assert_eq!(hgraph.build, Build::Optimised, "{}", hgraph.said());
+        assert_eq!(hgraph.sdk, real(bundle.path().join("libexec/hgraph-sdk")));
+        let said = hgraph.said();
+        let prefix = format!(
+            "a debug build, with hgraph's optimised libraries in {}: the `hgl-debug` package beside \
+             hgl, in {}, ",
+            hgraph.sdk.display(),
+            real(beside).display()
+        );
+        said.strip_prefix(&prefix)
+            .unwrap_or_else(|| panic!("{said}"))
+            .to_string()
+    }
+
+    #[test]
+    fn an_ordinary_build_links_the_optimised_libraries_whatever_else_is_given() {
+        let bundle = release(Some(HGRAPH_TAG));
+        let named = tempfile::tempdir().unwrap();
+        lay_out_debug(named.path(), HGRAPH_TAG);
+        let hgraph = chosen_with(
+            false,
+            &[("HGL_HGRAPH_DEBUG", named.path())],
+            Some(bundle.path()),
+        )
+        .unwrap();
+        assert_eq!(hgraph.build, Build::Optimised);
+        assert_eq!(hgraph.sdk, real(bundle.path().join("libexec/hgraph-sdk")));
+        assert_eq!(hgraph.deps, real(bundle.path().join("libexec/hgraph-deps")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_debug_build_links_the_libraries_hgl_hgraph_debug_names() {
+        let bundle = release(Some(HGRAPH_TAG));
+        let named = tempfile::tempdir().unwrap();
+        // Of another tag: the variable names what the user means.
+        lay_out_debug(named.path(), "0.0.1");
+        let own = release(None);
+        let own_sdk = own.path().join("libexec/hgraph-sdk");
+        let hgraph = chosen_with(
+            true,
+            &[
+                ("HGL_HGRAPH_DEBUG", named.path()),
+                ("HGL_HGRAPH_SDK", &own_sdk),
+            ],
+            Some(bundle.path()),
+        )
+        .unwrap();
+        assert_eq!(hgraph.build, Build::Debug);
+        assert_eq!(hgraph.sdk, real(named.path().join("hgraph-sdk")));
+        assert_eq!(hgraph.deps, real(named.path().join("hgraph-deps")));
+        assert_eq!(
+            hgraph.said(),
+            format!(
+                "a debug build, with hgraph's debug libraries in {}, named by HGL_HGRAPH_DEBUG",
+                real(named.path().to_path_buf()).display()
+            )
+        );
+    }
+
+    #[test]
+    fn hgl_hgraph_debug_names_whole_libraries_built_for_debugging() {
+        let bundle = release(Some(HGRAPH_TAG));
+        let named = |damage: &dyn Fn(&Path)| {
+            let directory = tempfile::tempdir().unwrap();
+            lay_out_debug(directory.path(), HGRAPH_TAG);
+            damage(directory.path());
+            let reason = chosen_with(
+                true,
+                &[("HGL_HGRAPH_DEBUG", directory.path())],
+                Some(bundle.path()),
+            )
+            .unwrap_err();
+            let prefix = format!(
+                "HGL_HGRAPH_DEBUG names {}, which ",
+                directory.path().display()
+            );
+            let suffix = ": set it to the directory of hgraph's libraries built for debugging, \
+                          which holds the SDK in `hgraph-sdk` and its dependencies in `hgraph-deps`";
+            reason
+                .strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix(suffix))
+                .unwrap_or_else(|| panic!("{reason}"))
+                .to_string()
+        };
+        let empty = chosen_with(
+            true,
+            &[("HGL_HGRAPH_DEBUG", Path::new(""))],
+            Some(bundle.path()),
+        );
+        assert!(
+            empty
+                .unwrap_err()
+                .starts_with("HGL_HGRAPH_DEBUG is empty: ")
+        );
+        assert_eq!(
+            named(&|directory| fs::remove_dir(directory.join("hgraph-deps/include")).unwrap()),
+            "holds no `hgraph-deps/include`"
+        );
+        // The optimised libraries, named as debug ones.
+        assert_eq!(
+            named(&|directory| {
+                fs::write(directory.join("hgraph-sdk/hgl-sdk.txt"), "tag=0.9.23\n").unwrap()
+            }),
+            "is not built for debugging: its `hgraph-sdk/hgl-sdk.txt` names no build type, as an \
+             optimised build's does"
+        );
+        assert_eq!(
+            named(&|directory| {
+                fs::remove_file(directory.join(format!("hgraph-deps/lib/libspdlogd{SUFFIX}")))
+                    .unwrap()
+            }),
+            format!(
+                "lacks `hgraph-deps/lib/libspdlogd{SUFFIX}`, which its CMake package `spdlog` imports"
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_debug_build_links_the_package_installed_beside_hgl() {
+        let bundle = release(Some(HGRAPH_TAG));
+        let hgraph = chosen_with(true, &[], Some(bundle.path())).unwrap();
+        let beside = real(bundle.path().join("libexec/hgraph-debug"));
+        assert_eq!(hgraph.build, Build::Debug);
+        assert_eq!(hgraph.sdk, beside.join("hgraph-sdk"));
+        assert_eq!(hgraph.deps, beside.join("hgraph-deps"));
+        assert_eq!(
+            hgraph.said(),
+            format!(
+                "a debug build, with hgraph's debug libraries in {}, installed beside hgl",
+                beside.display()
+            )
+        );
+    }
+
+    #[test]
+    fn a_debug_build_with_no_package_links_the_optimised_libraries_and_says_why() {
+        let bundle = release(None);
+        let hgraph = chosen_with(true, &[], Some(bundle.path())).unwrap();
+        assert_eq!(hgraph.build, Build::Optimised);
+        assert_eq!(
+            hgraph.said(),
+            format!(
+                "a debug build, with hgraph's optimised libraries in {}: the `hgl-debug` package \
+                 is not installed beside hgl, and HGL_HGRAPH_DEBUG is not set",
+                real(bundle.path().join("libexec/hgraph-sdk")).display()
+            )
+        );
+    }
+
+    #[test]
+    fn a_package_beside_hgl_laid_out_wrongly_says_what_is_wrong() {
+        assert_eq!(
+            passed_over(|beside| fs::remove_dir(beside.join("hgraph-deps/include")).unwrap()),
+            "holds no `hgraph-deps/include`"
+        );
+        assert_eq!(
+            passed_over(|beside| fs::remove_dir_all(beside.join("hgraph-sdk")).unwrap()),
+            "holds no `hgraph-sdk/lib/cmake/hgraph/hgraphConfig.cmake`"
+        );
+    }
+
+    #[test]
+    fn a_package_beside_hgl_not_built_for_debugging_is_passed_over() {
+        assert_eq!(
+            passed_over(|beside| fs::remove_file(beside.join("hgraph-sdk/hgl-sdk.txt")).unwrap()),
+            "holds no `hgraph-sdk/hgl-sdk.txt`, which says how the SDK was built"
+        );
+        assert_eq!(
+            passed_over(|beside| {
+                fs::write(
+                    beside.join("hgraph-sdk/hgl-sdk.txt"),
+                    format!("tag={HGRAPH_TAG}\nbuild-type=Release\n"),
+                )
+                .unwrap()
+            }),
+            "is not built for debugging: its `hgraph-sdk/hgl-sdk.txt` says `build-type=Release`"
+        );
+    }
+
+    #[test]
+    fn a_package_beside_hgl_missing_a_library_is_passed_over() {
+        assert_eq!(
+            passed_over(|beside| {
+                fs::remove_file(beside.join(format!("hgraph-sdk/lib/libhgraph_runtime{SUFFIX}")))
+                    .unwrap()
+            }),
+            format!(
+                "lacks `hgraph-sdk/lib/libhgraph_runtime{SUFFIX}`, which its CMake package \
+                 `hgraph` imports"
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_package_beside_hgl_with_a_library_cut_short_is_passed_over() {
+        let said = passed_over(|beside| {
+            let library = beside.join(format!("hgraph-deps/lib/libfmtd{SUFFIX}"));
+            let whole = fs::read(&library).unwrap();
+            fs::remove_file(&library).unwrap();
+            fs::write(&library, &whole[..whole.len() / 2]).unwrap();
+        });
+        assert!(
+            said.starts_with(&format!(
+                "holds `hgraph-deps/lib/libfmtd{SUFFIX}`, which is not a whole library: "
+            )),
+            "{said}"
+        );
+    }
+
+    #[test]
+    fn a_package_beside_hgl_missing_a_cmake_package_is_passed_over() {
+        // A debug build would otherwise find spdlog's package in another
+        // prefix, one on the `PATH` say, and link two spdlogs.
+        assert_eq!(
+            passed_over(|beside| {
+                fs::remove_dir_all(beside.join("hgraph-deps/lib/cmake/spdlog")).unwrap()
+            }),
+            "holds no CMake package `spdlog` in `hgraph-deps/lib/cmake/spdlog`"
+        );
+        assert_eq!(
+            passed_over(|beside| {
+                fs::write(
+                    beside.join("hgraph-deps/lib/cmake/fmt/fmt-targets-debug.cmake"),
+                    "",
+                )
+                .unwrap()
+            }),
+            "holds a CMake package `fmt` in `hgraph-deps/lib/cmake/fmt` that imports no library"
+        );
+    }
+
+    #[test]
+    fn a_debug_build_against_the_users_own_sdk_does_not_take_the_package() {
+        let bundle = release(Some(HGRAPH_TAG));
+        let own = release(None);
+        let sdk = own.path().join("libexec/hgraph-sdk");
+        let deps = own.path().join("libexec/hgraph-deps");
+        for set in [
+            vec![
+                ("HGL_HGRAPH_SDK", sdk.as_path()),
+                ("HGL_HGRAPH_DEPS", deps.as_path()),
+            ],
+            vec![("HGL_HGRAPH_DEPS", deps.as_path())],
+        ] {
+            let hgraph = chosen_with(true, &set, Some(bundle.path())).unwrap();
+            assert_eq!(hgraph.build, Build::Optimised);
+            assert_eq!(hgraph.deps, real(deps.clone()));
+            assert!(
+                hgraph.said().ends_with(&format!(
+                    ": {} names them, and HGL_HGRAPH_DEBUG names no debug libraries",
+                    set[0].0
+                )),
+                "{}",
+                hgraph.said()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_package_of_another_hgraph_is_not_taken() {
+        let bundle = release(Some("0.0.1"));
+        let hgraph = chosen_with(true, &[], Some(bundle.path())).unwrap();
+        assert_eq!(hgraph.build, Build::Optimised);
+        assert!(
+            hgraph.said().ends_with(&format!(
+                "are hgraph 0.0.1's, and this hgl writes for hgraph {HGRAPH_TAG}"
+            )),
+            "{}",
+            hgraph.said()
+        );
+    }
+
+    /// A toolchain of `build`'s libraries in `libexec`, for a debug build
+    /// where `debug` says.
+    fn toolchain(libexec: &Path, build: Build, debug: bool) -> Toolchain {
+        Toolchain {
+            hgraph: Hgraph {
+                build,
+                sdk: libexec.join("hgraph-sdk"),
+                deps: libexec.join("hgraph-deps"),
+                found: String::new(),
+            },
+            compiler: PathBuf::from("g++"),
+            family: Family::Gcc,
+            version: "15.2.0".to_string(),
+            ninja: Some(PathBuf::from("ninja")),
+            lld: false,
+            flags: Vec::new(),
+            debug,
+        }
+    }
+
+    #[test]
+    fn the_toolchains_hash_covers_its_libraries_and_whether_it_builds_for_debugging() {
+        let bundle = release(None);
+        let libexec = bundle.path().join("libexec");
+        let ordinary = toolchain(&libexec, Build::Optimised, false).key();
+        assert_eq!(ordinary, toolchain(&libexec, Build::Optimised, false).key());
+        assert_ne!(ordinary, toolchain(&libexec, Build::Debug, false).key());
+        // A debug build that links the optimised libraries builds its
+        // runtime library for debugging all the same.
+        assert_ne!(ordinary, toolchain(&libexec, Build::Optimised, true).key());
+    }
+
+    #[test]
+    fn a_dependency_prefix_lacking_a_package_is_said_to_be_incomplete() {
+        let printed = "CMake Error at .../HgraphFetchDependencies.cmake:36 (message):\n  \
+                       Missing spdlog; install its CMake package or enable\n  \
+                       HGRAPH_FETCH_MISSING_DEPENDENCIES\n";
+        assert_eq!(super::missing_package(printed), Some("spdlog"));
+        assert_eq!(super::missing_package("-- Configuring done"), None);
+        let said = toolchain(Path::new("libexec"), Build::Optimised, false).incomplete(format!(
+            "the runtime library's configuration failed:\n{printed}"
+        ));
+        assert_eq!(
+            said,
+            format!(
+                "the dependency prefix {} is incomplete: it holds no CMake package of spdlog, \
+                 which hgraph's package needs",
+                Path::new("libexec").join("hgraph-deps").display()
+            )
+        );
+    }
+
+    #[test]
+    fn a_configure_takes_the_build_type_of_the_libraries_it_links() {
+        let libexec = Path::new("libexec");
+        assert_eq!(toolchain(libexec, Build::Debug, true).build_type(), "Debug");
+        // A debug build that links the optimised libraries picks what a
+        // package imports as they were built against.
+        assert_eq!(
+            toolchain(libexec, Build::Optimised, true).build_type(),
+            "Release"
+        );
+        assert_eq!(
+            toolchain(libexec, Build::Optimised, false).build_type(),
+            "Release"
+        );
+    }
+
+    #[test]
+    fn every_configure_finds_packages_in_the_two_prefixes_alone() {
+        let libexec = Path::new("libexec");
+        for (build, debug) in [
+            (Build::Debug, true),
+            (Build::Optimised, true),
+            (Build::Optimised, false),
+        ] {
+            let flags = toolchain(libexec, build, debug).configure_flags().unwrap();
+            assert!(
+                CONFINED
+                    .iter()
+                    .all(|flag| flags.iter().any(|given| given == flag)),
+                "{flags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cmake_runs_with_none_of_its_own_variables_of_the_environment() {
+        let command = cmake_command(Path::new("cmake"));
+        let removed: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        // Windows knows a variable's name whatever its case, and keeps
+        // one spelling of `spdlog_ROOT` and `SPDLOG_ROOT`.
+        let same = |name: &str, variable: &str| {
+            if cfg!(windows) {
+                name.eq_ignore_ascii_case(variable)
+            } else {
+                name == variable
+            }
+        };
+        for variable in [
+            "CMAKE_TOOLCHAIN_FILE",
+            "CMAKE_PREFIX_PATH",
+            "CMAKE_GENERATOR",
+            "CMAKE_BUILD_TYPE",
+            "DESTDIR",
+            "fmt_DIR",
+            "spdlog_ROOT",
+            "SPDLOG_ROOT",
+            "hgraph_DIR",
+        ] {
+            assert!(
+                removed.iter().any(|name| same(name, variable)),
+                "{variable}: {removed:?}"
+            );
+        }
+        assert!(
+            !removed
+                .iter()
+                .any(|name| same(name, "PATH") || same(name, "SDKROOT"))
+        );
+    }
 
     /// Some of what GCC 15.2 defines, as `-dM -E` prints it.
     const GCC: &str = "#define __cplusplus 201703L\n#define __GNUC__ 15\n\
