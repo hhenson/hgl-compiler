@@ -552,7 +552,10 @@ impl<'a> Typer<'a> {
             dependent_slot(&self.program.modules[module], signature)
         });
         let mut assigned = self.assign_dependent(name, list, slots, takes, aside, dependent);
-        let mut values: Vec<Option<Expr>> = vec![None; assigned.len()];
+        let mut values: Vec<Option<Expr>> = assigned
+            .iter()
+            .map(|argument| argument.forwarded.as_ref().map(|(_, value)| value.clone()))
+            .collect();
         // True for a value kept from its first reading that is not
         // then fitted to its place.
         let mut unfitted: Vec<bool> = vec![false; assigned.len()];
@@ -697,6 +700,12 @@ impl<'a> Typer<'a> {
                     by_argument[index] |= found[index].is_some();
                 }
             };
+            // A forwarded entry is already typed in the enclosing
+            // instance. Its type informs inference like any other input.
+            if let Some(value) = &values[position] {
+                learn(self, value, &mut found);
+                continue;
+            }
             // Nothing is expected of the value while its place is not
             // known, but that the place is an endpoint: the argument of
             // `valid<T>(input: endpoint<T>)` is an endpoint of whatever
@@ -856,7 +865,14 @@ impl<'a> Typer<'a> {
                     ..
                 } = assigned;
                 let Some(index) = *slot else {
-                    return self.argument(None, node, None, takes);
+                    return match values[position].take() {
+                        Some(value) => hir::Argument {
+                            parameter: None,
+                            pack: None,
+                            value,
+                        },
+                        None => self.argument(None, node, None, takes),
+                    };
                 };
                 let pattern = patterns[index];
                 let traced = matches!(pattern, Type::Trace { .. });
@@ -884,21 +900,27 @@ impl<'a> Typer<'a> {
                 // EXPR-9, ERR-2 and FN-17: a contextual expression or
                 // anonymous callback may need the slot another argument
                 // can settle in the graph instance (GEN-2).
-                let depends_on_instance = !late.is_empty() && !traced && !whole(&slot.ty) && {
-                    let mut missing = unfound
-                        .iter()
-                        .filter(|at| mentions(pattern, &[**at]))
-                        .peekable();
-                    let needs_place = match takes {
-                        Takes::Parameters => {
-                            needs_argument_place(node)
-                                || matches!(slot.ty, Type::Function(_))
-                                    && ungrouped(node.clone()).kind() == SyntaxKind::FnExpr
-                        }
-                        Takes::Fields => field_needs_argument_place(node),
+                let depends_on_instance = assigned.forwarded.is_none()
+                    && !late.is_empty()
+                    && !traced
+                    && !whole(&slot.ty)
+                    && {
+                        let mut missing = unfound
+                            .iter()
+                            .filter(|at| mentions(pattern, &[**at]))
+                            .peekable();
+                        let needs_place = match takes {
+                            Takes::Parameters => {
+                                needs_argument_place(node)
+                                    || matches!(slot.ty, Type::Function(_))
+                                        && ungrouped(node.clone()).kind() == SyntaxKind::FnExpr
+                            }
+                            Takes::Fields => field_needs_argument_place(node),
+                        };
+                        needs_place
+                            && missing.peek().is_some()
+                            && missing.all(|at| late.contains(at))
                     };
-                    needs_place && missing.peek().is_some() && missing.all(|at| late.contains(at))
-                };
                 // A place whose type names a parameter nothing resolved
                 // is not known, and where the call is settled it never
                 // will be. Its argument is then read as one of which
@@ -943,6 +965,11 @@ impl<'a> Typer<'a> {
                         .collect()
                 });
                 let mut argument = match values[position].take() {
+                    Some(value) if assigned.forwarded.is_some() => hir::Argument {
+                        parameter: Some(index),
+                        pack: None,
+                        value: self.fit_argument(value, &slot, traced, takes),
+                    },
                     None if placeless => {
                         let value = self.expression(node, None);
                         // TST-16: a const function takes the publications

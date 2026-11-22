@@ -2113,6 +2113,8 @@ impl Given {
 pub(super) enum Key {
     /// With no name: the place it stands in, from 0.
     Position(usize),
+    /// An unnamed spread entry and the public slot it fills, if any.
+    ForwardedPosition(Option<usize>),
     /// `name: value` in the parentheses.
     Name(String),
     /// A brace entry naming an ordinary parameter.
@@ -2127,7 +2129,7 @@ impl Key {
     /// The name written in either argument list.
     pub(super) fn name(&self) -> Option<&str> {
         match self {
-            Self::Position(_) => None,
+            Self::Position(_) | Self::ForwardedPosition(_) => None,
             Self::Name(name)
             | Self::Brace(name)
             | Self::Configuration(name)
@@ -2154,6 +2156,7 @@ impl Key {
     pub(super) fn public_parameter(&self, signature: &Signature) -> Option<usize> {
         match self {
             Self::Generic(_) => None,
+            Self::ForwardedPosition(index) => *index,
             Self::Position(position) => signature
                 .parameters
                 .iter()
@@ -2408,6 +2411,15 @@ pub(super) fn bound(
                     Place::Pack(index, captured[index])
                 }
             },
+            Key::ForwardedPosition(Some(index)) => Place::Parameter(mapping[*index]),
+            Key::ForwardedPosition(None) => {
+                if let Some(&index) = positional.iter().find(|&&index| !taken[index]) {
+                    Place::Parameter(index)
+                } else {
+                    let index = positional_pack.or(dependent)?;
+                    Place::Pack(index, captured[index])
+                }
+            }
             Key::Configuration(name) => {
                 let index = signature
                     .parameters

@@ -320,13 +320,19 @@ impl Typer<'_> {
                         .enumerate()
                         .filter(|(_, entry)| entry.slot == Some(slot))
                         .map(|(position, entry)| {
-                            let argument = self.argument(
-                                Some(slot),
-                                &entry.value,
-                                Some((&slots[slot], false)),
-                                Takes::Parameters,
-                            );
-                            (position, argument)
+                            let value = match &entry.forwarded {
+                                Some((_, value)) => value.clone(),
+                                None => {
+                                    self.argument(
+                                        Some(slot),
+                                        &entry.value,
+                                        Some((&slots[slot], false)),
+                                        Takes::Parameters,
+                                    )
+                                    .value
+                                }
+                            };
+                            (position, value)
                         }),
                 );
                 self.take_back(mark, false);
@@ -334,12 +340,7 @@ impl Typer<'_> {
             }
             let arguments: Vec<_> = supplied
                 .iter()
-                .map(|(offset, argument)| {
-                    (
-                        assigned[*offset].name.as_ref().map(SyntaxToken::text),
-                        &argument.value,
-                    )
-                })
+                .map(|(offset, value)| (assigned[*offset].name_text(), value))
                 .collect();
             let mut callback = self.function_argument_with_inputs(
                 &assigned[position].value,
@@ -380,7 +381,7 @@ impl Typer<'_> {
                                         .as_ref()
                                         .map_or_else(|| entry.value.span(), HasSpan::span),
                                 );
-                                (at, entry.name.as_ref().map(SyntaxToken::text))
+                                (at, entry.name_text())
                             })
                             .collect();
                         self.dependent_fault((name, list), &callback, &sites, &fault)

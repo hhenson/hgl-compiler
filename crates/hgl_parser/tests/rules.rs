@@ -3110,3 +3110,23 @@ fn an_error_at_the_end_of_the_file_points_at_the_end_of_the_file() {
         ["- 1:13: expected a type, found end of line"]
     );
 }
+
+#[test]
+fn pack_spreads_are_distinct_from_written_arguments() {
+    // FN-19: a spread may stand among positional and named arguments.
+    let read = run(Entry::Statements, "f(...(args), 2, item: 3, ...kwargs)");
+    assert!(read.findings.is_empty(), "{}", read.report);
+    let tree = read.outline();
+    assert!(
+        tree.contains(r#"PackSpreadArg["..." ParenExpr["(" NameExpr["args"] ")"]]"#),
+        "{tree}"
+    );
+    assert!(
+        tree.contains(
+            r#"Arg["item" ":" Literal["3"]] "," PackSpreadArg["..." NameExpr["kwargs"]]"#
+        ),
+        "{tree}"
+    );
+    rejected(Entry::Statements, "f(...)");
+    rejected(Entry::Statements, "f(item: ...kwargs)");
+}
