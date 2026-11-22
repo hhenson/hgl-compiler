@@ -300,6 +300,9 @@ impl<'a> Typer<'a> {
             &unit.declarations[operator.declaration],
             dependent_pack,
         );
+        // Reflected callback packs still need the public reading to
+        // establish the arguments the operator admits (GEN-17).
+        let candidate_functions = !candidates.is_empty() && !reflects(unit, public);
         let written =
             self.operator_arguments(name, list, (public, dependent), &options, pack.as_ref());
         let named_generics = self.diagnostics.len() == reported
@@ -350,6 +353,7 @@ impl<'a> Typer<'a> {
                     Some(&inferred),
                     pack.as_ref(),
                     replay,
+                    false,
                 );
                 self.take_back(mark, false);
                 self.infer_operator_inputs(public, &mut inferred, &public_inputs(public, &probe));
@@ -362,6 +366,7 @@ impl<'a> Typer<'a> {
             context.as_deref(),
             pack.as_ref(),
             replay,
+            candidate_functions,
         );
         self.constants_given(&given, public);
         if self.diagnostics.len() == reported {
@@ -378,16 +383,17 @@ impl<'a> Typer<'a> {
         let faulty = self.diagnostics.len() != reported;
         let unknown = given
             .iter()
-            .any(|given| !given.by_place && open(given.ty()));
+            .any(|given| !given.by_place && !given.by_function && open(given.ty()));
         if self.graph
             && replay.is_none()
             && !faulty
             && given.iter().any(|given| {
-                if given.by_place {
-                    self.contextual_operator_argument_pending(&given.value, false)
-                } else {
-                    !whole(given.ty())
-                }
+                !given.by_function
+                    && if given.by_place {
+                        self.contextual_operator_argument_pending(&given.value, false)
+                    } else {
+                        !whole(given.ty())
+                    }
             })
         {
             // GEN-7: the arguments can settle only after an earlier
@@ -397,7 +403,10 @@ impl<'a> Typer<'a> {
                 list: self.at(list),
                 expected: expected.cloned(),
                 generics: generics.cloned(),
-                contextual: given.iter().map(|given| given.by_place).collect(),
+                contextual: given
+                    .iter()
+                    .map(|given| given.by_place || given.by_function)
+                    .collect(),
                 captured: self.callable.is_some(),
             };
             let mut kind = self.unselected(given, Form::Named);
@@ -611,6 +620,12 @@ impl<'a> Typer<'a> {
             if selected.len() > 1 && expected.is_some_and(open) {
                 return (self.unselected(given, Form::Named), Type::Unknown);
             }
+            if selected.is_empty()
+                && let Some(context) = &context
+                && self.report_unresolved_functions(public, context, &given)
+            {
+                return (self.unselected(given, Form::Named), Type::Unknown);
+            }
             let diagnostic = self.no_one_candidate(
                 (name.text(), at),
                 public,
@@ -634,6 +649,37 @@ impl<'a> Typer<'a> {
             operator_generics,
             (Form::Named, at),
         )
+    }
+
+    /// Keep an FN-17 error in an argument when no candidate could give
+    /// that argument a settled function type.
+    fn report_unresolved_functions(
+        &mut self,
+        public: &Signature,
+        context: &[Option<Argument>],
+        given: &[Given],
+    ) -> bool {
+        let pending = given
+            .iter()
+            .filter(|given| given.by_function && !whole(given.ty()));
+        let unknown = Argument::Type(Type::Unknown);
+        let map: Vec<_> = public
+            .generics
+            .iter()
+            .zip(context)
+            .map(|(generic, value)| (generic.at, value.as_ref().unwrap_or(&unknown)))
+            .collect();
+        let reported = self.diagnostics.len();
+        for input in pending {
+            if let Some(pattern) = public_function(public, &input.key)
+                && let Type::Function(template) = substitute_within(pattern, &map)
+            {
+                let mark = self.mark();
+                self.operator_function_argument(&input.node, &template, &CallbackInputs::default());
+                self.restore_read(mark, false);
+            }
+        }
+        self.diagnostics.len() != reported
     }
 
     /// A contextual literal may contain a computation or a read whose type
@@ -740,8 +786,9 @@ impl<'a> Typer<'a> {
         Some(selected)
     }
 
-    /// Read the arguments in source order. FN-17's static arguments
-    /// take their context from the operator's public function template.
+    /// Read the arguments in source order. The public reading of a
+    /// static argument can inform the output request (GEN-2, FN-17).
+    /// GEN-6 leaves its final function template to each candidate.
     fn read_operator_arguments(
         &mut self,
         (public, declared, dependent): (&Signature, &Declaration, Option<&DependentPack>),
@@ -749,6 +796,7 @@ impl<'a> Typer<'a> {
         context: Option<&[Option<Argument>]>,
         pack: Option<&hir::TypePackArgument>,
         replay: Option<ReplayedCall<'_>>,
+        candidate_functions: bool,
     ) -> Vec<Given> {
         let resolved: Vec<_> = context
             .unwrap_or_default()
@@ -799,6 +847,7 @@ impl<'a> Typer<'a> {
                         node: node.clone(),
                         value: value.clone(),
                         by_place: false,
+                        by_function: false,
                         explicit: None,
                         retried: false,
                     },
@@ -816,6 +865,8 @@ impl<'a> Typer<'a> {
             .into_iter()
             .enumerate()
             .map(|(position, (key, node, ready))| {
+                let public_type = public_function(public, &key);
+                let by_function = candidate_functions && public_type.is_some() && ready.is_none();
                 let explicit = match &key {
                     Key::Position(position) => position
                         .checked_sub(fixed)
@@ -823,12 +874,13 @@ impl<'a> Typer<'a> {
                     _ => None,
                 };
                 if let Some(replayed) = replay {
-                    let by_place = replayed.contextual[position];
+                    let by_place = replayed.contextual[position] && !by_function;
                     Given {
                         key,
                         node,
                         value: replayed.arguments[position].value.clone(),
                         by_place,
+                        by_function,
                         explicit: explicit.cloned(),
                         retried: by_place,
                     }
@@ -838,14 +890,14 @@ impl<'a> Typer<'a> {
                         node,
                         value,
                         by_place: false,
+                        by_function: false,
                         explicit: None,
                         retried: false,
                     }
                 } else if context.is_some()
-                    && let Some(pattern) = public_function(public, &key)
+                    && let Some(pattern) = public_type
                     && let Type::Function(template) = substitute_within(pattern, &map)
                 {
-                    let reported = self.diagnostics.len();
                     let inputs = if dependent.is_some_and(|pack| {
                         key.public_parameter(public)
                             .is_some_and(|index| public.parameters[index].at == pack.function)
@@ -857,22 +909,18 @@ impl<'a> Typer<'a> {
                     } else {
                         CallbackInputs::default()
                     };
-                    let value = self.function_argument_with_inputs(&node, &template, &inputs);
-                    if self.diagnostics.len() == reported && !whole(&value.ty) {
-                        self.diagnostics.emit(error(
-                            Category::Type,
-                            codes::GENERIC_UNRESOLVED,
-                            self.at(&node),
-                            "the call does not determine every type in this function argument"
-                                .to_string(),
-                            "FN-17",
-                        ));
+                    let mark = by_function.then(|| self.mark());
+                    let mut value = self.operator_function_argument(&node, &template, &inputs);
+                    if mark.is_some_and(|mark| !self.take_back(mark, false)) {
+                        value.kind = ExprKind::Unread;
+                        value.ty = Type::Unknown;
                     }
                     Given {
                         key,
                         node,
                         value,
                         by_place: false,
+                        by_function,
                         explicit: None,
                         retried: false,
                     }
@@ -884,6 +932,7 @@ impl<'a> Typer<'a> {
                         node,
                         value,
                         by_place: false,
+                        by_function: false,
                         explicit: Some(ty.clone()),
                         retried: false,
                     }
@@ -1160,6 +1209,7 @@ impl<'a> Typer<'a> {
         Given {
             key,
             by_place,
+            by_function: false,
             value,
             explicit: None,
             retried,

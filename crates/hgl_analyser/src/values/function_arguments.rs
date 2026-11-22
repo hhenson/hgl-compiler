@@ -31,6 +31,27 @@ impl<'a> Typer<'a> {
         self.function_argument_with_inputs(node, template, &CallbackInputs::default())
     }
 
+    /// FN-17: an operator call must determine its static argument's type.
+    pub(super) fn operator_function_argument(
+        &mut self,
+        node: &SyntaxNode,
+        template: &FunctionType,
+        inputs: &CallbackInputs<'_>,
+    ) -> Expr {
+        let reported = self.diagnostics.len();
+        let value = self.function_argument_with_inputs(node, template, inputs);
+        if self.diagnostics.len() == reported && !whole(&value.ty) {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::GENERIC_UNRESOLVED,
+                self.at(node),
+                "the call does not determine every type in this function argument".to_string(),
+                "FN-17",
+            ));
+        }
+        value
+    }
+
     /// FN-17: an operator named at a reflected template selects by the
     /// resolved argument types, including those in the dependent pack.
     pub(super) fn function_argument_with_inputs(
