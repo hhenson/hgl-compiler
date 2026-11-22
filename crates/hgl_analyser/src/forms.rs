@@ -181,8 +181,6 @@ fn packs(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
         .filter(|child| child.kind() == SyntaxKind::Param);
     // The `...` of the first pack met, once one has been.
     let mut pack_seen: Option<SyntaxToken> = None;
-    let mut positional_seen: Option<SyntaxToken> = None;
-    let mut named_seen: Option<SyntaxToken> = None;
     // The name of the first parameter met that may be omitted, once one
     // has been.
     let mut omissible_seen: Option<SyntaxToken> = None;
@@ -245,27 +243,6 @@ fn packs(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
             }
             continue;
         };
-        let named = child(&parameter, SyntaxKind::PackType);
-        let (kind, first) = if named.is_some() {
-            ("named", &mut named_seen)
-        } else {
-            ("positional", &mut positional_seen)
-        };
-        // FN-8: "A declaration has at most one positional pack and at most one named pack."
-        if let Some(earlier) = first {
-            diagnostics.emit(
-                error(
-                    Category::Type,
-                    codes::PACK_DUPLICATE,
-                    at(name),
-                    format!("`{}` is a second {kind} pack", name.text()),
-                    "FN-8",
-                )
-                .with_related(at(earlier), "the first pack is here"),
-            );
-        } else {
-            *first = Some(name.clone());
-        }
         if before_colon.len() > 1 {
             diagnostics.emit(error(
                 Category::Type,
@@ -286,7 +263,7 @@ fn packs(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
         }
         // `...{Fields}`: what is in the braces is a declared type pack,
         // by its bare name.
-        if let Some(named) = named {
+        if let Some(named) = child(&parameter, SyntaxKind::PackType) {
             let inner = named.children().next();
             let pack_name = inner
                 .as_ref()

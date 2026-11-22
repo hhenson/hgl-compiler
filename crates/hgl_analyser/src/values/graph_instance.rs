@@ -22,7 +22,6 @@ use super::statements::{
     child_loop_return, child_loop_write, missing_return, place_assignment_category,
 };
 use super::{BOOL, Selected, Tables, Typer};
-use crate::declared::substitute_within;
 use crate::hir::{
     self, BinaryOperator, Body, Callee, Expr, ExprKind, IfInference, Local, LocalId, Node, NodeMut,
     Stmt, UnaryOperator, Value, ValueCategory,
@@ -780,6 +779,8 @@ impl GraphDestinations {
             .map(|generic| generic.at)
             .zip(callee.generics())
             .collect();
+        let packs =
+            super::dependent_packs::PackTypes::new(&signature.generics, callee.type_packs());
         let mut positions = HashMap::<usize, usize>::new();
         for argument in arguments {
             let Some(slot) = argument.parameter else {
@@ -802,7 +803,7 @@ impl GraphDestinations {
                 };
                 ty.clone()
             } else {
-                substitute_within(&parameter.ty, &map)
+                packs.project(&parameter.ty, &map).unwrap_or(Type::Unknown)
             };
             if self.known(&argument.value)
                 && !matches!(ty, Type::Function(_))

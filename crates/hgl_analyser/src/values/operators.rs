@@ -286,8 +286,13 @@ impl<'a> Typer<'a> {
         let reported = self.diagnostics.len();
         let unit = &program.modules[operator.module];
         let dependent = dependent_slot(unit, public);
-        let dependent_pack = dependent.map(|index| &unit.dependent_packs[&public.parameters[index].at]);
-        let signature = (public, &unit.declarations[operator.declaration], dependent_pack);
+        let dependent_pack =
+            dependent.map(|index| &unit.dependent_packs[&public.parameters[index].at]);
+        let signature = (
+            public,
+            &unit.declarations[operator.declaration],
+            dependent_pack,
+        );
         let written =
             self.operator_arguments(name, list, (public, dependent), &options, pack.as_ref());
         let named_generics = self.diagnostics.len() == reported
@@ -457,6 +462,17 @@ impl<'a> Typer<'a> {
                 specialize_named_pack(&mut given[index].value, Some(pack));
             }
             let at = Location::new(self.file, name.span());
+            let packs = PackTypes::new(&public.generics, &resolved.packs);
+            let map: Vec<_> = public
+                .generics
+                .iter()
+                .map(|generic| generic.at)
+                .zip(&operator_generics)
+                .collect();
+            if let Some(missing) = packs.missing_written(unit, operator.declaration, &map) {
+                self.missing_pack_member(at, &missing);
+                return (self.unselected(given, Form::Named), Type::Unknown);
+            }
             let before = self.diagnostics.len();
             self.pack_requires_met(
                 at,
@@ -470,13 +486,6 @@ impl<'a> Typer<'a> {
             if let Some(result) = &public.result
                 && result.any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false)
             {
-                let packs = PackTypes::new(&public.generics, &resolved.packs);
-                let map: Vec<_> = public
-                    .generics
-                    .iter()
-                    .map(|generic| generic.at)
-                    .zip(&operator_generics)
-                    .collect();
                 match packs.project(result, &map) {
                     Ok(ty) if whole(&ty) => requested = Some(ty),
                     Ok(_) => {}
@@ -721,10 +730,14 @@ impl<'a> Typer<'a> {
             .iter()
             .zip(&public.generics)
             .map(|(value, generic)| {
-                value.clone().or_else(|| {
-                    dependent.filter(|pack| pack.without.contains(&generic.at))?;
-                    self.default_constant(declared, generic).map(Argument::Constant)
-                }).unwrap_or(Argument::Type(Type::Unknown))
+                value
+                    .clone()
+                    .or_else(|| {
+                        dependent.filter(|pack| pack.without.contains(&generic.at))?;
+                        self.default_constant(declared, generic)
+                            .map(Argument::Constant)
+                    })
+                    .unwrap_or(Argument::Type(Type::Unknown))
             })
             .collect();
         let map: Vec<_> = public
@@ -743,7 +756,10 @@ impl<'a> Typer<'a> {
         // evidence even when written after the callback itself.
         let mut dependent_values = Vec::new();
         if context.is_some() && replay.is_none() && dependent.is_some() {
-            let positional_pack = public.parameters.iter().any(|p| p.pack == Some(Pack::Positional));
+            let positional_pack = public
+                .parameters
+                .iter()
+                .any(|p| p.pack == Some(Pack::Positional));
             let mark = self.mark();
             dependent_values.extend(written.iter().filter_map(|(key, node)| {
                 let captured = match key {
@@ -755,9 +771,10 @@ impl<'a> Typer<'a> {
             }));
             self.take_back(mark, false);
         }
-        let supplied: Vec<_> = dependent_values.iter().map(|given| {
-            (given.key.name(), &given.value)
-        }).collect();
+        let supplied: Vec<_> = dependent_values
+            .iter()
+            .map(|given| (given.key.name(), &given.value))
+            .collect();
         let excluded = dependent.map_or_else(Vec::new, |pack| pack_exclusions(pack, &map));
         written
             .into_iter()
@@ -788,7 +805,10 @@ impl<'a> Typer<'a> {
                         key.public_parameter(public)
                             .is_some_and(|index| public.parameters[index].at == pack.function)
                     }) {
-                        CallbackInputs { supplied: &supplied, excluded: &excluded }
+                        CallbackInputs {
+                            supplied: Some(&supplied),
+                            excluded: &excluded,
+                        }
                     } else {
                         CallbackInputs::default()
                     };

@@ -189,3 +189,27 @@ const fn chosen() -> i64 => inspect(choose)",
     assert_eq!(actual.parameters[0].name(), Some("item"));
     assert_eq!(actual.parameters[0].ty(), &Type::Scalar(Scalar::I64));
 }
+
+#[test]
+fn dependent_arguments_resolve_a_bare_generic_callback() {
+    let checked = module(
+        r#"const fn inspect<R, ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R,
+    args: ...{As for f},
+) -> i64
+    requires R == f64 && each arg in arg_keys(As) { As[arg] == Ps[arg] }
+    => 1
+const fn generic<T, ...Ts>(item: T, rest: ...Ts) -> f64 => 1.0
+const fn chosen() -> i64 => inspect(generic, "item", 4)
+const fn empty() -> i64 => inspect(generic, item: "item")"#,
+    );
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+    let (target, actual) = callback(&checked, "chosen");
+    assert_eq!(actual.parameters[0].ty(), &Type::Scalar(Scalar::Str));
+    let [pack] = target.type_packs() else {
+        panic!("expected one inferred callback pack");
+    };
+    assert_eq!(pack.types, [Type::Scalar(Scalar::I64)]);
+    let (empty, _) = callback(&checked, "empty");
+    assert!(empty.type_packs()[0].types.is_empty());
+}

@@ -13,6 +13,7 @@ use super::function_arguments::CallbackInputs;
 use super::inference::{pack_bounds, type_pack};
 use crate::declared::{substitute_with_members, weight};
 use crate::hir::{Callee, Expr, ExprKind, PackKey, TypePackArgument};
+use crate::syntax::child;
 use crate::types::{
     Argument as GenericArgument, Constant, ConstantValue, Detail, FunctionType, GenericParameter,
     Pack, Signature, Type,
@@ -65,6 +66,38 @@ impl<'p> PackTypes<'p> {
         };
         let ty = substitute_with_members(ty, map, &member, self.heaviest);
         missing.into_inner().map_or(Ok(ty), Err)
+    }
+
+    /// A known key must exist when a declaration writes its member type.
+    /// Requirements evaluate their own member lookups conditionally.
+    pub(super) fn missing_written(
+        &self,
+        unit: &Module,
+        declaration: usize,
+        map: &[(Location, &GenericArgument)],
+    ) -> Option<MissingMember> {
+        if self.bindings.is_empty() {
+            return None;
+        }
+        let declared = &unit.declarations[declaration];
+        let contains = |outer: hgl_source::Span, inner: hgl_source::Span| {
+            outer.start <= inner.start && inner.end <= outer.end
+        };
+        let span = declared.syntax.span();
+        let requires = child(&declared.syntax, hgl_parser::SyntaxKind::RequiresClause);
+        unit.written
+            .iter()
+            .filter(|written| {
+                written.at.file == declared.at.file
+                    && contains(span, written.at.span)
+                    && !requires
+                        .as_ref()
+                        .is_some_and(|condition| contains(condition.span(), written.at.span))
+                    && written
+                        .ty
+                        .any_part(&|ty| matches!(ty, Type::PackMember { .. }), &|_| false)
+            })
+            .find_map(|written| self.project(&written.ty, map).err())
     }
 }
 
@@ -279,7 +312,7 @@ impl Typer<'_> {
                 &assigned[position].value,
                 &template,
                 &CallbackInputs {
-                    supplied: &arguments,
+                    supplied: for_this.is_some().then_some(&arguments),
                     excluded: &excluded,
                 },
             );
@@ -798,17 +831,7 @@ mod tests {
             }],
             &mut diagnostics,
         );
-        // The dependent-pack binder is tested separately from its WIP
-        // caller. The caller has not filled in the reflected pack yet.
-        assert!(
-            diagnostics.as_slice().iter().all(|diagnostic| {
-                diagnostic.code.as_str() == crate::codes::GENERIC_UNRESOLVED
-                    && diagnostic
-                        .message
-                        .starts_with("this call of `inspect` leaves `Ps` unresolved")
-            }),
-            "{diagnostics:?}"
-        );
+        assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");
         program
     }
 

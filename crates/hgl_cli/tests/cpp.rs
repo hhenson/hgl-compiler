@@ -1320,7 +1320,7 @@ fn dependent_pack_instances_distinguish_callable_and_shape() {
             line.trim_start().starts_with("// call_shape<") && line.contains("the instance")
         })
         .collect();
-    assert_eq!(instances.len(), 4, "{instances:?}");
+    assert_eq!(instances.len(), 6, "{instances:?}");
 }
 
 /// FN-8 and GEN-17: bind the callback's arguments, exclusions and keys,

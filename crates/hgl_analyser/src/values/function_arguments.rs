@@ -114,7 +114,12 @@ impl<'a> Typer<'a> {
                         Role::Value
                     })
                 }) {
-                    return self.declared_target(node, &name, (module, declaration), template);
+                    return self.declared_target(
+                        node,
+                        &name,
+                        (module, declaration),
+                        (template, inputs),
+                    );
                 }
             }
         }
@@ -133,7 +138,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         name: &SyntaxToken,
         (module, declaration): (usize, usize),
-        template: &FunctionType,
+        (template, inputs): (&FunctionType, &CallbackInputs<'_>),
     ) -> Option<(Callee, FunctionType)> {
         let program = self.program;
         let unit = &program.modules[module];
@@ -145,12 +150,19 @@ impl<'a> Typer<'a> {
             self.marked_function(node, signature);
             return None;
         }
+        let given = inputs
+            .supplied
+            .map(|_| reflected_arguments(signature, template, node, self.at(node), inputs));
         let ReferenceArguments {
             generics,
-            pack,
-            empty_named_pack,
+            type_packs,
             ..
-        } = self.reference_arguments(node, name, (declared, signature), (template, &[]))?;
+        } = self.reference_arguments(
+            node,
+            name,
+            (declared, signature),
+            (template, given.as_deref()),
+        )?;
         let map = signature
             .generics
             .iter()
@@ -160,16 +172,17 @@ impl<'a> Typer<'a> {
             .collect::<Vec<_>>();
         let taken = in_instance(signature, &map);
         let actual = function_type(&taken, declared.kind.role() == Some(Role::Value));
-        if pack.is_none() && matches_template(template, &actual) && template.types().all(whole) {
+        if type_packs.is_empty()
+            && matches_template(template, &actual)
+            && template.types().all(whole)
+        {
             self.requires_met(self.at(node), (module, declaration), &generics);
         }
-        let requirements = if pack.is_none() {
+        let requirements = if type_packs.is_empty() {
             self.answers(module, declaration, &generics)
         } else {
             Vec::new()
         };
-        let mut type_packs: Vec<_> = pack.into_iter().chain(empty_named_pack).collect();
-        type_packs.sort_by_key(|pack| pack.parameter);
         let callee = Callee::Function {
             module,
             declaration,
@@ -195,16 +208,22 @@ impl<'a> Typer<'a> {
         let at = self.at(node);
         let reflected = template.named_pack.is_some();
         let mut given = if reflected {
-            reflected_operator_arguments(public, template, node, at, inputs)
+            reflected_arguments(public, template, node, at, inputs)
         } else {
             Vec::new()
         };
-        if reflected && !given.iter().any(|argument| whole(argument.ty())) {
+        if let Some(pack) = &template.named_pack
+            && !given.iter().any(|argument| whole(argument.ty()))
+        {
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::GENERIC_UNRESOLVED,
                 at,
-                format!("the call gives no resolved parameter type to select a candidate of `{}`", name.text()),
+                format!(
+                    "the call leaves `{}` unresolved: no parameter type selects a candidate of `{}`",
+                    pack.name,
+                    name.text()
+                ),
                 "FN-17",
             ));
             return None;
@@ -223,9 +242,13 @@ impl<'a> Typer<'a> {
             .as_ref()
             .map_or(template, |operator| &operator.signature);
         if !reflected {
-            given.extend(request.parameters.iter().enumerate().map(|(index, input)| {
-                callback_operand(index, node, at, input.ty().clone())
-            }));
+            given.extend(
+                request
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .map(|(index, input)| callback_operand(index, node, at, input.ty().clone())),
+            );
         }
         let graph = std::mem::replace(&mut self.graph, !template.value);
         let value_code = std::mem::replace(&mut self.value_code, false);
@@ -308,7 +331,11 @@ impl<'a> Typer<'a> {
                 .role()
                 == Some(Role::Value);
             let mut actual = function_type(taken, value);
-            for (parameter, position) in public.parameters.iter().zip(public.candidate_parameters(taken)) {
+            for (parameter, position) in public
+                .parameters
+                .iter()
+                .zip(public.candidate_parameters(taken))
+            {
                 if let Some(position) = position
                     && let FunctionParameter::Declared(input) = &mut actual.parameters[position]
                 {
@@ -374,7 +401,7 @@ impl<'a> Typer<'a> {
             node,
             name,
             (&module.declarations[operator.declaration], public),
-            (template, given),
+            (template, Some(given)),
         )?;
         if generics
             .iter()
@@ -406,7 +433,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         name: &SyntaxToken,
         (declared, signature): (&Declaration, &Signature),
-        (template, given): (&FunctionType, &[Given]),
+        (template, given): (&FunctionType, Option<&[Given]>),
     ) -> Option<ReferenceArguments> {
         let written = self.reference_written(node, name);
         let ExplicitGenerics {
@@ -423,9 +450,14 @@ impl<'a> Typer<'a> {
         for (pattern, actual) in signature.parameters.iter().zip(&template.parameters) {
             infer(&pattern.ty, actual.ty(), &signature.generics, &mut found);
         }
-        for given in given {
+        for given in given.unwrap_or_default() {
             if let Some(index) = given.key.public_parameter(signature) {
-                infer(&signature.parameters[index].ty, given.ty(), &signature.generics, &mut found);
+                infer(
+                    &signature.parameters[index].ty,
+                    given.ty(),
+                    &signature.generics,
+                    &mut found,
+                );
             }
         }
         // GEN-2 and GEN-8: a generic value parameter nothing says
@@ -470,33 +502,62 @@ impl<'a> Typer<'a> {
         if self.diagnostics.len() != reported {
             return None;
         }
-        // GEN-8: explicitly written positional pack types live on the
-        // target as a sequence, with no single argument at its generic slot.
-        if let Some(pack) = &pack {
+        let mut type_packs: Vec<_> = pack.into_iter().collect();
+        if template.named_pack.is_some() {
+            // FN-8, GEN-8: the callback's own supplied entries determine
+            // its type packs. A named pack with none supplied is empty.
+            for parameter in &signature.parameters {
+                let Some(index) = type_pack(parameter, &signature.generics) else {
+                    continue;
+                };
+                if type_packs.iter().any(|pack| pack.parameter == index) {
+                    continue;
+                }
+                let pack = match (parameter.pack, given) {
+                    (Some(Pack::Positional), Some(given)) => {
+                        let types = given
+                            .iter()
+                            .filter(|argument| {
+                                matches!(argument.key, Key::Position(_))
+                                    && argument.key.public_parameter(signature).is_none()
+                            })
+                            .map(|argument| argument.ty().clone())
+                            .collect();
+                        TypePackArgument::positional(index, types)
+                    }
+                    (Some(Pack::Named), given) => {
+                        let entries = given
+                            .unwrap_or_default()
+                            .iter()
+                            .filter_map(|argument| {
+                                let name = argument.key.name()?;
+                                argument.key.public_parameter(signature).is_none().then(|| {
+                                    (
+                                        crate::hir::PackKey::Name(name.to_string()),
+                                        argument.ty().clone(),
+                                    )
+                                })
+                            })
+                            .collect();
+                        TypePackArgument::keyed(index, entries)
+                    }
+                    _ => continue,
+                };
+                type_packs.push(pack);
+            }
+        }
+        type_packs.sort_by_key(|pack| pack.parameter);
+        for pack in &type_packs {
+            // The sequence is separate from the generic slot (GEN-8).
             found[pack.parameter] = Some(Argument::Type(Type::Unknown));
         }
-        // FN-8: an unapplied callback's own named pack contributes no
-        // entries to a reflected template. Its shape is still declared.
-        let empty_named_pack = template.named_pack.as_ref().and_then(|_| {
-            let named = signature
-                .parameters
-                .iter()
-                .find(|parameter| parameter.pack == Some(Pack::Named))?;
-            let index = type_pack(named, &signature.generics)?;
-            if pack.as_ref().is_some_and(|given| given.parameter == index) {
-                return None;
-            }
-            found[index] = Some(Argument::Type(Type::Unknown));
-            Some(TypePackArgument::positional(index, Vec::new()))
-        });
         let Some(generics) = found.into_iter().collect::<Option<Vec<_>>>() else {
             self.unresolved_reference(node, name);
             return None;
         };
         Some(ReferenceArguments {
             generics,
-            pack,
-            empty_named_pack,
+            type_packs,
             defaulted,
         })
     }
@@ -697,19 +758,20 @@ struct OperatorReference {
 /// Generic arguments from a function reference before candidate selection (FN-17).
 struct ReferenceArguments {
     generics: Vec<Argument>,
-    pack: Option<TypePackArgument>,
-    empty_named_pack: Option<TypePackArgument>,
+    type_packs: Vec<TypePackArgument>,
     defaulted: Vec<usize>,
 }
 
 /// The arguments the enclosing call gives the callback's own parameters.
 #[derive(Default)]
 pub(super) struct CallbackInputs<'a> {
-    pub(super) supplied: &'a [(Option<&'a str>, &'a Expr)],
+    /// A dependent pack's entries in written order, including an empty pack.
+    pub(super) supplied: Option<&'a [(Option<&'a str>, &'a Expr)]>,
+    /// Parameters the enclosing declaration will give the callback (FN-8).
     pub(super) excluded: &'a [&'a str],
 }
 
-fn reflected_operator_arguments(
+fn reflected_arguments(
     public: &Signature,
     template: &FunctionType,
     node: &SyntaxNode,
@@ -728,6 +790,7 @@ fn reflected_operator_arguments(
     let mut pack_position = fixed;
     let mut given: Vec<_> = inputs
         .supplied
+        .unwrap_or_default()
         .iter()
         .map(|(name, value)| {
             let key = if let Some(name) = name {
@@ -748,7 +811,9 @@ fn reflected_operator_arguments(
     // declaration supplies them or the callback has a default (FN-17).
     for (index, input) in template.parameters.iter().enumerate() {
         if whole(input.ty())
-            && given.iter().all(|given| given.key.public_parameter(public) != Some(index))
+            && given
+                .iter()
+                .all(|given| given.key.public_parameter(public) != Some(index))
         {
             given.push(callback_operand(index, node, at, input.ty().clone()));
         }

@@ -10,6 +10,7 @@ use hgl_source::{FileId, Span};
 
 use super::arguments::{Slot, Takes};
 use super::constants::generic_default;
+use super::dependent_packs::PackTypes;
 use super::evals::{trace_input_type, trace_pack_type};
 use super::fit::{not_null, open, whole};
 use super::inference::{
@@ -20,7 +21,7 @@ use super::lifting::fill_type;
 use super::node::RefRead;
 use super::sizes;
 use super::{Fact, Typer};
-use crate::declared::{names_parameter, substitute_within};
+use crate::declared::names_parameter;
 use crate::hir::{self, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, ValueCategory};
 use crate::program::{Binding, DeclarationKind, OperatorRef, Program, Role};
 use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
@@ -831,17 +832,21 @@ impl<'a> Typer<'a> {
                         .filter(|argument| argument.parameter == Some(slot))
                         .enumerate()
                         .map(|(position, argument)| {
-                            let ty =
-                                if let Some(ty) = written.and_then(|pack| pack.types.get(position)) {
-                                    ty.clone()
-                                } else if evaluating {
-                                    trace_pack_type(&argument.value.ty)
-                                        .cloned()
-                                        .unwrap_or(Type::Unknown)
-                                } else {
-                                    self.inferred_from(listed, &argument.value, Takes::Parameters)
-                                };
-                            let key = argument.pack.clone().unwrap_or(hir::PackKey::Position(position));
+                            let ty = if let Some(ty) =
+                                written.and_then(|pack| pack.types.get(position))
+                            {
+                                ty.clone()
+                            } else if evaluating {
+                                trace_pack_type(&argument.value.ty)
+                                    .cloned()
+                                    .unwrap_or(Type::Unknown)
+                            } else {
+                                self.inferred_from(listed, &argument.value, Takes::Parameters)
+                            };
+                            let key = argument
+                                .pack
+                                .clone()
+                                .unwrap_or(hir::PackKey::Position(position));
                             (key, ty)
                         })
                         .collect();
@@ -948,13 +953,12 @@ impl<'a> Typer<'a> {
             self.diagnostics,
         );
         let type_packs: Vec<_> = type_packs.into_iter().flatten().collect();
-        let pack_types = super::dependent_packs::PackTypes::new(generics, &type_packs);
+        let pack_types = PackTypes::new(generics, &type_packs);
         let ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
-            let ty = pack_types.project(result, &map).unwrap_or_else(|missing| {
-                self.missing_pack_member(at, &missing);
-                Type::Unknown
-            });
-            placed(ty, &own)
+            placed(
+                pack_types.project(result, &map).unwrap_or(Type::Unknown),
+                &own,
+            )
         });
         // GEN-3 and GEN-10: the callee's `requires` holds with what was
         // resolved, including the separate sequence in each type pack.
@@ -963,7 +967,11 @@ impl<'a> Typer<'a> {
             && unresolved.is_empty()
             && type_packs.iter().all(|pack| !pack.infer_from_arguments)
         {
-            if first_pack.is_none() {
+            if let Some(missing) =
+                pack_types.missing_written(&program.modules[module], declaration, &map)
+            {
+                self.missing_pack_member(at, &missing);
+            } else if first_pack.is_none() {
                 self.requires_met(at, (module, declaration), &resolved);
             } else {
                 self.pack_requires_met(at, (module, declaration), &resolved, &type_packs);
@@ -1241,6 +1249,7 @@ impl<'a> Typer<'a> {
         if !sources.is_empty() {
             self.index_instance_locals();
         }
+        let pack_types = PackTypes::new(&signature.generics, &packs);
         let mut sources = sources.into_iter().peekable();
         for (position, argument) in arguments.iter_mut().enumerate() {
             let parameter =
@@ -1250,7 +1259,12 @@ impl<'a> Typer<'a> {
             if type_pack(parameter, &signature.generics).is_some() {
                 continue;
             }
-            let ty = placed(substitute_within(&parameter.ty, &map), &own);
+            let ty = placed(
+                pack_types
+                    .project(&parameter.ty, &map)
+                    .unwrap_or(Type::Unknown),
+                &own,
+            );
             if let Some((source, node)) = sources.next_if(|(source, _)| source.position == position)
             {
                 if !self.may_reread() {
@@ -1314,7 +1328,9 @@ impl<'a> Typer<'a> {
         // GEN-10: the same quantified check applies when a graph
         // completes the pack types that source typing could not see.
         if self.diagnostics.len() == before {
-            if packs.is_empty() {
+            if let Some(missing) = pack_types.missing_written(owner, *declaration, &map) {
+                self.missing_pack_member(call.at, &missing);
+            } else if packs.is_empty() {
                 self.requires_met(call.at, callee, &resolved);
             } else {
                 self.pack_requires_met(call.at, callee, &resolved, &packs);
@@ -1324,7 +1340,10 @@ impl<'a> Typer<'a> {
             *requirements = self.answers(callee.0, callee.1, &resolved);
         }
         call.ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
-            placed(substitute_within(result, &map), &own)
+            placed(
+                pack_types.project(result, &map).unwrap_or(Type::Unknown),
+                &own,
+            )
         });
         *generics = resolved;
         *type_packs = packs;

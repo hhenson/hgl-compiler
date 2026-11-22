@@ -9,8 +9,8 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::arguments::{Assigned, Slot, Takes};
 use super::candidates::typed_by_place;
 use super::constants::{constant_text, generic_default};
-use super::dependent_packs::{PackTypes, dependent_slot};
 use super::control::value_of_branch;
+use super::dependent_packs::{PackTypes, dependent_slot};
 use super::evals::{holds_trace, publications, trace_input_type, trace_pack_type};
 use super::expressions::{holds_block, takes_its_type, written_null};
 use super::fit::{not_null, open, whole};
@@ -957,7 +957,10 @@ impl<'a> Typer<'a> {
                     Some(value)
                         if unfitted[position]
                             || matches!(slot.ty, Type::Function(_))
-                                && matches!(value.kind, hir::ExprKind::StaticCallable(_) | hir::ExprKind::Unread) =>
+                                && matches!(
+                                    value.kind,
+                                    hir::ExprKind::StaticCallable(_) | hir::ExprKind::Unread
+                                ) =>
                     {
                         hir::Argument {
                             parameter: Some(index),

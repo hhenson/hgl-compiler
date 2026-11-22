@@ -55,3 +55,15 @@ test no_parameter_type_for_multiple_candidates {
     # expect-error(type, "generic.unresolved")
     assert inspect(choose) == 1
 }
+
+const missing_key: str = "absent"
+
+const fn missing_local_type<...Ps>(f: const fn(...{Ps}) -> f64) -> i64 {
+    let values: list<Ps[missing_key]> = []
+    return 1
+}
+
+test a_pack_member_in_a_local_type_needs_a_key {
+    # expect-error(type, "pack.name")
+    assert missing_local_type(scaled) == 1
+}

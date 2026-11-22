@@ -708,6 +708,20 @@ impl<'a> Typer<'a> {
             };
             return (kind, Type::Unknown);
         }
+        if selecting.is_none() && !type_packs.is_empty() {
+            let unit = &program.modules[module];
+            let pack_types = PackTypes::new(&signature.generics, &type_packs);
+            let map: Vec<_> = signature
+                .generics
+                .iter()
+                .map(|generic| generic.at)
+                .zip(&generics)
+                .collect();
+            if let Some(missing) = pack_types.missing_written(unit, declaration, &map) {
+                self.missing_pack_member(at, &missing);
+                return (self.unselected(given, form), Type::Unknown);
+            }
+        }
         // FN-15: a `var` parameter "is always given: it has no default,
         // and is not left out where its type is written `T?`". The mark
         // takes no part in selecting the candidate, which admits a call
@@ -976,7 +990,8 @@ impl<'a> Typer<'a> {
                         .as_ref()
                         .and_then(|callback| callback.reflected)
                         .is_some_and(|excluded| {
-                            let name = declared[index].map_or(&parameter.name, |public| &public.name);
+                            let name =
+                                declared[index].map_or(&parameter.name, |public| &public.name);
                             excluded.contains(&name.as_str())
                         })
                     || declared[index].is_some_and(|parameter| parameter.has_default)

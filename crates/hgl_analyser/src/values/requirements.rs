@@ -1988,8 +1988,7 @@ pub(super) fn instances_hold(
                     made.callee,
                     &made.generics,
                     &made.answers,
-                    &[],
-                    &[],
+                    (&[], &[]),
                     &RefCell::new(Diagnostics::new()),
                     &mut graph_reports,
                 )

@@ -231,8 +231,7 @@ impl Program {
             declaration,
             generics,
             requirements,
-            functions,
-            packs,
+            (functions, packs),
             &RefCell::new(Diagnostics::new()),
             &mut Diagnostics::new(),
         )
@@ -246,8 +245,7 @@ impl Program {
         (module, declaration): (usize, usize),
         generics: &[Argument],
         requirements: &[Answer],
-        functions: &[(usize, Callee)],
-        packs: &[TypePackArgument],
+        (functions, packs): (&[(usize, Callee)], &[TypePackArgument]),
         diagnostics: &RefCell<Diagnostics>,
         graph_diagnostics: &mut Diagnostics,
     ) -> Option<(Signature, Body)> {

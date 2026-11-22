@@ -180,8 +180,7 @@ pub(super) fn check_instance(
         callee,
         generics,
         requirements,
-        &[],
-        &[],
+        (&[], &[]),
         &reports,
         graph_diagnostics,
     )?;
