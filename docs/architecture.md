@@ -1389,6 +1389,10 @@ GEN-18 law predicates read the public operator's property domains, not
 its implementation's arithmetic. A plain or anonymous function has no
 law. Only the bool generic default form may inspect a formal function
 parameter (UNIT-7 and UNIT-8); an explicit option takes precedence.
+`values/law_calls.rs` resolves the query's formal slot and reads its law
+for function defaults, candidate defaults and requirements. A requirement
+whose callee resolves to an ordinary operator remains a GEN-16 callability
+test; the built-in spelling does not hide that binding.
 A generic wrapper's body knows only its stated law requirements (GEN-7).
 An unconstrained wrapper rejects even if separate candidates cover both
 law values: neither is known to take every case. A wrapper may state a
@@ -2047,23 +2051,53 @@ those `HGL_HGRAPH_DEBUG` names; else, where neither `HGL_HGRAPH_SDK` nor
 resolved executable, where their `hgl-sdk.txt` names the hgraph tag
 `hgl` is built for. Either is taken only whole (`cpp/sdk/package.rs`):
 laid out as above; its SDK's `hgl-sdk.txt` saying `build-type=Debug`;
-and the CMake packages a build configures from, hgraph's, fmt's,
-spdlog's and simdjson's, each there with every library it imports there
-and whole (its headers parse, none of its sections runs past its end,
-read with the [`object`](https://crates.io/crates/object) crate).
-`HGL_HGRAPH_DEBUG` naming a directory that is not is an error that says
-what is wrong; a package beside `hgl` that is not is passed over, and the
-optimised libraries are linked, saying why. A configure against debug
-libraries looks for packages in the SDK and the dependency prefix alone
-(`CONFINED` in `sdk.rs`: not through `PATH`, the environment, the
-system's prefixes or a registry, and hgraph's package fetches none it
+the CMake packages a build configures from, hgraph's, fmt's, spdlog's
+and simdjson's, each there with every library it imports there; each of
+those libraries whole (its headers parse, none of its sections runs past
+its end, read with the [`object`](https://crates.io/crates/object)
+crate); and the name a program loads each by, and each name of the four
+packages' libraries it needs, there in either prefix as a library of
+that name, so that a program built against them starts with them alone.
+A library of a form the check does not read, a static archive or a
+universal Mach-O, is not held against the package: the line `hgl`
+prints says so. `HGL_HGRAPH_DEBUG` naming a directory that is not whole
+is an error that says what is wrong; a package beside `hgl` that is not
+is passed over, and the optimised libraries are linked, saying why.
+hgraph's installed headers do not depend on `NDEBUG`, so the debug build
+stands in for the optimised one. A debug build's runtime library is
+built as CMake's `Debug`, whichever libraries it links. A debug build
+says on standard error, before it builds, which it links, and why where
+it links the optimised ones, and its JSON description says it too
+(below).
+
+Every CMake `hgl` runs, for an ordinary build and a debug one, finds
+packages in the SDK and the dependency prefix alone (`CONFINED` in
+`sdk.rs`: no package root, no `PATH` or other environment prefixes, no
+system prefixes or registries, and hgraph's package fetches none it
 misses), so that a program never links two copies of fmt, spdlog or
-simdjson. hgraph's installed headers do not depend on `NDEBUG`, so the
-debug build stands in for the optimised one. A debug build's runtime
-library is built as CMake's `Debug`, whichever libraries it links. A
-debug build says on standard error, before it builds, which it links,
-and why where it links the optimised ones, and its JSON description says
-it too (below).
+simdjson, the prefix's and another's. It runs with none of the
+variables of the environment CMake reads for itself (`CMAKE_READS` in
+`sdk.rs`): the toolchain file `CMAKE_TOOLCHAIN_FILE`, which can name
+prefixes, packages and compilers; the search paths `CMAKE_PREFIX_PATH`,
+`CMAKE_FRAMEWORK_PATH`, `CMAKE_APPBUNDLE_PATH`, `CMAKE_INCLUDE_PATH`,
+`CMAKE_LIBRARY_PATH`, `CMAKE_PROGRAM_PATH`, and `CMAKE_FIND_ROOT_PATH` and
+`CMAKE_MODULE_PATH`, which CMake does not read from the environment
+today; `<Package>_DIR`, `<Package>_ROOT` and `<PACKAGE>_ROOT` of each
+package it finds (hgraph, fmt, spdlog, simdjson, Threads, doctest); the
+generator `CMAKE_GENERATOR` and its `_INSTANCE`, `_PLATFORM` and
+`_TOOLSET`; `CMAKE_BUILD_TYPE`, `CMAKE_CONFIGURATION_TYPES`,
+`CMAKE_CONFIG_TYPE`; the compilers, flags and launchers `CC`, `CXX`,
+`CFLAGS`, `CXXFLAGS`, `LDFLAGS`, `CMAKE_C_COMPILER_LAUNCHER`,
+`CMAKE_CXX_COMPILER_LAUNCHER`, `CMAKE_C_LINKER_LAUNCHER`,
+`CMAKE_CXX_LINKER_LAUNCHER`, `CMAKE_CROSSCOMPILING_EMULATOR`,
+`CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES_EXCLUDE`; macOS's
+`CMAKE_OSX_ARCHITECTURES` and `CMAKE_APPLE_SILICON_PROCESSOR`; what
+`cmake --install` reads, `CMAKE_INSTALL_PREFIX`, `CMAKE_INSTALL_MODE` and
+`DESTDIR`; and `CMAKE_POLICY_VERSION_MINIMUM`. What the build is given of
+these, it is given on the command line. Kept, and under the toolchain's
+hash: `MACOSX_DEPLOYMENT_TARGET` and `SDKROOT`. Kept, and not under it:
+`PATH`, which finds no package, and `CMAKE_BUILD_PARALLEL_LEVEL`, how
+many jobs, which changes nothing made.
 `HGL_HGRAPH_BUILD_TYPE=Debug scripts/provision-hgraph-sdk.sh TAG
 DIR/hgraph-sdk`, with `HGL_HGRAPH_SOURCE` naming a checkout of `TAG` for
 a debugger to read, makes a debug SDK for `HGL_HGRAPH_DEBUG` to name,
@@ -2094,18 +2128,46 @@ each library on the way; it is run with no variable, as
 `DYLD_LIBRARY_PATH` naming the dependency prefix would load
 conda-forge's libc++ in place of the system's.
 
-A program is built in `programs/<hash>` of its source roots, or the
-directory `--keep` names, under a lock held until its last executable
-has ended. Each file the target writes, and `build.ninja`, is written
-only where it changed, and `ninja -k 0` builds the executables of the
-tests to run: one object for each module's unit, with the precompiled
-header, one for each entry unit, which includes the test host's light
-header (`hglrt/host.h`, nothing of hgraph's) and is compiled with no
-precompiled header, and one executable for each module, linked from its entry, its module's unit and each unit that
-one calls into, through those (a unit is linked whole). Where the
-build fails, an executable is run only where `ninja -n` says nothing is
-left to do for it, and the tests of every other are not run, with the
-failure: an older executable is never run in a newer one's place.
+A program's workspace is `programs/<hash>` under the cache, keyed by its
+source roots, or the directory named by `--out` or `--keep`. Both flags
+work on `hgl build`, `hgl run` and `hgl test`. The driver holds the workspace
+lock through the build and until its last executable ends. The program's
+Ninja process inherits the lock so that the next command waits if `hgl`
+dies. On Linux Ninja also gets a termination signal when `hgl` dies.
+On macOS an already started Ninja build can finish under the inherited lock.
+
+`hgl build ROOT...` checks the program, writes the generated files
+and builds its units and application executables. `--tests` builds a
+test executable for each module with tests. The command reports the
+workspace and artifacts. `--format json` reports a versioned object
+with `workspace`, `target`, `units`, `applications`, `tests` and
+`reused`.
+
+`hgl build --compile-commands` writes `compile_commands.json` in the
+workspace using `ninja -t compdb` for its module and entry rules.
+The version 1 JSON description includes its absolute path as
+`compileCommands` when requested. A reused build can restore the
+database without compiling. An unchanged database keeps its timestamp,
+and a command without the flag leaves it alone.
+
+After Ninja succeeds, the driver records a stamp with the BLAKE3 digest of
+each built object and executable. The key includes the source contents,
+core, the HGL compiler version and executable contents, the prepared
+toolchain and flags, and any application replacements. The inventory
+records whether the tests were built. `hgl run` and `hgl test` reuse the
+build when its key matches and its artifacts pass content verification.
+A rebuild atomically moves the previous stamp aside. A failed or interrupted
+build leaves no runnable stamp. Its predecessor's digests remain available
+to verify incremental outputs when the build is retried. Ninja receives the
+outputs that still match those digests and rebuilds unverified outputs.
+An ordinary build or run checks rejection owners as source. When a
+test build omitted those owners, its stamp covers test commands.
+
+The driver writes each generated file and `build.ninja` where its
+contents change. Ninja compiles each module unit with the precompiled
+header. A test entry uses the light host header (`hglrt/host.h`) and
+each executable links its entry, module unit and the units it calls
+into. A unit is linked whole.
 Executables run side by side. File stems replace each dot of a module
 or application path with a hyphen and mark folded uppercase letters
 with `+`. The `mod-`, `type-`, `test-` and `app-` prefixes
@@ -2114,12 +2176,9 @@ give `bin/test-tm-pricing-app` and `bin/test-tm-+pricing-+app`
 on macOS. Reports keep the original HGL paths.
 
 `hgl emit --target cpp --out DIR` writes the files. `hgl run --target
-cpp` runs an application (UNIT-14, "Running an application" above),
-with what it replaces read again: it builds the
-application's executable, `run/<application-stem>`, in the program's
-workspace (`--keep`'s directory, or the one under the cache), linked
-from its entry unit and the units its module's reaches, and runs it as
-`EXECUTABLE RESULTS` (`cpp/application.rs`). The entry unit, executable
+cpp` uses the application's executable, `run/<application-stem>`
+(UNIT-14). It runs it as `EXECUTABLE RESULTS` (`cpp/application.rs`).
+The entry unit, executable
 and run results share a stem such as `app-demo-pricing-app` for
 `demo.pricing.app`. The executable's host
 (`hglrt/application_host.h`) runs the run statement once and writes
@@ -2266,7 +2325,9 @@ fails where a public header brings it in.
 
 A native is a function named as the emitter names the candidate
 (`hgl_cpp`, `names::native_candidate`): the operator's name and the type
-of each parameter, `add__i64_i64`. One with a generic type parameter is a
+of each parameter, `add__i64_i64`. Both the name and the native call put
+ordinary parameters before configuration. Argument evaluation follows
+the written order (EXPR-13). One with a generic type parameter is a
 template the generated code instances, `lt__T_T<i64>`; one with a generic
 value parameter takes it as a template argument,
 `div__f64_f64<ZeroPolicy::ieee>`, and so do the candidates that differ in
@@ -2472,10 +2533,12 @@ the job the way the design needs is dropped.
 | Crate | Used by | For |
 | --- | --- | --- |
 | `clap` | `hgl_cli` | command-line parsing and help text |
-| `serde` | `hgl_doc` | serialization of the documentation records |
-| `serde_json` | `hgl_cli`, `hgl_doc` | encode check diagnostics and API documentation as JSON |
+| `serde` | `hgl_cli`, `hgl_doc`, `hgl_runner` | serialization of documentation and built test records |
+| `serde_json` | `hgl_cli`, `hgl_doc` | check diagnostics, API documentation and native build records as JSON |
+| `blake3` | `hgl_cli` | content fingerprints for native build reuse |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
-| `ctrlc` | `hgl_cli` | taking an interrupt or a request to end while an application runs, to stop the run and still print its output |
+| `ctrlc` | `hgl_cli` | waiting for an interrupted native build to finish, or passing a stop request to an application |
+| `nix` | `hgl_cli` on Linux | delivers a termination signal to Ninja if the build driver dies |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `pulldown-cmark` | `hgl_parser`, `hgl_doc` | CommonMark fenced block ranges and HTML rendering of documentation comments |
@@ -2523,19 +2586,25 @@ crate updates and workflow action updates weekly
 
 ### Native application debug launch
 
-`hgl run --application NAME --debug-build DIR ROOT...` builds the selected
-application with symbols and no optimization in its generated units. Each
-launch has its own subdirectory under DIR. The caller owns its lifetime.
+`hgl build --debug --application NAME --out DIR --format json ROOT...`
+builds native symbols with HGL source mappings and reports the selected
+application's launch. With an implicit workspace, the debug build uses
+`debug-programs/<hash>` under the cache. Its stamp includes the absolute
+HGL source paths used by the debugger.
 
-On success stdout is one JSON object with `version: 1`, absolute `executable`,
-`arguments` (an array), `workingDirectory`, `environment` (overrides to
-inherit alongside the caller's environment), and `hgraph`: the libraries
-it links, `libraries` (`debug` or `optimised`, as "The build driver"
-above chooses them), and the absolute `sdk` and `dependencies` prefixes.
+The build's version 1 JSON reports the launch as `debugLaunch`. The debugger
+starts its absolute `executable` with its `arguments`, `workingDirectory`
+and `environment` overrides. Its `hgraph` gives the libraries the build
+links: `libraries` (`debug` or `optimised`, as "The build driver" above
+chooses them), and the absolute `sdk` and `dependencies` prefixes.
 Standard error says the same in a line before the build, `hgl: a debug
 build, with hgraph's debug libraries in DIR, named by HGL_HGRAPH_DEBUG`,
-or for the optimised ones why no debug ones were taken. Start that exact command in
-the debugger. Its console mirrors the results protocol. After the run
+or for the optimised ones why no debug ones were taken. A client
+creates its own session directory to keep that image for the duration
+of the debug session. The legacy `hgl run --application NAME
+--debug-build DIR ROOT...` spelling creates a fresh session under DIR
+and reports the launch fields at the top level with `version: 1`. The debugger's
+console mirrors the results protocol. After the run
 returns it prints the recorded publications. The debugger owns process termination and may close stdin.
 Ordinary application runs keep their host stop pipe. HGL statements use the
 existing C++ `#line` mappings with absolute application and module paths.

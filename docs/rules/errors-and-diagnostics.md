@@ -176,13 +176,14 @@ analyser: done
   reads the child at initialization. A graph's `var` given a child denotes
   its connection (EXPR-4).
 - A runtime-checked child read, or an admitted whole read of a dictionary, an unsized list or a window, gives T, `result<T, error>`, or `T?` according to its place. The nullable form discards the error as ERR-15 does.
+- Comparing a runtime-checked child with `null` takes the nullable form when its concrete type is nonnullable. If the child has a nullable type, the comparison reads its payload and an unset child still fails. An operator candidate can keep the whole read result, including from a child bound in a generic hook (GEN-7, ERR-15).
 - `delta_value` takes the same forms. TYPE-11 restricts a duration-window delta to a result or nullable place, and `removed_value` to a result place for every window.
 
 transpiler: partial
 
 - Holds the position or key of an inferred child binding through pack expansion
   and static value-function captures (FN-8, FN-14, FN-17). A payload read happens at
-  the use, and a failed plain read reports the use's HGL location. A child bound
+  the use, and a failed plain read names the child and reports the use's HGL location. A child bound
   inside a value helper borrows its captured parent's endpoint.
 - Writes checked child, dictionary, unsized-list and window reads in the analysed
   value, result or nullable form. A dictionary omits wholly unset entries and a
@@ -200,6 +201,7 @@ analyser: partial
 - In composition the analyser records whether a conversion belongs to the call's node or to a reader of a held connection. A field projection waits for an incomplete result type, then takes the success before reading the field (GEN-7, EXPR-7).
 - A candidate keeps operands whole where possible. Equal minimum arrangements of result reads are `operator.ambiguous`. [Compiler issue #356](https://github.com/hhenson/hgl-compiler/issues/356)
 - Among admitted operator candidates, fewer result reads take precedence over GEN-5 ranking. Equal counts use normal candidate ranking. [Compiler issue #429](https://github.com/hhenson/hgl-compiler/issues/429)
+- A checked child supplies its payload type to ordinary parameter inference. A candidate with a result slot can keep the whole read, and ranking counts each checked child consumed as an ordinary operand (ERR-14).
 
 transpiler: done
 

@@ -17,23 +17,73 @@
 //! `run/<application-stem>` (UNIT-14), each linked from its entry and the
 //! units `hgl_cpp` says it needs.
 //!
-//! A build that fails runs no executable it did not finish: where
-//! `ninja` fails, each executable is run only where `ninja` says
-//! nothing is left to do for it, and every other is reported with the
-//! failure.
+//! The caller publishes a content stamp after Ninja succeeds. The stamp
+//! covers the objects and the executables needed to reuse the build.
 
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use hgl_cpp::{Executable, Output, application_stem};
 
-use super::sdk::{Description, last_lines};
+use super::{
+    application::Stop,
+    sdk::{Description, last_lines},
+    stamp::Stamp,
+};
 
 /// The file a workspace's lock is taken on.
 const LOCK: &str = ".hgl-lock";
+
+const BUILDING: u8 = 0;
+const INTERRUPTED: u8 = 1;
+const FINISHED: u8 = 2;
+
+/// A stop requested during a build. The process waits for its native
+/// child before releasing the workspace lock and leaves no stamp.
+pub(super) struct Interrupt(Arc<AtomicU8>);
+
+impl Interrupt {
+    /// The command's one handler routes a stop to its build until it can
+    /// publish a stamp, and to the application after that point.
+    pub(super) fn watch(stop: Option<Stop>) -> Result<Self, String> {
+        let state = Arc::new(AtomicU8::new(BUILDING));
+        let signal = Arc::clone(&state);
+        ctrlc::set_handler(move || {
+            if signal.compare_exchange(BUILDING, INTERRUPTED, Ordering::SeqCst, Ordering::SeqCst)
+                == Err(FINISHED)
+            {
+                if let Some(stop) = &stop {
+                    stop.ask();
+                } else {
+                    std::process::exit(130);
+                }
+            }
+        })
+        .map_err(|error| format!("the interrupt handler could not be started: {error}"))?;
+        Ok(Self(state))
+    }
+
+    pub(super) fn check(&self) -> Result<(), String> {
+        if self.0.load(Ordering::SeqCst) == INTERRUPTED {
+            Err("the build was interrupted".to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Allows publication only if no stop was requested during the build.
+    pub(super) fn finish(&self) -> Result<(), String> {
+        self.0
+            .compare_exchange(BUILDING, FINISHED, Ordering::SeqCst, Ordering::SeqCst)
+            .map(|_| ())
+            .map_err(|_| "the build was interrupted".to_string())
+    }
+}
 
 /// The variable that names the cache, where neither it nor the user's
 /// cache directory is the place.
@@ -136,24 +186,14 @@ pub(super) struct Workspace {
     _lock: fs::File,
 }
 
-/// What became of a build: for each executable asked for, whether it is
-/// built from what was written, and where the build failed, what the
-/// failure said.
-pub(super) struct Built {
-    /// For each executable asked for, in the order asked, true where it
-    /// is up to date and can be run.
-    pub(super) fresh: Vec<bool>,
-    /// What a failed build printed, from its first failure.
-    pub(super) failure: Option<String>,
-}
-
 impl Workspace {
-    /// The workspace of the program under `roots`, or the directory
-    /// `keep` names, with its lock taken.
+    /// Opens a normal or debug workspace. A debug build with an
+    /// implicit path has its own directory under the cache.
     pub(super) fn open(
         keep: Option<&Path>,
         roots: &[PathBuf],
         cache: &Path,
+        debug: bool,
     ) -> Result<Workspace, String> {
         let directory = match keep {
             Some(directory) => std::path::absolute(directory).map_err(|error| {
@@ -167,7 +207,7 @@ impl Workspace {
                         .hash(&mut hash);
                 }
                 cache
-                    .join("programs")
+                    .join(if debug { "debug-programs" } else { "programs" })
                     .join(format!("{:016x}", hash.finish()))
             }
         };
@@ -180,9 +220,9 @@ impl Workspace {
         })
     }
 
-    /// The path to a test executable in this workspace.
-    pub(super) fn executable(&self, executable: &Executable) -> PathBuf {
-        self.directory.join(test_target(executable))
+    /// The path of a built test executable given its artifact stem.
+    pub(super) fn test_executable(&self, stem: &str) -> PathBuf {
+        self.directory.join(test_target_stem(stem))
     }
 
     /// The executable of application `path` (UNIT-14).
@@ -192,7 +232,12 @@ impl Workspace {
 
     /// Writes what the target wrote, `output`, and the `build.ninja`
     /// that builds it with `description`, each where it changed.
-    pub(super) fn write(&self, output: &Output, description: &Description) -> Result<(), String> {
+    pub(super) fn write(
+        &self,
+        output: &Output,
+        description: &Description,
+        tests: bool,
+    ) -> Result<(), String> {
         for file in &output.files {
             let path = file
                 .path
@@ -200,49 +245,95 @@ impl Workspace {
                 .fold(self.directory.clone(), |path, part| path.join(part));
             write_if_changed(&path, &file.text)?;
         }
-        write_if_changed(
-            &self.directory.join("build.ninja"),
-            &ninja_file(output, description),
-        )
+        write_if_changed(&self.manifest(), &ninja_file(output, description, tests))
     }
 
-    /// Runs `ninja` for the executables `wanted`, positions in
-    /// `output.executables`, with `jobs` jobs at once where that is
-    /// given, and says which of them are built.
-    pub(super) fn build(
+    /// The manifest Ninja uses for this workspace.
+    pub(super) fn manifest(&self) -> PathBuf {
+        self.directory.join("build.ninja")
+    }
+
+    /// Exports Ninja's compile rules for modules and entry units without
+    /// building anything. An unchanged database keeps its time.
+    pub(super) fn compile_commands(&self, ninja: &Path) -> Result<PathBuf, String> {
+        let commands = Command::new(ninja)
+            .arg("-C")
+            .arg(&self.directory)
+            .args(["-t", "compdb", "unit", "entry"])
+            .output()
+            .map_err(|error| {
+                format!("could not start Ninja for the compilation database: {error}")
+            })?;
+        if !commands.status.success() {
+            let stderr = String::from_utf8_lossy(&commands.stderr);
+            return Err(format!(
+                "Ninja could not describe the compile commands:\n{}",
+                last_lines(&stderr, 20)
+            ));
+        }
+        let database = String::from_utf8(commands.stdout)
+            .map_err(|error| format!("Ninja's compilation database is not UTF-8: {error}"))?;
+        let path = self.directory.join("compile_commands.json");
+        write_if_changed(&path, &database)?;
+        Ok(path)
+    }
+
+    /// Compiles the program's units, then links its applications and,
+    /// where asked for, its test executables. Returns every built path.
+    pub(super) fn build_program(
         &self,
         ninja: &Path,
         output: &Output,
-        wanted: &[usize],
+        tests: bool,
         jobs: Option<&str>,
-    ) -> Result<Built, String> {
-        let targets: Vec<String> = wanted
+        previous: Option<&Stamp>,
+    ) -> Result<Vec<String>, String> {
+        let mut targets: Vec<_> = output
+            .units
             .iter()
-            .map(|&executable| test_target(&output.executables[executable]))
+            .map(|unit| object(&unit.source))
             .collect();
-        self.build_targets(ninja, &targets, jobs)
+        targets.extend(
+            output
+                .applications
+                .iter()
+                .filter(|application| application.source.is_some())
+                .map(|application| application_target(&application.path)),
+        );
+        if tests {
+            targets.extend(output.executables.iter().map(test_target));
+        }
+        let mut artifacts = targets.clone();
+        if tests {
+            artifacts.extend(
+                output
+                    .executables
+                    .iter()
+                    .map(|executable| object(&executable.source)),
+            );
+        }
+        artifacts.extend(
+            output
+                .applications
+                .iter()
+                .filter_map(|application| application.source.as_deref())
+                .map(object),
+        );
+        if !targets.is_empty() {
+            Stamp::remove_unverified(previous, self, &artifacts)?;
+            self.build_targets(ninja, &targets, jobs)?;
+        }
+        Ok(artifacts)
     }
 
-    /// Runs `ninja` for the executable of application `path`, as
-    /// [`Workspace::build`] does for tests' executables.
-    pub(super) fn build_application(
-        &self,
-        ninja: &Path,
-        path: &str,
-        jobs: Option<&str>,
-    ) -> Result<Built, String> {
-        self.build_targets(ninja, &[application_target(path)], jobs)
-    }
-
-    /// Runs `ninja` for `targets`, paths of executables of the build,
-    /// and says which of them are built.
+    /// Runs Ninja for every requested artifact. A failed build is never stamped.
     fn build_targets(
         &self,
         ninja: &Path,
         targets: &[String],
         jobs: Option<&str>,
-    ) -> Result<Built, String> {
-        let mut command = Command::new(ninja);
+    ) -> Result<(), String> {
+        let mut command = native_command(ninja, &self._lock)?;
         command.arg("-C").arg(&self.directory).arg("-k").arg("0");
         if let Some(jobs) = jobs {
             command.arg("-j").arg(jobs);
@@ -252,10 +343,7 @@ impl Workspace {
             .output()
             .map_err(|error| format!("`{}` could not be started: {error}", ninja.display()))?;
         if finished.status.success() {
-            return Ok(Built {
-                fresh: vec![true; targets.len()],
-                failure: None,
-            });
+            return Ok(());
         }
         let printed = String::from_utf8_lossy(&finished.stdout).into_owned()
             + &String::from_utf8_lossy(&finished.stderr);
@@ -270,32 +358,61 @@ impl Workspace {
             }
             None => last_lines(&printed, 20),
         };
-        // `ninja -n` does nothing and says what it would do: an
-        // executable with nothing left to do was built from what is
-        // written now.
-        let mut fresh = Vec::new();
-        for target in targets {
-            let dry = Command::new(ninja)
-                .arg("-C")
-                .arg(&self.directory)
-                .arg("-n")
-                .arg(target)
-                .output()
-                .map_err(|error| format!("`{}` could not be started: {error}", ninja.display()))?;
-            fresh.push(
-                dry.status.success()
-                    && String::from_utf8_lossy(&dry.stdout).contains("no work to do"),
-            );
-        }
-        Ok(Built {
-            fresh,
-            failure: Some(failure),
-        })
+        Err(format!("the build of its executable failed:\n{failure}"))
     }
 }
 
+/// A build process inherits the open workspace lock on its unused stdin.
+/// If hgl dies, the next build waits while the native process exits.
+fn native_command(program: &Path, lock: &fs::File) -> Result<Command, String> {
+    #[cfg(target_os = "linux")]
+    let mut command = {
+        let hgl = std::env::current_exe().map_err(|error| format!("cannot find hgl: {error}"))?;
+        let mut command = Command::new(hgl);
+        command
+            .arg("native-build-child")
+            .arg(std::process::id().to_string())
+            .arg(program)
+            .arg("--");
+        command
+    };
+    #[cfg(not(target_os = "linux"))]
+    let mut command = Command::new(program);
+    let inherited = lock
+        .try_clone()
+        .map_err(|error| format!("cannot share the build lock: {error}"))?;
+    command.stdin(Stdio::from(inherited));
+    Ok(command)
+}
+
+/// Sets a parent-death signal before replacing this helper with Ninja.
+#[cfg(target_os = "linux")]
+pub(crate) fn native_build_child(
+    parent: u32,
+    program: &Path,
+    arguments: &[std::ffi::OsString],
+) -> std::process::ExitCode {
+    use nix::{
+        sys::{prctl, signal::Signal},
+        unistd::getppid,
+    };
+    use std::os::unix::process::CommandExt as _;
+
+    if let Err(error) = prctl::set_pdeathsig(Signal::SIGTERM) {
+        eprintln!("hgl: cannot set the build's parent-death signal: {error}");
+        return std::process::ExitCode::FAILURE;
+    }
+    // The original parent may have died before the signal was installed.
+    if u32::try_from(getppid().as_raw()) != Ok(parent) {
+        return std::process::ExitCode::FAILURE;
+    }
+    let error = Command::new(program).args(arguments).exec();
+    eprintln!("hgl: `{}` could not be started: {error}", program.display());
+    std::process::ExitCode::FAILURE
+}
+
 /// The `build.ninja` of `output`, built with `description`.
-fn ninja_file(output: &Output, description: &Description) -> String {
+fn ninja_file(output: &Output, description: &Description, tests: bool) -> String {
     let mut text = String::from(
         "# Written by hgl: the build of a program written by the cpp target.\n\
          # It is written again whenever it changes.\n\
@@ -332,7 +449,7 @@ fn ninja_file(output: &Output, description: &Description) -> String {
             ninja_path(&unit.source)
         ));
     }
-    for executable in &output.executables {
+    for executable in output.executables.iter().filter(|_| tests) {
         text.push_str(&format!(
             "build {}: entry {}\n",
             ninja_path(&object(&executable.source)),
@@ -380,12 +497,16 @@ fn ninja_file(output: &Output, description: &Description) -> String {
 
 /// The test executable's path, with the host's executable suffix where required.
 fn test_target(executable: &Executable) -> String {
-    format!("bin/{}{}", executable.stem, std::env::consts::EXE_SUFFIX)
+    test_target_stem(&executable.stem)
+}
+
+pub(super) fn test_target_stem(stem: &str) -> String {
+    format!("bin/{stem}{}", std::env::consts::EXE_SUFFIX)
 }
 
 /// The path, in the build, of the executable of application `path`:
 /// `run/app-demo-app`, with the host's executable suffix where required.
-fn application_target(path: &str) -> String {
+pub(super) fn application_target(path: &str) -> String {
     format!(
         "run/{}{}",
         application_stem(path),

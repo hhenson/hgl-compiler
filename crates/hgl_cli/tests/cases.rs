@@ -464,7 +464,7 @@ fn any_and_operator_law_rejections_are_checked() {
         text(&output.stderr)
     );
     assert!(
-        stdout.contains("rejection cases: 12 passed, 0 failed\n"),
+        stdout.contains("rejection cases: 17 passed, 0 failed\n"),
         "{stdout}"
     );
 }

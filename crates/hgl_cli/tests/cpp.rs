@@ -8,6 +8,9 @@
 //! runs them, as the CI job for C++ does. Run with no C++ SDK named,
 //! they say so and have nothing to check.
 
+#[cfg(unix)]
+#[path = "cpp/build_reuse.rs"]
+mod build_reuse;
 mod common;
 
 use std::fs;
@@ -650,22 +653,21 @@ fn a_failed_build_runs_no_older_executable() {
     let output = hgl_in(&arguments, &[], &[]);
     let stdout = text(&output.stdout);
     assert_eq!(output.status.code(), Some(2), "{stdout}");
+    assert!(!kept.join(".hgl-built.json").exists());
     let rows: Vec<&str> = stdout.lines().collect();
     assert_eq!(rows[0], "not run  executable  demo.calc::sums", "{stdout}");
-    assert_eq!(
-        rows[1], "    the build of its executable failed:",
+    assert!(
+        rows[1].contains("mod-demo-calc.o could not be removed"),
         "{stdout}"
     );
-    assert!(stdout.contains("FAILED: "), "{stdout}");
     assert!(
         stdout.ends_with("executable cases: 0 passed, 0 failed, 1 not run\n"),
         "{stdout}"
     );
 }
 
-/// Puts a directory in the place of the object at `path`: `ninja`
-/// takes the object for changed, and a compile can write no object
-/// there.
+/// Puts a directory in the place of the object at `path`, so the builder
+/// cannot clear the unverified object and proceed with a rebuild.
 fn block(path: &Path) {
     assert!(path.is_file(), "{} was built", path.display());
     fs::remove_file(path).unwrap();
@@ -814,7 +816,7 @@ fn endpoint_read_forms_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 1 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 10 passed, 3 failed, 0 not run\n"),
         "{stdout}"
     );
     let line = fixture
@@ -826,6 +828,27 @@ fn endpoint_read_forms_run_on_the_sdk() {
         stdout.contains("FAILED   executable  demo.endpoint_read_forms::a_plain_child_failure_points_to_the_read\n")
             && stdout.contains("value.unset_read")
             && stdout.contains(&format!("raised at {file}:{line}")),
+        "{stdout}"
+    );
+    let child_line = fixture
+        .lines()
+        .position(|line| line.contains("# consuming scalar child read"))
+        .expect("the scalar read to which the error points")
+        + 1;
+    assert!(
+        stdout.contains("FAILED   executable  demo.endpoint_read_forms::unset_child_diagnostic_names_the_child\n")
+            && stdout.contains(&format!(
+                "value.unset_read: the child read has no complete value, raised at {file}:{child_line}"
+            )),
+        "{stdout}"
+    );
+    assert!(
+        stdout
+            .split_once(
+                "FAILED   executable  demo.endpoint_read_forms::generic_nullable_child_still_raises_if_unset\n"
+            )
+            .and_then(|(_, tail)| tail.lines().next())
+            .is_some_and(|report| report.contains("value.unset_read: the child read has no complete value")),
         "{stdout}"
     );
 }
@@ -3239,14 +3262,38 @@ fn an_interrupt_of_hgl_alone_stops_a_run_in_real_time() {
     let root = scratch("interrupted");
     write(&root, "ticks.hgl", TICKS);
     write(&root, "endless.hgl", ENDLESS);
-    let child = Command::new(env!("CARGO_BIN_EXE_hgl"))
-        .args(["run", &argument(&root), "--target", "cpp"])
+    let kept = root.join("build");
+    let results = kept.join("results/app-demo-ticks-endless.run.txt");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hgl"))
+        .args([
+            "run",
+            &argument(&root),
+            "--target",
+            "cpp",
+            "--keep",
+            &argument(&kept),
+        ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("the hgl binary runs");
-    // Long enough for the program to be built and its run started.
-    std::thread::sleep(std::time::Duration::from_millis(8000));
+    // Wait for the running application rather than guessing how long its
+    // build takes. An interrupt during the build has a different outcome.
+    let started = std::time::Instant::now();
+    loop {
+        let recorded = fs::read_to_string(&results).unwrap_or_default();
+        if recorded.starts_with("start\n") {
+            break;
+        }
+        if started.elapsed() >= std::time::Duration::from_secs(120)
+            || child.try_wait().expect("hgl can be polled").is_some()
+        {
+            let _ = child.kill();
+            let output = child.wait_with_output().expect("hgl ends");
+            panic!("the application never started: {}", text(&output.stderr));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     // To `hgl` alone: its process, and not its group.
     let sent = Command::new("kill")
         .args(["-INT", &child.id().to_string()])
@@ -3263,8 +3310,8 @@ fn an_interrupt_of_hgl_alone_stops_a_run_in_real_time() {
     );
     let lines: Vec<&str> = printed.lines().collect();
     let (summary, published) = lines.split_last().expect("something is printed");
-    // It counted from 1 for as long as it ran: on a slow host that may be
-    // no time at all, where the interrupt comes before the run starts.
+    // It counted from 1 for as long as it ran. The host can receive the
+    // stop before the engine publishes its first value.
     for (position, line) in published.iter().enumerate() {
         assert!(line.ends_with(&format!("Z  {}", position + 1)), "{printed}");
     }
@@ -3553,6 +3600,36 @@ fn operator_configuration_runs_on_the_sdk() {
     );
 }
 
+/// EXPR-14, FN-6 and NUM-11: the selected declaration determines
+/// which options are lifted inputs and which bind at graph construction.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn option_declarations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("option_declarations");
+    let cases = [
+        (
+            "demo.option_declarations.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.option_declarations.hgl"),
+            "executable cases: 8 passed, 0 failed, 0 not run\n",
+        ),
+        (
+            "demo.option_declarations_rejections.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.option_declarations_rejections.hgl"),
+            "rejection cases: 4 passed, 0 failed\n",
+        ),
+    ];
+    for (name, source, expected) in cases {
+        let file = write(&root, name, source);
+        let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+        let stdout = text(&output.stdout);
+        assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+        assert!(stdout.contains(expected), "{stdout}");
+    }
+}
+
 /// EXPR-6, OPS-5, FN-6 and FN-11: Boolean symbols use the selected
 /// operator's inputs in a graph and still short-circuit in value code.
 #[test]
@@ -3657,7 +3734,35 @@ fn any_and_operator_laws_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// GEN-16, UNIT-10: operators named like law predicates retain their
+/// ordinary callability requirements in functions and candidates.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn named_law_requirements_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("named_law_requirements");
+    let file = write(
+        &root,
+        "demo.named_law_requirements.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.named_law_requirements.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
