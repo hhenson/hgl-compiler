@@ -6,6 +6,9 @@
 
 mod common;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
+
 use common::check_broken;
 
 /// A program that uses every kind of item the analyser reads, and in a
@@ -87,13 +90,26 @@ fn the_whole_program_is_accepted_but_for_its_cycle_and_an_unknown_operator() {
 /// whole.
 #[test]
 fn every_prefix_of_every_file_is_analysed() {
-    let mut runs = 0;
-    for (cut, (_, text)) in FILES.iter().enumerate() {
-        // `char_indices` gives the byte position of each character, so
-        // the cut never falls inside one.
-        for (end, _) in text.char_indices() {
+    // Each cut as the index of the file cut and where it ends.
+    // `char_indices` gives the byte position of each character, so the
+    // cut never falls inside one.
+    let cuts: Vec<(usize, usize)> = FILES
+        .iter()
+        .enumerate()
+        .flat_map(|(cut, (_, text))| text.char_indices().map(move |(end, _)| (cut, end)))
+        .collect();
+    let next = AtomicUsize::new(0);
+    // Each cut is analysed on its own, so several workers share them:
+    // as many as there are threads, capped at six for machines shared
+    // with builds.
+    let workers =
+        thread::available_parallelism().map_or(1, |threads| usize::from(threads).clamp(1, 6));
+    let work = || {
+        let mut runs = 0;
+        // The atomic cursor gives each cut to one worker.
+        while let Some(&(cut, end)) = cuts.get(next.fetch_add(1, Ordering::Relaxed)) {
             let mut files = FILES;
-            files[cut].1 = &text[..end];
+            files[cut].1 = &FILES[cut].1[..end];
             let checked = check_broken(&files);
             // Whatever was reported points inside its file; `check_broken`
             // asserts that. A program came back, holding at least the
@@ -101,7 +117,17 @@ fn every_prefix_of_every_file_is_analysed() {
             assert!(!checked.program.modules.is_empty());
             runs += 1;
         }
-    }
+        runs
+    };
+    let runs = thread::scope(|scope| {
+        let others: Vec<_> = (1..workers).map(|_| scope.spawn(work)).collect();
+        work()
+            + others
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .sum::<usize>()
+    });
+    assert_eq!(runs, cuts.len());
     assert!(runs > 500, "the files were cut {runs} times");
 }
 
