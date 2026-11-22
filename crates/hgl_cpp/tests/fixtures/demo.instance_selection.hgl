@@ -259,6 +259,21 @@ fn contextual_fields<T>(const value: T) -> f64 {
     return pair.b
 }
 
+# TYPE-7 and EXPR-9: settled field types give these leaves their context.
+struct ContextPair<U> {
+    first: U
+    second: U
+    seen: list<U>
+    tags: set<U>
+    entries: dict<str, U>
+}
+
+fn settled_contextual_fields<T>(const value: T) -> GraphSide {
+    let chosen = if live_helper(value) > 0 { GraphSide.left }
+    let values = ContextPair(first: chosen, second: .right, seen: [], tags: [], entries: [])
+    return values.second
+}
+
 # CTRL-15: inferred list elements become the types of loop bindings.
 fn inferred_iteration<T>(const value: T) -> i64 {
     var total = 0
@@ -577,6 +592,7 @@ test an_instance_settles_its_graph_conditions {
     assert eval inferred_holder(value: "s") == [2]
     assert eval ordered_fields(value: "s") == [2.5]
     assert eval contextual_fields(value: "s") == [2.5]
+    assert eval settled_contextual_fields(value: "s") == [GraphSide.right]
     assert eval inferred_iteration(value: "s") == [2]
     assert eval sum_inferred_iteration(value: "s") == [5]
     assert eval deferred_member(value: "s") == [2]
