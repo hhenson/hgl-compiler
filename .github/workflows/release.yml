@@ -205,6 +205,9 @@ jobs:
   verify-debug:
     needs: bundle
     runs-on: ${{ fromJSON(vars.HGL_SELF_HOSTED_MACOS == 'true' && '["self-hosted","macOS","ARM64","hgl-release"]' || '["macos-26"]') }}
+    # lldb waits on an authorisation prompt where the machine does not let
+    # its account debug (docs/releases.md): the job ends, not the runner.
+    timeout-minutes: 30
     steps:
       - name: Report the macOS toolchain
         run: *report-toolchain
@@ -299,6 +302,7 @@ jobs:
   verify-debug-linux:
     needs: bundle-linux
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

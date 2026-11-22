@@ -18,6 +18,13 @@
 #    line and locals; and the release's optimised library resolves an engine
 #    function to its file and line through its symbol file, in a live process
 #    and in a core file of it on Linux.
+#
+# The debuggers look for symbol files beside the libraries alone, never in a
+# directory or service of the machine's: gdb is given an empty debug file
+# directory and no debuginfod; lldb is told not to look elsewhere
+# (`symbols.enable-external-lookup`), which on macOS would find a dSYM of the
+# same UUID anywhere Spotlight has seen one, in a release cache say. What
+# they find is what the two trees hold.
 set -euo pipefail
 
 fail() {
@@ -54,8 +61,12 @@ mkdir -p -- "$alone" "$both"
 
 unset HGL_HGRAPH_SDK HGL_HGRAPH_DEPS HGL_HGRAPH_DEBUG HGL_CPP_FLAGS LD_LIBRARY_PATH DYLD_LIBRARY_PATH
 export HGL_NATIVE_CACHE="$scratch/native"
-# gdb asks no server for symbols: what it finds is what the trees hold.
+# gdb asks no server for symbols, and looks in no directory of the machine's.
 export DEBUGINFOD_URLS=
+nowhere=$scratch/no-symbols
+mkdir -p -- "$nowhere"
+gdb=(gdb -batch -nx -iex "set debug-file-directory $nowhere")
+lldb=(xcrun lldb --batch -O 'settings set symbols.enable-external-lookup false')
 
 # A debug build of the fixtures with the hgl of release tree $1, into $2:
 # its JSON description in $2.json and what hgl said in $2.said.
@@ -101,17 +112,17 @@ print("\n".join([launch["executable"], *launch["arguments"]]))' "$1"
 # hgraph's runtime library $1, read alone.
 lookup_engine() {
     if [[ $platform == linux-x86_64 ]]; then
-        gdb -batch -nx -ex 'info line hgraph::NodeView::global_state' "$1" 2>&1
+        "${gdb[@]}" -ex 'info line hgraph::NodeView::global_state' "$1" 2>&1
     else
-        xcrun lldb --batch -o "target create '$1'" \
+        "${lldb[@]}" -o "target create '$1'" \
             -o 'image lookup -v -n hgraph::NodeView::global_state' 2>&1
     fi
 }
 
 # What the platform's debugger shows of a run of the command in file $1 (one
 # word to a line), stopped where the engine's runtime library gives a node its
-# store: the frame and its arguments, and on Linux the locals of the engine's
-# loop over the nodes; or, where $2 is given, a core file of the process
+# store: the library the process loaded, the frame and its arguments, and on
+# Linux the locals of the engine's loop over the nodes; or, where $2 is given, a core file of the process
 # written there in place of the locals, which gdb 17 cannot always show of an
 # optimised build.
 stop_in_engine() {
@@ -121,9 +132,10 @@ stop_in_engine() {
         command+=("$word")
     done <"$1"
     if [[ $platform == macos-arm64 ]]; then
-        xcrun lldb --batch \
+        "${lldb[@]}" \
             -o 'breakpoint set --shlib libhgraph_runtime.dylib --name hgraph::NodeView::global_state' \
-            -o 'process launch --stdin /dev/null' -o 'frame info' -o 'frame variable' -o 'process kill' \
+            -o 'process launch --stdin /dev/null' -o 'frame info' -o 'frame variable' \
+            -o 'image list libhgraph_runtime.dylib' -o 'process kill' \
             -- "${command[@]}" 2>&1 || true
         return
     fi
@@ -164,18 +176,30 @@ continue
 python
 frame = gdb.selected_frame()
 line = frame.find_sal()
+print("engine library:", gdb.solib_name(frame.pc()))
 print("engine frame:", frame.name(), "at", f"{line.symtab.filename}:{line.line}" if line.symtab else "no line")
 end
 $then
 kill
 GDB
-    gdb -batch -nx -x "$scratch/stop.gdb" --args "${command[@]}" </dev/null 2>&1 |
+    "${gdb[@]}" -x "$scratch/stop.gdb" --args "${command[@]}" </dev/null 2>&1 |
         grep -E '^(engine |Saved corefile)' || true
+}
+
+# Whether what the debugger said, $1, has the process load the engine's
+# runtime library from directory $2.
+loaded() {
+    local library=$2/libhgraph_runtime.$suffix
+    if [[ $platform == linux-x86_64 ]]; then
+        grep -qxF "engine library: $library" <<<"$1"
+    else
+        grep -qF " $library" <<<"$1"
+    fi
 }
 
 # What gdb says of the newest frame in the core file $2 of executable $1.
 core_frame() {
-    gdb -batch -nx -ex 'frame 0' "$1" "$2" 2>&1 | grep -E '^#0' || true
+    "${gdb[@]}" -ex 'frame 0' "$1" "$2" 2>&1 | grep -E '^#0' || true
 }
 
 echo "== the release alone"
@@ -204,6 +228,7 @@ stopped=$(stop_in_engine "$scratch/both.command")
 printf '%s\n' "$stopped"
 grep -Eq '(engine frame: hgraph::NodeView::global_state at .*/node\.cpp:[0-9]+|at node\.cpp:[0-9]+)' <<<"$stopped" ||
     fail "the debug build's engine frame has no line"
+loaded "$stopped" "$both/$name/libexec/hgraph-debug/hgraph-sdk/lib" || fail "the debug build loaded another engine"
 if [[ $platform == linux-x86_64 ]]; then
     grep -Eq '^engine loop locals: [0-9]+$' <<<"$stopped" || fail "the debug build's engine loop has no locals"
 else
@@ -224,6 +249,8 @@ if [[ $platform == linux-x86_64 ]]; then
     printf '%s\n' "$stopped"
     grep -Eq 'engine frame: hgraph::NodeView::global_state at .*/node\.cpp:[0-9]+' <<<"$stopped" ||
         fail "the ordinary build's engine frame has no line with hgl-debug"
+    # An ordinary build never uses the debug libraries, as it runs too.
+    loaded "$stopped" "$both/$name/libexec/hgraph-sdk/lib" || fail "the ordinary build loaded another engine"
     frame=$(core_frame "$executable" "$scratch/ordinary.core")
     printf '%s\n' "$frame"
     grep -Eq 'hgraph::NodeView::global_state .* at .*/node\.cpp:[0-9]+' <<<"$frame" ||

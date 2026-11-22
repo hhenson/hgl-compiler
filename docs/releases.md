@@ -75,7 +75,19 @@ the debug archive unpacked into it, the debug tree is verified, a debug
 build links the debug libraries, lldb or gdb stops in an engine frame of it
 with its file, line and arguments (gdb: the locals of the engine's loop),
 the release's own library resolves an engine function to its file and line,
-and on Linux so does a core file of an ordinary run. Run **Release
+and on Linux so does a core file of an ordinary run, whose process loads
+the release's own engine library. The debuggers look for symbol files
+beside the libraries alone, never in the machine's directories or, on
+macOS, through Spotlight, which finds a dSYM of the same UUID wherever it
+has seen one (a release cache keeps the release's). The macOS job runs
+lldb unattended, so the release runner must let its account debug with no
+prompt: `DevToolsSecurity -status` says developer mode is enabled
+(`sudo DevToolsSecurity -enable`, once), and the account is in the
+`_developer` group (`sudo dseditgroup -o edit -a ACCOUNT -t user
+_developer`). Without both, `process launch` waits for an administrator's
+password in a dialog no one sees, and the job ends at its 30-minute
+limit. The debugged programs are this repository's own, signed ad hoc
+without the hardened runtime, so nothing else is needed. Run **Release
 bundles** by hand to rehearse these steps without publishing.
 
 Push the bare workspace version as a tag, such as `0.1.0`. The tag run
