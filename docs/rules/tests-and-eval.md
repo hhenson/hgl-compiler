@@ -31,7 +31,8 @@ transpiler: partial
 
 analyser: partial
 
-- A test declares no `state` or `cache`, injects nothing but an integration test's `run_config` (RUN-6), and has no hook, `yield` or `return`, in its block or a block inside it (`test.statement_phase`)
+- A test's own statements declare no `state` or `cache`, inject nothing but an integration test's `run_config` (RUN-6), and have no hook, `yield` or `return` (`test.statement_phase`)
+- Each leading helper is checked as a function of its declared role
 - Outside the call an `eval` or a `run` takes its statements are value code, with `assert` among them: a call of a node, a graph or a source is `call.role` (the code proposed), an operator selects among all its candidates and one that selects a temporal candidate is `call.role` too (GEN-5), a `const` parameter takes any value, and nothing is lifted; the call an `eval` or a `run` takes is read as composition is
 - An eval of a target with a result is a trace of the result's type, bound with `let` and compared; a trace, or a value that holds one, stored in a field or given to a temporal function is `trace.escape`; one given to a `const fn` is the list of its publications there (TST-16)
 - Left: an `eval` or a `run` outside a named test, which is not read; a trace returned
@@ -60,7 +61,7 @@ parser: done
 
 analyser: partial
 
-- An eval's call is of a module function or one of its named test’s helpers, the temporal definition where there are both (`eval.target`: an operator, a struct)
+- An eval calls a module function or a helper of the named test where it stands, the temporal definition where there are both (`eval.target`: an operator, a struct)
 - The call's arguments are bound as any call's are, its generic arguments among them: a `const` parameter takes configuration and every other a trace
 - Each positional or named pack capture takes its own trace (FN-8). A heterogeneous pack infers the types it replays from those traces or takes its written types.
 - A cell is written as a `return` is: a T whole or a `delta<T>`, each by its type, for a list, a set, a dictionary, a struct and a tuple; a tuple that is a T is the whole tuple, a null position a published null, and one that is no T, `(null, 3)` of a `tuple<i64, i64>`, its delta, a tuple of its positions; a window's cell is the V that arrived, its delta (TYPE-16), a generic target's window once its arguments are known
