@@ -213,6 +213,37 @@ fn modules_that_differ_in_case_have_distinct_paths() {
 }
 
 #[test]
+fn the_offline_search_index_matches_the_pages_and_visibility() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    input(&source, "\n");
+    let public = write_site(root.path(), &source, &[]);
+    write_site(root.path(), &source, &["--out", "private", "--private"]);
+    for (site, private) in [(public, false), (root.path().join("private"), true)] {
+        let index = fs::read_to_string(site.join("search-index.js")).unwrap();
+        let payload = index
+            .strip_prefix("const hglDeclarations = ")
+            .and_then(|content| content.strip_suffix(";\n"))
+            .unwrap();
+        let entries: Vec<serde_json::Value> = serde_json::from_str(payload).unwrap();
+        let mut has_private = false;
+        let mut operators = 0;
+        for entry in entries {
+            let name = entry["canonicalName"].as_str().unwrap();
+            has_private |= name == "guide.api::private_marker";
+            operators += usize::from(name == "guide.api::choose");
+            let href = entry["href"].as_str().unwrap();
+            let (file, anchor) = href.split_once('#').unwrap();
+            assert!(file.starts_with("modules/") && !file.contains(':'));
+            let page = fs::read_to_string(site.join(file)).unwrap();
+            assert!(page.contains(&format!("id=\"{anchor}\"")), "{href}");
+        }
+        assert_eq!(has_private, private);
+        assert_eq!(operators, 1, "candidates use the operator's search result");
+    }
+}
+
+#[test]
 fn rejected_source_does_not_create_the_site() {
     let root = tempdir().unwrap();
     let source = root.path().join("bad.hgl");

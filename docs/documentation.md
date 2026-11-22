@@ -18,7 +18,8 @@ span naming a declaration or member links to it when it resolves in the
 comment's source scope and appears in the site (SDOC-8). Only generated
 local destinations become active Markdown links. Other link labels
 and image descriptions remain readable text. The pages and stylesheet
-use relative paths and open offline.
+use relative paths and open offline. The index searches declaration names
+using a local search index.
 
 `hgl doc <ROOT>... --format json [--out DIR] [--private]` writes one
 UTF-8 JSON document for the analysed program. Source discovery and

@@ -8,6 +8,13 @@
 <header><nav><a href="index.html">API reference</a></nav></header>
 <main>
 <h1>API reference</h1>
+<div id="declaration-search" hidden>
+<label for="declaration-query">Search declarations</label>
+<input id="declaration-query" type="search" autocomplete="off" aria-controls="search-results">
+<p role="status"></p><ul id="search-results"></ul>
+</div>
+<script defer src="search-index.js"></script>
+<script defer src="search.js"></script>
 <h2>Modules</h2>
 <ul>
 <li><a href="modules/mod-core.html">core</a></li>

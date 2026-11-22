@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 
 use hgl_analyser::Program;
 use hgl_diagnostics::Location;
+use serde::Serialize;
 
 use crate::markdown::{escaped, render};
 use crate::model::{Declaration, Documentation, Interface, Model, Module, Section, Source};
@@ -27,6 +28,16 @@ struct Target<'a> {
 struct Site<'a> {
     program: &'a Program,
     targets: HashMap<Location, Target<'a>>,
+    search: Vec<SearchEntry>,
+}
+
+/// One declaration in the offline search index. Module paths and anchors
+/// are the same as the site's ordinary links.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchEntry {
+    canonical_name: String,
+    href: String,
 }
 
 pub(crate) fn build(program: &Program, model: Model<'_>) -> Vec<SiteFile> {
@@ -39,6 +50,7 @@ pub(crate) fn build(program: &Program, model: Model<'_>) -> Vec<SiteFile> {
     let mut site = Site {
         program,
         targets: HashMap::new(),
+        search: Vec::new(),
     };
     for (module, page) in model.modules.iter().zip(&pages) {
         let mut index = 0;
@@ -47,10 +59,22 @@ pub(crate) fn build(program: &Program, model: Model<'_>) -> Vec<SiteFile> {
         }
     }
 
-    let mut files = vec![SiteFile {
-        path: "site.css".to_owned(),
-        text: include_str!("site.css").replace("\r\n", "\n"),
-    }];
+    let search = serde_json::to_string(&site.search).expect("the search index has only strings");
+    let mut files = vec![
+        SiteFile {
+            path: "site.css".to_owned(),
+            text: include_str!("site.css").replace("\r\n", "\n"),
+        },
+        SiteFile {
+            path: "search-index.js".to_owned(),
+            // A classic script can load the index directly from file://.
+            text: format!("const hglDeclarations = {search};\n"),
+        },
+        SiteFile {
+            path: "search.js".to_owned(),
+            text: include_str!("search.js").replace("\r\n", "\n"),
+        },
+    ];
     for (module, page) in model.modules.iter().zip(&pages) {
         files.push(SiteFile {
             path: format!("modules/{page}"),
@@ -86,7 +110,15 @@ fn filename(module: &str, index: usize) -> String {
 
 fn index(model: &Model<'_>, pages: &[String]) -> String {
     let mut output = page("API reference", "site.css", "index.html");
-    output.push_str("<h1>API reference</h1>\n<h2>Modules</h2>\n<ul>\n");
+    output.push_str(
+        "<h1>API reference</h1>\n\
+         <div id=\"declaration-search\" hidden>\n\
+         <label for=\"declaration-query\">Search declarations</label>\n\
+         <input id=\"declaration-query\" type=\"search\" autocomplete=\"off\" aria-controls=\"search-results\">\n\
+         <p role=\"status\"></p><ul id=\"search-results\"></ul>\n</div>\n\
+         <script defer src=\"search-index.js\"></script>\n<script defer src=\"search.js\"></script>\n\
+         <h2>Modules</h2>\n<ul>\n",
+    );
     for (module, page) in model.modules.iter().zip(pages) {
         writeln!(
             output,
@@ -117,13 +149,20 @@ fn finish_page(mut page: String) -> String {
 
 impl<'a> Site<'a> {
     fn add_target(&mut self, declaration: &Declaration<'_>, page: &'a str, index: &mut usize) {
-        self.targets.insert(
-            declaration.source.at,
-            Target {
-                page,
-                anchor: format!("decl-{}-{}", declaration.name, *index),
-            },
-        );
+        let anchor = format!("decl-{}-{}", declaration.name, *index);
+        // An operator's search result leads to its page, where all its
+        // candidates appear. They do not need duplicate search rows.
+        if !matches!(
+            declaration.kind,
+            "candidate" | "nativeCandidate" | "nativeCandidateImplementation"
+        ) {
+            self.search.push(SearchEntry {
+                canonical_name: declaration.canonical_name.clone(),
+                href: format!("modules/{page}#{anchor}"),
+            });
+        }
+        self.targets
+            .insert(declaration.source.at, Target { page, anchor });
         *index += 1;
         for item in declaration.candidates.iter().chain(&declaration.members) {
             self.add_target(item, page, index);
