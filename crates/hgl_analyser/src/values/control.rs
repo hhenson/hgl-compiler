@@ -45,6 +45,41 @@ pub(super) fn while_connection(condition: &Expr, category: ValueCategory) -> Opt
     })
 }
 
+pub(super) const RANGE_LOWER: &str = "the lower bound of this range";
+pub(super) const RANGE_UPPER: &str = "the upper bound of this range";
+
+/// EXPR-16: composition evaluates a range bound while building the graph.
+pub(super) fn range_connection(
+    bound: &Expr,
+    name: &str,
+    category: ValueCategory,
+) -> Option<Diagnostic> {
+    (category == ValueCategory::Connection).then(|| {
+        error(
+            Category::Phase,
+            codes::CONNECTION_AS_CONSTANT,
+            bound.at,
+            format!("{name} is evaluated where the graph is built, and this is a connection"),
+            "EXPR-16",
+        )
+    })
+}
+
+pub(super) fn comprehension_extent_error(at: Location, composition: bool) -> Diagnostic {
+    let message = if composition {
+        "a list comprehension in composition takes a range with constant bounds or a fixed-size list connection"
+    } else {
+        "this comprehension needs a constant number of entries for its fixed-size list"
+    };
+    error(
+        Category::Type,
+        codes::LIST_SIZE,
+        at,
+        message.to_string(),
+        "EXPR-17",
+    )
+}
+
 /// What a `for` binds, and whether it makes one child for each member,
 /// by what it loops over (CTRL-15).
 ///
@@ -745,21 +780,15 @@ impl<'a> Typer<'a> {
             let expected = Type::Scalar(Scalar::I64);
             let value = self.expression(node, Some(&expected));
             let value = self.fit(value, &expected, name);
-            if self.graph && self.category(&value) == ValueCategory::Connection {
-                self.diagnostics.emit(error(
-                    Category::Phase,
-                    codes::CONNECTION_AS_CONSTANT,
-                    value.at,
-                    format!(
-                        "{name} is evaluated where the graph is built, and this is a connection"
-                    ),
-                    "EXPR-16",
-                ));
+            if self.graph
+                && let Some(report) = range_connection(&value, name, self.category(&value))
+            {
+                self.diagnostics.emit(report);
             }
             Box::new(value)
         };
-        let lower = bound(&lower, "the lower bound of this range");
-        let upper = bound(&upper, "the upper bound of this range");
+        let lower = bound(&lower, RANGE_LOWER);
+        let upper = bound(&upper, RANGE_UPPER);
         Expr {
             kind: ExprKind::Range { lower, upper },
             ty: Type::List {
@@ -887,18 +916,8 @@ impl<'a> Typer<'a> {
         };
         let Some(value) = size.filter(crate::constant::worked_out) else {
             if !open(&sequence.ty) {
-                let message = if self.graph {
-                    "a list comprehension in composition takes a range with constant bounds or a fixed-size list connection"
-                } else {
-                    "this comprehension needs a constant number of entries for its fixed-size list"
-                };
-                self.diagnostics.emit(error(
-                    Category::Type,
-                    codes::LIST_SIZE,
-                    sequence.at,
-                    message.to_string(),
-                    "EXPR-17",
-                ));
+                self.diagnostics
+                    .emit(comprehension_extent_error(sequence.at, self.graph));
             }
             return expected.cloned();
         };

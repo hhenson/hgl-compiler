@@ -23,3 +23,34 @@ fn live_bound(limit: i64) -> i64 {
 
 # expect-error(type, "list.size")
 fn growing_list(values: list<i64>) -> list<i64, 4> => [for item in values: item]
+
+operator selected_extent<T>(value: T) -> i64
+impl const fn selected_extent<T>(value: T) -> i64 => 5
+impl fn selected_extent(value: i64) -> i64 {
+    when { return value }
+}
+
+fn selected_range_sum<T>(const value: T) -> i64 {
+    var total = 0
+    for index in 0..<selected_extent(value) { total = total + index }
+    return total
+}
+
+test bound_settles_to_connection {
+    # expect-error(phase, "connection.as_constant")
+    assert eval selected_range_sum(value: 3) == [3]
+}
+
+operator fixed_items<T>(value: T) -> list<i64, 2>
+impl const fn fixed_items<T>(value: T) -> list<i64, 2> => [2, 3]
+impl fn fixed_items(value: i64) -> list<i64, 2> {
+    when { return [value, value + 1] }
+}
+
+fn selected_list<T>(const value: T) -> list<i64, 2> =>
+    [for item in fixed_items(value): item + 1]
+
+test iterable_settles_to_value {
+    # expect-error(type, "list.size")
+    assert eval selected_list(value: "ordinary") == [[3, 4]]
+}

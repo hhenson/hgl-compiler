@@ -46,6 +46,32 @@ test list_loops_compose {
     assert eval graph_fixed([[1, 2, 3], [4, 5, 6]]) == [[2, 4, 6], [8, 10, 12]]
 }
 
+operator selected_extent<T>(value: T) -> i64
+impl const fn selected_extent<T>(value: T) -> i64 => 5
+impl fn selected_extent(value: i64) -> i64 {
+    when { return value }
+}
+
+fn selected_range_sum<T>(const value: T) -> i64 {
+    var total = 0
+    for index in 0..<selected_extent(value) { total = total + index }
+    return total
+}
+
+operator fixed_items<T>(value: T) -> list<i64, 2>
+impl const fn fixed_items<T>(value: T) -> list<i64, 2> => [2, 3]
+impl fn fixed_items(value: i64) -> list<i64, 2> {
+    when { return [value, value + 1] }
+}
+
+fn selected_list<T>(const value: T) -> list<i64, 2> =>
+    [for item in fixed_items(value): item + 1]
+
+test generic_iterables_settle_after_selection {
+    assert eval selected_range_sum(value: "ordinary") == [10]
+    assert eval selected_list(value: 3) == [[4, 5]]
+}
+
 const fn generic_squares<const N: i64>() -> list<i64, N> => [for i in 0..<N: i * i]
 const fn generic_shift<const First: i64, const Last: i64>() -> list<i64, Last - First> =>
     [for i in First..<Last: i + 1]

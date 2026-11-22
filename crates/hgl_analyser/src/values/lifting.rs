@@ -552,7 +552,7 @@ pub(super) fn record_with(
     mut typer: Option<&mut Typer<'_>>,
     place_required: Option<&dyn Fn(&mut Expr)>,
 ) {
-    use ValueCategory::{Connection, Unsettled};
+    use ValueCategory::Unsettled;
     let Body { locals, statements } = body;
     let mut first = first_values(locals, statements);
     let mut capture_types = HashMap::new();
@@ -571,32 +571,28 @@ pub(super) fn record_with(
                 NodeMut::Statement(Stmt::For {
                     names, sequence, ..
                 }) if composition => {
-                    let ty = received_type(&sequence.ty, iterates);
-                    if let Some(types) = iteration_types(ty, names.len()) {
-                        for (&local, given) in names.iter().zip(types) {
-                            if !whole(&locals[local].ty) {
-                                settling |= fill_type(&mut locals[local].ty, given.clone());
-                            }
-                        }
-                    }
-                    if names
-                        .iter()
-                        .all(|&local| locals[local].category != Unsettled)
-                    {
-                        return;
-                    }
-                    let over = category(program, locals, sequence);
-                    // A connection still needs its collection kind to
-                    // decide whether each iteration binding is one.
-                    if over == Unsettled || over == Connection && open(ty) {
-                        return;
-                    }
-                    let (categories, _) = bound_by_loop(over, ty, names.len());
-                    for (&local, given) in names.iter().zip(categories) {
-                        if locals[local].category == Unsettled && given != Unsettled {
-                            locals[local].category = given;
-                            settling = true;
-                        }
+                    settling |= settle_loop_bindings(program, locals, sequence, names);
+                    return;
+                }
+                NodeMut::Expression(Expr {
+                    kind:
+                        ExprKind::ListComprehension {
+                            composition: true,
+                            binding,
+                            sequence,
+                            entry,
+                        },
+                    ty: Type::List { element, .. },
+                    ..
+                }) => {
+                    settling |= settle_loop_bindings(
+                        program,
+                        locals,
+                        sequence,
+                        std::slice::from_ref(binding),
+                    );
+                    if !whole(element) {
+                        settling |= fill_type(element, entry.ty.clone());
                     }
                     return;
                 }
@@ -756,6 +752,45 @@ pub(super) fn record_with(
     walk_statements_mut(statements, &mut |value| {
         recorded(program, locals, composition, value);
     });
+}
+
+/// The binding of a graph loop takes its concrete type and category from
+/// the range or collection, for statements and comprehensions alike.
+fn settle_loop_bindings(
+    program: &Program,
+    locals: &mut [Local],
+    sequence: &Expr,
+    names: &[LocalId],
+) -> bool {
+    use ValueCategory::{Connection, Unsettled};
+    let mut changed = false;
+    let ty = received_type(&sequence.ty, iterates);
+    if let Some(types) = iteration_types(ty, names.len()) {
+        for (&local, given) in names.iter().zip(types) {
+            if !whole(&locals[local].ty) {
+                changed |= fill_type(&mut locals[local].ty, given.clone());
+            }
+        }
+    }
+    if names
+        .iter()
+        .all(|&local| locals[local].category != Unsettled)
+    {
+        return changed;
+    }
+    let over = category(program, locals, sequence);
+    // A connection still needs its collection kind to say what it binds.
+    if over == Unsettled || over == Connection && open(ty) {
+        return changed;
+    }
+    let (categories, _) = bound_by_loop(over, ty, names.len());
+    for (&local, given) in names.iter().zip(categories) {
+        if locals[local].category == Unsettled && given != Unsettled {
+            locals[local].category = given;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// EXPR-3: the initializer takes precedence, or the first assignment

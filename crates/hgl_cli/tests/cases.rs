@@ -396,7 +396,7 @@ fn ranges_and_list_comprehensions_reject_invalid_forms() {
         text(&output.stderr)
     );
     assert!(
-        stdout.contains("rejection cases: 6 passed, 0 failed"),
+        stdout.contains("rejection cases: 8 passed, 0 failed"),
         "{stdout}"
     );
 }

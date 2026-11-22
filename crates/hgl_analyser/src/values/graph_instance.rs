@@ -9,7 +9,10 @@ use hgl_parser::SyntaxKind;
 use hgl_source::Span;
 
 use super::arguments::Takes;
-use super::control::{bound_by_loop, duplicate_switch_label, iterates};
+use super::control::{
+    RANGE_LOWER, RANGE_UPPER, bound_by_loop, comprehension_extent_error, duplicate_switch_label,
+    iterates, range_connection,
+};
 use super::fit::{not_null, open, whole};
 use super::inference::type_pack;
 use super::lifting::{
@@ -28,7 +31,7 @@ use crate::hir::{
 };
 use crate::program::{OperatorRef, Program, Role};
 use crate::syntax::ungrouped;
-use crate::types::{Argument, Detail, Signature, Type};
+use crate::types::{Argument, Detail, Scalar, Signature, Type};
 
 /// Source checks awaiting concrete types and categories in a graph instance.
 pub(crate) struct GraphDestinations {
@@ -37,6 +40,7 @@ pub(crate) struct GraphDestinations {
     unsettled_arguments: HashSet<Location>,
     index_bases: HashSet<Location>,
     list_assignments: HashSet<Location>,
+    unsettled_iterations: HashSet<Location>,
     replay_source: bool,
 }
 
@@ -49,6 +53,7 @@ impl GraphDestinations {
         let mut unsettled_arguments = HashSet::new();
         let mut index_bases = HashSet::new();
         let mut list_assignments = HashSet::new();
+        let mut unsettled_iterations = HashSet::new();
         hir::walk_statement_nodes(&body.statements, &mut |node| {
             let value = match node {
                 Node::Expression(value) => value,
@@ -69,6 +74,23 @@ impl GraphDestinations {
             };
             if !whole(&value.ty) {
                 expressions.insert(value.at);
+            }
+            let mut iteration = |value: &Expr| {
+                if value.category == ValueCategory::Unsettled {
+                    unsettled_iterations.insert(value.at);
+                }
+            };
+            match &value.kind {
+                ExprKind::Range { lower, upper } => {
+                    iteration(lower);
+                    iteration(upper);
+                }
+                ExprKind::ListComprehension {
+                    composition: true,
+                    sequence,
+                    ..
+                } if !matches!(sequence.kind, ExprKind::Range { .. }) => iteration(sequence),
+                _ => {}
             }
             if let ExprKind::Index { base, .. } = &value.kind
                 && !whole(&base.ty)
@@ -112,6 +134,7 @@ impl GraphDestinations {
             unsettled_arguments,
             index_bases,
             list_assignments,
+            unsettled_iterations,
             replay_source,
         }
     }
@@ -139,6 +162,15 @@ impl GraphDestinations {
                     body.locals[local].category = ValueCategory::Unsettled;
                 }
             }
+            Node::Expression(Expr {
+                kind:
+                    ExprKind::ListComprehension {
+                        composition: true,
+                        binding,
+                        ..
+                    },
+                ..
+            }) => body.locals[*binding].category = ValueCategory::Unsettled,
             _ => {}
         });
         let owner = &program.modules[module];
@@ -182,7 +214,10 @@ impl GraphDestinations {
         typer.graph = true;
         record_with(program, body, true, Some(&mut typer), Some(place_required));
         typer.locals.clone_from(&body.locals);
-        if !self.expressions.is_empty() || !self.list_assignments.is_empty() {
+        if !self.expressions.is_empty()
+            || !self.list_assignments.is_empty()
+            || !self.unsettled_iterations.is_empty()
+        {
             hir::walk_statement_nodes_mut(&mut body.statements, &mut |node| {
                 self.fit_destination(&mut typer, node);
             });
@@ -324,6 +359,40 @@ impl GraphDestinations {
             }) => {
                 self.fit_switch(typer, selector, cases);
                 return;
+            }
+            NodeMut::Expression(Expr {
+                kind: ExprKind::Range { lower, upper },
+                ..
+            }) => {
+                for (bound, name) in [(lower, RANGE_LOWER), (upper, RANGE_UPPER)] {
+                    self.fit(typer, bound, &Type::Scalar(Scalar::I64), name, false);
+                    if self.unsettled_iterations.contains(&bound.at)
+                        && let Some(report) = range_connection(bound, name, typer.category(bound))
+                    {
+                        typer.diagnostics.emit(report);
+                    }
+                }
+                return;
+            }
+            NodeMut::Expression(Expr {
+                kind:
+                    ExprKind::ListComprehension {
+                        composition: true,
+                        sequence,
+                        entry,
+                        ..
+                    },
+                ty: Type::List { element, .. },
+                ..
+            }) => {
+                if self.unsettled_iterations.contains(&sequence.at)
+                    && sequence.category == ValueCategory::Value
+                {
+                    typer
+                        .diagnostics
+                        .emit(comprehension_extent_error(sequence.at, true));
+                }
+                (entry.as_mut(), (**element).clone(), "this list entry", true)
             }
             NodeMut::Expression(Expr {
                 kind:
