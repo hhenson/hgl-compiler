@@ -379,6 +379,41 @@ using viewed_t = std::remove_cvref_t<decltype(viewed(std::declval<const E&>()))>
 
 } // namespace detail
 
+/// An ERR-14 child binding borrowed by a value helper (FN-14, FN-17).
+/// The selector belongs to the calling scope and is invoked only at use.
+template <class S>
+class BoundChild {
+    using View = hgraph::In<"", S>;
+
+  public:
+    /// Borrow a generated selector for the duration of the call.
+    template <class Select>
+        requires (!std::is_same_v<std::remove_cvref_t<Select>, BoundChild>)
+    BoundChild(Select& select) : select_(&select), project_([](const void* binding, std::source_location at) {
+        const auto child = (*static_cast<const Select*>(binding))(at);
+        if (!detail::present(child)) {
+            return Child<View>{};
+        }
+        const auto& view = detail::viewed(child);
+        // Collection fields can name their view, but the helper only
+        // needs the schema and the same underlying input endpoint.
+        if constexpr (std::is_base_of_v<hgraph::TSInputView, detail::viewed_t<decltype(child)>>) {
+            return Child<View>{View{view.borrowed_ref()}};
+        } else {
+            return Child<View>{View{view.base().borrowed_ref()}};
+        }
+    }) {}
+
+    /// Resolve the selected endpoint at this consuming use.
+    [[nodiscard]] Child<View> operator()(std::source_location at) const {
+        return project_(select_, at);
+    }
+
+  private:
+    const void* select_;
+    Child<View> (*project_)(const void*, std::source_location);
+};
+
 /// `all_valid<T>(input: endpoint<T>) -> bool` (END-7, END-9): whether every
 /// element, field or entry of a collection is valid, one level deep, and
 /// whether a window holds at least its minimum, as the form's

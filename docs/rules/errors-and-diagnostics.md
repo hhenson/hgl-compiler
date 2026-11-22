@@ -173,8 +173,9 @@ analyser: done
 
 transpiler: partial
 
-- Holds the position or key of an inferred child binding and reads its payload at the
-  use. A failed plain read reports the use's HGL location.
+- Holds the position or key of an inferred child binding through pack expansion
+  and static value-function captures (FN-8, FN-14, FN-17). A payload read happens at
+  the use, and a failed plain read reports the use's HGL location.
 - Writes checked child, dictionary, unsized-list and window reads in the analysed
   value, result or nullable form. A dictionary omits wholly unset entries and a
   partial valid entry fails its whole read.

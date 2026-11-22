@@ -74,6 +74,18 @@ pub(super) fn capability_type(
 pub(super) struct Endpoints;
 
 impl Emitter<'_> {
+    /// The typed locator passed to a value helper that captures a
+    /// bound child (ERR-14, FN-14). A copy still refers to the same endpoint.
+    pub(super) fn bound_child_type(
+        &mut self,
+        ty: &Type,
+        at: hgl_diagnostics::Location,
+    ) -> Option<String> {
+        let schema = self.temporal_schema(ty, at)?;
+        self.note_types(ty);
+        Some(format!("::{}::BoundChild<{schema}>", runtime::NAMESPACE))
+    }
+
     /// The view chosen by an ERR-14 read or metadata operation. At a
     /// bound endpoint the arguments have already been captured.
     pub(super) fn read_endpoint_view(
