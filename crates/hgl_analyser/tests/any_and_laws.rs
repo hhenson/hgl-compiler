@@ -326,3 +326,13 @@ fn a_bool_requirement_authorizes_forwarding_that_option() {
     let accepted = check(&[("m.hgl", &source)]);
     assert!(!accepted.rejected, "{}", accepted.report);
 }
+
+#[test]
+fn an_existential_can_test_an_inequality_without_binding() {
+    // GEN-3, GEN-10, GEN-17: the pinned constraint grammar includes !=.
+    let accepted = check(&[(
+        "m.hgl",
+        "module m\nconst fn different<...Ts>(xs: ...Ts) -> i64 requires any T in types(Ts) { T != i64 } => 1\nconst fn good() -> i64 => different(1, true)\n",
+    )]);
+    assert!(!accepted.rejected, "{}", accepted.report);
+}

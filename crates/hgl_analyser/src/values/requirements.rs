@@ -3537,8 +3537,9 @@ fn holds_with_packs(
                 .and_then(|name| (of.type_of)(&name))
                 .or_else(|| (scope?.written)(left, keys))
             {
-                return if has_token(node, SyntaxKind::EqEq) {
+                return if has_token(node, SyntaxKind::EqEq) || has_token(node, SyntaxKind::BangEq) {
                     typed_alike(&written(right)?, &ty, of)
+                        .map(|same| same == has_token(node, SyntaxKind::EqEq))
                 } else if within && right.kind() == SyntaxKind::ConstraintSet {
                     let mut found = Some(false);
                     for member in right.children() {
@@ -3553,12 +3554,13 @@ fn holds_with_packs(
                     None
                 };
             }
-            if has_token(node, SyntaxKind::EqEq)
+            if (has_token(node, SyntaxKind::EqEq) || has_token(node, SyntaxKind::BangEq))
                 && let Some(ty) = option(right)
                     .and_then(|name| (of.type_of)(&name))
                     .or_else(|| (scope?.written)(right, keys))
             {
-                return typed_alike(&written(left)?, &ty, of);
+                return typed_alike(&written(left)?, &ty, of)
+                    .map(|same| same == has_token(node, SyntaxKind::EqEq));
             }
             // What an operand that is a constant comes to as a value of
             // the option `name`'s type: the value another option has at
@@ -3571,7 +3573,7 @@ fn holds_with_packs(
                     .and_then(|other| (of.value_of)(&other))
                     .or_else(|| (of.constant)(operand, name))
             };
-            if has_token(node, SyntaxKind::EqEq) {
+            if has_token(node, SyntaxKind::EqEq) || has_token(node, SyntaxKind::BangEq) {
                 // The option is the operand that has a value at the call:
                 // the left where both do.
                 let valued = |operand: &SyntaxNode| {
@@ -3589,6 +3591,7 @@ fn holds_with_packs(
                 // is `-0.0`." Where the value is not known, whether it
                 // holds is not either.
                 compared(&(of.value_of)(&name)?, &operand(constant, &name)?, of)
+                    .map(|same| same == has_token(node, SyntaxKind::EqEq))
             } else if within {
                 let name = option(left)?;
                 if right.kind() != SyntaxKind::ConstraintSet {

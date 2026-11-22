@@ -297,7 +297,8 @@ impl Parser<'_> {
             // An operand alone is no constraint, so the constraint is
             // incomplete here and one line break is ignored (LEX-5).
             let relates =
-                (parser.at(EqEq) || parser.at(KwIs) || parser.at_word("in")) && !parser.cut();
+                (parser.at(EqEq) || parser.at(BangEq) || parser.at(KwIs) || parser.at_word("in"))
+                    && !parser.cut();
             if parser.errors == errors && relates {
                 Verdict::Yes
             } else {
