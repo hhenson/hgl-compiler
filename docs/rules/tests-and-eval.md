@@ -11,18 +11,19 @@ parser: done
 
 analyser: done
 
-- One test scope across parts; exports and operator implementations rejected there
+- Unnamed test contexts share a scope across parts; each named test gives its own helpers a private scope. Exports and operator implementations are rejected in test contexts.
 
 ## TST-2
 
 analyser: done
 
-- Production names no test-only declaration; a test-only declaration takes no name of its module; duplicate test names rejected
+- Production names no test-only declaration. Named-test helpers do not take names visible outside their test; within it, one helper per role is admitted under FN-4. Duplicate test names and repeated helper roles reject.
 
 transpiler: partial
 
 - Application entry units link reachable production pieces. Named tests have separate
-  entry units and their own runnable dependency set.
+  entry units and their own runnable dependency set. Helpers of a named test
+  have a separate generated namespace for that test.
 - Left: Production module units can still contain test pieces. The emitter reports a
   missing test block or a return in a test defensively.
 
@@ -59,7 +60,7 @@ parser: done
 
 analyser: partial
 
-- An eval's call is of a function of a module, the temporal definition where there are both (`eval.target`: an operator, a struct)
+- An eval's call is of a module function or one of its named test’s helpers, the temporal definition where there are both (`eval.target`: an operator, a struct)
 - The call's arguments are bound as any call's are, its generic arguments among them: a `const` parameter takes configuration and every other a trace
 - Each positional or named pack capture takes its own trace (FN-8). A heterogeneous pack infers the types it replays from those traces or takes its written types.
 - A cell is written as a `return` is: a T whole or a `delta<T>`, each by its type, for a list, a set, a dictionary, a struct and a tuple; a tuple that is a T is the whole tuple, a null position a published null, and one that is no T, `(null, 3)` of a `tuple<i64, i64>`, its delta, a tuple of its positions; a window's cell is the V that arrived, its delta (TYPE-16), a generic target's window once its arguments are known
