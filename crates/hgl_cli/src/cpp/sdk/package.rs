@@ -115,18 +115,13 @@ pub(super) fn usable(directory: &Path) -> Result<Vec<String>, String> {
                 ));
             }
         };
-        // A needed name's file in either prefix, and the name its library
-        // is loaded by.
+        // A needed name's file in either prefix, and what reading it gave.
         let found = |name: &str| {
             LIBRARY_DIRECTORIES.iter().find_map(|directory_of| {
                 let candidate = directory.join(directory_of).join(name);
-                candidate.is_file().then(|| {
-                    let own = match read(&candidate) {
-                        Read::Whole(Names { own, .. }) => own,
-                        _ => None,
-                    };
-                    (format!("{directory_of}/{name}"), own)
-                })
+                candidate
+                    .is_file()
+                    .then(|| (format!("{directory_of}/{name}"), read(&candidate)))
             })
         };
         if let Some(problem) = needs_problem(shown, &names, &found) {
@@ -137,15 +132,17 @@ pub(super) fn usable(directory: &Path) -> Result<Vec<String>, String> {
 }
 
 /// Where a needed name's library is in one of the prefixes, as it is
-/// shown, and the name it is loaded by, where it has one.
-type Found<'a> = &'a dyn Fn(&str) -> Option<(String, Option<String>)>;
+/// shown, and what reading it gave.
+type Found<'a> = &'a dyn Fn(&str) -> Option<(String, Read)>;
 
 /// What is wrong with the names of the library `shown`, of `names`, among
 /// the four packages' libraries: the first, of the name a program that
 /// links it loads it by and then the names it needs, that neither prefix
-/// holds, or that `found` gives a library of another name for. `found`
-/// gives a file of a name's in one of the prefixes' library directories,
-/// as it is shown, and the name its library is loaded by, where it has one.
+/// holds, or that `found` gives a broken library or one of another name
+/// for. `found` gives a file of a name's in one of the prefixes' library
+/// directories, as it is shown, and what reading it gave: where it is
+/// loaded under that name, it is the file that is loaded, whatever a
+/// package imports.
 fn needs_problem(shown: &str, names: &Names, found: Found) -> Option<String> {
     let loaded = names
         .own
@@ -159,19 +156,27 @@ fn needs_problem(shown: &str, names: &Names, found: Found) -> Option<String> {
         if !FAMILY.iter().any(|family| name.starts_with(family)) {
             continue;
         }
-        let Some((found_shown, own)) = found(name) else {
+        let Some((found_shown, read)) = found(name) else {
             return Some(format!(
                 "holds `{shown}`, which {what}, and neither `{}` nor `{}` holds it",
                 LIBRARY_DIRECTORIES[0], LIBRARY_DIRECTORIES[1]
             ));
         };
-        // A library known by another name: a link to another build's, say.
-        if let Some(own) = own
-            && own != *name
-        {
-            return Some(format!(
-                "holds `{shown}`, which {what}, and `{found_shown}` is `{own}`"
-            ));
+        match read {
+            Read::Broken(why) => {
+                return Some(format!(
+                    "holds `{shown}`, which {what}, and `{found_shown}` is not a whole library: \
+                     {why}"
+                ));
+            }
+            // A library known by another name: a link to another build's,
+            // say.
+            Read::Whole(Names { own: Some(own), .. }) if own != *name => {
+                return Some(format!(
+                    "holds `{shown}`, which {what}, and `{found_shown}` is `{own}`"
+                ));
+            }
+            _ => {}
         }
     }
     None
@@ -397,6 +402,36 @@ mod tests {
 
     use super::{Names, Read, needs_problem, read};
 
+    /// What reading a whole library loaded by `own` gives.
+    fn named(own: &str) -> Read {
+        Read::Whole(Names {
+            own: Some(own.to_string()),
+            needed: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn a_library_needing_one_whose_file_is_broken_cannot_start() {
+        // `libfmtd.so.12.1.0` whole, and `libfmtd.so.12`, which the
+        // loader loads, cut short.
+        let found = |name: &str| {
+            let read = if name == "libfmtd.so.12" {
+                Read::Broken("it is empty".to_string())
+            } else {
+                named(name)
+            };
+            Some((format!("hgraph-deps/lib/{name}"), read))
+        };
+        assert_eq!(
+            needs_problem("hgraph-sdk/lib/libhgraph_runtime.so", &runtime(), &found),
+            Some(
+                "holds `hgraph-sdk/lib/libhgraph_runtime.so`, which needs `libfmtd.so.12`, and \
+                 `hgraph-deps/lib/libfmtd.so.12` is not a whole library: it is empty"
+                    .to_string()
+            )
+        );
+    }
+
     /// The names of a library of the runtime, needing two of the
     /// dependencies and the system's C library.
     fn runtime() -> Names {
@@ -412,8 +447,7 @@ mod tests {
     fn a_library_needing_one_neither_prefix_holds_cannot_start() {
         // The debug SDK beside the release's optimised dependencies.
         let found = |name: &str| {
-            (name != "libfmtd.so.12")
-                .then(|| (format!("hgraph-deps/lib/{name}"), Some(name.to_string())))
+            (name != "libfmtd.so.12").then(|| (format!("hgraph-deps/lib/{name}"), named(name)))
         };
         assert_eq!(
             needs_problem("hgraph-sdk/lib/libhgraph_runtime.so", &runtime(), &found),
@@ -434,7 +468,7 @@ mod tests {
             } else {
                 name
             };
-            Some((format!("hgraph-deps/lib/{name}"), Some(own.to_string())))
+            Some((format!("hgraph-deps/lib/{name}"), named(own)))
         };
         assert_eq!(
             needs_problem("hgraph-sdk/lib/libhgraph_runtime.so", &runtime(), &found),
@@ -446,8 +480,7 @@ mod tests {
         );
         // The system's libraries are the loader's to find.
         let whole = |name: &str| {
-            (name != "libc.so.6")
-                .then(|| (format!("hgraph-deps/lib/{name}"), Some(name.to_string())))
+            (name != "libc.so.6").then(|| (format!("hgraph-deps/lib/{name}"), named(name)))
         };
         assert_eq!(needs_problem("x", &runtime(), &whole), None);
         // A debug fmt's file a link to an optimised one: a program linking
@@ -458,7 +491,7 @@ mod tests {
         };
         let debug_only = |name: &str| {
             name.starts_with("libfmtd")
-                .then(|| (format!("hgraph-deps/lib/{name}"), Some(name.to_string())))
+                .then(|| (format!("hgraph-deps/lib/{name}"), named(name)))
         };
         assert_eq!(
             needs_problem("hgraph-deps/lib/libfmtd.so.12.1.0", &linked, &debug_only),
