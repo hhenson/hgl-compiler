@@ -629,9 +629,21 @@ fn deferred_delta_properties<T>(const value: T, const ready: bool) -> str {
     return change.text
 }
 
+# TYPE-16: the known collection type reaches a local holding its delta.
+const fn change_list_size<U>(value: U) -> delta<list<U>> =>
+    delta<list<U>>(size_modified: 1)
+
+fn deferred_list_delta<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let changed = change_list_size(chosen)
+    let copied = changed
+    return chosen_or_skip(copied.size_modified)
+}
+
 test deferred_delta_properties_fit {
     assert eval deferred_delta_properties(value: "s", ready: true) == ["ready"]
     assert eval deferred_delta_properties(value: "s", ready: false) == ["absent"]
+    assert eval deferred_list_delta(value: "s") == [1]
 }
 
 # FN-9 and GEN-7: the value candidate can supply the graph's store
