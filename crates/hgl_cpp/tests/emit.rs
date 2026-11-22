@@ -2467,11 +2467,7 @@ fn named_test_helpers_have_test_local_cpp_names() {
     assert_eq!(
         tests,
         [
-            (
-                "core_conformance::first_helpers".to_owned(),
-                false,
-                Some(0)
-            ),
+            ("core_conformance::first_helpers".to_owned(), false, Some(0)),
             (
                 "core_conformance::second_helpers".to_owned(),
                 false,
@@ -2490,9 +2486,7 @@ fn named_test_helpers_have_test_local_cpp_names() {
         let helper = format!("t_::helpers_0{owner}_");
         assert!(unit.contains(&format!("namespace {helper}")), "{unit}");
         assert!(
-            unit.contains(&format!(
-                "::hgl::core_conformance::m_::{helper}::adjust("
-            )),
+            unit.contains(&format!("::hgl::core_conformance::m_::{helper}::adjust(")),
             "{unit}"
         );
         if owner < 2 {
