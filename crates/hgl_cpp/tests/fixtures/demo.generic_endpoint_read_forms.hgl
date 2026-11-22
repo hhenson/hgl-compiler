@@ -1,11 +1,13 @@
 module demo.generic_endpoint_read_forms
 
+const fn is_null<T>(value: T?) -> bool => value == null
+
 # ERR-14, ERR-15 and GEN-7: a generic hook uses the concrete endpoint's
 # nullable read form. A later complete publication is readable again.
 fn whole_is_null<T>(probe: i64, value: T) -> bool {
-    when modified(probe) && valid(value) {
+    when modified(probe) && valid<T>(value) {
         let observed: T? = value
-        return observed == null
+        return is_null<T>(observed)
     }
 }
 

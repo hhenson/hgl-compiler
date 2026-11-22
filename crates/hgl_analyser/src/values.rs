@@ -397,16 +397,41 @@ pub(crate) fn reread_instance_body(
 ) -> Option<hir::Body> {
     let owner = &program.modules[module];
     let declared = &owner.declarations[declaration];
-    let (bindings, mut written, calls) = tables(owner);
+    let (bindings, mut written, mut calls) = tables(owner);
     let span = declared.syntax.span();
+    let in_body =
+        |(file, start)| file == declared.at.file && (span.start..span.end).contains(&start);
     let projected: Vec<_> = written
         .iter()
-        .filter(|&(&(file, start), _)| {
-            file == declared.at.file && (span.start..span.end).contains(&start)
-        })
+        .filter(|&(&at, _)| in_body(at))
         .map(|(&at, ty)| (at, project(ty)))
         .collect();
     written.extend(projected.iter().map(|(at, ty)| (*at, ty)));
+    let projected_calls: Vec<_> = calls
+        .iter()
+        .filter(|&(&at, _)| in_body(at))
+        .map(|(&at, call)| {
+            let arguments = call
+                .arguments
+                .iter()
+                .map(|(at, argument)| {
+                    let argument = match argument {
+                        crate::Argument::Type(ty) => crate::Argument::Type(project(ty)),
+                        crate::Argument::Constant(_) => crate::instance::placed(argument, map),
+                    };
+                    (*at, argument)
+                })
+                .collect();
+            (
+                at,
+                CallArguments {
+                    at: call.at,
+                    arguments,
+                },
+            )
+        })
+        .collect();
+    calls.extend(projected_calls.iter().map(|(at, call)| (*at, call)));
     let selecting = RefCell::new(Vec::new());
     let reading = Signature {
         generics: match &owner.details[declaration] {
