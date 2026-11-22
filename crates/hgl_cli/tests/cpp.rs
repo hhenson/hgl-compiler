@@ -1215,6 +1215,34 @@ fn operator_candidates_are_selected_per_instance_on_the_sdk() {
     );
 }
 
+/// GEN-5, GEN-7 and ERR-15: a selected candidate's result takes the
+/// form required by its place in value, node and graph instances.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn operator_instance_results_take_their_context_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("instance-result-context");
+    let file = write(
+        &root,
+        "demo.instance_result_context.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.instance_result_context.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-8 and GEN-10: C++ calls bind the individual inputs of positional
 /// and named packs in value helpers, nodes, and graphs. TST-5: eval
 /// replays the trace of each captured argument.
