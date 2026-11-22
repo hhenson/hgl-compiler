@@ -32,14 +32,14 @@ pub(crate) struct GraphDestinations {
     captures: HashSet<Location>,
     store_arguments: HashSet<Location>,
     tuple_indices: HashSet<Location>,
-    configured_symbols: bool,
+    replay_source: bool,
 }
 
 impl GraphDestinations {
     /// Remembers what the generic body could not check before selection.
     pub(crate) fn pending(body: &Body) -> Self {
         let mut expressions = HashSet::new();
-        let mut configured_symbols = false;
+        let mut replay_source = false;
         let mut captures = HashSet::new();
         let mut store_arguments = HashSet::new();
         let mut tuple_indices = HashSet::new();
@@ -69,18 +69,22 @@ impl GraphDestinations {
                         .map(|value| value.at),
                 );
             }
-            if let ExprKind::DeferredBinary { configuration, .. }
-            | ExprKind::DeferredNegation { configuration, .. } = &value.kind
-            {
-                configured_symbols |= !configuration.is_empty();
-            }
+            replay_source |= match &value.kind {
+                ExprKind::DeferredBinary { configuration, .. }
+                | ExprKind::DeferredNegation { configuration, .. } => !configuration.is_empty(),
+                ExprKind::Call {
+                    callee: Callee::DeferredOperator(_),
+                    ..
+                } => true,
+                _ => false,
+            };
         });
         Self {
             expressions,
             captures,
             store_arguments,
             tuple_indices,
-            configured_symbols,
+            replay_source,
         }
     }
 
@@ -109,12 +113,12 @@ impl GraphDestinations {
             _ => {}
         });
         let owner = &program.modules[module];
-        let (bindings, written, calls) = if self.configured_symbols {
+        let (bindings, written, calls) = if self.replay_source {
             super::tables(owner)
         } else {
             (HashMap::new(), HashMap::new(), HashMap::new())
         };
-        let reading = if self.configured_symbols
+        let reading = if self.replay_source
             && let Detail::Callable(declared) = &owner.details[declaration]
         {
             // EXPR-10 and GEN-8: a contextual option is still read in
@@ -140,7 +144,7 @@ impl GraphDestinations {
             },
             diagnostics,
         );
-        if self.configured_symbols {
+        if self.replay_source {
             typer.instance = map
                 .iter()
                 .map(|(at, argument)| (*at, (*argument).clone()))

@@ -188,6 +188,7 @@ fn check_const_arguments(
         } => (*module, *declaration),
         Callee::Parameter { .. }
         | Callee::Anonymous(_)
+        | Callee::DeferredOperator(_)
         | Callee::DeferredValue
         | Callee::Unread => {
             return;
@@ -367,9 +368,10 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
                 // A callback may capture a connection. A call awaiting
                 // instance selection may choose a temporal candidate
                 // (GEN-7), even with only ordinary arguments.
-                Callee::Parameter { .. } | Callee::Required { .. } | Callee::Unread => {
-                    join(given, Unsettled)
-                }
+                Callee::Parameter { .. }
+                | Callee::Required { .. }
+                | Callee::DeferredOperator(_)
+                | Callee::Unread => join(given, Unsettled),
                 _ => given,
             }
         }
@@ -598,6 +600,28 @@ pub(super) fn record_with(
                         std::mem::swap(&mut typer.locals, locals);
                         settling |= typer.settle_function_call(value);
                         std::mem::swap(&mut typer.locals, locals);
+                    }
+                    return;
+                }
+                NodeMut::Expression(value)
+                    if composition
+                        && matches!(
+                            value.kind,
+                            ExprKind::Call {
+                                callee: Callee::DeferredOperator(_),
+                                ..
+                            }
+                        ) =>
+                {
+                    if let Some(typer) = typer.as_deref_mut() {
+                        std::mem::swap(&mut typer.locals, locals);
+                        let selected = typer.settle_operator(value);
+                        std::mem::swap(&mut typer.locals, locals);
+                        if let Some((kind, ty)) = selected {
+                            value.kind = kind;
+                            value.ty = ty;
+                            settling = true;
+                        }
                     }
                     return;
                 }

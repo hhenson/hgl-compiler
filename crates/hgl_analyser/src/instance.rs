@@ -784,6 +784,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
         }
         Callee::Parameter { .. }
         | Callee::Anonymous(_)
+        | Callee::DeferredOperator(_)
         | Callee::DeferredValue
         | Callee::Unread => {}
     }

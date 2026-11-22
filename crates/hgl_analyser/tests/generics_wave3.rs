@@ -43,6 +43,7 @@ fn called(checked: &Checked, body: &Body) -> Vec<String> {
             }
             Callee::Parameter { .. }
             | Callee::Anonymous(_)
+            | Callee::DeferredOperator(_)
             | Callee::DeferredValue
             | Callee::Unread => {
                 found.push("none".to_string());
@@ -1896,6 +1897,60 @@ fn graph_instances_select_configured_symbols_after_types_settle() {
     assert_eq!(arguments[2].value.ty.to_string(), "f64");
 }
 
+/// GEN-5 and GEN-8: a named operator uses the same written options,
+/// explicit result type and admission checks after its arguments settle.
+#[test]
+fn graph_instances_select_named_operators_after_types_settle() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "operator shifted<T, R>(value: T) -> R\n",
+        "impl const fn shifted(value: i64, amount: i64) -> i64 => value + amount\n",
+        "impl const fn shifted(value: i64, amount: i64) -> f64 => value + amount + 0.5\n",
+        "fn wrapper<T>(const input: T) -> f64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let copied = shifted<i64, f64>{amount: 5}(value: chosen)\n",
+        "    return copied\n",
+        "}\n",
+        "fn incompatible<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return add_(chosen, true)\n",
+        "}\n",
+        "fn admitted() -> f64 => wrapper(1)\n",
+        "fn rejected() -> i64 => incompatible(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:18:25 operator/operator.no_candidate GEN-5"],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    let Stmt::Declare {
+        value: Some(value), ..
+    } = &instance.statements[1]
+    else {
+        panic!("the saved operator result");
+    };
+    let ExprKind::Call {
+        callee: Callee::Candidate { .. },
+        arguments,
+        ..
+    } = &value.kind
+    else {
+        panic!("the selected operator: {:?}", value.kind);
+    };
+    assert_eq!(value.ty.to_string(), "f64");
+    assert_eq!(
+        arguments
+            .iter()
+            .map(|argument| argument.parameter)
+            .collect::<Vec<_>>(),
+        [Some(1), Some(0)]
+    );
+}
+
 /// GEN-7 and EXPR-7: a member name and base survive the source pass
 /// until selection can check the field and choose its read form.
 #[test]
@@ -2467,12 +2522,22 @@ fn graph_instances_follow_completed_function_calls_for_admission() {
         "}\n",
         "fn late() -> i64 => wrapped(1)\n",
         "fn direct() -> i64 => through(1)\n",
+        "operator delegated<V>(value: V) -> V\n",
+        "impl const fn delegated<V>(value: V) -> V => through(value)\n",
+        "fn wrapped_operator<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return delegated(chosen)\n",
+        "}\n",
+        "fn late_operator() -> i64 => wrapped_operator(1)\n",
+        "fn direct_operator() -> i64 => delegated(1)\n",
     ));
     assert_eq!(
         checked.summary(),
         [
             "m.hgl:15:21 constraint/requires.unmet GEN-3",
             "m.hgl:16:23 constraint/requires.unmet GEN-3",
+            "m.hgl:23:30 constraint/requires.unmet GEN-3",
+            "m.hgl:24:32 constraint/requires.unmet GEN-3",
         ],
         "{}",
         checked.report
@@ -2482,7 +2547,7 @@ fn graph_instances_follow_completed_function_calls_for_admission() {
             .report
             .matches("the `requires` of `OnlyText`")
             .count(),
-        2
+        4
     );
 }
 

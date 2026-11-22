@@ -137,7 +137,10 @@ impl Emitter<'_> {
                 return self.missing(at, "an operation a generic declaration requires");
             }
             Callee::Parameter { .. } => return self.missing(at, "an unresolved function argument"),
-            Callee::Anonymous(_) | Callee::DeferredValue | Callee::Unread => {
+            Callee::Anonymous(_)
+            | Callee::DeferredOperator(_)
+            | Callee::DeferredValue
+            | Callee::Unread => {
                 return self.missing(at, "this call");
             }
         };

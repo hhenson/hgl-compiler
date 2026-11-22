@@ -2524,7 +2524,15 @@ fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
 fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<Made>) {
     let mut pending = std::collections::HashSet::new();
     hir::walk_statements(&source.statements, &mut |expression| {
-        if super::calls::pending_function_inference(&expression.kind) {
+        if super::calls::pending_function_inference(&expression.kind)
+            || matches!(
+                expression.kind,
+                ExprKind::Call {
+                    callee: Callee::DeferredOperator(_),
+                    ..
+                }
+            )
+        {
             pending.insert(expression.at);
         }
     });
@@ -2534,7 +2542,7 @@ fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<
     hir::walk_statements(&settled.statements, &mut |expression| {
         if pending.contains(&expression.at)
             && let ExprKind::Call {
-                callee: Callee::Function { generics, .. },
+                callee: Callee::Function { generics, .. } | Callee::Candidate { generics, .. },
                 ..
             } = &expression.kind
             && generics.iter().all(resolved_default_argument)

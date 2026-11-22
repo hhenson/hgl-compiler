@@ -16,7 +16,7 @@ use hgl_diagnostics::Location;
 pub use hgl_lexer::literal::Tenor;
 
 use crate::program::{LocalKind, OperatorRef};
-use crate::types::{Argument as GenericArgument, Type};
+use crate::types::{Argument as GenericArgument, CallArguments, Type};
 
 /// An application's run statement, typed (RUN-1): "its run statement
 /// is `run call` or `eval call`, where the call is of an entry, written
@@ -1031,6 +1031,23 @@ pub struct DeferredOption {
     pub value: Option<Expr>,
 }
 
+/// A named operator whose arguments need the concrete graph instance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeferredOperator {
+    /// The bound operator identity (GEN-4).
+    pub identity: OperatorRef,
+    /// The written argument list, also used to recover a call within `capture`.
+    pub list: Location,
+    /// What the original place expects of the call's result.
+    pub expected: Option<Type>,
+    /// The explicit arguments written after the operator name (GEN-8).
+    pub generics: Option<CallArguments>,
+    /// Which arguments take their type from a candidate, in written order.
+    pub contextual: Vec<bool>,
+    /// Whether this call shares the enclosing `capture`'s argument list.
+    pub captured: bool,
+}
+
 /// What a call calls.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Callee {
@@ -1110,6 +1127,8 @@ pub enum Callee {
     },
     /// A statically selected anonymous function, with explicit lexical captures.
     Anonymous(Box<AnonymousFunction>),
+    /// A named operator awaiting an argument type before selection (GEN-7).
+    DeferredOperator(Box<DeferredOperator>),
     /// A deferred operator call whose candidates are all value functions.
     DeferredValue,
     /// No callee: a name left for the prelude, a function that is
@@ -1139,6 +1158,7 @@ impl Callee {
             Callee::Required { .. }
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
+            | Callee::DeferredOperator(_)
             | Callee::DeferredValue
             | Callee::Unread => None,
         }
@@ -1153,6 +1173,7 @@ impl Callee {
             Callee::Required { .. }
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
+            | Callee::DeferredOperator(_)
             | Callee::DeferredValue
             | Callee::Unread => &[],
         }
@@ -1167,6 +1188,7 @@ impl Callee {
             Callee::Required { .. }
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
+            | Callee::DeferredOperator(_)
             | Callee::DeferredValue
             | Callee::Unread => &[],
         }

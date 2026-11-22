@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
+use super::calls::arguments_of;
 use super::candidates::{Chosen, Given, Key, Settled, Wanted, typed_by_place};
 use super::constants::{constant_text, generic_default};
 use super::fit::{open, whole};
@@ -17,9 +18,9 @@ use super::inference::{
 };
 use super::{Candidate, Typer};
 use crate::declared::{agree, names_parameter, substitute_within};
-use crate::hir::{self, Callee, Expr, ExprKind, Form};
+use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
 use crate::program::{OperatorRef, Program, Role};
-use crate::syntax::has_token;
+use crate::syntax::{has_token, name_token};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, NamedKind, Pack,
     Signature, Type,
@@ -204,6 +205,19 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         generics: Option<&CallArguments>,
     ) -> (ExprKind, Type) {
+        self.call_operator_with(name, list, operator, expected, generics, None)
+    }
+
+    /// Read the named call, reusing settled argument readings in an instance.
+    fn call_operator_with(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        operator: OperatorRef,
+        expected: Option<&Type>,
+        generics: Option<&CallArguments>,
+        replay: Option<(&[hir::Argument], &[bool])>,
+    ) -> (ExprKind, Type) {
         let program = self.program;
         let Some(Detail::Callable(public)) = program.modules[operator.module]
             .details
@@ -256,6 +270,16 @@ impl<'a> Typer<'a> {
                 written.iter().map(|(key, node)| (key, node)),
                 &mut explicit,
             );
+        if replay.is_some() && named_generics {
+            let map: Vec<_> = self
+                .instance
+                .iter()
+                .map(|(at, argument)| (*at, argument))
+                .collect();
+            for argument in explicit.iter_mut().flatten() {
+                *argument = crate::instance::placed(argument, &map);
+            }
+        }
         let mut found = explicit.clone();
         from_place(public, expected, &mut found);
         let mut context = None;
@@ -287,14 +311,20 @@ impl<'a> Typer<'a> {
                     written.iter().cloned(),
                     Some(&inferred),
                     pack.as_ref(),
+                    replay,
                 );
                 self.take_back(mark, false);
                 self.infer_operator_inputs(public, &mut inferred, &public_inputs(public, &probe));
             }
             context = Some(inferred);
         }
-        let mut given =
-            self.read_operator_arguments(public, written, context.as_deref(), pack.as_ref());
+        let mut given = self.read_operator_arguments(
+            public,
+            written,
+            context.as_deref(),
+            pack.as_ref(),
+            replay,
+        );
         self.constants_given(&given, public);
         if self.diagnostics.len() == reported {
             self.missing_configuration(
@@ -311,6 +341,30 @@ impl<'a> Typer<'a> {
         let unknown = given
             .iter()
             .any(|given| !given.by_place && open(given.ty()));
+        if self.graph
+            && replay.is_none()
+            && !faulty
+            && unknown
+            && given
+                .iter()
+                .any(|given| !given.by_place && matches!(given.ty(), Type::Unknown))
+        {
+            // GEN-7: the arguments can settle only after an earlier
+            // operator in this graph has selected its instance candidate.
+            let deferred = hir::DeferredOperator {
+                identity: operator,
+                list: self.at(list),
+                expected: expected.cloned(),
+                generics: generics.cloned(),
+                contextual: given.iter().map(|given| given.by_place).collect(),
+                captured: self.callable.is_some(),
+            };
+            let mut kind = self.unselected(given, Form::Named);
+            if let ExprKind::Call { callee, .. } = &mut kind {
+                *callee = Callee::DeferredOperator(Box::new(deferred));
+            }
+            return (kind, Type::Unknown);
+        }
         if faulty || unknown {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
@@ -466,6 +520,72 @@ impl<'a> Typer<'a> {
         )
     }
 
+    /// GEN-5 and GEN-7: reapply named selection to the original written
+    /// call with the types and categories of the cooked arguments.
+    pub(super) fn settle_operator(&mut self, call: &Expr) -> Option<(ExprKind, Type)> {
+        let ExprKind::Call {
+            callee: Callee::DeferredOperator(deferred),
+            arguments,
+            ..
+        } = &call.kind
+        else {
+            return None;
+        };
+        let ready = arguments
+            .iter()
+            .zip(&deferred.contextual)
+            .all(|(argument, contextual)| {
+                *contextual
+                    || whole(&argument.value.ty)
+                        && self.category(&argument.value) != ValueCategory::Unsettled
+            });
+        if !ready {
+            return None;
+        }
+        let list = self.node_at(deferred.list)?;
+        let parent = list.parent()?;
+        let callable = if deferred.captured {
+            Some(arguments_of(&list).into_iter().next()?.1)
+        } else {
+            None
+        };
+        let named = match &callable {
+            Some(callable) => callable.clone(),
+            None if parent.kind() == SyntaxKind::TypedConstructor => parent,
+            None => parent.children().next()?,
+        };
+        let name = name_token(&named)?;
+        let map: Vec<_> = self
+            .instance
+            .iter()
+            .map(|(at, argument)| (*at, argument))
+            .collect();
+        let expected = deferred
+            .expected
+            .as_ref()
+            .map(|ty| substitute_within(ty, &map));
+        let written = deferred.generics.as_ref().map(|given| CallArguments {
+            at: given.at,
+            arguments: given
+                .arguments
+                .iter()
+                .map(|(at, argument)| (*at, crate::instance::placed(argument, &map)))
+                .collect(),
+        });
+        self.index_instance_locals();
+        let previous = std::mem::replace(&mut self.callable, callable);
+        let selected = self.call_operator_with(
+            &name,
+            &list,
+            deferred.identity,
+            expected.as_ref(),
+            written.as_ref(),
+            Some((arguments, &deferred.contextual)),
+        );
+        self.callable = previous;
+        Some(selected)
+    }
+
     /// Read the arguments in source order. FN-17's static arguments
     /// take their context from the operator's public function template.
     fn read_operator_arguments(
@@ -474,6 +594,7 @@ impl<'a> Typer<'a> {
         written: impl IntoIterator<Item = (Key, SyntaxNode)>,
         context: Option<&[Option<Argument>]>,
         pack: Option<&hir::TypePackArgument>,
+        replay: Option<(&[hir::Argument], &[bool])>,
     ) -> Vec<Given> {
         let resolved: Vec<_> = context
             .unwrap_or_default()
@@ -493,8 +614,25 @@ impl<'a> Typer<'a> {
             .count();
         written
             .into_iter()
-            .map(|(key, node)| {
-                if context.is_some()
+            .enumerate()
+            .map(|(position, (key, node))| {
+                let explicit = match &key {
+                    Key::Position(position) => position
+                        .checked_sub(fixed)
+                        .and_then(|index| pack?.types.get(index)),
+                    _ => None,
+                };
+                if let Some((arguments, contextual)) = replay {
+                    let by_place = contextual[position];
+                    Given {
+                        key,
+                        node,
+                        value: arguments[position].value.clone(),
+                        by_place,
+                        explicit: explicit.cloned(),
+                        retried: by_place,
+                    }
+                } else if context.is_some()
                     && let Some(pattern) = public_function(public, &key)
                     && let Type::Function(template) = substitute_within(pattern, &map)
                 {
@@ -518,11 +656,7 @@ impl<'a> Typer<'a> {
                         explicit: None,
                         retried: false,
                     }
-                } else if let Key::Position(position) = &key
-                    && let Some(ty) = position
-                        .checked_sub(fixed)
-                        .and_then(|index| pack?.types.get(index))
-                {
+                } else if let Some(ty) = explicit {
                     let value = self.expression(&node, Some(ty));
                     let value = self.fit_input(value, ty, "the explicitly typed pack argument");
                     Given {

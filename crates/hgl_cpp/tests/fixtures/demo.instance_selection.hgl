@@ -242,6 +242,23 @@ fn deferred_configured_division<T, const Policy: ZeroPolicy = .ieee>(const value
     return x /{zero: Policy} 2
 }
 
+# GEN-5: a named operator selects once its deferred argument settles.
+fn deferred_named_add<T>(const value: T) -> i64 {
+    let x = if live_helper(value) > 0 { 1 }
+    return add_(x, 1)
+}
+
+# GEN-8: the call retains its requested result and configured argument.
+operator shifted<T, R>(value: T) -> R
+impl const fn shifted(value: i64, amount: i64) -> i64 => value + amount
+impl const fn shifted(value: i64, amount: i64) -> f64 => value + amount + 0.5
+
+fn deferred_named_option<T>(const value: T) -> f64 {
+    let x = if live_helper(value) > 0 { 1 }
+    let copied = shifted<i64, f64>{amount: 5}(value: x)
+    return copied
+}
+
 test an_instance_selects_unary_minus {
     assert eval deferred_negation(value: 3) == [-1]
     assert eval deferred_negation(value: 0) == []
@@ -297,6 +314,8 @@ fn selected_case<T>(const value: T) -> i64 {
 test an_instance_settles_its_graph_conditions {
     assert eval deferred_configured_comparison(value: 3) == [true]
     assert eval deferred_configured_division(value: 3) == [1.25]
+    assert eval deferred_named_add(value: 3) == [2]
+    assert eval deferred_named_option(value: 3) == [6.5]
     assert eval loop_scalar(value: "s") == [5]
     assert eval wiring_if(value: 3) == [1]
     assert eval wiring_if(value: "s") == [-1]
