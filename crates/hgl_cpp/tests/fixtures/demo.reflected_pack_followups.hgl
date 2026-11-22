@@ -47,6 +47,19 @@ test passed_pack_requirement_is_checked {
     assert relay_again(integer) == 43
 }
 
+const fn reads_absent_member<...Ps>(f: const fn(...{Ps}) -> i64) -> i64 {
+    let unused: Ps[absent_key]? = null
+    return 1
+}
+
+const fn relay_member_read<...Ps>(f: const fn(...{Ps}) -> i64) -> i64 =>
+    reads_absent_member(f)
+
+test passed_pack_member_type_is_checked {
+    # expect-error(type, "pack.name")
+    assert relay_member_read(integer) == 1
+}
+
 test passed_pack_bound_is_checked {
     # expect-error(type, "pack.cardinality")
     assert relay_bounded(two_inputs) == 51
@@ -86,11 +99,16 @@ impl const fn scale_operator{by: f64}(value: f64) -> f64 => value * by
 const fn apply(f: const fn(f64) -> f64, value: f64) -> f64 => f(value)
 const fn only_value<...Ps{1}>(f: const fn(...{Ps}) -> f64) -> i64
     requires value_key in arg_keys(Ps) => 48
+const fn fixed_prefix<...Ps, ...As>(
+    f: const fn(f64, ...{Ps}) -> f64, args: ...{As for f},
+) -> i64 => 52
 
 test callback_configuration_defaults {
     assert apply(scale, 3.0) == 6.0
     assert apply(scale_operator, 4.0) == 8.0
     assert apply(scale_operator<f64>, 5.0) == 10.0
+    assert fixed_prefix(scale_operator<f64>, 3.0) == 52
+    assert fixed_prefix(scale_operator<f64>, value: 4.0) == 52
     assert only_value(scale) == 48
 }
 

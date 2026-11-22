@@ -420,7 +420,7 @@ fn reflected_pack_followups_reject_invalid_calls() {
         text(&output.stderr)
     );
     assert!(
-        stdout.contains("rejection cases: 8 passed, 0 failed"),
+        stdout.contains("rejection cases: 9 passed, 0 failed"),
         "{stdout}"
     );
 }

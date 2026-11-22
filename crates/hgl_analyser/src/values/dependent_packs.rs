@@ -426,16 +426,20 @@ impl Typer<'_> {
         packs
     }
 
-    /// Check reflected bounds now that the caller has supplied every key.
-    pub(super) fn check_forwarded_pack_counts(
+    /// Check reflected bounds and written member types now that the
+    /// caller has supplied the pack's keys (GEN-10, GEN-17).
+    pub(super) fn check_forwarded_packs(
         &mut self,
         at: Location,
-        callee: (usize, usize),
+        (module, declaration): (usize, usize),
+        arguments: &[GenericArgument],
         packs: &[TypePackArgument],
     ) {
-        let Detail::Callable(signature) = &self.program.modules[callee.0].details[callee.1] else {
+        let unit = &self.program.modules[module];
+        let Detail::Callable(signature) = &unit.details[declaration] else {
             return;
         };
+        let before = self.diagnostics.len();
         for parameter in &signature.parameters {
             let Type::Function(template) = &parameter.ty else {
                 continue;
@@ -453,6 +457,18 @@ impl Typer<'_> {
                         pack.types.len() as u64,
                     );
                 }
+            }
+        }
+        if self.diagnostics.len() == before {
+            let map: Vec<_> = signature
+                .generics
+                .iter()
+                .map(|generic| generic.at)
+                .zip(arguments)
+                .collect();
+            let reflected = PackTypes::new(&signature.generics, packs);
+            if let Some(fault) = reflected.written_member_fault(unit, declaration, &map) {
+                self.pack_member_fault(at, &fault);
             }
         }
     }

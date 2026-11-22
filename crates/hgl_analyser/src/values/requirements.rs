@@ -2345,7 +2345,7 @@ pub(super) fn instances_hold(
                     for &root in &from {
                         if forwarded {
                             let reported = typer.diagnostics.len();
-                            typer.check_forwarded_pack_counts(root, callee, &type_packs);
+                            typer.check_forwarded_packs(root, callee, &generics, &type_packs);
                             if typer.diagnostics.len() == reported {
                                 typer.pack_requires_met(root, callee, &generics, &type_packs);
                             }

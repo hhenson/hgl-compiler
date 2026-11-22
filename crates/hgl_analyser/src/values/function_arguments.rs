@@ -1090,11 +1090,12 @@ fn reflected_arguments(
         .collect();
     // Fixed inputs specify their own types even where the enclosing
     // declaration supplies them or the callback has a default (FN-17).
-    for (index, input) in template.parameters.iter().enumerate() {
+    for (index, input) in template.ordinary_parameters().enumerate() {
         if whole(input.ty())
+            && let Some(slot) = Key::Position(index).public_parameter(public)
             && given
                 .iter()
-                .all(|given| given.key.public_parameter(public) != Some(index))
+                .all(|given| given.key.public_parameter(public) != Some(slot))
         {
             given.push(callback_operand(index, node, at, input.ty().clone()));
         }
