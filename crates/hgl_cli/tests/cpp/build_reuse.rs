@@ -620,7 +620,8 @@ fn a_test_waits_for_its_workspaces_build() {
         return;
     }
     let root = scratch("build-lock");
-    let source = write(&root, "calc.hgl", CALC);
+    let example = "/** A test from the module's documentation.\n\nExamples:\n    ```hgl\n    assert true\n    ```\n*/\n";
+    let source = write(&root, "calc.hgl", &format!("{example}{CALC}"));
     let ninja = NinjaTrace::new(&root);
     let workspace = argument(&ninja.workspace);
     let mut build = ninja
@@ -646,6 +647,14 @@ fn a_test_waits_for_its_workspaces_build() {
         .unwrap();
     success(build.wait_with_output().unwrap());
     assert!(success(test.wait_with_output().unwrap()).contains("demo.calc::sums"));
+    let selected = "demo.calc::[module]#example-1";
+    let example = ninja
+        .hgl(&[
+            "test", &source, "--target", "cpp", "--keep", &workspace, "--test", selected,
+        ])
+        .output()
+        .unwrap();
+    assert!(success(example).contains(&format!("passed   executable  {selected}")));
     assert_eq!(ninja.calls(), 1);
 }
 

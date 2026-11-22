@@ -54,6 +54,9 @@ code, pre {
 code { overflow-wrap: anywhere; padding: .14em .24em; }
 pre { overflow: auto; padding: .8rem 1rem; }
 pre code { padding: 0; }
+figure[data-example] { margin: 1rem 0; }
+figure[data-example] pre { margin-top: .25rem; }
+figure[data-example] figcaption { color: var(--muted); font-size: .9rem; }
 .signature { white-space: pre-wrap; overflow-wrap: anywhere; }
 .source, .comment { color: var(--muted); }
 .keyword { color: var(--accent); font-weight: 700; }

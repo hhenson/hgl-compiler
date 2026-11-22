@@ -9,7 +9,6 @@ use std::collections::BTreeMap;
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::HasSpan;
 use hgl_parser::ast::{AstNode, SourceFile};
-use hgl_source::Span;
 
 use crate::program::{Module, ModuleFile, Program};
 use crate::{ParsedFile, codes, error};
@@ -21,21 +20,17 @@ struct Entry<'a> {
     path_at: Location,
     /// Where its part name is written, when it has one.
     part_at: Option<Location>,
-    /// The file's `omit` list.
-    omit: &'a [Span],
+    parsed: &'a ParsedFile,
     /// True for the file of an application (UNIT-14).
     application: bool,
 }
 
 /// Builds the program's modules, each with its files and nothing else
-/// yet, and the `omit` lists of those files in the same order.
-///
-/// `'a` is a lifetime: it says the lists returned are borrowed from
-/// `files` and live as long as it does.
+/// yet, and the corresponding parsed inputs in the same order.
 pub(crate) fn assemble<'a>(
     files: &'a [ParsedFile],
     diagnostics: &mut Diagnostics,
-) -> (Program, Vec<Vec<&'a [Span]>>) {
+) -> (Program, Vec<Vec<&'a ParsedFile>>) {
     // A `BTreeMap` keeps its keys in order, so the modules come out in
     // order of path whatever order the files came in.
     let mut by_path: BTreeMap<String, Vec<Entry<'a>>> = BTreeMap::new();
@@ -70,13 +65,13 @@ pub(crate) fn assemble<'a>(
                 imports: Vec::new(),
                 syntax: source,
             },
-            omit: &parsed.omit,
+            parsed,
             application,
         });
     }
 
     let mut program = Program::default();
-    let mut omits = Vec::new();
+    let mut module_files = Vec::new();
     for (path, mut entries) in by_path {
         // The unnamed file first, then the parts by name: `None` sorts
         // before `Some`. The sort is stable, so files that tie keep the
@@ -103,7 +98,7 @@ pub(crate) fn assemble<'a>(
         } else {
             check_parts(&path, &entries, diagnostics);
         }
-        omits.push(entries.iter().map(|entry| entry.omit).collect());
+        module_files.push(entries.iter().map(|entry| entry.parsed).collect());
         let application = entries.first().is_some_and(|entry| entry.application);
         program.modules.push(Module {
             path,
@@ -133,7 +128,7 @@ pub(crate) fn assemble<'a>(
             graph_return_checks: Vec::new(),
         });
     }
-    (program, omits)
+    (program, module_files)
 }
 
 /// UNIT-1: at most one unnamed file, and unique part names. `entries` is

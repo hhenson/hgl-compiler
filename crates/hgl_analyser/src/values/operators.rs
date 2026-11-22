@@ -300,6 +300,7 @@ impl<'a> Typer<'a> {
             &unit.declarations[operator.declaration],
             dependent_pack,
         );
+        let candidate_functions = !candidates.is_empty();
         let written =
             self.operator_arguments(name, list, (public, dependent), &options, pack.as_ref());
         let named_generics = self.diagnostics.len() == reported
@@ -350,6 +351,7 @@ impl<'a> Typer<'a> {
                     Some(&inferred),
                     pack.as_ref(),
                     replay,
+                    false,
                 );
                 self.take_back(mark, false);
                 self.infer_operator_inputs(public, &mut inferred, &public_inputs(public, &probe));
@@ -362,6 +364,7 @@ impl<'a> Typer<'a> {
             context.as_deref(),
             pack.as_ref(),
             replay,
+            candidate_functions,
         );
         self.constants_given(&given, public);
         if self.diagnostics.len() == reported {
@@ -378,16 +381,17 @@ impl<'a> Typer<'a> {
         let faulty = self.diagnostics.len() != reported;
         let unknown = given
             .iter()
-            .any(|given| !given.by_place && open(given.ty()));
+            .any(|given| !given.by_place && !given.by_function && open(given.ty()));
         if self.graph
             && replay.is_none()
             && !faulty
             && given.iter().any(|given| {
-                if given.by_place {
-                    self.contextual_operator_argument_pending(&given.value, false)
-                } else {
-                    !whole(given.ty())
-                }
+                !given.by_function
+                    && if given.by_place {
+                        self.contextual_operator_argument_pending(&given.value, false)
+                    } else {
+                        !whole(given.ty())
+                    }
             })
         {
             // GEN-7: the arguments can settle only after an earlier
@@ -397,7 +401,10 @@ impl<'a> Typer<'a> {
                 list: self.at(list),
                 expected: expected.cloned(),
                 generics: generics.cloned(),
-                contextual: given.iter().map(|given| given.by_place).collect(),
+                contextual: given
+                    .iter()
+                    .map(|given| given.by_place || given.by_function)
+                    .collect(),
                 captured: self.callable.is_some(),
             };
             let mut kind = self.unselected(given, Form::Named);
@@ -553,7 +560,8 @@ impl<'a> Typer<'a> {
             written: result_written,
             callback: None,
         };
-        let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
+        let ((mut selected, untold), function_errors) =
+            self.admitted_with_function_errors(operator, &candidates, &given, &wanted);
         // EXPR-12: "Resolve configuration that selects an expression's
         // source result type during source checking." An option a
         // candidate's condition reads is given here as no constant this
@@ -609,6 +617,12 @@ impl<'a> Typer<'a> {
             // `list<i64>`. The tie is then not reported, and the call
             // has no type.
             if selected.len() > 1 && expected.is_some_and(open) {
+                return (self.unselected(given, Form::Named), Type::Unknown);
+            }
+            if selected.is_empty() && !function_errors.is_empty() {
+                for diagnostic in function_errors {
+                    self.diagnostics.emit(diagnostic);
+                }
                 return (self.unselected(given, Form::Named), Type::Unknown);
             }
             let diagnostic = self.no_one_candidate(
@@ -740,8 +754,9 @@ impl<'a> Typer<'a> {
         Some(selected)
     }
 
-    /// Read the arguments in source order. FN-17's static arguments
-    /// take their context from the operator's public function template.
+    /// Read the arguments in source order. The public reading of a
+    /// static argument can inform the output request (GEN-2, FN-17).
+    /// GEN-6 leaves its final function template to each candidate.
     fn read_operator_arguments(
         &mut self,
         (public, declared, dependent): (&Signature, &Declaration, Option<&DependentPack>),
@@ -749,6 +764,7 @@ impl<'a> Typer<'a> {
         context: Option<&[Option<Argument>]>,
         pack: Option<&hir::TypePackArgument>,
         replay: Option<ReplayedCall<'_>>,
+        candidate_functions: bool,
     ) -> Vec<Given> {
         let resolved: Vec<_> = context
             .unwrap_or_default()
@@ -799,6 +815,7 @@ impl<'a> Typer<'a> {
                         node: node.clone(),
                         value: value.clone(),
                         by_place: false,
+                        by_function: false,
                         explicit: None,
                         retried: false,
                     },
@@ -816,6 +833,17 @@ impl<'a> Typer<'a> {
             .into_iter()
             .enumerate()
             .map(|(position, (key, node, ready))| {
+                let public_type = public_function(public, &key);
+                let dependent_function = dependent.is_some_and(|pack| {
+                    key.public_parameter(public)
+                        .is_some_and(|index| public.parameters[index].at == pack.function)
+                });
+                // A reflected pack needs its public reading to establish
+                // the arguments the operator admits (GEN-17).
+                let by_function = candidate_functions
+                    && !dependent_function
+                    && matches!(public_type, Some(Type::Function(template)) if template.named_pack.is_none())
+                    && ready.is_none();
                 let explicit = match &key {
                     Key::Position(position) => position
                         .checked_sub(fixed)
@@ -823,14 +851,15 @@ impl<'a> Typer<'a> {
                     _ => None,
                 };
                 if let Some(replayed) = replay {
-                    let by_place = replayed.contextual[position];
+                    let by_place = replayed.contextual[position] && !by_function;
                     Given {
                         key,
                         node,
                         value: replayed.arguments[position].value.clone(),
                         by_place,
+                        by_function,
                         explicit: explicit.cloned(),
-                        retried: by_place,
+                        retried: by_place || by_function,
                     }
                 } else if let Some(value) = ready {
                     Given {
@@ -838,18 +867,15 @@ impl<'a> Typer<'a> {
                         node,
                         value,
                         by_place: false,
+                        by_function: false,
                         explicit: None,
                         retried: false,
                     }
                 } else if context.is_some()
-                    && let Some(pattern) = public_function(public, &key)
+                    && let Some(pattern) = public_type
                     && let Type::Function(template) = substitute_within(pattern, &map)
                 {
-                    let reported = self.diagnostics.len();
-                    let inputs = if dependent.is_some_and(|pack| {
-                        key.public_parameter(public)
-                            .is_some_and(|index| public.parameters[index].at == pack.function)
-                    }) {
+                    let inputs = if dependent_function {
                         CallbackInputs {
                             supplied: Some(&supplied),
                             excluded: &excluded,
@@ -857,24 +883,20 @@ impl<'a> Typer<'a> {
                     } else {
                         CallbackInputs::default()
                     };
-                    let value = self.function_argument_with_inputs(&node, &template, &inputs);
-                    if self.diagnostics.len() == reported && !whole(&value.ty) {
-                        self.diagnostics.emit(error(
-                            Category::Type,
-                            codes::GENERIC_UNRESOLVED,
-                            self.at(&node),
-                            "the call does not determine every type in this function argument"
-                                .to_string(),
-                            "FN-17",
-                        ));
+                    let mark = by_function.then(|| self.mark());
+                    let mut value = self.operator_function_argument(&node, &template, &inputs);
+                    if mark.is_some_and(|mark| !self.take_back(mark, false)) {
+                        value.kind = ExprKind::Unread;
+                        value.ty = Type::Unknown;
                     }
                     Given {
                         key,
                         node,
                         value,
                         by_place: false,
+                        by_function,
                         explicit: None,
-                        retried: false,
+                        retried: by_function,
                     }
                 } else if let Some(ty) = explicit {
                     let value = self.expression(&node, Some(ty));
@@ -884,6 +906,7 @@ impl<'a> Typer<'a> {
                         node,
                         value,
                         by_place: false,
+                        by_function: false,
                         explicit: Some(ty.clone()),
                         retried: false,
                     }
@@ -931,7 +954,7 @@ impl<'a> Typer<'a> {
         let takes: Vec<String> = given
             .iter()
             .map(|given| {
-                let value = if given.by_place {
+                let value = if given.by_place || given.by_function {
                     given.node.text().to_string().trim().to_string()
                 } else {
                     given.ty().to_string()
@@ -1160,6 +1183,7 @@ impl<'a> Typer<'a> {
         Given {
             key,
             by_place,
+            by_function: false,
             value,
             explicit: None,
             retried,
@@ -1482,7 +1506,7 @@ impl<'a> Typer<'a> {
             .map(|given| hir::Argument {
                 parameter: None,
                 pack: None,
-                value: if given.retried {
+                value: if given.retried && !given.by_function {
                     self.expression(&given.node, Some(&Type::Unknown))
                 } else {
                     given.value

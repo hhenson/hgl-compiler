@@ -155,9 +155,16 @@ fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
     let module = &program.modules[index];
     // Where each declaration is written: for each file, the start, the
     // end and the position of each of its declarations, in order of
-    // start. No declaration is written inside another.
+    // start. An example's helpers share positions with the comment of
+    // another declaration; they are outside that declaration's code (SDOC-6).
     let mut written: HashMap<FileId, Vec<(u32, u32, usize)>> = HashMap::new();
     for (position, declaration) in module.declarations.iter().enumerate() {
+        if declaration
+            .test_owner
+            .is_some_and(|test| module.tests[test].documentation_example)
+        {
+            continue;
+        }
         let span = declaration.syntax.span();
         written
             .entry(module.files[declaration.file].file)
@@ -205,7 +212,13 @@ fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
     };
 
     let mut found = Vec::new();
-    for used in &module.uses {
+    // SDOC-6: a use at a comment's location belongs to its example's
+    // test, so it cannot add a dependency to the documented declaration.
+    for used in module
+        .uses
+        .iter()
+        .filter(|used| !used.documentation_example)
+    {
         let Binding::Declarations {
             module: bound,
             declarations,

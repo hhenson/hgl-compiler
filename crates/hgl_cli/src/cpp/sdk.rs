@@ -501,6 +501,21 @@ impl Toolchain {
         }
     }
 
+    /// `reason`, a configure's failure, said of this toolchain's prefixes
+    /// where hgraph's package found no package of a dependency: the prefix
+    /// is incomplete. hgraph's own message asks for its package's fetching,
+    /// which every configure here turns off ([`CONFINED`]).
+    fn incomplete(&self, reason: String) -> String {
+        match missing_package(&reason) {
+            Some(package) => format!(
+                "the dependency prefix {} is incomplete: it holds no CMake package of {package}, \
+                 which hgraph's package needs",
+                self.hgraph.deps.display()
+            ),
+            None => reason,
+        }
+    }
+
     /// Ninja is needed on a build miss, after reuse has been considered.
     pub(super) fn ninja(&self) -> Result<&Path, String> {
         self.ninja.as_deref().ok_or_else(|| {
@@ -679,7 +694,8 @@ impl Toolchain {
             // description's program finds it.
             .arg("-DCMAKE_INSTALL_LIBDIR=lib")
             .arg("-DBUILD_TESTING=OFF");
-        run("the runtime library's configuration", &mut configure)?;
+        run("the runtime library's configuration", &mut configure)
+            .map_err(|reason| self.incomplete(reason))?;
         let mut built = cmake_command(cmake);
         built.arg("--build").arg(&build);
         if let Some(jobs) = jobs {
@@ -734,7 +750,8 @@ impl Toolchain {
                 self.build_type().to_uppercase()
             ))
             .arg(format!("-DHGL_RUNTIME={}", runtime.display()));
-        run("the description of a build against the SDK", &mut configure)?;
+        run("the description of a build against the SDK", &mut configure)
+            .map_err(|reason| self.incomplete(reason))?;
         let target = probe_target(&build.join(".cmake/api/v1/reply"))?;
         let mut description = description_of(&target, self.family, &self.compiler)?;
         description.link.extend(self.family.link_flags(self.lld));
@@ -1076,6 +1093,17 @@ pub(super) fn library_path(description: &Description) -> Option<(&'static str, O
         .or(inherited)
         .filter(|value| !value.is_empty())
         .map(|value| (variable, value))
+}
+
+/// The dependency hgraph's CMake package found no package of, where a
+/// configure's output says so: `Missing NAME; install its CMake package`.
+fn missing_package(printed: &str) -> Option<&str> {
+    printed.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("Missing ")?
+            .split_once("; install its CMake package")
+            .map(|(name, _)| name)
+    })
 }
 
 /// Runs `command` to its end; `what` names it in the reason it failed,
@@ -1637,6 +1665,26 @@ mod tests {
         // A debug build that links the optimised libraries builds its
         // runtime library for debugging all the same.
         assert_ne!(ordinary, toolchain(&libexec, Build::Optimised, true).key());
+    }
+
+    #[test]
+    fn a_dependency_prefix_lacking_a_package_is_said_to_be_incomplete() {
+        let printed = "CMake Error at .../HgraphFetchDependencies.cmake:36 (message):\n  \
+                       Missing spdlog; install its CMake package or enable\n  \
+                       HGRAPH_FETCH_MISSING_DEPENDENCIES\n";
+        assert_eq!(super::missing_package(printed), Some("spdlog"));
+        assert_eq!(super::missing_package("-- Configuring done"), None);
+        let said = toolchain(Path::new("libexec"), Build::Optimised, false).incomplete(format!(
+            "the runtime library's configuration failed:\n{printed}"
+        ));
+        assert_eq!(
+            said,
+            format!(
+                "the dependency prefix {} is incomplete: it holds no CMake package of spdlog, \
+                 which hgraph's package needs",
+                Path::new("libexec").join("hgraph-deps").display()
+            )
+        );
     }
 
     #[test]

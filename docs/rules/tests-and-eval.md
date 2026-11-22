@@ -180,6 +180,7 @@ runner: done
 runner: done
 
 - Invalid metadata and surviving-source errors stop the run, and nothing is then executed; selectors; counts of rejection cases and of tests passed, failed and not run
+- The given source roots determine which modules' named tests and documentation examples are checked and run.
 
 transpiler: partial
 

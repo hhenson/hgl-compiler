@@ -77,7 +77,7 @@ mod windows;
 pub(crate) use apps::APPLICATION;
 pub(crate) use composites::Layout;
 pub(crate) use names::{
-    identifier, module_namespace, program_names, string, test_namespace, testing,
+    module_namespace, program_names, string, test_identifier, test_namespace, testing,
 };
 
 /// What writing a module gave.

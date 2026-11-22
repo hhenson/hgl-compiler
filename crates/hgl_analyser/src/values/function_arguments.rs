@@ -10,18 +10,19 @@ use super::candidates::{
 };
 use super::constants::generic_default;
 use super::dependent_packs::PackTypes;
-use super::fit::whole;
+use super::fit::{accepts_float, is_integer_literal, whole};
 use super::forwarded_packs::spread_operands;
-use super::inference::{ExplicitGenerics, infer, pack_bounds, type_pack};
+use super::inference::{ExplicitGenerics, infer, mentions, pack_bounds, type_pack};
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{
-    AnonymousFunction, Callee, Expr, ExprKind, Form, TypePackArgument, ValueCategory,
+    AnonymousFunction, Callee, Expr, ExprKind, Form, Node, Stmt, TypePackArgument, ValueCategory,
+    walk_statement_nodes,
 };
 use crate::program::{Declaration, OperatorRef, Role};
 use crate::syntax::{child, name_token, ungrouped};
 use crate::types::{
     Argument, CallArguments, ConstantValue, Detail, FunctionParameter, FunctionType, GenericKind,
-    Pack, Parameter, Signature, Type,
+    GenericParameter, Pack, Parameter, Signature, Type,
 };
 use crate::{codes, error, local_error};
 
@@ -29,6 +30,27 @@ impl<'a> Typer<'a> {
     /// Read an argument the callee expects to be a function known at compile time.
     pub(super) fn function_argument(&mut self, node: &SyntaxNode, template: &FunctionType) -> Expr {
         self.function_argument_with_inputs(node, template, &CallbackInputs::default())
+    }
+
+    /// FN-17: an operator call must determine its static argument's type.
+    pub(super) fn operator_function_argument(
+        &mut self,
+        node: &SyntaxNode,
+        template: &FunctionType,
+        inputs: &CallbackInputs<'_>,
+    ) -> Expr {
+        let reported = self.diagnostics.len();
+        let value = self.function_argument_with_inputs(node, template, inputs);
+        if self.diagnostics.len() == reported && !whole(&value.ty) {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::GENERIC_UNRESOLVED,
+                self.at(node),
+                "the call does not determine every type in this function argument".to_string(),
+                "FN-17",
+            ));
+        }
+        value
     }
 
     /// FN-17: an operator named at a reflected template selects by the
@@ -250,7 +272,13 @@ impl<'a> Typer<'a> {
         let explicit = if node.kind() == SyntaxKind::FunctionReference {
             Some(self.operator_reference(node, name, operator, (template, &given))?)
         } else {
-            if !reflected && !template.types().all(whole) {
+            // FN-17: the inputs can select the callback and thereby
+            // determine a result type the receiving template leaves open.
+            if !reflected
+                && !template
+                    .ordinary_parameters()
+                    .all(|input| whole(input.ty()))
+            {
                 return None;
             }
             None
@@ -363,9 +391,25 @@ impl<'a> Typer<'a> {
                 }
             }
             let requirements = self.answers(module, declaration, &chosen.generics);
+            let operator_generics = explicit.map_or_else(Vec::new, |reference| {
+                let mut found: Vec<_> = reference
+                    .generics
+                    .into_iter()
+                    .map(|argument| {
+                        (!matches!(argument, Argument::Type(Type::Unknown))).then_some(argument)
+                    })
+                    .collect();
+                if let (Some(pattern), Some(result)) = (&public.result, &actual.result) {
+                    infer(pattern, result, &public.generics, &mut found);
+                }
+                found
+                    .into_iter()
+                    .map(|argument| argument.unwrap_or(Argument::Type(Type::Unknown)))
+                    .collect()
+            });
             let callee = Callee::Candidate {
                 operator: (operator.module, operator.declaration),
-                operator_generics: explicit.map_or_else(Vec::new, |operator| operator.generics),
+                operator_generics,
                 module,
                 declaration,
                 generics: chosen.generics,
@@ -451,7 +495,11 @@ impl<'a> Typer<'a> {
         )?;
         if generics
             .iter()
-            .any(|argument| matches!(argument, Argument::Type(ty) if !whole(ty)))
+            .zip(&public.generics)
+            .any(|(argument, generic)| {
+                matches!(argument, Argument::Type(ty) if !whole(ty))
+                    && !reference_result_decides(public, generic, template)
+            })
         {
             self.unresolved_reference(node, name);
             return None;
@@ -613,6 +661,13 @@ impl<'a> Typer<'a> {
             // The sequence is separate from the generic slot (GEN-8).
             found[pack.parameter] = Some(Argument::Type(Type::Unknown));
         }
+        if declared.kind == crate::program::DeclarationKind::Operator {
+            for (generic, value) in signature.generics.iter().zip(&mut found) {
+                if value.is_none() && reference_result_decides(signature, generic, template) {
+                    *value = Some(Argument::Type(Type::Unknown));
+                }
+            }
+        }
         let Some(generics) = found.into_iter().collect::<Option<Vec<_>>>() else {
             self.unresolved_reference(node, name);
             return None;
@@ -738,7 +793,7 @@ impl<'a> Typer<'a> {
         let result = crate::syntax::child(node, SyntaxKind::ReturnType)
             .and_then(|written| self.anonymous_type(&written))
             .or_else(|| template.result.clone());
-        let actual = FunctionType {
+        let mut actual = FunctionType {
             value: template.value,
             parameters: parameters
                 .iter()
@@ -766,6 +821,33 @@ impl<'a> Typer<'a> {
         self.graph = graph;
         let (mut body, captures) = definition?;
         super::record(self.program, &mut body, !template.value);
+        if result.as_ref().is_some_and(|ty| !whole(ty)) {
+            // FN-17 and GEN-2: known inputs can settle the body's
+            // result, even if the enclosing call still needs that type.
+            let mut inferred: Option<Expr> = None;
+            walk_statement_nodes(&body.statements, &mut |node| {
+                if let Node::Statement(Stmt::Return {
+                    value: Some(value), ..
+                }) = node
+                {
+                    if let Some(earlier) = &mut inferred {
+                        let mut value = value.clone();
+                        if is_integer_literal(&value) && accepts_float(&earlier.ty) {
+                            value = self.fit(value, &earlier.ty, "the function's result");
+                        } else if is_integer_literal(earlier) && accepts_float(&value.ty) {
+                            *earlier =
+                                self.fit(earlier.clone(), &value.ty, "the function's result");
+                        }
+                        earlier.ty = self.one_type(earlier, &mut value);
+                    } else {
+                        inferred = Some(value.clone());
+                    }
+                }
+            });
+            if let Some(inferred) = inferred {
+                actual.result = Some(inferred.ty);
+            }
+        }
         let callee = Callee::Anonymous(Box::new(AnonymousFunction {
             at: self.at(node),
             template: actual.clone(),
@@ -1178,6 +1260,20 @@ fn function_type(signature: &Signature, value: bool) -> FunctionType {
         result: signature.result.clone(),
         reference: signature.reference,
     }
+}
+
+/// An explicit operator reference can learn a result-only generic from
+/// the selected candidate when its receiving result is open (FN-17).
+fn reference_result_decides(
+    signature: &Signature,
+    generic: &GenericParameter,
+    template: &FunctionType,
+) -> bool {
+    let occurs = |ty: &Type| mentions(ty, &[generic.at]);
+    matches!(generic.kind, GenericKind::Type)
+        && template.result.as_ref().is_some_and(|ty| !whole(ty))
+        && signature.result.as_ref().is_some_and(occurs)
+        && !signature.parameters.iter().any(|input| occurs(&input.ty))
 }
 
 /// FN-17's fixed input types, required names and phase.

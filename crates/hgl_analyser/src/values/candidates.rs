@@ -9,7 +9,6 @@ use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
-use super::Typer;
 use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
 use super::dependent_packs::{
@@ -19,19 +18,21 @@ use super::expressions::takes_its_type;
 use super::fit::{
     accepts_float, arithmetic, checked_child_result, is_integer_literal, negated, not_null, whole,
 };
-use super::function_arguments::matches_template;
+use super::function_arguments::{CallbackInputs, matches_template};
 use super::inference::{
     bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
 };
 use super::operators::unreadable;
 use super::requirements::{Condition, holds};
+use super::{Candidate, Typer};
 use crate::constant::Fault;
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
-use crate::syntax::{child, tokens, ungrouped};
+use crate::syntax::{child, name_token, tokens, ungrouped};
 use crate::types::{
-    Argument, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Pack, Signature, Type,
+    Argument, Constant, ConstantValue, Detail, FunctionType, GenericKind, GenericParameter, Pack,
+    Signature, Type,
 };
 use crate::{codes, error};
 
@@ -65,6 +66,12 @@ struct Admissions<'s> {
     possible: Vec<(usize, Chosen<'s>)>,
     untold: bool,
     fits: bool,
+}
+
+#[derive(Default)]
+struct FunctionTrials<'a> {
+    prepared: Vec<(Candidate<'a>, Vec<Given>)>,
+    failed: Vec<Vec<Diagnostic>>,
 }
 
 impl<'s> Admissions<'s> {
@@ -113,6 +120,19 @@ impl<'a> Typer<'a> {
         given: &[Given],
         wanted: &Wanted,
     ) -> (Vec<Chosen<'a>>, bool) {
+        self.admitted_with_function_errors(operator, candidates, given, wanted)
+            .0
+    }
+
+    /// A named call can report what rejected its callback when the rest
+    /// of the call picks one candidate and no callback trial succeeds.
+    pub(super) fn admitted_with_function_errors(
+        &mut self,
+        operator: OperatorRef,
+        candidates: &[Candidate<'a>],
+        given: &[Given],
+        wanted: &Wanted,
+    ) -> ((Vec<Chosen<'a>>, bool), Vec<Diagnostic>) {
         let has_checked_children = given.iter().any(Given::reads_child);
         let has_results = given
             .iter()
@@ -121,6 +141,10 @@ impl<'a> Typer<'a> {
             || given.iter().any(|argument| {
                 !argument.by_place && matches!(argument.value.ty, Type::Nullable(_))
             });
+        let function_trials = given
+            .iter()
+            .any(|argument| argument.by_function)
+            .then(|| self.function_trials(operator, candidates, given, wanted));
         let forms = if has_forms {
             &[
                 ArgumentForms::Whole,
@@ -136,8 +160,22 @@ impl<'a> Typer<'a> {
             let mut fits = false;
             let mut result_forms = Admissions::default();
             for &form in forms {
-                let admitted =
-                    self.admitted_as(operator, candidates, given, wanted, widening, form);
+                let admitted = if let Some(trials) = &function_trials {
+                    let mut admitted = Admissions::default();
+                    for (candidate, given) in &trials.prepared {
+                        admitted.include(self.admitted_as(
+                            operator,
+                            std::slice::from_ref(candidate),
+                            given,
+                            wanted,
+                            widening,
+                            form,
+                        ));
+                    }
+                    admitted
+                } else {
+                    self.admitted_as(operator, candidates, given, wanted, widening, form)
+                };
                 fits |= admitted.fits;
                 if has_checked_children || has_results && form != ArgumentForms::Whole {
                     // A more general inference pass can find an admitted
@@ -153,23 +191,85 @@ impl<'a> Typer<'a> {
                 let takes_types = admitted.fits;
                 let (selected, unknown) = self.rank_admitted(operator, given, widening, admitted);
                 if !selected.is_empty() || unknown && takes_types {
-                    return (selected, unknown);
+                    return ((selected, unknown), Vec::new());
                 }
                 untold |= unknown;
             }
             let takes_types = result_forms.fits;
             let (selected, unknown) = self.rank_admitted(operator, given, widening, result_forms);
             if !selected.is_empty() || unknown && takes_types {
-                return (selected, unknown);
+                return ((selected, unknown), Vec::new());
             }
             untold |= unknown;
             // GEN-5: at this precision, a type fit decides whether to
             // widen literals, even if the candidate's condition fails.
             if fits {
-                break;
+                return ((Vec::new(), untold), Vec::new());
             }
         }
-        (Vec::new(), untold)
+        let Some(mut trials) = function_trials else {
+            return ((Vec::new(), untold), Vec::new());
+        };
+        if trials.failed.is_empty()
+            && given
+                .iter()
+                .any(|given| given.by_function && whole(given.ty()))
+        {
+            // A known callback may have bound a type the ordinary
+            // arguments cannot take. Check what the ordinary inputs
+            // would ask of it, solely to report a mismatch (FN-17).
+            let mut operands = given.to_vec();
+            for operand in operands.iter_mut().filter(|given| given.by_function) {
+                operand.value.ty = Type::Unknown;
+            }
+            trials.failed = self
+                .function_trials(operator, candidates, &operands, wanted)
+                .failed;
+        }
+        let errors = if trials.failed.len() == 1 {
+            trials.failed.pop().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        ((Vec::new(), untold), errors)
+    }
+
+    /// Read each candidate's static arguments once, before ranking the
+    /// ordinary arguments' precisions and result forms (FN-17, GEN-5).
+    fn function_trials(
+        &mut self,
+        operator: OperatorRef,
+        candidates: &[Candidate<'a>],
+        given: &[Given],
+        wanted: &Wanted,
+    ) -> FunctionTrials<'a> {
+        let program = self.program;
+        let Some(Detail::Callable(public)) = program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        else {
+            return FunctionTrials::default();
+        };
+        let mut trials = FunctionTrials::default();
+        for &(module, declaration, signature) in candidates {
+            let unit = &program.modules[module];
+            let Some(slots) = bound(signature, public, given, dependent_slot(unit, signature))
+            else {
+                continue;
+            };
+            match self.candidate_functions(
+                (module, &unit.declarations[declaration], signature),
+                (given, &slots),
+                wanted,
+            ) {
+                Some(Ok(arguments)) => trials
+                    .prepared
+                    .push(((module, declaration, signature), arguments)),
+                Some(Err(errors)) => trials.failed.push(errors),
+                None => {}
+            }
+        }
+        trials
     }
 
     /// Find candidates and their best arrangements with these possible
@@ -828,9 +928,19 @@ impl<'a> Typer<'a> {
                     _ => None,
                 };
                 let ty = parameter_type(signature, &type_packs, bound).unwrap_or(&Type::Unknown);
-                // FN-17: the template was checked at candidate admission.
-                let static_callable = matches!(given.value.kind, ExprKind::StaticCallable(_));
-                let mut input = if given.retried && !static_callable {
+                // FN-17: the trial read was taken back. The selected
+                // static argument now takes the candidate's template.
+                let mut input = if given.by_function
+                    && let Type::Function(template) = ty
+                    && (given.retried || !keeps_function_read(&given.value, template))
+                {
+                    self.operator_function_argument(
+                        &given.node,
+                        template,
+                        &CallbackInputs::default(),
+                    )
+                } else if given.retried && !matches!(given.value.kind, ExprKind::StaticCallable(_))
+                {
                     self.expression(&given.node, Some(ty))
                 } else {
                     given.value
@@ -840,8 +950,11 @@ impl<'a> Typer<'a> {
                 }
                 if let Some(selecting) = &mut selecting {
                     selecting.arguments[position].value = input.clone();
+                    if given.by_function {
+                        selecting.arguments[position].retried = false;
+                    }
                 }
-                let value = if static_callable {
+                let value = if matches!(input.kind, ExprKind::StaticCallable(_)) {
                     input
                 } else {
                     self.fit(input, ty, &place)
@@ -943,24 +1056,7 @@ impl<'a> Typer<'a> {
         widening: bool,
         converting: bool,
     ) -> Admits {
-        let result_fits = match (wanted.place, &signature.result) {
-            // An output requested in part, a `list<T, 3>` with `T` not
-            // said, is matched as far as it is known: `admits` compares
-            // what each type says and lets what is not said pass, and
-            // keeps a `T` a value of a `T?` (TYPE-14). GEN-5: "A
-            // candidate that gives `result<T, error>` meets a requested T
-            // or `T?` as one that gives T does, and its call takes the
-            // form the place expects (ERR-15)". A nullable result meets
-            // the requested payload under ERR-12 (hhenson/hgl_spec#182).
-            (Some(wanted), Some(result)) => {
-                self.admits(wanted, result)
-                    || matches!(result, Type::Nullable(_)) && self.taken(wanted, result).is_some()
-                    || matches!(result, Type::Result { error, .. } if **error == Type::Error)
-                        && self.taken(wanted, result).is_some()
-            }
-            (Some(_), None) => false,
-            (None, _) => true,
-        };
+        let result_fits = self.candidate_result_admits(wanted.place, signature.result.as_ref());
         // The operator's own requirement of its result.
         let among = match (&wanted.among, &signature.result) {
             (Some(among), Some(result)) => among.contains(result),
@@ -993,25 +1089,7 @@ impl<'a> Typer<'a> {
             let Some(ty) = ty else {
                 return Admits::Misfit;
             };
-            let admitted = match (ty, given.ty()) {
-                (Type::Function(template), Type::Function(actual)) => {
-                    matches_template(template, actual)
-                }
-                (Type::Function(_), _) | (_, Type::Function(_)) => false,
-                _ if given.by_place => self.fits_place(&given.node, ty, widening),
-                _ => {
-                    self.admits(ty, given.ty())
-                        || converting
-                            && place.parameter().is_some()
-                            && given.explicit.is_none()
-                            && self.taken(ty, given.ty()).is_some()
-                        || widening
-                            && given.explicit.is_none()
-                            && is_integer_literal(&given.value)
-                            && accepts_float(ty)
-                }
-            };
-            if !admitted {
+            if !self.candidate_argument_admits(given, place, ty, (widening, converting)) {
                 return Admits::Misfit;
             }
         }
@@ -1220,6 +1298,50 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// GEN-5: compare the known parts of the requested output. A place
+    /// may take the output's payload (ERR-12, ERR-15).
+    fn candidate_result_admits(&self, expected: Option<&Type>, result: Option<&Type>) -> bool {
+        match (expected, result) {
+            (Some(expected), Some(result)) => {
+                self.admits(expected, result)
+                    || matches!(result, Type::Nullable(_)) && self.taken(expected, result).is_some()
+                    || matches!(result, Type::Result { error, .. } if **error == Type::Error)
+                        && self.taken(expected, result).is_some()
+            }
+            (Some(_), None) => false,
+            (None, _) => true,
+        }
+    }
+
+    /// Whether an argument fits its candidate slot at this precision
+    /// and with the operand's allowed read forms (GEN-5, FN-17, ERR-15).
+    fn candidate_argument_admits(
+        &mut self,
+        given: &Given,
+        place: Place,
+        ty: &Type,
+        (widening, converting): (bool, bool),
+    ) -> bool {
+        match (ty, given.ty()) {
+            (Type::Function(template), Type::Function(actual)) => {
+                matches_template(template, actual)
+            }
+            (Type::Function(_), _) | (_, Type::Function(_)) => false,
+            _ if given.by_place => self.fits_place(&given.node, ty, widening),
+            _ => {
+                self.admits(ty, given.ty())
+                    || converting
+                        && place.parameter().is_some()
+                        && given.explicit.is_none()
+                        && self.taken(ty, given.ty()).is_some()
+                    || widening
+                        && given.explicit.is_none()
+                        && is_integer_literal(&given.value)
+                        && accepts_float(ty)
+            }
+        }
+    }
+
     /// True when the expression at `node`, which is read as the type of
     /// its place, is a value of `ty`. It is read as one, and what that
     /// reading reports is taken back: the caller asks, and reports for
@@ -1240,6 +1362,107 @@ impl<'a> Typer<'a> {
         let value = self.fit(value, ty, "its place");
         let fits = self.take_back(mark, false);
         fits && (widening || !widens_an_entry(&value))
+    }
+
+    /// GEN-6 and FN-17: resolve the candidate's function templates from
+    /// the known arguments, then try each static argument in its slot.
+    fn candidate_functions(
+        &mut self,
+        (module, candidate, signature): (usize, &Declaration, &Signature),
+        (given, bound): (&[Given], &[Place]),
+        wanted: &Wanted,
+    ) -> Option<Result<Vec<Given>, Vec<Diagnostic>>> {
+        let functions = given
+            .iter()
+            .zip(bound)
+            .enumerate()
+            .filter(|(_, (given, _))| given.by_function);
+        // A function already known contributes its types in declaration
+        // order, before any later argument can decide them (GEN-2).
+        // An unresolved callback contributes only what the probe knows.
+        let (mut found, type_packs) = candidate_bindings(
+            self,
+            signature,
+            (module, candidate),
+            (given, bound),
+            wanted,
+            (&|earlier, later| self.widens(earlier, later), None),
+            &mut |_| unreachable!("whole argument inference does not choose result reads"),
+        )?;
+        let generics = &signature.generics;
+        for (generic, value) in generics.iter().zip(&mut found) {
+            if value.is_none() && matches!(generic.kind, GenericKind::Value(_)) {
+                *value = self
+                    .default_constant(candidate, generic)
+                    .map(Argument::Constant);
+            }
+        }
+        let unknown_type = Argument::Type(Type::Unknown);
+        let unknown_value = Argument::Constant(super::inference::unsaid());
+        let mut checking = given.to_vec();
+        for (position, (given, slot)) in functions {
+            let parameter = signature.parameters.get(slot.parameter()?)?;
+            let map: Vec<_> = generics
+                .iter()
+                .zip(&found)
+                .map(|(generic, value)| {
+                    let unknown = if matches!(generic.kind, GenericKind::Value(_)) {
+                        &unknown_value
+                    } else {
+                        &unknown_type
+                    };
+                    (generic.at, value.as_ref().unwrap_or(unknown))
+                })
+                .collect();
+            let Type::Function(template) = substitute_within(&parameter.ty, &map) else {
+                return None;
+            };
+            if keeps_function_read(&given.value, &template) {
+                checking[position].value = given.value.clone();
+                continue;
+            }
+            if !self.may_reread() {
+                return None;
+            }
+            let mark = self.mark();
+            let reported = self.diagnostics.len();
+            let value =
+                self.operator_function_argument(&given.node, &template, &CallbackInputs::default());
+            let mut errors = self.diagnostics.as_slice()[reported..].to_vec();
+            if !self.take_back(mark, false) {
+                let partial = in_instance(signature, &map);
+                if !self.candidate_result_admits(wanted.place, partial.result.as_ref())
+                    || !checking.iter().zip(bound).all(|(other, &slot)| {
+                        other.by_function
+                            || parameter_type(&partial, &type_packs, slot).is_none_or(|ty| {
+                                self.candidate_argument_admits(other, slot, ty, (true, true))
+                            })
+                    })
+                {
+                    return None;
+                }
+                // A bare operator with no matching function target is
+                // a nonmatch of the outer call (GEN-5). A named
+                // function's type or an anonymous body's own error is
+                // still reported against this candidate (FN-17).
+                let node = ungrouped(given.node.clone());
+                if node.kind() == SyntaxKind::NameExpr
+                    && self.local_of(&node).is_none()
+                    && let Some(name) = name_token(&node)
+                    && let Some((module, names)) = self.declarations(&name)
+                    && names.iter().any(|&index| {
+                        self.program.modules[module].declarations[index].kind
+                            == crate::program::DeclarationKind::Operator
+                    })
+                {
+                    errors.retain(|error| error.code.as_str() != codes::TYPE_MISMATCH);
+                }
+                return Some(Err(errors));
+            }
+            infer(&parameter.ty, &value.ty, generics, &mut found);
+            checking[position].value = value;
+        }
+        Some(Ok(checking))
     }
 
     /// The constant a call's argument `node` comes to, as
@@ -1559,7 +1782,7 @@ impl<'a> Typer<'a> {
                         ty: in_place(&given.value.ty),
                         ..given.value.clone()
                     });
-                given.retried = false;
+                given.retried &= given.by_function;
                 given
             })
             .collect();
@@ -1602,9 +1825,11 @@ impl<'a> Typer<'a> {
                 // place. Its HIR can contain local declarations and nested
                 // calls that the instance walk specializes in turn.
                 for (given, &place) in given.iter_mut().zip(&chosen.bound) {
-                    given.retried = given.by_place
-                        && parameter_type(&chosen.taken, &chosen.type_packs, place)
-                            .is_some_and(|ty| ty != given.ty() || !whole(given.ty()));
+                    if !given.by_function {
+                        given.retried = given.by_place
+                            && parameter_type(&chosen.taken, &chosen.type_packs, place)
+                                .is_some_and(|ty| ty != given.ty() || !whole(given.ty()));
+                    }
                 }
             }
             return AtInstance::Selected(Box::new(chosen), given);
@@ -2133,6 +2358,8 @@ pub(super) struct Given {
     /// True when it is read as the type of the parameter it is given
     /// to: see [`typed_by_place`].
     pub(super) by_place: bool,
+    /// FN-17: read this static argument against the candidate's template.
+    pub(super) by_function: bool,
     /// Its value, read with nothing expected of it.
     pub(super) value: Expr,
     /// The type the call explicitly writes for this packed argument.
@@ -2166,6 +2393,7 @@ impl Given {
             key: Key::Position(position),
             node,
             by_place: false,
+            by_function: false,
             value,
             explicit: None,
             retried: false,
@@ -2386,6 +2614,20 @@ impl CallbackRequest<'_> {
                 _ => false,
             }
     }
+}
+
+/// An already typed static argument can keep its body and captures when
+/// the candidate gives the same complete function context (FN-17, GEN-7).
+fn keeps_function_read(value: &Expr, template: &FunctionType) -> bool {
+    let Type::Function(actual) = &value.ty else {
+        return false;
+    };
+    matches!(value.kind, ExprKind::StaticCallable(_))
+        && whole(&value.ty)
+        && template.value == actual.value
+        && template.parameters.iter().all(|input| whole(input.ty()))
+        && template.result.as_ref().is_none_or(whole)
+        && matches_template(template, actual)
 }
 
 /// What an argument of a call is given to in a candidate.
@@ -2640,6 +2882,103 @@ fn instance<'s>(
             Vec::new(),
         ));
     }
+    let (mut found, type_packs) = candidate_bindings(
+        typer,
+        signature,
+        (module, declaration),
+        (given, bound),
+        wanted,
+        (widens, converting),
+        choose,
+    )?;
+    let mut defaulted = Vec::new();
+    for (index, generic) in generics.iter().enumerate() {
+        if found[index].is_some() || !matches!(generic.kind, GenericKind::Value(_)) {
+            continue;
+        }
+        if let Some(default) = defaults(generic) {
+            found[index] = Some(Argument::Constant(default));
+            defaulted.push(index);
+        }
+    }
+    let mut resolved: Vec<Argument> = found.into_iter().collect::<Option<_>>()?;
+    let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
+    if let Some(callback) = &wanted.callback {
+        let map: Vec<_> = own.iter().copied().zip(&resolved).collect();
+        let mut fitted = Vec::new();
+        for (index, generic) in generics.iter().enumerate() {
+            let GenericKind::Value(ty) = &generic.kind else {
+                continue;
+            };
+            let Some(option) = callback
+                .values
+                .iter()
+                .find(|option| option.name == generic.name)
+            else {
+                continue;
+            };
+            let expected = placed(substitute_within(ty, &map), &own);
+            let value = option.fit(typer, &expected).ok()?;
+            fitted.push((
+                index,
+                Constant {
+                    text: option.value.text.clone(),
+                    value,
+                },
+            ));
+        }
+        for (index, value) in fitted {
+            resolved[index] = Argument::Constant(value);
+        }
+    }
+    let map: Vec<(Location, &Argument)> = own.iter().copied().zip(&resolved).collect();
+    let mut taken = signature.clone();
+    for parameter in &mut taken.parameters {
+        if type_pack(parameter, generics).is_none() {
+            parameter.ty = placed(substitute_within(&parameter.ty, &map), &own);
+        }
+    }
+    // A generic value parameter's type may name another generic
+    // parameter: the `T` of `<T, const fallback: T>`.
+    for generic in &mut taken.generics {
+        if let GenericKind::Value(ty) = &mut generic.kind {
+            *ty = placed(substitute_within(ty, &map), &own);
+        }
+    }
+    taken.result = taken
+        .result
+        .as_ref()
+        .map(|result| placed(substitute_within(result, &map), &own));
+    Some((
+        std::borrow::Cow::Owned(taken),
+        resolved,
+        type_packs,
+        defaulted,
+    ))
+}
+
+/// Infer a candidate's generic parameters from the requested result and
+/// the arguments known so far. Unresolved parameters can still provide
+/// the known parts of a function template (FN-17, GEN-2, GEN-6).
+#[allow(clippy::type_complexity)]
+fn candidate_bindings(
+    typer: &Typer<'_>,
+    signature: &Signature,
+    (module, declaration): (usize, &Declaration),
+    (given, bound): (&[Given], &[Place]),
+    wanted: &Wanted,
+    (widens, converting): (
+        &dyn Fn(&Type, &Type) -> bool,
+        Option<(
+            &Typer<'_>,
+            ArgumentForms,
+            &[bool],
+            &dyn Fn(&GenericParameter, &Type) -> bool,
+        )>,
+    ),
+    choose: &mut dyn FnMut([Option<ResultBinding>; 3]) -> ResultBinding,
+) -> Option<(Vec<Option<Argument>>, Vec<hir::TypePackArgument>)> {
+    let generics = &signature.generics;
     let mut found: Vec<Option<Argument>> = vec![None; generics.len()];
     if let Some(callback) = &wanted.callback {
         for (index, generic) in generics.iter().enumerate() {
@@ -2843,70 +3182,7 @@ fn instance<'s>(
         &type_packs,
         &mut found,
     );
-    let mut defaulted = Vec::new();
-    for (index, generic) in generics.iter().enumerate() {
-        if found[index].is_some() || !matches!(generic.kind, GenericKind::Value(_)) {
-            continue;
-        }
-        if let Some(default) = defaults(generic) {
-            found[index] = Some(Argument::Constant(default));
-            defaulted.push(index);
-        }
-    }
-    let mut resolved: Vec<Argument> = found.into_iter().collect::<Option<_>>()?;
-    let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
-    if let Some(callback) = &wanted.callback {
-        let map: Vec<_> = own.iter().copied().zip(&resolved).collect();
-        let mut fitted = Vec::new();
-        for (index, generic) in generics.iter().enumerate() {
-            let GenericKind::Value(ty) = &generic.kind else {
-                continue;
-            };
-            let Some(option) = callback
-                .values
-                .iter()
-                .find(|option| option.name == generic.name)
-            else {
-                continue;
-            };
-            let expected = placed(substitute_within(ty, &map), &own);
-            let value = option.fit(typer, &expected).ok()?;
-            fitted.push((
-                index,
-                Constant {
-                    text: option.value.text.clone(),
-                    value,
-                },
-            ));
-        }
-        for (index, value) in fitted {
-            resolved[index] = Argument::Constant(value);
-        }
-    }
-    let map: Vec<(Location, &Argument)> = own.iter().copied().zip(&resolved).collect();
-    let mut taken = signature.clone();
-    for parameter in &mut taken.parameters {
-        if type_pack(parameter, generics).is_none() {
-            parameter.ty = placed(substitute_within(&parameter.ty, &map), &own);
-        }
-    }
-    // A generic value parameter's type may name another generic
-    // parameter: the `T` of `<T, const fallback: T>`.
-    for generic in &mut taken.generics {
-        if let GenericKind::Value(ty) = &mut generic.kind {
-            *ty = placed(substitute_within(ty, &map), &own);
-        }
-    }
-    taken.result = taken
-        .result
-        .as_ref()
-        .map(|result| placed(substitute_within(result, &map), &own));
-    Some((
-        std::borrow::Cow::Owned(taken),
-        resolved,
-        type_packs,
-        defaulted,
-    ))
+    Some((found, type_packs))
 }
 
 /// ERR-12 and ERR-15: a result of a nullable value can supply the

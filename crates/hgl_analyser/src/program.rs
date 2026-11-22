@@ -592,8 +592,10 @@ impl Declaration {
 /// One named test.
 #[derive(Debug, Clone)]
 pub struct Test {
-    /// Its name.
+    /// Its name, or the declaration and ordinal of a documentation example.
     pub name: String,
+    /// Whether the test comes from a documentation fence (SDOC-9).
+    pub documentation_example: bool,
     /// True for an integration test (TST-17): one that may run in real
     /// time, and "is run only when it is asked for".
     pub integration: bool,
@@ -603,7 +605,7 @@ pub struct Test {
     /// where none is written, and where what is written is no valid
     /// duration, which the lexer has reported.
     pub timeout: Option<i64>,
-    /// Where the name is written.
+    /// Where the name or opening documentation fence is written.
     pub at: Location,
     /// The position of its file in [`Module::files`].
     pub file: usize,
@@ -645,6 +647,8 @@ pub struct NameUse {
     pub at: Location,
     /// What it is bound to.
     pub binding: Binding,
+    /// Whether this use is in a documentation example or one of its helpers (SDOC-9).
+    pub(crate) documentation_example: bool,
 }
 
 /// What a name is bound to (UNIT-10).
