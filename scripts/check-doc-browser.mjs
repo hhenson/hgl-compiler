@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 
-const profile = await mkdtemp(join(tmpdir(), 'q457-browser-'));
+const profile = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), 'hgl-doc-browser-'));
 const site = process.argv[2];
 const chrome = spawn(process.env.CHROME || 'google-chrome', [
   '--headless', '--disable-gpu', '--disable-background-networking', '--no-first-run',
@@ -79,15 +79,16 @@ try {
     features: [{name: 'prefers-color-scheme', value: 'dark'}],
   });
   await send('Page.navigate', { url: pathToFileURL(join(site, 'modules/mod-guide.api.html')).href });
-  await when('Boolean(document.querySelector(".formula math") && document.querySelector(".formula-block math") && document.querySelectorAll(".diagram svg").length === 2)');
+  await when('Boolean(document.querySelector(".formula math") && document.querySelectorAll(".formula-block math").length === 2 && document.querySelectorAll(".diagram svg").length === 3)');
   const rendered = await evaluate(`({
     inline: document.querySelector('.formula math').textContent,
+    formulas: [...document.querySelectorAll('.formula-block math annotation')].map(formula => formula.textContent.trim()),
     diagrams: [...document.querySelectorAll('.diagram svg')].map(svg => ({
       text: svg.textContent,
       usesHtml: Boolean(svg.querySelector('foreignObject')),
       links: [...svg.querySelectorAll('a')].map(link => link.getAttribute('href') || link.getAttribute('xlink:href')),
     })),
-    formulaFallback: document.querySelector('code.language-math').textContent.trim(),
+    formulaFallbacks: [...document.querySelectorAll('code.language-math')].map(code => code.textContent.trim()),
     diagramFallback: document.querySelector('code.language-mermaid').textContent.trim(),
     unhandled: document.querySelector('code.formula-inline'),
   })`);
@@ -99,7 +100,16 @@ try {
   assert.equal(protectedDiagram.usesHtml, false);
   assert.doesNotMatch(protectedDiagram.text, /hgl-theme-override|hgl-font-override|#010203/i);
   assert.ok(protectedDiagram.links.every(link => link === null || link.startsWith('#')));
-  assert.equal(rendered.formulaFallback, '\\badHglCommand{b}');
+  const journey = rendered.diagrams[2];
+  assert.match(journey.text, /Read notes/);
+  assert.equal(journey.usesHtml, false);
+  assert.deepEqual(rendered.formulas, ['a^2+b^2=c^2', '\\kern{-1em}']);
+  assert.deepEqual(rendered.formulaFallbacks, [
+    '\\badHglCommand{b}',
+    '\\rule[-100000em]{1em}{1em}',
+    '\\kern{-100000em}',
+    '\\raisebox{100000em}{x}',
+  ]);
   assert.equal(rendered.diagramFallback, 'not a diagram');
   assert.equal(rendered.unhandled, null);
   const layout = await evaluate(`({

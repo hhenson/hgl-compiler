@@ -16,6 +16,8 @@ HTML output goes into an empty directory or a site marked by `hgl doc`.
 An update removes generated files the new site no longer uses, including
 pages from a previous `--private` build. It preserves unrelated files.
 Choose an empty directory when regenerating an older, unmarked site.
+New sites use an empty `.hgl-doc-site-v2` marker. Sites with the original
+`.hgl-doc` marker also rebuild.
 
 Comments are rendered as CommonMark with tables (SDOC-7). Authored HTML
 is shown as text. HGL fences are highlighted using the lexer and labeled
@@ -30,11 +32,12 @@ If a formula or diagram cannot be rendered, its source stays visible.
 A site includes each renderer and its notices when one of its pages
 uses that renderer.
 
-KaTeX emits MathML with `trust: false` and strict errors. It bounds macro
-expansions to 1,000 and user-specified sizes to 20 em to constrain
-repeated expansion and author-specified dimensions. Mermaid uses strict security
-and text labels; a diagram directive cannot change those settings or
-supply theme CSS, theme variables or a font family.
+KaTeX emits MathML with `trust: false` and strict errors. It limits macro
+expansion to 1,000 steps and caps supported sizes at 20 em. When a generated
+MathML dimension or offset exceeds 20 em in magnitude, the formula
+stays visible as source. Mermaid uses strict security and SVG text labels,
+including text spans for journey diagrams. The site fixes these settings,
+text placement, theme CSS, theme variables and fonts for every diagram.
 
 `hgl doc <ROOT>... --format json [--out DIR] [--private]` writes one
 UTF-8 JSON document for the analysed program. Source discovery and

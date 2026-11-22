@@ -33,6 +33,10 @@ Notes:
     a^2+b^2=c^2
     ~~~
 
+    ~~~math
+    \kern{-1em}
+    ~~~
+
     ~~~mermaid
     graph LR; A --> B
     ~~~
@@ -44,10 +48,30 @@ Notes:
         click A href "https://renderer-probe.invalid/"
     ~~~
 
+    ~~~mermaid
+    %%{init: {"journey": {"textPlacement": "fo"}}}%%
+    journey
+        title Daily work
+        section Morning
+            Read notes: 3: Reader
+    ~~~
+
     Unrenderable source stays visible:
 
     ~~~math
     \badHglCommand{b}
+    ~~~
+
+    ~~~math
+    \rule[-100000em]{1em}{1em}
+    ~~~
+
+    ~~~math
+    \kern{-100000em}
+    ~~~
+
+    ~~~math
+    \raisebox{100000em}{x}
     ~~~
 
     ~~~mermaid
