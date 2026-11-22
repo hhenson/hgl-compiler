@@ -1,5 +1,6 @@
-//! The versioned records of the JSON documentation model.
+//! The documentation model. Its serialized fields are the versioned JSON API.
 
+use hgl_diagnostics::Location;
 use serde::Serialize;
 
 /// The current version of the API documentation model.
@@ -40,6 +41,8 @@ pub(crate) struct Declaration<'a> {
     pub(crate) canonical_name: String,
     pub(crate) role: Option<&'static str>,
     pub(crate) exported: bool,
+    #[serde(skip)]
+    pub(crate) signature: String,
     pub(crate) source: Source<'a>,
     pub(crate) documentation: Option<Documentation>,
     #[serde(flatten)]
@@ -118,6 +121,8 @@ pub(crate) struct Source<'a> {
     pub(crate) file: String,
     pub(crate) line: u32,
     pub(crate) column: u32,
+    #[serde(skip)]
+    pub(crate) at: Location,
 }
 
 /// A comment's normalized text and its parsed SDOC layout.
@@ -135,6 +140,8 @@ pub(crate) struct Section {
     pub(crate) recognized: bool,
     pub(crate) text: String,
     pub(crate) entries: Vec<Entry>,
+    #[serde(skip)]
+    pub(crate) prose: String,
 }
 
 /// One key and description as written under its heading.

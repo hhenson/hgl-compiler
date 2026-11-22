@@ -79,6 +79,10 @@ pub(crate) fn build<'a>(
                                 canonical_name: format!("{}::{}", data.path, test.name),
                                 role: None,
                                 exported: false,
+                                signature: signature(
+                                    &test.syntax,
+                                    sources.file(test.at.file).text(),
+                                ),
                                 source: reader.source(&data.path, part, test.at),
                                 documentation: documentation(&test.syntax),
                                 interface: Interface::default(),
@@ -120,6 +124,7 @@ impl<'a, F: Fn(FileId) -> String> Reader<'a, '_, F> {
             file: (self.path)(at.file),
             line: position.line,
             column: position.column,
+            at,
         }
     }
 
@@ -237,6 +242,7 @@ impl<'a, F: Fn(FileId) -> String> Reader<'a, '_, F> {
             canonical_name,
             role: declaration.kind.role().map(|role| role.as_str()),
             exported: declaration.is_public(),
+            signature: signature(syntax, self.sources.file(declaration.at.file).text()),
             source: self.source(&data.path, part, declaration.at),
             documentation: documentation(syntax),
             interface,
@@ -273,6 +279,10 @@ impl<'a, F: Fn(FileId) -> String> MemberContainer<'a, '_, '_, F> {
             canonical_name: format!("{}.{name}", self.canonical_name),
             role: None,
             exported: self.exported,
+            signature: syntax.as_ref().map_or_else(
+                || name.to_owned(),
+                |node| signature(node, self.reader.sources.file(at.file).text()),
+            ),
             source: self.reader.source(self.module, self.part, at),
             documentation: syntax.as_ref().and_then(documentation),
             interface: Interface {
@@ -399,7 +409,7 @@ fn documentation(syntax: &SyntaxNode) -> Option<Documentation> {
             prose_sections(&text, &mut sections, None);
             continue;
         };
-        let entries = section
+        let entries: Vec<_> = section
             .entries()
             // SDOC-3 does not give a spelling for struct field keys.
             .filter(|_| syntax.kind() != SyntaxKind::StructDecl || heading != "Args:")
@@ -411,6 +421,11 @@ fn documentation(syntax: &SyntaxNode) -> Option<Documentation> {
         sections.push(Section {
             heading: Some(heading.to_string()),
             recognized: true,
+            prose: if entries.is_empty() {
+                text.clone()
+            } else {
+                section.prose()
+            },
             text,
             entries,
         });
@@ -449,6 +464,7 @@ fn prose_sections(text: &str, sections: &mut Vec<Section>, summary: Option<&mut 
             at += 1;
             continue;
         }
+        let prose_start = at;
         let heading = heading_at(at);
         let start = at + usize::from(heading.is_some());
         at = start + 1;
@@ -484,6 +500,7 @@ fn prose_sections(text: &str, sections: &mut Vec<Section>, summary: Option<&mut 
             recognized: false,
             text,
             entries: Vec::new(),
+            prose: lines[prose_start..start + end].join("\n"),
         });
     }
 }
@@ -522,11 +539,40 @@ fn default(node: &SyntaxNode) -> Option<String> {
         .map(|node| written(&node))
 }
 
+/// Takes the written header, excluding the attached comment and the body.
+/// Parameter and result syntax stays exactly as the declaration writes it.
+fn signature(node: &SyntaxNode, source: &str) -> String {
+    let before_members = matches!(
+        node.kind(),
+        SyntaxKind::StructDecl | SyntaxKind::EnumDecl | SyntaxKind::NativeTypeDecl
+    );
+    let start = node
+        .children_with_tokens()
+        .find(|element| !element.kind().is_trivia())
+        .map_or_else(
+            || node.span().start,
+            |element| element.text_range().start().into(),
+        );
+    let end = node
+        .children_with_tokens()
+        .find(|element| {
+            matches!(
+                element.kind(),
+                SyntaxKind::ArrowBody | SyntaxKind::Block | SyntaxKind::NativeContractBody
+            ) || (before_members && element.kind() == SyntaxKind::LBrace)
+        })
+        .map_or_else(
+            || node.span().end,
+            |element| element.text_range().start().into(),
+        );
+    normalized(&source[start as usize..end as usize])
+}
+
 /// Authored annotations and expressions kept intact except for LEX-15 line breaks.
 fn written(node: &SyntaxNode) -> String {
-    node.text()
-        .to_string()
-        .trim()
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
+    normalized(&node.text().to_string())
+}
+
+fn normalized(text: &str) -> String {
+    text.trim().replace("\r\n", "\n").replace('\r', "\n")
 }
