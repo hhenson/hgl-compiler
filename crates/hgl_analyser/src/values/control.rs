@@ -80,6 +80,17 @@ pub(super) fn comprehension_extent_error(at: Location, composition: bool) -> Dia
     )
 }
 
+/// The number of iterations of a fixed-size list (EXPR-17).
+pub(super) fn fixed_list_extent(ty: &Type) -> Option<&Constant> {
+    let Type::List {
+        size: Some(size), ..
+    } = ty
+    else {
+        return None;
+    };
+    (!matches!(size.value, ConstantValue::Unbounded)).then_some(size)
+}
+
 /// What a `for` binds, and whether it makes one child for each member,
 /// by what it loops over (CTRL-15).
 ///
@@ -899,11 +910,8 @@ impl<'a> Typer<'a> {
                 }
                 _ => None,
             }
-        } else if let Type::List {
-            size: Some(size), ..
-        } = &sequence.ty
-            && !matches!(size.value, ConstantValue::Unbounded)
-            && (!self.graph || over != ValueCategory::Value)
+        } else if (!self.graph || over != ValueCategory::Value)
+            && let Some(size) = fixed_list_extent(&sequence.ty)
         {
             Some(size.value.clone())
         } else if !self.graph

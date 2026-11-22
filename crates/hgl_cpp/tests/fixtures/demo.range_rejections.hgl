@@ -54,3 +54,23 @@ test iterable_settles_to_value {
     # expect-error(type, "list.size")
     assert eval selected_list(value: "ordinary") == [[3, 4]]
 }
+
+operator appears<T>(value: T) -> bool
+impl const fn appears<T>(value: T) -> bool => false
+impl fn appears(value: i64) -> bool {
+    when { return value > 0 }
+}
+
+operator triple_items<T>(value: T) -> list<i64, 3>
+impl const fn triple_items<T>(value: T) -> list<i64, 3> => [10, 20, 30]
+impl fn triple_items(value: i64) -> list<i64, 3> {
+    when { return [value, value + 10, value + 20] }
+}
+
+fn wrong_extent<T>(const value: T) -> list<i64, 2> =>
+    [for item in (if appears(value) { triple_items(value) }): item]
+
+test iterable_settles_to_wrong_extent {
+    # expect-error(type, "type.mismatch")
+    assert eval wrong_extent(value: 10) == [[10, 20]]
+}

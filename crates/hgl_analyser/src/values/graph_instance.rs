@@ -11,7 +11,7 @@ use hgl_source::Span;
 use super::arguments::Takes;
 use super::control::{
     RANGE_LOWER, RANGE_UPPER, bound_by_loop, comprehension_extent_error, duplicate_switch_label,
-    iterates, range_connection,
+    fixed_list_extent, iterates, range_connection,
 };
 use super::fit::{not_null, open, whole};
 use super::inference::type_pack;
@@ -75,21 +75,23 @@ impl GraphDestinations {
             if !whole(&value.ty) {
                 expressions.insert(value.at);
             }
-            let mut iteration = |value: &Expr| {
-                if value.category == ValueCategory::Unsettled {
-                    unsettled_iterations.insert(value.at);
-                }
-            };
             match &value.kind {
                 ExprKind::Range { lower, upper } => {
-                    iteration(lower);
-                    iteration(upper);
+                    for bound in [lower, upper] {
+                        if bound.category == ValueCategory::Unsettled {
+                            unsettled_iterations.insert(bound.at);
+                        }
+                    }
                 }
                 ExprKind::ListComprehension {
                     composition: true,
                     sequence,
                     ..
-                } if !matches!(sequence.kind, ExprKind::Range { .. }) => iteration(sequence),
+                } if !matches!(sequence.kind, ExprKind::Range { .. })
+                    && (sequence.category == ValueCategory::Unsettled || open(&sequence.ty)) =>
+                {
+                    unsettled_iterations.insert(sequence.at);
+                }
                 _ => {}
             }
             if let ExprKind::Index { base, .. } = &value.kind
@@ -382,16 +384,14 @@ impl GraphDestinations {
                         entry,
                         ..
                     },
-                ty: Type::List { element, .. },
+                ty,
+                at,
                 ..
             }) => {
-                if self.unsettled_iterations.contains(&sequence.at)
-                    && sequence.category == ValueCategory::Value
-                {
-                    typer
-                        .diagnostics
-                        .emit(comprehension_extent_error(sequence.at, true));
-                }
+                self.fit_comprehension_sequence(typer, sequence, ty, *at);
+                let Type::List { element, .. } = ty else {
+                    return;
+                };
                 (entry.as_mut(), (**element).clone(), "this list entry", true)
             }
             NodeMut::Expression(Expr {
@@ -628,6 +628,46 @@ impl GraphDestinations {
     fn fit_condition(&self, typer: &mut Typer<'_>, value: &mut Expr) {
         if self.known(value) {
             *value = typer.fit_condition(value.clone());
+        }
+    }
+
+    /// EXPR-17: the result has exactly as many entries as the iterable.
+    /// An expected extent may have stood in for a shape still unknown at source.
+    fn fit_comprehension_sequence(
+        &self,
+        typer: &mut Typer<'_>,
+        sequence: &mut Expr,
+        expected: &Type,
+        at: Location,
+    ) {
+        if !self.unsettled_iterations.contains(&sequence.at) {
+            return;
+        }
+        if self.known(sequence) {
+            *sequence = typer.received(sequence.clone(), iterates);
+        }
+        let over = typer.category(sequence);
+        if over == ValueCategory::Unsettled || open(&sequence.ty) {
+            return;
+        }
+        let Some(extent) = fixed_list_extent(&sequence.ty).filter(|extent| {
+            over == ValueCategory::Connection && crate::constant::worked_out(&extent.value)
+        }) else {
+            typer
+                .diagnostics
+                .emit(comprehension_extent_error(sequence.at, true));
+            return;
+        };
+        if let Type::List {
+            element,
+            size: Some(_),
+        } = expected
+        {
+            let actual = Type::List {
+                element: element.clone(),
+                size: Some(extent.clone()),
+            };
+            typer.conforms(&actual, expected, at, "the expected list type");
         }
     }
 

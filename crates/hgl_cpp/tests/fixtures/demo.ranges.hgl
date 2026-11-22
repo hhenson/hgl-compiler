@@ -67,9 +67,19 @@ impl fn fixed_items(value: i64) -> list<i64, 2> {
 fn selected_list<T>(const value: T) -> list<i64, 2> =>
     [for item in fixed_items(value): item + 1]
 
+operator appears<T>(value: T) -> bool
+impl const fn appears<T>(value: T) -> bool => false
+impl fn appears(value: i64) -> bool {
+    when { return value > 0 }
+}
+
+fn selected_list_extent<T>(const value: T) -> list<i64, 2> =>
+    [for item in (if appears(value) { fixed_items(value) }): item + 1]
+
 test generic_iterables_settle_after_selection {
     assert eval selected_range_sum(value: "ordinary") == [10]
     assert eval selected_list(value: 3) == [[4, 5]]
+    assert eval selected_list_extent(value: 3) == [[4, 5]]
 }
 
 const fn generic_squares<const N: i64>() -> list<i64, N> => [for i in 0..<N: i * i]
