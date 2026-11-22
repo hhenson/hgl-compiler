@@ -4627,6 +4627,26 @@ fn explicit_operator_references_check_resolved_public_option_types() {
     }
 }
 
+/// FN-17 and GEN-6: an omitted operator default leaves the candidate's
+/// list type to resolve both types in the callback template.
+#[test]
+fn operator_arguments_use_the_candidate_function_type_with_an_omitted_default() {
+    let checked = module(
+        r#"operator vr2<L, R, C>(f: const fn(L, R) -> L, items: C, zero: L? = null) -> L
+impl const fn vr2<V>(f: const fn(V, V) -> V, items: list<V>, zero: V? = null) -> V =>
+    f(items[0], items[1])
+operator vr3<L, R>(f: const fn(L, R) -> L, items: list<R>, zero: L? = null) -> L
+impl const fn vr3<V>(f: const fn(V, V) -> V, items: list<V>, zero: V? = null) -> V =>
+    f(items[0], items[1])
+const fn diff(a: i64, b: i64) -> i64 => a - b
+test named_function { assert vr2(diff, [5, 2]) == 3 }
+test operator_function { assert vr2(add_, [5, 2]) == 7 }
+test no_zero { assert vr3(add_, [5, 2]) == 7 }
+"#,
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+}
+
 /// FN-17: a template checks role, written names and plain parameter
 /// modes, and does not take an ordinary runtime value.
 #[test]

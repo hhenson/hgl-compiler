@@ -1,0 +1,97 @@
+module demo.candidate_function_arguments
+
+# FN-17, GEN-6: the candidate ties the callback inputs to the list's
+# element type, even when the public operator has unrelated parameters.
+operator vr2<L, R, C>(f: const fn(L, R) -> L, items: C, zero: L? = null) -> L
+impl const fn vr2<V>(f: const fn(V, V) -> V, items: list<V>, zero: V? = null) -> V =>
+    f(items[0], items[1])
+
+operator vr3<L, R>(f: const fn(L, R) -> L, items: list<R>, zero: L? = null) -> L
+impl const fn vr3<V>(f: const fn(V, V) -> V, items: list<V>, zero: V? = null) -> V =>
+    f(items[0], items[1])
+
+const fn diff(a: i64, b: i64) -> i64 => a - b
+
+test named_function { assert vr2(diff, [5, 2], zero: null) == 3 }
+test operator_function { assert vr2(add_, [5, 2], zero: null) == 7 }
+test operator_function_with_list_shape { assert vr3(add_, [5, 2], zero: null) == 7 }
+
+# FN-17: the anonymous function gets its kind from the value candidate.
+operator fold2<V>(f: fn(V, V) -> V, items: list<V>) -> V
+impl const fn fold2<V>(f: const fn(V, V) -> V, items: list<V>) -> V => f(items[0], items[1])
+
+test anonymous_value_function {
+    let xs: list<i64> = [4, 5]
+    assert fold2(fn(a, b) => a + b, xs) == 9
+}
+
+# Both arguments can also supply their types in graph composition.
+operator vr_live<L, R, C>(f: fn(L, R) -> L, items: C) -> L
+impl fn vr_live<V>(f: fn(V, V) -> V, items: list<V>) -> V =>
+    f(items[0], items[1])
+
+operator vr_live_list<L, R>(f: fn(L, R) -> L, items: list<R>) -> L
+impl fn vr_live_list<V>(f: fn(V, V) -> V, items: list<V>) -> V =>
+    f(items[0], items[1])
+
+operator live_sum<T>(a: T, b: T) -> T
+impl fn live_sum(a: i64, b: i64) -> i64 {
+    when { return a + b + 10 }
+}
+
+operator fold_live<V>(f: fn(V, V) -> V, items: list<V>) -> V
+impl fn fold_live<V>(f: fn(V, V) -> V, items: list<V>) -> V => f(items[0], items[1])
+
+fn with_operator(items: list<i64>) -> i64 => vr_live(live_sum, items)
+fn with_operator_and_list_shape(items: list<i64>) -> i64 => vr_live_list(live_sum, items)
+fn with_named_function(items: list<i64>) -> i64 => vr_live(diff, items)
+fn with_anonymous(items: list<i64>) -> i64 => fold_live(fn(a, b) => live_sum(a, b), items)
+
+test temporal_candidates {
+    assert eval with_operator(items: [[4, 5]]) == [19]
+    assert eval with_operator_and_list_shape(items: [[4, 5]]) == [19]
+    assert eval with_named_function(items: [[5, 2]]) == [3]
+    assert eval with_anonymous(items: [[5, 8]]) == [23]
+}
+
+# The complete GEN-18 fold fragment and its three calls.
+operator plus<T>(a: T, b: T) -> T properties<i64> { associative }
+impl const fn plus(a: i64, b: i64) -> i64 => a + b
+
+operator fold<V, const associative: bool = associative(f)>(
+    f: fn(V, V) -> V,
+    items: list<V>,
+) -> V
+
+impl const fn fold<V, const associative: bool = associative(f)>(
+    f: const fn(V, V) -> V,
+    items: list<V>,
+) -> V requires associative { return items[0] }
+
+test law_from_the_operator_or_the_caller {
+    let xs: list<i64> = [4, 5]
+    assert fold(plus, xs) == 4
+    assert fold{associative: true}(fn(a, b) => a + b, xs) == 4
+}
+
+test anonymous_function_declares_no_law {
+    let xs: list<i64> = [4, 5]
+    # expect-error(operator, "operator.no_candidate")
+    assert fold(fn(a, b) => a - b, xs) == 4
+}
+
+# GEN-6: resolving one trial must not give its callback to another.
+operator select<L, R, C>(f: const fn(L, R) -> L, items: C) -> L
+impl const fn select(f: const fn(i64, i64) -> i64, items: list<i64>) -> i64 =>
+    f(items[0], items[1])
+impl const fn select(f: const fn(f64, f64) -> f64, items: list<f64>) -> f64 =>
+    f(items[0], items[1])
+
+test item_type_selects_the_callback {
+    let integers: list<i64> = [5, 2]
+    let floats: list<f64> = [3.5, 4.5]
+    let integer_sum = select(add_, integers)
+    let float_sum = select(add_, floats)
+    assert integer_sum == 7
+    assert float_sum == 8.0
+}
