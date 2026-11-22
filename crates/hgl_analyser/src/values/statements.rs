@@ -150,7 +150,7 @@ impl<'a> Typer<'a> {
         let (value, outcome) = self.flow(node, Some(result), true);
         match outcome {
             Outcome::Value(_) => {
-                let value = self.fit_input(value, result, "the function's result");
+                let value = self.fit_return(value, result);
                 self.returned = true;
                 Stmt::Return {
                     value: Some(value),
@@ -366,9 +366,19 @@ impl<'a> Typer<'a> {
         }
         let value = self.expression(node, result.as_ref());
         match &result {
-            Some(result) => self.fit_input(value, result, "the function's result"),
+            Some(result) => self.fit_return(value, result),
             None => value,
         }
+    }
+
+    fn fit_return(&mut self, value: Expr, result: &Type) -> Expr {
+        let place = "the function's result";
+        // A graph may already admit the provisional connection, while
+        // a nullable result still decides how it reads the selected call.
+        if self.graph && matches!(result, Type::Nullable(_)) {
+            self.record_result_read(&value, Some((result, place)));
+        }
+        self.fit_input(value, result, place)
     }
 
     /// EXPR-3: "Initialization fixes a binding's value/connection

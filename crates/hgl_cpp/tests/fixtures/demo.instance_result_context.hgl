@@ -46,7 +46,9 @@ const fn require_checked<T>(value: T) -> i64 => checked(value)
 fn checked_node<T>(value: T) -> i64? {
     when { return checked(value) }
 }
-fn checked_graph<T>(value: T) -> i64? => checked(value)
+fn checked_graph<T>(value: T) -> i64? {
+    return checked(value)
+}
 
 test result_value_places {
     assert keep_checked(2) == 2
