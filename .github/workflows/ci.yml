@@ -115,7 +115,7 @@ jobs:
     # The work is split four ways, so that it runs side by side on four
     # runners and not one after another on one: each mode, and in each
     # the SDK tests apart from the runtime library's tests and core's
-    # cases. Every check runs as it did in one job.
+    # cases.
     name: cpp (${{ matrix.mode }}, ${{ matrix.part }})
     strategy:
       fail-fast: false
@@ -186,9 +186,12 @@ jobs:
         run: ctest --test-dir build/cpp-${{ matrix.mode }} --output-on-failure
       - run: cargo --version
       # The C++ target on the SDK: the tests that build and run what it
-      # writes.
+      # writes. Cases share the runner's native build job budget.
       - if: matrix.part == 'sdk'
-        run: cargo test -p hgl_cli --locked --test cpp -- --ignored
+        run: |
+          jobs=$(nproc)
+          cases=$((jobs < 8 ? jobs : 8))
+          scripts/check-cpp-sdk.sh "$jobs" "$cases"
       # Core's cases, held to the list of those it does not run yet
       # (crates/hgl_cpp/ci/unsupported_cases.toml) by check_core.py, whose
       # own tests run first, once.
