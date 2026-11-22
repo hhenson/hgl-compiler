@@ -2077,6 +2077,9 @@ or a universal Mach-O, is not held against the package: the line `hgl`
 prints says so. One of no form known, or too short to tell, is. `HGL_HGRAPH_DEBUG` naming a directory that is not whole
 is an error that says what is wrong; a package beside `hgl` that is not
 is passed over, and the optimised libraries are linked, saying why.
+Both forms of package must identify the running hgl version in
+`hgl-debug.txt`. A missing stamp or a different version selects the
+optimised libraries and reports the reason.
 hgraph's installed headers do not depend on `NDEBUG`, so the debug build
 stands in for the optimised one. The runtime library and the
 description of a program are configured with the libraries' own build
@@ -2122,7 +2125,7 @@ many jobs, which changes nothing made.
 DIR/hgraph-sdk`, with `HGL_HGRAPH_SOURCE` naming a checkout of `TAG` for
 a debugger to read, makes a debug SDK for `HGL_HGRAPH_DEBUG` to name,
 beside `DIR/hgraph-deps`, the prefix it was built against or a link to
-it.
+it. Write the hgl version on a single line in `DIR/hgl-debug.txt`.
 
 A toolchain is prepared once and kept under the cache in
 `toolchains/<hash>`, the hash of which build of hgraph's libraries it
