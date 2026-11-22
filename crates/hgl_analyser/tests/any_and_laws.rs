@@ -336,3 +336,23 @@ fn an_existential_can_test_an_inequality_without_binding() {
     )]);
     assert!(!accepted.rejected, "{}", accepted.report);
 }
+
+#[test]
+fn law_queries_and_bare_terms_reject_runtime_formal_values() {
+    // GEN-3, GEN-18: only a function formal supplies a law default;
+    // a bare bool term names a generic value, not a runtime parameter.
+    for source in [
+        "module m\nconst fn bad<const law: bool = associative(value)>(value: i64) -> i64 => value\n",
+        "module m\nconst fn bad(value: bool) -> bool requires value => value\n",
+    ] {
+        let rejected = check(&[("m.hgl", source)]);
+        assert!(
+            rejected
+                .findings
+                .iter()
+                .any(|finding| finding.code == "type/type.mismatch"),
+            "{}",
+            rejected.report
+        );
+    }
+}

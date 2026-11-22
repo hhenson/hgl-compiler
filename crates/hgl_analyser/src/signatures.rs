@@ -500,8 +500,19 @@ fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
                 };
                 let place = format!("the generic value parameter `{}`", generic.name);
                 if let Some(Detail::Callable(signature)) = module.details.get(index)
-                    && crate::laws::default_parameter(signature, &default).is_some()
+                    && crate::laws::predicate(&default).is_some()
                 {
+                    if crate::laws::default_parameter(signature, &default).is_none() {
+                        diagnostics.emit(error(
+                            Category::Type,
+                            codes::TYPE_MISMATCH,
+                            Location::new(file, default.span()),
+                            "a law default must query a formal parameter that takes a function"
+                                .to_string(),
+                            "GEN-18",
+                        ));
+                        continue;
+                    }
                     // GEN-18, UNIT-8: this is a compile-time bool query
                     // of a function supplied at the call, not a cold constant.
                     if *ty != Type::Scalar(crate::types::Scalar::Bool) {
@@ -528,12 +539,16 @@ fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
                     continue;
                 };
                 let generic = generics.iter().find(|generic| generic.name == name.text());
-                if generic.is_some_and(|generic| {
-                    !matches!(
-                        &generic.kind,
-                        GenericKind::Value(Type::Scalar(crate::types::Scalar::Bool))
-                    )
-                }) {
+                let ordinary_parameter = matches!(module.details.get(index), Some(Detail::Callable(signature))
+                    if signature.parameters.iter().any(|parameter| parameter.name == name.text()));
+                if ordinary_parameter
+                    || generic.is_some_and(|generic| {
+                        !matches!(
+                            &generic.kind,
+                            GenericKind::Value(Type::Scalar(crate::types::Scalar::Bool))
+                        )
+                    })
+                {
                     diagnostics.emit(error(
                         Category::Type,
                         codes::TYPE_MISMATCH,
