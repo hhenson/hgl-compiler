@@ -56,7 +56,7 @@ impl BuildRequest<'_> {
             Err(reason) => Err(reason),
         };
         let (output, program, chosen) = self.prepare(&inputs)?;
-        if self.running
+        if (self.running || self.debug)
             && let Some(path) = &chosen
         {
             runnable_application(&program, path, self.debug)?;
@@ -118,7 +118,12 @@ impl BuildRequest<'_> {
         };
         let output = self.lower(&program, &sources, original_source);
         let program = plan::Program::new(&output, Some(&checked.report), &sources);
-        Ok((output, program, None))
+        let chosen = self
+            .replacements
+            .application
+            .map(|path| choose_application(&program, Some(path)))
+            .transpose()?;
+        Ok((output, program, chosen))
     }
 
     fn lower(
@@ -184,31 +189,21 @@ fn runnable_application<'a>(
     Ok(application)
 }
 
+fn choose_application(program: &plan::Program, named: Option<&str>) -> Result<String, ExitCode> {
+    let paths: Vec<_> = program
+        .applications
+        .iter()
+        .map(|app| app.path.as_str())
+        .collect();
+    crate::chosen_application(&paths, named)
+}
+
 /// Builds or reuses the application's artifacts, then runs its host.
 pub(crate) fn run(arguments: &RunArgs) -> ExitCode {
-    // A legacy debugger launch still gets a fresh session directory,
-    // so another request cannot overwrite a running debugger's image.
-    let session = match arguments
-        .debug_build
-        .as_deref()
-        .map(debug_session)
-        .transpose()
-    {
-        Ok(session) => session,
-        Err(reason) => return build_error(reason),
-    };
-    let stop = application::Stop::new();
-    if session.is_none() {
-        let asked = stop.clone();
-        let _ = ctrlc::set_handler(move || asked.ask());
-    }
     let request = BuildRequest {
         roots: &arguments.roots,
-        keep: session
-            .as_ref()
-            .map(tempfile::TempDir::path)
-            .or(arguments.keep.as_deref()),
-        debug: session.is_some(),
+        keep: arguments.keep.as_deref(),
+        debug: arguments.debug_build.is_some(),
         tests: false,
         running: true,
         limits: arguments.limits,
@@ -218,17 +213,23 @@ pub(crate) fn run(arguments: &RunArgs) -> ExitCode {
             configuration: &arguments.config,
         },
     };
+    if let Some(directory) = arguments.debug_build.as_deref() {
+        return match legacy_debug(&request, directory) {
+            Ok(launch) => {
+                println!("{launch}");
+                ExitCode::SUCCESS
+            }
+            Err(status) => status,
+        };
+    }
+    let stop = application::Stop::new();
+    let asked = stop.clone();
+    let _ = ctrlc::set_handler(move || asked.ask());
     let (build, built) = match request.build() {
         Ok(built) => built,
         Err(status) => return status,
     };
-    let paths: Vec<_> = built
-        .program
-        .applications
-        .iter()
-        .map(|app| app.path.as_str())
-        .collect();
-    let chosen = match crate::chosen_application(&paths, arguments.application.as_deref()) {
+    let chosen = match choose_application(&built.program, arguments.application.as_deref()) {
         Ok(path) => path,
         Err(status) => return status,
     };
@@ -237,21 +238,42 @@ pub(crate) fn run(arguments: &RunArgs) -> ExitCode {
         Err(status) => return status,
     };
     let libraries = sdk::library_path(&built.description);
-    if let Some(session) = session {
-        return match application::debug_launch(&build.workspace, &app.path, libraries) {
-            Ok(launch) => {
-                println!("{launch}");
-                let _ = session.keep();
-                ExitCode::SUCCESS
-            }
-            Err(reason) => build_error(reason),
-        };
-    }
     ran(
         &app.path,
         hgl_cpp::TARGET,
         application::launch(&build.workspace, &app.path, &libraries, &stop),
     )
+}
+
+/// Validates the legacy debugger request before creating its session
+/// directory. Each launch has its own executable until the caller ends it.
+fn legacy_debug(
+    request: &BuildRequest<'_>,
+    directory: &Path,
+) -> Result<serde_json::Value, ExitCode> {
+    let inputs = ProgramSources::read(request.roots)?;
+    let (output, program, chosen) = request.prepare(&inputs)?;
+    let chosen =
+        chosen.ok_or_else(|| build_error("the program has no application to run".into()))?;
+    let app = runnable_application(&program, &chosen, true)?;
+    let directory = debug_session(directory).map_err(build_error)?;
+    let session =
+        BuildSession::open(request.roots, Some(directory.path()), true).map_err(build_error)?;
+    let key = session
+        .key(&inputs, request.limits, &request.replacements)
+        .map_err(build_error)?;
+    session.begin().map_err(build_error)?;
+    let description = session
+        .finish_build(&key, &output, &program)
+        .map_err(build_error)?;
+    let launch = application::debug_launch(
+        &session.workspace,
+        &app.path,
+        sdk::library_path(&description),
+    )
+    .map_err(build_error)?;
+    let _ = directory.keep();
+    Ok(launch)
 }
 
 fn debug_session(directory: &Path) -> Result<tempfile::TempDir, String> {
@@ -281,6 +303,16 @@ pub(crate) fn build(arguments: &BuildArgs) -> ExitCode {
         Ok(built) => built,
         Err(status) => return status,
     };
+    if let Some(path) = arguments.application.as_deref() {
+        if let Err(status) = choose_application(&built.program, Some(path)) {
+            return status;
+        }
+        if arguments.debug
+            && let Err(status) = runnable_application(&built.program, path, true)
+        {
+            return status;
+        }
+    }
     match arguments.format {
         BuildFormat::Text => {
             let action = if built.reused { "reused" } else { "built" };
