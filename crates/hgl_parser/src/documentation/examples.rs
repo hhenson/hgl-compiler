@@ -4,11 +4,11 @@
 use hgl_diagnostics::{Diagnostics, Location};
 use hgl_lexer::{lex, literal::validate_literals};
 use hgl_source::{FileId, SourceFile, SourceMap, Span};
-use rowan::{GreenNode, GreenToken, Language, NodeOrToken};
+use rowan::{GreenNode, GreenNodeBuilder, GreenToken, Language, NodeOrToken, WalkEvent};
 
 use crate::documentation::{Comment, Example, attached};
 use crate::tree::HglLanguage;
-use crate::{Entry, Limits, SyntaxKind, SyntaxNode, parse};
+use crate::{Entry, HasSpan, Limits, SyntaxKind, SyntaxNode, parse};
 
 /// A runnable fence and the declaration whose comment owns it.
 #[derive(Debug, Clone)]
@@ -94,9 +94,49 @@ pub fn parse_examples(
         .collect()
 }
 
-/// Places a test header and closing brace in the fence's space. The
-/// partial source retains each code byte and line break at its offset.
-/// Bytes skipped by Markdown, such as block-quote markers, become spaces.
+/// Location of the wrapper and each code run in the source comment.
+struct Positions<'a> {
+    example: &'a Example,
+    start: usize,
+    close: usize,
+}
+
+const HEADER: &str = "test x{\n";
+
+impl Positions<'_> {
+    fn at(&self, offset: usize) -> usize {
+        let Some(code) = offset.checked_sub(HEADER.len()) else {
+            return self.start + offset;
+        };
+        if code >= self.example.code.len() {
+            return self.close;
+        }
+        let index = self
+            .example
+            .source
+            .partition_point(|run| run.offset <= code)
+            - 1;
+        let run = &self.example.source[index];
+        if run.synthetic {
+            run.start
+        } else {
+            run.start + (code - run.offset)
+        }
+    }
+
+    fn span(&self, written: Span) -> Span {
+        let start = self.at(written.start as usize);
+        let end = if written.is_empty() {
+            start
+        } else {
+            (self.at(written.end as usize - 1) + 1).max(start)
+        };
+        Span::new(start as u32, end as u32)
+    }
+}
+
+/// Parses the CommonMark code itself. Markdown margins cannot enter
+/// tokens whose contents are significant, such as LEX-25 text blocks.
 fn read_test(
     source: &SourceFile,
     file: FileId,
@@ -104,47 +144,23 @@ fn read_test(
     limits: Limits,
     diagnostics: &mut Diagnostics,
 ) -> Option<(usize, GreenNode)> {
-    const HEADER: &[u8] = b"test x{";
-    let first_line = source.line_index(example.fence.start);
-    let start = source.line_range(first_line)?.start;
-    let body_end = example
-        .source
-        .last()
-        .map_or(start + HEADER.len(), |last| last.end as usize);
-    let expected_close = example.fence.end.saturating_sub(1) as usize;
-    // CommonMark also admits an unclosed fence. Use the comment's
-    // remaining margin for our closing brace in that case.
-    let unclosed = body_end > expected_close;
-    let close = if unclosed {
-        body_end + 1
-    } else {
-        expected_close
+    let start = source
+        .line_range(source.line_index(example.fence.start))?
+        .start;
+    let positions = Positions {
+        example,
+        start,
+        close: example.fence.end.saturating_sub(1) as usize,
     };
-    let bytes = source.text().as_bytes();
-    let mut text: Vec<_> = bytes
-        .get(start..=close)?
-        .iter()
-        .map(|&byte| {
-            if matches!(byte, b'\r' | b'\n') {
-                byte
-            } else {
-                b' '
-            }
-        })
-        .collect();
-    text.get_mut(..HEADER.len())?.copy_from_slice(HEADER);
-    for span in &example.source {
-        let range = span.range();
-        let local = range.start - start..range.end - start;
-        text.get_mut(local)?.copy_from_slice(&bytes[range]);
+    let mut text = String::from(HEADER);
+    text.push_str(&example.code);
+    if !text.ends_with('\n') {
+        text.push('\n');
     }
-    if unclosed {
-        text[close - start - 1] = b'\n';
-    }
-    text[close - start] = b'}';
+    text.push('}');
 
     let mut fragment = SourceMap::new();
-    let fragment_file = fragment.add_bytes("<documentation example>", text).ok()?;
+    let fragment_file = fragment.add("<documentation example>", text).ok()?;
     let mut reports = Diagnostics::new();
     let tokens = lex(&fragment, fragment_file, &mut reports);
     validate_literals(&fragment, fragment_file, &tokens, &mut reports);
@@ -157,14 +173,13 @@ fn read_test(
         &mut reports,
     );
     for mut report in reports.as_slice().iter().cloned() {
-        let shift = |location: &mut Location| {
+        let move_to_comment = |location: &mut Location| {
             location.file = file;
-            location.span.start += start as u32;
-            location.span.end += start as u32;
+            location.span = positions.span(location.span);
         };
-        shift(&mut report.primary);
+        move_to_comment(&mut report.primary);
         for related in &mut report.related {
-            shift(&mut related.location);
+            move_to_comment(&mut related.location);
         }
         diagnostics.emit(report);
     }
@@ -172,5 +187,46 @@ fn read_test(
         .syntax()
         .children()
         .find(|node| node.kind() == SyntaxKind::TestDecl)?;
-    Some((start, test.green().to_owned()))
+    Some((start, at_source_positions(&test, &positions)))
+}
+
+/// Repositions the syntax by placing Markdown's removed bytes between
+/// tokens as trivia, leaving each token's text as the HGL lexer read it.
+/// Positions within a multiline token are mapped before this step, when
+/// reporting lexer and parser diagnostics.
+fn at_source_positions(test: &SyntaxNode, positions: &Positions<'_>) -> GreenNode {
+    let raw = HglLanguage::kind_to_raw;
+    let whitespace = raw(SyntaxKind::Whitespace);
+    let mut builder = GreenNodeBuilder::new();
+    let mut at = positions.start;
+    for event in test.preorder_with_tokens() {
+        match event {
+            WalkEvent::Enter(element) => {
+                let start = positions.at(u32::from(element.text_range().start()) as usize);
+                if at < start {
+                    builder.token(whitespace, &" ".repeat(start - at));
+                    at = start;
+                }
+                match element {
+                    NodeOrToken::Node(node) => builder.start_node(raw(node.kind())),
+                    NodeOrToken::Token(token) if token.kind() == SyntaxKind::Whitespace => {
+                        // CommonMark may expand part of a tab to spaces. Its
+                        // original width is what the next token must follow.
+                        let end = positions.span(token.span()).end as usize;
+                        if at < end {
+                            builder.token(whitespace, &" ".repeat(end - at));
+                            at = end;
+                        }
+                    }
+                    NodeOrToken::Token(token) => {
+                        builder.token(raw(token.kind()), token.text());
+                        at += token.text().len();
+                    }
+                }
+            }
+            WalkEvent::Leave(NodeOrToken::Node(_)) => builder.finish_node(),
+            WalkEvent::Leave(NodeOrToken::Token(_)) => {}
+        }
+    }
+    builder.finish()
 }

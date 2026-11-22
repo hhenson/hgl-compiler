@@ -195,8 +195,8 @@ fn read_examples(
             match event {
                 Event::End(pulldown_cmark::TagEnd::CodeBlock) => break,
                 Event::Text(text) => {
+                    source.extend(code_source(lines, &starts, range, code.len()));
                     code.push_str(&text);
-                    source.extend(source_ranges(lines, &starts, range));
                 }
                 _ => {}
             }
@@ -329,8 +329,15 @@ pub struct Example {
     pub runnable: bool,
     /// The original fence, including its delimiters where present.
     pub fence: Span,
-    /// The original code spans, one per line. Markdown margins are excluded.
-    pub source: Vec<Span>,
+    source: Vec<CodeSource>,
+}
+
+/// A run of the fence's rendered bytes with their original positions.
+/// A tab partly consumed by Markdown can leave synthetic spaces.
+struct CodeSource {
+    offset: usize,
+    start: usize,
+    synthetic: bool,
 }
 
 /// Pulldown ranges index the joined Markdown. The line records retain the
@@ -340,26 +347,32 @@ fn source_offset(lines: &[Line<'_>], starts: &[usize], offset: usize) -> u32 {
     lines[line].start + (offset - starts[line]) as u32
 }
 
-fn source_ranges<'a>(
-    lines: &'a [Line<'a>],
+fn code_source<'a>(
+    lines: &'a [Line<'_>],
     starts: &'a [usize],
     range: Range<usize>,
-) -> impl Iterator<Item = Span> + 'a {
-    let first = starts.partition_point(|&start| start <= range.start) - 1;
-    lines[first..]
+    offset: usize,
+) -> impl Iterator<Item = CodeSource> + 'a {
+    let Range { start, end } = range;
+    let first = starts.partition_point(|&line| line <= start) - 1;
+    let synthetic = (start == end).then(|| CodeSource {
+        offset,
+        start: source_offset(lines, starts, start).saturating_sub(1) as usize,
+        synthetic: true,
+    });
+    let written = lines[first..]
         .iter()
         .zip(&starts[first..])
-        .take_while(move |(_, start)| **start < range.end)
-        .filter_map(move |(line, &start)| {
-            let from = range.start.max(start);
-            let to = range.end.min(start + line.text.len());
-            (from < to).then(|| {
-                Span::new(
-                    line.start + (from - start) as u32,
-                    line.start + (to - start) as u32,
-                )
-            })
-        })
+        .take_while(move |(_, line)| start != end && **line < end)
+        .map(move |(line, &line_start)| {
+            let from = start.max(line_start);
+            CodeSource {
+                offset: offset + from - start,
+                start: line.start as usize + from - line_start,
+                synthetic: false,
+            }
+        });
+    synthetic.into_iter().chain(written)
 }
 
 /// A named entry of `Args:` or `Type Args:`, with its description.

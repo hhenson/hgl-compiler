@@ -2,7 +2,7 @@
 //! bytes of their comments, including in nested Markdown.
 
 use hgl_diagnostics::Diagnostics;
-use hgl_lexer::lex;
+use hgl_lexer::{lex, literal::decode_string};
 use hgl_parser::documentation::{Comment, attached, parse_examples};
 use hgl_parser::{Entry, HasSpan, Limits, SyntaxKind, parse};
 use hgl_source::SourceMap;
@@ -16,7 +16,10 @@ A réglage.
 
 Examples:
     > ~~~hgl
-    > assert true
+    > let label = """
+    >café
+    > """
+    > assert label == "café"
     > ~~~
 
     ~~~hgl no-run
@@ -88,7 +91,15 @@ export const marker: i64 = 1
             )
         })
         .collect();
-    assert_eq!(assertions, [(1, 8), (3, 16)]);
+    assert_eq!(assertions, [(1, 11), (3, 19)]);
+    // LEX-25: optional Markdown quote padding cannot enter the literal.
+    let text_block = examples[0]
+        .test
+        .descendants_with_tokens()
+        .filter_map(|element| element.into_token())
+        .find(|token| token.text().starts_with("\"\"\""))
+        .unwrap();
+    assert_eq!(decode_string(text_block.text()).unwrap(), "café");
 }
 
 #[test]

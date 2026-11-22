@@ -1,9 +1,12 @@
 /** Documentation examples for this module.
 
 Examples:
-    ~~~hgl
-    assert true
-    ~~~
+    > ~~~hgl
+    > let label = """
+    >café
+    > """
+    > assert label == "café"
+    > ~~~
 */
 module demo.documentation_examples
 
