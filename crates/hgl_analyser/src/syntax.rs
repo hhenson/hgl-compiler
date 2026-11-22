@@ -72,6 +72,14 @@ pub(crate) fn ungrouped(mut node: SyntaxNode) -> SyntaxNode {
     node
 }
 
+/// The statements of a test's block. Leading helper declarations have their own bodies.
+pub(crate) fn test_statements(test: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> {
+    child(test, SyntaxKind::Block)
+        .into_iter()
+        .flat_map(|block| block.children())
+        .filter(|node| node.kind() != SyntaxKind::FnDecl)
+}
+
 /// True when the `inject` `node` stands among the first statements of
 /// its test's block, before any that is no `inject` (TST-17).
 pub(crate) fn leads_its_test(node: &SyntaxNode) -> bool {
@@ -83,7 +91,10 @@ pub(crate) fn leads_its_test(node: &SyntaxNode) -> bool {
     });
     let mut before = node.prev_sibling();
     while let Some(statement) = before {
-        if statement.kind() != SyntaxKind::InjectDecl {
+        if !matches!(
+            statement.kind(),
+            SyntaxKind::InjectDecl | SyntaxKind::FnDecl
+        ) {
             return false;
         }
         before = statement.prev_sibling();

@@ -32,7 +32,7 @@ use hgl_source::{FileId, Span};
 
 use crate::constant::Constants;
 use crate::program::{Binding, DependentPack, Module, OperatorRef, Program};
-use crate::syntax::tokens;
+use crate::syntax::{test_statements, tokens};
 use crate::types::{CallArguments, Detail, GenericParameter, Type, WrittenType};
 
 use self::declarations::{Evidence, Kinds, struct_kinds};
@@ -71,7 +71,9 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
         }
         for test in &module.tests {
             reader.enter(module.files[test.file].file);
-            reader.scan(&test.syntax);
+            for statement in test_statements(&test.syntax) {
+                reader.scan(&statement);
+            }
         }
         if let Some(run) = &module.run {
             reader.enter(module.files[run.file].file);
