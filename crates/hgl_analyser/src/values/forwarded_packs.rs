@@ -6,8 +6,8 @@ use hgl_diagnostics::Category;
 use hgl_parser::{SyntaxKind, SyntaxNode};
 
 use super::Typer;
-use crate::declared::names_parameter;
-use crate::hir::{Callee, Expr, ExprKind, Form, PackKey};
+use crate::declared::{names_parameter, substitute_within};
+use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey};
 use crate::syntax::ungrouped;
 use crate::types::Type;
 use crate::{codes, error};
@@ -152,6 +152,74 @@ struct ForwardingInstance {
     pack_inputs: Vec<crate::hir::PackInput>,
 }
 
+impl crate::Program {
+    /// The type and source key of each pack entry bound to a call (FN-8,
+    /// FN-19). A concrete parameter type takes precedence over the type
+    /// of the argument read at the call. For a trace that supplies an
+    /// independently typed entry, use its replay payload (TST-5).
+    pub fn call_pack_inputs(
+        &self,
+        callee: &Callee,
+        signature: &crate::Signature,
+        arguments: &[crate::hir::Argument],
+    ) -> Vec<PackInput> {
+        let mut counts = vec![0; signature.parameters.len()];
+        let bindings: Vec<_> = signature
+            .generics
+            .iter()
+            .map(|parameter| parameter.at)
+            .zip(callee.generics())
+            .collect();
+        arguments
+            .iter()
+            .filter_map(|argument| {
+                let parameter = argument.parameter?;
+                let key = argument.pack.as_ref()?;
+                let declared = &signature.parameters[parameter];
+                let index = &mut counts[parameter];
+                let expected = super::inference::type_pack(declared, &signature.generics)
+                    .and_then(|generic| {
+                        callee
+                            .type_packs()
+                            .iter()
+                            .find(|pack| pack.parameter == generic)
+                    })
+                    .and_then(|pack| pack.types.get(*index))
+                    .cloned()
+                    .unwrap_or_else(|| substitute_within(&declared.ty, &bindings));
+                *index += 1;
+                let unresolved = expected.any_part(
+                    &|part| {
+                        matches!(
+                            part,
+                            Type::Unknown
+                                | Type::Parameter { .. }
+                                | Type::PackMember { .. }
+                                | Type::Trace { .. }
+                                | Type::Function(_)
+                        )
+                    },
+                    &|constant| constant.value.key().is_none(),
+                );
+                let ty = if unresolved {
+                    argument
+                        .value
+                        .ty
+                        .trace_payload()
+                        .unwrap_or_else(|| argument.value.ty.clone())
+                } else {
+                    expected
+                };
+                Some(PackInput {
+                    parameter,
+                    key: key.clone(),
+                    ty,
+                })
+            })
+            .collect()
+    }
+}
+
 impl ForwardingInstance {
     fn of(program: &crate::Program, expression: &Expr) -> Option<Self> {
         use crate::types::Argument;
@@ -189,37 +257,17 @@ impl ForwardingInstance {
         {
             return None;
         }
-        let mut indices = vec![0; signature.parameters.len()];
-        let mut pack_inputs = Vec::new();
-        let mut functions = Vec::new();
-        for argument in arguments {
-            let Some(parameter) = argument.parameter else {
-                continue;
-            };
-            if let ExprKind::StaticCallable(callee) = &argument.value.kind {
-                functions.push((parameter, (**callee).clone()));
-                continue;
-            }
-            let Some(key) = &argument.pack else {
-                continue;
-            };
-            let index = &mut indices[parameter];
-            let ty =
-                super::inference::type_pack(&signature.parameters[parameter], &signature.generics)
-                    .and_then(|generic| type_packs.iter().find(|pack| pack.parameter == generic))
-                    .and_then(|pack| pack.types.get(*index))
-                    .or_else(|| super::evals::trace_pack_type(&argument.value.ty))
-                    .unwrap_or(&argument.value.ty);
-            if !known(ty) {
-                return None;
-            }
-            *index += 1;
-            pack_inputs.push(crate::hir::PackInput {
-                parameter,
-                key: key.clone(),
-                ty: ty.clone(),
-            });
+        let pack_inputs = program.call_pack_inputs(callee, signature, arguments);
+        if pack_inputs.iter().any(|entry| !known(&entry.ty)) {
+            return None;
         }
+        let functions = arguments
+            .iter()
+            .filter_map(|argument| match &argument.value.kind {
+                ExprKind::StaticCallable(callee) => Some((argument.parameter?, (**callee).clone())),
+                _ => None,
+            })
+            .collect();
         let requirements = match callee {
             Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
                 requirements.clone()

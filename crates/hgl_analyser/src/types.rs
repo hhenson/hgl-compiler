@@ -447,6 +447,31 @@ impl Type {
         }
     }
 
+    /// The endpoint payload replayed by a trace of publications (TST-5,
+    /// TYPE-16). A composite delta names its payload. A tuple publication
+    /// holds each changed position under an outer nullable marker.
+    pub fn trace_payload(&self) -> Option<Type> {
+        fn published_type(cell: &Type) -> Type {
+            match cell {
+                Type::Delta(payload) => (**payload).clone(),
+                Type::Tuple(positions) => Type::Tuple(
+                    positions
+                        .iter()
+                        .map(|position| match position {
+                            Type::Nullable(changed) => published_type(changed),
+                            other => published_type(other),
+                        })
+                        .collect(),
+                ),
+                scalar => scalar.clone(),
+            }
+        }
+        match self {
+            Type::Trace { cell, .. } => Some(published_type(cell)),
+            _ => None,
+        }
+    }
+
     /// The `delta<T>` a trace's `cell` is (TYPE-16): what
     /// [`Type::trace_cell`] gives, with a tuple's delta formed, a tuple
     /// of each position's.

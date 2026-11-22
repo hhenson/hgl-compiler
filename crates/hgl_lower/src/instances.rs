@@ -200,30 +200,7 @@ pub struct Wiring {
 /// The endpoint payload for a trace of publications (TST-5, TYPE-16).
 /// Replays and the lifted node receiving those replays use the same type.
 pub fn trace_payload(trace: &Type) -> Option<Type> {
-    let Type::Trace { cell, .. } = trace else {
-        return None;
-    };
-    Some(published_type(cell))
-}
-
-/// The type whose publication `cell` is the delta of: a delta that is
-/// a type of its own names it, a scalar is its own, and a tuple's delta
-/// is "`tuple<delta<A>?, delta<B>?>`" (TYPE-16), each position the delta
-/// of the tuple's under a `?`.
-fn published_type(cell: &Type) -> Type {
-    match cell {
-        Type::Delta(payload) => payload.as_ref().clone(),
-        Type::Tuple(positions) => Type::Tuple(
-            positions
-                .iter()
-                .map(|position| match position {
-                    Type::Nullable(changed) => published_type(changed),
-                    other => published_type(other),
-                })
-                .collect(),
-        ),
-        scalar => scalar.clone(),
-    }
+    trace.trace_payload()
 }
 
 /// What the run of the eval that takes `call` is wired with; `eval` is
