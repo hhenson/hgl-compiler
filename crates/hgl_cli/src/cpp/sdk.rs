@@ -1759,8 +1759,11 @@ mod tests {
     fn executable(path: &Path, script: &str) {
         use std::os::unix::fs::PermissionsExt as _;
 
-        fs::write(path, script).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        crate::test_executable::publish_executable(
+            path,
+            script.as_bytes(),
+            fs::Permissions::from_mode(0o700),
+        );
     }
 
     #[cfg(unix)]

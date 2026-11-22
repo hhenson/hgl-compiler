@@ -14,6 +14,9 @@ mod build_reuse;
 mod common;
 #[path = "cpp/debug_tests.rs"]
 mod debug_tests;
+#[cfg(unix)]
+#[path = "common/executable.rs"]
+mod executable;
 
 use std::fs;
 use std::path::Path;
@@ -314,8 +317,9 @@ fn release_prefixes_follow_the_real_executable() {
     let file = write(&root, "flags.hgl", FLAGS);
     let bundle = root.join("bundle");
     let hgl = bundle.join("bin/hgl");
-    fs::create_dir_all(hgl.parent().unwrap()).unwrap();
-    fs::copy(env!("CARGO_BIN_EXE_hgl"), &hgl).unwrap();
+    let source = fs::File::open(env!("CARGO_BIN_EXE_hgl")).unwrap();
+    let permissions = source.metadata().unwrap().permissions();
+    executable::publish_executable(&hgl, source, permissions);
     let linked = root.join("hgl");
     std::os::unix::fs::symlink(&hgl, &linked).unwrap();
     let sdk = bundle.join("libexec/hgraph-sdk/lib/cmake/hgraph");

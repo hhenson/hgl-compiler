@@ -372,6 +372,8 @@ fn debug_launches_group_tests_and_build_only_missing_modules() {
 fn debug_native_build_failure_leaves_stdout_empty() {
     use std::os::unix::fs::PermissionsExt as _;
 
+    use super::executable::publish_executable;
+
     if !sdk_named() {
         return;
     }
@@ -388,17 +390,17 @@ fn debug_native_build_failure_leaves_stdout_empty() {
     );
     let workspace = root.join("debug workspace");
     let ninja = which::which("ninja").expect("the SDK uses Ninja");
-    let wrapper = write(
-        &root,
-        "bin/ninja",
+    publish_executable(
+        &root.join("bin/ninja"),
         r#"#!/bin/sh
 if [ "$1" = -C ] && [ "$2" = "$HGL_TEST_DEBUG_WORKSPACE" ]; then
     printf '\n#error controlled debug C++ failure\n' >> "$2/modules/mod-debug-bad.cpp"
 fi
 exec "$HGL_TEST_REAL_NINJA" "$@"
-"#,
+"#
+        .as_bytes(),
+        fs::Permissions::from_mode(0o755),
     );
-    fs::set_permissions(wrapper, fs::Permissions::from_mode(0o755)).unwrap();
     let path = std::env::join_paths(
         std::iter::once(root.join("bin"))
             .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
