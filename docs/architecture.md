@@ -1336,17 +1336,19 @@ parameter's type as resolved (GEN-13), and the operator's own
 requirement of its result. So a requirement holds exactly where the
 call it names would select one candidate.
 
-For value arguments, `values::public_output_inputs` leaves an integer literal's
-preliminary reading out of this output inference (EXPR-5, GEN-2, GEN-6).
-A defaulted operator option must not promote that reading to an `i64`
-result request before a candidate can widen the literal to `f64`.
-`public_inputs` still supplies those readings for contextual argument inference;
-selection reads each literal against the candidate's own signature.
-`Typer::called` completes any public type left open from the fitted
-argument types before an inherited configuration default is specialized.
-A literal fitted to `f64?` has type `f64`, without the nullable wrapper.
-Written type arguments, expected results, typed values and result-shape
-option defaults remain requests.
+`Typer::output_requested` keeps the complete public inference for result
+requirements (GEN-4), dependent generic defaults (GEN-13), and reflected
+pack checks (GEN-17). Its requested result uses written and expected type
+arguments together with inferred or defaulted generic values. An unrelated
+option therefore cannot promote preliminary argument types to an output
+request and change the way candidates read literals (GEN-5, GEN-6).
+
+Inherited configuration defaults have separate call metadata: argument-derived
+types stay open until `Typer::called` completes them from fitted arguments
+(UNIT-8). A literal fitted to `f64?` has type `f64`, without the nullable
+wrapper. This deferred metadata never replaces the public inference used
+by the earlier checks. Explicit types, expected results and result-shape
+options remain requests; typed values constrain candidate inputs.
 
 Where two requirements name one operator with the same types and
 different results, the call is the one that gives what its place

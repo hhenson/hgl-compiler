@@ -14,7 +14,7 @@ use super::constants::{constant_text, generic_default};
 use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
 };
-use super::fit::{is_integer_literal, open, whole};
+use super::fit::{open, whole};
 use super::function_arguments::CallbackInputs;
 use super::inference::{
     ExplicitGenerics, bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed,
@@ -68,6 +68,11 @@ impl<'a> Typer<'a> {
         said: bool,
     ) -> Requested {
         let program = self.program;
+        // GEN-5, GEN-6: an option does not turn an argument's
+        // preliminary type into a requested result. Public checks below
+        // still use every argument; written types and the expected place
+        // alone constrain the type parameters in the output request.
+        let requested_types = found.clone();
         self.infer_operator_inputs(public, &mut found, supplied);
         let operator_declaration =
             &program.modules[operator.module].declarations[operator.declaration];
@@ -130,6 +135,7 @@ impl<'a> Typer<'a> {
                     place: None,
                     among: None,
                     generics: Vec::new(),
+                    call_generics: Vec::new(),
                     unfit: Some(Unfit {
                         generic: index,
                         described,
@@ -140,12 +146,31 @@ impl<'a> Typer<'a> {
         }
         // The output requested, as far as it is known: a `list<T, 3>`
         // with `T` not yet said is a list of three of anything.
+        let output_arguments: Vec<_> = public
+            .generics
+            .iter()
+            .zip(&explicit)
+            .zip(requested_types)
+            .map(|((generic, inferred), requested)| match generic.kind {
+                GenericKind::Plain | GenericKind::Type => {
+                    requested.unwrap_or(Argument::Type(Type::Unknown))
+                }
+                _ => inferred.clone(),
+            })
+            .collect();
+        let output_map: Vec<_> = public
+            .generics
+            .iter()
+            .zip(&output_arguments)
+            .filter(|(generic, _)| !matches!(generic.kind, GenericKind::Pack { .. }))
+            .map(|(generic, argument)| (generic.at, argument))
+            .collect();
         let place: Option<Type> = asked
             .then(|| {
                 public
                     .result
                     .as_ref()
-                    .map(|result| placed(substitute_within(result, &map), &own_generics))
+                    .map(|result| placed(substitute_within(result, &output_map), &own_generics))
                     .filter(|requested| !matches!(requested, Type::Unknown))
             })
             .flatten();
@@ -163,6 +188,16 @@ impl<'a> Typer<'a> {
                 || reflects(&program.modules[operator.module], public)
             {
                 explicit
+            } else {
+                Vec::new()
+            },
+            call_generics: if public
+                .parameters
+                .iter()
+                .any(|parameter| parameter.configuration)
+                || reflects(&program.modules[operator.module], public)
+            {
+                output_arguments
             } else {
                 Vec::new()
             },
@@ -437,11 +472,12 @@ impl<'a> Typer<'a> {
         // Then its arguments, in the order the operator declares its
         // parameters (GEN-12), and its defaults: see
         // `Typer::output_requested`.
-        let supplied = public_output_inputs(public, &given);
+        let supplied = public_inputs(public, &given);
         let Requested {
             place: mut requested,
             among,
             generics: operator_generics,
+            call_generics,
             unfit,
         } = self.output_requested(operator, public, found, &supplied, said);
         // GEN-13: a default the call takes is of its parameter's type
@@ -510,6 +546,10 @@ impl<'a> Typer<'a> {
                 }
             }
         }
+        // Public constraints and pack checks above use the original
+        // inference. Only configuration defaults use the fitted argument
+        // types completed by `called` (UNIT-8, GEN-6).
+        let operator_generics = call_generics;
         // GEN-7: "A generic body is checked under its stated
         // requirements": what the enclosing declaration requires of its
         // generic parameters is callable in its body. The requirement
@@ -1539,26 +1579,6 @@ pub(super) fn public_inputs<'a>(public: &Signature, given: &'a [Given]) -> Vec<O
     inputs
 }
 
-/// GEN-2, GEN-6, EXPR-5: an integer literal takes the candidate's
-/// expected type. Its initial i64 reading does not request an i64 result
-/// through an operator option or default. Written types and places have
-/// already supplied their constraints separately.
-pub(super) fn public_output_inputs<'a>(
-    public: &Signature,
-    given: &'a [Given],
-) -> Vec<Option<&'a Type>> {
-    let mut inputs = public_inputs(public, given);
-    for argument in given
-        .iter()
-        .filter(|argument| is_integer_literal(&argument.value))
-    {
-        if let Some(index) = argument.key.public_parameter(public) {
-            inputs[index] = None;
-        }
-    }
-    inputs
-}
-
 /// The note on a call in a generic body that no candidate is known to
 /// admit: whether one does depends on a generic parameter of the body,
 /// which its `requires` does not settle (GEN-7).
@@ -1671,6 +1691,9 @@ pub(super) struct Requested {
     pub(super) among: Option<Vec<Type>>,
     /// The operator's resolved generic arguments, for any configuration defaults.
     pub(super) generics: Vec<Argument>,
+    /// Arguments for inherited configuration defaults: an argument-derived
+    /// type stays open until the candidate fits its source expression.
+    pub(super) call_generics: Vec<Argument>,
     /// A default the call takes that is not of its parameter's type as
     /// the call resolves it (GEN-13). Nothing is then requested.
     pub(super) unfit: Option<Unfit>,

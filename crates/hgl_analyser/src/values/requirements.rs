@@ -1644,7 +1644,7 @@ impl<'a> Typer<'a> {
                     self.diagnostics.emit(unfit.diagnostic(public, at));
                     return (self.unselected(given, form), Type::Unknown);
                 }
-                operator_generics = requested.generics;
+                operator_generics = requested.call_generics;
             } else {
                 self.infer_operator_inputs(public, &mut inferred, &supplied);
                 for (argument, found) in operator_generics.iter_mut().zip(inferred) {
