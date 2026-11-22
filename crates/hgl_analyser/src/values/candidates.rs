@@ -807,35 +807,6 @@ impl<'a> Typer<'a> {
         } = chosen;
         let signature: &Signature = &taken;
         let program = self.program;
-        // GEN-2, GEN-6, UNIT-8: the public output request leaves a
-        // widenable literal's type open. Once selected, the candidate
-        // supplies that type to inherited configuration defaults.
-        let mut operator_generics = operator_generics;
-        if !operator_generics.is_empty()
-            && let Some(Detail::Callable(public)) = program.modules[operator.module]
-                .details
-                .get(operator.declaration)
-        {
-            let mut found: Vec<_> = operator_generics
-                .iter()
-                .map(|argument| match argument {
-                    Argument::Type(Type::Unknown) => None,
-                    argument => Some(argument.clone()),
-                })
-                .collect();
-            let mut supplied = vec![None; public.parameters.len()];
-            for (argument, &slot) in given.iter().zip(&bound) {
-                if let Some(index) = argument.key.public_parameter(public) {
-                    supplied[index] = parameter_type(signature, &type_packs, slot);
-                }
-            }
-            self.infer_operator_inputs(public, &mut found, &supplied);
-            for (argument, resolved) in operator_generics.iter_mut().zip(found) {
-                if let Some(resolved) = resolved {
-                    *argument = resolved;
-                }
-            }
-        }
         let reported = self.diagnostics.len();
         // GEN-5: in a test's or an application's value code "a temporal
         // candidate it selects rejects" (TST-3, UNIT-14), the code
@@ -920,6 +891,19 @@ impl<'a> Typer<'a> {
                 ));
             }
         }
+        let mut operator_generics = operator_generics;
+        let public = (!operator_generics.is_empty())
+            .then(|| {
+                program.modules[operator.module]
+                    .details
+                    .get(operator.declaration)
+            })
+            .flatten()
+            .and_then(|detail| match detail {
+                Detail::Callable(public) => Some(public),
+                _ => None,
+            });
+        let mut fitted_inputs = vec![None; public.map_or(0, |public| public.parameters.len())];
         let mut braced = Vec::new();
         // GEN-7: when an instance has to select again, keep the input
         // expressions before the provisional candidate fits them. In
@@ -988,6 +972,9 @@ impl<'a> Typer<'a> {
                 } else {
                     self.fit(input, ty, &place)
                 };
+                if let Some(index) = public.and_then(|public| given.key.public_parameter(public)) {
+                    fitted_inputs[index] = Some(value.ty.clone());
+                }
                 if from_braces {
                     braced.push(value.at);
                 }
@@ -998,6 +985,25 @@ impl<'a> Typer<'a> {
                 })
             })
             .collect();
+        // GEN-2, GEN-6, UNIT-8: inherited configuration defaults
+        // receive the fitted argument's type, not the parameter's.
+        // Fitting a literal to f64? gives f64; it does not make it nullable.
+        if let Some(public) = public {
+            let mut found: Vec<_> = operator_generics
+                .iter()
+                .map(|argument| match argument {
+                    Argument::Type(Type::Unknown) => None,
+                    argument => Some(argument.clone()),
+                })
+                .collect();
+            let supplied: Vec<_> = fitted_inputs.iter().map(Option::as_ref).collect();
+            self.infer_operator_inputs(public, &mut found, &supplied);
+            for (argument, resolved) in operator_generics.iter_mut().zip(found) {
+                if let Some(resolved) = resolved {
+                    *argument = resolved;
+                }
+            }
+        }
         let requirements = self.answers(module, declaration, &generics);
         let kind = ExprKind::Call {
             callee: Callee::Candidate {

@@ -1342,8 +1342,9 @@ A defaulted operator option must not promote that reading to an `i64`
 result request before a candidate can widen the literal to `f64`.
 `public_inputs` still supplies those readings for contextual argument inference;
 selection reads each literal against the candidate's own signature.
-`Typer::called` completes any public type left open from those selected
-parameter types before an inherited configuration default is specialized.
+`Typer::called` completes any public type left open from the fitted
+argument types before an inherited configuration default is specialized.
+A literal fitted to `f64?` has type `f64`, without the nullable wrapper.
 Written type arguments, expected results, typed values and result-shape
 option defaults remain requests.
 
