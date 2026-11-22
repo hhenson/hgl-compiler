@@ -28,6 +28,7 @@ test with_a_type {
     assert closed.day == cutoff
     assert plan == Plan.holiday
     assert !open_on(closed, cutoff)
+    assert !open_on(Closed(day: @2026-01-05), @2026-01-05)
 }
 
 test independent_types_and_operator {
