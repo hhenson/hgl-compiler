@@ -424,11 +424,11 @@ pub(super) fn check_instances(
                 }
             }
             if let Some(checked) = checked {
-                if let Some(reports) = &checked.result_use_reports {
+                if let Some(result_uses) = &checked.result_uses {
                     super::requirements::report_instance_result_uses(
                         program,
                         (instance.declaration, &instance.generics),
-                        reports,
+                        result_uses,
                         &[at],
                         diagnostics,
                     );

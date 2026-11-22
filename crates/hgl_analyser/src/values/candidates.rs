@@ -2214,24 +2214,24 @@ pub(crate) fn in_instance(signature: &Signature, map: &[(Location, &Argument)]) 
 /// each call so put, for the instance's arguments to be put in place in
 /// what it holds. A call that selects no one candidate is left with no
 /// callee; the analyser has reported it (`instances_hold`).
-/// Returns whether a call changed the result type used to check its uses.
+/// Returns the calls that changed the result type used to check their uses.
 pub(crate) fn select_in_instance(
     program: &crate::program::Program,
     (module, declaration): (usize, usize),
     generics: &[Argument],
     body: &mut hir::Body,
     after: &dyn Fn(&mut Expr),
-) -> bool {
+) -> Vec<Location> {
     let unit = &program.modules[module];
     let Some(calls) = unit
         .selecting
         .get(declaration)
         .filter(|calls| !calls.is_empty())
     else {
-        return false;
+        return Vec::new();
     };
     let Some(Detail::Callable(declared)) = unit.details.get(declaration) else {
-        return false;
+        return Vec::new();
     };
     let map: Vec<(Location, &Argument)> = declared
         .generics
@@ -2268,7 +2268,7 @@ pub(crate) fn select_in_instance(
     // value where a call reads it (EXPR-3).
     typer.use_instance_locals(body.locals.clone());
     let mut retagged = HashSet::new();
-    let mut result_changed = false;
+    let mut changed_results = Vec::new();
     hir::walk_statements_mut(&mut body.statements, &mut |expression| {
         // A source read of the provisional result can be obsolete.
         // Replace it with the selected call in the actual place's form.
@@ -2323,9 +2323,12 @@ pub(crate) fn select_in_instance(
             category: expression.category,
         };
         let selected = typer.fit_selected_result(call, selected, |ty| substitute_within(ty, &map));
-        result_changed |= call.result.is_some()
+        if call.result.is_some()
             && expression.ty != selected.ty
-            && typer.diagnostics.len() == before;
+            && typer.diagnostics.len() == before
+        {
+            changed_results.push(call.at);
+        }
         *expression = selected;
         after(expression);
         if let Some(test) = call.tag_test
@@ -2350,7 +2353,7 @@ pub(crate) fn select_in_instance(
         });
     }
     body.locals = typer.locals;
-    result_changed
+    changed_results
 }
 
 /// One argument of an operator's call, before a candidate is selected.

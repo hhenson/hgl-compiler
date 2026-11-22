@@ -162,6 +162,29 @@ fn an_instance_rejects_an_index_into_its_selected_set() {
     assert!(checked.report.contains("first<bool>"), "{}", checked.report);
 }
 
+/// GEN-7 and EXPR-5: a return checks the selected type of an inferred
+/// local. The local has no annotation to guide the earlier selection.
+#[test]
+fn an_instance_rejects_a_return_of_its_selected_result() {
+    let checked = module(concat!(
+        "operator get_value<T, R>(value: T) -> R\n",
+        "impl const fn get_value<T>(value: T) -> i64 => 5\n",
+        "impl const fn get_value(value: i64) -> str => \"different\"\n",
+        "const fn inferred<T>(value: T) -> i64 {\n",
+        "    let answer = get_value(value)\n",
+        "    return answer\n",
+        "}\n",
+        "const fn concrete() -> i64 => inferred(3)\n",
+    ));
+    assert!(checked.rejected, "{}", checked.report);
+    assert_eq!(checked.summary(), ["m.hgl:6:18 type/type.mismatch EXPR-5"]);
+    assert!(
+        checked.report.contains("inferred<i64>"),
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-7: a changed result can make a new instance of its consumer.
 /// Checking the original consumer's instance does not check that call.
 #[test]

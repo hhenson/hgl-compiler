@@ -2200,22 +2200,22 @@ pub(super) fn instances_hold(
             };
             let mut reread_calls = HashSet::new();
             if let Some(instance) = &instance
-                && let Some(reports) = &instance.result_use_reports
+                && let Some(result_uses) = &instance.result_uses
             {
                 report_instance_result_uses(
                     program,
                     (made.callee, &made.generics),
-                    reports,
+                    result_uses,
                     &from,
                     diagnostics,
                 );
-                if reports.has_errors() {
+                if result_uses.reports.has_errors() {
                     continue;
                 }
                 reread_calls = made_after_result_recheck(&instance.body, &mut instance_calls);
             }
             if recheck_graph && let Some(instance) = &instance {
-                if instance.result_use_reports.is_none()
+                if instance.result_uses.is_none()
                     && let Some(Some(source)) =
                         program.modules[made.callee.0].bodies.get(made.callee.1)
                 {
@@ -2916,23 +2916,37 @@ fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
     hir::walk_statements(statements, &mut |expression| made_at(expression, made));
 }
 
-/// GEN-7: a failure in a selected result's use keeps the body location
-/// and the ordinary diagnostic code, and names the concrete instance.
+/// GEN-7: a failure in a selected result's use points at its call and
+/// retains the ordinary diagnostic code and the concrete instance.
 pub(super) fn report_instance_result_uses(
     program: &Program,
     ((module, declaration), generics): ((usize, usize), &[Argument]),
-    reports: &Diagnostics,
+    result_uses: &crate::instance::ResultUseChecks,
     callers: &[Location],
     diagnostics: &mut Diagnostics,
 ) {
-    if reports.is_empty() {
+    if result_uses.reports.is_empty() {
         return;
     }
     let name = &program.modules[module].declarations[declaration].name;
     let arguments = generics.iter().map(Argument::to_string).collect::<Vec<_>>();
     let instance = format!("GEN-7: in `{name}<{}>`", arguments.join(", "));
-    for report in reports.as_slice() {
+    let calls = &result_uses.changed_results;
+    for report in result_uses.reports.as_slice() {
         let mut report = report.clone().with_note(&instance);
+        if let Some(&changed) = calls.first()
+            && calls.iter().all(|&call| call == changed)
+        {
+            if report.primary != changed {
+                let use_at = report.primary;
+                report = report.with_related(use_at, "this use checks the selected result");
+                report.primary = changed;
+            }
+        } else {
+            for &call in calls {
+                report = report.with_related(call, "this call selected a different result type");
+            }
+        }
         for &caller in callers {
             report = report.with_related(caller, "this call makes the instance");
         }

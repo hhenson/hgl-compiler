@@ -32,7 +32,7 @@
 //! types (GEN-7: "Each instance then selects its own candidate";
 //! [`crate::values::Selecting`]).
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 use hgl_diagnostics::{Diagnostics, Location};
 
@@ -72,7 +72,7 @@ struct InstanceArguments<'a> {
     pack_inputs: &'a [PackInput],
     requirements: &'a [Answer],
     diagnostics: &'a RefCell<Diagnostics>,
-    result_type_changed: Cell<bool>,
+    changed_results: RefCell<Vec<Location>>,
 }
 
 impl InstanceArguments<'_> {
@@ -88,8 +88,16 @@ pub(crate) struct CheckedInstance {
     pub(crate) signature: Signature,
     /// The body with its concrete types and callees.
     pub(crate) body: Body,
-    /// Reports from a reread caused by a different result type, if any.
-    pub(crate) result_use_reports: Option<Diagnostics>,
+    /// Checks made when a selected result differs from the admitting result.
+    pub(crate) result_uses: Option<ResultUseChecks>,
+}
+
+/// The calls whose results changed and the checks their new types caused.
+pub(crate) struct ResultUseChecks {
+    /// Written locations of the calls that selected a different result.
+    pub(crate) changed_results: Vec<Location>,
+    /// Type checks from reading the body with the selected results.
+    pub(crate) reports: Diagnostics,
 }
 
 impl Program {
@@ -186,7 +194,7 @@ impl Program {
             pack_inputs: &[],
             requirements: &requirements,
             diagnostics: &reports,
-            result_type_changed: Cell::new(false),
+            changed_results: RefCell::new(Vec::new()),
         };
         // UNIT-7: a default has no formal parameters in scope. Run the
         // same membership-based selection here as in a specialized body.
@@ -352,7 +360,7 @@ impl Program {
             pack_inputs: pending_forwards.unwrap_or_default(),
             requirements,
             diagnostics,
-            result_type_changed: Cell::new(false),
+            changed_results: RefCell::new(Vec::new()),
         };
         let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
         let recheck_endpoints =
@@ -374,10 +382,11 @@ impl Program {
                 || !requirements.is_empty()
                 || pending_forwards.is_some());
         let mut destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
-        let mut result_use_reports = None;
+        let mut result_uses = None;
         let before = diagnostics.borrow().len();
         self.place_body(&mut body, &arguments, &functions);
-        if arguments.result_type_changed.get() {
+        let changed_results = std::mem::take(&mut *arguments.changed_results.borrow_mut());
+        if !changed_results.is_empty() {
             // GEN-7: the original body used the admitting candidate's
             // result. Read its uses with the selected type in place,
             // including inferred locals and the calls that consume them.
@@ -395,7 +404,10 @@ impl Program {
                 destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
                 self.place_body(&mut body, &arguments, &functions);
             }
-            result_use_reports = Some(reports);
+            result_uses = Some(ResultUseChecks {
+                changed_results,
+                reports,
+            });
         }
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
@@ -415,7 +427,7 @@ impl Program {
         Some(CheckedInstance {
             signature: taken,
             body,
-            result_use_reports,
+            result_uses,
         })
     }
 
@@ -435,15 +447,14 @@ impl Program {
         walk_statements_mut(&mut body.statements, &mut |expression| {
             self.place(expression, instance, functions);
         });
-        if crate::values::select_in_instance(
+        let changed = crate::values::select_in_instance(
             self,
             instance.declaration,
             instance.generics,
             body,
             &|call| call.walk_mut(&mut |inner| self.place(inner, instance, functions)),
-        ) {
-            instance.result_type_changed.set(true);
-        }
+        );
+        instance.changed_results.borrow_mut().extend(changed);
     }
 
     /// Puts the instance's arguments in place in an expression's type,
