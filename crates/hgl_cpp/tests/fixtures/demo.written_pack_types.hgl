@@ -1,0 +1,60 @@
+module demo.written_pack_types
+
+# GEN-8 and GEN-17: a call writes a type under a reflected pack key.
+
+const item_key: str = "item"
+const missing_key: str = "missing"
+const fn num(item: i64) -> i64 => item
+const fn words(item: str) -> i64 => 0
+const fn extra(other: i64) -> i64 => other
+const fn identity<T>(value: T) -> T => value
+const fn one<T>() -> i64 => 1
+
+const fn reflected<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
+    identity<Ps[item_key]>(item)
+
+const fn nested<...Ps>(f: const fn(...{Ps}) -> i64, items: list<Ps[item_key]>) -> list<Ps[item_key]> =>
+    identity<list<Ps[item_key]>>(items)
+
+const fn chosen<const key: str, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key] =>
+    identity<Ps[key]>(item)
+
+fn reflected_graph<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
+    identity<Ps[item_key]>(item)
+
+fn reflected_graph_i64(item: i64) -> i64 => reflected_graph(num, item)
+
+const fn missing<...Ps>(f: const fn(...{Ps}) -> i64) -> i64 => one<Ps[missing_key]>()
+
+test direct_and_nested_type_arguments {
+    assert reflected(num, 7) == 7
+    assert reflected(words, "value") == "value"
+    assert nested(num, [2, 4]) == [2, 4]
+    assert chosen<"other">(extra, 5) == 5
+}
+
+test reflected_type_argument_on_a_connection {
+    assert eval reflected_graph_i64([2, 3]) == [2, 3]
+}
+
+test unknown_written_member {
+    # expect-error(type, "pack.name")
+    assert missing(num) == 1
+}
+
+# GEN-3 and GEN-7: the generic body needs evidence for the reflected type.
+const fn exact<T>(value: T) -> T requires T == i64 => value
+const fn known<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] requires i64 == Ps[item_key] =>
+    exact<Ps[item_key]>(item)
+
+test a_stated_member_type_admits_the_call {
+    assert known(num, 8) == 8
+}
+
+# expect-error(constraint, "requires.unmet")
+const fn unstated<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] => exact<Ps[item_key]>(item)
+
+test a_false_member_constraint_rejects {
+    # expect-error(constraint, "requires.unmet")
+    assert known(words, "value") == "value"
+}

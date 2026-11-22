@@ -15,7 +15,9 @@ use super::fit::{open, whole};
 use super::inference::{fixed, mentions, placed, unsaid};
 use super::operators::{Requested, from_place, has_generic_configuration_default, unreadable};
 use super::{REQUIRING, Typer};
-use crate::declared::{names_parameter, same_type, substitute_within};
+use crate::declared::{
+    names_parameter, same_type, substitute_with_members, substitute_within, weight,
+};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
 use crate::program::{Binding, Declaration, DeclarationKind, OperatorRef, Phase, Program, Role};
 use crate::read::is_type;
@@ -694,6 +696,17 @@ impl<'a> Typer<'a> {
             combinations.push(Vec::new());
         }
         let bound = self.bound.clone();
+        let members = self.stated_pack_members();
+        let member_weight = members
+            .iter()
+            .map(|(_, _, ty)| weight(ty))
+            .max()
+            .unwrap_or(1);
+        let member_type = |pack, _: &str, key: &Constant| {
+            members.iter().find_map(|(declared, given_key, ty)| {
+                (*declared == pack && given_key.same(&key.value) == Some(true)).then(|| ty.clone())
+            })
+        };
         let name = &program.modules[callee.0].declarations[callee.1].name;
         let body = &self.declaration.name;
         for combination in combinations.iter().take(crate::INSTANCES + 1) {
@@ -702,16 +715,25 @@ impl<'a> Typer<'a> {
                 .chain(combination)
                 .map(|(at, argument)| (*at, argument))
                 .collect();
+            let project = |ty: &Type| {
+                placed(
+                    substitute_with_members(ty, &given, &member_type, member_weight),
+                    &own,
+                )
+            };
             let placed_generics: Vec<Argument> = generics
                 .iter()
-                .map(|argument| given_in(argument, &given, &own))
+                .map(|argument| match argument {
+                    Argument::Type(ty) => Argument::Type(project(ty)),
+                    Argument::Constant(_) => given_in(argument, &given, &own),
+                })
                 .collect();
             let placed_packs: Vec<_> = type_packs
                 .iter()
                 .cloned()
                 .map(|mut pack| {
                     pack.infer_from_arguments = false;
-                    pack.place_types(|ty| placed(substitute_within(ty, &given), &own));
+                    pack.place_types(project);
                     pack
                 })
                 .collect();
@@ -785,6 +807,41 @@ impl<'a> Typer<'a> {
             );
         }
         None
+    }
+
+    /// GEN-3 and GEN-17: a positive equality can state a known type for
+    /// one reflected member without binding the pack's other keys.
+    fn stated_pack_members(&self) -> Vec<(Location, ConstantValue, Type)> {
+        let Some(condition) = child(&self.declaration.syntax, SyntaxKind::RequiresClause)
+            .and_then(|clause| clause.children().next())
+        else {
+            return Vec::new();
+        };
+        let mut relations = Vec::new();
+        conjoined_relations(&condition, &mut relations);
+        relations
+            .into_iter()
+            .filter(|relation| has_token(relation, SyntaxKind::EqEq))
+            .filter_map(|relation| {
+                let mut operands = relation.children();
+                let left = self
+                    .written
+                    .get(&(self.file, operands.next()?.span().start))?;
+                let right = self
+                    .written
+                    .get(&(self.file, operands.next()?.span().start))?;
+                let (pack, key, given) = match (*left, *right) {
+                    (Type::PackMember { pack, key, .. }, given)
+                    | (given, Type::PackMember { pack, key, .. })
+                        if whole(given) =>
+                    {
+                        (pack, key, given)
+                    }
+                    _ => return None,
+                };
+                Some((*pack, key.value.clone(), given.clone()))
+            })
+            .collect()
     }
 
     /// Reports a `requires` that does not hold, or is not told for a
@@ -2852,10 +2909,7 @@ fn passes_on(generics: &[Argument], declared: &[Location]) -> bool {
     !declared.is_empty()
         && generics.iter().any(|argument| match argument {
             Argument::Constant(constant) => constant.value.names_one_of(declared),
-            Argument::Type(ty) => ty.any_part(
-                &|part| matches!(part, Type::Parameter { at, .. } if declared.contains(at)),
-                &|constant| constant.value.names_one_of(declared),
-            ),
+            Argument::Type(ty) => mentions(ty, declared),
         })
 }
 

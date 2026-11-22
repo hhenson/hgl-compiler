@@ -1850,6 +1850,36 @@ fn reflected_pack_followups_run_on_the_sdk() {
     );
 }
 
+/// GEN-8 and GEN-17: explicitly written reflected types specialize calls
+/// in value and graph bodies and still carry their stated requirements (GEN-7).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn written_pack_member_types_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("written-pack-member-types");
+    let file = write(
+        &root,
+        "demo.written_pack_types.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.written_pack_types.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 3 passed, 0 failed\nexecutable cases: 3 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
 /// FN-18 and EXPR-10: brace arguments reach their ordinary, generic,
 /// value and temporal slots. Graphs pass const values and connections
 /// on to a node, and configuration defaults are used when omitted.
