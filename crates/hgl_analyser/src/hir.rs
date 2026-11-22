@@ -1056,12 +1056,12 @@ pub struct DeferredOption {
     pub value: Option<Expr>,
 }
 
-/// A named operator whose arguments need the concrete graph instance.
+/// An operator call whose arguments need the concrete graph instance.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeferredOperator {
     /// The bound operator identity (GEN-4).
     pub identity: OperatorRef,
-    /// The written argument list, also used to recover a call within `capture`.
+    /// The written argument list or Boolean symbol expression.
     pub list: Location,
     /// What the original place expects of the call's result.
     pub expected: Option<Type>,

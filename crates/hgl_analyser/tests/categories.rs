@@ -89,14 +89,18 @@ fn what_each_expression_of_a_graph_is_is_recorded() {
     assert_eq!(checked.summary(), NONE);
     assert_eq!(
         recorded(&checked, body(&checked, "both")),
-        ["a && b: connection", "a: connection", "b: connection"]
+        [
+            "a && b: connection lifted",
+            "a: connection",
+            "b: connection"
+        ]
     );
     assert_eq!(
         recorded(&checked, body(&checked, "negated")),
         [
-            "neg(!a) || neg(k): connection",
+            "neg(!a) || neg(k): connection lifted",
             "neg(!a): connection lifted",
-            "!a: connection",
+            "!a: connection lifted",
             "a: connection",
             "neg(k): value",
             "k: value",

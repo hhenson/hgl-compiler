@@ -1,0 +1,50 @@
+module demo.logical_connections
+
+# EXPR-6, OPS-5, FN-6: Boolean symbols in composition use the same
+# inputs, admission and ticks as their named operators.
+fn both(left: bool, right: bool) -> bool => left && right
+fn either(left: bool, right: bool) -> bool => left || right
+fn negated(value: bool) -> bool => !value
+fn three(a: bool, b: bool, c: bool) -> bool => a && b && c
+fn any_three(a: bool, b: bool, c: bool) -> bool => a || b || c
+fn grouped(a: bool, b: bool, c: bool) -> bool => (a && b) && c
+fn mixed(value: bool, const mask: bool) -> bool => (value && mask) || !value
+fn named_chain(a: bool, b: bool, c: bool) -> bool => all_(a, b, c)
+
+# GEN-7: the selected edge makes the no-else expression a connection
+# of bool in this instance, so its enclosing chain can select all_.
+operator edge<T>(input: T) -> bool
+impl const fn edge<T>(input: T) -> bool => true
+impl fn edge(input: i64) -> bool { when { return true } }
+fn deferred<T>(const input: T, value: bool) -> bool => !(value && (if edge(input) { true }) && true)
+fn concrete(value: bool) -> bool => deferred(1, value)
+
+fn scalar_branch(const input: list<i64>) -> bool => true || input[0] > 0
+fn scalar_graph() -> bool => scalar_branch([])
+
+test boolean_symbols_on_connections {
+    assert eval both(left: [true, true], right: [true, false]) == [true, false]
+    assert eval either(left: [false, false], right: [true, false]) == [true, false]
+    assert eval negated(value: [true, false]) == [false, true]
+    assert eval three(a: [true], b: [true], c: [true]) == [true]
+}
+
+test all_connected_operands_participate {
+    assert eval both(left: [false, _, true, _], right: [_, true, _, false]) == [_, false, true, false]
+    assert eval either(left: [true, _, false, _], right: [_, false, _, true]) == [_, true, false, true]
+    assert eval three(a: [false, _, true, _], b: [true, _, _, false], c: [_, true, _, _]) == [_, false, true, false]
+    assert eval any_three(a: [true, _, false, _], b: [false, _, _, true], c: [_, false, _, _]) == [_, true, false, true]
+    assert eval grouped(a: [true], b: [true], c: [false]) == [false]
+    assert eval named_chain(a: [true], b: [true], c: [false]) == [false]
+    assert eval mixed(value: [true, false, false], mask: false) == [false, true, true]
+    assert eval concrete(value: [true, false]) == [false, true]
+}
+
+test scalar_symbols_still_short_circuit {
+    let empty: list<i64> = []
+    assert !(false && empty[0] > 0)
+    assert true || empty[0] > 0
+    assert all_(true, true, true)
+    assert !any_(false, false, false)
+    assert eval scalar_graph() == [true]
+}

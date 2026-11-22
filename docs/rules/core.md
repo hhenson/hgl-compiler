@@ -173,10 +173,13 @@ transpiler: done
 
 ## OPS-5
 
-analyser: partial
+analyser: done
 
-- The Boolean connectives and `!` take bools, in a value function
-- Left: temporal bodies
+- Boolean forms take bools. Composition selects `and_`, `or_` or `not_`, and an unparenthesized chain of three or more operands selects `all_` or `any_` over the whole chain.
+
+transpiler: done
+
+- Value code and hooks preserve short-circuiting. Composed Boolean calls use ordinary lifting and give each connected operand its own input.
 
 ## OPS-6
 

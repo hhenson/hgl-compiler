@@ -3424,6 +3424,34 @@ fn operator_configuration_runs_on_the_sdk() {
     );
 }
 
+/// EXPR-6, OPS-5, FN-6 and FN-11: Boolean symbols use the selected
+/// operator's inputs in a graph and still short-circuit in value code.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn logical_connections_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("logical_connections");
+    let file = write(
+        &root,
+        "demo.logical_connections.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.logical_connections.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// GEN-16, UNIT-8: a required symbol keeps the public generic arguments
 /// that its selected candidate's inherited configuration default reads.
 #[test]
