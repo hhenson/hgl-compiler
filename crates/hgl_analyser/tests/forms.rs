@@ -316,6 +316,34 @@ fn a_written_type_checks_the_argument_in_its_pack_position() {
     );
 }
 
+/// GEN-8 and EXPR-9: a type pack must resolve every captured type.
+/// An explicit positional type or an already typed named value can
+/// give a literal the context it needs.
+#[test]
+fn a_type_pack_cannot_infer_from_untyped_arguments() {
+    let checked = module(concat!(
+        "const fn positional<...Ts>(items: ...Ts) -> i64 => 0\n",
+        "const fn named<...Ts>(items: ...{Ts}) -> i64 => 0\n",
+        "const fn null_pos() -> i64 => positional(null)\n",
+        "const fn empty_pos() -> i64 => positional([])\n",
+        "const fn result_pos() -> i64 => positional(ok(1))\n",
+        "const fn null_named() -> i64 => named(x: null)\n",
+        "const fn explicit() -> i64 => positional<i64?, list<i64>, result<i64, error>>(null, [], ok(1))\n",
+        "const fn typed(item: i64?) -> i64 => named(x: item)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:31 type/generic.unresolved GEN-8",
+            "m.hgl:5:43 type/sequence.context_type EXPR-9",
+            "m.hgl:6:33 type/generic.unresolved GEN-8",
+            "m.hgl:7:33 type/generic.unresolved GEN-8",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-5, GEN-6 and GEN-10: packed candidate selection checks every
 /// operand and admits only those counts covered by the candidate.
 #[test]
