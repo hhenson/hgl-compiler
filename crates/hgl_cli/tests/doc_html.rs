@@ -361,3 +361,166 @@ fn rejected_source_does_not_create_the_site() {
             .contains("name.unknown")
     );
 }
+
+#[test]
+fn a_nonempty_unmarked_directory_is_left_alone() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    input(&source, "\n");
+    fs::write(root.path().join("index.html"), "my index").unwrap();
+    fs::write(root.path().join("site.css"), "my CSS").unwrap();
+    let before = snapshot(root.path());
+    let output = Command::new(env!("CARGO_BIN_EXE_hgl"))
+        .current_dir(root.path())
+        .args(["doc", "source", "--out", "."])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("neither empty nor an hgl doc site"));
+    assert_eq!(snapshot(root.path()), before);
+}
+
+#[test]
+fn rebuilding_an_owned_site_removes_private_pages_and_stale_assets() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("core.hgl"), "module core\n").unwrap();
+    fs::write(
+        source.join("stable.hgl"),
+        "module guide.stable\nexport const visible: i64 = 1\nconst hidden: i64 = 2\n",
+    )
+    .unwrap();
+    let removed = source.join("removed.hgl");
+    fs::write(
+        &removed,
+        "module guide.removed\n/**\n~~~mermaid\nflowchart LR; A --> B\n~~~\n*/\nexport const gone: i64 = 3\n",
+    )
+    .unwrap();
+
+    let site = write_site(root.path(), &source, &["--private"]);
+    let stable = site.join("modules/mod-guide.stable.html");
+    let removed_page = site.join("modules/mod-guide.removed.html");
+    let renderer = site.join("vendor/mermaid/mermaid.min.js");
+    assert!(fs::read_to_string(&stable).unwrap().contains("hidden"));
+    assert!(removed_page.is_file());
+    assert!(renderer.is_file());
+
+    fs::write(site.join("CNAME"), "docs.example.org").unwrap();
+    fs::write(site.join("modules/notes.txt"), "local notes").unwrap();
+    fs::remove_file(removed).unwrap();
+    write_site(root.path(), &source, &[]);
+
+    assert!(!fs::read_to_string(stable).unwrap().contains("hidden"));
+    assert!(
+        !fs::read_to_string(site.join("search-index.js"))
+            .unwrap()
+            .contains("hidden")
+    );
+    assert!(!removed_page.exists());
+    assert!(!renderer.exists());
+    assert!(!site.join("renderers.js").exists());
+    assert!(!site.join("vendor/mermaid/THIRD-PARTY-NOTICES.txt").exists());
+    assert_eq!(
+        fs::read_to_string(site.join("CNAME")).unwrap(),
+        "docs.example.org"
+    );
+    assert_eq!(
+        fs::read_to_string(site.join("modules/notes.txt")).unwrap(),
+        "local notes"
+    );
+}
+
+#[test]
+fn an_unrelated_file_in_an_owned_site_cannot_be_overwritten() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    input(&source, "\n");
+    let site = write_site(root.path(), &source, &[]);
+    fs::write(
+        site.join("modules/mod-guide.extra.html"),
+        "a hand-written page",
+    )
+    .unwrap();
+    fs::write(
+        source.join("extra.hgl"),
+        "module guide.extra\nexport const extra: i64 = 3\n",
+    )
+    .unwrap();
+    let before = snapshot(&site);
+    let output = Command::new(env!("CARGO_BIN_EXE_hgl"))
+        .current_dir(root.path())
+        .args(["doc", "source"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot replace unrelated"));
+    assert_eq!(snapshot(&site), before);
+
+    fs::remove_file(site.join("modules/mod-guide.extra.html")).unwrap();
+    write_site(root.path(), &source, &[]);
+    let page = fs::read_to_string(site.join("modules/mod-guide.extra.html")).unwrap();
+    assert!(page.contains("extra"));
+}
+
+#[test]
+fn a_site_manifest_cannot_claim_an_unrelated_file() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    input(&source, "\n");
+    let site = write_site(root.path(), &source, &[]);
+    fs::write(site.join("notes.txt"), "local notes").unwrap();
+    fs::write(site.join(".hgl-doc-files"), "notes.txt\n").unwrap();
+    let before = snapshot(&site);
+    let output = Command::new(env!("CARGO_BIN_EXE_hgl"))
+        .current_dir(root.path())
+        .args(["doc", "source"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid file name"));
+    assert_eq!(snapshot(&site), before);
+}
+
+#[test]
+fn concurrent_site_rebuilds_leave_one_complete_site() {
+    let root = tempdir().unwrap();
+    for (file, module) in [("left.hgl", "guide.left"), ("right.hgl", "guide.right")] {
+        fs::write(
+            root.path().join(file),
+            format!("module {module}\nexport const value: i64 = 1\n"),
+        )
+        .unwrap();
+    }
+    let left = root.path().join("left.hgl");
+    let right = root.path().join("right.hgl");
+    let site = write_site(root.path(), &left, &[]);
+    fs::create_dir(root.path().join("expected-left")).unwrap();
+    write_site(root.path(), &left, &["--out", "expected-left"]);
+    write_site(root.path(), &right, &["--out", "expected-right"]);
+
+    let rebuild = |source: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_hgl"))
+            .current_dir(root.path())
+            .arg("doc")
+            .arg(source)
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let left_build = rebuild(&left);
+    let right_build = rebuild(&right);
+    for child in [left_build, right_build] {
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let actual = snapshot(&site);
+    let expected_left = snapshot(&root.path().join("expected-left"));
+    let expected_right = snapshot(&root.path().join("expected-right"));
+    assert!(actual == expected_left || actual == expected_right);
+}
