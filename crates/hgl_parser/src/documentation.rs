@@ -1,10 +1,16 @@
 //! The layout of SDOC comments on the lossless tree. The analyser checks
 //! names in this layout and the documentation stage publishes its text.
 
+use std::ops::Range;
+
 use hgl_source::{Span, line_break_length};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 
 use crate::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
+
+mod examples;
+
+pub use examples::{RunnableExample, parse_examples};
 
 /// The comment attached to this node by the parser (SDOC-1).
 pub fn attached(node: &SyntaxNode) -> Option<SyntaxToken> {
@@ -120,6 +126,63 @@ impl<'a> Comment<'a> {
     pub fn sections(&self) -> impl Iterator<Item = &Section<'a>> {
         self.sections.iter().skip(1)
     }
+
+    /// The HGL fences in the comment (SDOC-7, SDOC-9). Only a fence
+    /// marked `hgl` under an Examples section is a runnable test.
+    pub fn examples(&self) -> Vec<Example> {
+        let mut position = 0;
+        let mut examples = Vec::new();
+        for section in &self.sections {
+            let in_examples = section.heading == Some("Examples:");
+            let lines = section.markdown_lines();
+            let mut offset = 0;
+            let starts: Vec<_> = lines
+                .iter()
+                .map(|line| {
+                    let start = offset;
+                    offset += line.text.len() + 1;
+                    start
+                })
+                .collect();
+            let text = joined(&lines, |line| line.text);
+            let mut markdown = Parser::new_ext(&text, Options::ENABLE_TABLES).into_offset_iter();
+            while let Some((event, fence)) = markdown.next() {
+                let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) = event else {
+                    continue;
+                };
+                if !matches!(info.as_ref(), "hgl" | "hgl no-run") {
+                    continue;
+                }
+                let position = in_examples.then(|| {
+                    position += 1;
+                    position
+                });
+                let mut code = String::new();
+                let mut source = Vec::new();
+                for (event, range) in markdown.by_ref() {
+                    match event {
+                        Event::End(pulldown_cmark::TagEnd::CodeBlock) => break,
+                        Event::Text(text) => {
+                            code.push_str(&text);
+                            source.extend(source_ranges(&lines, &starts, range));
+                        }
+                        _ => {}
+                    }
+                }
+                examples.push(Example {
+                    code,
+                    position,
+                    runnable: in_examples && info.as_ref() == "hgl",
+                    fence: Span::new(
+                        source_offset(&lines, &starts, fence.start),
+                        source_offset(&lines, &starts, fence.end),
+                    ),
+                    source,
+                });
+            }
+        }
+        examples
+    }
 }
 
 /// One recognized SDOC-3 section or a stretch of unheaded prose.
@@ -143,6 +206,24 @@ impl<'a> Section<'a> {
                 line.text
             }
         })
+    }
+
+    /// Section text in Markdown coordinates and each line's original start.
+    fn markdown_lines(&self) -> Vec<Line<'a>> {
+        trim_blank(&self.lines)
+            .iter()
+            .map(|line| {
+                let text = if self.heading.is_some() {
+                    without_margin(line.text)
+                } else {
+                    line.text
+                };
+                Line {
+                    text,
+                    start: line.start + (line.text.len() - text.len()) as u32,
+                }
+            })
+            .collect()
     }
 
     /// Keys whose spelling SDOC-3 defines, with their original source spans.
@@ -210,6 +291,50 @@ impl<'a> Section<'a> {
                 ))
             })
     }
+}
+
+/// An HGL code fence in a documentation comment (SDOC-7, SDOC-9).
+pub struct Example {
+    /// The contents read by CommonMark, without the fence.
+    pub code: String,
+    /// The position among the comment's `Examples:` fences, from one.
+    /// A fence outside that section has no position.
+    pub position: Option<usize>,
+    /// Whether the compiler checks and runs this fence as a test.
+    pub runnable: bool,
+    /// The original fence, including its delimiters where present.
+    pub fence: Span,
+    /// The original code spans, one per line. Markdown margins are excluded.
+    pub source: Vec<Span>,
+}
+
+/// Pulldown ranges index the joined Markdown. The line records retain the
+/// original byte positions, including the margins and the source line breaks.
+fn source_offset(lines: &[Line<'_>], starts: &[usize], offset: usize) -> u32 {
+    let line = starts.partition_point(|&start| start <= offset) - 1;
+    lines[line].start + (offset - starts[line]) as u32
+}
+
+fn source_ranges<'a>(
+    lines: &'a [Line<'a>],
+    starts: &'a [usize],
+    range: Range<usize>,
+) -> impl Iterator<Item = Span> + 'a {
+    let first = starts.partition_point(|&start| start <= range.start) - 1;
+    lines[first..]
+        .iter()
+        .zip(&starts[first..])
+        .take_while(move |(_, start)| **start < range.end)
+        .filter_map(move |(line, &start)| {
+            let from = range.start.max(start);
+            let to = range.end.min(start + line.text.len());
+            (from < to).then(|| {
+                Span::new(
+                    line.start + (from - start) as u32,
+                    line.start + (to - start) as u32,
+                )
+            })
+        })
 }
 
 /// A named entry of `Args:` or `Type Args:`, with its description.
