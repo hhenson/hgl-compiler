@@ -14,7 +14,7 @@ use super::constants::{constant_text, generic_default};
 use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
 };
-use super::fit::{negated, open, whole};
+use super::fit::{open, whole};
 use super::function_arguments::CallbackInputs;
 use super::inference::{
     ExplicitGenerics, bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed,
@@ -70,9 +70,9 @@ impl<'a> Typer<'a> {
         self.request_output(operator, public, found, supplied, said, false)
     }
 
-    /// GEN-5, GEN-6: a candidate can contextualize a literal or anonymous
-    /// function. An option must not turn its preliminary reading, or a
-    /// later argument's reading, into an output constraint first.
+    /// GEN-5, GEN-6, GEN-8: an option contributes its generic value to
+    /// the request, without promoting input-derived type arguments into
+    /// result constraints. Each candidate still checks every input.
     pub(super) fn argument_output_requested(
         &self,
         operator: OperatorRef,
@@ -82,12 +82,7 @@ impl<'a> Typer<'a> {
         said: bool,
     ) -> Requested {
         let supplied = public_inputs(public, given);
-        let contextual = given.iter().any(|argument| {
-            argument.explicit.is_none()
-                && argument.key.public_parameter(public).is_some()
-                && (argument.by_place || contextual_value(&argument.value))
-        });
-        self.request_output(operator, public, found, &supplied, said, contextual)
+        self.request_output(operator, public, found, &supplied, said, true)
     }
 
     fn request_output(
@@ -97,13 +92,13 @@ impl<'a> Typer<'a> {
         mut found: Vec<Option<Argument>>,
         supplied: &[Option<&Type>],
         said: bool,
-        contextual: bool,
+        value_call: bool,
     ) -> Requested {
         let program = self.program;
-        // GEN-5, GEN-6: an option does not turn an argument's
-        // preliminary type into a requested result. Public checks below
-        // still use every argument; written types and the expected place
-        // alone constrain output types while candidates contextualize inputs.
+        // GEN-5, GEN-6, GEN-8: a generic value default is a request for
+        // that value, not for every input-derived type. Public checks below
+        // still use every argument. Written types and the expected place
+        // constrain a value call's result independently of input spelling.
         let requested_types = found.clone();
         self.infer_operator_inputs(public, &mut found, supplied);
         let operator_declaration =
@@ -184,7 +179,7 @@ impl<'a> Typer<'a> {
             .zip(&explicit)
             .zip(requested_types)
             .map(|((generic, inferred), requested)| match generic.kind {
-                GenericKind::Plain | GenericKind::Type if contextual => {
+                GenericKind::Plain | GenericKind::Type if value_call => {
                     requested.unwrap_or(Argument::Type(Type::Unknown))
                 }
                 _ => inferred.clone(),
@@ -1605,16 +1600,6 @@ impl<'a> Typer<'a> {
             braced: Vec::new(),
             lifted: false,
         }
-    }
-}
-
-/// Value forms whose preliminary reading does not fix their candidate
-/// context. Sequence/tuple/block forms are marked by `Given::by_place`.
-fn contextual_value(value: &Expr) -> bool {
-    match &value.kind {
-        ExprKind::Literal(_) => true,
-        ExprKind::StaticCallable(callee) => matches!(callee.as_ref(), Callee::Anonymous(_)),
-        _ => negated(value).is_some_and(contextual_value),
     }
 }
 

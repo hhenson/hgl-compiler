@@ -156,6 +156,10 @@ operator overridden_default<T, const fallback: T = "x">(value: T) -> T
 impl const fn overridden_default(value: i64) -> i64 => value
 
 test option_literal_forms_and_public_inference {
+    assert mixed_binding(3)
+    assert result_literal(3) == 1.0
+    assert result_variable(3, true) == 1.0
+    assert result_variable(3, false) == 1.0
     let scalar = literal_option(3)
     assert scalar == literal_plain(3)
     assert scalar == 3.0
@@ -242,3 +246,29 @@ test a_float_seed_does_not_override_integer_items_with_an_option {
     # expect-error(operator, "operator.no_candidate")
     let observed = n2([1, 2], 0.5)
 }
+
+# GEN-5, GEN-6, GEN-8: an unrelated option and bool spelling preserve
+# the selected result. #605 owns the public result relationship separately.
+operator fixed_plain<T>(value: T, flag: bool) -> T
+impl const fn fixed_plain(value: i64, flag: bool) -> f64 => 0.5
+operator fixed_option<T, const on: bool = true>(value: T, flag: bool) -> T
+impl const fn fixed_option(value: i64, flag: bool) -> f64 => 0.5
+const fn result_literal(value: i64) -> f64 {
+    let plain = fixed_plain(value, true)
+    let option = fixed_option(value, true)
+    return option + plain
+}
+const fn result_variable(value: i64, flag: bool) -> f64 {
+    let plain = fixed_plain(value, flag)
+    let option = fixed_option(value, flag)
+    return option + plain
+}
+
+# GEN-2, GEN-6: a typed input remains fixed beside a widening literal.
+operator mixed_plain<T, U>(value: T, other: U) -> bool
+impl const fn mixed_plain(value: i64, other: f64) -> bool => true
+impl const fn mixed_plain(value: f64, other: f64) -> bool => false
+operator mixed_option<T, U, const on: bool = true>(value: T, other: U) -> bool
+impl const fn mixed_option(value: i64, other: f64) -> bool => true
+impl const fn mixed_option(value: f64, other: f64) -> bool => false
+const fn mixed_binding(value: i64) -> bool => mixed_plain(value, 1) && mixed_option(value, 1)

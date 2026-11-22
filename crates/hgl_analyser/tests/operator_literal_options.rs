@@ -323,21 +323,50 @@ test observed { let picked = choose(1) }
 }
 
 #[test]
-fn typed_values_and_type_requirements_keep_their_fixed_requests() {
-    // GEN-2, GEN-8: a typed value is not a contextual literal.
-    let checked = check(&[(
-        "m.hgl",
-        r#"module m
-operator fixed<T, const on: bool = true>(value: T) -> T
-impl const fn fixed(value: i64) -> f64 => 0.5
-const fn observed(value: i64) { let picked = fixed(value) }
-"#,
-    )]);
-    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
-    assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
-    assert!(
-        checked.findings[0].message.ends_with("and gives `i64`"),
-        "{}",
-        checked.report
-    );
+fn unrelated_option_and_argument_spellings_preserve_the_selected_result() {
+    // GEN-5, GEN-6, GEN-8: a bool literal cannot change another input's
+    // type request. Pin current option/no-option parity; #605 separately
+    // owns enforcement of the candidate's public result relationship.
+    for option in ["", ", const on: bool = true"] {
+        for call in [
+            "fixed(value, true)",
+            "fixed(value, flag)",
+            "fixed(value: value, flag: true)",
+        ] {
+            let source = format!(
+                "module m\noperator fixed<T{option}>(value: T, flag: bool) -> T\nimpl const fn fixed(value: i64, flag: bool) -> f64 => 0.5\nconst fn accept(value: f64) -> f64 => value\nconst fn observed(value: i64, flag: bool) {{ let picked = {call}\nlet checked = accept(picked) }}\n"
+            );
+            let checked = check(&[("m.hgl", &source)]);
+            assert!(!checked.rejected, "{option}/{call}: {}", checked.report);
+        }
+        // The same input-derived request must stay absent without a flag.
+        let source = format!(
+            "module m\noperator fixed<T{option}>(value: T) -> T\nimpl const fn fixed(value: i64) -> f64 => 0.5\nconst fn accept(value: f64) -> f64 => value\nconst fn observed(value: i64) {{ let picked = fixed(value)\nlet checked = accept(picked) }}\n"
+        );
+        let checked = check(&[("m.hgl", &source)]);
+        assert!(!checked.rejected, "{option}: {}", checked.report);
+    }
+}
+
+#[test]
+fn a_typed_input_keeps_its_binding_beside_a_contextual_argument() {
+    // GEN-2, GEN-6: the typed first input fixes candidate admission,
+    // although the second literal can widen under that candidate.
+    for option in ["", ", const on: bool = true"] {
+        for (candidate, admitted) in [("i64", true), ("f64", false)] {
+            let source = format!(
+                "module m\noperator mixed<T, U{option}>(value: T, other: U) -> bool\nimpl const fn mixed(value: {candidate}, other: f64) -> bool => true\nconst fn observed(value: i64) {{ let picked = mixed(value, 1) }}\n"
+            );
+            let checked = check(&[("m.hgl", &source)]);
+            assert_eq!(
+                !checked.rejected, admitted,
+                "{option}/{candidate}: {}",
+                checked.report
+            );
+            if !admitted {
+                assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+                assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+            }
+        }
+    }
 }
