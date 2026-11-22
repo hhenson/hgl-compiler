@@ -106,11 +106,10 @@ pub fn left_out<'p>(
 /// The default of the field `default` of a struct, which a construction
 /// that leaves the field out gives it (TYPE-5), read with no local in
 /// scope (UNIT-7). `None` where the analysed program has none for it.
-pub fn field_default(program: &Program, default: FieldRef) -> Option<&Expr> {
+pub fn field_default(program: &Program, default: FieldRef) -> Option<&DefaultExpr> {
     program.modules[default.module]
         .defaults
         .get(default.declaration)
         .and_then(|defaults| defaults.get(default.field))
         .and_then(Option::as_ref)
-        .map(|default| &default.value)
 }

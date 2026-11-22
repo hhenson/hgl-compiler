@@ -14,7 +14,7 @@ use crate::declared::agree;
 use crate::hir::{self, Expr, ExprKind, IfInference, LocalId, Stmt, ValueCategory};
 use crate::program::{LocalKind, Program};
 use crate::syntax::{child, tokens, ungrouped};
-use crate::types::{ConstantValue, Detail, Scalar, Type};
+use crate::types::{Constant, ConstantValue, Detail, Scalar, Type};
 use crate::{codes, error};
 
 /// CTRL-13: a graph's no-else `if` has its branch's type where it is a
@@ -43,6 +43,67 @@ pub(super) fn while_connection(condition: &Expr, category: ValueCategory) -> Opt
             "FN-3",
         )
     })
+}
+
+pub(super) const RANGE_LOWER: &str = "the lower bound of this range";
+pub(super) const RANGE_UPPER: &str = "the upper bound of this range";
+
+/// EXPR-16: composition evaluates a range bound while building the graph.
+pub(super) fn range_connection(
+    bound: &Expr,
+    name: &str,
+    category: ValueCategory,
+) -> Option<Diagnostic> {
+    (category == ValueCategory::Connection).then(|| {
+        error(
+            Category::Phase,
+            codes::CONNECTION_AS_CONSTANT,
+            bound.at,
+            format!("{name} is evaluated where the graph is built, and this is a connection"),
+            "EXPR-16",
+        )
+    })
+}
+
+pub(super) fn comprehension_extent_error(at: Location, composition: bool) -> Diagnostic {
+    let message = if composition {
+        "a list comprehension in composition takes a range with constant bounds or a fixed-size list connection"
+    } else {
+        "this comprehension needs a constant number of entries for its fixed-size list"
+    };
+    error(
+        Category::Type,
+        codes::LIST_SIZE,
+        at,
+        message.to_string(),
+        "EXPR-17",
+    )
+}
+
+/// The number of iterations of a fixed-size list (EXPR-17).
+pub(super) fn fixed_list_extent(ty: &Type) -> Option<&Constant> {
+    let Type::List {
+        size: Some(size), ..
+    } = ty
+    else {
+        return None;
+    };
+    (!matches!(size.value, ConstantValue::Unbounded)).then_some(size)
+}
+
+/// Show a symbolic range extent as an expression instead of a range type.
+fn extent_text(node: &SyntaxNode, value: &ConstantValue) -> String {
+    let mut bounds = node.children();
+    if let ConstantValue::RangeLength(lower, _) = value
+        && let (Some(first), Some(last)) = (bounds.next(), bounds.next())
+    {
+        if matches!(**lower, ConstantValue::Int(0)) {
+            return last.text().to_string();
+        }
+        let (first, last) = (first.text(), last.text());
+        return format!("if ({last}) > ({first}) {{ ({last}) - ({first}) }} else {{ 0 }}");
+    }
+    node.text().to_string()
 }
 
 /// What a `for` binds, and whether it makes one child for each member,
@@ -685,11 +746,7 @@ impl<'a> Typer<'a> {
         else {
             return self.unread(node);
         };
-        let sequence = self.expression(&sequence, None);
-        // ERR-15: "what a `for` iterates ... expect[s] the T", and CTRL-12:
-        // "a nullable list, set, or dictionary there is read, and a null
-        // fails the read (ERR-12)".
-        let sequence = self.received(sequence, iterates);
+        let sequence = self.loop_iterable(&sequence);
         let types = self.loop_bindings(&sequence, names.len());
         // CTRL-15: what the loop binds, and whether it makes one child
         // for each member.
@@ -729,6 +786,182 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// An iterable has the ordinary collection rules (CTRL-12), or is a
+    /// range whose bounds are ordinary `i64` values (EXPR-16).
+    pub(super) fn loop_iterable(&mut self, node: &SyntaxNode) -> Expr {
+        if node.kind() != SyntaxKind::RangeExpr {
+            let value = self.expression(node, None);
+            return self.received(value, iterates);
+        }
+        let mut bounds = node.children();
+        let (Some(lower), Some(upper)) = (bounds.next(), bounds.next()) else {
+            return Expr {
+                kind: ExprKind::Unread,
+                ty: Type::Unknown,
+                at: self.at(node),
+                category: ValueCategory::Unsettled,
+            };
+        };
+        let mut bound = |node: &SyntaxNode, name: &str| {
+            let expected = Type::Scalar(Scalar::I64);
+            let value = self.expression(node, Some(&expected));
+            let value = self.fit(value, &expected, name);
+            if self.graph
+                && let Some(report) = range_connection(&value, name, self.category(&value))
+            {
+                self.diagnostics.emit(report);
+            }
+            Box::new(value)
+        };
+        let lower = bound(&lower, RANGE_LOWER);
+        let upper = bound(&upper, RANGE_UPPER);
+        Expr {
+            kind: ExprKind::Range { lower, upper },
+            ty: Type::List {
+                element: Box::new(Type::Scalar(Scalar::I64)),
+                size: None,
+            },
+            at: self.at(node),
+            category: ValueCategory::Value,
+        }
+    }
+
+    /// Check the list type and the scope of each entry (EXPR-17).
+    pub(super) fn list_comprehension(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+    ) -> (ExprKind, Type) {
+        let mut parts = node.children();
+        let (Some(sequence_node), Some(entry), Some(name)) = (
+            parts.next(),
+            parts.next(),
+            tokens(node).find(|token| token.kind() == SyntaxKind::Ident),
+        ) else {
+            return (ExprKind::Unread, Type::Unknown);
+        };
+        let before_sequence = self.diagnostics.len();
+        let sequence = self.loop_iterable(&sequence_node);
+        let binding_ty = self.loop_bindings(&sequence, 1).remove(0);
+        let sequence_reported = self.diagnostics.len() != before_sequence;
+        let over = if self.graph {
+            self.category(&sequence)
+        } else {
+            ValueCategory::Value
+        };
+        let (item_category, _) = bound_by_loop(over, &sequence.ty, 1);
+        let binding = self.declare(
+            name.text(),
+            Location::new(self.file, name.span()),
+            LocalKind::Iteration,
+            binding_ty,
+            true,
+        );
+        self.locals[binding].category = item_category[0];
+        let (element, fixed) = match not_null(expected) {
+            Some(Type::List { element, size }) => (
+                Some(&**element),
+                size.as_ref()
+                    .filter(|size| !matches!(size.value, ConstantValue::Unbounded)),
+            ),
+            _ => (None, None),
+        };
+        // It is possible to make no entries. What happens in an entry
+        // cannot prove a binding assigned, present, or returned after it.
+        let before = self.assigned.clone();
+        let returned = self.returned;
+        let present = self.present.len();
+        let value = self.expression(&entry, element);
+        let value = match element {
+            Some(element) => self.fit_input(value, element, "this list entry"),
+            None => value,
+        };
+        self.present.truncate(present);
+        self.assigned = restored(&before, self.locals.len(), true);
+        self.returned = returned;
+        let size = if sequence_reported {
+            fixed.cloned()
+        } else if self.graph || fixed.is_some() {
+            self.comprehension_size(&sequence_node, &sequence, over, fixed)
+        } else {
+            None
+        };
+        let ty = if self.graph && !sequence_reported && size.is_none() && open(&sequence.ty) {
+            // The fixed list's size and the type of the binding can
+            // still depend on instance selection.
+            Type::Unknown
+        } else {
+            Type::List {
+                element: Box::new(element.cloned().unwrap_or_else(|| value.ty.clone())),
+                size,
+            }
+        };
+        (
+            ExprKind::ListComprehension {
+                composition: self.graph,
+                binding,
+                sequence: Box::new(sequence),
+                entry: Box::new(value),
+            },
+            ty,
+        )
+    }
+
+    /// A fixed comprehension's size is the count of its passes, known
+    /// before composition or wherever a fixed list is expected (EXPR-17).
+    fn comprehension_size(
+        &mut self,
+        node: &SyntaxNode,
+        sequence: &Expr,
+        over: ValueCategory,
+        expected: Option<&Constant>,
+    ) -> Option<Constant> {
+        let size = if matches!(sequence.kind, ExprKind::Range { .. }) {
+            let mut bounds = node.children();
+            let mut read = || {
+                self.read_constant(&bounds.next()?, Some(&Type::Scalar(Scalar::I64)))
+                    .ok()
+            };
+            match (read(), read()) {
+                (Some(lower), Some(upper))
+                    if crate::constant::worked_out(&lower)
+                        && crate::constant::worked_out(&upper) =>
+                {
+                    Some(ConstantValue::range_length(lower, upper))
+                }
+                _ => None,
+            }
+        } else if (!self.graph || over != ValueCategory::Value)
+            && let Some(size) = fixed_list_extent(&sequence.ty)
+        {
+            if crate::constant::worked_out(&size.value) {
+                return Some(Constant {
+                    text: size.value.key().unwrap_or_else(|| size.text.clone()),
+                    value: size.value.clone(),
+                });
+            }
+            None
+        } else if !self.graph
+            && let ExprKind::Sequence(entries) = &sequence.kind
+            && matches!(sequence.ty, Type::List { .. })
+        {
+            i64::try_from(entries.len()).ok().map(ConstantValue::Int)
+        } else {
+            None
+        };
+        let Some(value) = size.filter(crate::constant::worked_out) else {
+            if !open(&sequence.ty) {
+                self.diagnostics
+                    .emit(comprehension_extent_error(sequence.at, self.graph));
+            }
+            return expected.cloned();
+        };
+        Some(Constant {
+            text: value.key().unwrap_or_else(|| extent_text(node, &value)),
+            value,
+        })
+    }
+
     /// The source check for a `for` sequence and its binding types.
     pub(super) fn loop_bindings(&mut self, sequence: &Expr, count: usize) -> Vec<Type> {
         let ty = &sequence.ty;
@@ -736,16 +969,18 @@ impl<'a> Typer<'a> {
             return types.into_iter().cloned().collect();
         }
         if !open(ty) {
-            let takes = if count == 1 {
-                "`for` with one name loops over a list or a set"
+            let message = if matches!(sequence.kind, ExprKind::Range { .. }) {
+                "a range gives one iteration binding".to_string()
+            } else if count == 1 {
+                format!("this is `{ty}`, and `for` with one name loops over a list or a set")
             } else {
-                "`for` with two names loops over a dictionary"
+                format!("this is `{ty}`, and `for` with two names loops over a dictionary")
             };
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::TYPE_MISMATCH,
                 sequence.at,
-                format!("this is `{ty}`, and {takes}"),
+                message,
                 self.loop_rule(),
             ));
         }

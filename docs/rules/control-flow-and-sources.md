@@ -175,12 +175,12 @@ analyser: partial
 - A `switch` with a newly settled selector or label rechecks the selector type and fits the affected labels against it (CTRL-12, GEN-7).
 - Selection also settles each `for` binding's type and category from the sequence before the instance checks its uses (CTRL-12, FN-3, GEN-7).
 - A loop that selects a temporal sequence now creating children checks outer writes, including through `var` parameters, and returns against the existing `loop.carried` restrictions.
-- CTRL-15 allows an outer `var` to carry across passes over a connection of `list<T, N>` or a range with constant bounds (EXPR-16). Each pass rebinds the `var` at wiring time (EXPR-15). #368 tracks constant ranges.
+- CTRL-15 allows an outer `var` to carry across passes over a connection of `list<T, N>` or a range with constant bounds (EXPR-16). Each pass rebinds the `var` at wiring time (EXPR-15).
 - Struct and atomic struct iteration and the proposed `for.sequence` diagnostic await #373. Dynamic loops continue to accept temporal collections and report local `loop.carried` for an outer assignment or a return.
 
 transpiler: partial
 
-- Emits wiring-time and temporal switches, unrolls fixed-list connection loops, and
+- Emits wiring-time and temporal switches, unrolls range and fixed-list connection loops, and
   emits the existing dynamic list and dictionary forms.
 - Left: Field traversal and the changing-membership rejection await #373, with dynamic
   children moving to #370. The loop size, nonlocal list, set, key and branch return
@@ -190,7 +190,7 @@ transpiler: partial
 
 analyser: planned
 
-- #368 tracks checking only the selected branch of a constant condition in an unrolled pass.
+- #368 tracks checking only the selected branch and using a pass's loop binding in a nested constant bound or generic argument.
 
 transpiler: planned
 

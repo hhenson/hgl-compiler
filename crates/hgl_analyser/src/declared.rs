@@ -420,6 +420,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>)
         // `Side(N)` hold it.
         ConstantValue::Unary(..)
         | ConstantValue::Binary(..)
+        | ConstantValue::RangeLength(..)
         | ConstantValue::List(_)
         | ConstantValue::Tuple(_)
         | ConstantValue::Constructed { .. } => {
@@ -2188,7 +2189,11 @@ fn agree_as(left: &Type, right: &Type, unknown: bool) -> bool {
             },
         ) => {
             let sizes = match (size, other_size) {
-                (Some(size), Some(other_size)) => constants_agree(size, other_size),
+                (Some(size), Some(other_size)) => {
+                    constants_agree(size, other_size)
+                        || size.value.same_extent(&other_size.value)
+                        || other_size.value.same_extent(&size.value)
+                }
                 (size, other_size) => size == other_size,
             };
             sizes && agree(element, other_element)

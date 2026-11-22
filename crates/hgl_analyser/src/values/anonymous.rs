@@ -337,6 +337,7 @@ pub(crate) fn remap_locals(body: &mut Body, slots: &[LocalId]) {
             ExprKind::Local(local) | ExprKind::EndpointOf(local) | ExprKind::BoundChild(local) => {
                 change(local)
             }
+            ExprKind::ListComprehension { binding, .. } => change(binding),
             ExprKind::Endpoint {
                 inputs: Some(locals),
                 ..

@@ -258,7 +258,7 @@ fn parts_of(program: &Program, index: usize, parts: &mut Vec<(Part, Vec<Part>)>)
     for position in 0..module.declarations.len() {
         let declared = (index, position);
         if let Some(Some(value)) = module.constants.get(position) {
-            parts.push((Part::Constant(declared), gather(&[value])));
+            parts.push((Part::Constant(declared), gather(&[&value.value])));
         }
         if let Some(Some(body)) = module.bodies.get(position) {
             let mut reads = Vec::new();

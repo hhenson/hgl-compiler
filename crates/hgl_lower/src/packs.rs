@@ -253,6 +253,7 @@ impl Captures {
                             unsupported.get_or_insert(expression.at);
                         }
                     }
+                    ExprKind::ListComprehension { binding, .. } => change(binding),
                     ExprKind::Local(local)
                     | ExprKind::EndpointOf(local)
                     | ExprKind::BoundChild(local) => read(local),

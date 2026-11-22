@@ -1,0 +1,121 @@
+module demo.range_rejections
+
+test range_is_no_value {
+    # expect-error(parse, "syntax.expected_token")
+    let ranges = 0..<3
+}
+
+const fn take_list(values: list<i64>) -> i64 => 3
+
+test range_is_no_argument {
+    # expect-error(parse, "syntax.expected_token")
+    assert take_list(0..<3) == 3
+}
+
+test range_is_no_assigned_value {
+    var values: list<i64> = []
+    # expect-error(parse, "syntax.expected_token")
+    values = 0..<3
+}
+
+test range_has_one_binding {
+    # expect-error(type, "type.mismatch")
+    for i, j in 0..<3 {}
+}
+
+# expect-error(type, "type.mismatch")
+const fn wrong_bound() -> list<i64> => [for index in "start"..<2: index]
+
+# expect-error(type, "type.mismatch")
+const fn wrong_fixed_size() -> list<i64, 4> => [for index in 0..<3: index]
+
+# expect-error(type, "type.mismatch")
+fn wrong_graph_range_size(x: i64) -> list<i64, 2> => [for index in 0..<3: x + index]
+
+# expect-error(type, "type.mismatch")
+fn wrong_graph_list_size(values: list<i64, 2>) -> list<i64, 3> => [for item in values: item]
+
+const fn triple() -> list<i64, 3> => [10, 20, 30]
+
+# expect-error(type, "type.mismatch")
+const fn wrong_value_input_size() -> list<i64, 2> => [for item in triple(): item]
+
+# expect-error(type, "type.mismatch")
+const fn to_two<N>(xs: list<i64, N>) -> list<i64, 2> => [for x in xs: x]
+
+# expect-error(type, "type.mismatch")
+const fn one_more<N>(xs: list<i64, N>) -> list<i64, N + 1> => [for x in xs: x]
+
+# expect-error(type, "list.size")
+const fn runtime_extent(count: i64) -> list<i64, 4> => [for index in 0..<count: index]
+
+fn live_bound(limit: i64) -> i64 {
+    var total = 0
+    # expect-error(phase, "connection.as_constant")
+    for index in 0..<limit { total = total + index }
+    return total
+}
+
+# expect-error(type, "list.size")
+fn growing_list(values: list<i64>) -> list<i64, 4> => [for item in values: item]
+
+operator selected_extent<T>(value: T) -> i64
+impl const fn selected_extent<T>(value: T) -> i64 => 5
+impl fn selected_extent(value: i64) -> i64 {
+    when { return value }
+}
+
+fn selected_range_sum<T>(const value: T) -> i64 {
+    var total = 0
+    for index in 0..<selected_extent(value) { total = total + index }
+    return total
+}
+
+test bound_settles_to_connection {
+    # expect-error(phase, "connection.as_constant")
+    assert eval selected_range_sum(value: 3) == [3]
+}
+
+operator fixed_items<T>(value: T) -> list<i64, 2>
+impl const fn fixed_items<T>(value: T) -> list<i64, 2> => [2, 3]
+impl fn fixed_items(value: i64) -> list<i64, 2> {
+    when { return [value, value + 1] }
+}
+
+fn selected_list<T>(const value: T) -> list<i64, 2> =>
+    [for item in fixed_items(value): item + 1]
+
+test iterable_settles_to_value {
+    # expect-error(type, "list.size")
+    assert eval selected_list(value: "ordinary") == [[3, 4]]
+}
+
+operator appears<T>(value: T) -> bool
+impl const fn appears<T>(value: T) -> bool => false
+impl fn appears(value: i64) -> bool {
+    when { return value > 0 }
+}
+
+operator triple_items<T>(value: T) -> list<i64, 3>
+impl const fn triple_items<T>(value: T) -> list<i64, 3> => [10, 20, 30]
+impl fn triple_items(value: i64) -> list<i64, 3> {
+    when { return [value, value + 10, value + 20] }
+}
+
+fn wrong_extent<T>(const value: T) -> list<i64, 2> =>
+    [for item in (if appears(value) { triple_items(value) }): item]
+
+fn wrong_inferred_extent<T>(const value: T) -> list<i64, 2> {
+    let selected = [for item in (if appears(value) { triple_items(value) }): item]
+    return selected
+}
+
+test iterable_settles_to_wrong_extent {
+    # expect-error(type, "type.mismatch")
+    assert eval wrong_extent(value: 10) == [[10, 20]]
+}
+
+test inferred_extent_must_also_fit_the_result {
+    # expect-error(type, "type.mismatch")
+    assert eval wrong_inferred_extent(value: 10) == [[10, 20]]
+}
