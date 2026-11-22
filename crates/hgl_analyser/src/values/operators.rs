@@ -12,9 +12,10 @@ use super::calls::arguments_of;
 use super::candidates::{Chosen, Given, Key, Settled, Wanted, bound, typed_by_place};
 use super::constants::{constant_text, generic_default};
 use super::dependent_packs::{
-    PackTypes, dependent_slot, operator_packs, reflects, specialize_named_pack,
+    PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
 };
 use super::fit::{open, whole};
+use super::function_arguments::CallbackInputs;
 use super::inference::{
     ExplicitGenerics, bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed,
     unsaid,
@@ -23,7 +24,7 @@ use super::lifting::contextual_type_is_pending;
 use super::{Candidate, Typer};
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
-use crate::program::{OperatorRef, Program, Role};
+use crate::program::{Declaration, DependentPack, OperatorRef, Program, Role};
 use crate::syntax::{has_token, name_token};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, NamedKind, Pack, Scalar,
@@ -283,7 +284,10 @@ impl<'a> Typer<'a> {
         // against each candidate's own signature").
         let options = options_of(public, &candidates);
         let reported = self.diagnostics.len();
-        let dependent = dependent_slot(&program.modules[operator.module], public);
+        let unit = &program.modules[operator.module];
+        let dependent = dependent_slot(unit, public);
+        let dependent_pack = dependent.map(|index| &unit.dependent_packs[&public.parameters[index].at]);
+        let signature = (public, &unit.declarations[operator.declaration], dependent_pack);
         let written =
             self.operator_arguments(name, list, (public, dependent), &options, pack.as_ref());
         let named_generics = self.diagnostics.len() == reported
@@ -329,7 +333,7 @@ impl<'a> Typer<'a> {
                 // arguments are read in source order.
                 let mark = self.mark();
                 let probe = self.read_operator_arguments(
-                    public,
+                    signature,
                     written.iter().cloned(),
                     Some(&inferred),
                     pack.as_ref(),
@@ -341,7 +345,7 @@ impl<'a> Typer<'a> {
             context = Some(inferred);
         }
         let mut given = self.read_operator_arguments(
-            public,
+            signature,
             written,
             context.as_deref(),
             pack.as_ref(),
@@ -706,7 +710,7 @@ impl<'a> Typer<'a> {
     /// take their context from the operator's public function template.
     fn read_operator_arguments(
         &mut self,
-        public: &Signature,
+        (public, declared, dependent): (&Signature, &Declaration, Option<&DependentPack>),
         written: impl IntoIterator<Item = (Key, SyntaxNode)>,
         context: Option<&[Option<Argument>]>,
         pack: Option<&hir::TypePackArgument>,
@@ -715,7 +719,13 @@ impl<'a> Typer<'a> {
         let resolved: Vec<_> = context
             .unwrap_or_default()
             .iter()
-            .map(|value| value.clone().unwrap_or(Argument::Type(Type::Unknown)))
+            .zip(&public.generics)
+            .map(|(value, generic)| {
+                value.clone().or_else(|| {
+                    dependent.filter(|pack| pack.without.contains(&generic.at))?;
+                    self.default_constant(declared, generic).map(Argument::Constant)
+                }).unwrap_or(Argument::Type(Type::Unknown))
+            })
             .collect();
         let map: Vec<_> = public
             .generics
@@ -728,6 +738,27 @@ impl<'a> Typer<'a> {
             .iter()
             .filter(|parameter| !parameter.configuration && parameter.pack.is_none())
             .count();
+        let written: Vec<_> = written.into_iter().collect();
+        // For FN-17 selection the dependent arguments supply type
+        // evidence even when written after the callback itself.
+        let mut dependent_values = Vec::new();
+        if context.is_some() && replay.is_none() && dependent.is_some() {
+            let positional_pack = public.parameters.iter().any(|p| p.pack == Some(Pack::Positional));
+            let mark = self.mark();
+            dependent_values.extend(written.iter().filter_map(|(key, node)| {
+                let captured = match key {
+                    Key::Position(position) => *position >= fixed && !positional_pack,
+                    Key::Name(_) => key.public_parameter(public).is_none(),
+                    _ => false,
+                };
+                captured.then(|| self.give(key.clone(), node.clone()))
+            }));
+            self.take_back(mark, false);
+        }
+        let supplied: Vec<_> = dependent_values.iter().map(|given| {
+            (given.key.name(), &given.value)
+        }).collect();
+        let excluded = dependent.map_or_else(Vec::new, |pack| pack_exclusions(pack, &map));
         written
             .into_iter()
             .enumerate()
@@ -753,7 +784,15 @@ impl<'a> Typer<'a> {
                     && let Type::Function(template) = substitute_within(pattern, &map)
                 {
                     let reported = self.diagnostics.len();
-                    let value = self.function_argument(&node, &template);
+                    let inputs = if dependent.is_some_and(|pack| {
+                        key.public_parameter(public)
+                            .is_some_and(|index| public.parameters[index].at == pack.function)
+                    }) {
+                        CallbackInputs { supplied: &supplied, excluded: &excluded }
+                    } else {
+                        CallbackInputs::default()
+                    };
+                    let value = self.function_argument_with_inputs(&node, &template, &inputs);
                     if self.diagnostics.len() == reported && !whole(&value.ty) {
                         self.diagnostics.emit(error(
                             Category::Type,

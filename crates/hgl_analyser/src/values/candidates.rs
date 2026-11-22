@@ -971,6 +971,14 @@ impl<'a> Typer<'a> {
                 // a default or a nullable type.
                 count != 0
                     || parameter.has_default
+                    || wanted
+                        .callback
+                        .as_ref()
+                        .and_then(|callback| callback.reflected)
+                        .is_some_and(|excluded| {
+                            let name = declared[index].map_or(&parameter.name, |public| &public.name);
+                            excluded.contains(&name.as_str())
+                        })
                     || declared[index].is_some_and(|parameter| parameter.has_default)
                     || matches!(parameter.ty, Type::Nullable(_))
             };
@@ -2058,6 +2066,8 @@ pub(super) struct CallbackRequest<'w> {
     pub(super) reference: bool,
     /// The operator's compile-time options taken by a candidate that uses them.
     pub(super) values: &'w [CallbackOption<'w>],
+    /// A reflected callback can leave these parameters for its caller (FN-8).
+    pub(super) reflected: Option<&'w [&'w str]>,
 }
 
 /// A public option that a candidate may take under the same name.
@@ -2141,11 +2151,12 @@ impl CallbackRequest<'_> {
         result: Option<&Type>,
     ) -> bool {
         self.reference == signature.reference
-            && signature.parameters.len() == given.len()
-            && given.iter().zip(bound).all(|(given, place)| {
-                matches!(*place, Place::Parameter(index)
-                    if agree(given.ty(), &signature.parameters[index].ty))
-            })
+            && (self.reflected.is_some()
+                || signature.parameters.len() == given.len()
+                    && given.iter().zip(bound).all(|(given, place)| {
+                        matches!(*place, Place::Parameter(index)
+                            if agree(given.ty(), &signature.parameters[index].ty))
+                    }))
             && match (result, &signature.result) {
                 (Some(expected), Some(actual)) => agree(expected, actual),
                 (None, None) => true,
@@ -2327,7 +2338,7 @@ pub(super) struct Chosen<'s> {
     /// What each of its generic parameters stands for at this call.
     pub(super) generics: Vec<Argument>,
     /// The ordered types of each heterogeneous pack (GEN-10).
-    type_packs: Vec<hir::TypePackArgument>,
+    pub(super) type_packs: Vec<hir::TypePackArgument>,
     /// Candidate slots in written argument order.
     bound: Vec<Place>,
     /// The concrete named pack of a static callback, when it has one.

@@ -8,6 +8,7 @@ use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
 use super::Typer;
 use super::arguments::{Assigned, Slot, Takes};
 use super::candidates::Given;
+use super::function_arguments::CallbackInputs;
 
 use super::inference::{pack_bounds, type_pack};
 use crate::declared::{substitute_with_members, weight};
@@ -243,47 +244,47 @@ impl Typer<'_> {
             else {
                 continue;
             };
-            let mut callback = self.function_argument(&assigned[position].value, &template);
-            let mut reflected = reflect(&template, &callback);
+            let mut supplied = Vec::new();
+            let mut excluded = Vec::new();
             if let Some((slot, declaration)) = for_this {
                 let mark = self.mark();
-                let supplied: Vec<_> = assigned
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, entry)| entry.slot == Some(slot))
-                    .map(|(position, entry)| {
-                        let argument = self.argument(
-                            Some(slot),
-                            &entry.value,
-                            Some((&slots[slot], false)),
-                            Takes::Parameters,
-                        );
-                        (position, argument)
-                    })
-                    .collect();
+                supplied.extend(
+                    assigned
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, entry)| entry.slot == Some(slot))
+                        .map(|(position, entry)| {
+                            let argument = self.argument(
+                                Some(slot),
+                                &entry.value,
+                                Some((&slots[slot], false)),
+                                Takes::Parameters,
+                            );
+                            (position, argument)
+                        }),
+                );
                 self.take_back(mark, false);
-                let arguments: Vec<_> = supplied
-                    .iter()
-                    .map(|(offset, argument)| {
-                        (
-                            assigned[*offset].name.as_ref().map(SyntaxToken::text),
-                            &argument.value,
-                        )
-                    })
-                    .collect();
-                let without: Vec<_> = declaration
-                    .without
-                    .iter()
-                    .filter_map(|at| map.iter().find(|(declared, _)| declared == at))
-                    .filter_map(|(_, argument)| match argument {
-                        GenericArgument::Constant(constant) => Some(constant),
-                        _ => None,
-                    })
-                    .collect();
-                let excluded: Vec<_> = without
-                    .iter()
-                    .flat_map(|constant| exclusion_names(&constant.value))
-                    .collect();
+                excluded = pack_exclusions(declaration, map);
+            }
+            let arguments: Vec<_> = supplied
+                .iter()
+                .map(|(offset, argument)| {
+                    (
+                        assigned[*offset].name.as_ref().map(SyntaxToken::text),
+                        &argument.value,
+                    )
+                })
+                .collect();
+            let mut callback = self.function_argument_with_inputs(
+                &assigned[position].value,
+                &template,
+                &CallbackInputs {
+                    supplied: &arguments,
+                    excluded: &excluded,
+                },
+            );
+            let mut reflected = reflect(&template, &callback);
+            if let Some((slot, _)) = for_this {
                 match bind(program, &template, &callback, &arguments, &excluded) {
                     Ok(bound) => {
                         reflected = bound.reflected;
@@ -464,6 +465,23 @@ impl Typer<'_> {
         };
         self.diagnostics.emit(report);
     }
+}
+
+/// The parameter names a dependent pack leaves for the enclosing declaration.
+pub(super) fn pack_exclusions<'a>(
+    dependent: &crate::program::DependentPack,
+    map: &[(Location, &'a GenericArgument)],
+) -> Vec<&'a str> {
+    dependent
+        .without
+        .iter()
+        .filter_map(|at| map.iter().find(|(declared, _)| declared == at))
+        .filter_map(|(_, argument)| match argument {
+            GenericArgument::Constant(constant) => Some(&constant.value),
+            _ => None,
+        })
+        .flat_map(exclusion_names)
+        .collect()
 }
 
 /// The names supplied by one constant in a `without` clause (FN-8).

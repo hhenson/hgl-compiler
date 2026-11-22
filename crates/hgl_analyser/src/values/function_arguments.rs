@@ -6,7 +6,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::Typer;
 use super::arguments::{Slot, Takes};
 use super::candidates::{
-    CallbackOption, CallbackOptionSource, CallbackRequest, Given, Wanted, in_instance,
+    CallbackOption, CallbackOptionSource, CallbackRequest, Given, Key, Wanted, in_instance,
 };
 use super::constants::generic_default;
 use super::fit::whole;
@@ -26,9 +26,20 @@ use crate::{codes, error, local_error};
 impl<'a> Typer<'a> {
     /// Read an argument the callee expects to be a function known at compile time.
     pub(super) fn function_argument(&mut self, node: &SyntaxNode, template: &FunctionType) -> Expr {
+        self.function_argument_with_inputs(node, template, &CallbackInputs::default())
+    }
+
+    /// FN-17: an operator named at a reflected template selects by the
+    /// resolved argument types, including those in the dependent pack.
+    pub(super) fn function_argument_with_inputs(
+        &mut self,
+        node: &SyntaxNode,
+        template: &FunctionType,
+        inputs: &CallbackInputs<'_>,
+    ) -> Expr {
         let at = self.at(node);
         let argument = ungrouped(node.clone());
-        let resolved = self.function_target(&argument, template);
+        let resolved = self.function_target(&argument, template, inputs);
         let (kind, ty) = resolved.map_or((ExprKind::Unread, Type::Unknown), |(callee, actual)| {
             if !matches_template(template, &actual) {
                 self.template_mismatch(at, template, &actual);
@@ -51,6 +62,7 @@ impl<'a> Typer<'a> {
         &mut self,
         node: &SyntaxNode,
         template: &FunctionType,
+        inputs: &CallbackInputs<'_>,
     ) -> Option<(Callee, FunctionType)> {
         if node.kind() == SyntaxKind::FnExpr {
             return self.anonymous_target(node, template);
@@ -82,7 +94,7 @@ impl<'a> Typer<'a> {
                             module,
                             declaration,
                         },
-                        template,
+                        (template, inputs),
                     );
                 }
                 let preferred = if template.value {
@@ -138,7 +150,7 @@ impl<'a> Typer<'a> {
             pack,
             empty_named_pack,
             ..
-        } = self.reference_arguments(node, name, (declared, signature), template)?;
+        } = self.reference_arguments(node, name, (declared, signature), (template, &[]))?;
         let map = signature
             .generics
             .iter()
@@ -174,15 +186,35 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         name: &SyntaxToken,
         operator: OperatorRef,
-        template: &FunctionType,
+        (template, inputs): (&FunctionType, &CallbackInputs<'_>),
     ) -> Option<(Callee, FunctionType)> {
-        // Bare references use the existing template-driven selector.
-        // With written arguments, the operator can also complete a
-        // template still open after the other arguments were read.
-        let explicit = if node.kind() == SyntaxKind::FunctionReference {
-            Some(self.operator_reference(node, name, operator, template)?)
+        let unit = &self.program.modules[operator.module];
+        let Detail::Callable(public) = &unit.details[operator.declaration] else {
+            return None;
+        };
+        let at = self.at(node);
+        let reflected = template.named_pack.is_some();
+        let mut given = if reflected {
+            reflected_operator_arguments(public, template, node, at, inputs)
         } else {
-            if !template.types().all(whole) {
+            Vec::new()
+        };
+        if reflected && !given.iter().any(|argument| whole(argument.ty())) {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::GENERIC_UNRESOLVED,
+                at,
+                format!("the call gives no resolved parameter type to select a candidate of `{}`", name.text()),
+                "FN-17",
+            ));
+            return None;
+        }
+        // With written generics the operator can also complete a template
+        // still open after the enclosing call's other arguments were read.
+        let explicit = if node.kind() == SyntaxKind::FunctionReference {
+            Some(self.operator_reference(node, name, operator, (template, &given))?)
+        } else {
+            if !reflected && !template.types().all(whole) {
                 return None;
             }
             None
@@ -190,31 +222,18 @@ impl<'a> Typer<'a> {
         let request = explicit
             .as_ref()
             .map_or(template, |operator| &operator.signature);
+        if !reflected {
+            given.extend(request.parameters.iter().enumerate().map(|(index, input)| {
+                callback_operand(index, node, at, input.ty().clone())
+            }));
+        }
         let graph = std::mem::replace(&mut self.graph, !template.value);
         let value_code = std::mem::replace(&mut self.value_code, false);
-        let candidates = self.value_candidates(operator);
-        let candidates: Vec<_> = candidates
+        let candidates: Vec<_> = self
+            .value_candidates(operator)
             .into_iter()
-            .filter(|(_, _, signature)| signature.parameters.iter().all(plain_parameter))
+            .filter(|(_, _, signature)| plain_inputs(signature, template))
             .collect();
-        let at = self.at(node);
-        let given = request
-            .parameters
-            .iter()
-            .enumerate()
-            .map(|(index, input)| {
-                Given::read(
-                    index,
-                    node.clone(),
-                    Expr {
-                        kind: ExprKind::Unread,
-                        ty: input.ty().clone(),
-                        at,
-                        category: ValueCategory::Value,
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
         let mut requested_values = Vec::new();
         if let Some(explicit) = &explicit
             && let Detail::Callable(public) =
@@ -268,9 +287,10 @@ impl<'a> Typer<'a> {
                 .as_ref()
                 .and_then(|operator| operator.among.clone()),
             written: explicit.is_some(),
-            callback: explicit.as_ref().map(|_| CallbackRequest {
+            callback: (explicit.is_some() || reflected).then_some(CallbackRequest {
                 reference: request.reference,
                 values: &requested_values,
+                reflected: reflected.then_some(inputs.excluded),
             }),
         };
         let (mut matches, unknown) = self.admitted(operator, &candidates, &given, &wanted);
@@ -288,14 +308,12 @@ impl<'a> Typer<'a> {
                 .role()
                 == Some(Role::Value);
             let mut actual = function_type(taken, value);
-            if let Some(Detail::Callable(public)) = self.program.modules[operator.module]
-                .details
-                .get(operator.declaration)
-            {
-                for (input, public) in actual.parameters.iter_mut().zip(&public.parameters) {
-                    if let FunctionParameter::Declared(parameter) = input {
-                        parameter.name.clone_from(&public.name);
-                    }
+            for (parameter, position) in public.parameters.iter().zip(public.candidate_parameters(taken)) {
+                if let Some(position) = position
+                    && let FunctionParameter::Declared(input) = &mut actual.parameters[position]
+                {
+                    input.name.clone_from(&parameter.name);
+                    input.has_default |= parameter.has_default;
                 }
             }
             let requirements = self.answers(module, declaration, &chosen.generics);
@@ -305,7 +323,7 @@ impl<'a> Typer<'a> {
                 module,
                 declaration,
                 generics: chosen.generics,
-                type_packs: Vec::new(),
+                type_packs: chosen.type_packs,
                 requirements,
             };
             return Some((callee, actual));
@@ -330,17 +348,17 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         name: &SyntaxToken,
         operator: OperatorRef,
-        template: &FunctionType,
+        (template, given): (&FunctionType, &[Given]),
     ) -> Option<OperatorReference> {
         let module = &self.program.modules[operator.module];
         let Detail::Callable(public) = &module.details[operator.declaration] else {
             return None;
         };
-        if !plain_parameters(public) {
+        if !plain_inputs(public, template) {
             self.marked_function(node, public);
             return None;
         }
-        if public.parameters.len() != template.parameters.len()
+        if !takes_input_count(template, public.parameters.len())
             || public.result.is_some() != template.result.is_some()
             || public.reference != template.reference
         {
@@ -356,7 +374,7 @@ impl<'a> Typer<'a> {
             node,
             name,
             (&module.declarations[operator.declaration], public),
-            template,
+            (template, given),
         )?;
         if generics
             .iter()
@@ -388,7 +406,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         name: &SyntaxToken,
         (declared, signature): (&Declaration, &Signature),
-        template: &FunctionType,
+        (template, given): (&FunctionType, &[Given]),
     ) -> Option<ReferenceArguments> {
         let written = self.reference_written(node, name);
         let ExplicitGenerics {
@@ -404,6 +422,11 @@ impl<'a> Typer<'a> {
         }
         for (pattern, actual) in signature.parameters.iter().zip(&template.parameters) {
             infer(&pattern.ty, actual.ty(), &signature.generics, &mut found);
+        }
+        for given in given {
+            if let Some(index) = given.key.public_parameter(signature) {
+                infer(&signature.parameters[index].ty, given.ty(), &signature.generics, &mut found);
+            }
         }
         // GEN-2 and GEN-8: a generic value parameter nothing says
         // anything of takes the default declared by the callback.
@@ -679,8 +702,71 @@ struct ReferenceArguments {
     defaulted: Vec<usize>,
 }
 
-fn plain_parameters(signature: &Signature) -> bool {
-    signature.parameters.iter().all(plain_parameter)
+/// The arguments the enclosing call gives the callback's own parameters.
+#[derive(Default)]
+pub(super) struct CallbackInputs<'a> {
+    pub(super) supplied: &'a [(Option<&'a str>, &'a Expr)],
+    pub(super) excluded: &'a [&'a str],
+}
+
+fn reflected_operator_arguments(
+    public: &Signature,
+    template: &FunctionType,
+    node: &SyntaxNode,
+    at: Location,
+    inputs: &CallbackInputs<'_>,
+) -> Vec<Given> {
+    let mut positions = public
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.configuration && parameter.pack.is_none())
+        .enumerate();
+    let fixed = positions.clone().count();
+    let mut remaining = positions
+        .by_ref()
+        .filter(|(_, parameter)| !inputs.excluded.contains(&parameter.name.as_str()));
+    let mut pack_position = fixed;
+    let mut given: Vec<_> = inputs
+        .supplied
+        .iter()
+        .map(|(name, value)| {
+            let key = if let Some(name) = name {
+                Key::Name((*name).to_string())
+            } else if let Some((position, _)) = remaining.next() {
+                Key::Position(position)
+            } else {
+                let position = pack_position;
+                pack_position += 1;
+                Key::Position(position)
+            };
+            let mut argument = callback_operand(0, node, value.at, value.ty.clone());
+            argument.key = key;
+            argument
+        })
+        .collect();
+    // Fixed inputs specify their own types even where the enclosing
+    // declaration supplies them or the callback has a default (FN-17).
+    for (index, input) in template.parameters.iter().enumerate() {
+        if whole(input.ty())
+            && given.iter().all(|given| given.key.public_parameter(public) != Some(index))
+        {
+            given.push(callback_operand(index, node, at, input.ty().clone()));
+        }
+    }
+    given
+}
+
+fn callback_operand(position: usize, node: &SyntaxNode, at: Location, ty: Type) -> Given {
+    Given::read(
+        position,
+        node.clone(),
+        Expr {
+            kind: ExprKind::Unread,
+            ty,
+            at,
+            category: ValueCategory::Value,
+        },
+    )
 }
 
 /// FN-17: fixed inputs are plain. GEN-17 reflects the other inputs as
