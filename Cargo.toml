@@ -7,7 +7,7 @@ members = ["crates/*"]
 
 # Values each crate inherits with `field.workspace = true`.
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 # No `rust-version` (minimum supported Rust): the project follows the
 # current stable release, pinned in rust-toolchain.toml.
@@ -52,3 +52,12 @@ missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# Every build of the `dev` profile, which `cargo test` uses too, builds
+# the dependencies (every package that is not a workspace member) with
+# optimisation: the tests take about half the time, and a dependency is
+# built once and kept. The workspace's own crates stay unoptimised, as
+# the stack-size tests assume, and debug assertions and overflow checks
+# stay on in all of them. A release build is not changed.
+[profile.dev.package."*"]
+opt-level = 3
