@@ -30,9 +30,25 @@ impl Reader<'_> {
                     // A const option compared in a constraint is a
                     // value: no type is written there. So is a constant
                     // compared with one (UNIT-13).
-                    if !inside && !self.names_an_option(&node) && !self.compared_constant(&node) {
+                    if !inside
+                        && !self.names_an_option(&node)
+                        && !self.compared_constant(&node)
+                        && !self.constraint_pack_key(&node)
+                    {
                         self.outermost(&node);
                     }
+                }
+                SyntaxKind::IndexExpr
+                    if node.parent().is_some_and(|parent| {
+                        matches!(
+                            parent.kind(),
+                            SyntaxKind::ConstraintRelation
+                                | SyntaxKind::ConstraintSet
+                                | SyntaxKind::ConstraintCall
+                        )
+                    }) && self.indexed_pack(&node) =>
+                {
+                    self.outermost(&node);
                 }
                 SyntaxKind::TypedConstructor | SyntaxKind::FunctionReference => {
                     self.constructor(&node);

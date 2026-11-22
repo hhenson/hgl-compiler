@@ -38,7 +38,7 @@
 //!   sum, difference, negation and scaling of tenors (TEN-2); `+` of two
 //!   strings; `==`, `!=` and the order of numbers and durations; `&&`
 //!   and `||`;
-//! * a list and a tuple written out, of constants.
+//! * a list, a tuple and a `set<str>` written out, of constants.
 //!
 //! What it cannot work out is [`ConstantValue::Unevaluated`]: an
 //! operation that overflows, a division by zero, a symbol given
@@ -47,7 +47,7 @@
 //! all, a local or a call, is [`Fault::NotConstant`].
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_lexer::literal::{
@@ -115,6 +115,9 @@ pub(crate) enum Fault {
     /// It is `.member` where no enum is expected (TYPE-7: "With no enum
     /// type expected, `.member` rejects").
     NoEnum,
+    /// A member of a written string set is the same constant as one
+    /// before it (EXPR-9).
+    DuplicateSetMember { first: Location, again: Location },
     /// Something in it has been reported already: a name nothing binds,
     /// a literal the lexer rejected, a constant in a cycle (ERR-9).
     Reported,
@@ -217,8 +220,27 @@ impl Fault {
                 ),
                 "TYPE-7",
             ),
+            Fault::DuplicateSetMember { .. } => return self.set_duplicate_report(),
             Fault::NotConstant | Fault::Reported | Fault::Failed => return None,
         })
+    }
+
+    /// EXPR-9: report a duplicate at the later member, with the first
+    /// written member as its related location.
+    pub(crate) fn set_duplicate_report(&self) -> Option<Diagnostic> {
+        let Self::DuplicateSetMember { first, again } = *self else {
+            return None;
+        };
+        Some(
+            crate::error(
+                Category::Type,
+                codes::SET_DUPLICATE_MEMBER,
+                again,
+                "this member of the set is the same constant as an earlier member".to_string(),
+                "EXPR-9",
+            )
+            .with_related(first, "the first member"),
+        )
     }
 }
 
@@ -396,7 +418,8 @@ pub(crate) fn fit(
                 .collect::<Result<Vec<ConstantValue>, Fault>>()?;
             return Ok(ConstantValue::Tuple(values));
         }
-        // A set's or a dictionary's constant is not read (`sequence`).
+        // A sequence read without a set or dictionary type cannot give
+        // a value of that type afterwards (`sequence`).
         (ConstantValue::List(_), Type::Set(_) | Type::Dict { .. }) => {
             return Ok(ConstantValue::Unevaluated);
         }
@@ -488,7 +511,8 @@ fn fits(ty: &Type, expected: &Type) -> bool {
         ) => (module, declaration) == (other_module, other_declaration),
         // A generic parameter's type is known once the parameter is
         // given a value: here it is not.
-        (Type::Parameter { .. }, _) | (_, Type::Parameter { .. }) => true,
+        (Type::Parameter { .. } | Type::PackMember { .. }, _)
+        | (_, Type::Parameter { .. } | Type::PackMember { .. }) => true,
         (left, right) => left == right,
     }
 }
@@ -498,7 +522,10 @@ fn fits(ty: &Type, expected: &Type) -> bool {
 fn unknown(ty: &Type) -> bool {
     matches!(
         ty,
-        Type::Unknown | Type::Scalar(Scalar::Any) | Type::Parameter { .. }
+        Type::Unknown
+            | Type::Scalar(Scalar::Any)
+            | Type::Parameter { .. }
+            | Type::PackMember { .. }
     )
 }
 
@@ -731,14 +758,17 @@ fn name(node: &SyntaxNode, scope: &Scope) -> Result<Typed, Fault> {
     }
     // A name nothing binds has been reported, or is left for the
     // prelude (UNIT-11).
-    let Some((name, binding)) = bound(node, scope) else {
-        return Err(Fault::Reported);
-    };
+    named(&name_token(node).ok_or(Fault::Reported)?, scope)
+}
+
+/// The constant a name token denotes, including a pack key bound in a requirement.
+pub(crate) fn named(name: &SyntaxToken, scope: &Scope) -> Result<Typed, Fault> {
+    let binding = (scope.binding)(scope.file, name.span().start).ok_or(Fault::Reported)?;
     match binding {
         // "a generic value parameter in scope".
         Binding::Local {
             at,
-            kind: LocalKind::GenericParameter,
+            kind: LocalKind::GenericParameter | LocalKind::PackKey,
         } => Ok(Typed::of(
             ConstantValue::Parameter {
                 name: name.text().to_string(),
@@ -925,8 +955,8 @@ fn constant_expression(
 
 /// The type a constant's declaration, or a generic value parameter's,
 /// writes, as far as it can be read before the program's types are:
-/// a scalar, an enum, a generic parameter, and a nullable, list or
-/// tuple of those. `None` for any other. A constant's place is given
+/// a scalar, an enum, a generic parameter, and a nullable, list, set
+/// or tuple of those. `None` for any other. A constant's place is given
 /// such a type; another is read when the types are.
 pub(crate) fn written_type<'s>(
     node: &SyntaxNode,
@@ -949,6 +979,7 @@ pub(crate) fn written_type<'s>(
             Scalar::from_keyword(tokens(node).next()?.kind()).map(Type::Scalar)
         }
         SyntaxKind::NullableType => Some(Type::Nullable(Box::new(part(node)?))),
+        SyntaxKind::SetType => Some(Type::Set(Box::new(part(node)?))),
         SyntaxKind::ListType => {
             // TYPE-10: a size is an `i64` constant, or `unbounded`.
             let size = node
@@ -1201,12 +1232,14 @@ fn constructed_member(node: &SyntaxNode, scope: &Scope) -> Result<Typed, Fault> 
     ))
 }
 
-/// `[a, b]`: a list of constants.
+/// `[a, b]`: a list of constants, or a string set in a place for one.
 fn sequence(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Typed, Fault> {
     let element = match expected {
         Some(Type::List { element, .. }) => Some(&**element),
-        // A set's or a dictionary's constant is not read: its entries
-        // have no order to compare them by.
+        Some(ty @ Type::Set(element)) if **element == Type::Scalar(Scalar::Str) => {
+            return string_set(node, ty, scope);
+        }
+        // Other sets and dictionaries are not worked out here.
         Some(Type::Set(_) | Type::Dict { .. }) => return Ok(Typed::unevaluated(None)),
         _ => None,
     };
@@ -1248,6 +1281,51 @@ fn sequence(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result
                 size: None,
             }),
         )
+    })
+}
+
+/// FN-8: a written `set<str>` gives the names its members hold. EXPR-9
+/// rejects repeated constants even where another member is not worked
+/// out. Keep the source location for a repeated member and store only
+/// the string values for a complete set (UNIT-13).
+fn string_set(node: &SyntaxNode, ty: &Type, scope: &Scope) -> Result<Typed, Fault> {
+    let element = Type::Scalar(Scalar::Str);
+    let mut names = BTreeMap::new();
+    let mut fault = None;
+    let mut known = true;
+    let mut failed = false;
+    for entry in node.children() {
+        if entry.kind() == SyntaxKind::SequencePair {
+            return Ok(Typed::unevaluated(None));
+        }
+        let read = value(&entry, Some(&element), scope).and_then(|read| {
+            failed |= read.failed;
+            fit(read, Some(&element), scope.program)
+        });
+        match read {
+            Ok(ConstantValue::Str(name)) => {
+                let again = Location::new(scope.file, entry.span());
+                if let Some(first) = names.insert(name, again) {
+                    return Err(Fault::DuplicateSetMember { first, again });
+                }
+            }
+            Ok(_) => known = false,
+            Err(why) => {
+                fault.get_or_insert(why);
+            }
+        }
+    }
+    if let Some(fault) = fault {
+        return Err(fault);
+    }
+    let value = if known {
+        ConstantValue::StringSet(names.into_keys().collect())
+    } else {
+        ConstantValue::Unevaluated
+    };
+    Ok(Typed {
+        failed,
+        ..Typed::of(value, Some(ty.clone()))
     })
 }
 
@@ -2388,6 +2466,7 @@ impl ConstantValue {
             (V::Float(left), V::Float(right)) => Some(floats(*left, *right)),
             (V::Bool(left), V::Bool(right)) => Some(left == right),
             (V::Str(left), V::Str(right)) => Some(left == right),
+            (V::StringSet(left), V::StringSet(right)) => Some(left == right),
             (V::Null, V::Null) | (V::Unbounded, V::Unbounded) => Some(true),
             (V::Duration(left), V::Duration(right)) => Some(left == right),
             // TYPE-17: "Two tenors are equal when they are of the same
@@ -2522,6 +2601,10 @@ impl ConstantValue {
                 None => format!(".{}", member.name),
             },
             V::List(values) => format!("[{}]", all(values)?),
+            V::StringSet(values) => {
+                let names: Vec<String> = values.iter().map(|name| format!("{name:?}")).collect();
+                format!("set<str>[{}]", names.join(", "))
+            }
             V::Tuple(values) => format!("({})", all(values)?),
             V::Unbounded => "unbounded".to_string(),
             V::Parameter { .. }

@@ -1291,6 +1291,50 @@ pub struct TypePackArgument {
     /// The graph's arguments still have to complete this inferred pack.
     /// A pack with written types is already fixed (GEN-8).
     pub infer_from_arguments: bool,
+    /// Each type's name or position in the same order (GEN-17).
+    pub keys: Vec<PackKey>,
+}
+
+impl TypePackArgument {
+    /// A pack of types given in positional order (GEN-10).
+    pub(crate) fn positional(parameter: usize, types: Vec<Type>) -> Self {
+        let keys = (0..types.len()).map(PackKey::Position).collect();
+        Self {
+            parameter,
+            types,
+            infer_from_arguments: false,
+            keys,
+        }
+    }
+
+    /// A pack whose types are known with their names or positions (GEN-17).
+    pub(crate) fn keyed(parameter: usize, entries: Vec<(PackKey, Type)>) -> Self {
+        let (keys, types) = entries.into_iter().unzip();
+        Self {
+            parameter,
+            types,
+            infer_from_arguments: false,
+            keys,
+        }
+    }
+
+    /// The type named by a compile-time key (GEN-17).
+    pub(crate) fn member(&self, key: &crate::types::ConstantValue) -> Option<&Type> {
+        use crate::types::ConstantValue;
+
+        self.keys
+            .iter()
+            .zip(&self.types)
+            .find_map(|(entry, ty)| match (entry, key) {
+                (PackKey::Name(name), ConstantValue::Str(given)) if name == given => Some(ty),
+                (PackKey::Position(pos), ConstantValue::Int(given))
+                    if usize::try_from(*given) == Ok(*pos) =>
+                {
+                    Some(ty)
+                }
+                _ => None,
+            })
+    }
 }
 
 /// What answers a requirement a call's callee states (GEN-16).

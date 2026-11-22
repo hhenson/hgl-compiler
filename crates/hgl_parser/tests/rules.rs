@@ -1791,6 +1791,119 @@ fn a_pack_parameter_has_a_positional_and_a_named_form() {
     assert_eq!(outcome.findings, []);
 }
 
+#[test]
+fn a_pack_declared_for_a_function_keeps_the_function_and_exclusions() {
+    // FN-8: the pack is declared for a function parameter. Each exclusion
+    // names one generic value parameter, whether its value is a name or set.
+    for (inside, ending) in [
+        ("", ""),
+        (" without key", r#" "without" "key""#),
+        (" without key, index", r#" "without" "key" "," "index""#),
+        (" without given", r#" "without" "given""#),
+    ] {
+        let tree = declarations(&format!(
+            "operator pass<R, ...Ps, ...As>(f: fn(...{{Ps}}) -> R, args: ...{{As for f{inside}}}) -> R"
+        ));
+        assert!(
+            tree.contains(&format!(
+                r#"PackType["{{" NamedType["As"] PackFor["for" "f"{ending}] "}}"]"#
+            )),
+            "{tree}"
+        );
+    }
+}
+
+#[test]
+fn a_pack_for_clause_needs_a_function_and_any_written_exclusion_names() {
+    // FN-8: both the function and the exclusions are identifiers.
+    for inside in ["As for", "As for f without", "As for f without key,"] {
+        rejected(
+            Entry::Declarations,
+            &format!("operator pass<...As>(f: fn(), args: ...{{{inside}}})"),
+        );
+    }
+}
+
+// ---- GEN-17 ----
+
+#[test]
+fn a_function_type_reads_packs_after_fixed_parameters() {
+    // FN-17 and GEN-17: a function type reads a pack as one input. The
+    // named form can follow a fixed named input.
+    let tree =
+        declarations("operator pass<R, ...Ps>(f: const fn(scale: f64, ...{Ps}{1:*}) -> R) -> R");
+    assert!(
+        tree.contains(
+            r#"FunctionType["const" "fn" ParamList["(" FunctionTypeParam["scale" ":" ScalarType["f64"]] "," FunctionTypeParam["..." PackType["{" NamedType["Ps"] "}"] Cardinality["{" "1" ":" "*" "}"]] ")"] ReturnType["->" NamedType["R"]]]"#
+        ),
+        "{tree}"
+    );
+    let positional = declarations("fn run_it(f: fn(i64, ...f64)) {}");
+    assert!(
+        positional.contains(r#"FunctionTypeParam["..." ScalarType["f64"]]"#),
+        "{positional}"
+    );
+}
+
+#[test]
+fn a_pack_member_can_be_nested_in_a_type() {
+    // GEN-17 and pack_member: Ps[arg] is itself a type. TYPE-15: the
+    // question mark covers the entire member.
+    let tree = declarations("fn read<...Ps>(f: fn(...{Ps}), x: Ps[arg]?) -> dict<i64, Ps[arg]> {}");
+    let member = r#"PackMemberType["Ps" "[" "arg" "]"]"#;
+    for expected in [
+        format!(r#"NullableType[{member} "?"]"#),
+        format!(r#"DictType["dict" "<" ScalarType["i64"] "," {member} ">"]"#),
+    ] {
+        assert!(tree.contains(&expected), "{tree}");
+    }
+    rejected(Entry::Declarations, "fn read(x: Ps[1]) {}");
+    assert!(rejected(Entry::Declarations, "fn read(x: Ps [arg]) {}")[0].starts_with("LEX-27 "));
+}
+
+#[test]
+fn a_constraint_walks_pack_keys_and_compares_member_types() {
+    // GEN-17 and GEN-3: the key iterator is a call and either operand of
+    // a relation can read a type under the key.
+    let tree = declarations(
+        "operator check<K, ...Ps, ...As>(f: fn(...{Ps}), args: ...{As for f})
+         requires each arg in arg_keys(As) {
+             As[arg] == dict<K, Ps[arg]> || dict<K, As[arg]> == Ps[arg]
+             || As[arg] in {Ps[arg], dict<K, Ps[arg]>} || arg in arg_keys(Ps)
+         }",
+    );
+    assert!(
+        tree.contains(
+            r#"ConstraintEach["each" "arg" "in" CallExpr[NameExpr["arg_keys"] ArgList["(" Arg[NameExpr["As"]] ")"]]"#
+        ),
+        "{tree}"
+    );
+    assert_eq!(tree.matches("ConstraintRelation[").count(), 4, "{tree}");
+    assert_eq!(tree.matches("PackMemberType[").count(), 3, "{tree}");
+    assert_eq!(tree.matches("IndexExpr[").count(), 4, "{tree}");
+}
+
+#[test]
+fn a_bare_index_in_a_type_or_value_position_keeps_its_index_tree() {
+    // GEN-3 and GEN-17: a bare Name[Name] could be a type member or
+    // an index expression. The binding decides. EXPR-7: in an expression
+    // position the same text remains ordinary indexing.
+    let index = r#"IndexExpr[NameExpr["table"] "[" NameExpr["key"] "]"]"#;
+    let tree = declarations("fn count(x: Sized<table[key]>) requires table[key] == 1 {}");
+    assert!(
+        tree.contains(&format!(r#"GenericArgs["<" {index} ">"]"#)),
+        "{tree}"
+    );
+    assert!(
+        tree.contains(&format!(r#"ConstraintRelation[{index} "==" Literal["1"]]"#)),
+        "{tree}"
+    );
+    assert_eq!(
+        statements("let x = table[key]"),
+        format!(r#"LocalDecl["let" "x" "=" {index}]"#)
+    );
+}
+
 // ---- FN-10 ----
 
 #[test]

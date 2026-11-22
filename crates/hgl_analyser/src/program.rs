@@ -166,8 +166,9 @@ pub struct Module {
     /// later of two", so what is reported does not depend on the order
     /// the files were given in; it changes no meaning (UNIT-1).
     pub files: Vec<ModuleFile>,
-    /// Every declaration of the module, test helpers included, in file
-    /// order and then source order.
+    /// Module declarations in file and source order, including those of unnamed
+    /// test contexts. A suffix holds named tests' helpers, in test and source order,
+    /// so that adding one cannot change existing module declaration identities (TST-2).
     pub declarations: Vec<Declaration>,
     /// The named tests, in file order and then source order.
     pub tests: Vec<Test>,
@@ -189,6 +190,9 @@ pub struct Module {
     /// What the types of each declaration are: its signature, or its
     /// fields. One for each of `declarations`, in the same order.
     pub details: Vec<Detail>,
+    /// The function and exclusions named by each pack declared with `for` (FN-8),
+    /// indexed by the pack parameter's declaration.
+    pub dependent_packs: HashMap<Location, DependentPack>,
     /// Every type written in the module, with what it means, in file
     /// order and then source order. A type inside another is part of
     /// that one and not listed again.
@@ -534,9 +538,11 @@ pub struct Declaration {
     pub kind: DeclarationKind,
     /// True when the declaration is marked `export` (UNIT-3).
     pub exported: bool,
-    /// True when it is declared in an unnamed test context: a helper or
-    /// type of the module's test scope (TST-1).
+    /// True for a declaration in the module's test scope or a named test's own scope (TST-1).
     pub test_only: bool,
+    /// The position in [\`Module::tests\`] of the test that owns this helper (TST-1).
+    /// A helper from an unnamed context has no such owner.
+    pub test_owner: Option<usize>,
     /// The position of its file in [`Module::files`].
     pub file: usize,
     /// The declaration's syntax tree.
@@ -567,6 +573,7 @@ impl Declaration {
             kind: DeclarationKind::Function(Role::Temporal),
             exported: false,
             test_only,
+            test_owner: None,
             file,
             syntax: syntax.clone(),
         }
@@ -593,6 +600,8 @@ pub struct Test {
     pub file: usize,
     /// The test's syntax tree.
     pub syntax: SyntaxNode,
+    /// Names private to this test, as positions in the module's declarations.
+    pub(crate) helpers: HashMap<String, Vec<usize>>,
 }
 
 /// A statement an application sets its run's store with, as it is
@@ -671,6 +680,8 @@ pub enum LocalKind {
     /// A generic parameter, or the name an `each ... in` constraint
     /// binds.
     GenericParameter,
+    /// The key bound by `each arg in arg_keys(Ps)` (GEN-17).
+    PackKey,
 }
 
 impl LocalKind {
@@ -693,8 +704,18 @@ impl LocalKind {
             LocalKind::Iteration => "an iteration binding",
             LocalKind::Parameter => "a parameter",
             LocalKind::GenericParameter => "a generic parameter",
+            LocalKind::PackKey => "a pack key",
         }
     }
+}
+
+/// A named pack declared for a function parameter, `...{As for f without key}` (FN-8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependentPack {
+    /// The parameter taking the function that these arguments are for.
+    pub function: Location,
+    /// The generic value parameters that supply exclusions, in written order.
+    pub without: Vec<Location>,
 }
 
 /// What a `name<...>(...)` that reads two ways was decided to be

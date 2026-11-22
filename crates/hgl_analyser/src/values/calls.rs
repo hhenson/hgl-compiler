@@ -10,6 +10,7 @@ use hgl_source::{FileId, Span};
 
 use super::arguments::{Slot, Takes};
 use super::constants::generic_default;
+use super::dependent_packs::PackTypes;
 use super::evals::{trace_input_type, trace_pack_type};
 use super::fit::{not_null, open, whole};
 use super::inference::{
@@ -20,7 +21,7 @@ use super::lifting::fill_type;
 use super::node::RefRead;
 use super::sizes;
 use super::{Fact, Typer};
-use crate::declared::{names_parameter, substitute_within};
+use crate::declared::names_parameter;
 use crate::hir::{self, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, ValueCategory};
 use crate::program::{Binding, DeclarationKind, OperatorRef, Program, Role};
 use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
@@ -810,6 +811,7 @@ impl<'a> Typer<'a> {
                 .as_ref()
                 .map(|pack| (pack.parameter, pack.types.as_slice())),
             result_fallback,
+            callable: Some((module, signature)),
             defaults: generics
                 .iter()
                 .map(|generic| self.default_constant(callee, generic))
@@ -822,6 +824,7 @@ impl<'a> Typer<'a> {
             defaulted,
             contextual,
             missing_pack_context,
+            type_packs: reflected,
         } = self.infer_arguments(name, list, &places, found, Takes::Parameters);
         let mut type_packs = vec![None; generics.len()];
         // FN-8 and GEN-10: collect the individual types in capture order.
@@ -829,37 +832,46 @@ impl<'a> Typer<'a> {
             if let Some(index) = parameter.type_pack {
                 type_packs[index].get_or_insert_with(|| {
                     let written = written_pack.as_ref().filter(|pack| pack.parameter == index);
-                    let types: Vec<_> = arguments
+                    let entries: Vec<_> = arguments
                         .iter()
                         .filter(|argument| argument.parameter == Some(slot))
                         .enumerate()
                         .map(|(position, argument)| {
-                            if let Some(ty) = written.and_then(|pack| pack.types.get(position)) {
-                                return ty.clone();
-                            }
-                            if evaluating {
-                                return trace_pack_type(&argument.value.ty)
+                            let ty = if let Some(ty) =
+                                written.and_then(|pack| pack.types.get(position))
+                            {
+                                ty.clone()
+                            } else if evaluating {
+                                trace_pack_type(&argument.value.ty)
                                     .cloned()
-                                    .unwrap_or(Type::Unknown);
-                            }
-                            self.inferred_from(listed, &argument.value, Takes::Parameters)
+                                    .unwrap_or(Type::Unknown)
+                            } else {
+                                self.inferred_from(listed, &argument.value, Takes::Parameters)
+                            };
+                            let key = argument
+                                .pack
+                                .clone()
+                                .unwrap_or(hir::PackKey::Position(position));
+                            (key, ty)
                         })
                         .collect();
-                    hir::TypePackArgument {
-                        parameter: index,
-                        infer_from_arguments: self.graph
-                            && !self.signature.generics.is_empty()
-                            && !evaluating
-                            && written.is_none()
-                            && !missing_pack_context.contains(&index)
-                            && types.iter().any(|ty| !whole(ty)),
-                        types,
-                    }
+                    let mut pack = hir::TypePackArgument::keyed(index, entries);
+                    pack.infer_from_arguments = self.graph
+                        && !self.signature.generics.is_empty()
+                        && !evaluating
+                        && written.is_none()
+                        && !missing_pack_context.contains(&index)
+                        && pack.types.iter().any(|ty| !whole(ty));
+                    pack
                 });
             }
         }
         if let Some(pack) = &written_pack {
             type_packs[pack.parameter].get_or_insert_with(|| pack.clone());
+        }
+        for pack in reflected {
+            let index = pack.parameter;
+            type_packs[index] = Some(pack);
         }
         self.generic_values(name, callee, generics, (&named, &defaulted), &mut found);
 
@@ -935,13 +947,9 @@ impl<'a> Typer<'a> {
             .map(|found| found.unwrap_or(Argument::Type(Type::Unknown)))
             .collect();
         let map: Vec<(Location, &Argument)> = own.iter().copied().zip(&resolved).collect();
-        let ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
-            placed(substitute_within(result, &map), &own)
-        });
         let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
         // TYPE-10, TYPE-11: the sizes the callee's parameters and result
-        // have with what was resolved, `sized<-1>(xs)` giving a
-        // `list<i64, N>` a size of -1.
+        // have with what was resolved.
         sizes::call_sizes(
             program,
             (at, name.text()),
@@ -950,6 +958,13 @@ impl<'a> Typer<'a> {
             self.diagnostics,
         );
         let type_packs: Vec<_> = type_packs.into_iter().flatten().collect();
+        let pack_types = PackTypes::new(generics, &type_packs);
+        let ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
+            placed(
+                pack_types.project(result, &map).unwrap_or(Type::Unknown),
+                &own,
+            )
+        });
         // GEN-3 and GEN-10: the callee's `requires` holds with what was
         // resolved, including the separate sequence in each type pack.
         // Not where something else was reported of the call (ERR-9).
@@ -957,7 +972,11 @@ impl<'a> Typer<'a> {
             && unresolved.is_empty()
             && type_packs.iter().all(|pack| !pack.infer_from_arguments)
         {
-            if first_pack.is_none() {
+            if let Some(missing) =
+                pack_types.written_member_fault(&program.modules[module], declaration, &map)
+            {
+                self.pack_member_fault(at, &missing);
+            } else if first_pack.is_none() {
                 self.requires_met(at, (module, declaration), &resolved);
             } else {
                 self.pack_requires_met(at, (module, declaration), &resolved, &type_packs);
@@ -1235,6 +1254,7 @@ impl<'a> Typer<'a> {
         if !sources.is_empty() {
             self.index_instance_locals();
         }
+        let pack_types = PackTypes::new(&signature.generics, &packs);
         let mut sources = sources.into_iter().peekable();
         for (position, argument) in arguments.iter_mut().enumerate() {
             let parameter =
@@ -1244,7 +1264,12 @@ impl<'a> Typer<'a> {
             if type_pack(parameter, &signature.generics).is_some() {
                 continue;
             }
-            let ty = placed(substitute_within(&parameter.ty, &map), &own);
+            let ty = placed(
+                pack_types
+                    .project(&parameter.ty, &map)
+                    .unwrap_or(Type::Unknown),
+                &own,
+            );
             if let Some((source, node)) = sources.next_if(|(source, _)| source.position == position)
             {
                 if !self.may_reread() {
@@ -1308,7 +1333,9 @@ impl<'a> Typer<'a> {
         // GEN-10: the same quantified check applies when a graph
         // completes the pack types that source typing could not see.
         if self.diagnostics.len() == before {
-            if packs.is_empty() {
+            if let Some(missing) = pack_types.written_member_fault(owner, *declaration, &map) {
+                self.pack_member_fault(call.at, &missing);
+            } else if packs.is_empty() {
                 self.requires_met(call.at, callee, &resolved);
             } else {
                 self.pack_requires_met(call.at, callee, &resolved, &packs);
@@ -1318,7 +1345,10 @@ impl<'a> Typer<'a> {
             *requirements = self.answers(callee.0, callee.1, &resolved);
         }
         call.ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
-            placed(substitute_within(result, &map), &own)
+            placed(
+                pack_types.project(result, &map).unwrap_or(Type::Unknown),
+                &own,
+            )
         });
         *generics = resolved;
         *type_packs = packs;

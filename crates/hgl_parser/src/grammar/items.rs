@@ -221,7 +221,7 @@ impl Parser<'_> {
         match item {
             Item::Module => self.module_decl(),
             Item::Use => self.use_decl(),
-            Item::Function => self.function_decl(),
+            Item::Function => self.function_decl(false),
             Item::Struct => self.struct_decl(),
             Item::Enum => self.enum_decl(),
             Item::Operator => self.operator_decl(),
@@ -417,7 +417,7 @@ impl Parser<'_> {
     ///     [ requires_clause ], function_body ;
     /// function_body = "=>", expression | block ;
     /// ```
-    fn function_decl(&mut self) {
+    fn function_decl(&mut self, test_helper: bool) {
         self.start(FnDecl);
         // ERR-10: `@suppress_warning("...")` stands on the lines before a
         // named function.
@@ -437,6 +437,13 @@ impl Parser<'_> {
             return;
         }
 
+        if test_helper && matches!(self.current(), KwExport | KwImpl) {
+            self.error(
+                "a test helper must be a private `fn` or `const fn`",
+                "TST-1",
+                None,
+            );
+        }
         if self.eat(KwExport) {
             if self.at(KwImpl) && !self.cut() {
                 // The grammar has `export` or `impl`, and no form with
@@ -581,8 +588,6 @@ impl Parser<'_> {
     ///           | "var", IDENTIFIER, ":", value_type
     ///           | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ]
     ///           | IDENTIFIER, ":", function_type ;
-    /// pack = "...", type, [ cardinality ]
-    ///      | "...", "{", type, "}", [ cardinality ] ;
     /// ```
     ///
     /// One permissive form is parsed: an optional `const`, a name, a type
@@ -629,24 +634,8 @@ impl Parser<'_> {
                 self.finish();
                 return;
             }
-            if !var && !reference && self.eat(Ellipsis) {
-                // FN-8: a pack takes any number of arguments. `...T` is a
-                // positional pack; `...{T}` a named one.
-                if self.at(LBrace) {
-                    self.start(PackType);
-                    self.bump();
-                    self.nested(Context::PLAIN, |parser| {
-                        parser.type_();
-                        parser.close(RBrace);
-                    });
-                    self.finish();
-                } else {
-                    self.type_();
-                }
-                // GEN-10: a cardinality follows the pack it bounds.
-                if self.at(LBrace) {
-                    self.cardinality();
-                }
+            if !var && !reference && self.at(Ellipsis) {
+                self.pack();
             } else {
                 self.type_();
             }
@@ -660,9 +649,55 @@ impl Parser<'_> {
         self.finish();
     }
 
+    /// FN-8: `...T` is positional, `...{T}` named. A named pack may name
+    /// the function parameter its arguments are declared for.
+    ///
+    /// ```text
+    /// pack = "...", type, [ cardinality ]
+    ///      | "...", "{", type, [ "for", IDENTIFIER, [ "without", without_names ] ],
+    ///        "}", [ cardinality ] ;
+    /// ```
+    fn pack(&mut self) {
+        self.bump();
+        if self.at(LBrace) {
+            self.start(PackType);
+            self.bump();
+            self.nested(Context::PLAIN, |parser| {
+                parser.type_();
+                if parser.at(KwFor) {
+                    parser.pack_for();
+                }
+                parser.close(RBrace);
+            });
+            self.finish();
+        } else {
+            self.type_();
+        }
+        // GEN-10: a cardinality follows the pack it bounds.
+        if self.at(LBrace) {
+            self.cardinality();
+        }
+    }
+
+    /// FN-8: `"for", IDENTIFIER, [ "without", IDENTIFIER, { ",", IDENTIFIER } ]`.
+    fn pack_for(&mut self) {
+        self.start(PackFor);
+        self.bump();
+        self.expect_name("a function parameter's name");
+        // LEX-10: `without` is contextual; it can also be a name.
+        if self.at_word("without") {
+            self.bump();
+            self.expect_name("an exclusion name");
+            while self.eat(Comma) {
+                self.expect_name("an exclusion name");
+            }
+        }
+        self.finish();
+    }
+
     /// FN-17: `[ "const" ], "fn", "(", [ function_type_parameters ],
-    /// ")", [ "->", [ "ref" ], type ]`. Fixed inputs may name a position.
-    /// Named packs in this template await GEN-17.
+    /// ")", [ "->", [ "ref" ], type ]`. An input is a type with an
+    /// optional name, or a pack (GEN-17).
     fn function_type(&mut self) {
         self.start(FunctionType);
         if self.at_word("const") {
@@ -676,11 +711,15 @@ impl Parser<'_> {
             self.nested(Context::LIST, |parser| {
                 parser.list(RParen, "a function type parameter", true, |parser| {
                     parser.start(FunctionTypeParam);
-                    if parser.at(Ident) && parser.nth(1) == Colon {
-                        parser.bump();
-                        parser.bump();
+                    if parser.at(Ellipsis) {
+                        parser.pack();
+                    } else {
+                        if parser.at(Ident) && parser.nth(1) == Colon {
+                            parser.bump();
+                            parser.bump();
+                        }
+                        parser.type_();
                     }
-                    parser.type_();
                     parser.finish();
                 });
             });
@@ -1078,8 +1117,8 @@ impl Parser<'_> {
     // ---- Tests ----
 
     /// ```text
-    /// test_decl = "test", IDENTIFIER, block
-    ///           | [ timeout_annotation, NL ], "integration_test", IDENTIFIER, block ;
+    /// test_decl = "test", IDENTIFIER, test_block
+    ///           | [ timeout_annotation, NL ], "integration_test", IDENTIFIER, test_block ;
     /// ```
     fn test_decl(&mut self) {
         self.start(TestDecl);
@@ -1106,8 +1145,57 @@ impl Parser<'_> {
             self.expect(KwTest);
         }
         self.expect_name("a test name");
-        self.body_block();
+        if self.at(LBrace) {
+            self.header_brace();
+            self.block_with(Self::test_block_contents);
+        } else {
+            self.expected("`{`");
+        }
         self.finish();
+    }
+
+    /// TST-1: a named test starts with its helper functions, before any
+    /// statements. Each helper declaration is followed by a line break.
+    fn test_block_contents(&mut self) {
+        while self.at_test_helper() {
+            self.begin_entry();
+            let errors = self.errors;
+            self.function_decl(true);
+            if self.errors != errors {
+                self.skip_line(false);
+            } else if !self.at_line_start() {
+                self.expected_rule("a line break after a test helper", "TST-1");
+            }
+        }
+        self.block_statements(|parser| {
+            if parser.at_test_helper() {
+                parser.error(
+                    "a test helper must precede the test's statements",
+                    "TST-1",
+                    None,
+                );
+                // Read the whole misplaced declaration for recovery, so
+                // its body braces cannot close the test's block.
+                parser.start(Error);
+                parser.function_decl(true);
+                parser.finish();
+            } else {
+                parser.statement();
+            }
+        });
+    }
+
+    /// A named function or an attached warning annotation. A named
+    /// function has a name where an anonymous one's parameters begin.
+    fn at_test_helper(&self) -> bool {
+        if self.at(At) && self.nth_word(1, "suppress_warning") {
+            return true;
+        }
+        // Recognize forbidden modifiers too, to diagnose them on a
+        // declaration while recovering its body as a unit.
+        let visibility = usize::from(matches!(self.current(), KwExport | KwImpl));
+        let modifier = visibility + usize::from(self.nth_word(visibility, "const"));
+        self.nth(modifier) == KwFn && self.nth(modifier + 1) == Ident
     }
 
     /// `timeout_annotation = "@", "timeout", "(", TEMPORAL_LITERAL, ")" ;`
