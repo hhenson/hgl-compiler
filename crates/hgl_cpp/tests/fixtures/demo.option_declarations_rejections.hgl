@@ -1,0 +1,22 @@
+module demo.option_declarations_rejections
+
+struct Weight { amount: i64 }
+
+impl const fn add_{offset: i64}(left: Weight, right: Weight) -> i64 =>
+    left.amount * right.amount - offset
+
+const fn offset_value{offset: i64}(value: i64) -> i64 => value - offset
+
+# EXPR-14: these brace-declared slots cannot receive a connection.
+# expect-error(phase, "connection.as_constant")
+fn bad_symbol(offset: i64) -> i64 => Weight(amount: 2) +{offset: offset} Weight(amount: 3)
+
+# expect-error(phase, "connection.as_constant")
+fn bad_named_operator(offset: i64) -> i64 => add_{offset: offset}(Weight(amount: 2), Weight(amount: 3))
+
+# expect-error(phase, "connection.as_constant")
+fn bad_named_function(offset: i64) -> i64 => offset_value{offset: offset}(6)
+
+# NUM-11 and FN-18: the numeric tolerance is a configuration parameter.
+# expect-error(name, "argument.unknown")
+const fn tolerance_in_parentheses(a: f64, b: f64) -> bool => eq_(a, b, abs: 0.1)

@@ -1376,6 +1376,27 @@ condition gives the facts that hold where it does and where it does
 not, and a branch, the right operand of a connective and what follows a
 branch that returns each read under theirs.
 
+### Compile-time laws and existential constraints
+
+GEN-10 `any` checks pack entries in order. A positive conjunctive equality
+can bind one unresolved generic from the first successful trial; failed
+trials do not change inference, and bindings are solved to a fixed point.
+A negated or disjunctive quantifier only tests resolved data. Empty `any`
+is false, while empty `each` is true. Their bound types and keys remain
+available inside nested written types.
+
+GEN-18 law predicates read the public operator's property domains, not
+its implementation's arithmetic. A plain or anonymous function has no
+law. Only the bool generic default form may inspect a formal function
+parameter (UNIT-7 and UNIT-8); an explicit option takes precedence.
+A generic wrapper's body knows only its stated law requirements (GEN-7).
+An unconstrained wrapper rejects even if separate candidates cover both
+law values: neither is known to take every case. A wrapper may state a
+positive or negative law, or give its own bool generic onward under a
+membership in `{true, false}` (GEN-3); that membership's instances select
+their candidates. This adds no runtime law evaluation or arithmetic
+reassociation.
+
 ### Order
 
 Nothing depends on the order the files are given in (UNIT-1). Where a
@@ -2211,7 +2232,9 @@ fails where a public header brings it in.
 
 A native is a function named as the emitter names the candidate
 (`hgl_cpp`, `names::native_candidate`): the operator's name and the type
-of each parameter, `add__i64_i64`. One with a generic type parameter is a
+of each parameter, `add__i64_i64`. Both the name and the native call put
+ordinary parameters before configuration. Argument evaluation follows
+the written order (EXPR-13). One with a generic type parameter is a
 template the generated code instances, `lt__T_T<i64>`; one with a generic
 value parameter takes it as a template argument,
 `div__f64_f64<ZeroPolicy::ieee>`, and so do the candidates that differ in

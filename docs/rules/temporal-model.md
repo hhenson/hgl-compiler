@@ -28,7 +28,7 @@ transpiler: partial
 
 analyser: partial
 
-- In a graph a connection is given nothing the graph needs the value of while it is built: a `const` parameter, a `switch` label and a `while` condition (FN-3, CTRL-15), a call on the store (FN-9), a symbol's configuration (EXPR-14), each `connection.as_constant`; an endpoint operation takes no input there (TIME-9)
+- In a graph, `const` parameters, `switch` labels, `while` conditions, store calls, and a value function's declared configuration need their values during construction. A connection in any of those places rejects with `connection.as_constant` (FN-3, CTRL-15, FN-9, EXPR-14). An endpoint operation takes no input there (TIME-9).
 - Left: a connection written as a generic value argument or a list's size (GEN-8, TYPE-10), which is not rejected
 
 transpiler: done

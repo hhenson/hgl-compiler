@@ -11,7 +11,9 @@
 
 use std::collections::BTreeSet;
 
-use hgl_analyser::{Declaration, DeclarationKind, Detail, Program, Signature, Test, Type};
+use hgl_analyser::{
+    Declaration, DeclarationKind, Detail, Parameter, Program, Signature, Test, Type,
+};
 
 /// The words the C++ standard keeps: its keywords and alternative
 /// tokens, the identifiers it gives a meaning in some places (`final`,
@@ -235,12 +237,23 @@ fn mangled(ty: &Type) -> String {
 /// (NATIVE-7): the candidate's name, then the types of its parameters,
 /// each after a `_`. `add_(i64, i64)` is `add__i64_i64`.
 pub(super) fn native_candidate(name: &str, signature: &Signature) -> String {
-    let types: Vec<String> = signature
-        .parameters
-        .iter()
-        .map(|parameter| mangled(&parameter.ty))
+    let types: Vec<String> = native_candidate_parameters(signature)
+        .map(|(_, parameter)| mangled(&parameter.ty))
         .collect();
     format!("{name}_{}", types.join("_"))
+}
+
+/// The provider's argument order uses ordinary inputs first, then
+/// configuration. The source slot indices still identify the values and
+/// the emitter evaluates expressions in the written order (EXPR-13).
+pub(super) fn native_candidate_parameters(
+    signature: &Signature,
+) -> impl Iterator<Item = (usize, &Parameter)> {
+    let parameters = signature.parameters.iter().enumerate();
+    parameters
+        .clone()
+        .filter(|(_, parameter)| !parameter.configuration)
+        .chain(parameters.filter(|(_, parameter)| parameter.configuration))
 }
 
 /// The name the runtime library gives a native function of core

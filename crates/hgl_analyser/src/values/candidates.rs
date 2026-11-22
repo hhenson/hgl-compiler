@@ -16,7 +16,9 @@ use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, reflects, specialize_named_pack,
 };
 use super::expressions::takes_its_type;
-use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, not_null, whole};
+use super::fit::{
+    accepts_float, arithmetic, checked_child_result, is_integer_literal, negated, not_null, whole,
+};
 use super::function_arguments::matches_template;
 use super::inference::{
     bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
@@ -111,13 +113,14 @@ impl<'a> Typer<'a> {
         given: &[Given],
         wanted: &Wanted,
     ) -> (Vec<Chosen<'a>>, bool) {
+        let has_checked_children = given.iter().any(Given::reads_child);
         let has_results = given
             .iter()
             .any(|argument| !argument.by_place && matches!(argument.value.ty, Type::Result { .. }));
-        let has_forms = given.iter().any(|argument| {
-            !argument.by_place
-                && matches!(argument.value.ty, Type::Result { .. } | Type::Nullable(_))
-        });
+        let has_forms = has_results
+            || given.iter().any(|argument| {
+                !argument.by_place && matches!(argument.value.ty, Type::Nullable(_))
+            });
         let forms = if has_forms {
             &[
                 ArgumentForms::Whole,
@@ -131,16 +134,17 @@ impl<'a> Typer<'a> {
         let mut untold = false;
         for widening in [false, true] {
             let mut fits = false;
-            let mut converting = Admissions::default();
+            let mut result_forms = Admissions::default();
             for &form in forms {
                 let admitted =
                     self.admitted_as(operator, candidates, given, wanted, widening, form);
                 fits |= admitted.fits;
-                if has_results && form != ArgumentForms::Whole {
+                if has_checked_children || has_results && form != ArgumentForms::Whole {
                     // A more general inference pass can find an admitted
-                    // candidate that reads fewer operands (ERR-15).
+                    // candidate that reads fewer operands (ERR-15). A
+                    // checked child can already be read in the whole pass.
                     let keeps_results = admitted.known.iter().any(|(reads, _)| reads.is_empty());
-                    converting.include(admitted);
+                    result_forms.include(admitted);
                     if keeps_results {
                         break;
                     }
@@ -153,8 +157,8 @@ impl<'a> Typer<'a> {
                 }
                 untold |= unknown;
             }
-            let takes_types = converting.fits;
-            let (selected, unknown) = self.rank_admitted(operator, given, widening, converting);
+            let takes_types = result_forms.fits;
+            let (selected, unknown) = self.rank_admitted(operator, given, widening, result_forms);
             if !selected.is_empty() || unknown && takes_types {
                 return (selected, unknown);
             }
@@ -201,6 +205,27 @@ impl<'a> Typer<'a> {
             ) else {
                 continue;
             };
+            // ERR-14 and ERR-15: a checked child's ordinary type is the
+            // child's value. A candidate that declares a result slot can
+            // take the failure whole. A bare generic does not infer that
+            // slot just because the child can fail when read.
+            let mut with_results = std::borrow::Cow::Borrowed(given);
+            for (position, (argument, place)) in given.iter().zip(&bound).enumerate() {
+                if !argument.reads_child() {
+                    continue;
+                }
+                let Some(index) = place.parameter() else {
+                    continue;
+                };
+                let expected = &signature.parameters[index].ty;
+                if matches!(expected, Type::Result { error, .. } if **error == Type::Error)
+                    && let Some(result) = checked_child_result(&argument.value)
+                    && (names_parameter(expected) || self.admits(expected, &result.ty))
+                {
+                    with_results.to_mut()[position].value = result;
+                }
+            }
+            let given = with_results.as_ref();
             // FN-17: a static argument takes a declared function slot.
             // Inference cannot turn an ordinary parameter into that slot.
             if given.iter().zip(&bound).any(|(given, place)| {
@@ -315,11 +340,29 @@ impl<'a> Typer<'a> {
                 // The candidate as this call takes it: its generic
                 // parameters resolved (GEN-2).
                 let widens = |decided: &Type, later: &Type| self.widens(decided, later);
-                let defaults =
-                    |generic: &GenericParameter| self.default_constant(candidate, generic);
+                let defaults = |generic: &GenericParameter| {
+                    if let Some(default) = generic_default(&candidate.syntax, generic)
+                        && let Some((law, name)) = crate::laws::predicate(&default)
+                    {
+                        let value = crate::laws::parameter(signature, &name)
+                            .and_then(|parameter| {
+                                bound
+                                    .iter()
+                                    .position(|place| place.parameter() == Some(parameter))
+                            })
+                            .and_then(|position| self.law_value(law, &given[position].value))
+                            .map_or(ConstantValue::Unknown, ConstantValue::Bool);
+                        return Some(Constant {
+                            text: constant_text(&default),
+                            value,
+                        });
+                    }
+                    self.default_constant(candidate, generic)
+                };
                 let Some((mut taken, generics, mut type_packs, defaulted)) = instance(
                     self,
                     signature,
+                    (module, candidate),
                     (given, &bound),
                     wanted,
                     (
@@ -387,6 +430,9 @@ impl<'a> Typer<'a> {
                 // (ERR-9).
                 let unfit = defaulted.iter().find_map(|&index| {
                     let default = generic_default(&candidate.syntax, &signature.generics[index])?;
+                    if crate::laws::default_parameter(signature, &default).is_some() {
+                        return None;
+                    }
                     let (GenericKind::Value(resolved), GenericKind::Value(declared)) =
                         (&taken.generics[index].kind, &signature.generics[index].kind)
                     else {
@@ -430,8 +476,9 @@ impl<'a> Typer<'a> {
                         let ty = parameter_type(&taken, &type_packs, place)?;
                         (!given.by_place
                             && given.explicit.is_none()
-                            && matches!(given.ty(), Type::Result { .. })
-                            && self.taken(ty, given.ty()).is_some())
+                            && (given.reads_child()
+                                || matches!(given.ty(), Type::Result { .. })
+                                    && self.taken(ty, given.ty()).is_some()))
                         .then_some(position)
                     })
                     .collect();
@@ -798,13 +845,6 @@ impl<'a> Typer<'a> {
                 };
                 if from_braces {
                     braced.push(value.at);
-                    self.configuration_input(
-                        (operator, form),
-                        (module, declaration),
-                        parameter,
-                        &value,
-                        self.category(&value),
-                    );
                 }
                 Some(hir::Argument {
                     parameter: Some(index),
@@ -1011,8 +1051,21 @@ impl<'a> Typer<'a> {
         let Some(condition) = clause.children().next() else {
             return Admits::Yes;
         };
+        let laws = crate::laws::verdicts(
+            &|law, expression| self.law_value(law, expression),
+            signature,
+            &condition,
+            &|parameter| {
+                let position = bound
+                    .iter()
+                    .position(|place| place.parameter() == Some(parameter))?;
+                Some(&given[position].value)
+            },
+        );
         let pack_operand = |node: SyntaxNode| match node.kind() {
-            SyntaxKind::ConstraintEach | SyntaxKind::PackMemberType => true,
+            SyntaxKind::ConstraintEach | SyntaxKind::ConstraintAny | SyntaxKind::PackMemberType => {
+                true
+            }
             // A bare member in a constraint can also parse as an
             // index. The read table resolves whether it is a type.
             SyntaxKind::IndexExpr => self.program.modules[module].written.iter().any(|read| {
@@ -1026,7 +1079,7 @@ impl<'a> Typer<'a> {
         };
         if !type_packs.is_empty() && condition.descendants().any(pack_operand) {
             return match self
-                .requires_told_with_packs((module, declaration), generics, type_packs, None)
+                .requires_told_with_laws((module, declaration), generics, type_packs, None, &laws)
                 .and_then(|(_, held, _)| held)
             {
                 Some(true) => Admits::Yes,
@@ -1044,6 +1097,13 @@ impl<'a> Typer<'a> {
             &condition,
         );
         let callable = |node: &SyntaxNode| -> Option<bool> {
+            if let Some((law, name)) = crate::laws::predicate(node) {
+                let parameter = crate::laws::parameter(signature, &name)?;
+                let position = bound
+                    .iter()
+                    .position(|place| place.parameter() == Some(parameter))?;
+                return self.law_value(law, &given[position].value);
+            }
             let start = node.span().start;
             callable
                 .iter()
@@ -2088,6 +2148,15 @@ pub(super) struct Given {
 }
 
 impl Given {
+    fn reads_child(&self) -> bool {
+        !self.by_place
+            && self.explicit.is_none()
+            && matches!(
+                self.value.kind,
+                ExprKind::CheckedChild { result: false, .. }
+            )
+    }
+
     /// The type the candidate sees. For example an explicit `i64?`
     /// stays nullable even when its argument is an `i64` value.
     pub(super) fn ty(&self) -> &Type {
@@ -2407,6 +2476,24 @@ pub(super) fn bound(
         .filter(|(_, p)| !p.configuration && p.pack.is_none())
         .map(|(index, _)| index)
         .collect();
+    let ordinary_named = |name: &str| {
+        let matches = |parameter: &crate::types::Parameter| {
+            !parameter.configuration && parameter.pack.is_none() && parameter.name == name
+        };
+        public
+            .parameters
+            .iter()
+            .position(matches)
+            .map(|index| mapping[index])
+            .or_else(|| {
+                signature
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .find(|(index, option)| !mapping.contains(index) && matches(option))
+                    .map(|(index, _)| index)
+            })
+    };
     let mut places = Vec::with_capacity(given.len());
     for given in given {
         let place = match &given.key {
@@ -2427,10 +2514,13 @@ pub(super) fn bound(
                 }
             }
             Key::Configuration(name) => {
+                // EXPR-10: another candidate may declare configuration
+                // of this name. This one may instead take an ordinary input.
                 let index = signature
                     .parameters
                     .iter()
-                    .position(|parameter| parameter.configuration && parameter.name == *name)?;
+                    .position(|parameter| parameter.configuration && parameter.name == *name)
+                    .or_else(|| ordinary_named(name))?;
                 Place::Parameter(index)
             }
             Key::Generic(_) => {
@@ -2443,24 +2533,7 @@ pub(super) fn bound(
                 }
             }
             Key::Name(name) | Key::Brace(name) => {
-                if let Some(index) = given
-                    .key
-                    .public_parameter(public)
-                    .map(|index| mapping[index])
-                    .or_else(|| {
-                        signature
-                            .parameters
-                            .iter()
-                            .enumerate()
-                            .find(|(index, option)| {
-                                !mapping.contains(index)
-                                    && !option.configuration
-                                    && option.pack.is_none()
-                                    && option.name == *name
-                            })
-                            .map(|(index, _)| index)
-                    })
-                {
+                if let Some(index) = ordinary_named(name) {
                     Place::Parameter(index)
                 } else {
                     let index = named_pack?;
@@ -2542,6 +2615,7 @@ impl Chosen<'_> {
 fn instance<'s>(
     typer: &Typer<'_>,
     signature: &'s Signature,
+    (module, declaration): (usize, &Declaration),
     (given, bound): (&[Given], &[Place]),
     wanted: &Wanted,
     (widens, defaults, converting): (
@@ -2743,6 +2817,36 @@ fn instance<'s>(
             &mut found,
         );
     }
+    // GEN-10: reflected packs are known before a positive existential
+    // equality chooses its first binding. Unresolved non-pack arguments
+    // remain placeholders during this projection.
+    if reflects(&typer.program.modules[module], signature) {
+        let provisional: Vec<_> = found
+            .iter()
+            .map(|value| value.clone().unwrap_or(Argument::Type(Type::Unknown)))
+            .collect();
+        let slots: Vec<_> = bound.iter().map(|place| place.parameter()).collect();
+        let reflected = operator_packs(
+            typer.program,
+            (module, signature),
+            &provisional,
+            given,
+            &slots,
+        )
+        .ok()?;
+        for pack in reflected.packs {
+            type_packs.retain(|current| current.parameter != pack.parameter);
+            type_packs.push(pack);
+        }
+        type_packs.sort_by_key(|pack| pack.parameter);
+    }
+    super::quantifiers::bind(
+        &typer.program.modules[module],
+        declaration,
+        generics,
+        &type_packs,
+        &mut found,
+    );
     let mut defaulted = Vec::new();
     for (index, generic) in generics.iter().enumerate() {
         if found[index].is_some() || !matches!(generic.kind, GenericKind::Value(_)) {

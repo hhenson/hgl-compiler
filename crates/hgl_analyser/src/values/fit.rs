@@ -22,6 +22,30 @@ use crate::syntax::has_token;
 use crate::types::{Argument, Detail, GenericKind, Scalar, Type};
 use crate::{codes, error};
 
+/// The complete fallible form of a child checked at runtime (ERR-14).
+/// Operator admission uses it before the parameter chooses a read form.
+pub(super) fn checked_child_result(value: &Expr) -> Option<Expr> {
+    let ExprKind::CheckedChild {
+        read,
+        result: false,
+    } = &value.kind
+    else {
+        return None;
+    };
+    (whole(&value.ty) && !open(&value.ty)).then(|| Expr {
+        kind: ExprKind::CheckedChild {
+            read: read.clone(),
+            result: true,
+        },
+        ty: Type::Result {
+            value: Box::new(value.ty.clone()),
+            error: Box::new(Type::Error),
+        },
+        at: value.at,
+        category: value.category,
+    })
+}
+
 impl<'a> Typer<'a> {
     // ---- What a place expects ----
 

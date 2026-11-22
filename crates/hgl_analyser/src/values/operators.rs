@@ -578,6 +578,20 @@ impl<'a> Typer<'a> {
                 return (self.unselected(given, Form::Named), Type::Unknown);
             }
             Settled::Elsewhere if untold => {
+                // GEN-18: a formal function's unknown law is not a
+                // guarantee, even in a body with no type parameters.
+                let formal_law = given.iter().any(|argument| matches!(&argument.value.kind,
+                    ExprKind::StaticCallable(callback) if matches!(callback.as_ref(), Callee::Parameter { .. })))
+                    && candidates.iter().any(|(module, declaration, _)| program.modules[*module].declarations[*declaration]
+                        .syntax.descendants().any(|node| crate::laws::predicate(&node).is_some()));
+                if formal_law {
+                    self.diagnostics.emit(self.no_one_candidate(
+                        (name.text(), Location::new(self.file, name.span())),
+                        public,
+                        (&given, &wanted),
+                        (!candidates.is_empty(), &selected),
+                    ));
+                }
                 return (self.unselected(given, Form::Named), Type::Unknown);
             }
             Settled::Elsewhere => {}

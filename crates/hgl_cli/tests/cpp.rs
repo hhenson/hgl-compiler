@@ -814,7 +814,7 @@ fn endpoint_read_forms_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 1 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 10 passed, 3 failed, 0 not run\n"),
         "{stdout}"
     );
     let line = fixture
@@ -826,6 +826,27 @@ fn endpoint_read_forms_run_on_the_sdk() {
         stdout.contains("FAILED   executable  demo.endpoint_read_forms::a_plain_child_failure_points_to_the_read\n")
             && stdout.contains("value.unset_read")
             && stdout.contains(&format!("raised at {file}:{line}")),
+        "{stdout}"
+    );
+    let child_line = fixture
+        .lines()
+        .position(|line| line.contains("# consuming scalar child read"))
+        .expect("the scalar read to which the error points")
+        + 1;
+    assert!(
+        stdout.contains("FAILED   executable  demo.endpoint_read_forms::unset_child_diagnostic_names_the_child\n")
+            && stdout.contains(&format!(
+                "value.unset_read: the child read has no complete value, raised at {file}:{child_line}"
+            )),
+        "{stdout}"
+    );
+    assert!(
+        stdout
+            .split_once(
+                "FAILED   executable  demo.endpoint_read_forms::generic_nullable_child_still_raises_if_unset\n"
+            )
+            .and_then(|(_, tail)| tail.lines().next())
+            .is_some_and(|report| report.contains("value.unset_read: the child read has no complete value")),
         "{stdout}"
     );
 }
@@ -3651,6 +3672,36 @@ fn operator_configuration_runs_on_the_sdk() {
     );
 }
 
+/// EXPR-14, FN-6 and NUM-11: the selected declaration determines
+/// which options are lifted inputs and which bind at graph construction.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn option_declarations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("option_declarations");
+    let cases = [
+        (
+            "demo.option_declarations.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.option_declarations.hgl"),
+            "executable cases: 8 passed, 0 failed, 0 not run\n",
+        ),
+        (
+            "demo.option_declarations_rejections.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.option_declarations_rejections.hgl"),
+            "rejection cases: 4 passed, 0 failed\n",
+        ),
+    ];
+    for (name, source, expected) in cases {
+        let file = write(&root, name, source);
+        let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+        let stdout = text(&output.stdout);
+        assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+        assert!(stdout.contains(expected), "{stdout}");
+    }
+}
+
 /// EXPR-6, OPS-5, FN-6 and FN-11: Boolean symbols use the selected
 /// operator's inputs in a graph and still short-circuit in value code.
 #[test]
@@ -3728,6 +3779,34 @@ fn required_symbols_inherit_configuration_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// GEN-3, GEN-7, GEN-9, GEN-10 and GEN-18: existential binding and
+/// numeric operator laws are settled before the target builds a program.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn any_and_operator_laws_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("any_laws");
+    let file = write(
+        &root,
+        "demo.any_laws.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.any_laws.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

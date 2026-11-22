@@ -186,7 +186,7 @@ export const fn scale<T, ...Rest, const N: i64>(
     rest: ...Rest{1:*},
     named: ...{str},
 ) -> f64?
-    requires T in {i64, f64} && !comparable(T) || (N == 3) && each R in Rest { numeric(R) } {
+    requires T in {i64, f64} && !comparable(T) || (N == 3) && each R in Rest { numeric(R) } && any S in types(Rest) { S == i64 } && enabled {
     return value
 }
 
