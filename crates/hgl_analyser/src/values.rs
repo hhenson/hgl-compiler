@@ -473,10 +473,10 @@ struct Typer<'a> {
     /// runtime: the graph's result is then the continuation's where the
     /// branch is not selected, so every path returns (CTRL-14).
     must_return: bool,
-    /// The last switch read, if its selector's type is unknown and
-    /// every case returns. A trailing one may complete a graph once its
-    /// enum coverage is known (CTRL-6, CTRL-14).
-    returning_switch: Option<Location>,
+    /// For a switch or a conditional whose tail would return on every
+    /// path, the switches whose enum coverage must still be proved
+    /// (CTRL-6, CTRL-14).
+    returning_tails: HashMap<Location, Vec<Location>>,
     /// Inside a composition loop that makes one child for each member,
     /// how many locals there were where the outermost such loop began:
     /// a `var` before that is declared outside it (CTRL-15).
@@ -678,7 +678,7 @@ impl<'a> Typer<'a> {
             graph: false,
             temporal: None,
             must_return: false,
-            returning_switch: None,
+            returning_tails: HashMap::new(),
             dynamic: None,
             hook: None,
             out: None,

@@ -174,7 +174,7 @@ impl GraphDestinations {
         check_control(
             &mut typer,
             &body.statements,
-            owner.graph_return_checks[declaration],
+            owner.graph_return_checks[declaration].as_ref(),
         );
     }
 
@@ -677,43 +677,57 @@ impl GraphDestinations {
 
 /// A graph that may need a continuation check after selection, from
 /// the declaration's FN-7 and CTRL-14 return flow.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) enum GraphReturnCheck {
     /// A path reaches the end of the body.
     Fallthrough,
-    /// Every case of the final switch returns, with coverage still unknown.
-    TrailingSwitch,
+    /// The tail returns if all these switches cover their enums.
+    TailSwitches(Vec<Location>),
 }
 
 impl GraphReturnCheck {
-    /// CTRL-6: all cases of a final switch with no default can still
-    /// supply the continuation when its enum coverage becomes known.
-    fn needs_continuation(self, typer: &Typer<'_>, statements: &[Stmt]) -> bool {
-        let (
-            Self::TrailingSwitch,
-            Some(Stmt::Switch {
-                selector, cases, ..
-            }),
-        ) = (self, statements.last())
-        else {
+    /// CTRL-6: each switch identified by source flow must cover every
+    /// enum member in the instance for the continuation to be complete.
+    fn needs_continuation(&self, typer: &Typer<'_>, statements: &[Stmt]) -> bool {
+        let Self::TailSwitches(switches) = self else {
             return true;
         };
-        let Some(members) = typer.enum_members(&selector.ty) else {
-            return true;
-        };
-        let covered: HashSet<_> = cases
-            .iter()
-            .filter_map(|case| match case.value {
-                Some(hir::LabelValue::Member(member))
-                    if case.label.ty == selector.ty && member < members =>
-                {
-                    Some(member)
-                }
-                _ => None,
-            })
-            .collect();
-        covered.len() != members
+        let mut pending: HashSet<_> = switches.iter().copied().collect();
+        hir::walk_statement_nodes(statements, &mut |node| {
+            if let Node::Statement(Stmt::Switch {
+                selector,
+                cases,
+                at,
+                ..
+            }) = node
+                && pending.contains(at)
+                && covers_enum(typer, selector, cases)
+            {
+                pending.remove(at);
+            }
+        });
+        !pending.is_empty()
     }
+}
+
+/// CTRL-6: the cases cover every member when all the distinct
+/// positions of the selector's own enum are among the settled labels.
+fn covers_enum(typer: &Typer<'_>, selector: &Expr, cases: &[hir::Case]) -> bool {
+    let Some(members) = typer.enum_members(&selector.ty) else {
+        return false;
+    };
+    let covered: HashSet<_> = cases
+        .iter()
+        .filter_map(|case| match case.value {
+            Some(hir::LabelValue::Member(member))
+                if case.label.ty == selector.ty && member < members =>
+            {
+                Some(member)
+            }
+            _ => None,
+        })
+        .collect();
+    covered.len() == members
 }
 
 /// The nearest runtime branch and child loop enclosing a typed node.
@@ -730,7 +744,7 @@ struct Boundaries {
 fn check_control(
     typer: &mut Typer<'_>,
     statements: &[Stmt],
-    check_return: Option<GraphReturnCheck>,
+    check_return: Option<&GraphReturnCheck>,
 ) {
     let check_return =
         check_return.is_some_and(|check| check.needs_continuation(typer, statements));

@@ -446,6 +446,28 @@ impl<'a> Typer<'a> {
             }
         }
 
+        // CTRL-14: a final conditional can supply a continuation only
+        // through both arms. Reuse each arm's ordinary flow result;
+        // any arm still waiting for a switch must prove its coverage.
+        if self.graph {
+            self.returning_tails.remove(&at);
+            if !self.returned
+                && let Some(other) = &other
+            {
+                let covered = |branch: &Branch| {
+                    if branch.returned {
+                        Some(&[][..])
+                    } else {
+                        self.returning_expression(&branch.value)
+                    }
+                };
+                if let (Some(then), Some(other)) = (covered(&then), covered(other)) {
+                    let switches = then.iter().chain(other).copied().collect();
+                    self.returning_tails.insert(at, switches);
+                }
+            }
+        }
+
         let outcome = match (
             then.outcome.clone(),
             other.as_ref().map(|other| other.outcome.clone()),
@@ -907,8 +929,13 @@ impl<'a> Typer<'a> {
             .count();
         let exhaustive = default.is_some() || members.is_some_and(|count| covered == count);
         let cases_return = !ends.is_empty() && ends.iter().all(|(_, returned)| *returned);
-        self.returning_switch =
-            (self.graph && open(&selector.ty) && default.is_none() && cases_return).then_some(at);
+        if self.graph {
+            if open(&selector.ty) && default.is_none() && cases_return {
+                self.returning_tails.insert(at, vec![at]);
+            } else {
+                self.returning_tails.remove(&at);
+            }
+        }
         let count = self.locals.len();
         if exhaustive && !ends.is_empty() {
             self.assigned = (0..count)
@@ -931,6 +958,26 @@ impl<'a> Typer<'a> {
             cases,
             default,
             at,
+        }
+    }
+
+    /// The proof of a graph's continuation goes through its tail only.
+    pub(super) fn returning_statement(&self, tail: Option<&Stmt>) -> Option<&[Location]> {
+        match tail? {
+            Stmt::Expr(value) => self.returning_expression(value),
+            Stmt::Switch { at, .. } => self.returning_tails.get(at).map(Vec::as_slice),
+            _ => None,
+        }
+    }
+
+    fn returning_expression(&self, tail: &Expr) -> Option<&[Location]> {
+        if let ExprKind::Block { statements, value } = &tail.kind {
+            match value {
+                Some(value) => self.returning_expression(value),
+                None => self.returning_statement(statements.last()),
+            }
+        } else {
+            self.returning_tails.get(&tail.at).map(Vec::as_slice)
         }
     }
 }

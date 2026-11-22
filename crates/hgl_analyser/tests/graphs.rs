@@ -553,6 +553,46 @@ fn an_instance_can_complete_its_return_in_a_final_switch() {
     );
 }
 
+/// CTRL-6 and CTRL-14: every arm of the final `if` must complete the
+/// continuation, including arms which end in a deferred switch.
+#[test]
+fn an_instance_can_complete_its_return_in_both_tail_branches() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "enum Side { left, right }\n",
+        "fn covered<T>(const input: T, const use_switch: bool) -> i64 {\n",
+        "    if predicate(input) { return 1 }\n",
+        "    let side = if predicate(input) { Side.left }\n",
+        "    if use_switch {\n",
+        "        switch side {\n",
+        "            case Side.left: return 2\n",
+        "            case Side.right: return 3\n",
+        "        }\n",
+        "    } else { return 4 }\n",
+        "}\n",
+        "fn falls_through<T>(const input: T, const use_switch: bool) -> i64 {\n",
+        "    if predicate(input) { return 1 }\n",
+        "    let side = if predicate(input) { Side.left }\n",
+        "    if use_switch {\n",
+        "        switch side {\n",
+        "            case Side.left: return 2\n",
+        "            case Side.right: return 3\n",
+        "        }\n",
+        "    } else { let unused = 4 }\n",
+        "}\n",
+        "fn live_covered() -> i64 => covered(1, true)\n",
+        "fn live_falls_through() -> i64 => falls_through(1, false)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:27:35 type/return.missing FN-7"],
+        "{}",
+        checked.report
+    );
+}
+
 /// CTRL-15: "`for item in items` over an ordinary list, set, or
 /// dictionary composes its body once for each element, with ordinary
 /// values bound, and may carry a `var` from one pass to the next. Over a

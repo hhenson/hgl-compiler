@@ -76,11 +76,11 @@ impl<'a> Typer<'a> {
                     && !self.unsure
                     && !self.must_return
             })
-            .map(|body| match body.statements.last() {
-                Some(Stmt::Switch { at, .. }) if self.returning_switch == Some(*at) => {
-                    GraphReturnCheck::TrailingSwitch
-                }
-                _ => GraphReturnCheck::Fallthrough,
+            .map(|body| {
+                self.returning_statement(body.statements.last())
+                    .map_or(GraphReturnCheck::Fallthrough, |switches| {
+                        GraphReturnCheck::TailSwitches(switches.to_vec())
+                    })
             });
         (body, check_return)
     }
