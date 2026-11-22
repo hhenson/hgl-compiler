@@ -274,6 +274,24 @@ fn settled_contextual_fields<T>(const value: T) -> GraphSide {
     return values.second
 }
 
+# CTRL-10 and TYPE-5: the nullable field types the nested block tail,
+# and the statements before it still run once.
+struct ContextTail<U> {
+    first: U?
+    optional: U?
+}
+
+fn settled_contextual_field_tail<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 2 }
+    var calls = 0
+    let pair = ContextTail(first: chosen, optional: {
+        calls += 1
+        { null }
+    })
+    if calls != 1 { return 0 }
+    return pair.first
+}
+
 # CTRL-15: inferred list elements become the types of loop bindings.
 fn inferred_iteration<T>(const value: T) -> i64 {
     var total = 0
@@ -593,6 +611,7 @@ test an_instance_settles_its_graph_conditions {
     assert eval ordered_fields(value: "s") == [2.5]
     assert eval contextual_fields(value: "s") == [2.5]
     assert eval settled_contextual_fields(value: "s") == [GraphSide.right]
+    assert eval settled_contextual_field_tail(value: "s") == [2]
     assert eval inferred_iteration(value: "s") == [2]
     assert eval sum_inferred_iteration(value: "s") == [5]
     assert eval deferred_member(value: "s") == [2]

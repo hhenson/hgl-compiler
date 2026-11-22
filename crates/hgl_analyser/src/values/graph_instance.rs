@@ -12,7 +12,10 @@ use super::arguments::Takes;
 use super::control::{bound_by_loop, duplicate_switch_label, iterates};
 use super::fit::{open, whole};
 use super::inference::type_pack;
-use super::lifting::{assignment_category, record, record_with};
+use super::lifting::{
+    assignment_category, block_tail, contextual_tail_syntax, record, record_with,
+    resolve_contextual_tail,
+};
 use super::members::{index_collection, index_operand, indexed_payload};
 use super::results::{error_fields, tagged_side};
 use super::statements::{
@@ -695,21 +698,24 @@ impl GraphDestinations {
                 continue;
             }
             let value = &mut argument.value;
+            let tail = block_tail(value);
             let place = format!("the field `{}`", field.name);
             if completed
-                && !whole(&value.ty)
-                && let Some(node) = typer.syntax_of(value).map(ungrouped)
+                && !whole(&tail.ty)
+                && let Some(node) = contextual_tail_syntax(typer, tail).map(ungrouped)
                 && match node.kind() {
                     // TYPE-7 and EXPR-9: these leaves take their type
                     // from the completed field. A source-resolved
                     // leaf already has a whole type and stays intact.
-                    SyntaxKind::ImpliedMember => matches!(value.kind, ExprKind::Unread),
+                    SyntaxKind::ImpliedMember => matches!(tail.kind, ExprKind::Unread),
                     SyntaxKind::SequenceExpr => node.children().next().is_none(),
-                    _ => matches!(value.kind, ExprKind::Literal(Value::Null)),
+                    _ => matches!(tail.kind, ExprKind::Literal(Value::Null)),
                 }
             {
-                let read = typer.expression(&node, Some(expected));
-                *value = typer.fit(read, expected, &place);
+                let mut read = typer.expression(&node, Some(expected));
+                read.at = tail.at;
+                let fitted = typer.fit(read, expected, &place);
+                resolve_contextual_tail(value, (fitted.kind, fitted.ty));
             } else if completed && whole(&value.ty) && value.ty != *expected {
                 // An earlier argument may decide a field's type only
                 // now, even when this sibling was already known.
