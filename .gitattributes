@@ -1,3 +1,6 @@
 # Test fixtures are read byte for byte: keep their line breaks as committed
 # on every platform.
 crates/*/tests/fixtures/** -text
+
+# Keep pinned browser assets byte-for-byte across checkouts.
+crates/hgl_doc/vendor/** -text linguist-vendored

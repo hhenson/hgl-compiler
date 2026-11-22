@@ -69,7 +69,9 @@ analyser: partial
 - A default is read as a value of its parameter's type (`type.mismatch`) and kept for the stages after, `Module::defaults`
 - Law predicates in defaults await #367.
 - A default on a `ref` parameter is checked against the type after its mode (FN-16).
-- Left: known required-constant failures in defaults; type checking a window or atomic default; checking a default against the selected generic parameter type where the argument is left out.
+- Known required-constant failures reject at the parameter default (ERR-9). A window default is checked as an arrival and an atomic default as its whole payload (TYPE-9, TYPE-11).
+- Using the proposed `constant.failure` catalogue code for parameter and field defaults is planned (hhenson/hgl_spec#228).
+- Omitted parameter defaults are checked against the concrete parameter type after generic selection, including in a call made by a generic body.
 
 transpiler: partial
 
@@ -92,7 +94,7 @@ analyser: partial
 
 - Every name in a signature, body, type and constraint resolved to its one binding, and one that nothing binds is `name.unknown`
 - Clock properties resolve on the capability, and `types(Ts)` supplies the selections in an `each` constraint (GEN-10).
-- Left: a declaration named `scheduled` can shadow the reserved `scheduled()` form (TIME-9); `schemas(pack)` is accepted in an ordinary value result where the borrowed view cannot be returned (GEN-10).
+- Left: a declaration named `scheduled` can shadow the reserved `scheduled()` form (TIME-9).
 
 ## UNIT-11
 

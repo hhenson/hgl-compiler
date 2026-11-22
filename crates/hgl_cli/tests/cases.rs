@@ -401,6 +401,30 @@ fn forwarded_packs_reject_invalid_arguments() {
     );
 }
 
+/// FN-17, FN-18 and GEN-17: reflected callbacks reject unknown
+/// anonymous inputs, invalid options, and a false forwarded requirement.
+#[test]
+fn reflected_pack_followups_reject_invalid_calls() {
+    let root = scratch("reflected-pack-followup-rejections");
+    let file = write(
+        &root,
+        "demo.reflected_pack_followups.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.reflected_pack_followups.hgl"),
+    );
+    let output = hgl(&["test", &file, "--rejections-only"]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 9 passed, 0 failed"),
+        "{stdout}"
+    );
+}
+
 /// GEN-17: a member lookup of a name missing from the bound pack reports
 /// the catalogue code.
 #[test]

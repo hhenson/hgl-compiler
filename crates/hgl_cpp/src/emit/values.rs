@@ -250,7 +250,7 @@ impl Emitter<'_> {
         let Some(written) = self.written_type(ty, at) else {
             return;
         };
-        let name = identifier(&declaration.name);
+        let (namespace, name) = names::placed(program, self.module, index, None);
         let empty = Body {
             locals: Vec::new(),
             statements: Vec::new(),
@@ -269,9 +269,14 @@ impl Emitter<'_> {
             Some(directive) => super::stamped(&directive, &init),
             None => init,
         };
-        self.piece.declaration = format!("{comment}const {written}& {name}();\n");
-        self.piece.text =
-            format!("{comment}const {written}& {name}()\n{{\n{init}{INDENT}return value;\n}}\n");
+        self.piece.declaration = within(
+            namespace.as_deref(),
+            &format!("{comment}const {written}& {name}();\n"),
+        );
+        self.piece.text = within(
+            namespace.as_deref(),
+            &format!("{comment}const {written}& {name}()\n{{\n{init}{INDENT}return value;\n}}\n"),
+        );
     }
 }
 

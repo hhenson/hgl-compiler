@@ -2220,11 +2220,10 @@ fn a_capability_is_made_before_the_initializers_that_read_it() {
     assert!(made < read, "{start}");
 }
 
-/// TST-5: a trace given to an eval that is no trace written out, a `let`
-/// of an eval's, is reported where it is given, and not wired as a
-/// constant of its payload.
+/// TST-5, CEVAL-1: a temporal input given a stored eval trace is wired
+/// to the replay of its recording.
 #[test]
-fn a_trace_held_in_a_let_given_to_an_eval_is_reported() {
+fn a_trace_held_in_a_let_is_replayed_by_an_eval() {
     let emitted = emit_with(
         &[(
             "m.hgl",
@@ -2243,11 +2242,17 @@ fn a_trace_held_in_a_let_given_to_an_eval_is_reported() {
         )],
         &hgl_cpp::runtime::provides,
     );
-    assert_eq!(
-        emitted.blocked("again").as_deref(),
-        Some(
-            "m.hgl:9:29 the cpp target does not write a trace given to an eval that is no trace written out yet"
-        )
+    assert_eq!(emitted.blocked("again"), None);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/mod-m.cpp")
+        .unwrap()
+        .text;
+    assert!(
+        unit.contains("::hglrt::testing::replay_items(seen, start_)"),
+        "{unit}"
     );
 }
 

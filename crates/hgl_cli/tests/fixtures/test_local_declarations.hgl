@@ -1,0 +1,109 @@
+module demo.test_local_declarations
+
+const fn keep<T>(value: T) -> T => value
+
+export operator classify<T>(value: T) -> i64
+impl const fn classify<T>(value: T) -> i64 => 0
+
+const fn in_production() -> i64 => classify(7)
+
+const fn through_requirement<T>(value: T) -> i64
+    requires classify(T) -> i64 => classify(value)
+
+test with_a_type {
+    const cutoff: date = @2026-01-05
+
+    struct Closed {
+        day: date
+    }
+
+    enum Plan { regular, holiday }
+
+    operator open_on<C>(calendar: C, day: date) -> bool
+    impl const fn open_on(calendar: Closed, day: date) -> bool =>
+        day != calendar.day
+
+    let closed = keep(Closed(day: cutoff))
+    let plan = keep(Plan.holiday)
+    assert closed.day == cutoff
+    assert plan == Plan.holiday
+    assert !open_on(closed, cutoff)
+    assert !open_on(Closed(day: @2026-01-05), @2026-01-05)
+}
+
+test independent_types_and_operator {
+    const cutoff: i64 = 7
+
+    struct Closed {
+        count: i64
+    }
+
+    enum Plan { special }
+
+    operator open_on<C>(calendar: C, day: i64) -> bool
+    impl const fn open_on(calendar: Closed, day: i64) -> bool =>
+        day == calendar.count
+
+    let closed = keep(Closed(count: cutoff))
+    let plan = keep(Plan.special)
+    assert closed.count == cutoff
+    assert plan == Plan.special
+    assert open_on(closed, 7)
+}
+
+# TST-1 and GEN-16: a candidate from this test answers the generic
+# calendar requirement of the date addition.
+test local_calendar {
+    struct Closed {
+        day: date
+    }
+
+    impl const fn business_day(calendar: Closed, day: date) -> bool =>
+        day != calendar.day && business_day(Weekdays(), day)
+
+    let mine = Closed(day: @2026-01-05)
+    assert @2026-01-02 +{calendar: mine} 2B == @2026-01-07
+}
+
+test local_candidate {
+    impl const fn classify(value: i64) -> i64 => 1
+    assert classify(7) == 1
+    assert through_requirement(7) == 1
+    assert in_production() == 0
+}
+
+test ordinary_scope {
+    assert classify(7) == 0
+    assert through_requirement(7) == 0
+    assert in_production() == 0
+}
+
+
+operator taste<T>(value: T) -> i64
+
+# GEN-6, TST-1: an option has one kind among the candidates that can
+# occur together. These two candidates belong to different tests.
+test generic_option {
+    impl const fn taste<const mode: i64 = 3>(value: i64) -> i64 => mode
+    assert taste{mode: 7}(0) == 7
+}
+
+test parameter_option {
+    impl const fn taste{mode: i64 = 4}(value: i64) -> i64 => mode
+    assert taste{mode: 8}(0) == 8
+}
+
+
+# TST-1 and TST-3: a temporal candidate is used by a test-local graph.
+test temporal_candidate {
+    operator increment<T>(value: T) -> i64
+    impl fn increment(value: i64) -> i64 {
+        when { return value + 1 }
+    }
+
+    fn graph(value: i64) -> i64 {
+        return increment(value)
+    }
+
+    assert eval graph(value: [1, _, 3]) == [2, _, 4]
+}

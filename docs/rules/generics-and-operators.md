@@ -40,6 +40,8 @@ transpiler: partial
 analyser: partial
 
 - Binding a generic from a positive `any` conjunct awaits #367.
+- Parsing and testing `!=` without binding a parameter are planned in #516.
+- Naming a capability type in an operator declaration's type membership is planned in #562 (TIME-8).
 
 - A parameter compared in a constraint is a const option or is rejected, and each constant it is compared with is a value of the option's type (`type.mismatch`, `member.unknown`, `enum.context_type`, at the declaration); a constant of a module among those is its value (UNIT-13)
 - At a named operator call in a value function, a candidate's `T in {types}` and `T == type` are checked against what `T` stands for, and a named operator requirement is tested with the call's types (GEN-16)
@@ -62,6 +64,7 @@ parser: partial
 analyser: partial
 
 - An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares, its file imports, or the prelude binds, and one that names no operator is `impl.unknown_operator`; a value candidate's body is read as a value function's
+- An operator declared in a named test has that test in its identity. A test-local candidate binds its operator in the test’s scope and participates only in selection within that test (TST-1).
 - An operator's requirement `O in {...}` on its bare result parameter limits its candidates' results
 - Operator identity in selection and other requirements of an operator are pending.
 - A private operator is used only in its own module. Importing one rejects with `import.private` (UNIT-3). A candidate in another module needs a binding to an exported operator or reports `impl.unknown_operator`.
@@ -153,6 +156,7 @@ analyser: partial
 - Function and operator calls check the cardinality of captured arguments against the value parameter and its generic type pack. Explicit positional type sequences also constrain the argument count. The HIR records the resolved sequence of types for each captured type pack.
 - A function's `each T in types(Ts)` checks its condition for every resolved type in the pack. An empty capture satisfies it. Equality and membership can test the bound type by name. A verdict the analyser cannot give rejects as untold (GEN-3).
 - GEN-17 adds `each` over pack keys. Named operator requirements bound by `each` and evaluation of `any`, including its generic binding rule (#367), are pending.
+- An ordinary value context rejects the borrowed view from `schemas(pack)`.
 
 transpiler: partial
 
@@ -225,7 +229,8 @@ analyser: partial
 transpiler: partial
 
 - Lowers a generic instance's supplied answer to a named operator requirement to its
-  resolved candidate.
+  resolved candidate. Instances with test-local answers are kept distinct even
+  when the generic arguments are identical (TST-1).
 - Left: An operator requirement left without an executable answer is reported. Function
   law predicates await #367 (GEN-18).
 
@@ -239,7 +244,8 @@ parser: partial
 analyser: partial
 
 - Reflects the selected callback's fixed suffix and its supplied positional and named pack entries. A dependent pack keeps the callback parameter keys and the types written at the call.
-- Evaluates `each` over `arg_keys`, key comparison and membership, and keyed type projection. A missing member of a known pack reports `pack.name`.
+- Evaluates `each` over `arg_keys`, constant key membership, and keyed type projection. Candidate requirements can compare bare pack members. A missing member of a known pack reports `pack.name`.
+- A generic call that receives another function parameter checks its pack requirements when the caller supplies the reflected types.
 - An operator callback reflects the public declaration's parameter names and the selected candidate's types (FN-17).
 
 ## GEN-18
@@ -251,6 +257,7 @@ parser: planned
 analyser: planned
 
 - Reading the given function's laws in requirements and defaults awaits #367.
+- Checking a forwarded law guarantee at its declaration and testing it at the concrete call are planned in #367 (GEN-7).
 
 transpiler: planned
 

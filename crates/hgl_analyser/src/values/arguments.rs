@@ -512,7 +512,13 @@ impl<'a> Typer<'a> {
                     let configuration = found.is_some_and(|index| slots[index].configuration);
                     // EXPR-10: configuration names bind first, then
                     // generic value parameters, then ordinary ones.
-                    if !configuration && forwarded.is_none() && aside.contains(&text) {
+                    // FN-18: the parentheses of a declaration with
+                    // a dependent pack supply that callback's arguments.
+                    if !configuration
+                        && forwarded.is_none()
+                        && (brace || dependent.is_none())
+                        && aside.contains(&text)
+                    {
                         continue;
                     }
                     let found = found.filter(|_| {
@@ -633,18 +639,37 @@ impl<'a> Typer<'a> {
         given: &[Location],
     ) {
         let count = given.len() as u64;
-        let (at, bound, direction) = if let Some(maximum) = maximum
+        let at = if let Some(maximum) = maximum
             && count > maximum
         {
-            (given[maximum as usize], maximum, "at most")
+            given[maximum as usize]
         } else if count < minimum {
-            let at = tokens(list)
+            tokens(list)
                 .find(|token| token.kind() == SyntaxKind::RParen)
                 .map_or_else(
                     || self.at(list),
                     |token| Location::new(self.file, token.span()),
-                );
-            (at, minimum, "at least")
+                )
+        } else {
+            return;
+        };
+        self.check_pack_count_at(at, name, (minimum, maximum), count);
+    }
+
+    /// Check a pack whose argument count became known in an instance (GEN-10).
+    pub(super) fn check_pack_count_at(
+        &mut self,
+        at: Location,
+        name: &str,
+        (minimum, maximum): (u64, Option<u64>),
+        count: u64,
+    ) {
+        let (bound, direction) = if let Some(maximum) = maximum
+            && count > maximum
+        {
+            (maximum, "at most")
+        } else if count < minimum {
+            (minimum, "at least")
         } else {
             return;
         };

@@ -20,6 +20,44 @@ fn call(body: &hgl_analyser::hir::Body) -> (&Callee, &[Argument]) {
     (callee, arguments)
 }
 
+/// TST-1 and UNIT-13: enum constants from different tests identify
+/// different generic types, even when their enum and member names match.
+#[test]
+fn test_local_enum_constants_identify_distinct_instances() {
+    let program = program(&[(
+        "m.hgl",
+        r#"module m
+struct Box<const Tag: any> { value: i64 }
+const fn keep<T>(value: T) -> T => value
+
+test first {
+    enum Mode { x }
+    assert keep(Box<Mode.x>(value: 1)).value == 1
+}
+
+test second {
+    enum Mode { x }
+    assert keep(Box<Mode.x>(value: 2)).value == 2
+}
+"#,
+    )]);
+    let module = program.module_index("m").expect("fixture module");
+    let keep = declaration(&program.modules[module], "keep");
+    let instances = Instances::typed(&program);
+    let keys: Vec<_> = instances
+        .declared(module, keep)
+        .iter()
+        .map(|instance| {
+            crate::canonical::canonical(&program, &instance.signature.parameters[0].ty)
+                .expect("the concrete argument has a canonical type")
+        })
+        .collect();
+    assert_eq!(
+        keys,
+        ["m::Box<m::first::Mode.x>", "m::Box<m::second::Mode.x>"]
+    );
+}
+
 /// FN-8, GEN-2, GEN-10: a named pack's types and source keys identify the
 /// instance. The same declaration and shape share that instance across
 /// call sites and modules, even with different argument values.
