@@ -70,7 +70,10 @@
 
 set -euo pipefail
 
-source "$(dirname -- "${BASH_SOURCE[0]}")/hgraph-dependencies.sh"
+# This script's own directory, which holds the scripts it uses.
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$here/hgraph-dependencies.sh"
+source "$here/gather-dsyms.sh"
 
 # The dependency prefix made where there is none: what hgraph's build
 # without Arrow finds as packages (fmt 11 or later, spdlog 1.15 or later,
@@ -164,7 +167,10 @@ main() {
         fail "$dir holds no whole SDK of hgraph $tag; remove it or name another directory"
     fi
 
-    work=$(mktemp -d)
+    # A template, so that TMPDIR is honoured: macOS's mktemp given none
+    # makes the directory in the user's own temporary directory.
+    work=$(mktemp -d "${TMPDIR:-/tmp}/provision-hgraph-sdk.XXXXXX")
+    work=$(cd -- "$work" && pwd -P)
     trap 'rm -rf -- "$work"' EXIT
 
     # The dependency prefix, made where it is not there.
@@ -226,8 +232,15 @@ main() {
     local jobs=${HGL_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN)}
     say "building hgraph $tag ($commit), $build_type, with $compiler, $jobs jobs"
     local started=$SECONDS
+    # On macOS each library's link keeps the objects link-time optimisation
+    # compiles, whose debug information gather_dsyms reads (keep-lto-objects.sh).
+    local -a launcher=()
+    if [[ $platform == Darwin ]]; then
+        launcher=("-DCMAKE_CXX_LINKER_LAUNCHER=$here/keep-lto-objects.sh")
+    fi
     "$cmake" -S "$source" -B "$work/build" -G Ninja \
         -DCMAKE_MAKE_PROGRAM="$ninja" \
+        ${launcher[@]+"${launcher[@]}"} \
         -DCMAKE_CXX_COMPILER="$cxx" \
         -DCMAKE_BUILD_TYPE="$build_type" \
         -DCMAKE_PREFIX_PATH="$deps" \
@@ -246,6 +259,12 @@ main() {
         -DCMAKE_DISABLE_FIND_PACKAGE_date=ON
     "$cmake" --build "$work/build" --parallel "$jobs"
     "$cmake" --install "$work/build"
+    # A library's debug information on macOS, which a Debug build has and a
+    # build with `-g` in CXXFLAGS, into a dSYM bundle beside it while the
+    # objects that hold it are here.
+    if [[ $platform == Darwin ]]; then
+        gather_dsyms "$dir/lib"
+    fi
 
     # date/tz can be built into the shared runtime and is not installed
     # separately. Keep its notice alongside hgraph's if it was fetched.
