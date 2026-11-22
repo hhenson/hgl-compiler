@@ -18,7 +18,8 @@ transpiler: done
 analyser: partial
 
 - `ok(value)` and `err(value)` take one value by position and no generic argument (`generic.argument_count`), and both types from the complete `result<T, E>` the place expects, a nullable one included; with none it is `result.context_type`
-- The payload is read as its side's type. This includes a named function argument whose result parameter type is completed by another argument in the graph instance (GEN-2, GEN-7).
+- The payload is read as its side's type. This includes a named function argument whose result parameter type is completed by another argument in the graph instance (GEN-2, GEN-7). An inferred constructor field also keeps its scoped payload
+  until an earlier field completes the result type.
 - Left: a result expected through a generic parameter still being inferred; equality
 
 transpiler: done
