@@ -250,7 +250,10 @@ def verify(bundle, forbidden, target):
 
 
 def verify_paths(bundle, forbidden):
-    """No file names a build path, and no link leaves the bundle."""
+    """No file names a build path, and no link leaves the bundle. A file's
+    debug information is read as a debugger reads it: an ELF file's
+    compressed debug sections decompressed first. Every file that fails is
+    named, in one error."""
     prefixes = {
         str(candidate).encode()
         for path in forbidden
@@ -264,17 +267,45 @@ def verify_paths(bundle, forbidden):
     )
     local_path = re.compile(path_start + rb"(?:" + b"|".join(map(re.escape, sorted(prefixes)))
                             + rb")(?![\w.~-])") if prefixes else None
-    for path in bundle.rglob("*"):
+    failed = []
+    for path in sorted(bundle.rglob("*")):
+        relative = path.relative_to(bundle)
         if path.is_symlink():
             if path.readlink().is_absolute() or not path.resolve(strict=True).is_relative_to(bundle):
-                raise ValueError(f"link escapes the bundle: {path.relative_to(bundle)}")
+                failed.append(f"link escapes the bundle: {relative}")
             continue
         if path.is_file():
-            data = path.read_bytes()
-            if scratch_path.search(data) or (local_path and local_path.search(data)):
-                raise ValueError(f"build path in {path.relative_to(bundle)}")
+            data = debug_bytes(path)
+            found = scratch_path.search(data) or (local_path and local_path.search(data))
+            if found:
+                failed.append(f"build path in {relative}: {found.group(0)[:120].decode(errors='replace')}")
             if path.suffix in RELEASE_METADATA:
-                verify_metadata_paths(bundle, path, data)
+                try:
+                    verify_metadata_paths(bundle, path, data)
+                except ValueError as error:
+                    failed.append(str(error))
+    if failed:
+        raise ValueError("\n".join(failed))
+
+
+def debug_bytes(path):
+    """The bytes of the file at `path` as a debugger reads them: an ELF
+    file with compressed debug sections, decompressed."""
+    data = path.read_bytes()
+    if not data.startswith(b"\x7fELF") or b".debug_" not in data:
+        return data
+    with tempfile.TemporaryDirectory() as scratch:
+        plain = Path(scratch) / "plain"
+        subprocess.run(["objcopy", "--decompress-debug-sections", str(path), str(plain)],
+                       check=True, capture_output=True)
+        return plain.read_bytes()
+
+
+def verify_mapped(file, relative):
+    """The debug information of `file` names its source by the release's
+    mapped path, under `/hgl-release/`, as `-ffile-prefix-map` writes it."""
+    if b"/hgl-release/" not in debug_bytes(file):
+        raise ValueError(f"{relative} names no source under /hgl-release/")
 
 
 def verify_split(bundle, library, macos):
@@ -322,9 +353,30 @@ def uuids(binary):
     return set(re.findall(r"UUID: ([0-9A-F-]+)", command("dwarfdump", "--uuid", binary)))
 
 
-def has_dsym(library, directory):
-    """Whether `directory` holds a dSYM bundle of `library`'s UUID."""
-    return any(uuids(library) & uuids(bundle) for bundle in directory.glob("*.dSYM"))
+def dsym_of(library, directory):
+    """The dSYM bundle in `directory` of `library`'s UUID, if there is one."""
+    return next((bundle for bundle in sorted(directory.glob("*.dSYM"))
+                 if uuids(library) & uuids(bundle)), None)
+
+
+def dsym_problems(bundle, root):
+    """What is wrong with dSYM `bundle` (under `root`) as a debugger reads
+    it: it has no DWARF file, one with no debug information or that names no
+    source by the mapped path, or keeps dsymutil's relocation map."""
+    relative = bundle.relative_to(root)
+    problems = []
+    dwarf = sorted((bundle / "Contents/Resources/DWARF").glob("*"))
+    if not dwarf:
+        problems.append(f"{relative} holds no DWARF")
+    for file in dwarf:
+        data = file.read_bytes()
+        if b"__debug_info" not in data:
+            problems.append(f"{file.relative_to(root)} has no debug information")
+        elif b"/hgl-release/" not in data:
+            problems.append(f"{file.relative_to(root)} names no source under /hgl-release/")
+    if (bundle / "Contents/Resources/Relocations").exists():
+        problems.append(f"{relative} keeps dsymutil's relocation map")
+    return problems
 
 
 def verify_debug(tree, release, forbidden, target):
@@ -361,39 +413,68 @@ def verify_debug(tree, release, forbidden, target):
     for prefix in ("libhgraph_runtime", "libhgraph_wiring", "libfmtd", "libspdlogd", "libsimdjson"):
         if not any(name.startswith(prefix) for name in names):
             raise ValueError(f"missing the debug {prefix} shared library")
-    for library in {lib.resolve(strict=True) for lib in libraries}:
+    # Each wrong thing below is named, all in one error.
+    failed = []
+
+    def elf_debug_problems(file, relative):
+        """An ELF file with debug information naming its source by the
+        mapped path."""
+        if ".debug_info" not in command("readelf", "--section-headers", "--wide", file):
+            return [f"{relative} has no debug information"]
+        try:
+            verify_mapped(file, relative)
+        except ValueError as error:
+            return [str(error)]
+        return []
+
+    for library in sorted({lib.resolve(strict=True) for lib in libraries}):
         relative = library.relative_to(tree)
+        try:
+            if macos:
+                verify_load_paths(tree, library, names)
+            else:
+                verify_elf(tree, library, names)
+        except ValueError as error:
+            failed.append(str(error))
         if macos:
-            verify_load_paths(tree, library, names)
-            if not has_dsym(library, library.parent):
-                raise ValueError(f"{relative} has no dSYM of its UUID")
+            dsym = dsym_of(library, library.parent)
+            if dsym is None:
+                failed.append(f"{relative} has no dSYM of its UUID")
+            else:
+                failed.extend(dsym_problems(dsym, tree))
         else:
-            verify_elf(tree, library, names)
-            if ".debug_info" not in command("readelf", "--section-headers", "--wide", library):
-                raise ValueError(f"{relative} has no debug information")
+            failed.extend(elf_debug_problems(library, relative))
 
     # The release's libraries' symbol files, each where a debugger looks
     # beside the library.
     for directory in ("libexec/hgraph-sdk/lib", "libexec/hgraph-deps/lib"):
-        for library in (release / directory).iterdir():
+        for library in sorted((release / directory).iterdir()):
             if library.is_symlink() or not library.is_file() or not re.search(
                 r"\.dylib$" if macos else r"\.so(?:\.[0-9]+)*$", library.name
             ):
                 continue
             relative = library.relative_to(release)
             if macos:
-                if not has_dsym(library, tree / directory):
-                    raise ValueError(f"no dSYM of {relative}'s UUID")
+                dsym = dsym_of(library, tree / directory)
+                if dsym is None:
+                    failed.append(f"no dSYM of {relative}'s UUID")
+                else:
+                    failed.extend(dsym_problems(dsym, tree))
                 continue
             link = debug_link(library)
             symbols = tree / directory / LINUX_SYMBOLS / (link or "")
             if link is None or not symbols.is_file():
-                raise ValueError(f"no symbol file for {relative}")
+                failed.append(f"no symbol file for {relative}")
+                continue
             if build_id(symbols) != build_id(library):
-                raise ValueError(f"{symbols.relative_to(tree)} is not {relative}'s build")
-            if ".debug_info" not in command("readelf", "--section-headers", "--wide", symbols):
-                raise ValueError(f"{symbols.relative_to(tree)} has no debug information")
-    verify_paths(tree, forbidden)
+                failed.append(f"{symbols.relative_to(tree)} is not {relative}'s build")
+            failed.extend(elf_debug_problems(symbols, symbols.relative_to(tree)))
+    try:
+        verify_paths(tree, forbidden)
+    except ValueError as error:
+        failed.append(str(error))
+    if failed:
+        raise ValueError("\n".join(failed))
     print(f"Verified the debug tree of {tree.name}")
 
 
