@@ -3,7 +3,7 @@
 //! slot that holds it.
 
 use hgl_diagnostics::Category;
-use hgl_parser::{SyntaxKind, SyntaxNode};
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::Typer;
 use crate::declared::names_parameter;
@@ -23,6 +23,13 @@ pub(super) struct ForwardedArgument {
 }
 
 impl Typer<'_> {
+    /// A form that does not implement pack forwarding must not discard
+    /// the spread and emit a call using only its written arguments.
+    pub(super) fn unread_pack_call(&mut self, list: &SyntaxNode) -> Option<(ExprKind, Type)> {
+        spread_operands(list).next()?;
+        Some(self.unread_call(list))
+    }
+
     /// Checks that a spread names a pack and preserves its call until the
     /// pack's concrete argument types and keys are available (FN-19).
     pub(super) fn defer_pack_call(
@@ -60,7 +67,6 @@ impl Typer<'_> {
         let ty = result
             .filter(|ty| !names_parameter(ty))
             .or(expected)
-            .or(result)
             .cloned()
             .unwrap_or(Type::Unknown);
         Some((
@@ -79,7 +85,8 @@ impl Typer<'_> {
         ))
     }
 
-    /// The entries the instance gives to this call, in spread and capture order.
+    /// The entries the instance gives to this call. Bind names before
+    /// positions, preserving spread and capture order within each group.
     pub(super) fn forwarded_arguments(&self, list: &SyntaxNode) -> Vec<ForwardedArgument> {
         let Some(inputs) = &self.pack_inputs else {
             return Vec::new();
@@ -108,6 +115,7 @@ impl Typer<'_> {
                 });
             }
         }
+        forwarded.sort_by_key(|entry| matches!(entry.key, PackKey::Position(_)));
         forwarded
     }
 }
@@ -119,7 +127,30 @@ pub(super) fn spread_operands(list: &SyntaxNode) -> impl Iterator<Item = SyntaxN
         .filter_map(|argument| argument.children().next())
 }
 
-/// Reread only calls that depend on the concrete pack inputs (FN-19).
+/// Whether the shape of a parameter pack still needs to be applied.
+pub(crate) fn has_forwarded_calls(body: &crate::hir::Body) -> bool {
+    let mut pending = false;
+    crate::hir::walk_statements(&body.statements, &mut |value| {
+        pending |= is_forwarded_call(value);
+    });
+    pending
+}
+
+fn is_forwarded_call(value: &Expr) -> bool {
+    matches!(
+        &value.kind,
+        ExprKind::Call {
+            callee: Callee::DeferredPackCall(_),
+            ..
+        }
+    )
+}
+
+/// Reread a deferred call with the concrete pack inputs (FN-19).
+///
+/// A value body where a call's result type also depends on its pack
+/// needs its source scope checked with that result in place. Returns
+/// whether the caller must specialize that newly read body.
 pub(crate) fn resolve_forwarded_calls(
     program: &crate::Program,
     (module, declaration): (usize, usize),
@@ -131,20 +162,7 @@ pub(crate) fn resolve_forwarded_calls(
     body: &mut crate::hir::Body,
     diagnostics: &mut hgl_diagnostics::Diagnostics,
     project: &dyn Fn(&Type) -> Type,
-) {
-    let mut pending = false;
-    crate::hir::walk_statements(&body.statements, &mut |value| {
-        pending |= matches!(
-            value.kind,
-            ExprKind::Call {
-                callee: Callee::DeferredPackCall(_),
-                ..
-            }
-        );
-    });
-    if !pending {
-        return;
-    }
+) -> bool {
     let owner = &program.modules[module];
     let declared = &owner.declarations[declaration];
     let (bindings, written, calls) = super::tables(owner);
@@ -158,26 +176,38 @@ pub(crate) fn resolve_forwarded_calls(
         },
         ..signature.clone()
     };
-    let mut typer = Typer::bare(
-        program,
-        owner,
-        declared,
-        &reading,
-        super::Tables {
-            bindings: &bindings,
-            written: &written,
-            calls: &calls,
-            selecting: &selecting,
-        },
-        diagnostics,
-    );
-    typer.use_instance_locals(std::mem::take(&mut body.locals));
+    let tables = super::Tables {
+        bindings: &bindings,
+        written: &written,
+        calls: &calls,
+        selecting: &selecting,
+    };
+    let mut needs_scope = false;
+    if declared.kind.role() == Some(crate::program::Role::Value) {
+        crate::hir::walk_statements(&body.statements, &mut |value| {
+            needs_scope |= is_forwarded_call(value) && !super::fit::whole(&value.ty);
+        });
+    }
+    let mut typer = if needs_scope {
+        Typer::new(program, owner, declared, &reading, tables, diagnostics)
+    } else {
+        let mut typer = Typer::bare(program, owner, declared, &reading, tables, diagnostics);
+        typer.use_instance_locals(std::mem::take(&mut body.locals));
+        typer
+    };
     typer.instance = map
         .iter()
         .map(|(at, argument)| (*at, (*argument).clone()))
         .collect();
     typer.pack_inputs = Some(inputs.to_vec());
     typer.pack_functions = functions.to_vec();
+    if needs_scope {
+        if let Some(reread) = typer.body() {
+            *body = reread;
+            return true;
+        }
+        return false;
+    }
     let graph = owner.phases[declaration] == Some(crate::program::Phase::Graph);
     crate::hir::walk_statements_mut(&mut body.statements, &mut |value| {
         let ExprKind::Call {
@@ -187,7 +217,13 @@ pub(crate) fn resolve_forwarded_calls(
         else {
             return;
         };
-        let Some(source) = typer.node_at(call.source) else {
+        let Some(source) = declared.syntax.descendants().find(|node| {
+            node.span() == call.source.span
+                && matches!(
+                    node.kind(),
+                    SyntaxKind::CallExpr | SyntaxKind::TypedConstructor
+                )
+        }) else {
             return;
         };
         typer.hook = call.hook;
@@ -196,5 +232,223 @@ pub(crate) fn resolve_forwarded_calls(
         *value = typer.expression(&source, expected.as_ref());
     });
     body.locals = typer.locals;
-    super::record(program, body, graph);
+    false
+}
+
+/// One concrete specialization reached by a call with a forwarding path.
+#[derive(Debug, Clone, PartialEq)]
+struct ForwardingInstance {
+    declaration: (usize, usize),
+    generics: Vec<crate::Argument>,
+    requirements: Vec<crate::hir::Answer>,
+    functions: Vec<(usize, Callee)>,
+    type_packs: Vec<crate::hir::TypePackArgument>,
+    pack_inputs: Vec<crate::hir::PackInput>,
+}
+
+impl ForwardingInstance {
+    fn of(program: &crate::Program, expression: &Expr) -> Option<Self> {
+        use crate::types::Argument;
+        let ExprKind::Call {
+            callee, arguments, ..
+        } = &expression.kind
+        else {
+            return None;
+        };
+        let declaration = callee.declaration()?;
+        let crate::Detail::Callable(signature) =
+            &program.modules[declaration.0].details[declaration.1]
+        else {
+            return None;
+        };
+        let type_packs = callee.type_packs();
+        let known = |ty: &Type| super::fit::whole(ty) && !names_parameter(ty);
+        if !callee
+            .generics()
+            .iter()
+            .enumerate()
+            .all(|(index, given)| match given {
+                Argument::Type(ty) => {
+                    known(ty) || type_packs.iter().any(|pack| pack.parameter == index)
+                }
+                Argument::Constant(constant) => !matches!(
+                    constant.value,
+                    crate::ConstantValue::Unknown
+                        | crate::ConstantValue::Unevaluated
+                        | crate::ConstantValue::Parameter { .. }
+                        | crate::ConstantValue::Unary(..)
+                        | crate::ConstantValue::Binary(..)
+                ),
+            })
+        {
+            return None;
+        }
+        let mut indices = vec![0; signature.parameters.len()];
+        let mut pack_inputs = Vec::new();
+        let mut functions = Vec::new();
+        for argument in arguments {
+            let Some(parameter) = argument.parameter else {
+                continue;
+            };
+            if let ExprKind::StaticCallable(callee) = &argument.value.kind {
+                functions.push((parameter, (**callee).clone()));
+                continue;
+            }
+            let Some(key) = &argument.pack else {
+                continue;
+            };
+            let index = &mut indices[parameter];
+            let ty =
+                super::inference::type_pack(&signature.parameters[parameter], &signature.generics)
+                    .and_then(|generic| type_packs.iter().find(|pack| pack.parameter == generic))
+                    .and_then(|pack| pack.types.get(*index))
+                    .or_else(|| super::evals::trace_pack_type(&argument.value.ty))
+                    .unwrap_or(&argument.value.ty);
+            if !known(ty) {
+                return None;
+            }
+            *index += 1;
+            pack_inputs.push(crate::hir::PackInput {
+                parameter,
+                key: key.clone(),
+                ty: ty.clone(),
+            });
+        }
+        let requirements = match callee {
+            Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
+                requirements.clone()
+            }
+            _ => return None,
+        };
+        Some(Self {
+            declaration,
+            generics: callee.generics().to_vec(),
+            requirements,
+            functions,
+            type_packs: type_packs.to_vec(),
+            pack_inputs,
+        })
+    }
+
+    fn inputs(&self) -> crate::InstanceInputs<'_> {
+        crate::InstanceInputs {
+            functions: &self.functions,
+            type_packs: &self.type_packs,
+            pack_inputs: Some(&self.pack_inputs),
+        }
+    }
+}
+
+/// Check forwarded calls under the concrete shapes that reach them (FN-19).
+/// A forwarding error belongs to the call that supplies that pack shape.
+pub(super) fn check_instances(
+    program: &crate::Program,
+    diagnostics: &mut hgl_diagnostics::Diagnostics,
+) {
+    use crate::hir::walk_statements;
+    use std::collections::{HashMap, HashSet, VecDeque};
+
+    let mut forwarding = HashSet::new();
+    let mut callers = HashMap::<_, Vec<_>>::new();
+    for (module, unit) in program.modules.iter().enumerate() {
+        for (declaration, body) in unit.bodies.iter().enumerate() {
+            let Some(body) = body else { continue };
+            let owner = (module, declaration);
+            walk_statements(&body.statements, &mut |value| {
+                if let ExprKind::Call { callee, .. } = &value.kind {
+                    if matches!(callee, Callee::DeferredPackCall(_)) {
+                        forwarding.insert(owner);
+                    } else if let Some(called) = callee.declaration() {
+                        callers.entry(called).or_default().push(owner);
+                    }
+                }
+            });
+        }
+    }
+    if forwarding.is_empty() {
+        return;
+    }
+    let mut waiting: VecDeque<_> = forwarding.iter().copied().collect();
+    while let Some(called) = waiting.pop_front() {
+        for &owner in callers.get(&called).into_iter().flatten() {
+            if forwarding.insert(owner) {
+                waiting.push_back(owner);
+            }
+        }
+    }
+    let mut roots = Vec::new();
+    for unit in &program.modules {
+        let mut record = |value: &Expr| {
+            if let Some(instance) = ForwardingInstance::of(program, value)
+                && forwarding.contains(&instance.declaration)
+            {
+                roots.push((instance, value.at));
+            }
+        };
+        for body in unit
+            .bodies
+            .iter()
+            .flatten()
+            .chain(unit.test_bodies.iter().flatten())
+            .chain(&unit.store_body)
+        {
+            walk_statements(&body.statements, &mut record);
+        }
+        if let Some(run) = &unit.run_body {
+            run.call.walk(&mut record);
+        }
+        for constant in unit.constants.iter().flatten() {
+            constant.walk(&mut record);
+        }
+    }
+    for (initial, at) in roots {
+        let mut waiting = VecDeque::from([initial]);
+        let mut seen = Vec::new();
+        let mut counts = HashMap::new();
+        while let Some(instance) = waiting.pop_front() {
+            if seen.contains(&instance) {
+                continue;
+            }
+            let count = counts.entry(instance.declaration).or_insert(0);
+            *count += 1;
+            if *count > crate::INSTANCES {
+                super::requirements::past_the_limit(
+                    &[at],
+                    instance.declaration,
+                    program,
+                    diagnostics,
+                );
+                break;
+            }
+            let reports = std::cell::RefCell::new(hgl_diagnostics::Diagnostics::new());
+            let mut graph_reports = hgl_diagnostics::Diagnostics::new();
+            let checked = program.checked_instance(
+                instance.declaration,
+                &instance.generics,
+                &instance.requirements,
+                instance.inputs(),
+                &reports,
+                &mut graph_reports,
+            );
+            seen.push(instance);
+            for report in graph_reports.as_slice() {
+                let mut report = report
+                    .clone()
+                    .with_related(report.primary, "the forwarded call is written here");
+                report.primary = at;
+                if !diagnostics.as_slice().contains(&report) {
+                    diagnostics.emit(report);
+                }
+            }
+            if let Some((_, body)) = checked {
+                walk_statements(&body.statements, &mut |value| {
+                    if let Some(child) = ForwardingInstance::of(program, value)
+                        && forwarding.contains(&child.declaration)
+                    {
+                        waiting.push_back(child);
+                    }
+                });
+            }
+        }
+    }
 }

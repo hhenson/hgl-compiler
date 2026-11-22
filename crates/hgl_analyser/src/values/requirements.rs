@@ -2520,7 +2520,7 @@ fn argument_fails(
 /// not taken to hold (GEN-3). `callee` is the declaration whose instance
 /// was being followed there. One already rejected for a `requires` is
 /// not reported again (ERR-9: "Do not demand cascaded diagnostics").
-fn past_the_limit(
+pub(super) fn past_the_limit(
     from: &[Location],
     (module, declaration): (usize, usize),
     program: &Program,

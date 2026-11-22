@@ -86,6 +86,11 @@ impl<'a> Typer<'a> {
         list: &SyntaxNode,
         expected: Option<&Type>,
     ) -> Option<(ExprKind, Type)> {
+        if crate::RESULT_FORMS.contains(&name.text())
+            && let Some(unread) = self.unread_pack_call(list)
+        {
+            return Some(unread);
+        }
         Some(match name.text() {
             "ok" => self.tagged(true, name, list, expected),
             "err" => self.tagged(false, name, list, expected),

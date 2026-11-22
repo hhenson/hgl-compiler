@@ -242,7 +242,9 @@ impl<'a> Typer<'a> {
             .copied()
             .find(|&declaration| kind_of(declaration) == DeclarationKind::Enum);
         if let Some(declaration) = enumeration {
-            return self.enum_from(name, list, module, declaration);
+            return self
+                .unread_pack_call(list)
+                .unwrap_or_else(|| self.enum_from(name, list, module, declaration));
         }
         let operator = declarations
             .iter()

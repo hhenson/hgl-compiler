@@ -318,13 +318,31 @@ impl Program {
             diagnostics,
         };
         let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
-        let recheck =
-            graph && (!declared.selecting[declaration].is_empty() || !requirements.is_empty());
+        let pending_forwards = inputs
+            .pack_inputs
+            .filter(|_| crate::values::has_forwarded_calls(&body));
+        let recheck = graph
+            && (!declared.selecting[declaration].is_empty()
+                || !requirements.is_empty()
+                || pending_forwards.is_some());
         let destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
         self.place_body(&mut body, &arguments, &functions);
+        if let Some(pack_inputs) = pending_forwards
+            && crate::values::resolve_forwarded_calls(
+                self,
+                (module, declaration),
+                (&taken, &map),
+                (&functions, pack_inputs),
+                &mut body,
+                graph_diagnostics,
+                &project,
+            )
+        {
+            self.place_body(&mut body, &arguments, &functions);
+        }
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
-        // could not say of an operation it requires.
+        // could not say of an operation it requires or a pack it forwards.
         if let Some(destinations) = destinations {
             destinations.settle(
                 self,
@@ -336,17 +354,6 @@ impl Program {
             );
         } else {
             crate::values::record(self, &mut body, graph);
-        }
-        if let Some(pack_inputs) = inputs.pack_inputs {
-            crate::values::resolve_forwarded_calls(
-                self,
-                (module, declaration),
-                (&taken, &map),
-                (&functions, pack_inputs),
-                &mut body,
-                graph_diagnostics,
-                &project,
-            );
         }
         Some((taken, body))
     }

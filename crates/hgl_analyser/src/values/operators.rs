@@ -771,7 +771,7 @@ impl<'a> Typer<'a> {
             dependent_values.extend(written.iter().filter_map(|(key, node, ready)| {
                 let captured = match key {
                     Key::Position(position) => *position >= fixed && !positional_pack,
-                    Key::ForwardedPosition => !positional_pack,
+                    Key::ForwardedPosition(None) => !positional_pack,
                     Key::Name(_) => key.public_parameter(public).is_none(),
                     _ => false,
                 };
@@ -1175,8 +1175,7 @@ impl<'a> Typer<'a> {
             .any(|parameter| parameter.pack == Some(Pack::Named));
         let mut positional = Vec::new();
         let mut named = Vec::new();
-        let mut spreads = self.forwarded_arguments(list);
-        spreads.sort_by_key(|entry| matches!(entry.key, hir::PackKey::Position(_)));
+        let spreads = self.forwarded_arguments(list);
         let explicit = self
             .call_entries(list)
             .into_iter()
@@ -1191,7 +1190,35 @@ impl<'a> Typer<'a> {
             );
             let key = match (&forwarded, name) {
                 (Some((hir::PackKey::Name(name), _)), _) => Key::Name(name.clone()),
-                (Some((hir::PackKey::Position(_), _)), _) => Key::ForwardedPosition,
+                (Some((hir::PackKey::Position(_), _)), _) => {
+                    let slot = public
+                        .parameters
+                        .iter()
+                        .enumerate()
+                        .find(|(index, parameter)| {
+                            !parameter.configuration
+                                && parameter.pack.is_none()
+                                && !filled.contains(index)
+                        })
+                        .map(|(index, _)| index);
+                    if slot.is_none() {
+                        if dependent.is_none()
+                            && options
+                                .positional_limit
+                                .is_some_and(|maximum| fixed + positional.len() >= maximum)
+                        {
+                            self.diagnostics.emit(error(
+                                Category::Type,
+                                codes::ARGUMENT_UNEXPECTED,
+                                at,
+                                format!("`{}` takes no positional argument here", callee.text()),
+                                "FN-19",
+                            ));
+                        }
+                        positional.push(at);
+                    }
+                    Key::ForwardedPosition(slot)
+                }
                 (_, None) => {
                     if named_seen {
                         self.diagnostics.emit(error(
@@ -1233,23 +1260,7 @@ impl<'a> Typer<'a> {
                     options.name_key(name.text(), brace)
                 }
             };
-            let own = if matches!(key, Key::ForwardedPosition) {
-                public
-                    .parameters
-                    .iter()
-                    .enumerate()
-                    .find(|(index, parameter)| {
-                        !parameter.configuration
-                            && parameter.pack.is_none()
-                            && !filled.contains(index)
-                    })
-                    .map(|(index, _)| index)
-            } else {
-                key.public_parameter(public)
-            };
-            if matches!(key, Key::ForwardedPosition) && own.is_none() {
-                positional.push(at);
-            }
+            let own = key.public_parameter(public);
             let mut duplicate = own.is_some_and(|index| !filled.insert(index));
             if let Some(text) = key.name() {
                 let known = own.is_some() || options.accepts_name(&key);
@@ -1469,20 +1480,6 @@ pub(super) fn public_inputs<'a>(public: &Signature, given: &'a [Given]) -> Vec<O
     for argument in given {
         if let Some(index) = argument.key.public_parameter(public) {
             inputs[index] = Some(argument.ty());
-        }
-    }
-    let mut remaining = inputs
-        .iter_mut()
-        .zip(&public.parameters)
-        .filter(|(input, parameter)| {
-            input.is_none() && !parameter.configuration && parameter.pack.is_none()
-        });
-    for argument in given
-        .iter()
-        .filter(|argument| matches!(argument.key, Key::ForwardedPosition))
-    {
-        if let Some((input, _)) = remaining.next() {
-            *input = Some(argument.ty());
         }
     }
     inputs

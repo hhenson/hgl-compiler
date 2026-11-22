@@ -134,6 +134,9 @@ impl<'a> Typer<'a> {
         given: Option<Vec<Argument>>,
         settled: bool,
     ) -> (ExprKind, Type) {
+        if let Some(unread) = self.unread_pack_call(list) {
+            return unread;
+        }
         let program = self.program;
         let declared = &program.modules[module].declarations[declaration];
         let Some(Detail::Struct(read)) = program.modules[module].details.get(declaration) else {
@@ -436,8 +439,7 @@ impl<'a> Typer<'a> {
         };
         // FN-19: written arguments bind first. Forwarded names then
         // bind ahead of forwarded positions, which take the slots left.
-        let mut spreads = self.forwarded_arguments(list);
-        spreads.sort_by_key(|entry| matches!(entry.key, hir::PackKey::Position(_)));
+        let spreads = self.forwarded_arguments(list);
         let written = entries
             .into_iter()
             .map(|(brace, name, value)| (brace, name, value, None));
@@ -446,13 +448,10 @@ impl<'a> Typer<'a> {
             .map(|entry| (false, None, entry.source, Some((entry.key, entry.value))));
         for (brace, name, value, forwarded) in written.chain(expanded) {
             let at = self.at(&value);
-            let name_text = name
-                .as_ref()
-                .map(SyntaxToken::text)
-                .or_else(|| match &forwarded {
-                    Some((hir::PackKey::Name(name), _)) => Some(name.as_str()),
-                    _ => None,
-                });
+            let name_text = name.as_ref().map(SyntaxToken::text).or(match &forwarded {
+                Some((hir::PackKey::Name(name), _)) => Some(name.as_str()),
+                _ => None,
+            });
             let slot = match name_text {
                 // TYPE-5: "it takes no positional argument."
                 None if takes == Takes::Fields => {

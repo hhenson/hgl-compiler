@@ -1,0 +1,44 @@
+module demo.forwarded_packs_rejections
+
+const fn receive(a: i64, b: i64) -> i64 => a + b
+const fn relay<...Fields>(fields: ...{Fields}) -> i64 => receive(...fields, b: 2)
+
+test duplicate {
+    # expect-error(name, "argument.duplicate")
+    assert relay(a: 1, b: 3) == 0
+}
+
+test missing {
+    # expect-error(type, "argument.missing")
+    assert relay() == 0
+}
+
+test unknown {
+    # expect-error(name, "argument.unknown")
+    assert relay(a: 1, c: 3) == 0
+}
+
+# A spread operand must be a pack.
+# expect-error(type, "type.mismatch")
+const fn not_a_pack(value: i64) -> i64 => receive(...value)
+
+test wrong_type {
+    # expect-error(type, "type.mismatch")
+    assert relay(a: "not an integer") == 0
+}
+
+const fn relay_positional<...Args>(args: ...Args) -> i64 => receive(...args)
+
+test extra_position {
+    # expect-error(type, "argument.unexpected")
+    assert relay_positional(1, 2, 3) == 0
+}
+
+operator take_one(value: i64) -> i64
+impl const fn take_one(value: i64) -> i64 => value
+const fn relay_operator<...Args>(args: ...Args) -> i64 => take_one(...args)
+
+test extra_operator_position {
+    # expect-error(type, "argument.unexpected")
+    assert relay_operator(1, 2) == 0
+}
