@@ -12,11 +12,13 @@ use super::Typer;
 use super::evals::{holds_trace, publications};
 use super::fit::whole;
 use super::inference::{Inferred, Places, fixed, infer, mentions, placed};
-use crate::declared::{is_optional, substitute_within};
+use crate::declared::{agree, is_optional, substitute_within};
 use crate::hir::{self, EndpointOperation, Expr, ExprKind, Value};
 use crate::program::DeclarationKind;
 use crate::syntax::{child, has_token, name_token, tokens};
-use crate::types::{Argument, Detail, GenericKind, GenericParameter, NamedKind, Pack, Type};
+use crate::types::{
+    Argument, ConstantValue, Detail, GenericKind, GenericParameter, NamedKind, Pack, Type,
+};
 use crate::{RESULT_FORMS, codes, error};
 
 impl<'a> Typer<'a> {
@@ -810,10 +812,31 @@ impl<'a> Typer<'a> {
         } else {
             value
         };
+        self.fit_prepared_argument(value, slot, traced, takes)
+    }
+
+    /// Fits an argument whose publication read has already been chosen.
+    pub(super) fn fit_prepared_argument(
+        &mut self,
+        value: Expr,
+        slot: &Slot<'_>,
+        traced: bool,
+        takes: Takes,
+    ) -> Expr {
         // FN-12: a window's connection given to a value
         // function's `list<V>` in composition (`lifted_window`).
         let lifted = self.lifted_window(&slot.ty, slot.listed, &value, takes);
-        if lifted || (!traced && holds_trace(&value.ty)) {
+        // TYPE-10: an ordinary list argument keeps its actual size;
+        // an unsized value parameter takes its entries in order.
+        let fixed_list_value = takes == Takes::Parameters
+            && slot.listed
+            && !self.composes(&value)
+            && matches!(
+                (&slot.ty, value.ty.omission_removed()),
+                (Type::List { element, size: None }, Type::List { element: actual, size: Some(size) })
+                    if !matches!(size.value, ConstantValue::Unbounded) && agree(element, actual)
+            );
+        if lifted || fixed_list_value || (!traced && holds_trace(&value.ty)) {
             value
         } else {
             let place = format!("the {} `{}`", takes.noun(), slot.name);
