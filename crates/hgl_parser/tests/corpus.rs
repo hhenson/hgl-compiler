@@ -48,14 +48,9 @@ const PENDING: &[Pending] = &[
         reason: "GEN-3 type category and GEN-10 tuple type pack (#512)",
     },
     Pending {
-        file: GENERICS,
-        opening: "operator keyed<K, R, ...Ps, ...As>(",
-        reason: "GEN-10 and GEN-18 (#367)",
-    },
-    Pending {
         file: MAPPING,
         opening: "export enum Join { inner, outer, left }",
-        reason: "GEN-10 and GEN-18 (#367), EXPR-16, EXPR-17 and FN-19 (#368)",
+        reason: "EXPR-16, EXPR-17 and FN-19 (#368)",
     },
     Pending {
         file: "hgl_core/spec/formatting.md",

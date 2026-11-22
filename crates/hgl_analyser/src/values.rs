@@ -95,6 +95,7 @@ pub(crate) use graph_instance::{GraphDestinations, GraphReturnCheck};
 // What a call's generic parameters stand for (GEN-2, GEN-8, GEN-12).
 mod inference;
 // What a value is in a graph: a connection or an ordinary value (FN-3, FN-6).
+mod law_calls;
 mod lifting;
 // `base.member`, `.member` and `base[index]` (TYPE-7, EXPR-7, ERR-6).
 mod members;
@@ -108,6 +109,7 @@ pub(crate) use operator_defaults::{
 // A call of an operator: its requested output, arguments and candidates (GEN-5, GEN-6).
 mod operators;
 // `requires`, and what a generic body may call by it (GEN-3, GEN-7, GEN-16).
+mod quantifiers;
 mod requirements;
 // The result forms, the parts of a result and of an error, and `capture` (ERR-2 to ERR-7).
 mod results;

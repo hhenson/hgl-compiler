@@ -315,11 +315,29 @@ impl<'a> Typer<'a> {
                 // The candidate as this call takes it: its generic
                 // parameters resolved (GEN-2).
                 let widens = |decided: &Type, later: &Type| self.widens(decided, later);
-                let defaults =
-                    |generic: &GenericParameter| self.default_constant(candidate, generic);
+                let defaults = |generic: &GenericParameter| {
+                    if let Some(default) = generic_default(&candidate.syntax, generic)
+                        && let Some((law, name)) = crate::laws::predicate(&default)
+                    {
+                        let value = crate::laws::parameter(signature, &name)
+                            .and_then(|parameter| {
+                                bound
+                                    .iter()
+                                    .position(|place| place.parameter() == Some(parameter))
+                            })
+                            .and_then(|position| self.law_value(law, &given[position].value))
+                            .map_or(ConstantValue::Unknown, ConstantValue::Bool);
+                        return Some(Constant {
+                            text: constant_text(&default),
+                            value,
+                        });
+                    }
+                    self.default_constant(candidate, generic)
+                };
                 let Some((mut taken, generics, mut type_packs, defaulted)) = instance(
                     self,
                     signature,
+                    (module, candidate),
                     (given, &bound),
                     wanted,
                     (
@@ -387,6 +405,9 @@ impl<'a> Typer<'a> {
                 // (ERR-9).
                 let unfit = defaulted.iter().find_map(|&index| {
                     let default = generic_default(&candidate.syntax, &signature.generics[index])?;
+                    if crate::laws::default_parameter(signature, &default).is_some() {
+                        return None;
+                    }
                     let (GenericKind::Value(resolved), GenericKind::Value(declared)) =
                         (&taken.generics[index].kind, &signature.generics[index].kind)
                     else {
@@ -1011,8 +1032,21 @@ impl<'a> Typer<'a> {
         let Some(condition) = clause.children().next() else {
             return Admits::Yes;
         };
+        let laws = crate::laws::verdicts(
+            &|law, expression| self.law_value(law, expression),
+            signature,
+            &condition,
+            &|parameter| {
+                let position = bound
+                    .iter()
+                    .position(|place| place.parameter() == Some(parameter))?;
+                Some(&given[position].value)
+            },
+        );
         let pack_operand = |node: SyntaxNode| match node.kind() {
-            SyntaxKind::ConstraintEach | SyntaxKind::PackMemberType => true,
+            SyntaxKind::ConstraintEach | SyntaxKind::ConstraintAny | SyntaxKind::PackMemberType => {
+                true
+            }
             // A bare member in a constraint can also parse as an
             // index. The read table resolves whether it is a type.
             SyntaxKind::IndexExpr => self.program.modules[module].written.iter().any(|read| {
@@ -1026,7 +1060,7 @@ impl<'a> Typer<'a> {
         };
         if !type_packs.is_empty() && condition.descendants().any(pack_operand) {
             return match self
-                .requires_told_with_packs((module, declaration), generics, type_packs, None)
+                .requires_told_with_laws((module, declaration), generics, type_packs, None, &laws)
                 .and_then(|(_, held, _)| held)
             {
                 Some(true) => Admits::Yes,
@@ -1044,6 +1078,13 @@ impl<'a> Typer<'a> {
             &condition,
         );
         let callable = |node: &SyntaxNode| -> Option<bool> {
+            if let Some((law, name)) = crate::laws::predicate(node) {
+                let parameter = crate::laws::parameter(signature, &name)?;
+                let position = bound
+                    .iter()
+                    .position(|place| place.parameter() == Some(parameter))?;
+                return self.law_value(law, &given[position].value);
+            }
             let start = node.span().start;
             callable
                 .iter()
@@ -2542,6 +2583,7 @@ impl Chosen<'_> {
 fn instance<'s>(
     typer: &Typer<'_>,
     signature: &'s Signature,
+    (module, declaration): (usize, &Declaration),
     (given, bound): (&[Given], &[Place]),
     wanted: &Wanted,
     (widens, defaults, converting): (
@@ -2743,6 +2785,36 @@ fn instance<'s>(
             &mut found,
         );
     }
+    // GEN-10: reflected packs are known before a positive existential
+    // equality chooses its first binding. Unresolved non-pack arguments
+    // remain placeholders during this projection.
+    if reflects(&typer.program.modules[module], signature) {
+        let provisional: Vec<_> = found
+            .iter()
+            .map(|value| value.clone().unwrap_or(Argument::Type(Type::Unknown)))
+            .collect();
+        let slots: Vec<_> = bound.iter().map(|place| place.parameter()).collect();
+        let reflected = operator_packs(
+            typer.program,
+            (module, signature),
+            &provisional,
+            given,
+            &slots,
+        )
+        .ok()?;
+        for pack in reflected.packs {
+            type_packs.retain(|current| current.parameter != pack.parameter);
+            type_packs.push(pack);
+        }
+        type_packs.sort_by_key(|pack| pack.parameter);
+    }
+    super::quantifiers::bind(
+        &typer.program.modules[module],
+        declaration,
+        generics,
+        &type_packs,
+        &mut found,
+    );
     let mut defaulted = Vec::new();
     for (index, generic) in generics.iter().enumerate() {
         if found[index].is_some() || !matches!(generic.kind, GenericKind::Value(_)) {
