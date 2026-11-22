@@ -16,11 +16,11 @@ pub(crate) struct DocArgs {
     #[arg(required = true, value_name = "ROOT")]
     roots: Vec<PathBuf>,
 
-    /// The documentation model's format.
-    #[arg(long, value_enum)]
+    /// The output format. HTML is the default.
+    #[arg(long, value_enum, default_value = "html")]
     format: Format,
 
-    /// Write documentation.json into this directory instead of stdout.
+    /// Output directory. HTML defaults to hgl-doc; JSON defaults to stdout.
     #[arg(long, value_name = "DIR")]
     out: Option<PathBuf>,
 
@@ -35,10 +35,11 @@ pub(crate) struct DocArgs {
 /// The documentation formats this command writes.
 #[derive(Clone, Copy, ValueEnum)]
 enum Format {
+    Html,
     Json,
 }
 
-/// Analyses a program, then writes its API model when the source is accepted.
+/// Analyses a program, then writes its API documentation when the source is accepted.
 pub(crate) fn run(arguments: &DocArgs) -> ExitCode {
     let limits = arguments.limits.limits();
     let mut parsed = match parse_program(&arguments.roots, limits) {
@@ -77,15 +78,17 @@ pub(crate) fn run(arguments: &DocArgs) -> ExitCode {
             }
         })
         .collect();
+    let path = |file: hgl_source::FileId| paths[file.index()].clone();
     let result = match arguments.format {
-        Format::Json => write(arguments.out.as_deref(), |output| {
-            hgl_doc::write_json(
-                output,
-                &program,
-                &parsed.sources,
-                |file| paths[file.index()].clone(),
-                arguments.private,
-            )
+        Format::Html => write_site(
+            arguments
+                .out
+                .as_deref()
+                .unwrap_or_else(|| Path::new("hgl-doc")),
+            hgl_doc::build_site(&program, &parsed.sources, path, arguments.private),
+        ),
+        Format::Json => write_json(arguments.out.as_deref(), |output| {
+            hgl_doc::write_json(output, &program, &parsed.sources, path, arguments.private)
         }),
     };
     if let Err(error) = result {
@@ -95,7 +98,20 @@ pub(crate) fn run(arguments: &DocArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn write(
+/// Writes the generated files under the chosen directory.
+fn write_site(directory: &Path, files: Vec<hgl_doc::SiteFile>) -> io::Result<()> {
+    fs::create_dir_all(directory)?;
+    for file in files {
+        let destination = directory.join(file.path);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(destination, file.text)?;
+    }
+    Ok(())
+}
+
+fn write_json(
     out: Option<&Path>,
     document: impl FnOnce(&mut dyn Write) -> io::Result<()>,
 ) -> io::Result<()> {

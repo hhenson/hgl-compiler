@@ -1,6 +1,6 @@
 [package]
 name = "hgl_doc"
-description = "The documentation stage: an analysed HGL program to an API model."
+description = "The documentation stage: an analysed HGL program to API documentation."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,6 +10,8 @@ repository.workspace = true
 [dependencies]
 hgl_source.workspace = true
 hgl_diagnostics.workspace = true
+hgl_lexer.workspace = true
+pulldown-cmark = { workspace = true, features = ["html"] }
 hgl_parser.workspace = true
 hgl_analyser.workspace = true
 serde.workspace = true

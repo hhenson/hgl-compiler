@@ -1,0 +1,379 @@
+//! Builds the file://-ready HTML reference from the documentation model.
+//! All generated destinations are relative to the page that uses them.
+
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
+
+use hgl_analyser::Program;
+use hgl_diagnostics::Location;
+
+use crate::markdown::{escaped, render};
+use crate::model::{Declaration, Documentation, Interface, Model, Module, Section, Source};
+use crate::{LinkContext, links};
+
+/// A generated documentation file, ready to be written as UTF-8.
+pub struct SiteFile {
+    /// Path relative to the output directory, using forward slashes.
+    pub path: String,
+    /// The generated contents, with LF line endings.
+    pub text: String,
+}
+
+struct Target<'a> {
+    page: &'a str,
+    anchor: String,
+}
+
+struct Site<'a> {
+    program: &'a Program,
+    targets: HashMap<Location, Target<'a>>,
+}
+
+pub(crate) fn build(program: &Program, model: Model<'_>) -> Vec<SiteFile> {
+    let pages: Vec<_> = model
+        .modules
+        .iter()
+        .enumerate()
+        .map(|(index, module)| filename(module.name, index))
+        .collect();
+    let mut site = Site {
+        program,
+        targets: HashMap::new(),
+    };
+    for (module, page) in model.modules.iter().zip(&pages) {
+        let mut index = 0;
+        for declaration in &module.declarations {
+            site.add_target(declaration, page, &mut index);
+        }
+    }
+
+    let mut files = vec![SiteFile {
+        path: "site.css".to_owned(),
+        text: include_str!("site.css").replace("\r\n", "\n"),
+    }];
+    for (module, page) in model.modules.iter().zip(&pages) {
+        files.push(SiteFile {
+            path: format!("modules/{page}"),
+            text: site.module(module, page),
+        });
+    }
+    // Publish the entry page after all of its targets have been written.
+    files.push(SiteFile {
+        path: "index.html".to_owned(),
+        text: index(&model, &pages),
+    });
+    files
+}
+
+/// Module paths can differ only in case. Encode uppercase ASCII so those
+/// modules have separate pages on case-insensitive filesystems too.
+fn filename(module: &str, index: usize) -> String {
+    let mut name = String::from("mod-");
+    for byte in module.bytes() {
+        if byte.is_ascii_uppercase() {
+            write!(name, "~{byte:02x}").unwrap();
+        } else {
+            name.push(char::from(byte));
+        }
+    }
+    if name.len() > 200 {
+        // Keep the generated path component within filesystem name limits.
+        name = format!("mod-@{index}");
+    }
+    name.push_str(".html");
+    name
+}
+
+fn index(model: &Model<'_>, pages: &[String]) -> String {
+    let mut output = page("API reference", "site.css", "index.html");
+    output.push_str("<h1>API reference</h1>\n<h2>Modules</h2>\n<ul>\n");
+    for (module, page) in model.modules.iter().zip(pages) {
+        writeln!(
+            output,
+            "<li><a href=\"modules/{}\">{}</a></li>",
+            escaped(page),
+            escaped(module.name)
+        )
+        .unwrap();
+    }
+    output.push_str("</ul>\n");
+    finish_page(output)
+}
+
+fn page(title: &str, stylesheet: &str, home: &str) -> String {
+    format!(
+        "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <title>{}</title>\n<link rel=\"stylesheet\" href=\"{stylesheet}\">\n\
+         <body>\n<header><nav><a href=\"{home}\">API reference</a></nav></header>\n<main>\n",
+        escaped(title),
+    )
+}
+
+fn finish_page(mut page: String) -> String {
+    page.push_str("</main>\n</body>\n</html>\n");
+    page
+}
+
+impl<'a> Site<'a> {
+    fn add_target(&mut self, declaration: &Declaration<'_>, page: &'a str, index: &mut usize) {
+        self.targets.insert(
+            declaration.source.at,
+            Target {
+                page,
+                anchor: format!("decl-{}-{}", declaration.name, *index),
+            },
+        );
+        *index += 1;
+        for item in declaration.candidates.iter().chain(&declaration.members) {
+            self.add_target(item, page, index);
+        }
+    }
+
+    fn module(&self, module: &Module<'_>, page_name: &str) -> String {
+        let mut output = page(module.name, "../site.css", "../index.html");
+        writeln!(output, "<h1>{}</h1>", escaped(module.name)).unwrap();
+        for part in &module.parts {
+            if let Some(comment) = &part.documentation {
+                if let Some(name) = part.name {
+                    writeln!(output, "<h2>Part {}</h2>", escaped(name)).unwrap();
+                }
+                self.documentation(&mut output, comment, &part.source, page_name, None);
+            }
+        }
+
+        let mut kinds = BTreeMap::<_, Vec<_>>::new();
+        for declaration in &module.declarations {
+            kinds
+                .entry(group(declaration.kind))
+                .or_default()
+                .push(declaration);
+        }
+        for (kind, declarations) in kinds {
+            writeln!(output, "<h2>{kind}</h2>").unwrap();
+            for declaration in declarations {
+                self.declaration(&mut output, declaration, page_name, 3);
+            }
+        }
+        finish_page(output)
+    }
+
+    fn declaration(
+        &self,
+        output: &mut String,
+        declaration: &Declaration<'_>,
+        page: &str,
+        level: u8,
+    ) {
+        let Target { anchor, .. } = &self.targets[&declaration.source.at];
+        writeln!(
+            output,
+            "<article id=\"{}\">\n<h{level}>{}</h{level}>\n<pre class=\"signature\"><code>{}</code></pre>\n\
+             <p class=\"source\">{}:{}</p>",
+            escaped(anchor),
+            escaped(declaration.name),
+            escaped(&declaration.signature),
+            escaped(&declaration.source.file),
+            declaration.source.line,
+        )
+        .unwrap();
+
+        if let Some(comment) = &declaration.documentation {
+            self.documentation(
+                output,
+                comment,
+                &declaration.source,
+                page,
+                Some(&declaration.interface),
+            );
+        } else {
+            generic_table(output, &declaration.interface, None, |_| None);
+            parameter_tables(output, &declaration.interface, None, |_| None);
+        }
+        for (label, nested) in [
+            ("Candidates", &declaration.candidates),
+            ("Members", &declaration.members),
+        ] {
+            if !nested.is_empty() {
+                writeln!(output, "<h4>{label}</h4>").unwrap();
+                for item in nested {
+                    self.declaration(output, item, page, 5);
+                }
+            }
+        }
+        output.push_str("</article>\n");
+    }
+
+    fn documentation(
+        &self,
+        output: &mut String,
+        comment: &Documentation,
+        source: &Source<'_>,
+        page: &str,
+        interface: Option<&Interface<'_>>,
+    ) {
+        let context = LinkContext {
+            module: source.module,
+            at: source.at,
+        };
+        let link = |name: &str| {
+            let target = links::resolve(self.program, context, name)?;
+            let target = self.targets.get(&target)?;
+            let prefix = if target.page == page { "" } else { target.page };
+            Some(format!("{prefix}#{}", target.anchor))
+        };
+
+        render(output, &comment.summary, link);
+        let mut wrote_generics = false;
+        let mut wrote_parameters = false;
+        for section in &comment.sections {
+            if !section.recognized {
+                // SDOC-3 leaves unrecognized headings as authored prose.
+                render(output, &section.prose, link);
+                continue;
+            }
+            match (section.heading.as_deref(), interface) {
+                (Some("Type Args:"), Some(interface))
+                    if !interface.generic_parameters.is_empty() =>
+                {
+                    generic_table(output, interface, Some(section), link);
+                    render(output, &section.prose, link);
+                    wrote_generics = true;
+                }
+                (Some("Args:"), Some(interface))
+                    if !interface.parameters.is_empty()
+                        || !interface.configuration_parameters.is_empty() =>
+                {
+                    parameter_tables(output, interface, Some(section), link);
+                    render(output, &section.prose, link);
+                    wrote_parameters = true;
+                }
+                _ => {
+                    if let Some(heading) = &section.heading {
+                        writeln!(
+                            output,
+                            "<h4>{}</h4>",
+                            escaped(heading.trim_end_matches(':'))
+                        )
+                        .unwrap();
+                    }
+                    render(output, &section.text, link);
+                }
+            }
+        }
+        if let Some(interface) = interface {
+            if !wrote_generics {
+                generic_table(output, interface, None, link);
+            }
+            if !wrote_parameters {
+                parameter_tables(output, interface, None, link);
+            }
+        }
+    }
+}
+
+fn group(kind: &str) -> &'static str {
+    match kind {
+        "constant" => "Constants",
+        "enum" => "Enums",
+        "function" => "Functions",
+        "nativeFunction" | "nativeImplementation" => "Native functions",
+        "nativeType" => "Native types",
+        "operator" => "Operators",
+        "struct" => "Structs",
+        "test" => "Tests",
+        _ => "Other declarations",
+    }
+}
+
+struct Row<'a> {
+    name: &'a str,
+    ty: &'a str,
+    default: Option<&'a str>,
+}
+
+fn generic_table(
+    output: &mut String,
+    interface: &Interface<'_>,
+    section: Option<&Section>,
+    link: impl Fn(&str) -> Option<String> + Copy,
+) {
+    table(
+        output,
+        "Type arguments",
+        interface.generic_parameters.iter().map(|parameter| Row {
+            name: parameter.name,
+            ty: parameter.ty.as_deref().unwrap_or(match parameter.kind {
+                "plain" | "type" => "type",
+                _ => parameter.kind,
+            }),
+            default: parameter.default.as_deref(),
+        }),
+        section,
+        link,
+    );
+}
+
+fn parameter_tables(
+    output: &mut String,
+    interface: &Interface<'_>,
+    section: Option<&Section>,
+    link: impl Fn(&str) -> Option<String> + Copy,
+) {
+    for (heading, parameters) in [
+        ("Arguments", &interface.parameters),
+        ("Configuration", &interface.configuration_parameters),
+    ] {
+        table(
+            output,
+            heading,
+            parameters.iter().map(|parameter| Row {
+                name: parameter.name,
+                ty: &parameter.ty,
+                default: parameter.default.as_deref(),
+            }),
+            section,
+            link,
+        );
+    }
+}
+
+fn table<'a>(
+    output: &mut String,
+    heading: &str,
+    rows: impl ExactSizeIterator<Item = Row<'a>>,
+    section: Option<&Section>,
+    link: impl Fn(&str) -> Option<String> + Copy,
+) {
+    if rows.len() == 0 {
+        return;
+    }
+    writeln!(
+        output,
+        "<h4>{heading}</h4>\n<table><thead><tr><th scope=\"col\">Name</th><th scope=\"col\">Type</th>\n\
+         <th scope=\"col\">Default</th><th scope=\"col\">Description</th></tr></thead><tbody>"
+    )
+    .unwrap();
+    for row in rows {
+        write!(
+            output,
+            "<tr><th scope=\"row\"><code>{}</code></th><td><code>{}</code></td><td>",
+            escaped(row.name),
+            escaped(row.ty)
+        )
+        .unwrap();
+        if let Some(value) = row.default {
+            write!(output, "<code>{}</code>", escaped(value)).unwrap();
+        } else {
+            output.push('—');
+        }
+        output.push_str("</td><td>");
+        for entry in section.into_iter().flat_map(|section| &section.entries) {
+            if entry.key == row.name {
+                render(output, &entry.text, link);
+            }
+        }
+        output.push_str("</td></tr>\n");
+    }
+    output.push_str("</tbody></table>\n");
+}

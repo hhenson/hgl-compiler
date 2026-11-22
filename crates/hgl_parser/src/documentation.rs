@@ -148,6 +148,33 @@ impl<'a> Section<'a> {
     /// Keys whose spelling SDOC-3 defines, with their original source spans.
     /// The spelling of requirements and property keys is still unspecified.
     pub fn entries(&self) -> impl Iterator<Item = Entry<'_>> {
+        self.entry_lines().map(|(_, entry)| entry)
+    }
+
+    /// The Markdown outside parameter entries. The HTML renderer shows
+    /// entries in a table while retaining the section's surrounding prose.
+    pub fn prose(&self) -> String {
+        let entries = self
+            .entry_lines()
+            .map(|(line, entry)| line..line + 1 + entry.continuation_length());
+        let mut entries = entries.peekable();
+        self.lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                while entries.peek().is_some_and(|entry| index >= entry.end) {
+                    entries.next();
+                }
+                (!entries.peek().is_some_and(|entry| entry.contains(&index)))
+                    .then_some(without_margin(line.text))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim_matches('\n')
+            .to_owned()
+    }
+
+    fn entry_lines(&self) -> impl Iterator<Item = (usize, Entry<'_>)> {
         let mut literal = Vec::new();
         if matches!(self.heading, Some("Args:" | "Type Args:")) {
             // The four spaces that delimit the section are outside its
@@ -172,12 +199,15 @@ impl<'a> Section<'a> {
                     .next()
                     .is_some_and(|first| first.is_alphabetic() || first == '_');
                 let value = content[length..].strip_prefix(':')?;
-                named.then_some(Entry {
-                    name: &content[..length],
-                    span: Span::new(line.start + 4, line.start + 4 + length as u32),
-                    value,
-                    following: &self.lines[index + 1..],
-                })
+                named.then_some((
+                    index,
+                    Entry {
+                        name: &content[..length],
+                        span: Span::new(line.start + 4, line.start + 4 + length as u32),
+                        value,
+                        following: &self.lines[index + 1..],
+                    },
+                ))
             })
     }
 }
@@ -195,11 +225,7 @@ pub struct Entry<'a> {
 impl Entry<'_> {
     /// The text after the colon, with any more deeply indented continuation.
     pub fn text(&self) -> String {
-        let end = self
-            .following
-            .iter()
-            .position(|line| !line.blank() && indent(line.text) <= 4)
-            .unwrap_or(self.following.len());
+        let end = self.continuation_length();
         let mut text = self
             .value
             .strip_prefix(' ')
@@ -212,6 +238,13 @@ impl Entry<'_> {
             text.push_str(without_margin(line.text));
         }
         text
+    }
+
+    fn continuation_length(&self) -> usize {
+        self.following
+            .iter()
+            .position(|line| !line.blank() && indent(line.text) <= 4)
+            .unwrap_or(self.following.len())
     }
 }
 

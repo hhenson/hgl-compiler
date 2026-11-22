@@ -1,0 +1,77 @@
+:root {
+  color-scheme: light dark;
+  --ink: #272c27;
+  --paper: #f8f8f3;
+  --panel: #eef0e8;
+  --rule: #d7ded0;
+  --accent: #275a43;
+  --string: #80421d;
+  --muted: #546257;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e0e7dc;
+    --paper: #1d241f;
+    --panel: #29332b;
+    --rule: #3f5143;
+    --accent: #a9d9b8;
+    --string: #efba9b;
+    --muted: #a7b6a8;
+  }
+}
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 1rem/1.55 system-ui, sans-serif;
+}
+header { border-bottom: 1px solid var(--rule); }
+main, nav {
+  box-sizing: border-box;
+  max-width: 69rem;
+  margin: auto;
+  padding: 1rem clamp(1rem, 4vw, 2.5rem);
+}
+h1, h2, h3, h4 { line-height: 1.2; margin-bottom: .6rem; }
+h1 { font-size: clamp(1.8rem, 6vw, 3rem); }
+h2 { margin-top: 2.8rem; }
+p { margin: .6rem 0 1rem; }
+a { color: var(--accent); text-underline-offset: .14em; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: .15rem; }
+article {
+  border-top: 1px solid var(--rule);
+  padding-top: 1rem;
+  margin-top: 1.2rem;
+  scroll-margin-top: 1rem;
+}
+article article { margin-left: clamp(.3rem, 3vw, 1.5rem); }
+article:target { border-color: var(--accent); }
+code, pre {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: var(--panel);
+  border-radius: .2rem;
+}
+code { overflow-wrap: anywhere; padding: .14em .24em; }
+pre { overflow: auto; padding: .8rem 1rem; }
+pre code { padding: 0; }
+.signature { white-space: pre-wrap; overflow-wrap: anywhere; }
+.source, .comment { color: var(--muted); }
+.keyword { color: var(--accent); font-weight: 700; }
+.string, .literal { color: var(--string); }
+table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: .5rem 0 1rem;
+}
+th, td {
+  border: 1px solid var(--rule);
+  padding: .4rem .65rem;
+  text-align: left;
+  vertical-align: top;
+}
+th { background: var(--panel); }
+th[scope="row"] code { white-space: nowrap; }
+td p { margin: 0 0 .5rem; }
+td p:last-child { margin-bottom: 0; }
