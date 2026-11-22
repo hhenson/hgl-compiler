@@ -152,7 +152,7 @@ pub(crate) fn module(
         module: index,
         provides,
         position: positions.source,
-        map_test_statements: positions.tests,
+        debugger: positions.debugger,
         lines: Vec::new(),
         instances,
         readers,
@@ -204,8 +204,8 @@ struct Emitter<'a> {
     /// generated code then sets the HGL file and line of each statement
     /// with `#line` ([`Emitter::line_directive`]).
     position: Option<crate::SourcePosition<'a>>,
-    /// Whether the debugger needs an HGL position on each test statement.
-    map_test_statements: bool,
+    /// Whether to add HGL positions for debugger stepping.
+    debugger: bool,
     /// Where each line starts in each file a directive was written for: a
     /// place in the file, by which it is told apart, and the offsets.
     lines: Vec<(Location, Vec<usize>)>,
@@ -310,6 +310,31 @@ impl Emitter<'_> {
             Some((name, line)) => format!("#line {line} {}\n", string(&name)),
             None => format!("{RESTORE}\n"),
         })
+    }
+
+    /// Maps a debug-only position and keeps ordinary C++ unchanged.
+    fn debug_position(&mut self, at: Location) -> Option<String> {
+        if self.debugger {
+            self.line_directive(at)
+        } else {
+            None
+        }
+    }
+
+    /// Gives these generated lines their HGL source in a debugger build.
+    fn debug_stamp(&mut self, at: Location, text: String) -> String {
+        match self.debug_position(at) {
+            Some(directive) => stamped(&directive, &text),
+            None => text,
+        }
+    }
+
+    /// Gives the generated closing line the position at the end of its
+    /// HGL body. Syntax spans end immediately after the closing token.
+    fn debug_end(&mut self, mut at: Location, end: u32, text: String) -> String {
+        at.span.end = end;
+        at.span.start = end.saturating_sub(1);
+        self.debug_stamp(at, text)
     }
 
     /// The line, counted from 1, that `at` is on in its file, read from the

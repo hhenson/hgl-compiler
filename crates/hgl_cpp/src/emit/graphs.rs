@@ -71,8 +71,10 @@ impl Emitter<'_> {
         shown: &str,
     ) {
         let program = self.program;
-        let at = program.modules[self.module].declarations[index].at;
-        let Some(text) = self.graph_definition(IMPLEMENTATION, signature, body, at) else {
+        let declaration = &program.modules[self.module].declarations[index];
+        let at = declaration.at;
+        let end = declaration.syntax.text_range().end().into();
+        let Some(text) = self.graph_definition(IMPLEMENTATION, signature, body, at, end) else {
             return;
         };
         let text = format!("// {shown}\n{text}");
@@ -101,6 +103,7 @@ impl Emitter<'_> {
         signature: &Signature,
         body: &Body,
         at: hgl_diagnostics::Location,
+        end: u32,
     ) -> Option<String> {
         let program = self.program;
         let mut context = Context::new(Kind::Graph, body.locals.len());
@@ -145,8 +148,9 @@ impl Emitter<'_> {
             }
             text.push('\n');
         }
+        let closing = self.debug_end(at, end, format!("{INDENT}}}\n"));
         text.push_str(&format!(
-            "{INDENT}static {result} compose({})\n{INDENT}{{\n{statements}{INDENT}}}\n}};\n",
+            "{INDENT}static {result} compose({})\n{INDENT}{{\n{statements}{closing}}};\n",
             parameters.join(", ")
         ));
         Some(text)

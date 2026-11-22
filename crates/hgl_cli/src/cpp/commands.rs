@@ -21,6 +21,12 @@ use crate::{
     TestArgs, count,
 };
 
+/// The bundled HGL declarations of the replay and record used by eval.
+const BUNDLED_EVAL_SOURCE: &str = "<core>/core/core.hgl";
+/// A debugger-readable copy that project source discovery does not pick up
+/// when the build directory is itself under a source root.
+pub(super) const DEBUG_EVAL_SOURCE: &str = "debug-sources/core.hgl.source";
+
 /// Inputs the build, run, test and debugger commands give to the same builder.
 pub(super) struct BuildRequest<'a> {
     roots: &'a [PathBuf],
@@ -236,7 +242,11 @@ impl<'a> BuildRequest<'a> {
                 _ => line,
             };
             let path = if self.debug {
-                debug_source_path(name)
+                if name == BUNDLED_EVAL_SOURCE {
+                    DEBUG_EVAL_SOURCE.to_string()
+                } else {
+                    debug_source_path(name)
+                }
             } else {
                 name.to_string()
             };
@@ -244,7 +254,18 @@ impl<'a> BuildRequest<'a> {
         };
         let mut unwritten = Diagnostics::new();
         if self.debug {
-            hgl_cpp::transpile_for_debugger(program, &position, &mut unwritten)
+            let mut output = hgl_cpp::transpile_for_debugger(program, &position, &mut unwritten);
+            if let Some(core) = sources
+                .files()
+                .iter()
+                .find(|file| file.name() == BUNDLED_EVAL_SOURCE)
+            {
+                output.files.push(hgl_cpp::File {
+                    path: DEBUG_EVAL_SOURCE.to_string(),
+                    text: core.text().to_string(),
+                });
+            }
+            output
         } else {
             hgl_cpp::transpile_with_positions(program, &position, &mut unwritten)
         }

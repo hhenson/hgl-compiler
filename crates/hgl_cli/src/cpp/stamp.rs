@@ -101,7 +101,7 @@ impl PreviousBuild {
     }
 }
 
-/// The relative path and BLAKE3 digest of a generated object or executable.
+/// The relative path and BLAKE3 digest of a generated build artifact.
 #[derive(Clone, Deserialize, Serialize)]
 struct Artifact {
     path: String,

@@ -198,7 +198,16 @@ impl BuildSession {
             }
         };
         interrupt.check()?;
-        let artifacts = artifacts?;
+        let mut artifacts = artifacts?;
+        // The debug line tables name this copy of bundled Core's source.
+        // A reusable launch needs the source as well as the executable.
+        artifacts.extend(
+            output
+                .files
+                .iter()
+                .filter(|file| file.path == commands::DEBUG_EVAL_SOURCE)
+                .map(|file| file.path.clone()),
+        );
         if self.toolchain.key() != self.toolchain_key {
             return Err("the C++ toolchain changed during the build".to_string());
         }
