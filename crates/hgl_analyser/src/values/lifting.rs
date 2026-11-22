@@ -854,6 +854,53 @@ pub(super) fn fill_type(current: &mut Type, inferred: Type) -> bool {
     }
 }
 
+/// True when a contextual operand's children have more type information
+/// than its stored type. Settlement visits the outer call before these
+/// children, so its replay must wait for the next type update.
+pub(super) fn contextual_type_is_pending(value: &Expr) -> bool {
+    if whole(&value.ty) {
+        return false;
+    }
+    let Some(inferred) = contextual_type(value) else {
+        return false;
+    };
+    fill_type(&mut value.ty.clone(), inferred)
+}
+
+fn contextual_type(value: &Expr) -> Option<Type> {
+    let inferred = match &value.kind {
+        ExprKind::Block {
+            value: Some(tail), ..
+        } => tail.ty.clone(),
+        // Tuple entries each have their own position and type (EXPR-9).
+        ExprKind::Tuple(entries) => {
+            Type::Tuple(entries.iter().map(|entry| entry.ty.clone()).collect())
+        }
+        ExprKind::Sequence(entries) => {
+            let Type::List { element, size } = &value.ty else {
+                return None;
+            };
+            let typed: Vec<&Type> = entries
+                .iter()
+                .filter(|entry| !matches!(entry.kind, ExprKind::Literal(Value::Null)))
+                .map(|entry| &entry.ty)
+                .collect();
+            // Another unsettled entry could change even the first known
+            // element's type (for instance by numeric widening).
+            if !typed.iter().all(|ty| whole(ty)) {
+                return None;
+            }
+            let inferred = sequence_element(&typed, matches!(**element, Type::Nullable(_)))?;
+            Type::List {
+                element: Box::new(inferred),
+                size: size.clone(),
+            }
+        }
+        _ => return None,
+    };
+    Some(inferred)
+}
+
 /// CTRL-13: decide a no-else expression's type once its categories
 /// settle. A block tail or a read of an inferred local also takes its
 /// type from the value once that type is known.
@@ -891,32 +938,8 @@ fn settled_type(
             category(program, locals, condition),
             category(program, locals, then),
         ),
-        ExprKind::Block {
-            value: Some(tail), ..
-        } => tail.ty.clone(),
-        // Tuple entries each have their own position and type (EXPR-9).
-        ExprKind::Tuple(entries) => {
-            Type::Tuple(entries.iter().map(|entry| entry.ty.clone()).collect())
-        }
-        ExprKind::Sequence(entries) => {
-            let Type::List { element, size } = &value.ty else {
-                return None;
-            };
-            let typed: Vec<&Type> = entries
-                .iter()
-                .filter(|entry| !matches!(entry.kind, ExprKind::Literal(Value::Null)))
-                .map(|entry| &entry.ty)
-                .collect();
-            // Another unsettled entry could change even the first known
-            // element's type (for instance by numeric widening).
-            if !typed.iter().all(|ty| whole(ty)) {
-                return None;
-            }
-            let inferred = sequence_element(&typed, matches!(**element, Type::Nullable(_)))?;
-            Type::List {
-                element: Box::new(inferred),
-                size: size.clone(),
-            }
+        ExprKind::Block { .. } | ExprKind::Tuple(_) | ExprKind::Sequence(_) => {
+            contextual_type(value)?
         }
         ExprKind::Local(local) => locals.get(*local)?.ty.clone(),
         // ERR-12: a read keeps the operand's payload type as it settles,

@@ -2453,6 +2453,61 @@ fn graph_instances_select_named_operators_after_types_settle() {
     );
 }
 
+/// GEN-7 and GEN-5: a named operator waits for holes inside argument types.
+#[test]
+fn graph_instances_select_named_operators_with_incomplete_tuple_arguments() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "operator count_pair<U>(value: tuple<U, i64>) -> i64\n",
+        "impl const fn count_pair<U>(value: tuple<U, i64>) -> i64 => 17\n",
+        "fn wrapped<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return count_pair((chosen, 0))\n",
+        "}\n",
+        "fn integer_instance() -> i64 => wrapped(1)\n",
+        "fn ordinary_instance() -> i64 => wrapped(\"text\")\n",
+    ));
+    assert!(checked.summary().is_empty(), "{}", checked.report);
+
+    for (caller, expected) in [
+        ("integer_instance", "tuple<i64, i64>"),
+        ("ordinary_instance", "tuple<i64?, i64>"),
+    ] {
+        let instance = instance_called_by(&checked, body(&checked, caller));
+        let Stmt::Return {
+            value: Some(value), ..
+        } = &instance.statements[1]
+        else {
+            panic!("the returned operator call");
+        };
+        let ExprKind::Call {
+            callee: Callee::Candidate { .. },
+            arguments,
+            ..
+        } = &value.kind
+        else {
+            panic!("the selected operator: {:?}", value.kind);
+        };
+        assert_eq!(arguments[0].value.ty.to_string(), expected);
+    }
+}
+
+/// GEN-5: a contextual tuple needs no instance to reject a known bad entry.
+#[test]
+fn graph_declarations_still_check_inherently_contextual_operator_arguments() {
+    let checked = module(concat!(
+        "operator fixed_pair(value: tuple<i64, i64?>) -> i64\n",
+        "impl const fn fixed_pair(value: tuple<i64, i64?>) -> i64 => 2\n",
+        "fn uncalled<T>(const input: T) -> i64 => fixed_pair((true, null))\n",
+        "const fn ordinary() -> i64 => fixed_pair((3, null))\n",
+    ));
+    let problems = checked.summary();
+    assert_eq!(problems.len(), 1, "{}", checked.report);
+    assert!(problems[0].contains("operator/operator.no_candidate GEN-5"));
+}
+
 /// GEN-16: the generic result place chooses among the stated calls,
 /// and the replay uses the candidate evidence already supplied to it.
 #[test]

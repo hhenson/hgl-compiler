@@ -16,6 +16,7 @@ use super::inference::{
     ExplicitGenerics, bare_parameter, fixed, infer, infer_from_place, mentions, pack_bounds,
     placed, unsaid,
 };
+use super::lifting::contextual_type_is_pending;
 use super::{Candidate, Typer};
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
@@ -353,10 +354,13 @@ impl<'a> Typer<'a> {
         if self.graph
             && replay.is_none()
             && !faulty
-            && unknown
-            && given
-                .iter()
-                .any(|given| !given.by_place && matches!(given.ty(), Type::Unknown))
+            && given.iter().any(|given| {
+                if given.by_place {
+                    self.contextual_operator_argument_pending(&given.value, false)
+                } else {
+                    !whole(given.ty())
+                }
+            })
         {
             // GEN-7: the arguments can settle only after an earlier
             // operator in this graph has selected its instance candidate.
@@ -532,6 +536,33 @@ impl<'a> Typer<'a> {
         )
     }
 
+    /// A contextual literal may contain a computation or a read whose type
+    /// is not settled. That dependency must settle before the call can
+    /// choose a place for the literal. An empty list or null itself can
+    /// still need the candidate's type.
+    fn contextual_operator_argument_pending(&self, argument: &Expr, replaying: bool) -> bool {
+        let mut pending = false;
+        argument.walk(&mut |value| {
+            if pending {
+                return;
+            }
+            let dependency = match &value.kind {
+                // A call with no result yet can itself need the
+                // candidate's parameter type to select (GEN-5).
+                ExprKind::Call {
+                    callee: Callee::Unread,
+                    ..
+                } if open(&value.ty) => false,
+                ExprKind::Local(_) | ExprKind::Call { .. } => {
+                    !whole(&value.ty) || self.category(value) == ValueCategory::Unsettled
+                }
+                _ => false,
+            };
+            pending = dependency || (replaying && contextual_type_is_pending(value));
+        });
+        pending
+    }
+
     /// GEN-5 and GEN-7: reapply named selection to the original written
     /// call with the types and categories of its settled arguments.
     pub(super) fn settle_operator(&mut self, call: &Expr) -> Option<(ExprKind, Type)> {
@@ -547,9 +578,12 @@ impl<'a> Typer<'a> {
             .iter()
             .zip(&deferred.contextual)
             .all(|(argument, contextual)| {
-                *contextual
-                    || whole(&argument.value.ty)
+                if *contextual {
+                    !self.contextual_operator_argument_pending(&argument.value, true)
+                } else {
+                    whole(&argument.value.ty)
                         && self.category(&argument.value) != ValueCategory::Unsettled
+                }
             });
         if !ready {
             return None;

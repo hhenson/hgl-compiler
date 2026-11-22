@@ -318,6 +318,25 @@ test an_instance_selects_unary_minus {
     assert eval deferred_configured_negation(value: 3) == [-4]
 }
 
+# GEN-7: the named operator waits for the tuple's deferred component.
+operator count_settled_pair<U>(value: tuple<U, i64>) -> i64
+impl const fn count_settled_pair<U>(value: tuple<U, i64>) -> i64 => 17
+
+fn deferred_nested_named_operator<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    return count_settled_pair((chosen, 0))
+}
+
+# GEN-7: an incomplete entry in a block's tuple settles before the
+# named operator supplies the type of its contextual null.
+operator count_settled_block<U>(value: tuple<U, i64?>) -> i64
+impl const fn count_settled_block<U>(value: tuple<U, i64?>) -> i64 => 19
+
+fn deferred_nested_named_block<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    return count_settled_block({ (chosen, null) })
+}
+
 # TYPE-7: an ordinary instance settles and narrows the operand of a
 # constructor whose enum was already known in the generic body.
 enum GraphSide { left, right }
@@ -456,6 +475,8 @@ test an_instance_settles_its_graph_conditions {
     assert eval ordinary_tolerance(value: "s", a: [2.5, 2.5], b: [2.55, 2.7]) == [true, false]
     assert eval deferred_configured_division(value: 3) == [1.25]
     assert eval deferred_named_add(value: 3) == [2]
+    assert eval deferred_nested_named_operator(value: "s") == [17]
+    assert eval deferred_nested_named_block(value: "s") == [19]
     assert eval deferred_named_option(value: 3) == [6.5]
     assert eval deferred_named_required<i64, i64, f64>(value: 3) == [1.5]
     assert eval loop_scalar(value: "s") == [5]
