@@ -263,6 +263,7 @@ pub fn run(
             .map(|parsed| ParsedFile {
                 file: parsed.file,
                 root: parsed.root.clone(),
+                examples: parsed.examples.clone(),
                 omit: owning
                     .iter()
                     .filter(|&&owner| Some(owner) != kept)

@@ -13,8 +13,8 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::{FileId, SourceMap};
 
 use crate::model::{
-    Bounds, Declaration, Documentation, Entry, Generic, Interface, Model, Module, Parameter, Part,
-    ResultType, SCHEMA_VERSION, Section, Source,
+    Bounds, Declaration, Documentation, Entry, Example, Generic, Interface, Model, Module,
+    Parameter, Part, ResultType, SCHEMA_VERSION, Section, Source,
 };
 
 /// An analysed declaration's module and declaration indices.
@@ -54,6 +54,9 @@ pub(crate) fn build<'a>(
                 let mut declarations = Vec::new();
                 for (index, declaration) in data.declarations.iter().enumerate() {
                     if matches!(declaration.kind.candidate(), Some((_, Some(_))))
+                        || declaration
+                            .test_owner
+                            .is_some_and(|test| data.tests[test].documentation_example)
                         || (!private && !declaration.is_public())
                     {
                         continue;
@@ -69,7 +72,7 @@ pub(crate) fn build<'a>(
                     declarations.push(((declaration.file, declaration.at.span.start), item));
                 }
                 if private {
-                    for test in &data.tests {
+                    for test in data.tests.iter().filter(|test| !test.documentation_example) {
                         let part = &data.files[test.file];
                         declarations.push((
                             (test.file, test.at.span.start),
@@ -434,6 +437,15 @@ fn documentation(syntax: &SyntaxNode) -> Option<Documentation> {
         text: comment.text(),
         summary,
         sections,
+        examples: comment
+            .examples()
+            .into_iter()
+            .map(|example| Example {
+                code: example.code,
+                position: example.position,
+                runnable: example.runnable,
+            })
+            .collect(),
     })
 }
 

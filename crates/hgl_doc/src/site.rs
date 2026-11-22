@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use hgl_analyser::Program;
 use hgl_diagnostics::Location;
 
-use crate::markdown::{escaped, render};
+use crate::markdown::{escaped, render, render_section};
 use crate::model::{Declaration, Documentation, Interface, Model, Module, Section, Source};
 use crate::{LinkContext, links};
 
@@ -257,7 +257,12 @@ impl<'a> Site<'a> {
                         )
                         .unwrap();
                     }
-                    render(output, &section.text, link);
+                    render_section(
+                        output,
+                        &section.text,
+                        section.heading.as_deref() == Some("Examples:"),
+                        link,
+                    );
                 }
             }
         }

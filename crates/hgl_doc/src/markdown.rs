@@ -12,6 +12,16 @@ use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 /// Appends a CommonMark fragment. The callback only returns destinations
 /// of declarations present in the generated site.
 pub(crate) fn render(output: &mut String, text: &str, link: impl Fn(&str) -> Option<String>) {
+    render_section(output, text, false, link);
+}
+
+/// HGL fences in a recognized Examples section can run as tests.
+pub(crate) fn render_section(
+    output: &mut String,
+    text: &str,
+    in_examples: bool,
+    link: impl Fn(&str) -> Option<String>,
+) {
     let mut source = Parser::new_ext(text, Options::ENABLE_TABLES).into_offset_iter();
     let mut events = Vec::new();
     while let Some((event, range)) = source.next() {
@@ -27,9 +37,14 @@ pub(crate) fn render(output: &mut String, text: &str, link: impl Fn(&str) -> Opt
                         _ => {}
                     }
                 }
+                let (status, label) = if in_examples && info.as_ref() == "hgl" {
+                    ("runnable", "Runnable example")
+                } else {
+                    ("shown", "Shown example")
+                };
                 Event::Html(
                     format!(
-                        "<pre><code class=\"language-hgl\">{}</code></pre>\n",
+                        "<figure data-example=\"{status}\"><figcaption>{label}</figcaption>\n<pre><code class=\"language-hgl\">{}</code></pre></figure>\n",
                         highlight(&code)
                     )
                     .into(),

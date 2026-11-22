@@ -605,17 +605,16 @@ struct Parsed {
 /// Finds, reads, lexes and parses every source file under `roots`, and
 /// core's module when no file under the roots belongs to `module core`.
 fn parse_program(roots: &[PathBuf], limits: Limits) -> Result<Parsed, ExitCode> {
-    parse_program_with(roots, limits, None)
+    parse_program_with(roots, limits, None, true)
 }
 
-/// As [`parse_program`], with the text of one file given in place of
-/// what is on disk: `replaced` is the file's name, as it is in the
-/// source map, and the text to read for it. This is how `hgl run`
-/// reads an application with its replacements made (RUN-2).
+/// Parses the program, optionally replacing one file's text for RUN-2.
+/// Only commands that check or run the program's tests read SDOC-9 examples.
 fn parse_program_with(
     roots: &[PathBuf],
     limits: Limits,
     replaced: Option<(&str, &str)>,
+    documentation_examples: bool,
 ) -> Result<Parsed, ExitCode> {
     let paths = find_sources(roots)?;
     let mut sources = SourceMap::new();
@@ -633,7 +632,17 @@ fn parse_program_with(
                 limits,
                 diagnostics,
             );
-            ParsedFile::new(file, parse.syntax())
+            let mut parsed = ParsedFile::new(file, parse.syntax());
+            if documentation_examples {
+                parsed.examples = hgl_parser::documentation::parse_examples(
+                    sources,
+                    file,
+                    &parsed.root,
+                    limits,
+                    diagnostics,
+                );
+            }
+            parsed
         };
     for path in &paths {
         let name = path.display().to_string();
@@ -788,7 +797,7 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
         files: parsed,
         mut diagnostics,
         ..
-    } = match parse_program(&arguments.roots, arguments.limits.limits()) {
+    } = match parse_program_with(&arguments.roots, arguments.limits.limits(), None, false) {
         Ok(program) => program,
         Err(status) => return status,
     };
@@ -856,7 +865,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
         files: parsed,
         mut diagnostics,
         ..
-    } = match parse_program(&arguments.roots, limits) {
+    } = match parse_program_with(&arguments.roots, limits, None, false) {
         Ok(program) => program,
         Err(status) => return status,
     };
@@ -904,7 +913,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
                 files,
                 diagnostics: mut found,
                 ..
-            }) = parse_program_with(&arguments.roots, limits, Some((&name, &text)))
+            }) = parse_program_with(&arguments.roots, limits, Some((&name, &text)), false)
             else {
                 return false;
             };
@@ -933,7 +942,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
             files: parsed,
             diagnostics: mut found,
             ..
-        } = match parse_program_with(&arguments.roots, limits, Some((&name, &text))) {
+        } = match parse_program_with(&arguments.roots, limits, Some((&name, &text)), false) {
             Ok(program) => program,
             Err(status) => return status,
         };

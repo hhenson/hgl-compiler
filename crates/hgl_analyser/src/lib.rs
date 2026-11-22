@@ -100,6 +100,7 @@ mod values;
 
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_parser::SyntaxNode;
+use hgl_parser::documentation::RunnableExample;
 use hgl_source::{FileId, Span};
 
 pub use declared::substitute_within;
@@ -610,6 +611,8 @@ pub struct ParsedFile {
     /// declaration that is expected to be rejected is left out of the
     /// program that must be accepted (TST-13).
     pub omit: Vec<Span>,
+    /// Runnable documentation fences when analysis includes tests (SDOC-9).
+    pub examples: Vec<RunnableExample>,
 }
 
 impl ParsedFile {
@@ -619,6 +622,7 @@ impl ParsedFile {
             file,
             root,
             omit: Vec::new(),
+            examples: Vec::new(),
         }
     }
 }
@@ -647,10 +651,9 @@ pub fn stack_size(limits: hgl_parser::Limits) -> usize {
 /// (UNIT-1). A file whose `module` line the parser could not read belongs
 /// to no module and is left out; the parser has reported it.
 pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
-    // `omits[m][f]` is the `omit` list of file `f` of module `m`.
-    let (mut program, omits) = assemble::assemble(files, diagnostics);
-    for (module, omits) in program.modules.iter_mut().zip(&omits) {
-        declare::declare(module, omits, diagnostics);
+    let (mut program, module_files) = assemble::assemble(files, diagnostics);
+    for (module, files) in program.modules.iter_mut().zip(&module_files) {
+        declare::declare(module, files, diagnostics);
     }
     imports::resolve(&mut program, diagnostics);
     resolve::resolve(&mut program, diagnostics);

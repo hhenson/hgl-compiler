@@ -10,19 +10,19 @@
 use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
-use hgl_parser::ast::{AstNode, Item, UseDecl};
-use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
+use hgl_parser::ast::{AstNode, Item, TestDecl, UseDecl};
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
 use crate::program::{
     Declaration, DeclarationKind, Import, ImportKind, Module, Program, Role, RunStatement,
     StoreStatement, Test,
 };
-use crate::{codes, error};
+use crate::{ParsedFile, codes, error, syntax};
 
 /// Fills in a module's imports, declarations, tests and scope from its
-/// files. `omits[f]` lists the nodes of file `f` to leave out.
-pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut Diagnostics) {
+/// files. The parsed inputs give each file's omissions and documentation tests.
+pub(crate) fn declare(module: &mut Module, inputs: &[&ParsedFile], diagnostics: &mut Diagnostics) {
     let mut walk = Walk {
         declarations: Vec::new(),
         test_helpers: Vec::new(),
@@ -35,7 +35,7 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
     };
     let mut run_omitted = false;
     for (index, file) in module.files.iter_mut().enumerate() {
-        let omit = omits[index];
+        let omit = &inputs[index].omit;
         // UNIT-2: imports precede declarations. Once a declaration has
         // been seen, an import is out of place.
         let mut declaration_seen = false;
@@ -73,6 +73,7 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
             }
         }
     }
+    walk.examples(module, inputs);
     let places: Vec<(Location, bool)> = walk
         .runs
         .iter()
@@ -116,6 +117,39 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
     bind_native_implementations(module, diagnostics);
     bind_native_candidates(module, diagnostics);
     check_tests(module, diagnostics);
+}
+
+/// The declaration label in a documentation test selector.
+fn documented_name(owner: &SyntaxNode, part: Option<&str>) -> String {
+    match owner.kind() {
+        SyntaxKind::ModuleDecl | SyntaxKind::ApplicationDecl => {
+            return match part {
+                None => "[module]".to_string(),
+                Some(part) => format!("[part {part}]"),
+            };
+        }
+        SyntaxKind::StructMember | SyntaxKind::EnumMember => {
+            if let (Some(parent), Some(member)) = (owner.parent(), syntax::name_token(owner)) {
+                return format!("{}.{}", documented_name(&parent, part), member.text());
+            }
+        }
+        _ => {}
+    }
+    let name = match Item::cast(owner.clone()) {
+        Some(Item::Function(item)) => item.name(),
+        Some(Item::Struct(item)) => item.name(),
+        Some(Item::Enum(item)) => item.name(),
+        Some(Item::Operator(item)) => item.name(),
+        Some(Item::NativeType(item)) => item.name(),
+        Some(Item::Constant(item)) => item.name(),
+        Some(Item::NativeFunction(item)) => item.name(),
+        Some(Item::Test(item)) => item.name(),
+        _ => syntax::name_token(owner),
+    };
+    name.map_or_else(
+        || "[declaration]".to_string(),
+        |name| name.text().to_string(),
+    )
 }
 
 /// UNIT-14: an application holds "one run statement (RUN-1), which
@@ -263,6 +297,82 @@ struct WalkedRun {
 }
 
 impl Walk<'_> {
+    /// Records a named test and the declarations private to its block (TST-1).
+    fn test(&mut self, test: Test, syntax: &TestDecl, omit: &[Span]) {
+        let owner = self.tests.len();
+        for helper in syntax.helpers() {
+            if omit.contains(&helper.syntax().span()) {
+                continue;
+            }
+            let Some(name) = helper.name() else {
+                continue;
+            };
+            let role = if helper.is_const() {
+                Role::Value
+            } else {
+                Role::Temporal
+            };
+            self.test_helpers.push(Declaration {
+                name: name.text().to_string(),
+                at: Location::new(test.at.file, name.span()),
+                kind: DeclarationKind::Function(role),
+                exported: false,
+                test_only: true,
+                test_owner: Some(owner),
+                file: test.file,
+                syntax: helper.syntax().clone(),
+            });
+        }
+        self.tests.push(test);
+    }
+
+    /// Adds SDOC-9 tests after authored tests, preserving their indices.
+    fn examples(&mut self, module: &Module, inputs: &[&ParsedFile]) {
+        let mut owners = HashMap::new();
+        for (index, input) in inputs.iter().enumerate() {
+            let part = module.files[index].part.as_deref();
+            let mut previous = None;
+            let mut label = String::new();
+            for example in &input.examples {
+                let span = example.owner.span();
+                if input
+                    .omit
+                    .iter()
+                    .any(|omit| omit.start <= span.start && span.end <= omit.end)
+                {
+                    continue;
+                }
+                let Some(test) = TestDecl::cast(example.test.clone()) else {
+                    continue;
+                };
+                if previous != Some(span) {
+                    label = documented_name(&example.owner, part);
+                    let occurrence = owners.entry(label.clone()).or_insert(0);
+                    *occurrence += 1;
+                    if *occurrence > 1 {
+                        // `@` separates a timeout from a test name in the native host.
+                        label.push_str(&format!("~{occurrence}"));
+                    }
+                    previous = Some(span);
+                }
+                self.test(
+                    Test {
+                        name: format!("{label}#example-{}", example.position),
+                        documentation_example: true,
+                        integration: false,
+                        timeout: None,
+                        at: Location::new(input.file, example.at),
+                        file: index,
+                        syntax: example.test.clone(),
+                        helpers: HashMap::new(),
+                    },
+                    &test,
+                    &input.omit,
+                );
+            }
+        }
+    }
+
     /// Records one item of file number `index`. `in_test` is true for an
     /// item of an unnamed test context.
     fn item(&mut self, index: usize, file: FileId, item: Item, in_test: bool, omit: &[Span]) {
@@ -342,41 +452,22 @@ impl Walk<'_> {
             }
             Item::Test(test) => {
                 if let Some(name) = test.name() {
-                    let owner = self.tests.len();
-                    for helper in test.helpers() {
-                        if omit.contains(&helper.syntax().span()) {
-                            continue;
-                        }
-                        let Some(name) = helper.name() else {
-                            continue;
-                        };
-                        let role = if helper.is_const() {
-                            Role::Value
-                        } else {
-                            Role::Temporal
-                        };
-                        self.test_helpers.push(Declaration {
+                    self.test(
+                        Test {
                             name: name.text().to_string(),
+                            documentation_example: false,
+                            integration: test.is_integration(),
+                            timeout: test.timeout().and_then(|written| {
+                                hgl_lexer::literal::decode_duration(written.text()).ok()
+                            }),
                             at: Location::new(file, name.span()),
-                            kind: DeclarationKind::Function(role),
-                            exported: false,
-                            test_only: true,
-                            test_owner: Some(owner),
                             file: index,
-                            syntax: helper.syntax().clone(),
-                        });
-                    }
-                    self.tests.push(Test {
-                        name: name.text().to_string(),
-                        integration: test.is_integration(),
-                        timeout: test.timeout().and_then(|written| {
-                            hgl_lexer::literal::decode_duration(written.text()).ok()
-                        }),
-                        at: Location::new(file, name.span()),
-                        file: index,
-                        syntax,
-                        helpers: HashMap::new(),
-                    });
+                            syntax,
+                            helpers: HashMap::new(),
+                        },
+                        &test,
+                        omit,
+                    );
                 }
                 return;
             }

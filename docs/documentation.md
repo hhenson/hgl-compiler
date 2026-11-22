@@ -13,8 +13,8 @@ with their own signatures and documentation. Exported declarations
 appear by default. Use `--private` to include the rest and named tests.
 
 Comments are rendered as CommonMark with tables (SDOC-7). Authored HTML
-is shown as text. HGL fences are highlighted using the lexer. A code
-span naming a declaration or member links to it when it resolves in the
+is shown as text. HGL fences are highlighted using the lexer and labeled
+as runnable or shown examples (SDOC-9). A code span naming a declaration or member links to it when it resolves in the
 comment's source scope and appears in the site (SDOC-8). Only generated
 local destinations become active Markdown links. Other link labels
 and image descriptions remain readable text. The pages and stylesheet
@@ -34,6 +34,22 @@ has `"exported": false` because it is reached through its operator
 (UNIT-3). A member records the export status of its containing type.
 `--private` also lists private declarations and named tests. A declaration
 without a comment has `"documentation": null`.
+
+## Runnable examples
+
+`hgl check` checks `hgl` fences under `Examples:` as named tests and
+reports errors on the original comment lines. `hgl test --target cpp`
+runs them alongside ordinary tests. A fence marked `hgl no-run` or
+outside `Examples:` is shown only. Backtick and tilde fences both work.
+
+The listing identifies an example as `module.path::declaration#example-N`.
+Pass that same name to `--test`, for example `--test 'demo::twice#example-1'`.
+Count HGL fences under the comment's `Examples:` headings from one,
+including `hgl no-run`. A field or member uses `Type.member`; the module
+header uses `[module]`, and a named part's header uses `[part name]`.
+When several documented declarations have the same label, the second and
+later use `~2`, `~3`, and so on before `#example-N`, in part and source
+order. Ordinary test selectors keep their `module.path::name` spelling.
 
 ## JSON model version 1
 
@@ -75,6 +91,9 @@ The [JSON Schema](documentation.schema.json) specifies the fields of
   their heading and use `recognized: false`. A headed section's text
   removes its four-space margin. Fenced Markdown keeps its delimiters
   and literal contents, including heading-like lines and keys.
+- A comment with HGL fences includes an `examples` array in source order.
+  Each entry has its `code`, its one-based `position` under `Examples:`
+  (null outside those headings), and a `runnable` flag.
 - Only recognized `Args:` and `Type Args:` sections carry `entries` with
   keys and descriptions. A missing description is an empty string.
   `Requires:`, `Properties:` and a struct's `Args:` retain their text

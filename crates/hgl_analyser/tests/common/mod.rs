@@ -140,6 +140,7 @@ pub fn check_with(files: &[(&str, &str)], omit: impl Fn(&str, &str) -> Vec<Span>
             file,
             root: tree.syntax(),
             omit: omit(name, text),
+            examples: Vec::new(),
         });
     }
     let front_end_errors = diagnostics.len();

@@ -56,7 +56,7 @@ impl Emitter<'_> {
         };
         let mut scope = Scope::cold(self.program, body);
         scope.testing = true;
-        let mut text = format!("void {}()\n{{\n", identifier(&test.name));
+        let mut text = format!("void {}()\n{{\n", names::test_identifier(test, index));
         for statement in &body.statements {
             // The line the statement starts on, counted from 0 in the
             // piece's text.

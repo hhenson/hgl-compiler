@@ -43,7 +43,7 @@ formatter: planned
 
 analyser: done
 
-- Documentation is recorded nowhere in the analysed program: two programs that differ in it alone analyse alike
+- Runnable documentation examples enter the analysed program as tests only. They leave application emission, execution, overload resolution and provider selection unaffected.
 
 ## SDOC-7
 
@@ -65,9 +65,10 @@ docs: done
 
 ## SDOC-9
 
-runner: planned
+parser, analyser, runner, docs: done
 
-- Fenced HGL in Examples runs as a named test (#458)
+- Fenced HGL in Examples is checked at its comment location and runs as a named test on the C++ target
+- The JSON model and HTML mark runnable and shown HGL fences
 
 ## SDOC-10
 

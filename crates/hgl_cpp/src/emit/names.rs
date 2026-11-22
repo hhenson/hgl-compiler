@@ -11,7 +11,7 @@
 
 use std::collections::BTreeSet;
 
-use hgl_analyser::{DeclarationKind, Detail, Program, Signature, Type};
+use hgl_analyser::{DeclarationKind, Detail, Program, Signature, Test, Type};
 
 /// The words the C++ standard keeps: its keywords and alternative
 /// tokens, the identifiers it gives a meaning in some places (`final`,
@@ -203,6 +203,16 @@ pub(crate) fn module_namespace(path: &str) -> String {
 /// and a declaration may have one name (TST-1 keeps the two apart).
 pub(crate) fn test_namespace(path: &str) -> String {
     format!("{}::t_", module_namespace(path))
+}
+
+/// A test's C++ symbol. Only generated symbols have these underscores:
+/// [`identifier`] escapes every written underscore in a name ending in `_`.
+pub(crate) fn test_identifier(test: &Test, index: usize) -> String {
+    if test.documentation_example {
+        format!("hgl_example_{index}_")
+    } else {
+        identifier(&test.name)
+    }
 }
 
 /// A type as part of a native function's name: `i64` as it is, and any
@@ -421,7 +431,13 @@ pub(crate) fn program_names(program: &Program) -> BTreeSet<String> {
                 .iter()
                 .map(|declared| declared.name.clone()),
         );
-        names.extend(module.tests.iter().map(|test| test.name.clone()));
+        names.extend(
+            module
+                .tests
+                .iter()
+                .filter(|test| !test.documentation_example)
+                .map(|test| test.name.clone()),
+        );
         for detail in &module.details {
             match detail {
                 Detail::Enum(read) => {
