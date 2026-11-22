@@ -266,6 +266,12 @@ pub(super) struct Description {
 }
 
 impl Toolchain {
+    /// Build generated units and their precompiled header with matching
+    /// symbols and optimization. These flags also distinguish the toolchain cache.
+    pub(super) fn enable_debug(&mut self) {
+        self.flags.extend(["-O0".to_string(), "-g".to_string()]);
+    }
+
     /// The configured or bundled toolchain, or why it could not be used.
     pub(super) fn find() -> Result<Toolchain, String> {
         let sdk = prefix(

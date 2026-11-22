@@ -2316,6 +2316,87 @@ fn names_a_platform_takes_are_built() {
     );
 }
 
+/// UNIT-14, RUN-1: preparing a debugger launch executes no user code. The
+/// described child can run with its debugger's closed stdin and reports each publication.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn builds_an_isolated_debug_application_without_running_it() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("debug application");
+    write(&root, "ticks.hgl", TICKS);
+    write(&root, "backtest.hgl", BACKTEST);
+    let builds = root.join("debug builds");
+    let prepare = || {
+        let report = hgl_in(
+            &["run", &argument(&root), "--debug-build", &argument(&builds)],
+            &[],
+            &[],
+        );
+        assert!(report.status.success(), "{}", text(&report.stderr));
+        serde_json::from_slice::<serde_json::Value>(&report.stdout).unwrap()
+    };
+    let launch = prepare();
+    assert_eq!(launch["version"], 1);
+    let executable = launch["executable"].as_str().unwrap();
+    let args = launch["arguments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap());
+    let results = std::path::Path::new(launch["arguments"][0].as_str().unwrap());
+    assert!(!results.exists());
+    // A subsequent session cannot rebuild the executable a debugger is using.
+    assert_ne!(prepare()["executable"], executable);
+    let run = Command::new(executable)
+        .args(args)
+        .current_dir(launch["workingDirectory"].as_str().unwrap())
+        .envs(
+            launch["environment"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k, v.as_str().unwrap())),
+        )
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    assert_eq!(std::fs::read(results).unwrap(), run.stdout);
+    assert_eq!(
+        text(&run.stdout)
+            .lines()
+            .filter(|line| line.starts_with("published "))
+            .count(),
+        3
+    );
+}
+
+/// A rejected debug build has no launch description on stdout.
+#[test]
+fn a_rejected_debug_application_has_no_launch_description() {
+    let root = scratch("rejected debug build");
+    write(
+        &root,
+        "backtest.hgl",
+        "application demo.backtest\neval unknown()\n",
+    );
+    let report = hgl_in(
+        &[
+            "run",
+            &argument(&root),
+            "--debug-build",
+            &argument(&root.join("build")),
+        ],
+        &[],
+        &[],
+    );
+    assert!(!report.status.success());
+    assert!(report.stdout.is_empty());
+    assert!(text(&report.stderr).contains("unknown"));
+    assert!(!root.join("build").exists());
+}
+
 /// A valid application that cannot be built because no SDK is named
 /// exits with status 2 and reports why it was not run.
 #[test]

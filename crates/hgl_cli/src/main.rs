@@ -238,6 +238,12 @@ struct RunArgs {
     #[arg(long = "config", value_name = "FIELD=VALUE", value_parser = replace::replacement)]
     config: Vec<Replacement>,
 
+    /// Build with native debug symbols and print a JSON launch description.
+    /// A fresh session directory under DIR holds the executable and its sources.
+    /// The application is started by the debugger.
+    #[arg(long, value_name = "DIR", conflicts_with = "keep")]
+    debug_build: Option<PathBuf>,
+
     /// Build the application in this directory, which keeps what the
     /// target wrote. With none, it is built in a directory under the
     /// cache for its source roots, which is kept for the next run.
@@ -862,7 +868,9 @@ fn run(arguments: &RunArgs) -> ExitCode {
     };
     let mut program = hgl_analyser::analyse(&parsed, &mut diagnostics);
     if diagnostics.has_errors() {
-        println!("not run: the program is rejected");
+        if arguments.debug_build.is_none() {
+            println!("not run: the program is rejected");
+        }
         return report(&sources, diagnostics);
     }
     let chosen = match chosen_application(&program, arguments.application.as_deref()) {
@@ -940,7 +948,9 @@ fn run(arguments: &RunArgs) -> ExitCode {
         program = hgl_analyser::analyse(&parsed, &mut found);
         sources = read_again;
         if found.has_errors() {
-            println!("not run: the program is rejected with the replacements given");
+            if arguments.debug_build.is_none() {
+                println!("not run: the program is rejected with the replacements given");
+            }
             return report(&sources, found);
         }
         // "a constant checked against the type it replaces": the types
@@ -950,7 +960,9 @@ fn run(arguments: &RunArgs) -> ExitCode {
         // same one with other generic arguments, is of another type.
         let replaced = replace::EntryCall::of(&program, &chosen);
         if replaced != written {
-            println!("not run: the program is rejected with the replacements given");
+            if arguments.debug_build.is_none() {
+                println!("not run: the program is rejected with the replacements given");
+            }
             let replaced_as = replaced
                 .as_ref()
                 .map_or("no entry".to_string(), |entry| entry.shown(&program));
@@ -975,6 +987,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
             &chosen,
             arguments.keep.as_deref(),
             &arguments.roots,
+            arguments.debug_build.as_deref(),
         ),
     }
 }

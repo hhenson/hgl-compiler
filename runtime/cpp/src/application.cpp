@@ -16,6 +16,7 @@
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 
 namespace hglrt::application {
@@ -55,6 +56,7 @@ struct Host {
     std::mutex mutex;
     std::FILE* results = nullptr;
     bool written = true;
+    bool debug_console = false;
     bool real_time = false;
     bool asked = false;
     bool interrupted = false;
@@ -65,6 +67,9 @@ struct Host {
     /// held.
     void say(const std::string& line) {
         written = testing::detail::write_results_line(results, line) && written;
+        if (debug_console) {
+            testing::detail::write_results_line(stdout, line);
+        }
     }
 };
 
@@ -140,7 +145,8 @@ void watch_interrupts() {
 
 /// Runs the application and returns its process status.
 int run_application(int argc, char** argv, bool real_time, Body body) {
-    if (argc != 2) {
+    const bool debug_console = argc == 3 && std::string_view(argv[2]) == "--debug-console";
+    if (argc != 2 && !debug_console) {
         std::fprintf(stderr, "usage: %s RESULTS\n", argc > 0 ? argv[0] : "application");
         return 2;
     }
@@ -153,6 +159,7 @@ int run_application(int argc, char** argv, bool real_time, Body body) {
             return 2;
         }
         kept.written = true;
+        kept.debug_console = debug_console;
         kept.real_time = real_time;
         kept.asked = false;
         kept.interrupted = false;
@@ -170,7 +177,10 @@ int run_application(int argc, char** argv, bool real_time, Body body) {
     std::thread interrupts_watched(watch_interrupts);
     // It cannot be joined: it may wait on standard input for as long
     // as the process lives.
-    std::thread(read_requests).detach();
+    // The debugger owns the child and its stop action. Its stdin may be EOF at launch.
+    if (!debug_console) {
+        std::thread(read_requests).detach();
+    }
     Output output;
     std::exception_ptr failure;
     try {

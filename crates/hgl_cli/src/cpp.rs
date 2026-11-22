@@ -473,9 +473,17 @@ pub(super) fn run(
     chosen: &str,
     keep: Option<&Path>,
     roots: &[PathBuf],
+    debug_build: Option<&Path>,
 ) -> ExitCode {
     let mut unwritten = Diagnostics::new();
-    let file_name = |at: Location| sources.file(at.file).name().to_string();
+    let file_name = |at: Location| {
+        let name = sources.file(at.file).name();
+        if debug_build.is_some() && !name.starts_with('<') {
+            std::path::absolute(name).map_or_else(|_| name.to_string(), |p| p.display().to_string())
+        } else {
+            name.to_string()
+        }
+    };
     let output = hgl_cpp::transpile(program, &file_name, &mut unwritten);
     let name = hgl_cpp::TARGET;
     let Some(application) = output
@@ -494,11 +502,25 @@ pub(super) fn run(
             source.line_col(diagnostic.primary.span.start),
             diagnostic.message
         );
-        println!(
-            "not run: the {name} target does not write all that {} needs yet",
-            application.path
-        );
+        if debug_build.is_none() {
+            println!(
+                "not run: the {name} target does not write all that {} needs yet",
+                application.path
+            );
+        }
         return ExitCode::from(EXIT_FAILED);
+    }
+    if let Some(directory) = debug_build {
+        return match application::debug_launch(&output, application, directory, roots) {
+            Ok(launch) => {
+                println!("{launch}");
+                ExitCode::SUCCESS
+            }
+            Err(reason) => {
+                eprintln!("hgl: {reason}");
+                ExitCode::from(EXIT_FAILED)
+            }
+        };
     }
     // Where the handler cannot be set the run goes on all the same, and
     // an interrupt then ends `hgl` as it always did.
