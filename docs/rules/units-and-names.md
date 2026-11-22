@@ -69,7 +69,8 @@ analyser: partial
 - A default is read as a value of its parameter's type (`type.mismatch`) and kept for the stages after, `Module::defaults`
 - A bool generic law default is evaluated from the static function supplied at the call; an explicit bool value overrides it (GEN-18).
 - A default on a `ref` parameter is checked against the type after its mode (FN-16).
-- Left: known required-constant failures in defaults; type checking a window or atomic default; checking a default against the selected generic parameter type where the argument is left out.
+- Known required-constant failures reject at the parameter default (ERR-9). A window default is checked as an arrival and an atomic default as its whole payload (TYPE-9, TYPE-11).
+- Omitted parameter defaults are checked against the concrete parameter type after generic selection, including in a call made by a generic body.
 
 transpiler: partial
 

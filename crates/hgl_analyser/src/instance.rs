@@ -123,6 +123,19 @@ impl Program {
         parameter: &Parameter,
         diagnostics: &mut Diagnostics,
     ) -> DefaultExpr {
+        self.specialize_parameter_default(default, operator, generics, parameter, diagnostics)
+    }
+
+    /// Places a default in its defining callable's scope and fits it
+    /// against the selected parameter type (UNIT-7, UNIT-8).
+    pub(crate) fn specialize_parameter_default(
+        &self,
+        default: &DefaultExpr,
+        operator: (usize, usize),
+        generics: &[Argument],
+        parameter: &Parameter,
+        diagnostics: &mut Diagnostics,
+    ) -> DefaultExpr {
         let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
             return default.clone();
         };
