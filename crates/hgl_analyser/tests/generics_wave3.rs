@@ -141,9 +141,11 @@ impl const fn parse(value: i64) -> i64 => value
 const fn keep<T>(v: T) -> i64? => find(v)
 const fn compare<T>(v: T) -> bool => check(v) == null
 const fn optional<T>(v: T) -> i64? => parse(v)
+fn publish<T>(v: T) -> i64? { when { return check(v) } }
 const fn keep_instance() -> i64? => keep(1)
 const fn compare_instance() -> bool => compare(1)
-const fn optional_instance() -> i64? => optional(1)"#,
+const fn optional_instance() -> i64? => optional(1)
+fn publish_instance() -> i64? => publish(1)"#,
     );
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
     for (name, expected) in [("keep_instance", "i64?"), ("optional_instance", "i64")] {
@@ -170,6 +172,17 @@ const fn optional_instance() -> i64? => optional(1)"#,
     };
     assert_eq!(left.ty.to_string(), "i64?");
     assert!(matches!(left.kind, ExprKind::OrNull { .. }));
+
+    let instance = instance_called_by(&checked, body(&checked, "publish_instance"));
+    let mut nullable_reads = 0;
+    walk_statements(&instance.statements, &mut |value| {
+        assert!(!matches!(value.kind, ExprKind::Raised { .. }));
+        if matches!(value.kind, ExprKind::OrNull { .. }) {
+            assert_eq!(value.ty.to_string(), "i64?");
+            nullable_reads += 1;
+        }
+    });
+    assert_eq!(nullable_reads, 1);
 }
 
 /// GEN-7: "A generic body is checked under its stated requirements;

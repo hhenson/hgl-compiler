@@ -862,15 +862,18 @@ impl<'a> Typer<'a> {
         let clean = self.diagnostics.len() == mark.diagnostics;
         // A delta, read as one whatever was expected of it:
         // `delta_value(input)`, `delta<set<i64>>(added: [1])`.
-        let given_delta =
-            delta != whole && !self.admits(result, &value.ty) && self.admits(&delta, &value.ty);
+        let given_whole = self.admits(result, &value.ty);
+        let given_delta = delta != whole && !given_whole && self.admits(&delta, &value.ty);
         if clean {
-            if open(&value.ty) {
+            if open(&value.ty) || given_whole {
+                // ERR-12 and ERR-15: the publication still supplies a
+                // nullable place when the provisional whole value fits.
+                if matches!(result, Type::Nullable(_)) {
+                    self.record_result_read(&value, Some((result, what)));
+                }
                 return value;
             }
-            // The result's own type: a complete value, and what an
-            // atomic input is read as. Or a delta.
-            if self.admits(result, &value.ty) || given_delta {
+            if given_delta {
                 return value;
             }
         }
