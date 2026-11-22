@@ -702,11 +702,6 @@ impl<'a> Typer<'a> {
             .map(|(_, _, ty)| weight(ty))
             .max()
             .unwrap_or(1);
-        let member_type = |pack, _: &str, key: &Constant| {
-            members.iter().find_map(|(declared, given_key, ty)| {
-                (*declared == pack && given_key.same(&key.value) == Some(true)).then(|| ty.clone())
-            })
-        };
         let name = &program.modules[callee.0].declarations[callee.1].name;
         let body = &self.declaration.name;
         for combination in combinations.iter().take(crate::INSTANCES + 1) {
@@ -715,6 +710,20 @@ impl<'a> Typer<'a> {
                 .chain(combination)
                 .map(|(at, argument)| (*at, argument))
                 .collect();
+            // Both sides of a key match use this combination's constants.
+            let constant_at = |at| match given.iter().find(|(declared, _)| *declared == at)?.1 {
+                Argument::Constant(constant) => Some(constant.value.clone()),
+                Argument::Type(_) => None,
+            };
+            let member_type = |pack, _: &str, key: &Constant| {
+                members
+                    .iter()
+                    .filter(|(declared, _, _)| *declared == pack)
+                    .find_map(|(_, stated, ty)| {
+                        (stated.substituted(&constant_at).same(&key.value) == Some(true))
+                            .then(|| ty.clone())
+                    })
+            };
             let project = |ty: &Type| {
                 placed(
                     substitute_with_members(ty, &given, &member_type, member_weight),

@@ -47,8 +47,12 @@ const fn exact<T>(value: T) -> T requires T == i64 => value
 const fn known<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] requires i64 == Ps[item_key] =>
     exact<Ps[item_key]>(item)
 
+const fn fixed_key<const key: str, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key]
+    requires key == "item" && Ps[key] == i64 => exact<Ps[key]>(item)
+
 test a_stated_member_type_admits_the_call {
     assert known(num, 8) == 8
+    assert fixed_key<"item">(num, 9) == 9
 }
 
 # expect-error(constraint, "requires.unmet")
