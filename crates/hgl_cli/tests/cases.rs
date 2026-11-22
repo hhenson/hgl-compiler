@@ -207,6 +207,257 @@ fn a_run_with_no_cases_says_so() {
     );
 }
 
+/// TST-13, TST-14: selection keeps the whole program available to a test
+/// and reports only the cases written in the selected files.
+#[test]
+fn test_paths_select_files_and_recursive_directories() {
+    let root = scratch("test_paths");
+    write(
+        &root,
+        "helper.hgl",
+        "module selection.helper\nexport const fn answer() -> i64 => 42\n",
+    );
+    let directory = argument(&root.join("with a space"));
+    let first = write(
+        &root,
+        "with a space/first.hgl",
+        concat!(
+            "module selection.first\n",
+            "use selection.helper::{answer}\n",
+            "test first { assert answer() == 42 }\n",
+            "test another { assert true }\n",
+            "# expect-error(type, \"type.mismatch\")\n",
+            "const fn standalone() -> i64 => true\n",
+        ),
+    );
+    let nested = write(
+        &root,
+        "with a space/nested/inner.hgl",
+        "module selection.inner\ntest inner { assert true }\n",
+    );
+    let outside = write(
+        &root,
+        "other.hgl",
+        concat!(
+            "module selection.other\n",
+            "test other { assert false }\n",
+            "# expect-error(type, \"type.mismatch\")\n",
+            "const fn outside_mismatch() -> i64 => 1\n",
+        ),
+    );
+    let root = argument(&root);
+    let run = |selectors: &[&str]| {
+        let mut arguments = vec!["test", &root];
+        arguments.extend_from_slice(selectors);
+        hgl(&arguments)
+    };
+
+    let file = run(&["--test-path", &first]);
+    let printed = text(&file.stdout);
+    assert_eq!(file.status.code(), Some(2), "{}", text(&file.stderr));
+    assert!(printed.contains("selection.first::first\n"), "{printed}");
+    assert!(printed.contains("const fn standalone\n"), "{printed}");
+    assert!(!printed.contains("selection.inner::inner"), "{printed}");
+    assert!(!printed.contains("outside_mismatch"), "{printed}");
+
+    let folder = run(&["--test-path", &directory]);
+    let printed = text(&folder.stdout);
+    assert_eq!(folder.status.code(), Some(2));
+    assert!(printed.contains("selection.inner::inner\n"), "{printed}");
+    assert!(!printed.contains("selection.other::other"), "{printed}");
+
+    let both = run(&["--test-path", &nested, "--test-path", &outside]);
+    let printed = text(&both.stdout);
+    assert_eq!(both.status.code(), Some(1));
+    assert!(printed.contains("selection.inner::inner\n"), "{printed}");
+    assert!(printed.contains("selection.other::other\n"), "{printed}");
+    assert!(printed.contains("outside_mismatch"), "{printed}");
+    assert!(!printed.contains("selection.first::first"), "{printed}");
+
+    let named = run(&["--test-path", &directory, "--test", "first"]);
+    let printed = text(&named.stdout);
+    assert_eq!(named.status.code(), Some(2));
+    assert!(printed.contains("selection.first::first\n"), "{printed}");
+    assert!(printed.contains("const fn standalone\n"), "{printed}");
+    assert!(!printed.contains("selection.first::another"), "{printed}");
+    assert!(!printed.contains("selection.inner::inner"), "{printed}");
+}
+
+/// A linked subtree can select a source even when an earlier root
+/// supplied the same file through a different path.
+#[cfg(unix)]
+#[test]
+fn a_test_path_matches_an_alternate_discovered_path() {
+    let root = scratch("linked_test_path");
+    let file = write(
+        &root,
+        "outside/case.hgl",
+        "module m\ntest linked { assert true }\n",
+    );
+    let directory = root.join("src");
+    std::fs::create_dir(&directory).unwrap();
+    std::os::unix::fs::symlink(root.join("outside"), directory.join("linked")).unwrap();
+    let directory = argument(&directory);
+    let output = hgl(&["test", &file, &directory, "--test-path", &directory]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr));
+    assert_eq!(text(&output.stderr), "");
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "not run  executable  m::linked\n",
+            "rejection cases: 0 passed, 0 failed\n",
+            "executable cases: 1 not run: no target was given to run a test on\n",
+        )
+    );
+}
+
+/// TST-13, TST-17: rejected integration tests keep their kind even though
+/// their declarations are omitted from the surviving program.
+#[test]
+fn integration_only_filters_owners_and_combines_with_test_path() {
+    let root = scratch("integration_only");
+    let selected = write(
+        &root,
+        "chosen.hgl",
+        concat!(
+            "module modes.chosen\n",
+            "# expect-error(type, \"type.mismatch\")\n",
+            "const fn standalone() -> i64 => true\n",
+            "test ordinary { assert false }\n",
+            "test ordinary_rejection {\n",
+            "    # expect-error(type, \"type.mismatch\")\n",
+            "    assert 1\n",
+            "}\n",
+            "integration_test integrated { assert true }\n",
+            "integration_test integrated_rejection {\n",
+            "    # expect-error(type, \"type.mismatch\")\n",
+            "    assert 1\n",
+            "}\n",
+        ),
+    );
+    write(
+        &root,
+        "other.hgl",
+        "module modes.other\nintegration_test other { assert true }\n",
+    );
+    let root = argument(&root);
+    let defaults = hgl(&["test", &root]);
+    let printed = text(&defaults.stdout);
+    assert_eq!(
+        defaults.status.code(),
+        Some(2),
+        "{}",
+        text(&defaults.stderr)
+    );
+    assert!(printed.contains("ordinary_rejection\n"), "{printed}");
+    assert!(!printed.contains("integrated_rejection\n"), "{printed}");
+
+    let all = hgl(&["test", &root, "--integration-only"]);
+    let printed = text(&all.stdout);
+    assert_eq!(all.status.code(), Some(2));
+    assert!(printed.contains("modes.other::other\n"), "{printed}");
+    assert!(printed.contains("modes.chosen::integrated\n"), "{printed}");
+    assert!(
+        printed.contains("passed   rejection   modes.chosen::integrated_rejection\n"),
+        "{printed}"
+    );
+    assert!(!printed.contains("ordinary"), "{printed}");
+    assert!(!printed.contains("standalone"), "{printed}");
+
+    let path = hgl(&[
+        "test",
+        &root,
+        "--integration-only",
+        "--test-path",
+        &selected,
+    ]);
+    let printed = text(&path.stdout);
+    assert_eq!(path.status.code(), Some(2));
+    assert!(printed.contains("modes.chosen::integrated\n"), "{printed}");
+    assert!(!printed.contains("modes.other::other"), "{printed}");
+
+    let rejections = hgl(&[
+        "test",
+        &root,
+        "--integration-only",
+        "--rejections-only",
+        "--test-path",
+        &selected,
+    ]);
+    assert_eq!(rejections.status.code(), Some(0));
+    assert_eq!(
+        text(&rejections.stdout),
+        concat!(
+            "passed   rejection   modes.chosen::integrated_rejection\n",
+            "rejection cases: 1 passed, 0 failed\n",
+            "executable cases: none selected\n",
+        )
+    );
+
+    let conflict = hgl(&["test", &root, "--integration", "--integration-only"]);
+    assert_eq!(conflict.status.code(), Some(2));
+    assert!(text(&conflict.stderr).contains("--integration-only"));
+}
+
+/// TST-15: a valid path with no selected cases succeeds. Invalid paths
+/// are usage errors, even when the native target was requested.
+#[test]
+fn empty_and_invalid_test_paths_are_reported_before_building() {
+    let root = scratch("test_paths_empty");
+    let source = write(
+        &root,
+        "src/m.hgl",
+        "module m\ntest ordinary { assert true }\n",
+    );
+    let source_root = root.join("src");
+    let empty = source_root.join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    let outside = write(&root, "outside.hgl", "module outside\n");
+    let source_root = argument(&source_root);
+    let empty = argument(&empty);
+    let missing = argument(&root.join("src/missing.hgl"));
+    let workspace = root.join("build");
+    let kept = argument(&workspace);
+    for options in [
+        vec!["--test-path", &empty],
+        vec!["--integration-only", "--test-path", &source],
+    ] {
+        let mut arguments = vec!["test", &source_root];
+        arguments.extend(options);
+        let output = hgl(&arguments);
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(
+            text(&output.stdout),
+            concat!(
+                "no case was selected: this run shows nothing\n",
+                "rejection cases: 0 passed, 0 failed\n",
+                "executable cases: 0 passed, 0 failed, 0 not run\n",
+            )
+        );
+    }
+
+    let empty_root = hgl(&["test", &empty, "--test-path", &empty]);
+    assert_eq!(empty_root.status.code(), Some(0));
+    assert!(text(&empty_root.stdout).contains("no case was selected"));
+
+    for invalid in [&missing, &outside] {
+        let output = hgl(&[
+            "test",
+            &source_root,
+            "--test-path",
+            invalid,
+            "--target",
+            "cpp",
+            "--keep",
+            &kept,
+        ]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(text(&output.stderr).contains(invalid));
+        assert!(output.stdout.is_empty());
+        assert!(!workspace.exists());
+    }
+}
+
 /// TST-14: "Other commands treat annotations as comments." `hgl check`
 /// reports the annotated error as any other and reads no annotation.
 #[test]

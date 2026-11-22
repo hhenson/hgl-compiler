@@ -37,6 +37,8 @@ pub(crate) struct Owner {
     pub ends_file: bool,
     /// For a named test: its module's path and its name.
     pub test: Option<(String, String)>,
+    /// Whether the owner is an integration test (TST-17).
+    pub integration: bool,
 }
 
 /// Every item of a file that can own a case, in source order.
@@ -123,6 +125,7 @@ pub(crate) fn owners(
                     .map(|name| (module.clone(), name.text().to_string())),
                 _ => None,
             },
+            integration: matches!(&item, Item::Test(test) if test.is_integration()),
         });
     }
 

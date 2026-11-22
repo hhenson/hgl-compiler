@@ -1506,8 +1506,22 @@ gives it one made of the cpp target and its build driver; without
 
 An integration test is left out of a run (TST-17): it is no case of the
 run, and is not listed. `--integration` asks for them all, and `--test`
-with its name asks for that one. A rejection case an integration test
-owns runs nothing, and is checked as any other is.
+with its name asks for that one. `--integration-only` selects integration
+tests and their rejection cases. It excludes standalone rejection cases
+and cannot be combined with `--integration`.
+
+Repeat `--test-path PATH` to select cases in several files or directories.
+A directory includes its subdirectories. Each path must exist within the
+source roots. The path and name filters combine when both are supplied.
+Declaration- and import-owned cases are independent of the name filter
+and are subject to the path filter. `--rejections-only` checks the
+rejection cases selected by the other filters.
+
+The runner still checks all sources given as roots, including dependencies
+outside the selected paths. A native build's inventory records the file of
+every case. Changing the selection reuses the same workspace build. A path
+selection with no cases reports that no case was selected and prints zero
+counts for rejection and executable cases.
 
 | Outcome of a test | When |
 | --- | --- |
