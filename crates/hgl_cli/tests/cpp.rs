@@ -1676,6 +1676,33 @@ fn dependent_call_packs_run_on_the_sdk() {
     );
 }
 
+/// EXPR-9: a fixed list literal composes one connection for each entry.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn graph_list_literals_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("graph-list-literals");
+    let file = write(
+        &root,
+        "demo.graph_list_literals.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.graph_list_literals.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// EXPR-17: graph comprehensions respect their category and capture
 /// each pass's binding in a temporal conditional or switch.
 #[test]
