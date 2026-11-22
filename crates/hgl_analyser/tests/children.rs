@@ -8,7 +8,7 @@
 mod common;
 
 use common::{Checked, body, check};
-use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Stmt};
+use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Stmt, walk_statements};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -224,6 +224,83 @@ fn an_inferred_let_holds_a_child_until_its_use() {
         );
         assert!(use_.at.span.start > binding.at.span.end);
     }
+}
+
+/// ERR-3, ERR-14 and TIME-1. A tag proof belongs to the bound child
+/// named in the guard. Its payload still reads the selected endpoint.
+#[test]
+fn a_bound_result_child_requires_its_own_tag_proof_and_validity() {
+    let checked = module(
+        "fn guarded_success(parts: list<result<i64, error>, 2>) -> i64 {
+    when all_valid(parts) {
+        let entry = parts[0]
+        if is_ok(entry) { return entry.value }
+        return 0
+    }
+}
+
+fn guarded_error(parts: list<result<i64, error>, 2>) -> str {
+    when {
+        let entry = parts[0]
+        if valid(entry) && is_err(entry) { return entry.error.message }
+        return \"none\"
+    }
+}
+
+fn unguarded(parts: list<result<i64, error>, 2>) -> i64 {
+    when all_valid(parts) {
+        let entry = parts[0]
+        return entry.value
+    }
+}
+
+fn different_binding(parts: list<result<i64, error>, 2>) -> i64 {
+    when all_valid(parts) {
+        let original = parts[0]
+        let entry = parts[0]
+        if is_ok(original) { return entry.value }
+        return 0
+    }
+}
+
+fn unchecked_tag(parts: list<result<i64, error>, 2>) -> bool {
+    when {
+        let entry = parts[0]
+        return is_ok(entry)
+    }
+}",
+    );
+    for (name, expected_success) in [("guarded_success", true), ("guarded_error", false)] {
+        let node = body(&checked, name);
+        let entry = node
+            .locals
+            .iter()
+            .position(|local| local.name == "entry")
+            .expect("the hook binds the selected endpoint");
+        assert_eq!(
+            node.locals[entry].ty.to_string(),
+            "endpoint<result<i64, error>>"
+        );
+        let mut reads = 0;
+        walk_statements(&node.statements, &mut |value| {
+            if let ExprKind::Payload { success, result } = &value.kind {
+                assert_eq!(*success, expected_success);
+                assert_eq!(result.kind, ExprKind::BoundChild(entry));
+                reads += 1;
+            }
+        });
+        assert_eq!(reads, 1);
+    }
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:21:22 type/result.required_variant ERR-3",
+            "m.hgl:29:43 type/result.required_variant ERR-3",
+            "m.hgl:37:22 phase/payload.unguarded TIME-1",
+        ],
+        "{}",
+        checked.report
+    );
 }
 
 /// TIME-1, TIME-4, ERR-14: reading a bound static child needs its

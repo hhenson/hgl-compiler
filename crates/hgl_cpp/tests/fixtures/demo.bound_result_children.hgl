@@ -1,0 +1,19 @@
+module demo.bound_result_children
+
+# ERR-3 and ERR-14: validity admits the endpoint, and the direct tag guard
+# then admits the selected child's matching payload.
+fn guarded(parts: tuple<result<i64, error>, i64>) -> i64 {
+    when {
+        let entry = parts[0]
+        if !valid(entry) { return -2 }
+        if is_ok(entry) { return entry.value }
+        if is_err(entry) && entry.error.message == "bad" { return -1 }
+        return -3
+    }
+}
+
+test child_tag_guards {
+    assert eval guarded(
+        parts: [(null, 1), (ok(7), null), (err(error(message: "bad")), null)],
+    ) == [-2, 7, -1]
+}

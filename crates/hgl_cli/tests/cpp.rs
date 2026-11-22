@@ -830,6 +830,34 @@ fn endpoint_read_forms_run_on_the_sdk() {
     );
 }
 
+/// ERR-3 and ERR-14: observe validity separately from the tag of a bound
+/// result child, and use the matching success or error payload.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn bound_result_children_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("bound-result-children");
+    let file = write(
+        &root,
+        "demo.bound_result_children.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.bound_result_children.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The temporal code of scalars on the SDK: a graph with lifted calls, a
 /// constant connection, nodes with state, handlers in order and
 /// capabilities, a source, and the evals of them (`demo.temporal`).
