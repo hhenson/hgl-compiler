@@ -1,0 +1,15 @@
+module guide.types
+
+/** One side of the order book. */
+export enum Side {
+    /** A bid. */
+    buy,
+    /** An offer. */
+    sell,
+}
+
+/** A public value you can import. */
+export const shared: i64 = 4
+
+/** A private value in another module. */
+const hidden_elsewhere: i64 = 5

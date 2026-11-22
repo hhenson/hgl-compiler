@@ -1,0 +1,60 @@
+/** Reference for the guide, including `increment`. */
+module guide.api
+use guide.types as foreign
+use guide.types::{shared}
+
+/**
+Describe the `shared` value and the `foreign::Side.buy` case.
+
+`guide.types.Side.sell` uses its full name. `value` is the parameter.
+`hidden_elsewhere` stays code. See also `private_marker`.
+
+Args:
+    offset: The **offset** to apply.
+    value: The input value.
+
+    The options are evaluated once.
+
+**Further reading**:
+    See `shared` for another example.
+
+Notes:
+    | Setting | Meaning |
+    | --- | --- |
+    | Default | One |
+
+    <script>alert("escaped")</script>
+    [External label](https://example.invalid/external)
+    ![External picture](https://example.invalid/picture.png)
+
+    Formula fallback $`shared`$ and diagram fallback:
+
+    ~~~math
+    a^2+b^2=c^2
+    ~~~
+
+    ~~~mermaid
+    graph LR; A --> B
+    ~~~
+
+Examples:
+    ~~~hgl
+    assert increment(2) == 3
+    ~~~
+*/
+export const fn increment{const offset: i64 = 1}(value: i64) -> i64 => value + offset
+
+/**
+Choose the result for the argument.
+
+Type Args:
+    T: The value type, independent of the candidate.
+*/
+export operator choose<T>(value: T) -> i64
+/** The integer candidate. */
+impl const fn choose(value: i64) -> i64 => value
+/** The text candidate. */
+impl const fn choose(value: str) -> i64 => 0
+
+/** Private implementation detail. */
+const private_marker: i64 = 11

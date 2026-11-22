@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>guide.api</title>
+<link rel="stylesheet" href="../site.css">
+<body>
+<header><nav><a href="../index.html">API reference</a></nav></header>
+<main>
+<h1>guide.api</h1>
+<p>Reference for the guide, including <a href="#decl-increment-0"><code>increment</code></a>.</p>
+<h2>Functions</h2>
+<article id="decl-increment-0">
+<h3>increment</h3>
+<pre class="signature"><code>export const fn increment{const offset: i64 = 1}(value: i64) -&gt; i64</code></pre>
+<p class="source">api.hgl:45</p>
+<p>Describe the <a href="mod-guide.types.html#decl-shared-3"><code>shared</code></a> value and the <a href="mod-guide.types.html#decl-buy-1"><code>foreign::Side.buy</code></a> case.</p>
+<p><a href="mod-guide.types.html#decl-sell-2"><code>guide.types.Side.sell</code></a> uses its full name. <code>value</code> is the parameter.
+<code>hidden_elsewhere</code> stays code. See also <code>private_marker</code>.</p>
+<h4>Arguments</h4>
+<table><thead><tr><th scope="col">Name</th><th scope="col">Type</th>
+<th scope="col">Default</th><th scope="col">Description</th></tr></thead><tbody>
+<tr><th scope="row"><code>value</code></th><td><code>i64</code></td><td>—</td><td><p>The input value.</p>
+</td></tr>
+</tbody></table>
+<h4>Configuration</h4>
+<table><thead><tr><th scope="col">Name</th><th scope="col">Type</th>
+<th scope="col">Default</th><th scope="col">Description</th></tr></thead><tbody>
+<tr><th scope="row"><code>offset</code></th><td><code>i64</code></td><td><code>1</code></td><td><p>The <strong>offset</strong> to apply.</p>
+</td></tr>
+</tbody></table>
+<p>The options are evaluated once.</p>
+<p><strong>Further reading</strong>:
+See <a href="mod-guide.types.html#decl-shared-3"><code>shared</code></a> for another example.</p>
+<h4>Notes</h4>
+<table><thead><tr><th>Setting</th><th>Meaning</th></tr></thead><tbody>
+<tr><td>Default</td><td>One</td></tr>
+</tbody></table>
+<pre class="authored-html">&lt;script&gt;alert("escaped")&lt;/script&gt;
+</pre>
+<p>External label
+External picture</p>
+<p>Formula fallback $<code>shared</code>$ and diagram fallback:</p>
+<pre><code class="language-math">a^2+b^2=c^2
+</code></pre>
+<pre><code class="language-mermaid">graph LR; A --&gt; B
+</code></pre>
+<h4>Examples</h4>
+<pre><code class="language-hgl"><span class="keyword">assert</span> increment(<span class="literal">2</span>) == <span class="literal">3</span>
+</code></pre>
+</article>
+<h2>Operators</h2>
+<article id="decl-choose-1">
+<h3>choose</h3>
+<pre class="signature"><code>export operator choose&lt;T&gt;(value: T) -&gt; i64</code></pre>
+<p class="source">api.hgl:53</p>
+<p>Choose the result for the argument.</p>
+<h4>Type arguments</h4>
+<table><thead><tr><th scope="col">Name</th><th scope="col">Type</th>
+<th scope="col">Default</th><th scope="col">Description</th></tr></thead><tbody>
+<tr><th scope="row"><code>T</code></th><td><code>type</code></td><td>—</td><td><p>The value type, independent of the candidate.</p>
+</td></tr>
+</tbody></table>
+<h4>Arguments</h4>
+<table><thead><tr><th scope="col">Name</th><th scope="col">Type</th>
+<th scope="col">Default</th><th scope="col">Description</th></tr></thead><tbody>
+<tr><th scope="row"><code>value</code></th><td><code>T</code></td><td>—</td><td></td></tr>
+</tbody></table>
+<h4>Candidates</h4>
+<article id="decl-choose-2">
+<h5>choose</h5>
+<pre class="signature"><code>impl const fn choose(value: i64) -&gt; i64</code></pre>
+<p class="source">api.hgl:55</p>
+<p>The integer candidate.</p>
+<h4>Arguments</h4>
+<table><thead><tr><th scope="col">Name</th><th scope="col">Type</th>
+<th scope="col">Default</th><th scope="col">Description</th></tr></thead><tbody>
+<tr><th scope="row"><code>value</code></th><td><code>i64</code></td><td>—</td><td></td></tr>
+</tbody></table>
+</article>
+<article id="decl-choose-3">
+<h5>choose</h5>
+<pre class="signature"><code>impl const fn choose(value: str) -&gt; i64</code></pre>
+<p class="source">api.hgl:57</p>
+<p>The text candidate.</p>
+<h4>Arguments</h4>
+<table><thead><tr><th scope="col">Name</th><th scope="col">Type</th>
+<th scope="col">Default</th><th scope="col">Description</th></tr></thead><tbody>
+<tr><th scope="row"><code>value</code></th><td><code>str</code></td><td>—</td><td></td></tr>
+</tbody></table>
+</article>
+</article>
+</main>
+</body>
+</html>
