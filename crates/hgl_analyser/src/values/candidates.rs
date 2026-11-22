@@ -845,13 +845,6 @@ impl<'a> Typer<'a> {
                 };
                 if from_braces {
                     braced.push(value.at);
-                    self.configuration_input(
-                        (operator, form),
-                        (module, declaration),
-                        parameter,
-                        &value,
-                        self.category(&value),
-                    );
                 }
                 Some(hir::Argument {
                     parameter: Some(index),
@@ -2483,6 +2476,24 @@ pub(super) fn bound(
         .filter(|(_, p)| !p.configuration && p.pack.is_none())
         .map(|(index, _)| index)
         .collect();
+    let ordinary_named = |name: &str| {
+        let matches = |parameter: &crate::types::Parameter| {
+            !parameter.configuration && parameter.pack.is_none() && parameter.name == name
+        };
+        public
+            .parameters
+            .iter()
+            .position(matches)
+            .map(|index| mapping[index])
+            .or_else(|| {
+                signature
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .find(|(index, option)| !mapping.contains(index) && matches(option))
+                    .map(|(index, _)| index)
+            })
+    };
     let mut places = Vec::with_capacity(given.len());
     for given in given {
         let place = match &given.key {
@@ -2503,10 +2514,13 @@ pub(super) fn bound(
                 }
             }
             Key::Configuration(name) => {
+                // EXPR-10: another candidate may declare configuration
+                // of this name. This one may instead take an ordinary input.
                 let index = signature
                     .parameters
                     .iter()
-                    .position(|parameter| parameter.configuration && parameter.name == *name)?;
+                    .position(|parameter| parameter.configuration && parameter.name == *name)
+                    .or_else(|| ordinary_named(name))?;
                 Place::Parameter(index)
             }
             Key::Generic(_) => {
@@ -2519,24 +2533,7 @@ pub(super) fn bound(
                 }
             }
             Key::Name(name) | Key::Brace(name) => {
-                if let Some(index) = given
-                    .key
-                    .public_parameter(public)
-                    .map(|index| mapping[index])
-                    .or_else(|| {
-                        signature
-                            .parameters
-                            .iter()
-                            .enumerate()
-                            .find(|(index, option)| {
-                                !mapping.contains(index)
-                                    && !option.configuration
-                                    && option.pack.is_none()
-                                    && option.name == *name
-                            })
-                            .map(|(index, _)| index)
-                    })
-                {
+                if let Some(index) = ordinary_named(name) {
                     Place::Parameter(index)
                 } else {
                     let index = named_pack?;

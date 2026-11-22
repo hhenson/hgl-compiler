@@ -3584,6 +3584,36 @@ fn operator_configuration_runs_on_the_sdk() {
     );
 }
 
+/// EXPR-14, FN-6 and NUM-11: the selected declaration determines
+/// which options are lifted inputs and which bind at graph construction.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn option_declarations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("option_declarations");
+    let cases = [
+        (
+            "demo.option_declarations.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.option_declarations.hgl"),
+            "executable cases: 8 passed, 0 failed, 0 not run\n",
+        ),
+        (
+            "demo.option_declarations_rejections.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.option_declarations_rejections.hgl"),
+            "rejection cases: 4 passed, 0 failed\n",
+        ),
+    ];
+    for (name, source, expected) in cases {
+        let file = write(&root, name, source);
+        let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+        let stdout = text(&output.stdout);
+        assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+        assert!(stdout.contains(expected), "{stdout}");
+    }
+}
+
 /// EXPR-6, OPS-5, FN-6 and FN-11: Boolean symbols use the selected
 /// operator's inputs in a graph and still short-circuit in value code.
 #[test]

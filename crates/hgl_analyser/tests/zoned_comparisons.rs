@@ -158,9 +158,9 @@ fn a_zoned_comparison_selects_cores_candidate_with_utc() {
 /// types, and an option that no candidate for the operands declares."
 /// `utc` is a `bool` (OPS-2), declared by the candidates for two zoned
 /// datetimes alone: not for a `datetime`, a `zoned_time` or an
-/// ordering; and the tolerances are for numbers (NUM-4). EXPR-14:
-/// "Scalar operator configuration binds during graph construction in
-/// temporal composition": in a graph `utc` is not a connection.
+/// ordering; and the tolerances are for numbers (NUM-4). The zoned
+/// candidate declares `utc` in its parentheses, so a graph can lift a
+/// connection there in either spelling (EXPR-14).
 #[test]
 fn zoned_datetimes_have_no_order_and_utc_is_theirs_alone() {
     let checked = module(concat!(
@@ -192,6 +192,7 @@ fn zoned_datetimes_have_no_order_and_utc_is_theirs_alone() {
         "    let ordered = a >= b\n",
         "    return a =={utc: flag} b\n",
         "}\n",
+        "fn wired_named(a: zoned_datetime, b: zoned_datetime, flag: bool) -> bool => eq_(a, b, utc: flag)\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -215,7 +216,6 @@ fn zoned_datetimes_have_no_order_and_utc_is_theirs_alone() {
             "m.hgl:19:24 name/argument.unknown EXPR-2",
             "m.hgl:22:21 operator/operator.no_candidate OPS-2",
             "m.hgl:25:21 operator/operator.no_candidate OPS-2",
-            "m.hgl:26:22 phase/connection.as_constant EXPR-14",
         ]
     );
 }
