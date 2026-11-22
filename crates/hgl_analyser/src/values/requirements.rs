@@ -2303,7 +2303,12 @@ pub(super) fn instances_hold(
                 let deep = generics.iter().any(
                     |argument| matches!(argument, Argument::Type(ty) if nesting(ty) > NESTING),
                 );
-                if deep {
+                if deep
+                    || type_packs
+                        .iter()
+                        .flat_map(|pack| &pack.types)
+                        .any(|ty| nesting(ty) > NESTING)
+                {
                     exhausted = true;
                     break;
                 }
@@ -2318,7 +2323,7 @@ pub(super) fn instances_hold(
                 // packs are told here, where their arguments are known.
                 let applied = program.modules[callee.0].declarations[callee.1].kind
                     == DeclarationKind::Struct;
-                if (applied || forwarded) && required(program, callee).is_some() {
+                if forwarded || applied && required(program, callee).is_some() {
                     let (module, declaration) = callee;
                     let unit = &program.modules[module];
                     let (bindings, written, arguments) = &tables[module];
@@ -2336,12 +2341,20 @@ pub(super) fn instances_hold(
                         },
                         diagnostics,
                     );
+                    let before = typer.diagnostics.len();
                     for &root in &from {
                         if forwarded {
-                            typer.pack_requires_met(root, callee, &generics, &type_packs);
+                            let reported = typer.diagnostics.len();
+                            typer.check_forwarded_pack_counts(root, callee, &type_packs);
+                            if typer.diagnostics.len() == reported {
+                                typer.pack_requires_met(root, callee, &generics, &type_packs);
+                            }
                         } else {
                             typer.instance_met((root, at), callee, &generics);
                         }
+                    }
+                    if forwarded && typer.diagnostics.len() != before {
+                        continue;
                     }
                 }
                 if reaching.contains(&callee) && seen.insert(key) {
@@ -3331,6 +3344,9 @@ fn holds_with_packs(
                     .cloned()
                     .or_else(|| option(left).and_then(|name| (of.value_of)(&name)))
                     .or_else(|| (scope.constant)(left, None))?;
+                if !matches!(left_key, ConstantValue::Str(_) | ConstantValue::Int(_)) {
+                    return None;
+                }
                 return Some(
                     (scope.pack)(&view, pack.text())?
                         .member(&left_key)

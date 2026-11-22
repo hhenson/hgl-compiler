@@ -100,11 +100,12 @@ impl<'a> Typer<'a> {
         list: &SyntaxNode,
         signature: &crate::types::Signature,
         found: &mut [Option<Argument>],
+        braces_only: bool,
     ) -> Vec<(usize, SyntaxNode)> {
         let generics = &signature.generics;
         let mut named = Vec::new();
-        for (_, name, value) in self.call_entries(list) {
-            let Some(name) = name else {
+        for (brace, name, value) in self.call_entries(list) {
+            let Some(name) = name.filter(|_| brace || !braces_only) else {
                 continue;
             };
             if signature

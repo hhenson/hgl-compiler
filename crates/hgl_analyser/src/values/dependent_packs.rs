@@ -254,11 +254,7 @@ pub(super) fn operator_packs(
                 .iter()
                 .position(|generic| generic.at == reflects.at)
         {
-            let mut bounds = reflects.bounds;
-            if let crate::GenericKind::Pack { minimum, maximum } = signature.generics[index].kind {
-                bounds.0 = bounds.0.max(minimum);
-                bounds.1 = bounds.1.into_iter().chain(maximum).min();
-            }
+            let bounds = reflected_bounds(reflects, &signature.generics[index]);
             let count = reflected.len() as u64;
             if count < bounds.0 || bounds.1.is_some_and(|maximum| count > maximum) {
                 return Err(OperatorFault {
@@ -276,6 +272,21 @@ pub(super) fn operator_packs(
         }
     }
     Ok(result)
+}
+
+/// The bounds from both the declared generic and the reflecting function type.
+fn reflected_bounds(
+    reflects: &crate::ReflectedPack,
+    generic: &GenericParameter,
+) -> (u64, Option<u64>) {
+    let (minimum, maximum) = reflects.bounds;
+    match generic.kind {
+        crate::GenericKind::Pack {
+            minimum: lower,
+            maximum: upper,
+        } => (minimum.max(lower), maximum.into_iter().chain(upper).min()),
+        _ => reflects.bounds,
+    }
 }
 
 impl Typer<'_> {
@@ -394,12 +405,7 @@ impl Typer<'_> {
                     .iter()
                     .position(|generic| generic.at == reflects.at)
             {
-                let mut bounds = reflects.bounds;
-                if let crate::GenericKind::Pack { minimum, maximum } = signature.generics[slot].kind
-                {
-                    bounds.0 = bounds.0.max(minimum);
-                    bounds.1 = bounds.1.into_iter().chain(maximum).min();
-                }
+                let bounds = reflected_bounds(reflects, &signature.generics[slot]);
                 let mut reflected = TypePackArgument::keyed(slot, reflected);
                 if let Type::Function(actual) = &callback.ty {
                     reflected.forwarded_from = actual.named_pack.as_ref().map(|pack| pack.at);
@@ -418,6 +424,37 @@ impl Typer<'_> {
         }
         packs.sort_by_key(|pack| pack.parameter);
         packs
+    }
+
+    /// Check reflected bounds now that the caller has supplied every key.
+    pub(super) fn check_forwarded_pack_counts(
+        &mut self,
+        at: Location,
+        callee: (usize, usize),
+        packs: &[TypePackArgument],
+    ) {
+        let Detail::Callable(signature) = &self.program.modules[callee.0].details[callee.1] else {
+            return;
+        };
+        for parameter in &signature.parameters {
+            let Type::Function(template) = &parameter.ty else {
+                continue;
+            };
+            let Some(reflects) = &template.named_pack else {
+                continue;
+            };
+            for pack in packs.iter().filter(|pack| pack.forwarded_from.is_none()) {
+                let generic = &signature.generics[pack.parameter];
+                if generic.at == reflects.at {
+                    self.check_pack_count_at(
+                        at,
+                        &reflects.name,
+                        reflected_bounds(reflects, generic),
+                        pack.types.len() as u64,
+                    );
+                }
+            }
+        }
     }
 
     /// Report a failed lookup after resolving a pack member's key (GEN-17).
@@ -476,6 +513,13 @@ impl Typer<'_> {
         };
         let report = match *fault {
             Fault::Deferred => return,
+            Fault::Order(index)
+                if self.diagnostics.as_slice().iter().any(|reported| {
+                    reported.primary == at(index) && reported.code.as_str() == codes::ARGUMENT_ORDER
+                }) =>
+            {
+                return;
+            }
             Fault::Order(index) => error(
                 Category::Type,
                 codes::ARGUMENT_ORDER,

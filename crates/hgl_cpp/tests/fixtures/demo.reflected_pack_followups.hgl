@@ -1,0 +1,130 @@
+module demo.reflected_pack_followups
+
+const value_key: str = "value"
+const absent_key: str = "absent"
+
+const fn integer(value: i64) -> i64 => value
+const fn real(value: f64) -> i64 => 1
+const fn two_inputs(value: i64, other: i64) -> i64 => value + other
+
+# FN-17: a generic type comes from a homogeneous callback pack's entries.
+const fn homogeneous<T>(values: ...T) -> i64 => 7
+
+const fn invoke<...Ps, ...As>(f: const fn(...{Ps}) -> i64, args: ...{As for f}) -> i64
+    requires each arg in arg_keys(As) { As[arg] == Ps[arg] } => 42
+
+test homogeneous_input {
+    assert invoke(homogeneous, 3) == 42
+}
+
+# FN-17: the reflected suffix of an anonymous callback needs written types.
+const fn requires_real<...Ps>(f: const fn(...{Ps}) -> i64) -> i64
+    requires Ps[value_key] == f64 => 43
+
+test anonymous_written_input {
+    assert requires_real(fn(value: f64) => 1) == 43
+}
+
+test unresolved_anonymous_input {
+    # expect-error(type, "generic.unresolved")
+    assert requires_real(fn(value) => 1) == 43
+}
+
+# GEN-17: the inner requirement takes the pack of the callback actually given.
+const fn relay<...Ps>(f: const fn(...{Ps}) -> i64) -> i64 => requires_real(f)
+const fn relay_again<...Ps>(f: const fn(...{Ps}) -> i64) -> i64 => relay(f)
+const fn one_input<...Ps{1}>(f: const fn(...{Ps}) -> i64) -> i64 => 51
+const fn relay_bounded<...Ps>(f: const fn(...{Ps}) -> i64) -> i64 => one_input(f)
+
+test passes_on_reflected_pack {
+    assert relay(real) == 43
+    assert relay_again(real) == 43
+    assert relay_bounded(integer) == 51
+}
+
+test passed_pack_requirement_is_checked {
+    # expect-error(constraint, "requires.unmet")
+    assert relay_again(integer) == 43
+}
+
+test passed_pack_bound_is_checked {
+    # expect-error(type, "pack.cardinality")
+    assert relay_bounded(two_inputs) == 51
+}
+
+# GEN-17: membership and a candidate's member equality work without each.
+const fn has_key<...Ps>(f: const fn(...{Ps}) -> i64) -> i64
+    requires value_key in arg_keys(Ps) => 44
+
+const fn requires_absent_key<...Ps>(f: const fn(...{Ps}) -> i64) -> i64
+    requires absent_key in arg_keys(Ps) => 45
+
+operator by_type<...Ps>(f: const fn(...{Ps}) -> i64) -> i64
+impl const fn by_type<...Ps>(f: const fn(...{Ps}) -> i64) -> i64
+    requires Ps[value_key] == i64 => 46
+impl const fn by_type<...Ps>(f: const fn(...{Ps}) -> i64) -> i64
+    requires Ps[value_key] == f64 => 47
+
+test bare_pack_predicates {
+    assert has_key(integer) == 44
+    assert by_type(integer) == 46
+    assert by_type(real) == 47
+}
+
+test missing_pack_key {
+    # expect-error(constraint, "requires.unmet")
+    assert requires_absent_key(integer) == 45
+}
+
+# FN-18: only defaulted configuration fits a function type, and it
+# does not occupy a reflected slot.
+const fn scale{by: f64 = 2.0}(value: f64) -> f64 => value * by
+const fn requires_configuration{by: f64}(value: f64) -> f64 => value * by
+operator scale_operator{by: f64 = 2.0}(value: f64) -> f64
+impl const fn scale_operator{by: f64}(value: f64) -> f64 => value * by
+
+const fn apply(f: const fn(f64) -> f64, value: f64) -> f64 => f(value)
+const fn only_value<...Ps{1}>(f: const fn(...{Ps}) -> f64) -> i64
+    requires value_key in arg_keys(Ps) => 48
+
+test callback_configuration_defaults {
+    assert apply(scale, 3.0) == 6.0
+    assert apply(scale_operator, 4.0) == 8.0
+    assert only_value(scale) == 48
+}
+
+test mandatory_callback_configuration {
+    # expect-error(type, "type.mismatch")
+    assert apply(requires_configuration, 2.0) == 4.0
+}
+
+# FN-18: the braces give the enclosing generic. Its callback's
+# parentheses can give a name that the generic pack's without does not omit.
+const fn labelled(key: str, price: f64) -> i64 => 1
+
+const fn tagged<...Ps, ...As, const key: str = "key">(
+    f: const fn(...{Ps}) -> i64, args: ...{As for f without key},
+) -> i64 requires each arg in arg_keys(As) { arg == "key" } => 49
+
+operator tagged_operator<...Ps, ...As, const key: str = "key">(
+    f: const fn(...{Ps}) -> i64, args: ...{As for f without key},
+) -> i64
+
+impl const fn tagged_operator<...Ps, ...As, const key: str = "key">(
+    f: const fn(...{Ps}) -> i64, args: ...{As for f without key},
+) -> i64 requires each arg in arg_keys(As) { arg == "key" } => 50
+
+test generic_callback_option_in_braces {
+    assert tagged{key: "price"}(labelled, "category") == 49
+    assert tagged_operator{key: "price"}(labelled, key: "category") == 50
+}
+
+test callback_name_does_not_supply_the_generic {
+    # expect-error(name, "argument.unknown")
+    assert tagged(labelled, "category", key: "price") == 49
+}
+
+test dependent_arguments_are_ordered {
+    # expect-error(type, "argument.order")
+    assert invoke(labelled, key: "category", 3.0) == 42
+}
