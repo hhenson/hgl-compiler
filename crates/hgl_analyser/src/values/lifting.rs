@@ -884,8 +884,9 @@ fn contextual_type(value: &Expr, typer: Option<&Typer<'_>>) -> Option<Type> {
             let typed: Vec<&Type> = entries
                 .iter()
                 .filter(|entry| {
-                    !matches!(entry.kind, ExprKind::Literal(Value::Null))
-                        && !typer.is_some_and(|typer| contextual_member(typer, entry).is_some())
+                    let tail = block_tail(entry);
+                    !matches!(tail.kind, ExprKind::Literal(Value::Null))
+                        && !typer.is_some_and(|typer| contextual_member(typer, tail).is_some())
                 })
                 .map(|entry| &entry.ty)
                 .collect();
@@ -905,43 +906,44 @@ fn contextual_type(value: &Expr, typer: Option<&Typer<'_>>) -> Option<Type> {
     Some(inferred)
 }
 
-/// TYPE-7: an unread `.member` takes its type from the list, so it
-/// cannot supply that type. Other unread expressions may still need
-/// to settle before the list has one type. A block takes its type from
-/// its value (CTRL-10).
-fn contextual_member(typer: &Typer<'_>, entry: &Expr) -> Option<SyntaxNode> {
-    if whole(&entry.ty) {
+/// CTRL-10: nested blocks take their value and type from their tail.
+fn block_tail(mut entry: &Expr) -> &Expr {
+    while let ExprKind::Block {
+        value: Some(tail), ..
+    } = &entry.kind
+    {
+        entry = tail;
+    }
+    entry
+}
+
+/// TYPE-7: an unread `.member` takes its type from the list. Other
+/// unread expressions may still need to settle before the list has a type.
+fn contextual_member(typer: &Typer<'_>, tail: &Expr) -> Option<SyntaxNode> {
+    if !matches!(tail.kind, ExprKind::Unread) || whole(&tail.ty) {
         return None;
     }
-    match &entry.kind {
-        ExprKind::Block {
-            value: Some(tail), ..
-        } => contextual_member(typer, tail),
-        ExprKind::Unread => {
-            let node = typer.syntax_of(entry)?;
-            // A block's tail and its expression statement share a span.
-            let expression = if node.kind() == SyntaxKind::ExprStmt {
-                node.children().next()?
-            } else {
-                node
-            };
-            (expression.kind() == SyntaxKind::ImpliedMember).then_some(expression)
-        }
-        _ => None,
-    }
+    let node = typer.syntax_of(tail)?;
+    // A block's tail and its expression statement share a span.
+    let expression = if node.kind() == SyntaxKind::ExprStmt {
+        node.children().next()?
+    } else {
+        node
+    };
+    (expression.kind() == SyntaxKind::ImpliedMember).then_some(expression)
 }
 
 /// Replace only the contextual tail, keeping any statements already
 /// checked in the block's own scope.
-fn resolve_contextual_member(entry: &mut Expr, member: (ExprKind, Type)) {
+fn resolve_contextual_tail(entry: &mut Expr, resolved: (ExprKind, Type)) {
     if let ExprKind::Block {
         value: Some(tail), ..
     } = &mut entry.kind
     {
-        resolve_contextual_member(tail, member);
+        resolve_contextual_tail(tail, resolved);
         entry.ty = tail.ty.clone();
     } else {
-        (entry.kind, entry.ty) = member;
+        (entry.kind, entry.ty) = resolved;
     }
 }
 
@@ -983,16 +985,26 @@ fn settled_type(
             category(program, locals, then),
         ),
         ExprKind::Sequence(_) => {
+            let mut typer = typer;
             let inferred = contextual_type(value, typer.as_deref())?;
-            if let (Some(typer), Type::List { element, .. }, ExprKind::Sequence(entries)) =
-                (typer, &inferred, &mut value.kind)
+            if let (Type::List { element, .. }, ExprKind::Sequence(entries)) =
+                (&inferred, &mut value.kind)
             {
                 for entry in entries {
-                    if let Some(node) = contextual_member(typer, entry) {
-                        resolve_contextual_member(
+                    let tail = block_tail(entry);
+                    if matches!(tail.kind, ExprKind::Literal(Value::Null))
+                        && matches!(**element, Type::Nullable(_))
+                    {
+                        // EXPR-9 and TYPE-14: a null takes the list's
+                        // inferred nullable element type through its blocks.
+                        resolve_contextual_tail(
                             entry,
-                            typer.implied_member(&node, Some(element)),
+                            (ExprKind::Literal(Value::Null), (**element).clone()),
                         );
+                    } else if let Some(typer) = typer.as_deref_mut()
+                        && let Some(node) = contextual_member(typer, tail)
+                    {
+                        resolve_contextual_tail(entry, typer.implied_member(&node, Some(element)));
                     }
                 }
             }

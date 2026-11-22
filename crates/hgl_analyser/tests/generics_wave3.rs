@@ -1676,6 +1676,10 @@ fn recovered<T>(const input: T) -> f64 {
     let copied = forward
     let explicit: list<f64, 2> = [1, chosen]
     let nullable = [1, chosen, null]
+    let wrapped_null = [1, chosen, {
+        let preserved = 3
+        { null }
+    }]
     let known_float = [1, 2.5, chosen]
     return 0.0
 }
@@ -1708,9 +1712,9 @@ fn wrong_element() -> f64 => nonliteral(1)"#,
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:34:24 type/type.mismatch EXPR-5",
-            "m.hgl:39:27 type/type.mismatch EXPR-5",
-            "m.hgl:40:30 type/type.mismatch EXPR-5",
+            "m.hgl:38:24 type/type.mismatch EXPR-5",
+            "m.hgl:43:27 type/type.mismatch EXPR-5",
+            "m.hgl:44:30 type/type.mismatch EXPR-5",
         ],
         "{}",
         checked.report
@@ -1722,6 +1726,7 @@ fn wrong_element() -> f64 => nonliteral(1)"#,
         ("copied", "list<f64>"),
         ("explicit", "list<f64, 2>"),
         ("nullable", "list<f64?>"),
+        ("wrapped_null", "list<f64?>"),
         ("known_float", "list<f64>"),
     ] {
         let local = instance
@@ -1735,8 +1740,27 @@ fn wrong_element() -> f64 => nonliteral(1)"#,
     walk_statements(&instance.statements, &mut |expr| {
         if let ExprKind::Sequence(entries) = &expr.kind {
             for entry in entries {
-                let expected = match entry.kind {
+                let expected = match &entry.kind {
                     ExprKind::Literal(hgl_analyser::hir::Value::Null) => "f64?",
+                    ExprKind::Block {
+                        statements,
+                        value: Some(tail),
+                    } => {
+                        assert!(matches!(statements.as_slice(), [Stmt::Declare { .. }]));
+                        let ExprKind::Block {
+                            value: Some(null), ..
+                        } = &tail.kind
+                        else {
+                            panic!("the nested block holds null");
+                        };
+                        assert!(matches!(
+                            null.kind,
+                            ExprKind::Literal(hgl_analyser::hir::Value::Null)
+                        ));
+                        assert_eq!(null.ty.to_string(), "f64?");
+                        assert_eq!(tail.ty.to_string(), "f64?");
+                        "f64?"
+                    }
                     _ => "f64",
                 };
                 assert_eq!(entry.ty.to_string(), expected);
@@ -1744,7 +1768,7 @@ fn wrong_element() -> f64 => nonliteral(1)"#,
             lists += 1;
         }
     });
-    assert_eq!(lists, 5);
+    assert_eq!(lists, 6);
 }
 
 /// GEN-7, EXPR-9 and TYPE-7: an implied enum member takes the element

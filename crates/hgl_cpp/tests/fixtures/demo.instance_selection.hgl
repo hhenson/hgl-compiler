@@ -399,6 +399,16 @@ fn deferred_list_member<T>(const value: T) -> bool {
     return observes_right(values)
 }
 
+# EXPR-9 and TYPE-14: null takes the settled list element type through a block.
+const fn observes_null(values: list<i64?>) -> bool =>
+    values[0] != null && values[1] == null
+
+fn deferred_list_null<T>(const value: T) -> bool {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let values = [chosen, { null }]
+    return observes_null(values)
+}
+
 # GEN-2: the selected instance settles the argument and the result of
 # the generic value function, including the inferred local receiving it.
 const fn deferred_identity<U>(input: U) -> U => input
@@ -573,6 +583,7 @@ test an_instance_settles_its_graph_conditions {
     assert eval deferred_member(value: 3) == [3]
     assert eval deferred_enum_constructor(value: "s") == [GraphSide.left]
     assert eval deferred_list_member(value: "s") == [true]
+    assert eval deferred_list_null(value: "s") == [true]
     assert eval deferred_generic_result(value: 3) == [1]
     assert eval deferred_contextual_list(value: 3) == [12]
     assert eval deferred_contextual_result(value: 3) == [2]
