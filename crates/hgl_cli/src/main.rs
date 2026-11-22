@@ -238,6 +238,13 @@ struct RunArgs {
     #[arg(long = "config", value_name = "FIELD=VALUE", value_parser = replace::replacement)]
     config: Vec<Replacement>,
 
+    /// Build with native debug symbols and print a JSON launch description.
+    /// A fresh session directory under DIR holds the executable and generated C++.
+    /// Debug symbols refer to the original HGL application files.
+    /// The application is started by the debugger.
+    #[arg(long, value_name = "DIR", conflicts_with = "keep")]
+    debug_build: Option<PathBuf>,
+
     /// Build the application in this directory, which keeps what the
     /// target wrote. With none, it is built in a directory under the
     /// cache for its source roots, which is kept for the next run.
@@ -871,7 +878,9 @@ fn run(arguments: &RunArgs) -> ExitCode {
     };
     let mut program = hgl_analyser::analyse(&parsed, &mut diagnostics);
     if diagnostics.has_errors() {
-        println!("not run: the program is rejected");
+        if arguments.debug_build.is_none() {
+            println!("not run: the program is rejected");
+        }
         return report(&sources, diagnostics);
     }
     let chosen = match chosen_application(&program, arguments.application.as_deref()) {
@@ -883,6 +892,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
     // application is read again with each written in it, and the
     // program checked again: each is held to what the application
     // writes is.
+    let mut original_source = None;
     if !arguments.arguments.is_empty() || !arguments.config.is_empty() {
         let written = replace::EntryCall::of(&program, &chosen);
         let written_as = written
@@ -896,7 +906,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
         // reads as it did. Its file may have no name for one of them.
         let inferred = replace::inferred_generics(&parsed, &program, &chosen);
         let explicit = inferred.as_ref().filter(|generics| {
-            let Ok((file, text)) = replace::replaced(
+            let Ok((file, text, _)) = replace::replaced(
                 &sources,
                 &parsed,
                 &program,
@@ -920,7 +930,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
             let read = hgl_analyser::analyse(&files, &mut found);
             !found.has_errors() && replace::EntryCall::of(&read, &chosen) == written
         });
-        let (file, text) = match replace::replaced(
+        let (file, text, edits) = match replace::replaced(
             &sources,
             &parsed,
             &program,
@@ -947,9 +957,14 @@ fn run(arguments: &RunArgs) -> ExitCode {
             Err(status) => return status,
         };
         program = hgl_analyser::analyse(&parsed, &mut found);
+        if arguments.debug_build.is_some() {
+            original_source = Some((sources.file(file).clone(), edits));
+        }
         sources = read_again;
         if found.has_errors() {
-            println!("not run: the program is rejected with the replacements given");
+            if arguments.debug_build.is_none() {
+                println!("not run: the program is rejected with the replacements given");
+            }
             return report(&sources, found);
         }
         // "a constant checked against the type it replaces": the types
@@ -959,7 +974,9 @@ fn run(arguments: &RunArgs) -> ExitCode {
         // same one with other generic arguments, is of another type.
         let replaced = replace::EntryCall::of(&program, &chosen);
         if replaced != written {
-            println!("not run: the program is rejected with the replacements given");
+            if arguments.debug_build.is_none() {
+                println!("not run: the program is rejected with the replacements given");
+            }
             let replaced_as = replaced
                 .as_ref()
                 .map_or("no entry".to_string(), |entry| entry.shown(&program));
@@ -984,6 +1001,8 @@ fn run(arguments: &RunArgs) -> ExitCode {
             &chosen,
             arguments.keep.as_deref(),
             &arguments.roots,
+            arguments.debug_build.as_deref(),
+            original_source.as_ref(),
         ),
     }
 }

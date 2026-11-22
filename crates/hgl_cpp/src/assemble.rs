@@ -725,7 +725,7 @@ fn restored(text: &str, path: &str) -> String {
     }
     let mut out = String::with_capacity(text.len());
     for (number, line) in text.split_inclusive('\n').enumerate() {
-        if line.trim_end() == RESTORE {
+        if line.trim() == RESTORE {
             // `number` counts from 0: this line is `number + 1`, and the
             // next one `number + 2`.
             out.push_str(&format!(

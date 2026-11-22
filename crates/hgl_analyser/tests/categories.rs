@@ -89,19 +89,36 @@ fn what_each_expression_of_a_graph_is_is_recorded() {
     assert_eq!(checked.summary(), NONE);
     assert_eq!(
         recorded(&checked, body(&checked, "both")),
-        ["a && b: connection", "a: connection", "b: connection"]
+        [
+            "a && b: connection lifted",
+            "a: connection",
+            "b: connection"
+        ]
     );
     assert_eq!(
         recorded(&checked, body(&checked, "negated")),
         [
-            "neg(!a) || neg(k): connection",
+            "neg(!a) || neg(k): connection lifted",
             "neg(!a): connection lifted",
-            "!a: connection",
+            "!a: connection lifted",
             "a: connection",
             "neg(k): value",
             "k: value",
         ]
     );
+}
+
+/// EXPR-6: scalar Boolean forms inside graphs keep their first reading
+/// when no flow facts change, including under explicit grouping.
+#[test]
+fn nested_scalar_boolean_forms_fit_the_reading_budget() {
+    let expression = (0..20).fold("value".to_string(), |inside, _| {
+        format!("({inside} || false)")
+    });
+    let checked = module(&format!(
+        "fn nested(const value: bool) -> bool => {expression}\n"
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
 }
 
 /// FN-6: a value helper "with temporal arguments in composition is

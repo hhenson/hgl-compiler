@@ -266,6 +266,12 @@ pub(super) struct Description {
 }
 
 impl Toolchain {
+    /// Build generated units and their precompiled header with matching
+    /// symbols and optimization. These flags also distinguish the toolchain cache.
+    pub(super) fn enable_debug(&mut self) {
+        self.flags.extend(["-O0".to_string(), "-g".to_string()]);
+    }
+
     /// The configured or bundled toolchain, or why it could not be used.
     pub(super) fn find() -> Result<Toolchain, String> {
         let sdk = prefix(
@@ -662,15 +668,20 @@ fn compiler(family: Family) -> Result<(PathBuf, String), String> {
 /// names. `None` where the family has no such variable.
 pub(super) fn library_path(description: &Description) -> Option<(&'static str, OsString)> {
     let variable = description.family.library_variable()?;
-    let inherited = std::env::var_os(variable).unwrap_or_default();
-    let paths = description
-        .libraries
-        .iter()
-        .map(PathBuf::from)
-        .chain(std::env::split_paths(&inherited));
+    let inherited = std::env::var_os(variable).filter(|value| !value.is_empty());
+    let paths = description.libraries.iter().map(PathBuf::from).chain(
+        inherited
+            .as_deref()
+            .into_iter()
+            .flat_map(std::env::split_paths),
+    );
     // A directory with a `:` in it cannot be named in the list; it is
     // then left to the executable's run path.
-    Some((variable, std::env::join_paths(paths).unwrap_or(inherited)))
+    std::env::join_paths(paths)
+        .ok()
+        .or(inherited)
+        .filter(|value| !value.is_empty())
+        .map(|value| (variable, value))
 }
 
 /// Runs `command` to its end; `what` names it in the reason it failed,

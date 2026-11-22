@@ -13,7 +13,7 @@ use super::evals::{holds_trace, publications};
 use super::fit::whole;
 use super::inference::{Inferred, Places, fixed, infer, mentions, placed};
 use crate::declared::{is_optional, substitute_within};
-use crate::hir::{self, EndpointOperation, ExprKind, Value};
+use crate::hir::{self, EndpointOperation, Expr, ExprKind, Value};
 use crate::program::DeclarationKind;
 use crate::syntax::{child, has_token, name_token, tokens};
 use crate::types::{Argument, Detail, GenericKind, GenericParameter, NamedKind, Pack, Type};
@@ -134,6 +134,9 @@ impl<'a> Typer<'a> {
         given: Option<Vec<Argument>>,
         settled: bool,
     ) -> (ExprKind, Type) {
+        if let Some(unread) = self.unread_pack_call(list) {
+            return unread;
+        }
         let program = self.program;
         let declared = &program.modules[module].declarations[declaration];
         let Some(Detail::Struct(read)) = program.modules[module].details.get(declaration) else {
@@ -434,9 +437,22 @@ impl<'a> Typer<'a> {
         } else {
             None
         };
-        for (brace, name, value) in entries {
+        // FN-19: written arguments bind first. Forwarded names then
+        // bind ahead of forwarded positions, which take the slots left.
+        let spreads = self.forwarded_arguments(list);
+        let written = entries
+            .into_iter()
+            .map(|(brace, name, value)| (brace, name, value, None));
+        let expanded = spreads
+            .into_iter()
+            .map(|entry| (false, None, entry.source, Some((entry.key, entry.value))));
+        for (brace, name, value, forwarded) in written.chain(expanded) {
             let at = self.at(&value);
-            let slot = match &name {
+            let name_text = name.as_ref().map(SyntaxToken::text).or(match &forwarded {
+                Some((hir::PackKey::Name(name), _)) => Some(name.as_str()),
+                _ => None,
+            });
+            let slot = match name_text {
                 // TYPE-5: "it takes no positional argument."
                 None if takes == Takes::Fields => {
                     unnamed_field = true;
@@ -453,7 +469,7 @@ impl<'a> Typer<'a> {
                     None
                 }
                 None => {
-                    if named_seen {
+                    if named_seen && forwarded.is_none() {
                         self.diagnostics.emit(error(
                             Category::Type,
                             codes::ARGUMENT_ORDER,
@@ -485,16 +501,24 @@ impl<'a> Typer<'a> {
                     }
                     next.or(positional_pack).or(dependent)
                 }
-                Some(name) => {
-                    named_seen |= !brace;
-                    let name_at = Location::new(self.file, name.span());
+                Some(text) => {
+                    named_seen |= !brace && forwarded.is_none();
+                    let name_at = name
+                        .as_ref()
+                        .map_or(at, |name| Location::new(self.file, name.span()));
                     let found = slots
                         .iter()
-                        .position(|slot| slot.pack.is_none() && slot.name == name.text());
+                        .position(|slot| slot.pack.is_none() && slot.name == text);
                     let configuration = found.is_some_and(|index| slots[index].configuration);
                     // EXPR-10: configuration names bind first, then
                     // generic value parameters, then ordinary ones.
-                    if !configuration && aside.contains(&name.text()) {
+                    // FN-18: the parentheses of a declaration with
+                    // a dependent pack supply that callback's arguments.
+                    if !configuration
+                        && forwarded.is_none()
+                        && (brace || dependent.is_none())
+                        && aside.contains(&text)
+                    {
                         continue;
                     }
                     let found = found.filter(|_| {
@@ -511,7 +535,7 @@ impl<'a> Typer<'a> {
                                 Category::Name,
                                 codes::ARGUMENT_DUPLICATE,
                                 name_at,
-                                format!("`{}` is given twice", name.text()),
+                                format!("`{text}` is given twice"),
                                 "EXPR-2",
                             ));
                             None
@@ -523,12 +547,12 @@ impl<'a> Typer<'a> {
                             && (!configuration || !brace && dependent.is_some())
                             && (!brace || dependent.is_none()) =>
                         {
-                            if named_pack.is_some() && !pack_names.insert(name.text().to_string()) {
+                            if named_pack.is_some() && !pack_names.insert(text.to_string()) {
                                 self.diagnostics.emit(error(
                                     Category::Name,
                                     codes::ARGUMENT_DUPLICATE,
                                     name_at,
-                                    format!("`{}` is given twice", name.text()),
+                                    format!("`{text}` is given twice"),
                                     "EXPR-2",
                                 ));
                                 None
@@ -541,7 +565,7 @@ impl<'a> Typer<'a> {
                                 Category::Name,
                                 codes::ARGUMENT_UNKNOWN,
                                 name_at,
-                                format!("`{}` has no {what} `{}`", callee.text(), name.text()),
+                                format!("`{}` has no {what} `{text}`", callee.text()),
                                 if configuration { "FN-18" } else { "EXPR-2" },
                             ));
                             None
@@ -552,19 +576,10 @@ impl<'a> Typer<'a> {
             let pack = slot.and_then(|index| {
                 filled[index] = true;
                 slots[index].pack.map(|kind| {
-                    let captured = &mut pack_locations[index];
-                    let key = match kind {
-                        Pack::Positional => hir::PackKey::Position(captured.len()),
-                        Pack::Named => name.as_ref().map_or_else(
-                            || hir::PackKey::Position(captured.len()),
-                            |name| hir::PackKey::Name(name.text().to_string()),
-                        ),
-                    };
-                    let position = captured.len();
-                    captured.push(name.as_ref().map_or(at, |name| {
+                    let site = name.as_ref().map_or(at, |name| {
                         Location::new(self.file, Span::new(name.span().start, value.span().end))
-                    }));
-                    (position, key)
+                    });
+                    capture_key(&mut pack_locations[index], kind, name_text, site)
                 })
             });
             arguments.push(Assigned {
@@ -572,6 +587,7 @@ impl<'a> Typer<'a> {
                 pack,
                 name,
                 value,
+                forwarded,
             });
         }
         for (index, slot) in slots.iter().enumerate() {
@@ -623,18 +639,37 @@ impl<'a> Typer<'a> {
         given: &[Location],
     ) {
         let count = given.len() as u64;
-        let (at, bound, direction) = if let Some(maximum) = maximum
+        let at = if let Some(maximum) = maximum
             && count > maximum
         {
-            (given[maximum as usize], maximum, "at most")
+            given[maximum as usize]
         } else if count < minimum {
-            let at = tokens(list)
+            tokens(list)
                 .find(|token| token.kind() == SyntaxKind::RParen)
                 .map_or_else(
                     || self.at(list),
                     |token| Location::new(self.file, token.span()),
-                );
-            (at, minimum, "at least")
+                )
+        } else {
+            return;
+        };
+        self.check_pack_count_at(at, name, (minimum, maximum), count);
+    }
+
+    /// Check a pack whose argument count became known in an instance (GEN-10).
+    pub(super) fn check_pack_count_at(
+        &mut self,
+        at: Location,
+        name: &str,
+        (minimum, maximum): (u64, Option<u64>),
+        count: u64,
+    ) {
+        let (bound, direction) = if let Some(maximum) = maximum
+            && count > maximum
+        {
+            (maximum, "at most")
+        } else if count < minimum {
+            (minimum, "at least")
         } else {
             return;
         };
@@ -666,7 +701,11 @@ impl<'a> Typer<'a> {
             .into_iter()
             .map(
                 |Assigned {
-                     slot, pack, value, ..
+                     slot,
+                     pack,
+                     value,
+                     forwarded,
+                     ..
                  }| {
                     // No generic parameter here: a slot that is a trace is
                     // one an eval gives (TST-5).
@@ -674,9 +713,21 @@ impl<'a> Typer<'a> {
                         let slot = &slots[index];
                         (slot, matches!(slot.ty, Type::Trace { .. }))
                     });
-                    let mut argument = self.argument(slot, &value, expected, takes);
-                    argument.pack = pack.map(|(_, key)| key);
-                    argument
+                    if let Some((_, read)) = forwarded {
+                        let value = match expected {
+                            Some((slot, traced)) => self.fit_argument(read, slot, traced, takes),
+                            None => read,
+                        };
+                        hir::Argument {
+                            parameter: slot,
+                            pack: pack.map(|(_, key)| key),
+                            value,
+                        }
+                    } else {
+                        let mut argument = self.argument(slot, &value, expected, takes);
+                        argument.pack = pack.map(|(_, key)| key);
+                        argument
+                    }
                 },
             )
             .collect()
@@ -706,24 +757,7 @@ impl<'a> Typer<'a> {
             )) => self.function_argument(node, template),
             Some((slot, traced)) => {
                 let value = self.expression(node, Some(&slot.ty));
-                let value = if slot.listed {
-                    publications(value)
-                } else {
-                    value
-                };
-                // FN-12: a window's connection given to a value
-                // function's `list<V>` in composition (`lifted_window`).
-                let lifted = self.lifted_window(&slot.ty, slot.listed, &value, takes);
-                if lifted || (!traced && holds_trace(&value.ty)) {
-                    value
-                } else {
-                    let place = format!("the {} `{}`", takes.noun(), slot.name);
-                    if takes == Takes::Parameters {
-                        self.fit_input(value, &slot.ty, &place)
-                    } else {
-                        self.fit(value, &slot.ty, &place)
-                    }
-                }
+                self.fit_argument(value, slot, traced, takes)
             }
             None => self.expression(node, Some(&Type::Unknown)),
         };
@@ -731,6 +765,34 @@ impl<'a> Typer<'a> {
             parameter,
             pack: None,
             value,
+        }
+    }
+
+    /// Fits an already-read argument, including a forwarded pack entry.
+    pub(super) fn fit_argument(
+        &mut self,
+        value: Expr,
+        slot: &Slot<'_>,
+        traced: bool,
+        takes: Takes,
+    ) -> Expr {
+        let value = if slot.listed {
+            publications(value)
+        } else {
+            value
+        };
+        // FN-12: a window's connection given to a value
+        // function's `list<V>` in composition (`lifted_window`).
+        let lifted = self.lifted_window(&slot.ty, slot.listed, &value, takes);
+        if lifted || (!traced && holds_trace(&value.ty)) {
+            value
+        } else {
+            let place = format!("the {} `{}`", takes.noun(), slot.name);
+            if takes == Takes::Parameters {
+                self.fit_input(value, &slot.ty, &place)
+            } else {
+                self.fit(value, &slot.ty, &place)
+            }
         }
     }
 
@@ -754,6 +816,22 @@ impl<'a> Typer<'a> {
     }
 }
 
+/// Retain a capture's destination key and its place in that pack.
+fn capture_key(
+    locations: &mut Vec<Location>,
+    kind: Pack,
+    name: Option<&str>,
+    at: Location,
+) -> (usize, hir::PackKey) {
+    let position = locations.len();
+    locations.push(at);
+    let key = match (kind, name) {
+        (Pack::Named, Some(name)) => hir::PackKey::Name(name.to_string()),
+        _ => hir::PackKey::Position(position),
+    };
+    (position, key)
+}
+
 /// An argument tied to a place before its value is read.
 pub(super) struct Assigned {
     /// The index of its parameter or field.
@@ -764,6 +842,21 @@ pub(super) struct Assigned {
     pub(super) name: Option<SyntaxToken>,
     /// The value written by the call.
     pub(super) value: SyntaxNode,
+    /// The source key and typed read for an entry supplied by a spread.
+    pub(super) forwarded: Option<(hir::PackKey, Expr)>,
+}
+
+impl Assigned {
+    /// The supplied name, whether written in this call or forwarded.
+    pub(super) fn name_text(&self) -> Option<&str> {
+        self.name
+            .as_ref()
+            .map(SyntaxToken::text)
+            .or_else(|| match &self.forwarded {
+                Some((hir::PackKey::Name(name), _)) => Some(name),
+                _ => None,
+            })
+    }
 }
 
 /// What an argument may be given to: a parameter of a function, or a

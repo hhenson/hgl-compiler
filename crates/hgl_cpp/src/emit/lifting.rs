@@ -21,15 +21,16 @@
 //! | A result read as its value in a `when` (ERR-5, ERR-8) | the result read as its success, and the node failed with its original error on failure, which keeps the context a retained error has |
 //! | `failure.context`, and its `.node`, `.phase`, `.evaluation_time` (ERR-4) | `(failure).context`, a `std::optional` of hgraph's `ErrorContext`; its members of those names |
 //!
-//! Not written yet, and reported: a lifted call or a capture given an
-//! argument of a pack (FN-8), and a capture of a call of an operator's
-//! candidate.
+//! Native positional packs give each packed argument its own runtime
+//! slot (FN-8), including Boolean chains (OPS-5).
+//! A capture of an operator candidate is reported as unavailable.
 
 use hgl_analyser::hir::{
     Argument, Body, Callee, ErrorPart, Expr, ExprKind, Local, Raise, Stmt, ValueCategory,
 };
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Phase as BodyPhase, Role as Phase, Type};
 use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
+use hgl_lower::instances::NativePack;
 use hgl_lower::types::read_whole_all_valid;
 
 use super::Emitter;
@@ -225,7 +226,9 @@ impl Emitter<'_> {
             };
             (declared, Some((module, declaration)), arguments.as_slice())
         };
+        let native_pack = NativePack::of(program, callee, arguments);
         let concrete = if origin.is_some()
+            && native_pack.is_none()
             && declared.parameters.iter().any(|parameter| {
                 parameter.pack.is_some() || matches!(parameter.ty, Type::Function(_))
             }) {
@@ -237,12 +240,18 @@ impl Emitter<'_> {
             None
         };
         let parameter_for = |argument: &Argument| {
+            if let Some(pack) = &native_pack {
+                return pack.parameter(argument);
+            }
             concrete.map_or_else(
                 || argument.parameter.filter(|_| argument.pack.is_none()),
                 |instance| instance.parameter(argument),
             )
         };
-        let signature = concrete.map_or(declared, |instance| &instance.signature);
+        let signature = native_pack.as_ref().map_or_else(
+            || concrete.map_or(declared, |instance| &instance.signature),
+            |pack| &pack.signature,
+        );
         let mut locals: Vec<Local> = Vec::new();
         let mut roles: Vec<Role> = Vec::new();
         let mut parameters: Vec<String> = Vec::new();

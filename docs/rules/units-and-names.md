@@ -31,7 +31,8 @@ transpiler: done
 analyser: partial
 
 - Functions, types, constants and operators are private unless exported. A candidate is reached through its operator (GEN-4). Private imports and import cycles reject.
-- Left: export closure.
+- A source import can use a private type reached through an exported signature without importing that type by name.
+- Left: carrying the reachable types and defining metadata in a compiled module interface (#132).
 
 ## UNIT-4
 
@@ -56,7 +57,8 @@ analyser: done
 analyser: partial
 
 - A default reads no parameter of its declaration and no field of its struct. Its own block bindings stay in scope when the default is specialized.
-- Left: the closure an imported default keeps; defaults that read a function's laws (#367).
+- An imported default retains its defining module's private bindings, even where the caller binds the same name.
+- Left: defaults that read a function's laws (#367).
 
 ## UNIT-8
 
@@ -66,17 +68,16 @@ analyser: partial
 - A parameter that may be omitted follows every one that may not within the parentheses. Configuration parameters in braces can stand in any order. A value function's call may omit a parameter written `T?`.
 - A default is read as a value of its parameter's type (`type.mismatch`) and kept for the stages after, `Module::defaults`
 - Law predicates in defaults await #367.
-- Left: that a default is a required constant; the default of a window, an atomic or a reference, which is held to no type; a default whose parameter's type names a generic parameter
+- A default on a `ref` parameter is checked against the type after its mode (FN-16).
+- Known required-constant failures reject at the parameter default (ERR-9). A window default is checked as an arrival and an atomic default as its whole payload (TYPE-9, TYPE-11).
+- Omitted parameter defaults are checked against the concrete parameter type after generic selection, including in a call made by a generic body.
 
 transpiler: partial
 
 - Binds omitted defaults or null after explicit arguments. Wires an omitted temporal
   default as a constant or leaves an optional input silent.
 - An inherited operator configuration default can run a block in its own lexical scope.
-- Left: statement blocks in other defaults and defaults that propagate a failure,
-  recursively leave themselves out or have unsupported types. A graph call leaving out a nullable
-  temporal input is reported (#399), as is a fallible default of a lifted nullable
-  argument.
+- Left: blocks with statements in callable and field defaults, and nonempty field defaults whose type depends on a generic struct argument. A graph call leaving out a nullable temporal input is reported (#399). The target also reports a recursively omitted default and retains a defensive report for defaults whose emitted evaluation needs failure-handling statements.
 
 ## UNIT-9
 
@@ -91,7 +92,8 @@ analyser: planned
 analyser: partial
 
 - Every name in a signature, body, type and constraint resolved to its one binding, and one that nothing binds is `name.unknown`
-- Left: capability receivers; activation forms; `types(Ts)` and `schemas(pack)`, which are forms no pass reads yet and are not reported
+- Clock properties resolve on the capability, and `types(Ts)` supplies the selections in an `each` constraint (GEN-10).
+- Left: a declaration named `scheduled` can shadow the reserved `scheduled()` form (TIME-9); `schemas(pack)` is accepted in an ordinary value result where the borrowed view cannot be returned (GEN-10).
 
 ## UNIT-11
 
@@ -127,13 +129,12 @@ analyser: partial
 - One the reader does not work out, a datetime moved by a duration, is no value a generic value argument is given (`generic.argument_constant`), as the same expression written in place is not
 - An expression is read in a loop along a chain of operators, `1 + 1 + ... + 1`, of any length the parser builds a tree for
 - One whose value depends on itself is `constant.cycle`: through another constant, the definition a call selected, an operator's candidate a symbol or a name selected, or a default a call leaves to be read
-- Left: the value of a constant computed by a `const fn`; a struct's field default counts for a construction that gives the field; a formatter's writing a constant back as written, as there is no formatter yet
+- Left: evaluating constants computed by a `const fn` (#240), including required-constant failures. A constructor can acquire a false dependency from the default of a field it explicitly supplies. Source formatting is pending and must preserve constant spellings.
 
 transpiler: partial
 
 - Emits one module constant value and reuses it at its reads.
-- Left: Reports a constant whose value runs statements or propagates a failure. A
-  constant with no value has a defensive report.
+- Left: reports a constant whose value runs statements. Defensive reports remain for a constant without a typed value or whose emitted evaluation needs failure-handling statements.
 
 ## UNIT-14
 

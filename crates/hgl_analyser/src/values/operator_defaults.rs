@@ -1,4 +1,4 @@
-//! Checks configuration after candidate selection.
+//! Checks omitted defaults after function and candidate selection.
 //!
 //! The operator owns the default (GEN-6). The declaration pass binds and
 //! checks the expression in its defining scope (UNIT-7). With generic
@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::HasSpan;
 
+use super::constants::parameter_default_type;
 use super::fit::{open, whole};
 use super::requirements::{Made, concrete_default_calls};
 use super::{Tables, Typer, lifting};
@@ -67,7 +68,7 @@ struct Defaults {
 #[derive(PartialEq)]
 struct DefaultUse {
     at: Location,
-    operator: (usize, usize),
+    owner: (usize, usize),
     generics: Vec<Argument>,
     expected: Type,
 }
@@ -92,17 +93,13 @@ impl Defaults {
             ExprKind::Call {
                 callee, arguments, ..
             } => {
-                check_call(
-                    program,
-                    self,
-                    callee,
-                    |slot| {
-                        arguments
-                            .iter()
-                            .any(|argument| argument.parameter == Some(slot))
-                    },
-                    diagnostics,
-                );
+                let supplied = |slot| {
+                    arguments
+                        .iter()
+                        .any(|argument| argument.parameter == Some(slot))
+                };
+                check_declared_defaults(program, self, callee, supplied, diagnostics);
+                check_inherited_defaults(program, self, callee, supplied, diagnostics);
             }
             ExprKind::StaticCallable(callee)
                 if let Callee::Anonymous(function) = callee.as_ref() =>
@@ -116,12 +113,26 @@ impl Defaults {
     }
 }
 
-/// True where an instance can resolve the selected type of an inherited
-/// default or supplied configuration for a required call.
+/// True where an instance can resolve a default's expected type or
+/// the selected configuration of a required call.
 pub(super) fn selects_configuration(program: &Program, unit: &Module, declaration: usize) -> bool {
     let has_default = |operator: (usize, usize)| {
-        matches!(program.modules[operator.0].details.get(operator.1),
-            Some(Detail::Callable(signature)) if signature.parameters.iter().any(configuration_default))
+        let unit = &program.modules[operator.0];
+        let Some(Detail::Callable(signature)) = unit.details.get(operator.1) else {
+            return false;
+        };
+        signature.parameters.iter().any(configuration_default)
+            || unit.defaults.get(operator.1).is_some_and(|defaults| {
+                signature
+                    .parameters
+                    .iter()
+                    .zip(defaults)
+                    .any(|(parameter, default)| {
+                        default
+                            .as_ref()
+                            .is_some_and(|default| dependent_default(parameter, default))
+                    })
+            })
     };
     if unit.selecting.get(declaration).is_some_and(|calls| {
         calls
@@ -149,9 +160,22 @@ pub(super) fn selects_configuration(program: &Program, unit: &Module, declaratio
                     ..
                 } => found = true,
                 ExprKind::Call {
-                    callee: Callee::Required { operator, .. } | Callee::Candidate { operator, .. },
+                    callee:
+                        Callee::Candidate {
+                            operator,
+                            module,
+                            declaration,
+                            ..
+                        },
+                    ..
+                } => found = has_default(*operator) || has_default((*module, *declaration)),
+                ExprKind::Call {
+                    callee: Callee::Required { operator, .. },
                     ..
                 } => found = has_default(*operator),
+                ExprKind::Call { callee, .. } => {
+                    found = callee.declaration().is_some_and(has_default);
+                }
                 ExprKind::StaticCallable(callee)
                     if let Callee::Anonymous(function) = callee.as_ref() =>
                 {
@@ -180,7 +204,7 @@ pub(super) fn check_instance(
         callee,
         generics,
         requirements,
-        (&[], &[]),
+        crate::instance::InstanceInputs::default(),
         &reports,
         graph_diagnostics,
     )?;
@@ -196,8 +220,71 @@ pub(super) fn check_instance(
     Some((signature, body))
 }
 
+/// UNIT-8: check a selected call's own omitted defaults once their
+/// parameter types are concrete.
+fn check_declared_defaults(
+    program: &Program,
+    checking: &mut Defaults,
+    callee: &Callee,
+    supplied: impl Fn(usize) -> bool,
+    diagnostics: &mut Diagnostics,
+) {
+    let Some(owner) = callee.declaration() else {
+        return;
+    };
+    let unit = &program.modules[owner.0];
+    let Some(Detail::Callable(signature)) = unit.details.get(owner.1) else {
+        return;
+    };
+    if !signature
+        .parameters
+        .iter()
+        .any(|parameter| parameter.has_default)
+    {
+        return;
+    }
+    let Some(defaults) = unit.defaults.get(owner.1) else {
+        return;
+    };
+    let generics = callee.generics();
+    let map: Vec<_> = signature
+        .generics
+        .iter()
+        .map(|generic| generic.at)
+        .zip(generics)
+        .collect();
+    for (slot, (parameter, default)) in signature.parameters.iter().zip(defaults).enumerate() {
+        let Some(default) = default else {
+            continue;
+        };
+        if !dependent_default(parameter, default)
+            || supplied(slot)
+            || parameter.configuration
+                && program
+                    .inherited_configuration_default(callee, slot)
+                    .is_some()
+        {
+            continue;
+        }
+        let ty = substitute_within(&parameter.ty, &map);
+        if names_parameter(&ty) || !whole(&ty) {
+            continue;
+        }
+        let concrete = Parameter {
+            ty,
+            ..parameter.clone()
+        };
+        checking.specialize(
+            program,
+            (owner, generics),
+            (default, &concrete),
+            diagnostics,
+        );
+    }
+}
+
 /// UNIT-8: check only the inherited defaults that this selected call uses.
-fn check_call(
+fn check_inherited_defaults(
     program: &Program,
     checking: &mut Defaults,
     callee: &Callee,
@@ -253,24 +340,42 @@ fn check_call(
             ty,
             ..parameter.clone()
         };
+        checking.specialize(
+            program,
+            (*operator, operator_generics),
+            (default, &concrete),
+            diagnostics,
+        );
+    }
+}
+
+impl Defaults {
+    /// Check a default in its defining scope and follow the calls it uses.
+    fn specialize(
+        &mut self,
+        program: &Program,
+        (owner, generics): ((usize, usize), &[Argument]),
+        (default, parameter): (&hir::DefaultExpr, &Parameter),
+        diagnostics: &mut Diagnostics,
+    ) {
         let use_key = DefaultUse {
             at: default.value.at,
-            operator: *operator,
-            generics: operator_generics.clone(),
-            expected: concrete.ty.clone(),
+            owner,
+            generics: generics.to_vec(),
+            expected: parameter.ty.clone(),
         };
-        if checking.seen.len() >= crate::INSTANCES || checking.seen.contains(&use_key) {
-            continue;
+        if self.seen.len() >= crate::INSTANCES || self.seen.contains(&use_key) {
+            return;
         }
-        checking.seen.push(use_key);
+        self.seen.push(use_key);
         let mut reports = Diagnostics::new();
-        let specialized = program.specialize_operator_default(
-            default,
-            *operator,
-            operator_generics,
-            &concrete,
-            &mut reports,
-        );
+        let specialized =
+            program.specialize_parameter_default(default, owner, generics, parameter, &mut reports);
+        if !reports.has_errors() && reads_generic_value(default) {
+            with_configuration_typer(program, owner, &mut reports, |typer| {
+                typer.check_default_evaluation(default.value.at, parameter, generics);
+            });
+        }
         for report in reports.as_slice() {
             if !diagnostics.as_slice().contains(report) {
                 diagnostics.emit(report.clone());
@@ -279,9 +384,23 @@ fn check_call(
         if !reports.has_errors() {
             // GEN-16: the specialized expression can call a candidate
             // that was not known when its source declaration was read.
-            checking.pending.push(specialized.value);
+            self.pending.push(specialized.value);
         }
     }
+}
+
+/// An omitted default can depend on generic arguments through its type
+/// or through a value read by the expression.
+fn dependent_default(parameter: &Parameter, default: &hir::DefaultExpr) -> bool {
+    names_parameter(&parameter.ty) || reads_generic_value(default)
+}
+
+fn reads_generic_value(default: &hir::DefaultExpr) -> bool {
+    let mut found = false;
+    default
+        .value
+        .walk(&mut |value| found |= matches!(value.kind, ExprKind::GenericValue { .. }));
+    found
 }
 
 /// A configuration parameter with a default of its own.
@@ -312,7 +431,8 @@ pub(crate) fn fit_operator_default(
     parameter: &Parameter,
     diagnostics: &mut Diagnostics,
 ) -> Expr {
-    let expected = &parameter.ty;
+    let null = matches!(value.kind, ExprKind::Literal(Value::Null));
+    let expected = parameter_default_type(&parameter.ty, null);
     if value.ty == *expected
         || names_parameter(expected)
         || !whole(expected)
@@ -320,7 +440,7 @@ pub(crate) fn fit_operator_default(
     {
         return value;
     }
-    if matches!(value.kind, ExprKind::Literal(Value::Null)) {
+    if null {
         if matches!(expected, Type::Nullable(_)) {
             value.ty = expected.clone();
         } else if !open(expected) && *expected != Type::Signal {
@@ -337,15 +457,10 @@ pub(crate) fn fit_operator_default(
         }
         return value;
     }
-    let mut value = fit_configuration(
-        program,
-        operator,
-        value,
-        expected,
-        &parameter.name,
-        None,
-        diagnostics,
-    );
+    let place = format!("the default of `{}`", parameter.name);
+    let mut value = with_configuration_typer(program, operator, diagnostics, |typer| {
+        typer.fit_parameter_default(value, parameter, expected, &place)
+    });
     lifting::record_value(program, &mut value);
     value
 }

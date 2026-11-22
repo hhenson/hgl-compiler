@@ -5,10 +5,9 @@ the same numeric rules the transpiler entries give.
 
 ## NUM-1
 
-analyser: partial
+analyser: done
 
-- Result types of arithmetic on `i64` and `f64`, and of unary minus, in value functions, through core's candidates
-- Left: temporal bodies
+- Selects core's numeric arithmetic and unary negation candidates in value functions, node hooks and graph composition.
 
 transpiler: done
 
@@ -45,10 +44,9 @@ transpiler: done
 
 ## NUM-6
 
-analyser: partial
+analyser: done
 
-- In a value function a comparison outcome is a `CmpResult`, and is rejected where a bool or a number is expected
-- Left: temporal bodies
+- A full comparison yields `CmpResult` in value functions, node hooks and graph composition. A bool result place rejects.
 
 transpiler: done
 
@@ -67,10 +65,9 @@ optimiser: planned
 
 ## NUM-8
 
-analyser: partial
+analyser: done
 
-- In a value function, configuration selects among the candidates of the operator its symbol stands for, and an option left out takes the default its candidate declares
-- Left: temporal bodies
+- Selects the same numeric candidate and its configuration defaults in value functions, node hooks and graph composition.
 
 optimiser: planned
 
@@ -83,10 +80,9 @@ transpiler: done
 
 ## NUM-9
 
-analyser: partial
+analyser: done
 
-- A division, by name or by symbol, through core's candidates in a value function: its own type, or a `result` of it under `zero: .error`; `zero` is a generic value parameter, so one given no compile-time constant is rejected
-- Left: temporal bodies
+- Resolves configured division by name or by symbol in value functions, node hooks and graph composition. A compile-time `zero: .error` selects a tagged result.
 
 transpiler: done
 
@@ -106,7 +102,8 @@ analyser: partial
 
 - `eq_(a, b, abs: ..., rel: ...)` by name through core's candidates in a value function: the tolerances are options of the candidates for numbers, and of no other
 - The same as the symbol's configuration, `a =={abs: ...} b`
-- Left: temporal bodies
+- Accepts scalar tolerances in graph composition and tolerances read in a node hook.
+- Left: a named comparison in a graph accepts a connected tolerance (#505).
 
 transpiler: done
 
@@ -115,10 +112,9 @@ transpiler: done
 
 ## NUM-12
 
-analyser: partial
+analyser: done
 
-- Every division, by name or by symbol, through core's candidates in a value function: a division whose result is an `f64` admits each policy, one whose result is an `i64` or a `duration` only `.error` and `.fail`, and `.error` gives a `result`
-- Left: temporal bodies
+- The result type determines the admitted policies in value functions, node hooks and graph composition. In each, `f64` admits every policy, `i64` and `duration` admit `.error` and `.fail`, and `.error` selects a tagged result.
 
 transpiler: done
 
@@ -131,7 +127,8 @@ analyser: partial
 
 - In a value function a symbol is the call of the core operator it stands for, and admits the operand types that operator's candidates declare, core's and a module's own; any other pairing rejected (`operator.no_candidate`)
 - Its operands are read as the call's arguments are, and the type its place expects is requested of the candidates
-- Left: temporal bodies
+- Numeric arithmetic and text concatenation use the same candidate selection in node hooks and graph composition.
+- Left: a calendar given as a connection to a date symbol (#493).
 
 transpiler: done
 
@@ -154,17 +151,16 @@ transpiler: done
 
 ## OPS-3
 
-analyser: partial
+analyser: done
 
-- `a <=> b` and `compare_(a, b)` through core's candidates in a value function are a `CmpResult`
-- Left: temporal bodies
+- `a <=> b` and `compare_(a, b)` give the selected candidate's `CmpResult` in value functions, node hooks and graph composition.
 
 ## OPS-4
 
 analyser: partial
 
-- `convert<T>(value)` through core's candidates in a value function: the conversions core declares, and no other
-- Left: a list of structs to a list of their parent; temporal bodies
+- Resolves declared conversions in value functions, node hooks and graph composition. A list of concrete structs converts to a list of their abstract parent (OPS-6).
+- Left: the enum conversions awaiting Core declarations and target support (#514).
 
 transpiler: done
 
@@ -173,10 +169,13 @@ transpiler: done
 
 ## OPS-5
 
-analyser: partial
+analyser: done
 
-- The Boolean connectives and `!` take bools, in a value function
-- Left: temporal bodies
+- Boolean forms take bools. Composition selects `and_`, `or_` or `not_`, and an unparenthesized chain of three or more operands selects `all_` or `any_` over the whole chain.
+
+transpiler: done
+
+- Value code and hooks preserve short-circuiting. Composed Boolean calls use ordinary lifting and give each connected operand its own input.
 
 ## OPS-6
 
@@ -202,10 +201,9 @@ transpiler: done
 
 ## OPS-8
 
-analyser: partial
+analyser: done
 
-- The options of `convert` through core's candidates in a value function: `invalid` selects `result<T, error>` or T and is given a compile-time constant, `rounding` and `nan` are parameters, and an option is admitted only for the conversions that declare it
-- Left: temporal bodies
+- In value functions, node hooks and graph composition, the compile-time `invalid` option selects T or `result<T, error>`. The candidate declares which options it admits.
 
 transpiler: done
 
@@ -368,15 +366,14 @@ transpiler: partial
 
 - Emits result invalidation, including clearing collection results and reference
   designations, and permits observation of the transition without a modified guard.
-- Left: An unsupported endpoint family or operation context is reported (TIME-9).
+- Left: `invalidate(input)` passes source checking and is declined by the target. The Core operation clears the node's own `out`. Unsupported output shapes follow TYPE-9.
 
 ## END-5
 
 transpiler: partial
 
-- Writes input activity control and suppresses silent no-change collection updates.
-- Left: Reports `activate` and `passivate` in `stop`. A window result holds its last
-  arrival until the handler's evaluation finishes (END-9).
+- Writes input activity control and suppresses silent no-change collection updates. A window result holds its last arrival until the handler's evaluation finishes (END-9).
+- Left: `activate` and `passivate` in `stop` pass source checking and are declined by the target. TIME-5 specifies a source `input.lifecycle` rejection.
 
 ## END-6
 
@@ -393,13 +390,13 @@ transpiler: done
 
 analyser: done
 
-- `all_valid` is an endpoint operation on a list, tuple, struct, dictionary or window (TIME-9)
+- `all_valid` takes a list, tuple, struct, dictionary or window. A set rejects with `endpoint.argument` (TIME-9).
 
 transpiler: partial
 
 - Uses published-empty collection validity and one-level `all_valid`, excluding optional
   children in supported bundle forms.
-- Left: An unsupported endpoint or `all_valid` of a set is reported.
+- Left: deeper nested dictionary and list schemas follow TYPE-9.
 
 ## END-8
 
@@ -447,7 +444,8 @@ transpiler: partial
 
 - A reader observes the designated input or fixed-list child through the reference port,
   including changes caused by rebinding or removing the target.
-- Left: Unsupported designations and timer combinations are recorded under FN-16.
+- A scheduler can wake a node that forwards a `ref` parameter.
+- Left: designating a dictionary child and designating an ordinary input in a node with a timer (FN-16).
 
 ## CAP-1
 
@@ -512,14 +510,13 @@ analyser: partial
 - `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get` gives a `result<V, error>`, with V written by the caller or inferred from the place
 - The run's own key, `"run.output"`, written out as a key is rejected (`store.reserved_key`)
 - A key written out is used with one type in a program: a `put` or a `get` of another type than an earlier use is `store.key_type` (TIME-8)
-- Left: the run's key, and a key, where it is a `const` parameter, which is known when the graph is built
+- Left: a key resolved from a `const` parameter can name `run.output` or bypass the source check for inconsistent types.
 
 transpiler: partial
 
 - Reads a store entry as a whole result before applying the recorded form, and writes
   supported ordinary payloads before a run, at graph build and in hooks.
-- Left: Putting a nullable value is reported (hhenson/hgl_spec#165). A child graph that
-  uses a captured store is reported (CRUN-7).
+- Left: an explicitly typed nullable store write and a temporal child graph using the surrounding store are declined (CRUN-7).
 
 ## CAP-7
 
@@ -531,6 +528,14 @@ transpiler: done
 
 - Exposes the supplied start, end and length as nullable properties, distinct from the
   bounds resolved for execution.
+
+## CAP-8
+
+transpiler: planned
+
+- The meanings of the clock's, the scheduler's and the logger's members are the engine's, reached
+  through the SDK as CAP-2 to CAP-5 write them. Nothing here cites or checks them yet: the
+  examples of core's comments run them once examples run as tests (#458).
 
 ## CONF-1
 
@@ -566,8 +571,7 @@ transpiler: partial
 
 - Creates an eval entry wired to core's replay and record and binds ordinary const
   arguments for the run.
-- Left: Reports replay or record with no suitable core native, an unrepresentable target
-  and replay of a trace not written as a literal (TST-5).
+- Left: reports replay of a trace bound from an earlier eval (TST-3, TST-5). Replay and recording require a representable temporal schema (CEVAL-3, CEVAL-4).
 
 ## CEVAL-2
 
@@ -586,8 +590,8 @@ transpiler: partial
 
 - Replays scalar publications, whole or delta collection entries, and window arrivals as
   their forms require.
-- Left: Collection and window schemas are restricted as described under TYPE-9 and
-  TYPE-11.
+- Replays a supported nested dictionary.
+- Left: an input of a concrete instantiation of a generic struct cannot yet be replayed. Other schema limits are under TYPE-9 and TYPE-11.
 
 ## CEVAL-4
 
@@ -595,8 +599,7 @@ transpiler: partial
 
 - Records independent timestamp and delta pairs, including an empty recording. A cycle
   that only ages a window adds no entry.
-- Left: Recording requires a compatible native and supported trace form (CEVAL-1,
-  TYPE-16).
+- Left: a result of a concrete instantiation of a generic struct cannot yet be recorded. Other schema limits are under TYPE-9 and TYPE-16.
 
 ## CEVAL-5
 
@@ -689,15 +692,14 @@ transpiler: partial
 
 - Creates one store for a run, populated by the application before graph construction,
   and executes its wiring-time store calls in order.
-- Left: A nested branch or loop using the store from the surrounding graph and a
-  nullable store write are reported (FN-9, CAP-6).
+- Left: a temporal branch using its surrounding graph's store, and an explicitly typed nullable write, are declined by the target (FN-9, CAP-6).
 
 ## CRUN-8
 
 analyser: partial
 
 - The run's own key written out as a key of the global store is rejected (`store.reserved_key`)
-- Left: a key that is a `const` parameter
+- Left: a key supplied as a `const` parameter can name `run.output` (CAP-6).
 
 transpiler: partial
 

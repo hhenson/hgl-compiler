@@ -399,6 +399,7 @@ fn constant_failures(program: &Program, diagnostics: &mut Diagnostics) {
                 file,
                 binding: &binding,
                 parameter: &|_| None,
+                arguments: &[],
                 constants: &constants,
             };
             if !crate::constant::fails_to_evaluate(&scope, (index, position)) {
@@ -452,6 +453,7 @@ fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
                 file,
                 binding: &binding,
                 parameter: &|_| None,
+                arguments: &[],
                 constants: &constants,
             };
             // What is wrong with the constant `node` as a value of `ty`,
@@ -562,34 +564,49 @@ fn option_kinds(program: &Program, diagnostics: &mut Diagnostics) {
     // The candidates of the program, each with its operator, by the
     // operator's module and declaration.
     let candidates = || {
-        program.modules.iter().flat_map(|module| {
-            module
-                .declarations
-                .iter()
-                .enumerate()
-                .filter_map(move |(index, declaration)| {
-                    let (_, operator) = declaration.kind.candidate()?;
-                    let operator = operator?;
-                    match module.details.get(index) {
-                        Some(Detail::Callable(signature)) => {
-                            Some(((operator.module, operator.declaration), signature))
+        program
+            .modules
+            .iter()
+            .enumerate()
+            .flat_map(|(index, module)| {
+                module
+                    .declarations
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(position, declaration)| {
+                        let (_, operator) = declaration.kind.candidate()?;
+                        let operator = operator?;
+                        let scope = declaration.test_owner.map(|test| (index, test));
+                        match module.details.get(position) {
+                            Some(Detail::Callable(signature)) => {
+                                Some(((operator.module, operator.declaration), scope, signature))
+                            }
+                            _ => None,
                         }
-                        _ => None,
-                    }
-                })
-        })
+                    })
+            })
     };
-    // For each operator: the options its candidates declare as generic
-    // value parameters, each with where one of them does.
-    let mut selecting: HashMap<(usize, usize), HashMap<&str, Location>> = HashMap::new();
-    for (operator, signature) in candidates() {
+    struct OptionDeclaration {
+        /// The named test where this candidate is visible, when private.
+        scope: Option<(usize, usize)>,
+        at: Location,
+    }
+    // For each operator: the options declared as generic value parameters
+    // and the scopes where their candidates are visible (GEN-6, TST-1).
+    let mut selecting: HashMap<(usize, usize), HashMap<&str, Vec<OptionDeclaration>>> =
+        HashMap::new();
+    for (operator, scope, signature) in candidates() {
         for generic in &signature.generics {
             if matches!(generic.kind, GenericKind::Value(_)) {
                 selecting
                     .entry(operator)
                     .or_default()
                     .entry(generic.name.as_str())
-                    .or_insert(generic.at);
+                    .or_default()
+                    .push(OptionDeclaration {
+                        scope,
+                        at: generic.at,
+                    });
             }
         }
     }
@@ -598,7 +615,7 @@ fn option_kinds(program: &Program, diagnostics: &mut Diagnostics) {
     }
     // A second pass, in the order the candidates are declared, so that
     // what is reported comes in one order on every run.
-    for (operator, signature) in candidates() {
+    for (operator, scope, signature) in candidates() {
         let Some(names) = selecting.get(&operator) else {
             continue;
         };
@@ -616,7 +633,11 @@ fn option_kinds(program: &Program, diagnostics: &mut Diagnostics) {
             if own.contains(&index) {
                 continue;
             }
-            let Some(other) = names.get(parameter.name.as_str()) else {
+            let Some(other) = names.get(parameter.name.as_str()).and_then(|declared| {
+                declared
+                    .iter()
+                    .find(|other| scope.is_none() || other.scope.is_none() || scope == other.scope)
+            }) else {
                 continue;
             };
             diagnostics.emit(
@@ -631,7 +652,7 @@ fn option_kinds(program: &Program, diagnostics: &mut Diagnostics) {
                     ),
                     "GEN-6",
                 )
-                .with_related(*other, "a generic value parameter here"),
+                .with_related(other.at, "a generic value parameter here"),
             );
         }
     }

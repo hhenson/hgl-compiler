@@ -31,7 +31,9 @@ pub(crate) fn build<'a>(
     let mut candidates = BTreeMap::<Id, Vec<Id>>::new();
     for (module, data) in program.modules.iter().enumerate() {
         for (index, declaration) in data.declarations.iter().enumerate() {
-            if let Some((_, Some(operator))) = declaration.kind.candidate() {
+            if declaration.test_owner.is_none()
+                && let Some((_, Some(operator))) = declaration.kind.candidate()
+            {
                 candidates
                     .entry((operator.module, operator.declaration))
                     .or_default()
@@ -53,7 +55,9 @@ pub(crate) fn build<'a>(
             .map(|(module, data)| {
                 let mut declarations = Vec::new();
                 for (index, declaration) in data.declarations.iter().enumerate() {
-                    if matches!(declaration.kind.candidate(), Some((_, Some(_))))
+                    let module_candidate = declaration.test_owner.is_none()
+                        && matches!(declaration.kind.candidate(), Some((_, Some(_))));
+                    if module_candidate
                         || declaration
                             .test_owner
                             .is_some_and(|test| data.tests[test].documentation_example)
@@ -164,7 +168,13 @@ impl<'a, F: Fn(FileId) -> String> Reader<'a, '_, F> {
             .candidate()
             .and_then(|(_, operator)| operator)
             .map_or(data, |operator| &self.program.modules[operator.module]);
-        let canonical_name = format!("{}::{}", owner.path, declaration.name);
+        let canonical_name = match declaration.test_owner {
+            Some(test) => format!(
+                "{}::{}::{}",
+                data.path, data.tests[test].name, declaration.name
+            ),
+            None => format!("{}::{}", owner.path, declaration.name),
+        };
         let mut interface = Interface {
             requires: child(syntax, SyntaxKind::RequiresClause).map(|clause| written(&clause)),
             properties: children(syntax, SyntaxKind::OperatorProperties)

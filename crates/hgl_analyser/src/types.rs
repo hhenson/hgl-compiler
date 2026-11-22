@@ -335,10 +335,19 @@ pub struct ReflectedPack {
 }
 
 impl FunctionType {
-    /// The parameter types and then the result type, when present.
+    /// The slots a function type can give; its callback's configuration
+    /// instead takes defaults (FN-18).
+    pub(crate) fn ordinary_parameters(&self) -> impl Iterator<Item = &FunctionParameter> {
+        self.parameters.iter().filter(|input| {
+            input
+                .declared()
+                .is_none_or(|parameter| !parameter.configuration)
+        })
+    }
+
+    /// The ordinary parameter types and then the result type, when present.
     pub(crate) fn types(&self) -> impl Iterator<Item = &Type> {
-        self.parameters
-            .iter()
+        self.ordinary_parameters()
             .map(FunctionParameter::ty)
             .chain(&self.result)
     }
@@ -670,7 +679,8 @@ pub struct EnumOf {
     /// The position of its module in `Program::modules`, and its own in
     /// that module's declarations: what it is (UNIT-4).
     pub declared: (usize, usize),
-    /// Its name with its module's path, `m::Mode`: what a key writes.
+    /// The enum's qualified name, including its test name where local
+    /// (TST-1): what a constant key writes.
     pub written: String,
 }
 

@@ -739,6 +739,7 @@ impl Reader<'_> {
             file: self.file,
             binding: &binding,
             parameter: &parameter,
+            arguments: &[],
             constants: &self.constants,
         };
         read(&scope)
@@ -852,6 +853,7 @@ impl Reader<'_> {
                     file,
                     binding: &binding,
                     parameter: &|_| None,
+                    arguments: &[],
                     constants: &self.constants,
                 };
                 crate::constant::read(&default, expected.as_ref(), &scope)

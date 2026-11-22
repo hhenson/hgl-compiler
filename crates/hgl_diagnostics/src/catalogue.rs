@@ -252,7 +252,12 @@ pub fn is_execution(code: &str) -> bool {
 /// Every warning of the catalogue, in the specification's order. A
 /// warning has a code and no category, and does not reject the source
 /// (ERR-1); no `expect-error` annotation names one (ERR-10).
-pub const WARNING_CODES: &[&str] = &["node.no_activation", "statement.no_effect"];
+pub const WARNING_CODES: &[&str] = &[
+    "node.no_activation",
+    // GEN-6: registered with the specification pin. Emission is tracked by #466.
+    "operator.candidates_tie",
+    "statement.no_effect",
+];
 
 /// True when the catalogue lists `code` as a warning.
 pub fn is_warning(code: &str) -> bool {

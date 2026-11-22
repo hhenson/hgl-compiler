@@ -18,7 +18,18 @@ as runnable or shown examples (SDOC-9). A code span naming a declaration or memb
 comment's source scope and appears in the site (SDOC-8). Only generated
 local destinations become active Markdown links. Other link labels
 and image descriptions remain readable text. The pages and stylesheet
-use relative paths and open offline.
+use relative paths and open offline. The index searches declaration names
+using a local search index. Inline formulas and `math` fences use the
+bundled KaTeX renderer. `mermaid` fences use the bundled Mermaid renderer.
+If a formula or diagram cannot be rendered, its source stays visible.
+A site includes each renderer and its notices when one of its pages
+uses that renderer.
+
+KaTeX emits MathML with `trust: false` and strict errors. It bounds macro
+expansions to 1,000 and user-specified sizes to 20 em to constrain
+repeated expansion and author-specified dimensions. Mermaid uses strict security
+and text labels; a diagram directive cannot change those settings or
+supply theme CSS, theme variables or a font family.
 
 `hgl doc <ROOT>... --format json [--out DIR] [--private]` writes one
 UTF-8 JSON document for the analysed program. Source discovery and
@@ -62,7 +73,9 @@ The [JSON Schema](documentation.schema.json) specifies the fields of
   A part gives the location and documentation of its module header.
 - `declarations` gives declarations in part and source order.
   `canonicalName` is `module.path::name`. A member appends `.member`;
-  a candidate has its operator's canonical name. Role, signature and
+  a module candidate has its operator's canonical name. A declaration
+  private to a named test includes the test's name, as in
+  `module.path::test_name::type_name`. Role, signature and
   source position distinguish declarations that share a canonical name.
   Members and candidates are nested under their owner. Candidates are
   ordered by the implementing module, part and source position.

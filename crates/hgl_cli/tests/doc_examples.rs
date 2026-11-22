@@ -153,13 +153,9 @@ fn the_model_and_site_mark_the_status_on_the_documented_declaration() {
     let output = hgl(&["doc", &input, "--out", &argument(&site)]);
     assert!(output.status.success(), "{}", text(&output.stderr));
     let files = generated_files(&site);
-    let page = files
-        .values()
-        .find_map(|bytes| {
-            let html = std::str::from_utf8(bytes).ok()?;
-            html.contains("data-example=\"shown\"").then_some(html)
-        })
-        .unwrap();
+    let page =
+        std::str::from_utf8(&files[Path::new("modules/mod-demo.documentation_examples.html")])
+            .unwrap();
     assert_eq!(page.matches("data-example=\"shown\"").count(), 3, "{page}");
     assert_eq!(
         page.matches("data-example=\"runnable\"").count(),

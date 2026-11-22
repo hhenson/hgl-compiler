@@ -3,7 +3,7 @@
 //! (GEN-2, GEN-5, GEN-6). Part of the typing pass ([`super`]): a symbol
 //! and a call of an operator by its name both select here.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
@@ -1011,14 +1011,20 @@ impl<'a> Typer<'a> {
         let Some(condition) = clause.children().next() else {
             return Admits::Yes;
         };
-        if !type_packs.is_empty()
-            && condition.descendants().any(|node| {
-                matches!(
-                    node.kind(),
-                    SyntaxKind::ConstraintEach | SyntaxKind::PackMemberType
-                )
-            })
-        {
+        let pack_operand = |node: SyntaxNode| match node.kind() {
+            SyntaxKind::ConstraintEach | SyntaxKind::PackMemberType => true,
+            // A bare member in a constraint can also parse as an
+            // index. The read table resolves whether it is a type.
+            SyntaxKind::IndexExpr => self.program.modules[module].written.iter().any(|read| {
+                read.at.file == candidate.at.file
+                    && read.at.span.start == node.span().start
+                    && matches!(read.ty, Type::PackMember { .. })
+            }),
+            SyntaxKind::CallExpr => super::requirements::pack_view(node)
+                .is_some_and(|(view, _)| view.text() == "arg_keys"),
+            _ => false,
+        };
+        if !type_packs.is_empty() && condition.descendants().any(pack_operand) {
             return match self
                 .requires_told_with_packs((module, declaration), generics, type_packs, None)
                 .and_then(|(_, held, _)| held)
@@ -1309,6 +1315,7 @@ impl<'a> Typer<'a> {
             scope: None,
             result: None,
             result_read: None,
+            tag_test: None,
         };
         if admits_without_membership {
             if let Some(chosen) = provisional {
@@ -1500,14 +1507,18 @@ impl<'a> Typer<'a> {
                 given
             })
             .collect();
+        // ERR-3 checks the selected result. A tag test does not supply
+        // the provisional result type as the operator's expected place.
         let place = selecting
             .place
             .as_ref()
             .or_else(|| {
                 if let Some(read) = &selecting.result_read {
                     read.expected.as_ref().map(|(ty, _)| ty)
-                } else {
+                } else if selecting.tag_test.is_none() {
                     selecting.result.as_ref()
+                } else {
+                    None
                 }
             })
             .map(in_place);
@@ -1598,6 +1609,12 @@ impl<'a> Typer<'a> {
                 return self.fit_with(value, &in_place(ty), what, Some(&scope));
             }
             return self.compared_with_null(value, Some(&scope));
+        }
+        if let Some(test) = call.tag_test
+            && (self.check_tag_test(test.success, &value.ty, test.at)
+                || !test.keeps_result_type && matches!(value.ty, Type::Result { .. }))
+        {
+            return value;
         }
         if let Some(expected) = call.result.as_ref().map(in_place)
             && expected != value.ty
@@ -1770,6 +1787,102 @@ pub(crate) struct Selecting {
     pub(super) result: Option<Type>,
     /// A place that takes the selected candidate's result in its own form.
     result_read: Option<InstanceResultRead>,
+    /// An ERR-3 test of this call or its immutable binding.
+    tag_test: Option<InstanceTagTest>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InstanceTagTest {
+    success: bool,
+    at: Location,
+    local: Option<hir::LocalId>,
+    keeps_result_type: bool,
+}
+
+/// ERR-3 checks the selected result without choosing its candidate.
+/// Retain tag tests of calls and of directly initialized `let` bindings.
+pub(super) fn record_tag_tests(body: &hir::Body, calls: &mut [Selecting]) {
+    if calls.is_empty() {
+        return;
+    }
+    let mut calls: HashMap<_, _> = calls.iter_mut().map(|call| (call.at, call)).collect();
+    let mut initializers = vec![None; body.locals.len()];
+    let mut uses = vec![(0, 0); body.locals.len()];
+    let count_captures = |callee: &Callee, uses: &mut [(usize, usize)]| {
+        if let Callee::Anonymous(function) = callee {
+            for &local in &function.captures {
+                uses[local].0 += 1;
+            }
+        }
+    };
+    hir::walk_statement_nodes(&body.statements, &mut |node| match node {
+        hir::Node::Statement(hir::Stmt::Declare {
+            local,
+            value: Some(value),
+        }) if body.locals[*local].kind == LocalKind::Let => {
+            initializers[*local] = selected_call_at(value);
+        }
+        hir::Node::Expression(Expr {
+            kind: ExprKind::TagTest { success, value },
+            ..
+        }) => {
+            let (initializer, local) = match value.kind {
+                ExprKind::Local(local) => {
+                    uses[local].1 += 1;
+                    (initializers[local], Some(local))
+                }
+                _ => (selected_call_at(value), None),
+            };
+            if let Some(at) = initializer
+                && let Some(call) = calls.get_mut(&at)
+                && call.place.is_none()
+                && call.tag_test.is_none()
+            {
+                call.tag_test = Some(InstanceTagTest {
+                    success: *success,
+                    at: value.at,
+                    local,
+                    keeps_result_type: false,
+                });
+            }
+        }
+        hir::Node::Expression(Expr {
+            kind: ExprKind::Local(local) | ExprKind::DeferredPresent(local),
+            ..
+        }) => uses[*local].0 += 1,
+        hir::Node::Expression(Expr {
+            kind: ExprKind::Call { callee, .. },
+            ..
+        }) => {
+            count_captures(callee, &mut uses);
+        }
+        hir::Node::Expression(Expr {
+            kind: ExprKind::StaticCallable(callee),
+            ..
+        }) => {
+            count_captures(callee, &mut uses);
+        }
+        _ => {}
+    });
+    for test in calls.values_mut().filter_map(|call| call.tag_test.as_mut()) {
+        // A value used elsewhere must still fit the type under which
+        // those other expressions were checked (GEN-7).
+        test.keeps_result_type = test.local.is_some_and(|local| {
+            let (reads, tag_reads) = uses[local];
+            reads != tag_reads
+        });
+    }
+}
+
+fn selected_call_at(value: &Expr) -> Option<Location> {
+    matches!(
+        value.kind,
+        ExprKind::Call {
+            callee: Callee::Unread | Callee::DeferredValue,
+            ..
+        }
+    )
+    .then_some(value.at)
 }
 
 /// The source place of a provisional call, including its failure scope.
@@ -1874,6 +1987,7 @@ pub(crate) fn select_in_instance(
     // The instance's own locals, which its arguments read: each has a
     // value where a call reads it (EXPR-3).
     typer.use_instance_locals(body.locals.clone());
+    let mut retagged = HashSet::new();
     hir::walk_statements_mut(&mut body.statements, &mut |expression| {
         // A source read of the provisional result can be obsolete.
         // Replace it with the selected call in the actual place's form.
@@ -1928,7 +2042,27 @@ pub(crate) fn select_in_instance(
         };
         *expression = typer.fit_selected_result(call, selected, |ty| substitute_within(ty, &map));
         after(expression);
+        if let Some(test) = call.tag_test
+            && !test.keeps_result_type
+            && let Some(local) = test.local
+            && matches!(expression.ty, Type::Result { .. })
+            && typer.locals[local].ty != expression.ty
+        {
+            // EXPR-3 and ERR-3: a tag-only local takes the selected
+            // result type from its initializer.
+            typer.locals[local].ty = expression.ty.clone();
+            retagged.insert(local);
+        }
     });
+    if !retagged.is_empty() {
+        hir::walk_statements_mut(&mut body.statements, &mut |expression| {
+            if let ExprKind::Local(local) = expression.kind
+                && retagged.contains(&local)
+            {
+                expression.ty = typer.locals[local].ty.clone();
+            }
+        });
+    }
     body.locals = typer.locals;
 }
 
@@ -1979,6 +2113,8 @@ impl Given {
 pub(super) enum Key {
     /// With no name: the place it stands in, from 0.
     Position(usize),
+    /// An unnamed spread entry and the public slot it fills, if any.
+    ForwardedPosition(Option<usize>),
     /// `name: value` in the parentheses.
     Name(String),
     /// A brace entry naming an ordinary parameter.
@@ -1993,7 +2129,7 @@ impl Key {
     /// The name written in either argument list.
     pub(super) fn name(&self) -> Option<&str> {
         match self {
-            Self::Position(_) => None,
+            Self::Position(_) | Self::ForwardedPosition(_) => None,
             Self::Name(name)
             | Self::Brace(name)
             | Self::Configuration(name)
@@ -2020,6 +2156,7 @@ impl Key {
     pub(super) fn public_parameter(&self, signature: &Signature) -> Option<usize> {
         match self {
             Self::Generic(_) => None,
+            Self::ForwardedPosition(index) => *index,
             Self::Position(position) => signature
                 .parameters
                 .iter()
@@ -2165,12 +2302,18 @@ impl CallbackRequest<'_> {
         (given, bound): (&[Given], &[Place]),
         result: Option<&Type>,
     ) -> bool {
+        let ordinary = signature
+            .parameters
+            .iter()
+            .filter(|parameter| !parameter.configuration)
+            .count();
         self.reference == signature.reference
             && (self.reflected.is_some()
-                || signature.parameters.len() == given.len()
+                || ordinary == given.len()
                     && given.iter().zip(bound).all(|(given, place)| {
                         matches!(*place, Place::Parameter(index)
-                            if agree(given.ty(), &signature.parameters[index].ty))
+                            if !signature.parameters[index].configuration
+                                && agree(given.ty(), &signature.parameters[index].ty))
                     }))
             && match (result, &signature.result) {
                 (Some(expected), Some(actual)) => agree(expected, actual),
@@ -2274,6 +2417,15 @@ pub(super) fn bound(
                     Place::Pack(index, captured[index])
                 }
             },
+            Key::ForwardedPosition(Some(index)) => Place::Parameter(mapping[*index]),
+            Key::ForwardedPosition(None) => {
+                if let Some(&index) = positional.iter().find(|&&index| !taken[index]) {
+                    Place::Parameter(index)
+                } else {
+                    let index = positional_pack.or(dependent)?;
+                    Place::Pack(index, captured[index])
+                }
+            }
             Key::Configuration(name) => {
                 let index = signature
                     .parameters

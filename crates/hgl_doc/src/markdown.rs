@@ -9,15 +9,41 @@ use hgl_lexer::TokenKind;
 use hgl_source::SourceMap;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
+/// The page text and which optional renderers its Markdown actually uses.
+pub(crate) struct Markup {
+    pub(crate) html: String,
+    pub(crate) renderers: Renderers,
+}
+
+/// Browser assets needed by the rendered forms (SDOC-7).
+#[derive(Default)]
+pub(crate) struct Renderers {
+    pub(crate) math: bool,
+    pub(crate) mermaid: bool,
+}
+
+impl Renderers {
+    /// Whether a page needs the renderer loader.
+    pub(crate) fn any(&self) -> bool {
+        self.math || self.mermaid
+    }
+
+    /// Adds one page's renderer needs to those of the whole site.
+    pub(crate) fn include(&mut self, other: &Self) {
+        self.math |= other.math;
+        self.mermaid |= other.mermaid;
+    }
+}
+
 /// Appends a CommonMark fragment. The callback only returns destinations
 /// of declarations present in the generated site.
-pub(crate) fn render(output: &mut String, text: &str, link: impl Fn(&str) -> Option<String>) {
+pub(crate) fn render(output: &mut Markup, text: &str, link: impl Fn(&str) -> Option<String>) {
     render_section(output, text, false, link);
 }
 
 /// HGL fences in a recognized Examples section can run as tests.
 pub(crate) fn render_section(
-    output: &mut String,
+    output: &mut Markup,
     text: &str,
     in_examples: bool,
     link: impl Fn(&str) -> Option<String>,
@@ -27,7 +53,7 @@ pub(crate) fn render_section(
     while let Some((event, range)) = source.next() {
         let event = match event {
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))
-                if matches!(&*info, "hgl" | "hgl no-run") =>
+                if matches!(&*info, "hgl" | "hgl no-run" | "math" | "mermaid") =>
             {
                 let mut code = String::new();
                 for (event, _) in source.by_ref() {
@@ -37,18 +63,34 @@ pub(crate) fn render_section(
                         _ => {}
                     }
                 }
-                let (status, label) = if in_examples && info.as_ref() == "hgl" {
-                    ("runnable", "Runnable example")
-                } else {
-                    ("shown", "Shown example")
+                let block = match &*info {
+                    "math" => {
+                        output.renderers.math = true;
+                        format!(
+                            "<pre><code data-renderer=\"math\" class=\"language-math\">{}</code></pre>\n",
+                            escaped(&code)
+                        )
+                    }
+                    "mermaid" => {
+                        output.renderers.mermaid = true;
+                        format!(
+                            "<pre><code data-renderer=\"mermaid\" class=\"language-mermaid\">{}</code></pre>\n",
+                            escaped(&code)
+                        )
+                    }
+                    _ => {
+                        let (status, label) = if in_examples && info.as_ref() == "hgl" {
+                            ("runnable", "Runnable example")
+                        } else {
+                            ("shown", "Shown example")
+                        };
+                        format!(
+                            "<figure data-example=\"{status}\"><figcaption>{label}</figcaption>\n<pre><code class=\"language-hgl\">{}</code></pre></figure>\n",
+                            highlight(&code)
+                        )
+                    }
                 };
-                Event::Html(
-                    format!(
-                        "<figure data-example=\"{status}\"><figcaption>{label}</figcaption>\n<pre><code class=\"language-hgl\">{}</code></pre></figure>\n",
-                        highlight(&code)
-                    )
-                    .into(),
-                )
+                Event::Html(block.into())
             }
             Event::Start(Tag::HtmlBlock) => Event::Html("<pre class=\"authored-html\">".into()),
             Event::End(TagEnd::HtmlBlock) => Event::Html("</pre>\n".into()),
@@ -57,7 +99,13 @@ pub(crate) fn render_section(
             // description. The source comment may refer to an online host.
             Event::Start(Tag::Link { .. } | Tag::Image { .. })
             | Event::End(TagEnd::Link | TagEnd::Image) => continue,
-            Event::Code(name) if !formula(text, range) => match link(&name) {
+            Event::Code(name) if formula(text, &range) => {
+                output.renderers.math = true;
+                Event::InlineHtml(
+                    format!("<code class=\"formula-inline\">{}</code>", escaped(&name)).into(),
+                )
+            }
+            Event::Code(name) => match link(&name) {
                 Some(href) => Event::InlineHtml(
                     format!(
                         "<a href=\"{}\"><code>{}</code></a>",
@@ -72,12 +120,12 @@ pub(crate) fn render_section(
         };
         events.push(event);
     }
-    html::push_html(output, events.into_iter());
+    html::push_html(&mut output.html, events.into_iter());
 }
 
 /// Dollar-delimited code spans belong to a formula (SDOC-7), even if the
 /// formula text happens to be an in-scope declaration name.
-fn formula(text: &str, range: Range<usize>) -> bool {
+fn formula(text: &str, range: &Range<usize>) -> bool {
     let Some(dollar) = range.start.checked_sub(1) else {
         return false;
     };

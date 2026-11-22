@@ -11,7 +11,7 @@
 
 use std::collections::BTreeSet;
 
-use hgl_analyser::{DeclarationKind, Detail, Program, Signature, Test, Type};
+use hgl_analyser::{Declaration, DeclarationKind, Detail, Program, Signature, Test, Type};
 
 /// The words the C++ standard keeps: its keywords and alternative
 /// tokens, the identifiers it gives a meaning in some places (`final`,
@@ -298,28 +298,35 @@ pub(super) fn placed(
 ) -> (Option<String>, String) {
     let unit = &program.modules[module];
     let declared = &unit.declarations[declaration];
-    if let Some(test) = declared.test_owner {
-        let namespace = format!("t_::{}", temporary("helpers", test));
-        let name = identifier(&declared.name);
-        return match instance {
-            Some(suffix) => (
-                Some(format!("{namespace}::i_::{name}")),
-                instance_name(suffix),
-            ),
-            None => (Some(namespace), name),
-        };
-    }
     let candidate = matches!(declared.kind, DeclarationKind::Implementation(..));
     let name = if candidate {
         candidate_identifier(&declared.name, unit.details.get(declaration), declaration)
     } else {
         identifier(&declared.name)
     };
-    match (candidate, instance) {
-        (false, None) => (None, name),
-        (true, None) => (Some("c_".to_string()), name),
-        (false, Some(suffix)) => (Some(format!("i_::{name}")), instance_name(suffix)),
-        (true, Some(suffix)) => (Some(format!("c_::i_::{name}")), instance_name(suffix)),
+    let namespace = match (declared.test_owner, candidate) {
+        (Some(test), true) => Some(format!("t_::{}::c_", temporary("helpers", test))),
+        (Some(test), false) => Some(format!("t_::{}", temporary("helpers", test))),
+        (None, true) => Some("c_".to_string()),
+        (None, false) => None,
+    };
+    match (namespace, instance) {
+        (namespace, None) => (namespace, name),
+        (None, Some(suffix)) => (Some(format!("i_::{name}")), instance_name(suffix)),
+        (Some(namespace), Some(suffix)) => (
+            Some(format!("{namespace}::i_::{name}")),
+            instance_name(suffix),
+        ),
+    }
+}
+
+/// A test-local type has its own C++ name even where another test uses
+/// the same source name (TST-1). Its index identifies it within its module.
+pub(super) fn declared_type(declared: &Declaration, index: usize) -> String {
+    if declared.test_owner.is_some() {
+        temporary("test_type", index)
+    } else {
+        identifier(&declared.name)
     }
 }
 

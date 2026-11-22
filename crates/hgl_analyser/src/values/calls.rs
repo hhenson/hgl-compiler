@@ -10,7 +10,7 @@ use hgl_source::{FileId, Span};
 
 use super::arguments::{Slot, Takes};
 use super::constants::generic_default;
-use super::dependent_packs::PackTypes;
+use super::dependent_packs::{PackTypes, dependent_slot};
 use super::evals::{trace_input_type, trace_pack_type};
 use super::fit::{not_null, open, whole};
 use super::inference::{
@@ -242,7 +242,9 @@ impl<'a> Typer<'a> {
             .copied()
             .find(|&declaration| kind_of(declaration) == DeclarationKind::Enum);
         if let Some(declaration) = enumeration {
-            return self.enum_from(name, list, module, declaration);
+            return self
+                .unread_pack_call(list)
+                .unwrap_or_else(|| self.enum_from(name, list, module, declaration));
         }
         let operator = declarations
             .iter()
@@ -531,6 +533,13 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         given: Option<&CallArguments>,
     ) -> (ExprKind, Type) {
+        let result = match &self.program.modules[module].details[declaration] {
+            Detail::Callable(signature) => signature.result.as_ref(),
+            _ => None,
+        };
+        if let Some(call) = self.defer_pack_call(list, result, expected) {
+            return call;
+        }
         // The call an `eval` stands for is this one, and not one among
         // its arguments.
         let evaluating = std::mem::take(&mut self.evaluating);
@@ -768,7 +777,8 @@ impl<'a> Typer<'a> {
             .collect();
         let callee = &program.modules[module].declarations[declaration];
         let reported = self.diagnostics.len();
-        let named = self.named_generics(list, signature, &mut found);
+        let braces_only = dependent_slot(&program.modules[module], signature).is_some();
+        let named = self.named_generics(list, signature, &mut found, braces_only);
 
         // The requested output: `let names: list<str> = repeat(3)` says
         // what the `T` of `repeat<T>(count: i64) -> list<T>` is.
@@ -1108,8 +1118,16 @@ impl<'a> Typer<'a> {
                 found.push(Some(argument.clone()));
             }
         }
+        // FN-17: synthesized captures are not arguments written at
+        // this call. They do not take part in inference or source replay.
+        let written = |argument: &hir::Argument| {
+            argument
+                .parameter
+                .is_none_or(|slot| slot < signature.parameters.len())
+        };
         let Some(mut supplied) = arguments
             .iter()
+            .filter(|argument| written(argument))
             .enumerate()
             .filter(|(position, _)| {
                 contextual
@@ -1255,6 +1273,8 @@ impl<'a> Typer<'a> {
             self.index_instance_locals();
         }
         let pack_types = PackTypes::new(&signature.generics, &packs);
+        // Category recording rebuilds captures from the completed callbacks.
+        arguments.retain(written);
         let mut sources = sources.into_iter().peekable();
         for (position, argument) in arguments.iter_mut().enumerate() {
             let parameter =
@@ -1275,7 +1295,7 @@ impl<'a> Typer<'a> {
                 if !self.may_reread() {
                     continue;
                 }
-                // EXPR-9 and ERR-2: use the normal argument reader
+                // EXPR-9, ERR-2 and FN-17: use the normal argument reader
                 // with its completed place, in written order (EXPR-2).
                 let slot = Slot {
                     name: &parameter.name,
@@ -1422,14 +1442,18 @@ impl<'a> Typer<'a> {
         }
         let list = child(&call, SyntaxKind::ArgList)?;
         let entries = self.call_entries(&list);
-        let declared = &self.program.modules[module].declarations[declaration];
+        let owner = &self.program.modules[module];
+        let braces_only = dependent_slot(owner, signature).is_some();
+        let declared = &owner.declarations[declaration];
         let mut defaulted = Vec::new();
         for (index, generic) in signature.generics.iter().enumerate() {
             if matches!(generic.kind, GenericKind::Value(_))
                 && generic_default(&declared.syntax, generic).is_some()
-                && !entries.iter().any(|(_, name, _)| {
-                    name.as_ref()
-                        .is_some_and(|name| name.text() == generic.name)
+                && !entries.iter().any(|(brace, name, _)| {
+                    (*brace || !braces_only)
+                        && name
+                            .as_ref()
+                            .is_some_and(|name| name.text() == generic.name)
                 })
             {
                 defaulted.push(index);

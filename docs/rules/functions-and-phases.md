@@ -236,9 +236,11 @@ parser: done
 analyser: partial
 
 - Check the fixed template's phase, input names and input and result types. A value target may lift in a temporal template. An anonymous body's phase comes from the accepting template (FN-7).
+- When a graph instance completes a call's parameter types, an anonymous callback takes the completed template in its lexical scope. Its synthesized capture inputs are separate from the written arguments (GEN-2).
 - Match a declared function or an operator's selected candidate, infer generic types in either direction, and accept explicit generic arguments on function and operator references. An operator reference uses the public signature, with the written arguments and the template together resolving its generic parameters. Static parameters may be called or passed onward. They hold no runtime value.
 - Applies the proposed plain-parameter restriction to the fixed inputs. Keeps the remaining callback slots in declared order with their modes, defaults and pack shape.
 - A reflected operator callback selects from the resolved parameter types, including the dependent arguments. With no resolved parameter type, it reports `generic.unresolved` even for a lone candidate (FN-17).
+- A reflected anonymous parameter beyond the fixed template needs a written type. Arguments of a homogeneous callback pack can determine its generic element type.
 - A call through a function parameter gives arguments by position or by a name written in its template (FN-17).
 
 transpiler: partial
@@ -257,21 +259,27 @@ analyser: partial
 - Binds configuration only by name in the braces. Checks defaults, missing and misplaced arguments, naming conflicts, and forbidden parameter modes.
 - Holds omitted operator configuration defaults to the selected candidate's parameter types in the operator's defining scope (GEN-6, UNIT-7, UNIT-8).
 - Fits supplied configuration of a required operator call to the selected candidate's parameters when instantiating the caller (GEN-16, EXPR-5).
-- Configuration in braces is separate from a dependent pack in parentheses (FN-8).
+- Configuration and named generic options go in braces when a dependent pack takes the callback's arguments in parentheses (FN-8).
+- A callback can have defaulted configuration. Its function type and reflected pack omit those slots.
 
 transpiler: partial
 
 - Passes configuration as values, const graph inputs or connections in functions, node hooks, graphs and operator candidates. The SDK tests cover each role.
-- Callable configuration parameters await #363.
+- Calls through a static function parameter use the callback declaration's configuration defaults (FN-17).
 
 ## FN-19
 
-parser: planned
+parser: partial
 
-- #368 tracks pack values read by key, built by loops and expanded at calls.
+- Reads a pack spread among ordinary call arguments.
 
-analyser: planned
+analyser: partial
 
-transpiler: planned
+- Resolves spreads of parameter packs when the enclosing callable is instantiated. Written arguments bind first, then named entries, then positional entries fill the remaining parameter slots in order.
+- Checks function, operator and static callback arguments with the ordinary call diagnostics (EXPR-2).
 
-- Making and applying argument packs in a body is tracked in #368.
+transpiler: partial
+
+- Lowers each forwarded entry from its own pack input slot. The SDK cases exercise values, connections, operator selection and reflected callbacks.
+
+Left: Pack indexing, pack comprehensions and pack bindings are tracked in #368.
