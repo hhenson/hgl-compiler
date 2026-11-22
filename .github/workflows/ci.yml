@@ -8,6 +8,14 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request's branch cancels the run of the one
+# before it, which no one waits on any more. A push to main is never
+# cancelled: each run there checks a commit of main and saves the
+# caches pull requests restore, so its group is its own run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: true
+
 # For every cargo command below. They change how long a build takes, not
 # what is built or what the tests check.
 env:
@@ -50,15 +58,19 @@ jobs:
         with:
           submodules: recursive
       # Installs the pinned toolchain and keeps its version for the cache
-      # key: a build by another compiler is of no use.
+      # key: a build by another compiler is of no use. Keeps a hash of
+      # Cargo.lock without the versions of the workspace's own crates
+      # (`hgl_*`), which every release changes and no dependency depends
+      # on, so that a release does not empty the cache.
       - id: rust
         shell: bash
         run: |
           cargo --version
           echo "version=$(rustc --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
+          echo "dependencies=$(awk '/^name = "hgl_/ { own = 1 } own && /^version = / { own = 0; next } { print }' Cargo.lock | git hash-object --stdin)" >> "$GITHUB_OUTPUT"
       # The downloaded crates and the built dependencies a run on main
-      # saved for this system, toolchain and Cargo.lock. With them a run
-      # compiles only the workspace's own crates.
+      # saved for this system, toolchain and Cargo.lock's dependencies.
+      # With them a run compiles only the workspace's own crates.
       - id: cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -69,12 +81,12 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-rust-${{ steps.rust.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-rust-${{ steps.rust.outputs.version }}-${{ steps.rust.outputs.dependencies }}
       # The dependencies are built with optimisation, which makes the
       # tests about 2.5 times quicker. The workspace's own crates stay
       # unoptimised, as the stack-size tests assume, and debug assertions
-      # and overflow checks stay on in all of them.
-      - run: cargo test --workspace --locked --config "profile.dev.package.'*'.opt-level=3"
+      # and overflow checks stay on in all of them. Cargo.toml says so.
+      - run: cargo test --workspace --locked
       # The next two steps run only on main, and only when the cache has
       # no entry for this key yet. Pull requests restore what main saved
       # and save nothing, so the repository's 10 GB of cache holds one
@@ -93,10 +105,30 @@ jobs:
 
   cpp:
     # libhglrt, the C++ target's runtime library (runtime/cpp), built
-    # against hgraph's C++ SDK and its unit tests run, then all of it again
-    # under the address and undefined-behaviour sanitizers
-    # (docs/architecture.md, "The C++ runtime library"). Ubuntu 26.04's
-    # image has GCC 15, which the SDK needs.
+    # against hgraph's C++ SDK and its unit tests run, and the C++ target
+    # on the SDK: the tests that build and run what it writes, and core's
+    # cases. All of it plain and again under the address and
+    # undefined-behaviour sanitizers (docs/architecture.md, "The C++
+    # runtime library"). Ubuntu 26.04's image has GCC 15, which the SDK
+    # needs.
+    #
+    # The work is split four ways, so that it runs side by side on four
+    # runners and not one after another on one: each mode, and in each
+    # the SDK tests apart from the runtime library's tests and core's
+    # cases. Every check runs as it did in one job.
+    name: cpp (${{ matrix.mode }}, ${{ matrix.part }})
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [plain, sanitize]
+        part: [sdk, runtime and core]
+        include:
+          # The sanitized mode: the runtime library's own build option,
+          # and the flags `hgl` adds to every compile and link of the
+          # generated code and the runtime library it builds.
+          - mode: sanitize
+            runtime: -DHGLRT_SANITIZE=ON
+            flags: -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined
     runs-on: ubuntu-26.04
     env:
       # The image's GCC 15, for the SDK and for the library.
@@ -106,6 +138,8 @@ jobs:
       # holds its own path, and the SDK holds the prefix's.
       HGL_HGRAPH_DEPS: ${{ github.workspace }}/.hgraph/deps
       HGL_HGRAPH_SDK: ${{ github.workspace }}/.hgraph/sdk
+      # Empty in the plain mode, which `hgl` reads as no flags.
+      HGL_CPP_FLAGS: ${{ matrix.flags }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # `hgl`, which the C++ target's steps below build, is built with
@@ -123,6 +157,8 @@ jobs:
       # builds them saves them, from a pull request too: the key changes
       # only with the tag, the script or the image, and a pull request that
       # changes the script then builds them once and not on each push.
+      # The four jobs of a run share the key: where it is new, each
+      # builds them and the first to finish saves them.
       - id: cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -141,26 +177,24 @@ jobs:
         run: scripts/provision-hgraph-sdk.sh "$HGRAPH_TAG" "$HGL_HGRAPH_SDK"
       # The prefix's CMake and Ninja for what follows.
       - run: echo "$HGL_HGRAPH_DEPS/bin" >> "$GITHUB_PATH"
-      - run: cmake -S runtime/cpp -B build/cpp -G Ninja -DCMAKE_BUILD_TYPE=Debug
-      - run: cmake --build build/cpp
-      - run: ctest --test-dir build/cpp --output-on-failure
-      - run: cmake -S runtime/cpp -B build/cpp-sanitize -G Ninja -DCMAKE_BUILD_TYPE=Debug -DHGLRT_SANITIZE=ON
-      - run: cmake --build build/cpp-sanitize
-      - run: ctest --test-dir build/cpp-sanitize --output-on-failure
-      # The C++ target on the SDK: the tests that build and run what it
-      # writes, and core's cases, held to the list of those it does not
-      # run yet (crates/hgl_cpp/ci/unsupported_cases.toml) by
-      # check_core.py, whose own tests run first.
+      # The runtime library and its unit tests, in this mode.
+      - if: matrix.part == 'runtime and core'
+        run: cmake -S runtime/cpp -B build/cpp-${{ matrix.mode }} -G Ninja -DCMAKE_BUILD_TYPE=Debug ${{ matrix.runtime }}
+      - if: matrix.part == 'runtime and core'
+        run: cmake --build build/cpp-${{ matrix.mode }}
+      - if: matrix.part == 'runtime and core'
+        run: ctest --test-dir build/cpp-${{ matrix.mode }} --output-on-failure
       - run: cargo --version
-      - run: cargo test -p hgl_cli --locked --test cpp -- --ignored
-      - run: python3 -m unittest discover -s crates/hgl_cpp/ci
-      - run: cargo build --locked --bin hgl
-      - run: python3 crates/hgl_cpp/ci/check_core.py target/debug/hgl spec/hgl_core
-      # The same again, the generated code and the runtime library built
-      # with the address and undefined-behaviour sanitizers.
-      - run: cargo test -p hgl_cli --locked --test cpp -- --ignored
-        env:
-          HGL_CPP_FLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined
-      - run: python3 crates/hgl_cpp/ci/check_core.py target/debug/hgl spec/hgl_core
-        env:
-          HGL_CPP_FLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined
+      # The C++ target on the SDK: the tests that build and run what it
+      # writes.
+      - if: matrix.part == 'sdk'
+        run: cargo test -p hgl_cli --locked --test cpp -- --ignored
+      # Core's cases, held to the list of those it does not run yet
+      # (crates/hgl_cpp/ci/unsupported_cases.toml) by check_core.py, whose
+      # own tests run first, once.
+      - if: matrix.part == 'runtime and core' && matrix.mode == 'plain'
+        run: python3 -m unittest discover -s crates/hgl_cpp/ci
+      - if: matrix.part == 'runtime and core'
+        run: cargo build --locked --bin hgl
+      - if: matrix.part == 'runtime and core'
+        run: python3 crates/hgl_cpp/ci/check_core.py target/debug/hgl spec/hgl_core

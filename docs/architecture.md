@@ -2103,8 +2103,9 @@ that `demo.values`, `demo.composites`, `demo.temporal`, `demo.windows`, `demo.re
 reported, applications run with their output, the store and a failure,
 and a run in real time stopped by an interrupt of `hgl` alone, with `cargo
 test -p hgl_cli --test cpp -- --ignored`. The Linux and macOS C++ jobs
-run it with `check_core.py` (below), then run both again with
-`HGL_CPP_FLAGS` naming the address and undefined-behaviour sanitizers.
+run it with `check_core.py` (below), and both again with
+`HGL_CPP_FLAGS` naming the address and undefined-behaviour sanitizers:
+on macOS one after another, on Linux side by side on separate runners.
 The generated code compiles with `-Wall -Wextra -Werror`.
 
 The target's progress is counted in cases: core's runtime cases, and
@@ -2328,7 +2329,9 @@ the tag, provisioning inputs, toolchain and workspace path. The cached
 SDK retains absolute dependency paths. The macOS job keeps Rust and
 Python tooling in the runner's tool cache and builds in the job's
 workspace. Both C++ jobs build `runtime/cpp` and run its unit tests,
-then repeat both with sanitizers. The test `hglrt_takes_no_stdlib` fails where the library takes
+and repeat both with sanitizers; the Linux job runs each mode on a
+runner of its own, with the SDK tests on one runner and the runtime
+library's tests and core's cases on another. The test `hglrt_takes_no_stdlib` fails where the library takes
 anything of hgraph's standard library or of Arrow: a header of either that
 the public headers bring in at any depth (their include set, preprocessed),
 a source that includes one, or a library that `libhglrt`, its tests or
