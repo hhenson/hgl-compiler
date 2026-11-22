@@ -1389,11 +1389,13 @@ GEN-18 law predicates read the public operator's property domains, not
 its implementation's arithmetic. A plain or anonymous function has no
 law. Only the bool generic default form may inspect a formal function
 parameter (UNIT-7 and UNIT-8); an explicit option takes precedence.
-A generic wrapper's declaration must admit the call under every law
-value its own requirements allow (GEN-7). An exhaustive set of candidates
-can therefore be accepted before the function identity is known; the
-static-body specialization selects its concrete candidate later. This
-adds no runtime law evaluation or arithmetic reassociation.
+A generic wrapper's body knows only its stated law requirements (GEN-7).
+An unconstrained wrapper rejects even if separate candidates cover both
+law values: neither is known to take every case. A wrapper may state a
+positive or negative law, or give its own bool generic onward under a
+membership in `{true, false}` (GEN-3); that membership's instances select
+their candidates. This adds no runtime law evaluation or arithmetic
+reassociation.
 
 ### Order
 

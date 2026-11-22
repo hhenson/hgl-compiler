@@ -260,11 +260,6 @@ pub(super) fn check_instances(
         for (declaration, body) in unit.bodies.iter().enumerate() {
             let Some(body) = body else { continue };
             let owner = (module, declaration);
-            // GEN-18 uses the same bounded specialization walk: a law
-            // reads the static function supplied at the root call.
-            if crate::laws::has_dependent_calls(program, body) {
-                forwarding.insert(owner);
-            }
             walk_statements(&body.statements, &mut |value| {
                 if let ExprKind::Call { callee, .. } = &value.kind {
                     if matches!(callee, Callee::DeferredPackCall) {
@@ -313,21 +308,6 @@ pub(super) fn check_instances(
         }
     }
     for (initial, at) in roots {
-        // ERR-9: a rejected root call makes no instance to judge. In
-        // particular, a failed public law requirement must not also
-        // report the inner candidate selected under that requirement.
-        if diagnostics.as_slice().iter().any(|report| {
-            report.primary.file == at.file
-                && report.primary.span.start == at.span.start
-                && matches!(
-                    report.code,
-                    hgl_diagnostics::Code::Catalogued(
-                        crate::codes::REQUIRES_UNMET | crate::codes::OPERATOR_NO_CANDIDATE
-                    )
-                )
-        }) {
-            continue;
-        }
         let mut waiting = VecDeque::from([initial]);
         let mut seen = Vec::new();
         let mut counts = HashMap::new();

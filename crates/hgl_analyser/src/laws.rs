@@ -96,8 +96,8 @@ pub(crate) fn default_parameter(signature: &Signature, node: &SyntaxNode) -> Opt
     parameter(signature, &name)
 }
 
-/// The operator's metadata at this concrete function type. A forwarded
-/// function parameter is unsettled until its caller supplies the function.
+/// The operator's metadata at this concrete function type. A formal
+/// function has no metadata here; its declaration must state a guarantee.
 pub(crate) fn holds(
     program: &Program,
     law: Law,
@@ -189,60 +189,6 @@ pub(crate) fn verdicts<'a>(
         .collect()
 }
 
-/// Whether this operator's public declaration or one of its candidates
-/// asks for a law where a static function identity is needed (GEN-18).
-pub(crate) fn operator_needs_identity(
-    program: &Program,
-    operator: crate::program::OperatorRef,
-) -> bool {
-    program.modules.iter().enumerate().any(|(module, unit)| {
-        unit.declarations
-            .iter()
-            .enumerate()
-            .any(|(index, declaration)| {
-                let belongs = (module, index) == (operator.module, operator.declaration)
-                    || declaration
-                        .kind
-                        .candidate()
-                        .is_some_and(|(_, target)| target == Some(operator));
-                belongs
-                    && declaration
-                        .syntax
-                        .descendants()
-                        .any(|node| predicate(&node).is_some())
-            })
-    })
-}
-
-/// A law-dependent body must be read with the function its caller supplies.
-/// Its declaration-level type template cannot determine that metadata.
-pub(crate) fn has_dependent_calls(program: &Program, body: &crate::hir::Body) -> bool {
-    use crate::hir::ExprKind;
-    let mut dependent = false;
-    crate::hir::walk_statements(&body.statements, &mut |expression| {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = &expression.kind
-        else {
-            return;
-        };
-        if !arguments.iter().any(|argument| matches!(&argument.value.kind,
-            ExprKind::StaticCallable(callback) if matches!(callback.as_ref(), Callee::Parameter { .. }))) { return; }
-        dependent |= match callee {
-            Callee::DeferredOperator(deferred) => {
-                operator_needs_identity(program, deferred.identity)
-            }
-            _ => callee.declaration().is_some_and(|(module, declaration)| {
-                program.modules[module].declarations[declaration]
-                    .syntax
-                    .descendants()
-                    .any(|node| predicate(&node).is_some())
-            }),
-        };
-    });
-    dependent
-}
-
 /// A law stated as a positive conjunct (or its negation), GEN-7 and GEN-18.
 pub(crate) fn stated(
     signature: &Signature,
@@ -306,45 +252,4 @@ pub(crate) fn check_domains(program: &Program, diagnostics: &mut hgl_diagnostics
             }
         }
     }
-}
-
-/// Whether a trial assignment is excluded by the wrapper's own Boolean
-/// law conditions (GEN-7). Unrelated type/value constraints remain unknown.
-pub(crate) fn allows(
-    signature: &Signature,
-    declaration: &SyntaxNode,
-    answer: &dyn Fn(usize, Law) -> Option<bool>,
-) -> bool {
-    fn evaluate(
-        node: &SyntaxNode,
-        signature: &Signature,
-        answer: &dyn Fn(usize, Law) -> Option<bool>,
-    ) -> Option<bool> {
-        match node.kind() {
-            SyntaxKind::ConstraintParen => evaluate(&node.children().next()?, signature, answer),
-            SyntaxKind::ConstraintNot => {
-                evaluate(&node.children().next()?, signature, answer).map(|value| !value)
-            }
-            SyntaxKind::ConstraintBinary => {
-                let mut parts = node.children();
-                let left = evaluate(&parts.next()?, signature, answer);
-                let right = evaluate(&parts.next()?, signature, answer);
-                let both = tokens(node).any(|token| token.kind() == SyntaxKind::AmpAmp);
-                match (left, right) {
-                    (Some(a), Some(b)) => Some(if both { a && b } else { a || b }),
-                    (Some(false), _) | (_, Some(false)) if both => Some(false),
-                    (Some(true), _) | (_, Some(true)) if !both => Some(true),
-                    _ => None,
-                }
-            }
-            _ => {
-                let (law, name) = predicate(node)?;
-                answer(parameter(signature, &name)?, law)
-            }
-        }
-    }
-    child(declaration, SyntaxKind::RequiresClause)
-        .and_then(|clause| clause.children().next())
-        .and_then(|condition| evaluate(&condition, signature, answer))
-        != Some(false)
 }

@@ -525,9 +525,6 @@ struct Typer<'a> {
     file: FileId,
     declaration: &'a Declaration,
     signature: &'a Signature,
-    /// GEN-7: trial law values while proving that every admitted static
-    /// function identity has a candidate before a body is accepted.
-    law_assumptions: Vec<(usize, crate::laws::Law, bool)>,
     /// Absent while reading the enclosing declaration itself.
     anonymous: Option<Anonymous>,
     bindings: &'a HashMap<(FileId, u32), &'a Binding>,
@@ -802,7 +799,6 @@ impl<'a> Typer<'a> {
             generating: false,
             valued: 0,
             captures: HashMap::new(),
-            law_assumptions: Vec::new(),
             callable: None,
             evaluating: false,
             driven: false,

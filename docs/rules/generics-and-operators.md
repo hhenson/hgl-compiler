@@ -257,6 +257,6 @@ parser: done
 analyser: done
 
 - `associative(f)` and `commutative(f)` query a supplied function's public operator and concrete domain, in requirements and bool generic defaults. Explicit options override defaults.
-- A wrapper is checked at declaration under its own stated law requirements (GEN-7). With no guarantee it needs candidates covering both law values; admitted calls select the concrete candidate in each instance. The four cases of the #367 ruling are tested.
+- A wrapper is checked at declaration under its own stated positive or negative law (GEN-7). With no guarantee it rejects even if two candidates cover both values. A bool generic explicitly given onward under a membership in `{true, false}` selects its candidate in each instance (GEN-3). The corrected #367 ruling is tested.
 
 - C++ receives the already-resolved bool options and selected candidates; this rule needs no runtime law query or target change.

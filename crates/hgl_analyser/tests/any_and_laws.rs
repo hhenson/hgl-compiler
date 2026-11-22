@@ -291,8 +291,15 @@ fn a_law_dependent_wrapper_is_judged_at_its_declaration() {
     let exhaustive = format!(
         "{LAWS}impl const fn fold<V, const law: bool = associative(f)>(f: const fn(V, V) -> V, a: V, b: V) -> V requires !law => f(b, a)\nconst fn forward<V>(f: const fn(V, V) -> V, a: V, b: V) -> V => fold(f, a, b)\nconst fn yes() -> i64 => forward(plus, 1, 2)\nconst fn no() -> i64 => forward(ordinary, 1, 2)\n"
     );
-    let accepted = check(&[("m.hgl", &exhaustive)]);
-    assert!(!accepted.rejected, "{}", accepted.report);
+    let rejected = check(&[("m.hgl", &exhaustive)]);
+    assert!(
+        rejected
+            .findings
+            .iter()
+            .any(|finding| finding.code == "operator/operator.no_candidate"),
+        "{}",
+        rejected.report
+    );
 }
 
 #[test]
@@ -355,4 +362,31 @@ fn law_queries_and_bare_terms_reject_runtime_formal_values() {
             rejected.report
         );
     }
+}
+
+#[test]
+fn law_branches_require_stated_constraints_or_an_explicit_bool_membership() {
+    // GEN-7, GEN-18: corrected ruling in merged specification #224.
+    let alternatives = format!(
+        "{LAWS}impl const fn fold<V, const law: bool = associative(f)>(f: const fn(V, V) -> V, a: V, b: V) -> V requires !law => f(b, a)\n"
+    );
+    let source = format!(
+        "{alternatives}const fn positive<V>(f: const fn(V, V) -> V, a: V, b: V) -> V requires associative(f) => fold(f, a, b)\nconst fn negative<V>(f: const fn(V, V) -> V, a: V, b: V) -> V requires !associative(f) => fold(f, a, b)\nconst fn both<V, const law: bool = associative(f)>(f: const fn(V, V) -> V, a: V, b: V) -> V requires law in {{true, false}} => fold{{law: law}}(f, a, b)\nconst fn yes() -> i64 => positive(plus, 1, 2)\nconst fn no() -> i64 => negative(ordinary, 1, 2)\nconst fn yes_member() -> i64 => both(plus, 1, 2)\nconst fn no_member() -> i64 => both(ordinary, 1, 2)\n"
+    );
+    let accepted = check(&[("m.hgl", &source)]);
+    assert!(!accepted.rejected, "{}", accepted.report);
+    let rejected = check(&[(
+        "m.hgl",
+        &format!(
+            "{alternatives}const fn bare(f: const fn(i64, i64) -> i64) -> i64 => fold(f, 1, 2)\n"
+        ),
+    )]);
+    assert!(
+        rejected
+            .findings
+            .iter()
+            .any(|finding| finding.code == "operator/operator.no_candidate"),
+        "{}",
+        rejected.report
+    );
 }

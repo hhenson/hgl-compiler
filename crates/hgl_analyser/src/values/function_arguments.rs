@@ -77,15 +77,10 @@ impl<'a> Typer<'a> {
             if let Some(local) = self.local_of(node)
                 && let Type::Function(actual) = &self.locals[local].ty
             {
-                let callee = self
-                    .pack_functions
-                    .iter()
-                    .find(|(parameter, _)| *parameter == local)
-                    .map(|(_, target)| target.clone())
-                    .unwrap_or(Callee::Parameter {
-                        parameter: local,
-                        temporal: !actual.value,
-                    });
+                let callee = Callee::Parameter {
+                    parameter: local,
+                    temporal: !actual.value,
+                };
                 return Some((callee, actual.as_ref().clone()));
             }
             if let Some((module, declarations)) = self.declarations(&name) {
