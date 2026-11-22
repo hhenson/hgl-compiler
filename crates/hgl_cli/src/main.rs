@@ -538,7 +538,7 @@ fn read_source(path: &Path) -> Result<Vec<u8>, ExitCode> {
 /// directory, so that a run prints the same thing on every machine; the
 /// analyser's result does not depend on the order (UNIT-1).
 fn find_sources(roots: &[PathBuf]) -> Result<Vec<PathBuf>, ExitCode> {
-    discover_sources(roots, false, |_, _, _| {})
+    discover_sources(roots, |_, _, _| {})
 }
 
 /// Visits every way a file is reached and returns each source once. The
@@ -546,7 +546,6 @@ fn find_sources(roots: &[PathBuf]) -> Result<Vec<PathBuf>, ExitCode> {
 /// for that source, so a path selector can match an alternate spelling.
 fn discover_sources(
     roots: &[PathBuf],
-    allow_empty_directories: bool,
     mut visit: impl FnMut(&Path, &Path, &Path),
 ) -> Result<Vec<PathBuf>, ExitCode> {
     let mut found = Vec::new();
@@ -588,7 +587,7 @@ fn discover_sources(
                 add(entry.into_path(), &mut found);
             }
         }
-        if !contains_source && (!allow_empty_directories || !root.is_dir()) {
+        if !contains_source {
             eprintln!("hgl: no .hgl file under {}", root.display());
             return Err(ExitCode::from(EXIT_FAILED));
         }

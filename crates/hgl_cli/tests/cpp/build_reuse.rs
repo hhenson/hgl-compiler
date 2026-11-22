@@ -528,6 +528,19 @@ fn changing_test_paths_and_kinds_reuses_the_full_build() {
     assert!(!written.contains("outside_mismatch"), "{written}");
     assert_eq!(ninja.calls(), 1);
 
+    let ordinary = ninja
+        .hgl(&["test", &source, "--target", "cpp", "--keep", &workspace])
+        .arg("--rejections-only")
+        .output()
+        .unwrap();
+    assert_eq!(ordinary.status.code(), Some(1));
+    let written = text(&ordinary.stdout);
+    assert!(
+        written.contains("passed   rejection   selected.second::rejected_integration\n"),
+        "{written}"
+    );
+    assert_eq!(ninja.calls(), 1);
+
     let written = run(&["--test-path", &second, "--integration-only"]);
     assert!(
         written.contains("passed   executable  selected.second::integration_second\n"),

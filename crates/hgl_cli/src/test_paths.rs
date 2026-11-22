@@ -48,7 +48,7 @@ pub(super) fn sources(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut names = HashSet::new();
-    let paths = discover_sources(roots, true, |written, canonical, source_name| {
+    let paths = discover_sources(roots, |written, canonical, source_name| {
         let absolute = std::path::absolute(written).ok();
         if selected
             .iter()

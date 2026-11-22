@@ -93,8 +93,7 @@ impl Selection {
         if self.integration_only && !integration {
             return false;
         }
-        let named = self.tests.iter().any(|selector| matches(selector, test));
-        named
+        self.names(test)
             || (self.tests.is_empty()
                 && (!integration || self.integration || self.integration_only))
     }
@@ -117,8 +116,18 @@ impl Selection {
         }
         match selection {
             CaseSelection::Always => !self.integration_only,
+            // Checking the rejection does not execute its test (TST-13).
+            CaseSelection::Named { .. }
+                if kind == CaseKind::Rejection && !self.integration_only =>
+            {
+                self.tests.is_empty() || self.names(identity)
+            }
             CaseSelection::Named { integration } => self.selects(identity, integration),
         }
+    }
+
+    fn names(&self, test: &str) -> bool {
+        self.tests.iter().any(|selector| matches(selector, test))
     }
 
     /// Any selectors that name neither an executable nor a rejection test.

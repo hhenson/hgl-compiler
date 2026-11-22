@@ -861,8 +861,15 @@ fn an_integration_test_is_left_out_unless_it_is_asked_for() {
         assert_eq!(ran.stopped, NONE);
         ran.cases
     };
-    // The integration test and its rejection case are both left out.
-    assert_eq!(select(&[], false), ["not-run executable one::first"]);
+    // A run of the module's tests leaves `live` out. A rejection case
+    // runs nothing, and is checked whoever owns it.
+    assert_eq!(
+        select(&[], false),
+        [
+            "passed rejection one::wrong",
+            "not-run executable one::first",
+        ]
+    );
     // Asked for, it is a test as any other.
     assert_eq!(
         select(&[], true),
