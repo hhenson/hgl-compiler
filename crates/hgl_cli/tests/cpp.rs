@@ -680,19 +680,19 @@ fn block(path: &Path) {
     fs::create_dir(path).unwrap();
 }
 
-/// UNIT-8, GEN-6, RED-5: omitted generic nulls are written, and a
-/// selected value candidate with a required ordinary slot rejects.
+/// EXPR-5, TYPE-14, UNIT-8: a generic null default is written using
+/// the selected nullable value parameter's concrete type.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
-fn value_candidate_defaults_run_on_the_sdk() {
+fn generic_null_defaults_run_on_the_sdk() {
     if !sdk_named() {
         return;
     }
-    let root = scratch("value_candidate_defaults");
+    let root = scratch("generic_null_defaults");
     let file = write(
         &root,
-        "demo.value_candidate_defaults.hgl",
-        include_str!("../../hgl_cpp/tests/fixtures/demo.value_candidate_defaults.hgl"),
+        "demo.generic_null_defaults.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.generic_null_defaults.hgl"),
     );
     let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
@@ -703,11 +703,11 @@ fn value_candidate_defaults_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.contains("rejection cases: 5 passed, 0 failed\n"),
+        stdout.contains("rejection cases: 0 passed, 0 failed\n"),
         "{stdout}"
     );
     assert!(
-        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -768,7 +768,7 @@ fn list_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1787,7 +1787,7 @@ fn inferred_list_sizes_are_values_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
