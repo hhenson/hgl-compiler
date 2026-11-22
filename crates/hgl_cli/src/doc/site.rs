@@ -6,7 +6,7 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 
 use hgl_doc::SiteFile;
-use tempfile::{NamedTempFile, tempdir_in};
+use tempfile::NamedTempFile;
 
 const MARKER: &str = ".hgl-doc";
 const MAGIC: &str = "hgl doc HTML site version 1\n";
@@ -25,12 +25,16 @@ pub(super) fn write(directory: &Path, files: Vec<SiteFile>) -> io::Result<()> {
         .iter()
         .map(|file| output_name(&file.path))
         .collect::<io::Result<BTreeSet<_>>>()?;
+    let mut replacing = BTreeSet::new();
     for path in &next {
-        if output_exists(directory, path)? && !previous.contains(path) {
-            return Err(io::Error::new(
-                ErrorKind::AlreadyExists,
-                format!("cannot replace unrelated documentation file {path}"),
-            ));
+        if output_exists(directory, path)? {
+            if !previous.contains(path) {
+                return Err(io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    format!("cannot replace unrelated documentation file {path}"),
+                ));
+            }
+            replacing.insert(path.as_str());
         }
     }
 
@@ -42,16 +46,9 @@ pub(super) fn write(directory: &Path, files: Vec<SiteFile>) -> io::Result<()> {
             Err(error) => Some(Err(error)),
         })
         .collect::<io::Result<Vec<_>>>()?;
-    // Keep even an interrupted publication's staging files outside the site.
-    let staging_parent = directory.parent().ok_or_else(|| {
-        io::Error::other("cannot stage a documentation site at a filesystem root")
-    })?;
-    let staging = tempdir_in(staging_parent)?;
     for file in &files {
-        let staged = staging.path().join(&file.path);
-        fs::create_dir_all(parent(&staged))?;
-        fs::write(staged, &file.contents)?;
-        fs::create_dir_all(parent(&directory.join(&file.path)))?;
+        let path = directory.join(&file.path);
+        fs::create_dir_all(path.parent().expect("a site file has a parent"))?;
     }
 
     // A failed publication can be retried. Both generations remain known
@@ -60,9 +57,15 @@ pub(super) fn write(directory: &Path, files: Vec<SiteFile>) -> io::Result<()> {
     for path in stale {
         fs::remove_file(directory.join(path))?;
     }
-    // Keep the generator's order, with the entry page published last.
+    // The contents are already rendered. Write each file at its destination,
+    // with the entry page last and no staged pages left by an interruption.
     for file in files {
-        fs::rename(staging.path().join(&file.path), directory.join(&file.path))?;
+        let path = directory.join(&file.path);
+        if replacing.contains(file.path.as_str()) {
+            fs::remove_file(&path)?;
+        }
+        // Exclusive creation never truncates an existing hard link or file.
+        File::create_new(path)?.write_all(&file.contents)?;
     }
     write_manifest(directory, &next)
 }
@@ -130,11 +133,6 @@ fn write_manifest<'a>(
         .persist(directory.join(MANIFEST))
         .map_err(|error| error.error)?;
     Ok(())
-}
-
-fn parent(path: &Path) -> &Path {
-    path.parent()
-        .expect("a staged or published file has a parent")
 }
 
 /// Validates names from the manifest against the files a site can own.

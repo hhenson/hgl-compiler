@@ -380,6 +380,48 @@ fn a_nonempty_unmarked_directory_is_left_alone() {
     assert_eq!(snapshot(root.path()), before);
 }
 
+#[cfg(unix)]
+#[test]
+fn an_output_site_can_be_rebuilt_under_a_read_only_parent() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    input(&source, "\n");
+    let parent = root.path().join("read-only");
+    let site = parent.join("site");
+    fs::create_dir_all(&site).unwrap();
+    let permissions = fs::metadata(&parent).unwrap().permissions();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let generate = || {
+        Command::new(env!("CARGO_BIN_EXE_hgl"))
+            .current_dir(root.path())
+            .args(["doc", "source", "--out", "read-only/site"])
+            .output()
+            .unwrap()
+    };
+    let first = generate();
+    fs::write(site.join("CNAME"), "docs.example.org").unwrap();
+    fs::remove_file(source.join("api.hgl")).unwrap();
+    let rebuild = generate();
+    fs::set_permissions(&parent, permissions).unwrap();
+
+    for output in [first, rebuild] {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(site.join("index.html").is_file());
+    assert!(!site.join("modules/mod-guide.api.html").exists());
+    assert_eq!(
+        fs::read_to_string(site.join("CNAME")).unwrap(),
+        "docs.example.org"
+    );
+}
+
 #[test]
 fn rebuilding_an_owned_site_removes_private_pages_and_stale_assets() {
     let root = tempdir().unwrap();
