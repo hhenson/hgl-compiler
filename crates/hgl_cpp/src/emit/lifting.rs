@@ -58,18 +58,16 @@ pub(super) struct Given {
 }
 
 impl Emitter<'_> {
-    /// A new Err must fail the reading node before it tests admission
-    /// or runs a handler (ERR-15, owner's ruling on #355).
-    pub(super) fn check_result_tick(&mut self, form: &Expr, view: &str, indent: &str) -> String {
+    /// Fail on a new null or Err before checking admission or running
+    /// a handler. A retained value is only read when needed (ERR-12, ERR-15).
+    pub(super) fn check_read_tick(&mut self, form: &Expr, view: &str, indent: &str) -> String {
         let input = reader_operand(form);
         let value = self.temporal_read(&input.ty, view, input.at);
-        let name = names::temporary("outcome", self.temporary());
-        let place = self.source_location(form.at);
+        let checked = self.apply_reader_chain(form, &value);
         let library = runtime::NAMESPACE;
         format!(
             "{indent}if (::{library}::fn_modified({view}))\n{indent}{{\n\
-             {indent}{INDENT}const auto {name} = {value};\n\
-             {indent}{INDENT}if (!{name}.has_value()) ::{library}::raise({name}.error(), {place});\n{indent}}}\n"
+             {indent}{INDENT}(void){checked};\n{indent}}}\n"
         )
     }
 
@@ -266,7 +264,7 @@ impl Emitter<'_> {
                     .find(|given| given.position == position)
                     .is_none_or(|given| given.input.as_ref() == Some(&input.ty))
         };
-        let observes_results = arguments.iter().enumerate().any(|(position, argument)| {
+        let observes_failures = arguments.iter().enumerate().any(|(position, argument)| {
             reads_raw_input(position, argument) && watches_failure(&argument.value).is_some()
         });
         let mut checks = String::new();
@@ -326,8 +324,8 @@ impl Emitter<'_> {
                         // `valid(input)`": hgraph evaluates the node only
                         // once it is.
                         None => {
-                            let policy = if observes_results {
-                                // ERR-15: failure ticks are observed even
+                            let policy = if observes_failures {
+                                // ERR-12 and ERR-15: observe failures even
                                 // while another input is still invalid.
                                 admission
                                     .push_str(&format!("{indent}if (!{valid}({name})) return;\n"));
@@ -339,7 +337,7 @@ impl Emitter<'_> {
                                 .push(format!("::hgraph::In<{label}, {schema}{policy}> {name}"));
                             roles.push(Role::Input);
                             if let Some(form) = watched {
-                                checks.push_str(&self.check_result_tick(form, &name, &indent));
+                                checks.push_str(&self.check_read_tick(form, &name, &indent));
                             }
                             if whole {
                                 prelude.push_str(&format!(
@@ -362,7 +360,7 @@ impl Emitter<'_> {
                                 "::hgraph::In<{label}, {schema}, ::hgraph::InputValidity::Unchecked> {view}"
                             ));
                             if let Some(form) = watched {
-                                checks.push_str(&self.check_result_tick(form, &view, &indent));
+                                checks.push_str(&self.check_read_tick(form, &view, &indent));
                             }
                             roles.push(Role::Plain);
                             // TYPE-14: "A T is a value where a `T?` is
