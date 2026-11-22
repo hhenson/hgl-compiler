@@ -1257,7 +1257,11 @@ impl<'a> Typer<'a> {
                     // A named brace entry does not put the parentheses
                     // into their named-argument portion (EXPR-2, EXPR-10).
                     named_seen |= !brace;
-                    options.name_key(name.text(), brace)
+                    if !brace && dependent.is_some() {
+                        Key::Name(name.text().to_string())
+                    } else {
+                        options.name_key(name.text(), brace)
+                    }
                 }
             };
             let own = key.public_parameter(public);

@@ -1510,6 +1510,34 @@ fn function_parameters_run_on_the_sdk() {
     );
 }
 
+/// FN-17, FN-18 and GEN-17: reflected callbacks carry their generic
+/// arguments and defaults to the C++ target.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn reflected_pack_followups_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("reflected-pack-followups");
+    let file = write(
+        &root,
+        "demo.reflected_pack_followups.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.reflected_pack_followups.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-18 and EXPR-10: brace arguments reach their ordinary, generic,
 /// value and temporal slots. Graphs pass const values and connections
 /// on to a node, and configuration defaults are used when omitted.
