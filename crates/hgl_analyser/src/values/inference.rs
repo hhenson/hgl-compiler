@@ -881,16 +881,20 @@ impl<'a> Typer<'a> {
                     (None, _) => resolved_type(pattern),
                 };
                 let slot = Slot { ty, ..slots[index] };
-                // EXPR-9 and ERR-2: an empty sequence or a form with no
-                // type of its own needs the slot another argument can
-                // settle in the graph instance (GEN-2).
+                // EXPR-9, ERR-2 and FN-17: a contextual expression or
+                // anonymous callback may need the slot another argument
+                // can settle in the graph instance (GEN-2).
                 let depends_on_instance = !late.is_empty() && !traced && !whole(&slot.ty) && {
                     let mut missing = unfound
                         .iter()
                         .filter(|at| mentions(pattern, &[**at]))
                         .peekable();
                     let needs_place = match takes {
-                        Takes::Parameters => needs_argument_place(node),
+                        Takes::Parameters => {
+                            needs_argument_place(node)
+                                || matches!(slot.ty, Type::Function(_))
+                                    && ungrouped(node.clone()).kind() == SyntaxKind::FnExpr
+                        }
                         Takes::Fields => field_needs_argument_place(node),
                     };
                     needs_place && missing.peek().is_some() && missing.all(|at| late.contains(at))

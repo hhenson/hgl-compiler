@@ -1605,9 +1605,8 @@ impl<'a> Typer<'a> {
             return self.compared_with_null(value, Some(&scope));
         }
         if let Some((success, at)) = call.tag_test
-            && !matches!(value.ty, Type::Result { .. })
+            && self.check_tag_test(success, &value.ty, at)
         {
-            self.check_tag_test(success, &value.ty, at);
             return value;
         }
         if let Some(expected) = call.result.as_ref().map(in_place)

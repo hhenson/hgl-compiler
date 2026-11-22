@@ -379,6 +379,21 @@ fn deferred_configured_division<T, const Policy: ZeroPolicy = .ieee>(const value
     return x /{zero: Policy} 2
 }
 
+# GEN-2 and FN-17: the callback's type comes from the connection once
+# the graph instance selects the operator in the conditional.
+const fn shift_deferred<U>(a: U, f: const fn(U) -> U) -> U => f(a)
+
+fn deferred_callback_plain<T>(const value: T) -> f64 {
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    return shift_deferred(chosen, fn(x) => x + 1.0)
+}
+
+fn deferred_callback_captures<T>(const value: T) -> f64 {
+    let offset = 1.0
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    return shift_deferred(f: fn(x) => x + offset, a: chosen)
+}
+
 # GEN-5: a named operator selects once its deferred argument settles.
 fn deferred_named_add<T>(const value: T) -> i64 {
     let x = if live_helper(value) > 0 { 1 }
@@ -635,6 +650,9 @@ test an_instance_settles_its_graph_conditions {
     assert eval settled_contextual_fields(value: "s") == [GraphSide.right]
     assert eval settled_contextual_field_tail(value: "s") == [2]
     assert eval inferred_tagged_field(value: "s") == [GraphSide.right]
+    assert eval deferred_callback_plain(value: 3) == [3.5]
+    assert eval deferred_callback_captures(value: 3) == [3.5]
+    assert eval deferred_callback_captures(value: 0) == []
     assert eval inferred_iteration(value: "s") == [2]
     assert eval sum_inferred_iteration(value: "s") == [5]
     assert eval deferred_member(value: "s") == [2]

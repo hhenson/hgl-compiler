@@ -931,8 +931,8 @@ fn contextual_member(typer: &Typer<'_>, tail: &Expr) -> Option<SyntaxNode> {
 /// The expression written at a contextual tail's source location.
 pub(super) fn contextual_tail_syntax(typer: &Typer<'_>, tail: &Expr) -> Option<SyntaxNode> {
     let node = typer.syntax_of(tail)?;
-    // A block's tail and its expression statement share a span.
-    if node.kind() == SyntaxKind::ExprStmt {
+    // A block's tail or a positional payload can share its wrapper's span.
+    if matches!(node.kind(), SyntaxKind::ExprStmt | SyntaxKind::Arg) {
         node.children().next()
     } else {
         Some(node)

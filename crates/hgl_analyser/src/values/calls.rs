@@ -1108,8 +1108,16 @@ impl<'a> Typer<'a> {
                 found.push(Some(argument.clone()));
             }
         }
+        // FN-17: synthesized captures are not arguments written at
+        // this call. They do not take part in inference or source replay.
+        let written = |argument: &hir::Argument| {
+            argument
+                .parameter
+                .is_none_or(|slot| slot < signature.parameters.len())
+        };
         let Some(mut supplied) = arguments
             .iter()
+            .filter(|argument| written(argument))
             .enumerate()
             .filter(|(position, _)| {
                 contextual
@@ -1255,6 +1263,8 @@ impl<'a> Typer<'a> {
             self.index_instance_locals();
         }
         let pack_types = PackTypes::new(&signature.generics, &packs);
+        // Category recording rebuilds captures from the completed callbacks.
+        arguments.retain(written);
         let mut sources = sources.into_iter().peekable();
         for (position, argument) in arguments.iter_mut().enumerate() {
             let parameter =
@@ -1275,7 +1285,7 @@ impl<'a> Typer<'a> {
                 if !self.may_reread() {
                     continue;
                 }
-                // EXPR-9 and ERR-2: use the normal argument reader
+                // EXPR-9, ERR-2 and FN-17: use the normal argument reader
                 // with its completed place, in written order (EXPR-2).
                 let slot = Slot {
                     name: &parameter.name,

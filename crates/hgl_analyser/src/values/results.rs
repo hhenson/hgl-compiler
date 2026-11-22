@@ -235,9 +235,10 @@ impl<'a> Typer<'a> {
         (kind, BOOL)
     }
 
-    /// ERR-3: a tag test takes a result itself, before any implicit read.
-    pub(super) fn check_tag_test(&mut self, success: bool, ty: &Type, at: Location) {
-        if !matches!(ty, Type::Result { .. }) && whole(ty) && !open(ty) {
+    /// ERR-3: report whether a tag test rejects before any implicit read.
+    pub(super) fn check_tag_test(&mut self, success: bool, ty: &Type, at: Location) -> bool {
+        let rejected = !matches!(ty, Type::Result { .. }) && whole(ty) && !open(ty);
+        if rejected {
             let name = if success { "is_ok" } else { "is_err" };
             self.diagnostics.emit(error(
                 Category::Type,
@@ -247,6 +248,7 @@ impl<'a> Typer<'a> {
                 "ERR-3",
             ));
         }
+        rejected
     }
 
     /// The lexical fact a direct field projection needs on this binding.
