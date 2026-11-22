@@ -57,6 +57,8 @@ without a comment has `"documentation": null`.
 reports errors on the original comment lines. `hgl test --target cpp`
 runs them alongside ordinary tests. A fence marked `hgl no-run` or
 outside `Examples:` is shown only. Backtick and tilde fences both work.
+These commands include examples from modules under the given source roots.
+Give Core's source as a root to check or run its examples.
 
 The listing identifies an example as `module.path::declaration#example-N`.
 Pass that same name to `--test`, for example `--test 'demo::twice#example-1'`.

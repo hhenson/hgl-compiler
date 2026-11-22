@@ -612,6 +612,8 @@ pub struct ParsedFile {
     /// The root of its syntax tree, as `hgl_parser::parse` gives it for a
     /// whole file.
     pub root: SyntaxNode,
+    /// The compiler supplied this file outside the caller's source roots (TST-14).
+    pub compiler_supplied: bool,
     /// Declarations and imports to leave out, each named by the bytes
     /// its node covers. The program is analysed as if they were not
     /// written.
@@ -630,6 +632,7 @@ impl ParsedFile {
         ParsedFile {
             file,
             root,
+            compiler_supplied: false,
             omit: Vec::new(),
             examples: Vec::new(),
         }

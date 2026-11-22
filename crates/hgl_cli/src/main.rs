@@ -10,6 +10,7 @@
 //! hgl doc <roots>       program --[document]--> JSON API model
 //! hgl test <roots>      the program's cases, each checked; the outcome of each
 //! hgl emit <roots>      program --[transpile]--> files for a target, written
+//! hgl build <roots>     program --[transpile and build]--> native artifacts
 //! hgl run <roots>       an application of the program, run on a target
 //! ```
 //!
@@ -49,12 +50,13 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use cpp::CaseOutcome;
 use hgl_analyser::{Detail, ImportKind, ParsedFile, Program};
 use hgl_diagnostics::{Diagnostics, Severity, render};
 use hgl_lexer::{Token, TokenKind, lex, literal};
 use hgl_parser::ast::{self, AstNode};
-use hgl_parser::{Entry, Limits};
-use hgl_runner::{Case, CaseKind, Executor, Outcome, Report, Selection};
+use hgl_parser::{Entry, HasSpan, Limits};
+use hgl_runner::{CaseKind, Problem, Report, Selection};
 use hgl_source::{FileId, SourceMap};
 use replace::Replacement;
 use walkdir::WalkDir;
@@ -94,9 +96,20 @@ enum Command {
     Test(TestArgs),
     /// Write a program for a target, into a directory.
     Emit(EmitArgs),
+    /// Build a program's units and executables without running them.
+    Build(BuildArgs),
     /// Run an application of a program on a target, and print its
     /// output.
     Run(RunArgs),
+    /// Internal process entry that takes a parent-death signal before exec.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    NativeBuildChild {
+        parent: u32,
+        program: PathBuf,
+        #[arg(last = true)]
+        arguments: Vec<std::ffi::OsString>,
+    },
 }
 
 /// Arguments of `hgl tokens`.
@@ -179,7 +192,7 @@ struct TestArgs {
     /// Build the program in this directory, which keeps what the target
     /// wrote. With none, it is built in a directory under the cache
     /// for its source roots, which is kept for the next run.
-    #[arg(long, value_name = "DIR", requires = "target")]
+    #[arg(long, visible_alias = "out", value_name = "DIR", requires = "target")]
     keep: Option<PathBuf>,
 
     #[command(flatten)]
@@ -204,6 +217,60 @@ struct EmitArgs {
 
     #[command(flatten)]
     limits: LimitArgs,
+}
+
+/// Arguments of `hgl build`.
+#[derive(Args)]
+struct BuildArgs {
+    /// Source roots, as for `hgl check`.
+    #[arg(required = true, value_name = "ROOT")]
+    roots: Vec<PathBuf>,
+
+    /// The target to build for.
+    #[arg(long, value_enum, default_value_t = Target::Cpp)]
+    target: Target,
+
+    /// Build the test executables as well.
+    #[arg(long)]
+    tests: bool,
+
+    /// Write compile_commands.json for the generated C++ in the workspace.
+    /// Includes test entry units with --tests.
+    #[arg(long)]
+    compile_commands: bool,
+
+    /// The build workspace, or the program's workspace under the cache.
+    #[arg(long, visible_alias = "keep", value_name = "DIR")]
+    out: Option<PathBuf>,
+
+    /// Build with native debug symbols and the original HGL source paths.
+    #[arg(long)]
+    debug: bool,
+
+    /// How to report the build.
+    #[arg(long, value_enum, default_value_t = BuildFormat::Text)]
+    format: BuildFormat,
+
+    /// An application to describe or apply replacements to.
+    #[arg(long, value_name = "PATH")]
+    application: Option<String>,
+
+    /// Replace an entry argument, as for `hgl run` (RUN-2).
+    #[arg(long = "arg", value_name = "NAME=VALUE", value_parser = replace::replacement)]
+    arguments: Vec<Replacement>,
+
+    /// Supply run configuration, as for `hgl run` (RUN-6).
+    #[arg(long = "config", value_name = "FIELD=VALUE", value_parser = replace::replacement)]
+    config: Vec<Replacement>,
+
+    #[command(flatten)]
+    limits: LimitArgs,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum BuildFormat {
+    Text,
+    Json,
 }
 
 /// Arguments of `hgl run`.
@@ -248,7 +315,7 @@ struct RunArgs {
     /// Build the application in this directory, which keeps what the
     /// target wrote. With none, it is built in a directory under the
     /// cache for its source roots, which is kept for the next run.
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, visible_alias = "out", value_name = "DIR")]
     keep: Option<PathBuf>,
 
     #[command(flatten)]
@@ -258,14 +325,8 @@ struct RunArgs {
 /// The application `hgl run` runs, by its path: the one `named`, or the
 /// program's only one. On failure the reason has been printed, and the
 /// exit status to end with is returned.
-fn chosen_application(program: &Program, named: Option<&str>) -> Result<String, ExitCode> {
-    let paths: Vec<&str> = program
-        .modules
-        .iter()
-        .filter(|module| module.run_body.is_some())
-        .map(|module| module.path.as_str())
-        .collect();
-    match (named, paths.as_slice()) {
+fn chosen_application(paths: &[&str], named: Option<&str>) -> Result<String, ExitCode> {
+    match (named, paths) {
         (_, []) => {
             eprintln!("hgl: the program has no application to run");
             Err(ExitCode::from(EXIT_FAILED))
@@ -370,10 +431,24 @@ fn main() -> ExitCode {
             let stack = analysis_stack(arguments.limits.limits());
             on_stack_of(stack, move || emit(&arguments))
         }
+        Command::Build(arguments) => {
+            let stack = analysis_stack(arguments.limits.limits());
+            on_stack_of(stack, move || match arguments.target {
+                Target::Cpp => cpp::build(&arguments),
+            })
+        }
         Command::Run(arguments) => {
             let stack = analysis_stack(arguments.limits.limits());
-            on_stack_of(stack, move || run(&arguments))
+            on_stack_of(stack, move || match arguments.target {
+                Target::Cpp => cpp::run(&arguments),
+            })
         }
+        #[cfg(target_os = "linux")]
+        Command::NativeBuildChild {
+            parent,
+            program,
+            arguments,
+        } => cpp::native_build_child(parent, &program, &arguments),
     }
 }
 
@@ -426,15 +501,7 @@ fn load(path: &Path) -> Result<(SourceMap, FileId), ExitCode> {
 /// does.
 fn load_into(sources: &mut SourceMap, path: &Path) -> Result<FileId, ExitCode> {
     let name = path.display().to_string();
-    // The file is read as bytes, not as text: whether the bytes are UTF-8
-    // is the lexer's question (LEX-16), answered with a diagnostic.
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            eprintln!("hgl: cannot read {name}: {error}");
-            return Err(ExitCode::from(EXIT_FAILED));
-        }
-    };
+    let bytes = read_source(path)?;
     match sources.add_bytes(name, bytes) {
         Ok(file) => Ok(file),
         Err(error) => {
@@ -442,6 +509,14 @@ fn load_into(sources: &mut SourceMap, path: &Path) -> Result<FileId, ExitCode> {
             Err(ExitCode::from(EXIT_FAILED))
         }
     }
+}
+
+/// Read the original bytes. The lexer diagnoses non-UTF-8 source (LEX-16).
+fn read_source(path: &Path) -> Result<Vec<u8>, ExitCode> {
+    fs::read(path).map_err(|error| {
+        eprintln!("hgl: cannot read {}: {error}", path.display());
+        ExitCode::from(EXIT_FAILED)
+    })
 }
 
 /// The source files of a program: each root that is a file, and every
@@ -609,21 +684,45 @@ struct Parsed {
     supplied: usize,
 }
 
-/// Finds, reads, lexes and parses every source file under `roots`, and
-/// core's module when no file under the roots belongs to `module core`.
-fn parse_program(roots: &[PathBuf], limits: Limits) -> Result<Parsed, ExitCode> {
-    parse_program_with(roots, limits, None, true)
+/// The source inputs, read once so a build key and the parser see the
+/// same bytes even when a file changes during the build.
+struct ProgramSources {
+    files: Vec<(String, Vec<u8>)>,
 }
 
-/// Parses the program, optionally replacing one file's text for RUN-2.
-/// Only commands that check or run the program's tests read SDOC-9 examples.
-fn parse_program_with(
+impl ProgramSources {
+    fn read(roots: &[PathBuf]) -> Result<Self, ExitCode> {
+        let files = find_sources(roots)?
+            .iter()
+            .map(|path| Ok((path.display().to_string(), read_source(path)?)))
+            .collect::<Result<_, ExitCode>>()?;
+        Ok(Self { files })
+    }
+}
+
+/// Finds, reads, lexes and parses the source files and the supplied core.
+fn parse_program(
     roots: &[PathBuf],
+    limits: Limits,
+    documentation_examples: bool,
+) -> Result<Parsed, ExitCode> {
+    parse_sources(
+        &ProgramSources::read(roots)?,
+        limits,
+        None,
+        documentation_examples,
+    )
+}
+
+/// Parses the snapshot, with supplied core if the sources have no core
+/// module. RUN-2 may substitute the new text of one named file. SDOC-9
+/// examples are parsed only from the explicit inputs and for test analysis.
+fn parse_sources(
+    inputs: &ProgramSources,
     limits: Limits,
     replaced: Option<(&str, &str)>,
     documentation_examples: bool,
 ) -> Result<Parsed, ExitCode> {
-    let paths = find_sources(roots)?;
     let mut sources = SourceMap::new();
     let mut diagnostics = Diagnostics::new();
     let mut files = Vec::new();
@@ -639,31 +738,28 @@ fn parse_program_with(
                 limits,
                 diagnostics,
             );
-            let mut parsed = ParsedFile::new(file, parse.syntax());
-            if documentation_examples {
-                parsed.examples = hgl_parser::documentation::parse_examples(
-                    sources,
-                    file,
-                    &parsed.root,
-                    limits,
-                    diagnostics,
-                );
-            }
-            parsed
+            ParsedFile::new(file, parse.syntax())
         };
-    for path in &paths {
-        let name = path.display().to_string();
+    for (name, bytes) in &inputs.files {
         let file = match replaced {
-            Some((replaced, text)) if replaced == name => match sources.add(name, text) {
-                Ok(file) => file,
-                Err(error) => {
-                    eprintln!("hgl: {error}");
-                    return Err(ExitCode::from(EXIT_FAILED));
-                }
-            },
-            _ => load_into(&mut sources, path)?,
-        };
-        files.push(parse_file(&sources, file, limits, &mut diagnostics));
+            Some((replaced, text)) if replaced == name => sources.add(name, text),
+            _ => sources.add_bytes(name, bytes.clone()),
+        }
+        .map_err(|error| {
+            eprintln!("hgl: {error}");
+            ExitCode::from(EXIT_FAILED)
+        })?;
+        let mut parsed = parse_file(&sources, file, limits, &mut diagnostics);
+        if documentation_examples {
+            parsed.examples = hgl_parser::documentation::parse_examples(
+                &sources,
+                file,
+                &parsed.root,
+                limits,
+                &mut diagnostics,
+            );
+        }
+        files.push(parsed);
     }
     // A program that brings its own `module core` is checked with that
     // one: this is how core itself is checked.
@@ -686,12 +782,29 @@ fn parse_program_with(
             // The limits given are for the program's own source. Core's
             // files are the compiler's, and are read under the default
             // ones whatever the program is held to.
-            files.push(parse_file(
-                &sources,
-                file,
-                Limits::DEFAULT,
-                &mut diagnostics,
-            ));
+            let mut supplied_diagnostics = Diagnostics::new();
+            let mut parsed = parse_file(&sources, file, Limits::DEFAULT, &mut supplied_diagnostics);
+            // TST-14: only explicit source contributes named tests and
+            // their diagnostics. Core's ordinary declarations still check.
+            parsed.compiler_supplied = true;
+            parsed.omit.extend(
+                parsed
+                    .root
+                    .descendants()
+                    .filter_map(ast::TestDecl::cast)
+                    .map(|test| test.syntax().span()),
+            );
+            for diagnostic in supplied_diagnostics.as_slice() {
+                let span = diagnostic.primary.span;
+                if !parsed
+                    .omit
+                    .iter()
+                    .any(|omitted| omitted.start <= span.start && span.end <= omitted.end)
+                {
+                    diagnostics.emit(diagnostic.clone());
+                }
+            }
+            files.push(parsed);
             supplied += 1;
         }
     }
@@ -724,7 +837,7 @@ fn check(arguments: &CheckArgs) -> ExitCode {
         files: parsed,
         mut diagnostics,
         supplied,
-    } = match parse_program(&arguments.roots, arguments.limits.limits()) {
+    } = match parse_program(&arguments.roots, arguments.limits.limits(), true) {
         Ok(program) => program,
         Err(status) => return status,
     };
@@ -804,7 +917,7 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
         files: parsed,
         mut diagnostics,
         ..
-    } = match parse_program_with(&arguments.roots, arguments.limits.limits(), None, false) {
+    } = match parse_program(&arguments.roots, arguments.limits.limits(), false) {
         Ok(program) => program,
         Err(status) => return status,
     };
@@ -839,53 +952,54 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
     report(&sources, diagnostics)
 }
 
-/// `hgl run`: runs an application of a program on a target (UNIT-14,
-/// RUN-1), and prints the run's output: a line for each publication of
-/// the entry's result, its instant and then what was published.
-///
-/// ```text
-/// 1970-01-01T00:00:00.000001Z  1970-01-01T00:00:00.000001Z
-/// 1970-01-01T00:00:00.500001Z  1970-01-01T00:00:00.500001Z
-/// ran examples.entry.backtest on cpp: 2 publications
-/// ```
-///
-/// What the program logs and what the target prints goes to standard
-/// error, as the run goes. The output is printed to standard output
-/// when the run has stopped: core's CRUN-8 has it as the recording
-/// "once the run has stopped", and CRUN-6 gives a run that failed
-/// none.
-///
-/// RUN-3: `eval` is a simulation, and `run` is in real time "until the
-/// configuration's end or until its host stops it". An interrupt is
-/// the host's stop: the run ends as it does at its end, and what it
-/// recorded up to then is printed.
-///
-/// RUN-2: `--arg` replaces an argument of the entry, and `--config`
-/// supplies a field of the run's configuration (RUN-6); `replace`
-/// writes each into the application, an argument in the run statement
-/// and a field in its `inject run_config`, and the program is checked
-/// again.
-fn run(arguments: &RunArgs) -> ExitCode {
-    let limits = arguments.limits.limits();
+/// The checked program and the source positions for the target to write.
+struct PreparedProgram {
+    sources: SourceMap,
+    parsed: Vec<ParsedFile>,
+    front_end: Diagnostics,
+    program: Program,
+    chosen: Option<String>,
+    original_source: Option<(hgl_source::SourceFile, replace::SourceEdits)>,
+}
+
+/// Checks a program and, for a run or a named application, applies
+/// the requested overrides before writing the program (RUN-2, RUN-6).
+fn prepare_program(
+    inputs: &ProgramSources,
+    limits: Limits,
+    replacements: &cpp::Replacements<'_>,
+    running: bool,
+    debug: bool,
+    documentation_examples: bool,
+) -> Result<PreparedProgram, ExitCode> {
     let Parsed {
         mut sources,
-        files: parsed,
-        mut diagnostics,
+        files: mut parsed,
+        diagnostics: mut front_end,
         ..
-    } = match parse_program_with(&arguments.roots, limits, None, false) {
-        Ok(program) => program,
-        Err(status) => return status,
-    };
+    } = parse_sources(inputs, limits, None, documentation_examples)?;
+    let mut diagnostics = front_end.clone();
     let mut program = hgl_analyser::analyse(&parsed, &mut diagnostics);
     if diagnostics.has_errors() {
-        if arguments.debug_build.is_none() {
+        if running && !debug {
             println!("not run: the program is rejected");
         }
-        return report(&sources, diagnostics);
+        return Err(report(&sources, diagnostics));
     }
-    let chosen = match chosen_application(&program, arguments.application.as_deref()) {
-        Ok(path) => path,
-        Err(status) => return status,
+    let chosen = if running
+        || replacements.application.is_some()
+        || !replacements.arguments.is_empty()
+        || !replacements.configuration.is_empty()
+    {
+        let paths: Vec<_> = program
+            .modules
+            .iter()
+            .filter(|module| module.run_body.is_some())
+            .map(|module| module.path.as_str())
+            .collect();
+        Some(chosen_application(&paths, replacements.application)?)
+    } else {
+        None
     };
     // RUN-2: what starts the application replaces an argument of its
     // entry, and supplies its run's configuration (RUN-6). The
@@ -893,8 +1007,10 @@ fn run(arguments: &RunArgs) -> ExitCode {
     // program checked again: each is held to what the application
     // writes is.
     let mut original_source = None;
-    if !arguments.arguments.is_empty() || !arguments.config.is_empty() {
-        let written = replace::EntryCall::of(&program, &chosen);
+    if (!replacements.arguments.is_empty() || !replacements.configuration.is_empty())
+        && let Some(chosen) = chosen.as_deref()
+    {
+        let written = replace::EntryCall::of(&program, chosen);
         let written_as = written
             .as_ref()
             .map_or("no entry".to_string(), |entry| entry.shown(&program));
@@ -904,13 +1020,13 @@ fn run(arguments: &RunArgs) -> ExitCode {
         // read as the argument was expected: but only where the
         // application, with them written and nothing replaced, still
         // reads as it did. Its file may have no name for one of them.
-        let inferred = replace::inferred_generics(&parsed, &program, &chosen);
+        let inferred = replace::inferred_generics(&parsed, &program, chosen);
         let explicit = inferred.as_ref().filter(|generics| {
             let Ok((file, text, _)) = replace::replaced(
                 &sources,
                 &parsed,
                 &program,
-                &chosen,
+                chosen,
                 &[],
                 &[],
                 Some(generics),
@@ -923,58 +1039,58 @@ fn run(arguments: &RunArgs) -> ExitCode {
                 files,
                 diagnostics: mut found,
                 ..
-            }) = parse_program_with(&arguments.roots, limits, Some((&name, &text)), false)
+            }) = parse_sources(inputs, limits, Some((&name, &text)), documentation_examples)
             else {
                 return false;
             };
             let read = hgl_analyser::analyse(&files, &mut found);
-            !found.has_errors() && replace::EntryCall::of(&read, &chosen) == written
+            !found.has_errors() && replace::EntryCall::of(&read, chosen) == written
         });
         let (file, text, edits) = match replace::replaced(
             &sources,
             &parsed,
             &program,
-            &chosen,
-            &arguments.arguments,
-            &arguments.config,
+            chosen,
+            replacements.arguments,
+            replacements.configuration,
             explicit,
             limits,
         ) {
             Ok(replaced) => replaced,
             Err(message) => {
                 eprintln!("hgl: {message}");
-                return ExitCode::from(EXIT_FAILED);
+                return Err(ExitCode::from(EXIT_FAILED));
             }
         };
         let name = sources.file(file).name().to_string();
         let Parsed {
             sources: read_again,
-            files: parsed,
-            diagnostics: mut found,
+            files: read_files,
+            diagnostics: read_diagnostics,
             ..
-        } = match parse_program_with(&arguments.roots, limits, Some((&name, &text)), false) {
-            Ok(program) => program,
-            Err(status) => return status,
-        };
-        program = hgl_analyser::analyse(&parsed, &mut found);
-        if arguments.debug_build.is_some() {
+        } = parse_sources(inputs, limits, Some((&name, &text)), documentation_examples)?;
+        let mut found = read_diagnostics.clone();
+        program = hgl_analyser::analyse(&read_files, &mut found);
+        parsed = read_files;
+        front_end = read_diagnostics;
+        if debug {
             original_source = Some((sources.file(file).clone(), edits));
         }
         sources = read_again;
         if found.has_errors() {
-            if arguments.debug_build.is_none() {
+            if running && !debug {
                 println!("not run: the program is rejected with the replacements given");
             }
-            return report(&sources, found);
+            return Err(report(&sources, found));
         }
         // "a constant checked against the type it replaces": the types
         // of the entry's parameters are those of the entry the
         // application calls, with the generic arguments its call comes
         // to. A replacement that makes the call another entry, or the
         // same one with other generic arguments, is of another type.
-        let replaced = replace::EntryCall::of(&program, &chosen);
+        let replaced = replace::EntryCall::of(&program, chosen);
         if replaced != written {
-            if arguments.debug_build.is_none() {
+            if running && !debug {
                 println!("not run: the program is rejected with the replacements given");
             }
             let replaced_as = replaced
@@ -991,20 +1107,17 @@ fn run(arguments: &RunArgs) -> ExitCode {
                 "hgl: a replacement is of the type it replaces: `{chosen}` runs `{written_as}`, \
                  and with the replacements given it would run `{replaced_as}`{alike}"
             );
-            return ExitCode::from(EXIT_REJECTED);
+            return Err(ExitCode::from(EXIT_REJECTED));
         }
     }
-    match arguments.target {
-        Target::Cpp => cpp::run(
-            &sources,
-            &program,
-            &chosen,
-            arguments.keep.as_deref(),
-            &arguments.roots,
-            arguments.debug_build.as_deref(),
-            original_source.as_ref(),
-        ),
-    }
+    Ok(PreparedProgram {
+        sources,
+        parsed,
+        front_end,
+        program,
+        chosen,
+        original_source,
+    })
 }
 
 /// `hgl test`: checks the cases of a program and prints the outcome of
@@ -1033,169 +1146,134 @@ fn run(arguments: &RunArgs) -> ExitCode {
 /// executable cases: 1 not run: no target was given to run a test on
 /// ```
 fn test(arguments: &TestArgs) -> ExitCode {
-    let Parsed {
-        sources,
-        files: parsed,
-        diagnostics: front_end,
-        ..
-    } = match parse_program(&arguments.roots, arguments.limits.limits()) {
-        Ok(program) => program,
-        Err(status) => return status,
-    };
     let selection = Selection {
         tests: arguments.tests.clone(),
         rejections_only: arguments.rejections_only,
         integration: arguments.integration,
     };
-    // The target the tests run on, and where it builds the program.
-    let mut on_cpp = cpp::OnCpp {
-        sources: &sources,
-        keep: arguments.keep.as_deref(),
-        roots: &arguments.roots,
+    if matches!(arguments.target, Some(Target::Cpp)) {
+        return cpp::test(arguments, &selection);
+    }
+    let Parsed {
+        sources,
+        files,
+        diagnostics,
+        ..
+    } = match parse_program(&arguments.roots, arguments.limits.limits(), true) {
+        Ok(program) => program,
+        Err(status) => return status,
     };
-    let executor: Option<&mut dyn Executor> = match arguments.target {
-        None => None,
-        Some(Target::Cpp) => Some(&mut on_cpp),
-    };
-    let report = hgl_runner::run(&sources, &parsed, &front_end, &selection, executor);
+    let report = hgl_runner::run(&sources, &files, &diagnostics, &selection, None);
+    print_report(&sources, &report)
+}
 
+fn write_problems(sources: &SourceMap, problems: &[Problem]) {
+    for problem in problems {
+        match problem.at {
+            Some(at) => {
+                let source = sources.file(at.file);
+                eprintln!(
+                    "{}:{}: {}",
+                    source.name(),
+                    source.line_col(at.span.start),
+                    problem.message
+                );
+            }
+            None => eprintln!("hgl: {}", problem.message),
+        }
+    }
+}
+
+fn print_problems(sources: &SourceMap, problems: &[Problem]) -> ExitCode {
+    write_problems(sources, problems);
+    println!("no case was run");
+    ExitCode::from(EXIT_REJECTED)
+}
+
+fn print_report(sources: &SourceMap, report: &Report) -> ExitCode {
     // TST-14: invalid metadata and errors in the surviving source stop
     // the run before any case.
     if report.prevented() {
-        for problem in &report.problems {
-            match problem.at {
-                Some(at) => {
-                    let source = sources.file(at.file);
-                    eprintln!(
-                        "{}:{}: {}",
-                        source.name(),
-                        source.line_col(at.span.start),
-                        problem.message
-                    );
-                }
-                None => eprintln!("hgl: {}", problem.message),
-            }
-        }
-        if let Err(error) = render::to_stderr(&sources, &report.surviving) {
+        write_problems(sources, &report.problems);
+        if let Err(error) = render::to_stderr(sources, &report.surviving) {
             eprintln!("hgl: cannot write diagnostics: {error}");
             return ExitCode::from(EXIT_FAILED);
         }
         println!("no case was run");
         return ExitCode::from(EXIT_REJECTED);
     }
-
-    for case in &report.cases {
-        print_case(&sources, case);
-    }
-    print_counts(&report);
-    if report.succeeded() {
-        ExitCode::SUCCESS
-    } else if report
+    let outcomes: Vec<_> = report
         .cases
         .iter()
-        .any(|case| matches!(case.outcome, Outcome::Failed { .. } | Outcome::FailedRun(_)))
-    {
-        ExitCode::from(EXIT_REJECTED)
-    } else {
-        // Nothing failed, and something could not be run.
-        ExitCode::from(EXIT_FAILED)
-    }
+        .map(|case| {
+            (
+                case.identity.as_str(),
+                case.kind,
+                CaseOutcome::from_runner(&case.outcome, sources),
+            )
+        })
+        .collect();
+    print_outcomes(&outcomes)
 }
 
-/// Prints one case: its outcome, kind and identity. Under a failed
-/// rejection case is each annotation no error met and each error no
-/// annotation expects (TST-13); under an executable case that failed or
-/// was not run on a target is what the target said.
-fn print_case(sources: &SourceMap, case: &Case) {
-    let outcome = match case.outcome {
-        Outcome::Passed => "passed",
-        Outcome::Failed { .. } | Outcome::FailedRun(_) => "FAILED",
-        Outcome::NotRun(_) => "not run",
-    };
-    let kind = match case.kind {
-        CaseKind::Executable => "executable",
-        CaseKind::Rejection => "rejection",
-    };
-    println!("{outcome:<8} {kind:<11} {}", case.identity);
-    let (missing, unexpected) = match &case.outcome {
-        Outcome::Failed {
-            missing,
-            unexpected,
-        } => (missing, unexpected),
-        // With no target every test has the one reason, which the
-        // counts give once.
-        Outcome::FailedRun(said) | Outcome::NotRun(said) => {
-            if said != hgl_runner::NO_TARGET {
-                for line in said.lines() {
-                    println!("    {line}");
-                }
-            }
-            return;
-        }
-        Outcome::Passed => return,
-    };
-    for expectation in missing {
-        println!(
-            "    expected {}/{} on line {} of {}: not reported",
-            expectation.category.as_str(),
-            expectation.code,
-            expectation.line + 1,
-            sources.file(expectation.at.file).name()
-        );
-    }
-    for diagnostic in unexpected {
-        let source = sources.file(diagnostic.primary.file);
-        let local = if diagnostic.code.is_catalogued() {
-            ""
-        } else {
-            " (a compiler-local code, which no annotation can expect)"
-        };
-        println!(
-            "    reported {}/{} at {}:{}, not expected{local}: {}",
-            diagnostic.category.as_str(),
-            diagnostic.code.as_str(),
-            source.name(),
-            source.line_col(diagnostic.primary.span.start),
-            diagnostic.message
-        );
-    }
-}
-
-/// Prints how many cases of each kind passed, failed and were not run,
-/// the two kinds apart (TST-14).
-fn print_counts(report: &Report) {
-    if report.cases.is_empty() {
-        // TST-15: "A run with no cases supplies no conformance evidence."
+/// Prints current or cached case details and their separate totals (TST-14).
+fn print_outcomes(cases: &[(&str, CaseKind, CaseOutcome)]) -> ExitCode {
+    if cases.is_empty() {
         println!("no case was selected: this run shows nothing");
-        return;
+        return ExitCode::SUCCESS;
     }
-    let passed = |outcome: &Outcome| *outcome == Outcome::Passed;
-    let failed = |outcome: &Outcome| matches!(outcome, Outcome::Failed { .. });
-    let not_run = |outcome: &Outcome| matches!(outcome, Outcome::NotRun(_));
-    println!(
-        "rejection cases: {} passed, {} failed",
-        report.count(CaseKind::Rejection, passed),
-        report.count(CaseKind::Rejection, failed)
-    );
-    let ran = report.count(CaseKind::Executable, passed);
-    let broke = report.count(CaseKind::Executable, |outcome| {
-        matches!(outcome, Outcome::FailedRun(_))
-    });
-    let waiting = report.count(CaseKind::Executable, not_run);
-    let untargeted = report.count(
-        CaseKind::Executable,
-        |outcome| matches!(outcome, Outcome::NotRun(reason) if reason == hgl_runner::NO_TARGET),
-    );
-    if ran + broke + waiting == 0 {
+    let mut rejected = 0;
+    let mut rejection_failures = 0;
+    let mut passed = 0;
+    let mut failed = 0;
+    let mut skipped = 0;
+    let mut untargeted = 0;
+    for (identity, kind, outcome) in cases {
+        let label = match outcome {
+            CaseOutcome::Passed => "passed",
+            CaseOutcome::Failed(_) => "FAILED",
+            CaseOutcome::NotRun(_) => "not run",
+        };
+        let kind_label = match kind {
+            CaseKind::Rejection => "rejection",
+            CaseKind::Executable => "executable",
+        };
+        println!("{label:<8} {kind_label:<11} {identity}");
+        match (kind, outcome) {
+            (CaseKind::Rejection, CaseOutcome::Passed) => rejected += 1,
+            (CaseKind::Rejection, CaseOutcome::Failed(_)) => rejection_failures += 1,
+            (CaseKind::Executable, CaseOutcome::Passed) => passed += 1,
+            (CaseKind::Executable, CaseOutcome::Failed(_)) => failed += 1,
+            (_, CaseOutcome::NotRun(reason)) => {
+                skipped += 1;
+                untargeted += usize::from(reason == hgl_runner::NO_TARGET);
+            }
+        }
+        if let CaseOutcome::Failed(details) | CaseOutcome::NotRun(details) = outcome
+            && details != hgl_runner::NO_TARGET
+        {
+            for line in details.lines() {
+                println!("    {line}");
+            }
+        }
+    }
+    println!("rejection cases: {rejected} passed, {rejection_failures} failed");
+    if passed + failed + skipped == 0 {
         println!("executable cases: none selected");
-    } else if untargeted == waiting && ran + broke == 0 {
+    } else if untargeted == skipped && passed + failed == 0 {
         println!(
-            "executable cases: {waiting} not run: {}",
+            "executable cases: {skipped} not run: {}",
             hgl_runner::NO_TARGET
         );
     } else {
-        // TST-14: "Report executed/rejected counts separately".
-        println!("executable cases: {ran} passed, {broke} failed, {waiting} not run");
+        println!("executable cases: {passed} passed, {failed} failed, {skipped} not run");
+    }
+    if rejection_failures + failed > 0 {
+        ExitCode::from(EXIT_REJECTED)
+    } else if skipped > 0 {
+        ExitCode::from(EXIT_FAILED)
+    } else {
+        ExitCode::SUCCESS
     }
 }
 
