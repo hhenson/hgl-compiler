@@ -88,6 +88,57 @@ impl<'a> Typer<'a> {
             .map(|generic| generic.at)
             .collect();
         let mut bound: Vec<(Location, Argument)> = Vec::new();
+        // GEN-3, GEN-6: a positive bool term states the same bound as
+        // `flag == true`, and its negation as `flag == false`.
+        fn bool_terms(node: &SyntaxNode, found: &mut Vec<(SyntaxToken, bool)>) {
+            match node.kind() {
+                SyntaxKind::ConstraintParen => {
+                    if let Some(inside) = node.children().next() {
+                        bool_terms(&inside, found);
+                    }
+                }
+                SyntaxKind::ConstraintBinary if has_token(node, SyntaxKind::AmpAmp) => {
+                    for side in node.children() {
+                        bool_terms(&side, found);
+                    }
+                }
+                SyntaxKind::ConstraintValue => {
+                    if let Some(name) = name_token(node) {
+                        found.push((name, true));
+                    }
+                }
+                SyntaxKind::ConstraintNot => {
+                    if let Some(inside) = node.children().next()
+                        && inside.kind() == SyntaxKind::ConstraintValue
+                        && let Some(name) = name_token(&inside)
+                    {
+                        found.push((name, false));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut terms = Vec::new();
+        if let Some(condition) = clause.children().next() {
+            bool_terms(&condition, &mut terms);
+        }
+        for (name, value) in terms {
+            if let Some(generic) = self.signature.generics.iter().find(|generic| {
+                generic.name == name.text()
+                    && matches!(
+                        generic.kind,
+                        GenericKind::Value(Type::Scalar(crate::types::Scalar::Bool))
+                    )
+            }) {
+                bound.push((
+                    generic.at,
+                    Argument::Constant(Constant {
+                        text: value.to_string(),
+                        value: ConstantValue::Bool(value),
+                    }),
+                ));
+            }
+        }
         for relation in relations {
             if !has_token(&relation, SyntaxKind::EqEq) {
                 continue;
@@ -387,7 +438,7 @@ impl<'a> Typer<'a> {
                     // supply to named operator requirements (GEN-16).
                     && !node
                         .ancestors()
-                        .any(|parent| parent.kind() == SyntaxKind::ConstraintEach)
+                        .any(|parent| matches!(parent.kind(), SyntaxKind::ConstraintEach | SyntaxKind::ConstraintAny))
             })
             .collect();
         if calls.is_empty() {
@@ -735,6 +786,59 @@ impl<'a> Typer<'a> {
     /// that is not told), and whether a constant it compares is one this
     /// compiler does not work out ([`Condition::unvalued`]). `None` for a
     /// callee that states no `requires`.
+    /// GEN-18: a requirement may inspect the static function supplied at
+    /// this call. Return whether such a requirement was handled here.
+    pub(super) fn function_laws_met(
+        &mut self,
+        at: Location,
+        callee: (usize, usize),
+        generics: &[Argument],
+        packs: &[hir::TypePackArgument],
+        arguments: &[hir::Argument],
+    ) -> bool {
+        let Some((_, condition)) = required(self.program, callee) else {
+            return false;
+        };
+        let Detail::Callable(signature) = &self.program.modules[callee.0].details[callee.1] else {
+            return false;
+        };
+        let laws = crate::laws::verdicts(
+            &|law, expression| self.law_value(law, expression),
+            signature,
+            &condition,
+            &|parameter| {
+                arguments
+                    .iter()
+                    .find(|argument| argument.parameter == Some(parameter))
+                    .map(|argument| &argument.value)
+            },
+        );
+        if laws.is_empty() {
+            return false;
+        }
+        let Some((condition, held, _)) =
+            self.requires_told_with_laws(callee, generics, packs, None, &laws)
+        else {
+            return true;
+        };
+        if self.unmet_reported(at) {
+            return true;
+        }
+        if held == Some(false) {
+            self.diagnostics
+                .emit(unmet(self.program, callee, at, &condition));
+        } else if held.is_none() {
+            self.diagnostics.emit(untold_with_reason(
+                self.program,
+                callee,
+                at,
+                &condition,
+                "the function's declared law is not known for this call",
+            ));
+        }
+        true
+    }
+
     fn requires_told(
         &mut self,
         callee: (usize, usize),
@@ -752,6 +856,25 @@ impl<'a> Typer<'a> {
         type_packs: &[hir::TypePackArgument],
         member_fault: Option<&std::cell::RefCell<Option<super::dependent_packs::MemberFault>>>,
     ) -> Option<(SyntaxNode, Option<bool>, bool)> {
+        self.requires_told_with_laws(
+            (module, declaration),
+            generics,
+            type_packs,
+            member_fault,
+            &[],
+        )
+    }
+
+    /// The same requirement with GEN-18 answers supplied by the call's
+    /// static function arguments.
+    pub(super) fn requires_told_with_laws(
+        &mut self,
+        (module, declaration): (usize, usize),
+        generics: &[Argument],
+        type_packs: &[hir::TypePackArgument],
+        member_fault: Option<&std::cell::RefCell<Option<super::dependent_packs::MemberFault>>>,
+        laws: &[(u32, Option<bool>)],
+    ) -> Option<(SyntaxNode, Option<bool>, bool)> {
         let program = self.program;
         let (parameters, condition) = required(program, (module, declaration))?;
         let declared = &program.modules[module].declarations[declaration];
@@ -760,6 +883,9 @@ impl<'a> Typer<'a> {
         let verdicts = self.requirements_hold(declared, parameters, (module, generics), &condition);
         let callable = |node: &SyntaxNode| -> Option<bool> {
             let start = node.span().start;
+            if let Some((_, answer)) = laws.iter().find(|(at, _)| *at == start) {
+                return *answer;
+            }
             verdicts
                 .iter()
                 .find(|(at, _)| *at == start)
@@ -3081,6 +3207,8 @@ fn requires_holds(
             .written
             .iter()
             .find(|written| written.at.file == file && written.at.span.start == start)?;
+        let mut map = map.clone();
+        map.extend(keys.iter().map(|key| (key.at, &key.argument)));
         if !matches!(read.ty, Type::PackMember { .. })
             && !read
                 .ty
@@ -3088,8 +3216,6 @@ fn requires_holds(
         {
             return told(placed(substitute_within(&read.ty, &map), &own));
         }
-        let mut map = map.clone();
-        map.extend(keys.iter().map(|key| (key.at, &key.argument)));
         match pack_types.project(&read.ty, &map) {
             Ok(ty) => told(placed(ty, &own)),
             Err(fault) => {
@@ -3286,11 +3412,11 @@ struct ConstraintKey<'a> {
 }
 
 impl ConstraintKey<'_> {
-    fn value(&self) -> &ConstantValue {
-        let Argument::Constant(constant) = &self.argument else {
-            unreachable!("a pack key is a constant");
-        };
-        &constant.value
+    fn value(&self) -> Option<&ConstantValue> {
+        match &self.argument {
+            Argument::Constant(constant) => Some(&constant.value),
+            Argument::Type(_) => None,
+        }
     }
 }
 
@@ -3318,7 +3444,19 @@ fn holds_with_packs(
         SyntaxKind::ConstraintNot => {
             holds_with_packs(&node.children().next()?, of, scope, keys).map(|held| !held)
         }
-        SyntaxKind::ConstraintEach => each_holds(node, of, scope?, keys),
+        SyntaxKind::ConstraintEach | SyntaxKind::ConstraintAny => {
+            each_holds(node, of, scope?, keys)
+        }
+        SyntaxKind::ConstraintValue => {
+            let name = name_token(node)?;
+            match (of.value_of)(name.text()) {
+                Some(ConstantValue::Bool(value)) => Some(value),
+                _ => {
+                    of.unvalued.set(true);
+                    None
+                }
+            }
+        }
         // GEN-16: a named operator requirement.
         SyntaxKind::ConstraintCall => (of.callable)(node),
         SyntaxKind::ConstraintBinary => {
@@ -3355,7 +3493,7 @@ fn holds_with_packs(
                 keys.iter()
                     .rev()
                     .find(|key| key.name == name)
-                    .map(ConstraintKey::value)
+                    .and_then(ConstraintKey::value)
             };
             if within
                 && let Some((view, pack)) = pack_view(right.clone())
@@ -3399,8 +3537,9 @@ fn holds_with_packs(
                 .and_then(|name| (of.type_of)(&name))
                 .or_else(|| (scope?.written)(left, keys))
             {
-                return if has_token(node, SyntaxKind::EqEq) {
+                return if has_token(node, SyntaxKind::EqEq) || has_token(node, SyntaxKind::BangEq) {
                     typed_alike(&written(right)?, &ty, of)
+                        .map(|same| same == has_token(node, SyntaxKind::EqEq))
                 } else if within && right.kind() == SyntaxKind::ConstraintSet {
                     let mut found = Some(false);
                     for member in right.children() {
@@ -3415,12 +3554,13 @@ fn holds_with_packs(
                     None
                 };
             }
-            if has_token(node, SyntaxKind::EqEq)
+            if (has_token(node, SyntaxKind::EqEq) || has_token(node, SyntaxKind::BangEq))
                 && let Some(ty) = option(right)
                     .and_then(|name| (of.type_of)(&name))
                     .or_else(|| (scope?.written)(right, keys))
             {
-                return typed_alike(&written(left)?, &ty, of);
+                return typed_alike(&written(left)?, &ty, of)
+                    .map(|same| same == has_token(node, SyntaxKind::EqEq));
             }
             // What an operand that is a constant comes to as a value of
             // the option `name`'s type: the value another option has at
@@ -3433,7 +3573,7 @@ fn holds_with_packs(
                     .and_then(|other| (of.value_of)(&other))
                     .or_else(|| (of.constant)(operand, name))
             };
-            if has_token(node, SyntaxKind::EqEq) {
+            if has_token(node, SyntaxKind::EqEq) || has_token(node, SyntaxKind::BangEq) {
                 // The option is the operand that has a value at the call:
                 // the left where both do.
                 let valued = |operand: &SyntaxNode| {
@@ -3451,6 +3591,7 @@ fn holds_with_packs(
                 // is `-0.0`." Where the value is not known, whether it
                 // holds is not either.
                 compared(&(of.value_of)(&name)?, &operand(constant, &name)?, of)
+                    .map(|same| same == has_token(node, SyntaxKind::EqEq))
             } else if within {
                 let name = option(left)?;
                 if right.kind() != SyntaxKind::ConstraintSet {
@@ -3486,14 +3627,15 @@ fn each_holds(
     scope: &PackScope<'_>,
     keys: &[ConstraintKey<'_>],
 ) -> Option<bool> {
+    let existential = node.kind() == SyntaxKind::ConstraintAny;
     let bound = tokens(node)
         .filter(|token| token.kind() == SyntaxKind::Ident)
-        .nth(1)?;
+        .nth(usize::from(!existential))?;
     let mut parts = node.children();
     let (view, pack) = pack_view(parts.next()?)?;
     let body = parts.next()?;
     let pack = (scope.pack)(&view, pack.text())?;
-    let mut held = Some(true);
+    let mut held = Some(!existential);
     if view.text() == "arg_keys" {
         let at = Location::new(scope.file, bound.span());
         let mut nested = keys.to_vec();
@@ -3515,14 +3657,20 @@ fn each_holds(
             let checked = holds_with_packs(&body, of, Some(scope), &nested);
             nested.pop();
             match checked {
-                Some(false) => return Some(false),
-                Some(true) => {}
+                Some(value) if value == existential => return Some(value),
+                Some(_) => {}
                 None => held = None,
             }
         }
         return held;
     }
     for ty in &pack.types {
+        let mut nested = keys.to_vec();
+        nested.push(ConstraintKey {
+            name: bound.text(),
+            at: Location::new(scope.file, bound.span()),
+            argument: Argument::Type(ty.clone()),
+        });
         let type_of = |name: &str| {
             if name == bound.text() {
                 (whole(ty) && !names_parameter(ty)).then(|| ty.clone())
@@ -3534,7 +3682,7 @@ fn each_holds(
             if operand.kind() == SyntaxKind::NamedType && operand.text() == bound.text() {
                 type_of(bound.text())
             } else {
-                (of.written)(operand)
+                (scope.written)(operand, &nested).or_else(|| (of.written)(operand))
             }
         };
         let here = Condition {
@@ -3542,9 +3690,9 @@ fn each_holds(
             written: &written,
             ..*of
         };
-        match holds_with_packs(&body, &here, Some(scope), keys) {
-            Some(false) => return Some(false),
-            Some(true) => {}
+        match holds_with_packs(&body, &here, Some(scope), &nested) {
+            Some(value) if value == existential => return Some(value),
+            Some(_) => {}
             None => held = None,
         }
     }

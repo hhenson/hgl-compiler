@@ -234,6 +234,7 @@ pub const EXECUTION_CODES: &[&str] = &[
     "store.key_type",
     "numeric.division_by_zero",
     "numeric.out_of_range",
+    "numeric.invalid_tolerance",
     "tenor.mixed_units",
     "convert.invalid",
     "yield.negative_duration",

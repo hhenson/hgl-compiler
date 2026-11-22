@@ -39,7 +39,8 @@ transpiler: partial
 
 analyser: partial
 
-- Binding a generic from a positive `any` conjunct awaits #367.
+- A positive conjunctive `any` equality binds one unresolved generic from the first matching pack entry, with tentative bindings discarded on a failed trial and conjuncts revisited to a fixed point. Negation and disjunction only test supplied bindings.
+- Bare bool generic terms and their negations are checked at calls and candidates; positive terms also state a bool bound in a generic body.
 
 - A parameter compared in a constraint is a const option or is rejected, and each constant it is compared with is a value of the option's type (`type.mismatch`, `member.unknown`, `enum.context_type`, at the declaration); a constant of a module among those is its value (UNIT-13)
 - At a named operator call in a value function, a candidate's `T in {types}` and `T == type` are checked against what `T` stands for, and a named operator requirement is tested with the call's types (GEN-16)
@@ -133,10 +134,10 @@ analyser: partial
 
 ## GEN-9
 
-analyser: partial
+analyser: done
 
-- A property domain is an ordinary value type
-- Left: clauses applied to explicit concrete domains
+- Property domains are ordinary concrete value types. A generic domain rejects with local `property.domain`.
+- Law queries read the public operator's metadata for the concrete operand type; an ordinary or anonymous function declares no guarantee. Metadata performs no arithmetic transformation.
 
 optimiser: planned
 
@@ -146,20 +147,22 @@ optimiser: planned
 
 parser: partial
 
-- A cardinality after a pack parameter or a generic pack parameter. The `any` quantifier awaits #367.
+- A cardinality after a pack parameter or a generic pack parameter; `each` and `any` quantifiers. `any` remains a scalar type outside the quantifier form.
 
 analyser: partial
 
 - A cardinality bounds the arguments a generic type's pack takes, and has its upper bound at least its lower
 - Function and operator calls check the cardinality of captured arguments against the value parameter and its generic type pack. Explicit positional type sequences also constrain the argument count. The HIR records the resolved sequence of types for each captured type pack.
 - A function's `each T in types(Ts)` checks its condition for every resolved type in the pack. An empty capture satisfies it. Equality and membership can test the bound type by name. A verdict the analyser cannot give rejects as untold (GEN-3).
-- GEN-17 adds `each` over pack keys. Named operator requirements bound by `each` and evaluation of `any`, including its generic binding rule (#367), are pending.
+- GEN-17 adds quantification over pack keys. `any` succeeds for at least one entry and rejects an empty pack. Type and key bindings project within nested type expressions.
+- Left: named operator requirements bound by a quantifier.
 
 transpiler: partial
 
 - C++ uses the analysed argument order, names and types when it writes each pack's
   parameters, including an empty capture.
-- Left: reading a pack as a whole, `schemas(pack)`, and `any` over a pack (#367).
+- Quantifier verdicts and bindings are settled in the analyser before C++ emission.
+- Left: reading a pack as a whole and `schemas(pack)`.
 
 ## GEN-11
 
@@ -229,7 +232,7 @@ transpiler: partial
   resolved candidate. Instances with test-local answers are kept distinct even
   when the generic arguments are identical (TST-1).
 - Left: An operator requirement left without an executable answer is reported. Function
-  law predicates await #367 (GEN-18).
+  law predicates are settled by the analyser (GEN-18).
 
 ## GEN-17
 
@@ -247,14 +250,13 @@ analyser: partial
 
 ## GEN-18
 
-parser: planned
+parser: done
 
-- #367 tracks law predicates and bare Boolean constraints.
+- Reads law-predicate calls and bare Boolean generic terms, including their negations and Boolean combinations.
 
-analyser: planned
+analyser: done
 
-- Reading the given function's laws in requirements and defaults awaits #367.
+- `associative(f)` and `commutative(f)` query a supplied function's public operator and concrete domain, in requirements and bool generic defaults. Explicit options override defaults.
+- A wrapper is checked at declaration under its own stated positive or negative law (GEN-7). With no guarantee it rejects even if two candidates cover both values. A bool generic explicitly given onward under a membership in `{true, false}` selects its candidate in each instance (GEN-3). The corrected #367 ruling is tested.
 
-transpiler: planned
-
-- Function law predicates await #367.
+- C++ receives the already-resolved bool options and selected candidates; this rule needs no runtime law query or target change.

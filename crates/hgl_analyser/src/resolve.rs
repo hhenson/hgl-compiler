@@ -286,7 +286,7 @@ impl Resolver<'_> {
         self.frames.push(Frame::default());
         // GEN-1: "Generic scope covers the whole declaration."
         if let Some(generics) = child(node, SyntaxKind::GenericParams) {
-            self.generic_params(&generics);
+            self.generic_params(&generics, true);
         }
         let parameters = crate::read::parameters(node);
         // The types first: they see the generic parameters.
@@ -323,6 +323,15 @@ impl Resolver<'_> {
                 self.bind(&name, kind);
             }
         }
+        if let Some(generics) = child(node, SyntaxKind::GenericParams) {
+            for generic in generics.children() {
+                if let Some(default) = crate::read::default_of(&generic)
+                    && crate::laws::predicate(&default).is_some()
+                {
+                    self.walk(&default);
+                }
+            }
+        }
         // FN-8: a pack's `for f` sees the callable's parameters. This is
         // separate from reading the pack's type or the parameter defaults.
         for parameter in &parameters {
@@ -351,7 +360,7 @@ impl Resolver<'_> {
         self.frames.pop();
     }
 
-    fn generic_params(&mut self, generics: &SyntaxNode) {
+    fn generic_params(&mut self, generics: &SyntaxNode, defer_laws: bool) {
         let parameters: Vec<SyntaxNode> = generics
             .children()
             .filter(|parameter| parameter.kind() == SyntaxKind::GenericParam)
@@ -367,14 +376,24 @@ impl Resolver<'_> {
         }
         // The type of `const N: i64`.
         for parameter in &parameters {
-            self.children(parameter);
+            let (types, defaults) = split_at_default(parameter);
+            for part in types {
+                self.walk(&part);
+            }
+            for part in defaults {
+                // GEN-18, UNIT-8: the one default that may inspect a
+                // formal function waits until those parameters are bound.
+                if !defer_laws || crate::laws::predicate(&part).is_none() {
+                    self.walk(&part);
+                }
+            }
         }
     }
 
     fn structure(&mut self, node: &SyntaxNode) {
         self.frames.push(Frame::default());
         if let Some(generics) = child(node, SyntaxKind::GenericParams) {
-            self.generic_params(&generics);
+            self.generic_params(&generics, false);
         }
         // UNIT-7: a default is resolved "excluding ... the struct's
         // instance fields". A field's name is the first token of its
@@ -445,7 +464,7 @@ impl Resolver<'_> {
             SyntaxKind::InjectDecl => self.inject(node),
             SyntaxKind::ForStmt => self.for_statement(node),
             SyntaxKind::FnExpr => self.function_expression(node),
-            SyntaxKind::ConstraintEach => self.each_constraint(node),
+            SyntaxKind::ConstraintEach | SyntaxKind::ConstraintAny => self.each_constraint(node),
             SyntaxKind::PackMemberType => {
                 for name in identifiers(node) {
                     self.lookup(&name);
@@ -456,6 +475,7 @@ impl Resolver<'_> {
             | SyntaxKind::TypedConstructor
             | SyntaxKind::FunctionReference
             | SyntaxKind::ConstraintCall
+            | SyntaxKind::ConstraintValue
             | SyntaxKind::Instantiation => self.name_use(node),
             SyntaxKind::UndecidedConstructor => self.undecided(node),
             SyntaxKind::BinaryExpr => self.binary(node),
@@ -664,7 +684,7 @@ impl Resolver<'_> {
     /// braces.
     fn each_constraint(&mut self, node: &SyntaxNode) {
         // The identifiers directly inside are `each`, the name, `in`.
-        let name = identifiers(node).nth(1);
+        let name = identifiers(node).nth(usize::from(node.kind() == SyntaxKind::ConstraintEach));
         let mut parts = node.children();
         let mut kind = LocalKind::GenericParameter;
         // What is iterated is outside the scope of the name.
@@ -838,6 +858,25 @@ impl Resolver<'_> {
             && node
                 .ancestors()
                 .any(|part| part.kind() == SyntaxKind::RequiresClause)
+        {
+            return None;
+        }
+        // GEN-18: law predicates name a compile-time language form.
+        let predicate = if node.kind() == SyntaxKind::ConstraintCall {
+            crate::laws::predicate(node)
+        } else if is_callee(node) {
+            node.parent()
+                .and_then(|parent| crate::laws::predicate(&parent))
+        } else {
+            None
+        };
+        if predicate.is_some()
+            && node.ancestors().any(|parent| {
+                matches!(
+                    parent.kind(),
+                    SyntaxKind::RequiresClause | SyntaxKind::GenericParam
+                )
+            })
         {
             return None;
         }

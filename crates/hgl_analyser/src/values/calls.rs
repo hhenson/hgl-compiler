@@ -741,7 +741,9 @@ impl<'a> Typer<'a> {
             // generic parameters this pass does not resolve.
             if generics.is_empty() && self.diagnostics.len() == reported {
                 let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
-                self.requires_met(at, (module, declaration), &[]);
+                if !self.function_laws_met(at, (module, declaration), &[], &[], &arguments) {
+                    self.requires_met(at, (module, declaration), &[]);
+                }
             }
             let requirements = if generics.is_empty() {
                 self.answers(module, declaration, &[])
@@ -883,6 +885,33 @@ impl<'a> Typer<'a> {
             let index = pack.parameter;
             type_packs[index] = Some(pack);
         }
+        // GEN-3, GEN-10: positive existential equalities can settle
+        // the result's otherwise unresolved type from the first match.
+        let known_packs: Vec<_> = type_packs.iter().flatten().cloned().collect();
+        super::quantifiers::bind(
+            &program.modules[module],
+            callee,
+            generics,
+            &known_packs,
+            &mut found,
+        );
+        for &index in &defaulted {
+            if let Some(default) =
+                super::constants::generic_default(&callee.syntax, &generics[index])
+                && let Some((law, name)) = crate::laws::predicate(&default)
+                && let Some(parameter) = crate::laws::parameter(signature, &name)
+            {
+                let value = arguments
+                    .iter()
+                    .find(|argument| argument.parameter == Some(parameter))
+                    .and_then(|argument| self.law_value(law, &argument.value))
+                    .map_or(ConstantValue::Unknown, ConstantValue::Bool);
+                found[index] = Some(Argument::Constant(crate::types::Constant {
+                    text: default.text().to_string(),
+                    value,
+                }));
+            }
+        }
         self.generic_values(name, callee, generics, (&named, &defaulted), &mut found);
 
         // GEN-8: "A call rejects when it leaves a generic parameter
@@ -986,6 +1015,14 @@ impl<'a> Typer<'a> {
                 pack_types.written_member_fault(&program.modules[module], declaration, &map)
             {
                 self.pack_member_fault(at, &missing);
+            } else if self.function_laws_met(
+                at,
+                (module, declaration),
+                &resolved,
+                &type_packs,
+                &arguments,
+            ) {
+                // GEN-18 handled the condition with its function identity.
             } else if first_pack.is_none() {
                 self.requires_met(at, (module, declaration), &resolved);
             } else {

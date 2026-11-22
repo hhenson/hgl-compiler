@@ -27,6 +27,7 @@ use crate::{codes, error};
 pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
     constant_failures(program, diagnostics);
     generic_defaults(program, diagnostics);
+    crate::laws::check_domains(program, diagnostics);
     option_kinds(program, diagnostics);
     pack_declarations(program, diagnostics);
     configuration_shapes(program, diagnostics);
@@ -399,6 +400,7 @@ fn constant_failures(program: &Program, diagnostics: &mut Diagnostics) {
                 file,
                 binding: &binding,
                 parameter: &|_| None,
+                arguments: &[],
                 constants: &constants,
             };
             if !crate::constant::fails_to_evaluate(&scope, (index, position)) {
@@ -452,40 +454,42 @@ fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
                 file,
                 binding: &binding,
                 parameter: &|_| None,
+                arguments: &[],
                 constants: &constants,
             };
             // What is wrong with the constant `node` as a value of `ty`,
             // `place` named for the message.
-            let mut check = |node: &SyntaxNode, ty: &Type, place: &str| {
-                let at = Location::new(file, node.span());
-                let read = match crate::constant::typed(node, Some(ty), &scope) {
-                    Ok(read) => read,
-                    Err(fault) => {
-                        if let Some(report) = fault.report(at, place, ty) {
-                            diagnostics.emit(report);
+            let check =
+                |node: &SyntaxNode, ty: &Type, place: &str, diagnostics: &mut Diagnostics| {
+                    let at = Location::new(file, node.span());
+                    let read = match crate::constant::typed(node, Some(ty), &scope) {
+                        Ok(read) => read,
+                        Err(fault) => {
+                            if let Some(report) = fault.report(at, place, ty) {
+                                diagnostics.emit(report);
+                            }
+                            return;
                         }
-                        return;
+                    };
+                    match crate::constant::fit(read.clone(), Some(ty), program) {
+                        Err(Fault::Mismatch(_)) => diagnostics.emit(error(
+                            Category::Type,
+                            codes::TYPE_MISMATCH,
+                            at,
+                            format!(
+                                "this is {}, and {place} is `{ty}`",
+                                crate::constant::described(&read)
+                            ),
+                            "GEN-13",
+                        )),
+                        Err(fault) => {
+                            if let Some(report) = fault.report(at, place, ty) {
+                                diagnostics.emit(report);
+                            }
+                        }
+                        Ok(_) => {}
                     }
                 };
-                match crate::constant::fit(read.clone(), Some(ty), program) {
-                    Err(Fault::Mismatch(_)) => diagnostics.emit(error(
-                        Category::Type,
-                        codes::TYPE_MISMATCH,
-                        at,
-                        format!(
-                            "this is {}, and {place} is `{ty}`",
-                            crate::constant::described(&read)
-                        ),
-                        "GEN-13",
-                    )),
-                    Err(fault) => {
-                        if let Some(report) = fault.report(at, place, ty) {
-                            diagnostics.emit(report);
-                        }
-                    }
-                    Ok(_) => {}
-                }
-            };
             for generic in generics {
                 let GenericKind::Value(ty) = &generic.kind else {
                     continue;
@@ -497,10 +501,66 @@ fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
                     continue;
                 };
                 let place = format!("the generic value parameter `{}`", generic.name);
-                check(&default, ty, &place);
+                if let Some(Detail::Callable(signature)) = module.details.get(index)
+                    && crate::laws::predicate(&default).is_some()
+                {
+                    if crate::laws::default_parameter(signature, &default).is_none() {
+                        diagnostics.emit(error(
+                            Category::Type,
+                            codes::TYPE_MISMATCH,
+                            Location::new(file, default.span()),
+                            "a law default must query a formal parameter that takes a function"
+                                .to_string(),
+                            "GEN-18",
+                        ));
+                        continue;
+                    }
+                    // GEN-18, UNIT-8: this is a compile-time bool query
+                    // of a function supplied at the call, not a cold constant.
+                    if *ty != Type::Scalar(crate::types::Scalar::Bool) {
+                        diagnostics.emit(error(
+                            Category::Type,
+                            codes::TYPE_MISMATCH,
+                            Location::new(file, default.span()),
+                            format!("a law predicate gives `bool`, and {place} is `{ty}`"),
+                            "GEN-18",
+                        ));
+                    }
+                    continue;
+                }
+                check(&default, ty, &place, diagnostics);
             }
             let condition = child(&declaration.syntax, SyntaxKind::RequiresClause)
                 .and_then(|clause| clause.children().next());
+            for term in condition
+                .iter()
+                .flat_map(|condition| condition.descendants())
+                .filter(|node| node.kind() == SyntaxKind::ConstraintValue)
+            {
+                let Some(name) = crate::syntax::name_token(&term) else {
+                    continue;
+                };
+                let generic = generics.iter().find(|generic| generic.name == name.text());
+                let ordinary_parameter = matches!(module.details.get(index), Some(Detail::Callable(signature))
+                    if signature.parameters.iter().any(|parameter| parameter.name == name.text()));
+                if ordinary_parameter
+                    || generic.is_some_and(|generic| {
+                        !matches!(
+                            &generic.kind,
+                            GenericKind::Value(Type::Scalar(crate::types::Scalar::Bool))
+                        )
+                    })
+                {
+                    diagnostics.emit(error(
+                        Category::Type,
+                        codes::TYPE_MISMATCH,
+                        Location::new(file, term.span()),
+                        "a bare requirement term must name a bool generic value parameter"
+                            .to_string(),
+                        "GEN-3",
+                    ));
+                }
+            }
             for relation in condition
                 .iter()
                 .flat_map(|condition| condition.descendants())
@@ -535,10 +595,10 @@ fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
                 let place = format!("`{}`", generic.name);
                 if compared.kind() == SyntaxKind::ConstraintSet {
                     for member in compared.children() {
-                        check(&member, ty, &place);
+                        check(&member, ty, &place, diagnostics);
                     }
                 } else if has_token(&relation, SyntaxKind::EqEq) {
-                    check(compared, ty, &place);
+                    check(compared, ty, &place, diagnostics);
                 }
             }
         }

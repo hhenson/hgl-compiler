@@ -34,6 +34,9 @@ impl Reader<'_> {
                         && !self.names_an_option(&node)
                         && !self.compared_constant(&node)
                         && !self.constraint_pack_key(&node)
+                        // GEN-18: this operand names a formal function,
+                        // rather than writing a type.
+                        && !node.parent().is_some_and(|parent| crate::laws::predicate(&parent).is_some())
                     {
                         self.outermost(&node);
                     }
