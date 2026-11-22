@@ -16,7 +16,9 @@ use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, reflects, specialize_named_pack,
 };
 use super::expressions::takes_its_type;
-use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, not_null, whole};
+use super::fit::{
+    accepts_float, arithmetic, checked_child_result, is_integer_literal, negated, not_null, whole,
+};
 use super::function_arguments::matches_template;
 use super::inference::{
     bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
@@ -111,6 +113,18 @@ impl<'a> Typer<'a> {
         given: &[Given],
         wanted: &Wanted,
     ) -> (Vec<Chosen<'a>>, bool) {
+        // ERR-14: a runtime-checked child competes as a fallible read.
+        // Keep the written operands for fitting after a candidate is chosen.
+        let mut checked = None;
+        for (position, argument) in given.iter().enumerate() {
+            if !argument.by_place
+                && argument.explicit.is_none()
+                && let Some(result) = checked_child_result(&argument.value)
+            {
+                checked.get_or_insert_with(|| given.to_vec())[position].value = result;
+            }
+        }
+        let given = checked.as_deref().unwrap_or(given);
         let has_results = given
             .iter()
             .any(|argument| !argument.by_place && matches!(argument.value.ty, Type::Result { .. }));

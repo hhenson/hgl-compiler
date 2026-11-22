@@ -814,7 +814,7 @@ fn endpoint_read_forms_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 1 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 6 passed, 2 failed, 0 not run\n"),
         "{stdout}"
     );
     let line = fixture
@@ -826,6 +826,18 @@ fn endpoint_read_forms_run_on_the_sdk() {
         stdout.contains("FAILED   executable  demo.endpoint_read_forms::a_plain_child_failure_points_to_the_read\n")
             && stdout.contains("value.unset_read")
             && stdout.contains(&format!("raised at {file}:{line}")),
+        "{stdout}"
+    );
+    let child_line = fixture
+        .lines()
+        .position(|line| line.contains("# consuming scalar child read"))
+        .expect("the scalar read to which the error points")
+        + 1;
+    assert!(
+        stdout.contains("FAILED   executable  demo.endpoint_read_forms::unset_child_diagnostic_names_the_child\n")
+            && stdout.contains(&format!(
+                "value.unset_read: the child read has no complete value, raised at {file}:{child_line}"
+            )),
         "{stdout}"
     );
 }

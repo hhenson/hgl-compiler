@@ -176,13 +176,14 @@ analyser: done
   reads the child at initialization. A graph's `var` given a child denotes
   its connection (EXPR-4).
 - A runtime-checked child read, or an admitted whole read of a dictionary, an unsized list or a window, gives T, `result<T, error>`, or `T?` according to its place. The nullable form discards the error as ERR-15 does.
+- Comparing a runtime-checked child of a nonnullable type with `null` takes the nullable form. An operator candidate can keep the whole read result, including from a child bound in a generic hook (GEN-7, ERR-15).
 - `delta_value` takes the same forms. TYPE-11 restricts a duration-window delta to a result or nullable place, and `removed_value` to a result place for every window.
 
 transpiler: partial
 
 - Holds the position or key of an inferred child binding through pack expansion
   and static value-function captures (FN-8, FN-14, FN-17). A payload read happens at
-  the use, and a failed plain read reports the use's HGL location. A child bound
+  the use, and a failed plain read names the child and reports the use's HGL location. A child bound
   inside a value helper borrows its captured parent's endpoint.
 - Writes checked child, dictionary, unsized-list and window reads in the analysed
   value, result or nullable form. A dictionary omits wholly unset entries and a

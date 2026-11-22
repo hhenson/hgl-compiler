@@ -84,3 +84,79 @@ fn observe_list_result(step: i64) -> bool => whole_result(gaps(step))
 test a_growing_list_with_a_gap_has_a_result_form {
     assert eval observe_list_result(step: [0, 1]) == [true, false]
 }
+
+# ERR-14 and ERR-15: a comparison with null takes the nullable form
+# of a runtime-checked child, directly or through its bound endpoint.
+fn publish_scalar_child(index: i64, value: i64) -> list<i64, 2> {
+    when { return delta<list<i64, 2>>(updated: [index: value]) }
+}
+
+fn child_null_forms(parts: list<i64, 2>, index: i64) -> tuple<bool, bool, bool, i64> {
+    when {
+        let entry = parts[index]
+        let direct = parts[index] == null
+        let right = entry == null
+        let left = null != entry
+        if entry != null { return (direct, right, left, entry) }
+        return (direct, right, left, -1)
+    }
+}
+
+fn observe_child_null_forms(index: i64, reading: i64, probe: i64) -> tuple<bool, bool, bool, i64> =>
+    child_null_forms(publish_scalar_child(index, reading), probe)
+
+test child_null_checks_read_the_nullable_form {
+    assert eval observe_child_null_forms(index: [0, _], reading: [3, _], probe: [0, 1]) ==
+        [(false, false, true, 3), (true, true, false, -1)]
+}
+
+# ERR-15: a candidate that keeps the whole result wins over one that
+# takes the child's plain value, including in a generic hook (GEN-7).
+operator child_score<T>(value: T) -> i64
+impl const fn child_score<T>(value: T) -> i64 => 0
+impl const fn child_score(value: i64) -> i64 => value
+impl const fn child_score(value: result<i64, error>) -> i64 {
+    if is_ok(value) { return 100 + value.value }
+    return -100
+}
+
+fn concrete_child_score(parts: list<i64, 2>, index: i64) -> tuple<i64, i64> {
+    when {
+        let entry = parts[index]
+        return (child_score(entry), child_score(parts[index]))
+    }
+}
+
+fn generic_child_score<T>(parts: list<T, 2>, index: i64) -> i64 {
+    when {
+        let entry = parts[index]
+        return child_score(entry)
+    }
+}
+
+fn observe_concrete_child_scores(index: i64, reading: i64, probe: i64) -> tuple<i64, i64> =>
+    concrete_child_score(publish_scalar_child(index, reading), probe)
+
+fn observe_generic_child_score(index: i64, reading: i64, probe: i64) -> i64 =>
+    generic_child_score(publish_scalar_child(index, reading), probe)
+
+test child_operator_calls_keep_the_result {
+    assert eval observe_concrete_child_scores(index: [0, _], reading: [3, _], probe: [0, 1]) ==
+        [(103, 103), (-100, -100)]
+    assert eval observe_generic_child_score(index: [0, _], reading: [3, _], probe: [0, 1]) ==
+        [103, -100]
+}
+
+fn plain_scalar_child(parts: list<i64, 2>, index: i64) -> i64 {
+    when {
+        let entry = parts[index]
+        return entry # consuming scalar child read
+    }
+}
+
+fn observe_plain_scalar_child(index: i64, reading: i64, probe: i64) -> i64 =>
+    plain_scalar_child(publish_scalar_child(index, reading), probe)
+
+test unset_child_diagnostic_names_the_child {
+    assert eval observe_plain_scalar_child(index: [0], reading: [3], probe: [1]) == [3]
+}
