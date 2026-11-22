@@ -23,12 +23,18 @@ const fn digits<T>(value: T) -> i64 {
 }
 const fn scaled<T>(value: T) -> i64 {
     let values = [for item in items_of(value): item * 10]
-    return extent_of(values) + values[0]
+    var total = 0
+    for item in values { total += item }
+    return total
 }
 fn first_in_node<T>(value: T) -> i64 {
     when { return items_of(value)[0] }
 }
 fn first_in_graph<T>(value: T) -> i64 => items_of(value)[0]
+fn scaled_in_graph<T>(value: T) -> i64 {
+    let values = [for item in items_of(value): item * 10]
+    return extent_of(values) + values[0]
+}
 
 test direct { assert items_of(5) == [5, 6, 7] }
 test indexed {
@@ -45,8 +51,8 @@ test looped {
     assert digits("string") == 12
 }
 test built_list {
-    assert scaled(5) == 53
-    assert scaled("string") == 12
+    assert scaled(5) == 180
+    assert scaled("string") == 30
 }
 test node {
     assert eval first_in_node(value: [5, 6]) == [5, 6]
@@ -55,4 +61,6 @@ test node {
 test graph {
     assert eval first_in_graph(value: [5, 6]) == [5, 6]
     assert eval first_in_graph(value: ["s", "t"]) == [1, 1]
+    assert eval scaled_in_graph(value: [5, 6]) == [53, 63]
+    assert eval scaled_in_graph(value: ["s", "t"]) == [12, 12]
 }
