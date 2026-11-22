@@ -15,9 +15,11 @@ use crate::hir::{
     EndpointOperation, Expr, ExprKind, Hook, LocalId, Node, Stmt, ValueCategory,
     walk_statement_nodes,
 };
-use crate::program::{DeclarationKind, Role};
+use crate::program::{DeclarationKind, Module, Phase, Role};
 use crate::syntax::{child, tokens, ungrouped};
-use crate::types::{Argument, CallArguments, ConstantValue, NamedKind, Scalar, Type};
+use crate::types::{
+    Argument, CallArguments, ConstantValue, Detail, NamedKind, Scalar, Signature, Type,
+};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -685,6 +687,72 @@ fn duration_window(ty: &Type) -> bool {
         ty,
         Type::RollingWindow { maximum, .. } if matches!(maximum.value, ConstantValue::Duration(_))
     )
+}
+
+/// Whether a generic node has a read whose admission or result form
+/// depends on an input's shape (GEN-7, TIME-1, ERR-14, TYPE-11). With
+/// the instance signature available, check only the affected shapes.
+pub(crate) fn node_endpoint_reads(
+    module: &Module,
+    declaration: usize,
+    concrete: Option<&Signature>,
+) -> bool {
+    if module.phases.get(declaration) != Some(&Some(Phase::Node)) {
+        return false;
+    }
+    let Some(Detail::Callable(signature)) = module.details.get(declaration) else {
+        return false;
+    };
+    if signature.generics.is_empty() {
+        return false;
+    }
+    let Some(Some(body)) = module.bodies.get(declaration) else {
+        return false;
+    };
+    let parameters: Vec<_> = signature
+        .generics
+        .iter()
+        .map(|generic| generic.at)
+        .collect();
+    let depends_on_shape = |local: LocalId, delta: bool| {
+        let Some(parameter) = signature.parameters.get(local) else {
+            return false;
+        };
+        if parameter.constant || parameter.reference {
+            return false;
+        }
+        let source = parameter.ty.omission_removed();
+        let unsettled = matches!(source, Type::Parameter { .. })
+            || delta
+                && matches!(source, Type::RollingWindow { maximum, .. }
+                    if maximum.value.names_one_of(&parameters));
+        unsettled
+            && concrete.is_none_or(|concrete| {
+                let ty = concrete.parameters[local].ty.omission_removed();
+                if delta {
+                    duration_window(ty)
+                } else {
+                    children::read_whole_all_valid(ty)
+                        || matches!(ty, Type::Dict { .. } | Type::List { size: None, .. })
+                }
+            })
+    };
+    let mut pending = false;
+    walk_statement_nodes(&body.statements, &mut |node| {
+        if !pending && let Node::Expression(value) = node {
+            pending = match &value.kind {
+                ExprKind::Local(local) => depends_on_shape(*local, false),
+                ExprKind::Endpoint {
+                    operation: EndpointOperation::DeltaValue,
+                    inputs: Some(inputs),
+                } => inputs
+                    .first()
+                    .is_some_and(|&local| depends_on_shape(local, true)),
+                _ => false,
+            };
+        }
+    });
+    pending
 }
 
 /// An argument of an endpoint operation or an `endpoint<T>` parameter as

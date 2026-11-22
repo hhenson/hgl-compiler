@@ -1,0 +1,41 @@
+module demo.generic_endpoint_read_forms
+
+# ERR-14, ERR-15 and GEN-7: a generic hook uses the concrete endpoint's
+# nullable read form. A later complete publication is readable again.
+fn whole_is_null<T>(probe: i64, value: T) -> bool {
+    when modified(probe) && valid(value) {
+        let observed: T? = value
+        return observed == null
+    }
+}
+
+fn publish_dictionary(step: i64) -> dict<str, tuple<i64, i64>> {
+    when {
+        if step == 0 { return ["ready": (7, 8)] }
+        let partial: delta<tuple<i64, i64>> = (3, null)
+        if step == 1 {
+            return delta<dict<str, tuple<i64, i64>>>(updated: ["partial": partial])
+        }
+        let finish: delta<tuple<i64, i64>> = (null, 4)
+        return delta<dict<str, tuple<i64, i64>>>(updated: ["partial": finish])
+    }
+}
+
+fn publish_list(step: i64) -> list<i64> {
+    when {
+        if step == 0 { return [1] }
+        if step == 1 { return delta<list<i64>>(updated: [2: 4]) }
+        return delta<list<i64>>(updated: [1: 3])
+    }
+}
+
+fn observe_dictionary(step: i64) -> bool => whole_is_null(step, publish_dictionary(step))
+fn observe_list(step: i64) -> bool => whole_is_null(step, publish_list(step))
+
+test generic_nullable_whole_dictionary_read {
+    assert eval observe_dictionary(step: [0, 1, 2]) == [false, true, false]
+}
+
+test generic_nullable_whole_list_read {
+    assert eval observe_list(step: [0, 1, 2]) == [false, true, false]
+}
