@@ -1191,6 +1191,34 @@ fn named_test_helpers_run_on_the_sdk() {
     );
 }
 
+/// TST-1 and GEN-16: private declarations and operator candidates are
+/// compiled for their own test, including the evidence for date addition.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn named_test_declarations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("named-test-declarations");
+    let file = write(
+        &root,
+        "local.hgl",
+        include_str!("fixtures/test_local_declarations.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The integration test above passes on the SDK.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]

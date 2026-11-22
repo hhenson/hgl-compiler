@@ -82,7 +82,10 @@ pub(super) fn struct_type(
     arguments: &[GenericArgument],
     generic: bool,
 ) -> Option<String> {
-    let name = identifier(&program.modules[module].declarations[declaration].name);
+    let name = names::declared_type(
+        &program.modules[module].declarations[declaration],
+        declaration,
+    );
     let namespace = module_namespace(&program.modules[module].path);
     Some(format!(
         "{namespace}::{name}{}",
@@ -99,7 +102,10 @@ fn struct_delta_type(
     arguments: &[GenericArgument],
     generic: bool,
 ) -> Option<String> {
-    let name = identifier(&program.modules[module].declarations[declaration].name);
+    let name = names::declared_type(
+        &program.modules[module].declarations[declaration],
+        declaration,
+    );
     let namespace = module_namespace(&program.modules[module].path);
     Some(format!(
         "{namespace}::d_::{name}{}",
@@ -761,7 +767,7 @@ impl Emitter<'_> {
                 self.note_types(ty);
             }
         }
-        let name = identifier(&declaration.name);
+        let name = names::declared_type(declaration, index);
         let namespace = module_namespace(&declared.path);
         let arguments = if parameters.is_empty() {
             String::new()

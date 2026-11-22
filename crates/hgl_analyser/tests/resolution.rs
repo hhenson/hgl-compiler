@@ -791,3 +791,49 @@ fn the_capability_names_are_the_chapters_list() {
     let listed: Vec<&str> = chapter[start..end].split('`').skip(1).step_by(2).collect();
     assert_eq!(listed, hgl_analyser::INJECTABLES);
 }
+
+/// TST-1 and TST-2: the names of a test's declarations are invisible to
+/// every other test and to production, and may not take a visible name.
+#[test]
+fn test_local_declarations_do_not_escape_their_owner() {
+    let checked = module(
+        r#"const module_value: i64 = 1
+
+test first {
+    const hidden: i64 = 7
+    struct Secret { value: i64 }
+    enum Mode { private }
+    operator rule(value: i64) -> i64
+    impl const fn rule(value: i64) -> i64 => value
+    assert rule(hidden) == hidden
+}
+
+test other {
+    assert hidden == 7
+    assert rule(1) == 1
+    assert Mode.private == Mode.private
+    let value: Secret = Secret(value: 7)
+}
+
+test collides {
+    struct module_value { field: i64 }
+    assert true
+}
+
+const fn outside() -> i64 => hidden
+"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:14:12 name/name.unknown UNIT-10",
+            "m.hgl:15:12 name/name.unknown UNIT-10",
+            "m.hgl:16:12 name/name.unknown UNIT-10",
+            "m.hgl:16:28 name/name.unknown UNIT-10",
+            "m.hgl:17:16 name/name.unknown UNIT-10",
+            "m.hgl:17:25 name/name.unknown UNIT-10",
+            "m.hgl:21:12 name/name.duplicate TST-2",
+            "m.hgl:25:30 name/name.unknown UNIT-10",
+        ]
+    );
+}

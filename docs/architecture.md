@@ -231,7 +231,7 @@ It is built in passes:
 | Pass | What it settles | Rules | State |
 | --- | --- | --- | --- |
 | Modules | Files grouped into modules and parts by their `module` lines, and an application's file, headed `application name`, into a unit of its own | UNIT-1, UNIT-14 | done |
-| Declarations | Each module's declarations, test helpers and tests; its declaration scope and test scope; a name declared twice | UNIT-5, UNIT-12, FN-4, TST-1, TST-2, NATIVE-2 | done |
+| Declarations | Module declarations, shared test contexts and named tests; private declarations and candidates within each named test; duplicate bindings | UNIT-5, UNIT-12, FN-4, TST-1, TST-2, NATIVE-2 | done |
 | Imports | The module and the declarations each `use` names; cycles; the operator of each candidate, `impl fn` or `impl const fn`, native or not | UNIT-2, UNIT-3, GEN-4 | done |
 | Resolution | Every name in a signature, body, type and constraint, to the one binding in scope; a binding that takes a name already there; undecided generic applications | UNIT-5, UNIT-6, UNIT-7, UNIT-10, UNIT-12, FN-14, GEN-1, GEN-14, TST-2 | done |
 | Forms | What the grammar admits of a declaration and a rule does not: a pack with a default, const, or before a fixed parameter; a named pack of no type pack; the hooks of a native implementation | FN-8, NATIVE-3 | done |
@@ -511,11 +511,18 @@ execution code of the catalogue, as a string literal written out
 (TST-10, `catalogue::EXECUTION_CODES`); anything else is
 `test.raises_code`.
 
+The declarations before a named test's statements are checked with the
+test as their binding scope (TST-1). A call there sees the module's
+candidates and any candidate of the same operator declared in the test.
+When a generic call needs such a candidate as evidence (GEN-16), the
+call records it as an answer. Lowering distinguishes instances that
+have different test-local answers.
+
 A test's block is then read as value code (`Typer::test`, into
 `Module::test_bodies`), as an application's statements are (TST-3,
 UNIT-14): a test has a name and neither a parameter nor a result. It
 calls `const fn`s only, a temporal call there being `call.role`; an
-operator selects among all its candidates, a value one outranking a
+operator selects among its visible candidates, a value one outranking a
 temporal one of the same parameter types, and a temporal one selected is
 `call.role` too (GEN-5, the typer's `value_code`); nothing is lifted. The call
 an `eval` or a `run` takes is read as composition is. `assert` is a

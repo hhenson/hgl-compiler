@@ -313,7 +313,7 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
             continue;
         }
         let name = implementation.name.as_str();
-        let operator = |module: &Module, public_only: bool| {
+        let exported_operator = |module: &Module| {
             module
                 .scope
                 .get(name)
@@ -322,8 +322,7 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
                 .copied()
                 .find(|&other| {
                     let declaration = &module.declarations[other];
-                    declaration.kind == DeclarationKind::Operator
-                        && (!public_only || declaration.is_public())
+                    declaration.kind == DeclarationKind::Operator && declaration.is_public()
                 })
         };
 
@@ -377,7 +376,7 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
                 continue;
             };
             if import.kind == ImportKind::Selective
-                && let Some(declaration) = operator(&program.modules[target], true)
+                && let Some(declaration) = exported_operator(&program.modules[target])
             {
                 found.push((
                     position,
@@ -407,7 +406,7 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
         if let Some(core) = program.core()
             && core != index
         {
-            if let Some(declaration) = operator(&program.modules[core], true) {
+            if let Some(declaration) = exported_operator(&program.modules[core]) {
                 found.push((
                     position,
                     OperatorRef {

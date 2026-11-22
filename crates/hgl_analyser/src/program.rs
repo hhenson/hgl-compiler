@@ -540,8 +540,8 @@ pub struct Declaration {
     pub exported: bool,
     /// True for a declaration in the module's test scope or a named test's own scope (TST-1).
     pub test_only: bool,
-    /// The position in [\`Module::tests\`] of the test that owns this helper (TST-1).
-    /// A helper from an unnamed context has no such owner.
+    /// The position in [`Module::tests`] of the named test that declares it (TST-1).
+    /// A declaration from an unnamed context has no individual test owner.
     pub test_owner: Option<usize>,
     /// The position of its file in [`Module::files`].
     pub file: usize,

@@ -8,8 +8,8 @@ use hgl_analyser::{Argument as GenericArgument, Constant, Program, Type};
 /// A type as text that no other type is written as: part of the key of
 /// a generic instance (GEN-2) and of a generic struct's application,
 /// whose values TYPE-3 tells apart by "complete canonical arguments". A named
-/// type has its module's path before it: two modules may each declare
-/// a `Quote`. `None` for a type that is not whole as the module is
+/// type includes its module's path and, for a test-local type, its
+/// test's name (TST-1). `None` for a type that is not whole as the module is
 /// written: one that names a generic parameter, or is not known.
 pub fn canonical(program: &Program, ty: &Type) -> Option<String> {
     let one = |ty: &Type| canonical(program, ty);
@@ -18,18 +18,27 @@ pub fn canonical(program: &Program, ty: &Type) -> Option<String> {
         Type::Named {
             name,
             module,
+            declaration,
             arguments,
             ..
         } => {
-            let path = &program.modules[*module].path;
+            let unit = &program.modules[*module];
+            let owner = unit
+                .declarations
+                .get(*declaration)
+                .and_then(|declared| declared.test_owner);
+            let name = match owner {
+                Some(owner) => format!("{}::{}::{name}", unit.path, unit.tests[owner].name),
+                None => format!("{}::{name}", unit.path),
+            };
             if arguments.is_empty() {
-                format!("{path}::{name}")
+                name
             } else {
                 let arguments: Option<Vec<String>> = arguments
                     .iter()
                     .map(|argument| canonical_argument(program, argument))
                     .collect();
-                format!("{path}::{name}<{}>", arguments?.join(", "))
+                format!("{name}<{}>", arguments?.join(", "))
             }
         }
         Type::Tuple(elements) => {

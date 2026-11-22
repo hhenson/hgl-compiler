@@ -759,7 +759,7 @@ impl Resolver<'_> {
             .iter()
             .find(|import| import.name == name);
         let declaration = self
-            .test_helpers(name)
+            .test_declarations(name)
             .and_then(|bound| bound.first())
             .map(|&index| &self.module.declarations[index])
             .or_else(|| {
@@ -844,8 +844,8 @@ impl Resolver<'_> {
         self.lookup(&name)
     }
 
-    /// Ordinary declaration identities for a helper name in this test (TST-1, FN-4).
-    fn test_helpers(&self, name: &str) -> Option<&[usize]> {
+    /// The declarations in this test's scope that bind a name (TST-1, FN-4).
+    fn test_declarations(&self, name: &str) -> Option<&[usize]> {
         self.module
             .tests
             .get(self.test_owner?)?
@@ -929,7 +929,7 @@ impl Resolver<'_> {
             );
         }
 
-        if let Some(bound) = self.test_helpers(name) {
+        if let Some(bound) = self.test_declarations(name) {
             return self.used(
                 token,
                 Binding::Declarations {
