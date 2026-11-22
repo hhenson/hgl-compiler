@@ -390,3 +390,13 @@ fn law_branches_require_stated_constraints_or_an_explicit_bool_membership() {
         rejected.report
     );
 }
+
+#[test]
+fn parentheses_inside_a_negated_law_preserve_the_guarantee() {
+    // GEN-7, GEN-15, GEN-18: !(law(f)) and !law(f) state the same bound.
+    let source = format!(
+        "{LAWS}impl const fn fold<V, const law: bool = associative(f)>(f: const fn(V, V) -> V, a: V, b: V) -> V requires !law => f(b, a)\nconst fn grouped<V>(f: const fn(V, V) -> V, a: V, b: V) -> V requires !((associative(f))) => fold(f, a, b)\nconst fn good() -> i64 => grouped(ordinary, 1, 2)\n"
+    );
+    let accepted = check(&[("m.hgl", &source)]);
+    assert!(!accepted.rejected, "{}", accepted.report);
+}

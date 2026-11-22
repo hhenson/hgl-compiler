@@ -33,7 +33,12 @@ impl Law {
 /// A GEN-18 predicate of one bare function parameter, in a requirement
 /// or generic default. Other call forms retain ordinary name resolution.
 pub(crate) fn predicate(node: &SyntaxNode) -> Option<(Law, String)> {
-    let node = ungrouped(node.clone());
+    let mut node = ungrouped(node.clone());
+    // GEN-15: constraint grouping preserves a law predicate's meaning,
+    // including when the grouped predicate follows a negation.
+    while node.kind() == SyntaxKind::ConstraintParen {
+        node = ungrouped(node.children().next()?);
+    }
     let (name, operands) = match node.kind() {
         SyntaxKind::ConstraintCall => {
             if child(&node, SyntaxKind::QualifiedName).is_some()

@@ -112,7 +112,7 @@ impl const fn either<V, const law: bool = associative(f)>(f: const fn(V, V) -> V
 const fn either_forward<V, const law: bool = associative(f)>(f: const fn(V, V) -> V, a: V, b: V) -> V
     requires law in {true, false} => either{law: law}(f, a, b)
 const fn negative_forward<V>(f: const fn(V, V) -> V, a: V, b: V) -> V
-    requires !associative(f) => either(f, a, b)
+    requires !(associative(f)) => either(f, a, b)
 const fn difference(a: i64, b: i64) -> i64 => a - b
 
 /** GEN-3, GEN-7, GEN-18: the forwarded bool membership selects each branch. */
