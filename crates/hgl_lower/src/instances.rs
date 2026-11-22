@@ -473,6 +473,27 @@ fn function_key(program: &Program, target: &Callee) -> Option<String> {
     Some(format!("{declared:?}:{arguments:?}:{requirements:?}"))
 }
 
+/// An instance that uses a test's candidate has different evidence from
+/// the same call with another test's candidate or with the module's (TST-1).
+fn uses_test_candidate(program: &Program, answer: &Answer) -> bool {
+    match answer {
+        Answer::Candidate {
+            module,
+            declaration,
+            requirements,
+            ..
+        } => {
+            program.modules[*module].declarations[*declaration]
+                .test_owner
+                .is_some()
+                || requirements
+                    .iter()
+                    .any(|answer| uses_test_candidate(program, answer))
+        }
+        _ => false,
+    }
+}
+
 /// The generic arguments of a call of `declaration` of `module` as an
 /// instance's key. `None` where they are not whole: one of them names
 /// a generic parameter or is not known, or the call does not say what
@@ -484,6 +505,7 @@ fn key(
     type_packs: &[TypePackArgument],
     captures: &Captures,
     functions: &[(usize, Callee)],
+    requirements: &[Answer],
 ) -> Option<Vec<String>> {
     let Some(Detail::Callable(signature)) = program.modules.get(module)?.details.get(declaration)
     else {
@@ -507,6 +529,18 @@ fn key(
             "function[{slot}]:{}",
             function_key(program, target)?
         ));
+    }
+    if requirements
+        .iter()
+        .any(|answer| uses_test_candidate(program, answer))
+    {
+        key.push("test requirements".to_string());
+        key.extend(
+            requirements
+                .iter()
+                .map(|answer| answer_key(program, answer))
+                .collect::<Option<Vec<_>>>()?,
+        );
     }
     Some(key)
 }
@@ -636,6 +670,7 @@ impl Instances {
                 &next.type_packs,
                 &next.captures,
                 &next.functions,
+                &next.requirements,
             ) else {
                 continue;
             };
@@ -871,6 +906,7 @@ impl Instances {
             &[],
             &Captures::default(),
             &[],
+            &[],
         )?;
         self.declared(module, declaration)
             .iter()
@@ -890,6 +926,12 @@ impl Instances {
             return None;
         };
         let captures = Captures::of(program, callee, signature, arguments);
+        let requirements = match callee {
+            Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
+                requirements.as_slice()
+            }
+            _ => &[],
+        };
         let key = key(
             program,
             (module, declaration),
@@ -897,6 +939,7 @@ impl Instances {
             callee.type_packs(),
             &captures,
             &functions_of(arguments),
+            requirements,
         )?;
         self.declared(module, declaration)
             .iter()

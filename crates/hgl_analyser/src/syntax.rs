@@ -72,12 +72,24 @@ pub(crate) fn ungrouped(mut node: SyntaxNode) -> SyntaxNode {
     node
 }
 
-/// The statements of a test's block. Leading helper declarations have their own bodies.
+/// TST-1's test-local declarations use the module's declaration syntax.
+pub(crate) fn is_test_declaration(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::FnDecl
+            | SyntaxKind::ConstantDecl
+            | SyntaxKind::StructDecl
+            | SyntaxKind::EnumDecl
+            | SyntaxKind::OperatorDecl
+    )
+}
+
+/// The statements of a test's block. Its declarations are checked separately.
 pub(crate) fn test_statements(test: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> {
     child(test, SyntaxKind::Block)
         .into_iter()
         .flat_map(|block| block.children())
-        .filter(|node| node.kind() != SyntaxKind::FnDecl)
+        .filter(|node| !is_test_declaration(node.kind()))
 }
 
 /// True when the `inject` `node` stands among the first statements of
@@ -91,10 +103,7 @@ pub(crate) fn leads_its_test(node: &SyntaxNode) -> bool {
     });
     let mut before = node.prev_sibling();
     while let Some(statement) = before {
-        if !matches!(
-            statement.kind(),
-            SyntaxKind::InjectDecl | SyntaxKind::FnDecl
-        ) {
+        if statement.kind() != SyntaxKind::InjectDecl && !is_test_declaration(statement.kind()) {
             return false;
         }
         before = statement.prev_sibling();
