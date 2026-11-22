@@ -3,7 +3,7 @@
 
 use std::ffi::OsString;
 use std::fs::{self, File, FileTimes};
-use std::io::{Read as _, Write as _};
+use std::io::Read as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use walkdir::WalkDir;
 
+use super::common::publish_executable;
 use super::{BACKTEST, CALC, TICKS, argument, scratch, sdk_named, text, write};
 
 const SOURCE: &str = "module demo.stamped\n\
@@ -32,9 +33,8 @@ impl NinjaTrace {
     fn new(root: &Path) -> Self {
         let native = which::which("ninja").expect("the SDK uses Ninja");
         let bin = root.join("bin");
-        let wrapper = write(
-            root,
-            "bin/ninja",
+        publish_executable(
+            &bin.join("ninja"),
             r#"#!/bin/sh
 if [ "$1" = -C ] && [ "$2" = "$HGL_TEST_BUILD_WORKSPACE" ] && [ "$3" != -t ]; then
     if [ -n "$HGL_TEST_BUILD_TERM" ]; then
@@ -51,9 +51,10 @@ if [ "$1" = -C ] && [ "$2" = "$HGL_TEST_BUILD_WORKSPACE" ] && [ "$3" != -t ]; th
     if [ -n "$HGL_TEST_BUILD_DELAY" ]; then sleep "$HGL_TEST_BUILD_DELAY"; fi
 fi
 exec "$HGL_TEST_REAL_NINJA" "$@"
-"#,
+"#
+            .as_bytes(),
+            fs::Permissions::from_mode(0o755),
         );
-        fs::set_permissions(wrapper, fs::Permissions::from_mode(0o755)).unwrap();
         let path = std::env::join_paths(
             std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
         )
@@ -107,9 +108,9 @@ fn writes_ninjas_compilation_database_without_rebuilding() {
     let path = ninja.workspace.join("compile_commands.json");
     let cache = root.join("native-cache");
     let trace = root.join("compiler.log");
-    let compiler = write(
-        &root,
-        "bin/compiler",
+    let compiler = root.join("bin/compiler");
+    publish_executable(
+        &compiler,
         r#"#!/bin/sh
 if [ "$1" = -dM ] && [ "$2" = -E ]; then
     printf '%s\n' identify >>"$HGL_TEST_CXX_TRACE"
@@ -117,9 +118,10 @@ else
     printf '%s\n' compile >>"$HGL_TEST_CXX_TRACE"
 fi
 exec "$HGL_TEST_REAL_CXX" "$@"
-"#,
+"#
+        .as_bytes(),
+        fs::Permissions::from_mode(0o755),
     );
-    fs::set_permissions(&compiler, fs::Permissions::from_mode(0o755)).unwrap();
     let real = std::env::var_os("CXX").unwrap_or_else(|| {
         if cfg!(target_os = "macos") {
             "clang++"
@@ -456,15 +458,11 @@ fn run_and_test_repair_rewritten_workspace_artifacts() {
         let mut broken = fs::read(&path).unwrap();
         broken[0] ^= u8::MAX;
         for (replacement, calls) in [(broken.as_slice(), 3), (b"foreign artifact".as_slice(), 4)] {
-            // A process can still have the old executable mapped. Replace
-            // its path without opening that executable for writing.
-            let mut staged = tempfile::NamedTempFile::new_in(path.parent().unwrap()).unwrap();
-            staged.write_all(replacement).unwrap();
-            staged
-                .as_file()
-                .set_permissions(fs::metadata(&path).unwrap().permissions())
-                .unwrap();
-            drop(staged.persist(&path).unwrap());
+            publish_executable(
+                &path,
+                replacement,
+                fs::metadata(&path).unwrap().permissions(),
+            );
             reject();
             assert!(invoke().contains(expected));
             assert_eq!(ninja.calls(), calls);
@@ -644,15 +642,18 @@ fn build_reuse_tracks_test_coverage_and_invalidates_by_content() {
         // Linux permits a patched version string in this disposable ELF.
         let compiler = Path::new(env!("CARGO_BIN_EXE_hgl"));
         let other = root.join("other-hgl");
-        fs::copy(compiler, &other).unwrap();
-        let mut bytes = fs::read(&other).unwrap();
+        let mut bytes = fs::read(compiler).unwrap();
         let version = concat!(env!("CARGO_PKG_VERSION"), " (hgraph ").as_bytes();
         let at = bytes
             .windows(version.len())
             .position(|window| window == version)
             .unwrap();
         bytes[at] = if bytes[at] == b'9' { b'8' } else { b'9' };
-        fs::write(&other, bytes).unwrap();
+        publish_executable(
+            &other,
+            bytes.as_slice(),
+            fs::metadata(compiler).unwrap().permissions(),
+        );
         let version_of = |hgl: &Path| success(Command::new(hgl).arg("--version").output().unwrap());
         assert_ne!(version_of(compiler), version_of(&other));
         success(
