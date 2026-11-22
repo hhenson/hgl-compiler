@@ -141,7 +141,8 @@ build_libraries() {
     build_dependency simdjson "$build" "$prefix" "$licenses" -DSIMDJSON_DEVELOPER_MODE=OFF
     # Keep only headers, shared libraries and CMake packages from the dependencies.
     rm -rf -- "$prefix/lib/pkgconfig" "$prefix/share"
-    TMPDIR=$work HGL_HGRAPH_DEPS=$prefix HGL_HGRAPH_SOURCE=$work/hgraph HGL_HGRAPH_BUILD_TYPE=$build \
+    TMPDIR=$work HGL_HGRAPH_WORK_DIR=$work/hgraph-build HGL_HGRAPH_DEPS=$prefix \
+        HGL_HGRAPH_SOURCE=$work/hgraph HGL_HGRAPH_BUILD_TYPE=$build \
         HGL_HGRAPH_INSTALL_RPATH="$library_origin/../../hgraph-deps/lib" HGL_BUILD_JOBS=$jobs \
         scripts/provision-hgraph-sdk.sh "$hgraph_tag" "$libexec/hgraph-sdk"
     sed 's|^dependencies=.*|dependencies=../hgraph-deps|' "$libexec/hgraph-sdk/hgl-sdk.txt" >"$work/sdk-stamp"

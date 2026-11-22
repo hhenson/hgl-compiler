@@ -266,7 +266,7 @@ def verify_paths(bundle, forbidden):
     scratch_path = re.compile(
         path_start + rb"(?:(?:/private)?/var/folders/|/(?:Users|home|root)/|/tmp/hgl-release\.)[^\s\x00]+"
     )
-    local_path = re.compile(path_start + rb"(?:" + b"|".join(map(re.escape, sorted(prefixes)))
+    local_path = re.compile(rb"(?:" + b"|".join(map(re.escape, sorted(prefixes)))
                             + rb")(?![\w.~-])") if prefixes else None
     failed = []
     for path in sorted(bundle.rglob("*")):
@@ -293,7 +293,9 @@ def debug_bytes(path):
     """The bytes of the file at `path` as a debugger reads them: an ELF
     file with compressed debug sections, decompressed."""
     data = path.read_bytes()
-    if not data.startswith(b"\x7fELF") or b".debug_" not in data:
+    if not data.startswith(b"\x7fELF") or not any(
+        section in data for section in (b".debug_", b".zdebug_")
+    ):
         return data
     with tempfile.TemporaryDirectory() as scratch:
         plain = Path(scratch) / "plain"

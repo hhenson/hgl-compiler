@@ -27,6 +27,8 @@
 #                      holds more, Arrow among it, does: nothing more is used.
 #   HGL_HGRAPH_SOURCE  a checkout of hgraph at TAG to build. Without it, TAG
 #                      is cloned from GitHub into a temporary directory.
+#   HGL_HGRAPH_WORK_DIR  a new scratch directory to use and remove after the
+#                      build. Without it, a scratch directory is made in TMPDIR.
 #   CXX                the C++ compiler (default: g++ on Linux, clang++ on
 #                      macOS).
 #   HGL_HGRAPH_INSTALL_RPATH  where SDK libraries look for dependencies.
@@ -167,9 +169,13 @@ main() {
         fail "$dir holds no whole SDK of hgraph $tag; remove it or name another directory"
     fi
 
-    # A template, so that TMPDIR is honoured: macOS's mktemp given none
-    # makes the directory in the user's own temporary directory.
-    work=$(mktemp -d "${TMPDIR:-/tmp}/provision-hgraph-sdk.XXXXXX")
+    if [[ -n ${HGL_HGRAPH_WORK_DIR:-} ]]; then
+        work=$(absolute "$HGL_HGRAPH_WORK_DIR")
+        mkdir -- "$work" || fail "the work directory must be new: $work"
+    else
+        # A template keeps the ordinary build in the caller's temporary directory.
+        work=$(mktemp -d "${TMPDIR:-/tmp}/provision-hgraph-sdk.XXXXXX")
+    fi
     work=$(cd -- "$work" && pwd -P)
     trap 'rm -rf -- "$work"' EXIT
 
