@@ -95,3 +95,20 @@ test item_type_selects_the_callback {
     assert integer_sum == 7
     assert float_sum == 8.0
 }
+
+# GEN-17: reflection for one callback leaves another callback's types
+# to the candidate that takes the whole call.
+operator with_reflection<L, R, C, ...Ps>(
+    f: const fn(L, R) -> L,
+    items: C,
+    reflected: const fn(...{Ps}) -> i64,
+) -> L
+impl const fn with_reflection<V, ...Ps>(
+    f: const fn(V, V) -> V,
+    items: list<V>,
+    reflected: const fn(...{Ps}) -> i64,
+) -> V => f(items[0], items[1])
+
+test fixed_callback_beside_a_reflected_callback {
+    assert with_reflection(add_, [5, 2], diff) == 7
+}

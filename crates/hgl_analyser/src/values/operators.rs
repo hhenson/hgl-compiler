@@ -300,9 +300,7 @@ impl<'a> Typer<'a> {
             &unit.declarations[operator.declaration],
             dependent_pack,
         );
-        // Reflected callback packs still need the public reading to
-        // establish the arguments the operator admits (GEN-17).
-        let candidate_functions = !candidates.is_empty() && !reflects(unit, public);
+        let candidate_functions = !candidates.is_empty();
         let written =
             self.operator_arguments(name, list, (public, dependent), &options, pack.as_ref());
         let named_generics = self.diagnostics.len() == reported
@@ -866,7 +864,16 @@ impl<'a> Typer<'a> {
             .enumerate()
             .map(|(position, (key, node, ready))| {
                 let public_type = public_function(public, &key);
-                let by_function = candidate_functions && public_type.is_some() && ready.is_none();
+                let dependent_function = dependent.is_some_and(|pack| {
+                    key.public_parameter(public)
+                        .is_some_and(|index| public.parameters[index].at == pack.function)
+                });
+                // A reflected pack needs its public reading to establish
+                // the arguments the operator admits (GEN-17).
+                let by_function = candidate_functions
+                    && !dependent_function
+                    && matches!(public_type, Some(Type::Function(template)) if template.named_pack.is_none())
+                    && ready.is_none();
                 let explicit = match &key {
                     Key::Position(position) => position
                         .checked_sub(fixed)
@@ -898,10 +905,7 @@ impl<'a> Typer<'a> {
                     && let Some(pattern) = public_type
                     && let Type::Function(template) = substitute_within(pattern, &map)
                 {
-                    let inputs = if dependent.is_some_and(|pack| {
-                        key.public_parameter(public)
-                            .is_some_and(|index| public.parameters[index].at == pack.function)
-                    }) {
+                    let inputs = if dependent_function {
                         CallbackInputs {
                             supplied: Some(&supplied),
                             excluded: &excluded,
