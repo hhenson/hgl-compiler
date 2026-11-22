@@ -3744,7 +3744,35 @@ fn any_and_operator_laws_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// GEN-16, UNIT-10: operators named like law predicates retain their
+/// ordinary callability requirements in functions and candidates.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn named_law_requirements_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("named_law_requirements");
+    let file = write(
+        &root,
+        "demo.named_law_requirements.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.named_law_requirements.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

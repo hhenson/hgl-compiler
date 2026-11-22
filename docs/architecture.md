@@ -1389,6 +1389,10 @@ GEN-18 law predicates read the public operator's property domains, not
 its implementation's arithmetic. A plain or anonymous function has no
 law. Only the bool generic default form may inspect a formal function
 parameter (UNIT-7 and UNIT-8); an explicit option takes precedence.
+`values/law_calls.rs` resolves the query's formal slot and reads its law
+for function defaults, candidate defaults and requirements. A requirement
+whose callee resolves to an ordinary operator remains a GEN-16 callability
+test; the built-in spelling does not hide that binding.
 A generic wrapper's body knows only its stated law requirements (GEN-7).
 An unconstrained wrapper rejects even if separate candidates cover both
 law values: neither is known to take every case. A wrapper may state a
