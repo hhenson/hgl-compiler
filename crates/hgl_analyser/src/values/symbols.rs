@@ -1,10 +1,11 @@
 //! `-value`, `!value` and the operators with two operands: each symbol
 //! is read as the call of the core operator it stands for, with its
-//! configuration, and `&&` and `||` as they are written (NUM-1, EXPR-6,
-//! EXPR-10, GEN-5). Part of the typing pass ([`super`]).
+//! configuration. Value code keeps `&&` and `||` short-circuited
+//! (NUM-1, EXPR-6, EXPR-10, GEN-5). Part of the typing pass ([`super`]).
 
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
+use hgl_source::Span;
 
 use super::candidates::{Given, Key, Settled, Wanted, typed_by_place};
 use super::control::joined;
@@ -16,7 +17,8 @@ use super::operators::{
 use super::{BOOL, Typer};
 use crate::constant::is_least_magnitude;
 use crate::hir::{
-    BinaryOperator, DeferredOption, Expr, ExprKind, Form, UnaryOperator, Value, ValueCategory,
+    Argument, BinaryOperator, Callee, DeferredOperator, DeferredOption, Expr, ExprKind, Form,
+    UnaryOperator, Value, ValueCategory,
 };
 use crate::program::{DeclarationKind, OperatorRef};
 use crate::syntax::{child, tokens, ungrouped};
@@ -30,7 +32,7 @@ impl<'a> Typer<'a> {
     /// these core identities"), and is read as the call of it: NUM-1,
     /// "Unary negation preserves the numeric type", and OPS-1 are what
     /// its candidates declare. `!` is of a bool (EXPR-6; OPS-5: "`&&`,
-    /// `||`, and `!` take bools"), and is read as it is written.
+    /// `||`, and `!` take bools"). Composition selects `not_`.
     pub(super) fn unary(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
         let config = child(node, SyntaxKind::OperatorConfig);
         let operand = node
@@ -42,11 +44,23 @@ impl<'a> Typer<'a> {
         let at = Location::new(self.file, token.span());
         match token.kind() {
             SyntaxKind::Bang => {
-                let _ = self.symbol_operator(UnaryOperator::Not.identity(), at);
+                let operator = UnaryOperator::Not;
+                let identity = self.symbol_operator(operator.identity(), at);
                 // Configuration of `!` is for the pass that reads it through
                 // core's `not_`.
                 if config.is_some() {
                     return (ExprKind::Unread, Type::Unknown);
+                }
+                if self.graph
+                    && let Some(identity) = identity
+                {
+                    return self.graph_logic(
+                        Form::Unary(operator),
+                        identity,
+                        at,
+                        node,
+                        vec![operand],
+                    );
                 }
                 let operand = self.expression(&operand, Some(&BOOL));
                 let operand = self.fit(operand, &BOOL, "the operand of `!`");
@@ -179,7 +193,7 @@ impl<'a> Typer<'a> {
         let mut links = vec![node.clone()];
         loop {
             let last = links.last().expect("never empty");
-            if unread_link(last) {
+            if unread_link(last) || self.graph && logical_operator(last).is_some() {
                 break;
             }
             match last.children().next() {
@@ -216,11 +230,9 @@ impl<'a> Typer<'a> {
     /// `read` is the left operand, when it is the link inside this one
     /// and has been read.
     ///
-    /// `&&` and `||` are read as they are written (EXPR-6). Every other
-    /// symbol stands for an operator of core's module (the generics
-    /// chapter: "Syntax binds these core identities independently of
-    /// local same-named functions"), and is read as the call of it: see
-    /// [`Typer::symbol`].
+    /// Boolean connectives short-circuit in value code. Composition
+    /// reads their operands as dependencies (EXPR-6). The other symbols
+    /// use [`Typer::symbol`].
     fn binary_link(
         &mut self,
         node: &SyntaxNode,
@@ -244,53 +256,31 @@ impl<'a> Typer<'a> {
             return (ExprKind::Unread, Type::Unknown);
         };
         if matches!(operator, BinaryOperator::And | BinaryOperator::Or) {
-            if let Some(identity) = logical_identity(node, operator) {
-                let _ = self.symbol_operator(identity, operator_at);
-            }
             // Configuration of these is for the pass that reads them
             // through core's `and_` and `or_`.
             if config.is_some() {
                 return (ExprKind::Unread, Type::Unknown);
             }
-            // EXPR-6: "Boolean connectives short-circuit left to right."
-            // Their operands are bools.
-            let what = format!("an operand of `{}`", operator.symbol());
+            if self.graph {
+                let operands = logical_operands(node, operator);
+                let identity = logical_call(operator, operands.len());
+                if let Some(identity) = self.symbol_operator(identity, operator_at) {
+                    return self.graph_logic(
+                        Form::Binary(operator),
+                        identity,
+                        operator_at,
+                        node,
+                        operands,
+                    );
+                }
+            } else if let Some(identity) = logical_identity(node, operator) {
+                let _ = self.symbol_operator(identity, operator_at);
+            }
             let left = match read.take() {
                 Some(left) => left,
                 None => self.expression(&left, Some(&BOOL)),
             };
-            let left = self.fit(left, &BOOL, &what);
-            // EXPR-6: the right operand is not evaluated when the left
-            // decides. What it assigns is assigned only on the path
-            // that evaluates it, and a `return` in it does not end
-            // every path (CTRL-11, CTRL-5).
-            let before = self.assigned.clone();
-            let before_returned = self.returned;
-            // ERR-3 has "short-circuit paths" tracked, and ERR-12 the
-            // same of null tests: the right operand of `&&` is reached
-            // only where the left holds, and of `||` only where it does
-            // not.
-            let (when_true, when_false) = self.null_tests(&left);
-            let frame = self.present.len();
-            self.present.extend(match operator {
-                BinaryOperator::And => when_true,
-                _ => when_false,
-            });
-            let right = self.expression(&right, Some(&BOOL));
-            self.present.truncate(frame);
-            self.assigned = joined(
-                (&self.assigned, self.returned),
-                (&before, before_returned),
-                self.locals.len(),
-            );
-            self.returned = before_returned;
-            let right = self.fit(right, &BOOL, &what);
-            let kind = ExprKind::Binary {
-                operator,
-                left: Box::new(left),
-                right: Box::new(right),
-            };
-            return (kind, BOOL);
+            return (self.scalar_logic(operator, left, &right).kind, BOOL);
         }
         // TST-4: "Harness comparison is intrinsic: compare presence,
         // exact present data, and shape/length; overload candidates
@@ -338,6 +328,206 @@ impl<'a> Typer<'a> {
             (entries, faulty, config.is_some()),
             place,
         )
+    }
+
+    /// EXPR-6: read the right operand with the facts that hold on the
+    /// path that evaluates it (ERR-3, ERR-12, CTRL-5, CTRL-11).
+    fn scalar_logic(&mut self, operator: BinaryOperator, left: Expr, right: &SyntaxNode) -> Expr {
+        let what = format!("an operand of `{}`", operator.symbol());
+        let left = self.fit(left, &BOOL, &what);
+        let before = self.assigned.clone();
+        let before_returned = self.returned;
+        let (when_true, when_false) = self.null_tests(&left);
+        let frame = self.present.len();
+        self.present.extend(if operator == BinaryOperator::And {
+            when_true
+        } else {
+            when_false
+        });
+        let right = self.expression(right, Some(&BOOL));
+        self.present.truncate(frame);
+        self.assigned = joined(
+            (&self.assigned, self.returned),
+            (&before, before_returned),
+            self.locals.len(),
+        );
+        self.returned = before_returned;
+        let right = self.fit(right, &BOOL, &what);
+        scalar_link(operator, left, right)
+    }
+
+    /// EXPR-6 and OPS-5: a graph gives every operand to the selected
+    /// core identity. An unparenthesized chain gives a single pack.
+    fn graph_logic(
+        &mut self,
+        form: Form,
+        identity: OperatorRef,
+        at: Location,
+        node: &SyntaxNode,
+        operands: Vec<SyntaxNode>,
+    ) -> (ExprKind, Type) {
+        let mark = self.mark();
+        let reported = mark.diagnostics;
+        let given: Vec<_> = operands
+            .into_iter()
+            .enumerate()
+            .map(|(position, node)| {
+                let value = self.expression(&node, Some(&BOOL));
+                Given::read(position, node, value)
+            })
+            .collect();
+        if let Form::Binary(operator) = form
+            && given
+                .iter()
+                .all(|given| self.category(&given.value) == ValueCategory::Value)
+            && (self.diagnostics.len() != reported
+                || !self.assigned.starts_with(&mark.assigned)
+                || self.returned != mark.returned
+                || given[..given.len() - 1].iter().any(|given| {
+                    let (when_true, when_false) = self.null_tests(&given.value);
+                    let facts = if operator == BinaryOperator::And {
+                        when_true
+                    } else {
+                        when_false
+                    };
+                    facts.iter().any(|fact| !self.present.contains(fact))
+                }))
+            && self.may_reread()
+        {
+            // Only reread when short-circuit flow can change the typing
+            // of a later operand. Plain nested Boolean expressions keep
+            // their first reading.
+            self.take_back(mark, false);
+            let mut nodes = given.into_iter().map(|given| given.node);
+            let first = nodes.next().expect("a Boolean connective has operands");
+            let first = self.expression(&first, Some(&BOOL));
+            let value = nodes.fold(first, |left, right| {
+                self.scalar_logic(operator, left, &right)
+            });
+            return (value.kind, BOOL);
+        }
+        if self.diagnostics.len() != reported {
+            return (self.unselected(given, form), BOOL);
+        }
+        if given.iter().any(|given| {
+            !whole(given.ty()) || self.category(&given.value) == ValueCategory::Unsettled
+        }) {
+            let arguments = given
+                .into_iter()
+                .map(|given| Argument {
+                    parameter: None,
+                    pack: None,
+                    value: given.value,
+                })
+                .collect::<Vec<_>>();
+            let deferred = DeferredOperator {
+                identity,
+                list: self.at(node),
+                expected: Some(BOOL),
+                generics: None,
+                contextual: vec![false; arguments.len()],
+                captured: false,
+            };
+            return (
+                ExprKind::Call {
+                    callee: Callee::DeferredOperator(Box::new(deferred)),
+                    arguments,
+                    form,
+                    braced: Vec::new(),
+                    lifted: false,
+                },
+                BOOL,
+            );
+        }
+        self.call_logic(form, identity, at, given)
+    }
+
+    /// Select an already-read Boolean form once its operands have types.
+    pub(super) fn settle_logic(
+        &mut self,
+        form: Form,
+        identity: OperatorRef,
+        node: &SyntaxNode,
+        arguments: &[Argument],
+    ) -> Option<(ExprKind, Type)> {
+        let (token, operands) = match form {
+            Form::Binary(operator) => (
+                tokens(node).find(|token| binary_operator(token.kind()) == Some(operator))?,
+                logical_operands(node, operator),
+            ),
+            Form::Unary(_) => (tokens(node).next()?, vec![node.children().next()?]),
+            Form::Named => return None,
+        };
+        let at = Location::new(self.file, token.span());
+        let given = operands
+            .into_iter()
+            .zip(arguments)
+            .enumerate()
+            .map(|(position, (node, argument))| Given::read(position, node, argument.value.clone()))
+            .collect();
+        Some(self.call_logic(form, identity, at, given))
+    }
+
+    fn call_logic(
+        &mut self,
+        form: Form,
+        identity: OperatorRef,
+        at: Location,
+        given: Vec<Given>,
+    ) -> (ExprKind, Type) {
+        let (text, what) = match form {
+            Form::Binary(operator) => (
+                operator.symbol(),
+                format!("an operand of `{}`", operator.symbol()),
+            ),
+            Form::Unary(operator) => (
+                operator.symbol(),
+                format!("the operand of `{}`", operator.symbol()),
+            ),
+            Form::Named => unreachable!("a Boolean symbol has an operator token"),
+        };
+        let reported = self.diagnostics.len();
+        let given: Vec<_> = given
+            .into_iter()
+            .map(|mut given| {
+                given.value = self.fit(given.value, &BOOL, &what);
+                given
+            })
+            .collect();
+        if self.diagnostics.len() != reported {
+            return (self.unselected(given, form), BOOL);
+        }
+        // FN-6 and GEN-7: all-scalar wiring, including after instance
+        // selection, keeps short-circuit reads and unary guard facts.
+        if given
+            .iter()
+            .all(|given| self.category(&given.value) == ValueCategory::Value)
+        {
+            let mut operands = given.into_iter().map(|given| given.value);
+            let first = operands.next().expect("a Boolean symbol has operands");
+            let kind = match form {
+                Form::Binary(operator) => {
+                    operands
+                        .fold(first, |left, right| scalar_link(operator, left, right))
+                        .kind
+                }
+                Form::Unary(operator) => ExprKind::Unary {
+                    operator,
+                    operand: Box::new(first),
+                },
+                Form::Named => unreachable!("a Boolean symbol has an operator token"),
+            };
+            return (kind, BOOL);
+        }
+        let symbol = Symbol {
+            form,
+            text,
+            at,
+            rule: "OPS-5",
+            unjudged: BOOL,
+            place: Some(BOOL),
+        };
+        self.call_symbol(symbol, identity, given)
     }
 
     /// A symbol between two operands, as the call of the operator it
@@ -1060,6 +1250,24 @@ impl<'a> Typer<'a> {
     }
 }
 
+/// Record a scalar Boolean link in its source span.
+fn scalar_link(operator: BinaryOperator, left: Expr, right: Expr) -> Expr {
+    let at = Location::new(
+        left.at.file,
+        Span::new(left.at.span.start, right.at.span.end),
+    );
+    Expr {
+        kind: ExprKind::Binary {
+            operator,
+            left: Box::new(left),
+            right: Box::new(right),
+        },
+        ty: BOOL,
+        at,
+        category: ValueCategory::Value,
+    }
+}
+
 /// True when an operator's contract is not applied to an operand of
 /// this type here: it is not known, or it is nullable, and its payload
 /// needs its guard first. A generic parameter is judged: it has the
@@ -1120,23 +1328,47 @@ fn is_implied_member(node: &SyntaxNode) -> bool {
 /// of an unparenthesized chain (the generics chapter). A grouped link
 /// has a parenthesis node between it and the surrounding operator.
 fn logical_identity(node: &SyntaxNode, operator: BinaryOperator) -> Option<&'static str> {
-    let same_link = |part: SyntaxNode| {
-        part.kind() == SyntaxKind::BinaryExpr
-            && tokens(&part).find_map(|token| binary_operator(token.kind())) == Some(operator)
-    };
+    let same_link = |part: SyntaxNode| logical_operator(&part) == Some(operator);
     if node.parent().is_some_and(same_link) {
         return None;
     }
-    let identity = if node.children().any(same_link) {
-        if operator == BinaryOperator::And {
-            "all_"
+    Some(logical_call(
+        operator,
+        if node.children().any(same_link) { 3 } else { 2 },
+    ))
+}
+
+/// The Boolean connective at this link. A group is an operand of its own.
+fn logical_operator(node: &SyntaxNode) -> Option<BinaryOperator> {
+    if node.kind() != SyntaxKind::BinaryExpr {
+        return None;
+    }
+    tokens(node)
+        .find_map(|token| binary_operator(token.kind()))
+        .filter(|operator| matches!(operator, BinaryOperator::And | BinaryOperator::Or))
+}
+
+/// Recover the flat source chain without recursive descent into its left spine.
+fn logical_operands(node: &SyntaxNode, operator: BinaryOperator) -> Vec<SyntaxNode> {
+    let mut pending = vec![node.clone()];
+    let mut operands = Vec::new();
+    while let Some(node) = pending.pop() {
+        if logical_operator(&node) == Some(operator) && !unread_link(&node) {
+            pending.extend(node.children().collect::<Vec<_>>().into_iter().rev());
         } else {
-            "any_"
+            operands.push(node);
         }
-    } else {
-        operator.identity()
-    };
-    Some(identity)
+    }
+    operands
+}
+
+/// OPS-5 and GEN-5: chains and pairs have different core identities.
+fn logical_call(operator: BinaryOperator, operands: usize) -> &'static str {
+    match (operator, operands > 2) {
+        (BinaryOperator::And, true) => "all_",
+        (BinaryOperator::Or, true) => "any_",
+        _ => operator.identity(),
+    }
 }
 
 /// The operator a token is, between two operands.

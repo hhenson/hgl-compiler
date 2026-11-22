@@ -14,6 +14,7 @@ analyser: partial
 - A `return` to a `ref` result names an input or a child and reads no payload, so it needs no admission (FN-16)
 - Left: a function value kept in a `state` or a `cache`, which carries a read into a later evaluation, and which the rules give no type
 - A struct, a tuple or a fixed list read whole, an input or a child named when the program is compiled, `return quote`, `rows[0]`, is admitted only by its own `all_valid`, in a header or as a guard: `valid` of it, and `all_valid` of what holds it, do not admit it (`payload.unguarded`); a dictionary and an unsized list are read whole where `valid` holds, an `atomic<V>` as any value that publishes whole
+- A generic hook checks a whole read against the instance's input shape, including the `all_valid` guard for a fixed composite and the nullable form of a failing dictionary or unsized-list read (GEN-7, ERR-14).
 
 transpiler: partial
 
@@ -127,6 +128,7 @@ analyser: partial
 - `run_config` is an application's and an integration test's, and no function's (`inject.position`, RUN-6); braces after any other capability are `inject.configuration`
 - A key of the global store written out is used with one type in a program: a `put` or a `get` of another type than its earlier use is `store.key_type`, at the later use
 - A capability type written other than as the whole type of a parameter of a `const fn` or a native value function, and a capability that is the value of a `state` or `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published, is rejected (`capability.as_value`); a `let` and an argument of a parameter of its type are uses, one given to a parameter written as a generic parameter or `any` is rejected (hhenson/hgl_spec#73), and a property is read with its type (NATIVE-6)
+- The exception for naming a capability type in an operator declaration's membership is planned in #562 (GEN-3).
 - A capture by an anonymous function is reported: of the injected name by the resolver (`name.captured`, FN-14), and of a `let` it is bound to or a parameter of its type here
 - A wake asked of the scheduler or the alarm, a call of core's `schedule`, with a duration the compiler sees, a literal, a constant or a constant expression of them, that is not more than zero rejects (`schedule.duration_bounds`): in `start` a negative one, and in a `when` or `stop` zero too; in a value function given the capability a negative one, and a zero is left to the target, since the rule does not say whether a call there is in `start`
 
@@ -134,6 +136,7 @@ transpiler: partial
 
 - Supplies the declared node, source and application capabilities, including timers and
   run configuration. Wires them before initializers that read them.
+- Dropping a datetime wake at or before evaluation time, except for an equal-time request in `start`, is planned in #516. The first dropped request warns once per node, and further requests are counted for its stop log.
 - Left: Unknown or unavailable injections are reported, including graph injections other
   than the store. A nested child graph cannot read capabilities captured from its parent
   (CTRL-2).

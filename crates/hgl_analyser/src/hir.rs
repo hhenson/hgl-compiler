@@ -1056,12 +1056,12 @@ pub struct DeferredOption {
     pub value: Option<Expr>,
 }
 
-/// A named operator whose arguments need the concrete graph instance.
+/// An operator call whose arguments need the concrete graph instance.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeferredOperator {
     /// The bound operator identity (GEN-4).
     pub identity: OperatorRef,
-    /// The written argument list, also used to recover a call within `capture`.
+    /// The written argument list or Boolean symbol expression.
     pub list: Location,
     /// What the original place expects of the call's result.
     pub expected: Option<Type>,
@@ -1304,6 +1304,9 @@ pub struct TypePackArgument {
     /// The graph's arguments still have to complete this inferred pack.
     /// A pack with written types is already fixed (GEN-8).
     pub infer_from_arguments: bool,
+    /// The enclosing type pack that supplies the rest of this reflected
+    /// parameter pack when the static function argument is known (GEN-17).
+    pub forwarded_from: Option<Location>,
     /// Each type's name or position in the same order (GEN-17).
     pub keys: Vec<PackKey>,
 }
@@ -1316,6 +1319,7 @@ impl TypePackArgument {
             parameter,
             types,
             infer_from_arguments: false,
+            forwarded_from: None,
             keys,
         }
     }
@@ -1327,6 +1331,7 @@ impl TypePackArgument {
             parameter,
             types,
             infer_from_arguments: false,
+            forwarded_from: None,
             keys,
         }
     }

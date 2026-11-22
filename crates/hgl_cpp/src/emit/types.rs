@@ -183,7 +183,10 @@ pub(super) fn enum_name(program: &Program, module: usize, declaration: usize) ->
     format!(
         "{}::{}",
         names::module_namespace(&program.modules[module].path),
-        identifier(name)
+        names::declared_type(
+            &program.modules[module].declarations[declaration],
+            declaration
+        )
     )
 }
 
@@ -293,7 +296,7 @@ impl Emitter<'_> {
                     .iter()
                     .map(|member| identifier(&member.name))
                     .collect();
-                let name = identifier(&declaration.name);
+                let name = names::declared_type(declaration, index);
                 self.piece.is_type = true;
                 self.piece.declaration = format!(
                     "// enum {} (TYPE-7)\nenum class {name}\n{{\n    {},\n}};\n",
@@ -315,7 +318,13 @@ impl Emitter<'_> {
                             format!("{{{name}::{written}, {}}}", names::string(&member.name))
                         })
                         .collect();
-                    let qualified = format!("{}::{}", declared.path, declaration.name);
+                    let qualified = match declaration.test_owner {
+                        Some(owner) => format!(
+                            "{}::{}::{}",
+                            declared.path, declared.tests[owner].name, declaration.name
+                        ),
+                        None => format!("{}::{}", declared.path, declaration.name),
+                    };
                     self.piece.declaration.push_str(&format!(
                         "constexpr ::{}::EnumNames<{name}, {}> hgl_enum({name}) noexcept\n{{\n    return {{{}, {{{}}}}};\n}}\n",
                         runtime::NAMESPACE,

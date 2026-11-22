@@ -107,15 +107,23 @@ fn symbols_are_the_punctuation_production() {
     // alternatives are listed.
     let source_text = chapter("source-text.md");
     let listed: BTreeSet<String> = terminals(&source_text, "PUNCTUATION").into_iter().collect();
-    let known: BTreeSet<String> = TokenKind::PUNCTUATION
+    let mut known: BTreeSet<String> = TokenKind::PUNCTUATION
         .iter()
         .map(|&(text, _)| text.to_string())
         .collect();
     assert!(!listed.is_empty());
-    assert_eq!(known, listed);
     // No symbol is listed twice on either side.
     assert_eq!(known.len(), TokenKind::PUNCTUATION.len());
     assert_eq!(listed.len(), terminals(&source_text, "PUNCTUATION").len());
+    // Pin the pending LEX-29 token without claiming the lexer emits it.
+    const PENDING_PUNCTUATION: &[(&str, &str)] = &[("..<", "LEX-29 (#368)")];
+    for &(symbol, rule) in PENDING_PUNCTUATION {
+        assert!(
+            known.insert(symbol.to_string()),
+            "{symbol} is implemented: remove its pending entry ({rule})"
+        );
+    }
+    assert_eq!(known, listed);
 }
 
 /// The rows of the diagnostic catalog in category `parse`: each code with

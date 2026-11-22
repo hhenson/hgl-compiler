@@ -43,6 +43,9 @@ walkdir = "2.5"
 dirs = "6"
 # Programs on the PATH: the C++ compiler, `ninja`, `cmake`, `ld.lld`.
 which = "8"
+# Reading a shared library's headers, ELF and Mach-O: that each of hgraph's
+# libraries built for debugging is whole before a debug build links it.
+object = { version = "0.41", default-features = false, features = ["read_core", "elf", "macho", "std"] }
 
 # Lints every crate inherits with `[lints] workspace = true`.
 [workspace.lints.rust]

@@ -9,18 +9,19 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
 use super::Typer;
+use super::expressions::written_null;
 use super::fit::{not_null, whole};
 use super::inference::placed;
 use crate::constant::{Fault, Scope, Typed};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{DefaultExpr, Expr, ExprKind, Value};
-use crate::program::Declaration;
+use crate::program::{Declaration, Role};
 use crate::read::{default_of, parameters};
 use crate::syntax::{child, tokens};
 use crate::types::{
-    Argument, Constant, ConstantValue, GenericKind, GenericParameter, StructType, Type,
+    Argument, Constant, ConstantValue, GenericKind, GenericParameter, Parameter, StructType, Type,
 };
-use crate::{codes, error};
+use crate::{codes, error, local_error};
 
 impl<'a> Typer<'a> {
     /// The value a constant is written with, read as a value of
@@ -51,10 +52,8 @@ impl<'a> Typer<'a> {
     /// none.
     ///
     /// A default is cold and reads no formal argument (UNIT-7), so it
-    /// is read apart from the body. A type naming a generic parameter has a
-    /// type only a call gives, and its default is not held to one;
-    /// neither is the default of a temporal shape that is no ordinary
-    /// value type.
+    /// is read apart from the body. A generic parameter's default is
+    /// checked again when an omitted argument gives it a concrete type.
     pub(super) fn defaults(mut self) -> Vec<Option<DefaultExpr>> {
         self.locals.clear();
         self.declared.clear();
@@ -69,18 +68,22 @@ impl<'a> Typer<'a> {
                     return None;
                 }
                 let written = default_at(&syntax, parameter)?;
-                // "An omitted temporal argument is wired as a constant
-                // of its default, so the default is a value a constant
-                // of the parameter's type can publish." What that is
-                // for a window or an atomic is not settled
-                // here: `window: rolling_window<f64, 5> = []` is read, and
-                // held to no type.
-                let expected = if shaped(&parameter.ty) || names_parameter(&parameter.ty) {
-                    Type::Unknown
+                let reported = self.diagnostics.len();
+                // FN-1 has already rejected a temporal shape in a
+                // value declaration or a `const` parameter.
+                let invalid_shape = shaped(&parameter.ty)
+                    && (parameter.constant || self.declaration.kind.role() == Some(Role::Value));
+                let expected = if invalid_shape {
+                    &Type::Unknown
                 } else {
-                    parameter.ty.clone()
+                    parameter_default_type(&parameter.ty, written_null(&written))
                 };
-                let value = self.expression(&written, Some(&expected));
+                let expected = if names_parameter(expected) {
+                    &Type::Unknown
+                } else {
+                    expected
+                };
+                let value = self.expression(&written, Some(expected));
                 let place = format!("the parameter `{}`", parameter.name);
                 // TYPE-12: "A `signal` input takes no default but
                 // `null`": it has no payload a constant could supply.
@@ -95,10 +98,51 @@ impl<'a> Typer<'a> {
                     ));
                     return Some(self.take_default(value));
                 }
-                let value = self.fit(value, &expected, &place);
+                let value = self.fit_parameter_default(value, parameter, expected, &place);
+                // ERR-9: reject a failure this reader can establish.
+                // Calls the constant reader cannot evaluate are still
+                // checked by the ordinary expression reader.
+                if !invalid_shape
+                    && self.diagnostics.len() == reported
+                    && self
+                        .typed_in(self.file, &written, Some(expected))
+                        .is_ok_and(|constant| constant.evaluation_failed())
+                {
+                    self.report_failed_default(value.at, parameter);
+                }
                 Some(self.take_default(value))
             })
             .collect()
+    }
+
+    fn report_failed_default(&mut self, at: Location, parameter: &Parameter) {
+        self.diagnostics.emit(local_error(
+            Category::Type,
+            codes::local::DEFAULT_CONSTANT_FAILURE,
+            at,
+            format!("evaluating the default of `{}` fails", parameter.name),
+            "UNIT-8",
+        ));
+    }
+
+    /// A window of nullable values also accepts the delta of an arrival,
+    /// including a published null (TIME-7, TYPE-11).
+    pub(super) fn fit_parameter_default(
+        &mut self,
+        value: Expr,
+        parameter: &Parameter,
+        expected: &Type,
+        place: &str,
+    ) -> Expr {
+        let ty = parameter.ty.omission_removed();
+        if let Type::RollingWindow { value: arrival, .. } = ty
+            && matches!(arrival.as_ref(), Type::Nullable(_))
+            && !self.admits(expected, &value.ty)
+            && self.admits(&Type::delta(ty.clone()), &value.ty)
+        {
+            return value;
+        }
+        self.fit(value, expected, place)
     }
 
     /// The default of each field the struct writes, read as a value of
@@ -199,7 +243,7 @@ impl<'a> Typer<'a> {
                     _ => None,
                 })
         };
-        self.typed_in_scope(file, node, expected, &parameter)
+        self.typed_in_scope(file, node, expected, &parameter, &[])
     }
 
     fn typed_in_scope(
@@ -208,6 +252,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         expected: Option<&Type>,
         parameter: &dyn Fn(Location) -> Option<Type>,
+        arguments: &[(Location, &Argument)],
     ) -> Result<Typed, Fault> {
         let binding = |file: FileId, offset: u32| self.binding_at(file, offset);
         let scope = Scope {
@@ -215,9 +260,43 @@ impl<'a> Typer<'a> {
             file,
             binding: &binding,
             parameter,
+            arguments,
             constants: &self.constants,
         };
         crate::constant::typed(node, expected, &scope)
+    }
+
+    /// UNIT-8: a generic argument can make an omitted default's evaluation
+    /// fail, including an operand that a short-circuiting guard now reaches.
+    pub(super) fn check_default_evaluation(
+        &mut self,
+        at: Location,
+        parameter: &Parameter,
+        arguments: &[Argument],
+    ) {
+        let Some(written) = self.node_at(at) else {
+            return;
+        };
+        let generics = &self.signature.generics;
+        let map: Vec<_> = generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(arguments)
+            .collect();
+        let generic_type = |at: Location| {
+            let generic = generics.iter().find(|generic| generic.at == at)?;
+            match &generic.kind {
+                GenericKind::Value(ty) => Some(substitute_within(ty, &map)),
+                _ => None,
+            }
+        };
+        let expected = parameter_default_type(&parameter.ty, written_null(&written));
+        if self
+            .typed_in_scope(at.file, &written, Some(expected), &generic_type, &map)
+            .is_ok_and(|constant| constant.evaluation_failed())
+        {
+            self.report_failed_default(at, parameter);
+        }
     }
 
     /// What the compile-time constant `node`, written in `file`, comes
@@ -257,7 +336,7 @@ impl<'a> Typer<'a> {
             }
         };
         let expected = whole(expected).then_some(expected);
-        let read = self.typed_in_scope(file, node, expected, &parameter)?;
+        let read = self.typed_in_scope(file, node, expected, &parameter, &[])?;
         let value = crate::constant::fit(read, expected, self.program)?;
         Ok(value.substituted(
             &|at| match map.iter().find(|(declared, _)| *declared == at)?.1 {
@@ -350,6 +429,19 @@ pub(super) fn default_at(
             .any(|token| token.span().start == parameter.at.span.start)
     })?;
     default_of(&written)
+}
+
+/// UNIT-8: a temporal input's default is the ordinary value its
+/// constant can publish. A window takes one arrival (TYPE-11); an
+/// atomic takes its whole payload (TYPE-9). Written null marks omission.
+pub(super) fn parameter_default_type(ty: &Type, null: bool) -> &Type {
+    match ty.omission_removed() {
+        Type::RollingWindow { value, .. } | Type::Atomic(value) if !null => value,
+        Type::RollingWindow { .. } | Type::Atomic(_) | Type::Signal | Type::Endpoint(_) => {
+            &Type::Unknown
+        }
+        _ => ty,
+    }
 }
 
 /// True for a type that is a temporal shape and no ordinary value

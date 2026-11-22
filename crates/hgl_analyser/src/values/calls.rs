@@ -10,7 +10,7 @@ use hgl_source::{FileId, Span};
 
 use super::arguments::{Slot, Takes};
 use super::constants::generic_default;
-use super::dependent_packs::PackTypes;
+use super::dependent_packs::{PackTypes, dependent_slot};
 use super::evals::{trace_input_type, trace_pack_type};
 use super::fit::{not_null, open, whole};
 use super::inference::{
@@ -69,12 +69,22 @@ impl<'a> Typer<'a> {
     /// A name left for the prelude, an operator, and a callee that is
     /// itself an expression are for later parts: the callee and the
     /// arguments are read, and the call has no type.
-    pub(super) fn call(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
-        self.call_read(node, expected)
+    pub(super) fn call(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        used: bool,
+    ) -> (ExprKind, Type) {
+        self.call_read(node, expected, used)
     }
 
     /// A call, as the form or the function its callee names.
-    fn call_read(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
+    fn call_read(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        used: bool,
+    ) -> (ExprKind, Type) {
         let (Some(callee), Some(list)) = (node.children().next(), child(node, SyntaxKind::ArgList))
         else {
             return (ExprKind::Unread, Type::Unknown);
@@ -91,6 +101,25 @@ impl<'a> Typer<'a> {
             && let Some(name) = name_token(&direct)
         {
             return self.call_function_parameter(&name, &list, index, &template);
+        }
+        // GEN-10: a runtime schema view has no ordinary value type.
+        // Resolve the language form only where no declaration or local
+        // binds that name (UNIT-10).
+        if used
+            && direct.kind() == SyntaxKind::NameExpr
+            && child(&direct, SyntaxKind::QualifiedName).is_none()
+            && let Some(name) = name_token(&direct)
+            && name.text() == "schemas"
+            && !self.bindings.contains_key(&(self.file, name.span().start))
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                self.at(node),
+                "a borrowed schema view cannot be used as an ordinary value".to_string(),
+                "GEN-10",
+            ));
+            return self.unread_call(&list);
         }
         // ERR-13: "as the callee of a call each is the form this
         // chapter defines, whatever else is in scope."
@@ -777,7 +806,8 @@ impl<'a> Typer<'a> {
             .collect();
         let callee = &program.modules[module].declarations[declaration];
         let reported = self.diagnostics.len();
-        let named = self.named_generics(list, signature, &mut found);
+        let braces_only = dependent_slot(&program.modules[module], signature).is_some();
+        let named = self.named_generics(list, signature, &mut found, braces_only);
 
         // The requested output: `let names: list<str> = repeat(3)` says
         // what the `T` of `repeat<T>(count: i64) -> list<T>` is.
@@ -1441,14 +1471,18 @@ impl<'a> Typer<'a> {
         }
         let list = child(&call, SyntaxKind::ArgList)?;
         let entries = self.call_entries(&list);
-        let declared = &self.program.modules[module].declarations[declaration];
+        let owner = &self.program.modules[module];
+        let braces_only = dependent_slot(owner, signature).is_some();
+        let declared = &owner.declarations[declaration];
         let mut defaulted = Vec::new();
         for (index, generic) in signature.generics.iter().enumerate() {
             if matches!(generic.kind, GenericKind::Value(_))
                 && generic_default(&declared.syntax, generic).is_some()
-                && !entries.iter().any(|(_, name, _)| {
-                    name.as_ref()
-                        .is_some_and(|name| name.text() == generic.name)
+                && !entries.iter().any(|(brace, name, _)| {
+                    (*brace || !braces_only)
+                        && name
+                            .as_ref()
+                            .is_some_and(|name| name.text() == generic.name)
                 })
             {
                 defaulted.push(index);

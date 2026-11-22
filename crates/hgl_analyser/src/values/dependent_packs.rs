@@ -43,6 +43,18 @@ impl<'p> PackTypes<'p> {
         }
     }
 
+    /// Put the enclosing compile-time inputs into a passed-on pack (GEN-17).
+    pub(crate) fn place_forwarded(&self, pack: &mut TypePackArgument) {
+        let Some(source) = pack.forwarded_from else {
+            return;
+        };
+        if let Some((_, given)) = self.bindings.iter().find(|(at, _)| *at == source) {
+            pack.keys.extend(given.keys.iter().cloned());
+            pack.types.extend(given.types.iter().cloned());
+            pack.forwarded_from = given.forwarded_from;
+        }
+    }
+
     /// Specialize a written type, including its GEN-17 member types.
     pub(crate) fn project(
         &self,
@@ -56,6 +68,9 @@ impl<'p> PackTypes<'p> {
                 ConstantValue::Str(_) | ConstantValue::Int(_) => {
                     if let Some(ty) = pack.member(&key.value) {
                         return Some(ty.clone());
+                    }
+                    if pack.forwarded_from.is_some() {
+                        return None;
                     }
                     MemberFault::Missing {
                         pack: name.to_string(),
@@ -239,11 +254,7 @@ pub(super) fn operator_packs(
                 .iter()
                 .position(|generic| generic.at == reflects.at)
         {
-            let mut bounds = reflects.bounds;
-            if let crate::GenericKind::Pack { minimum, maximum } = signature.generics[index].kind {
-                bounds.0 = bounds.0.max(minimum);
-                bounds.1 = bounds.1.into_iter().chain(maximum).min();
-            }
+            let bounds = reflected_bounds(reflects, &signature.generics[index]);
             let count = reflected.len() as u64;
             if count < bounds.0 || bounds.1.is_some_and(|maximum| count > maximum) {
                 return Err(OperatorFault {
@@ -261,6 +272,21 @@ pub(super) fn operator_packs(
         }
     }
     Ok(result)
+}
+
+/// The bounds from both the declared generic and the reflecting function type.
+fn reflected_bounds(
+    reflects: &crate::ReflectedPack,
+    generic: &GenericParameter,
+) -> (u64, Option<u64>) {
+    let (minimum, maximum) = reflects.bounds;
+    match generic.kind {
+        crate::GenericKind::Pack {
+            minimum: lower,
+            maximum: upper,
+        } => (minimum.max(lower), maximum.into_iter().chain(upper).min()),
+        _ => reflects.bounds,
+    }
 }
 
 impl Typer<'_> {
@@ -379,24 +405,72 @@ impl Typer<'_> {
                     .iter()
                     .position(|generic| generic.at == reflects.at)
             {
-                let mut bounds = reflects.bounds;
-                if let crate::GenericKind::Pack { minimum, maximum } = signature.generics[slot].kind
-                {
-                    bounds.0 = bounds.0.max(minimum);
-                    bounds.1 = bounds.1.into_iter().chain(maximum).min();
+                let bounds = reflected_bounds(reflects, &signature.generics[slot]);
+                let mut reflected = TypePackArgument::keyed(slot, reflected);
+                if let Type::Function(actual) = &callback.ty {
+                    reflected.forwarded_from = actual.named_pack.as_ref().map(|pack| pack.at);
                 }
-                self.check_pack_count(
-                    list,
-                    &reflects.name,
-                    bounds,
-                    &vec![callback.at; reflected.len()],
-                );
-                packs.push(TypePackArgument::keyed(slot, reflected));
+                if reflected.forwarded_from.is_none() {
+                    self.check_pack_count(
+                        list,
+                        &reflects.name,
+                        bounds,
+                        &vec![callback.at; reflected.types.len()],
+                    );
+                }
+                packs.push(reflected);
             }
             values[position] = Some(callback);
         }
         packs.sort_by_key(|pack| pack.parameter);
         packs
+    }
+
+    /// Check reflected bounds and written member types now that the
+    /// caller has supplied the pack's keys (GEN-10, GEN-17).
+    pub(super) fn check_forwarded_packs(
+        &mut self,
+        at: Location,
+        (module, declaration): (usize, usize),
+        arguments: &[GenericArgument],
+        packs: &[TypePackArgument],
+    ) {
+        let unit = &self.program.modules[module];
+        let Detail::Callable(signature) = &unit.details[declaration] else {
+            return;
+        };
+        let before = self.diagnostics.len();
+        for parameter in &signature.parameters {
+            let Type::Function(template) = &parameter.ty else {
+                continue;
+            };
+            let Some(reflects) = &template.named_pack else {
+                continue;
+            };
+            for pack in packs.iter().filter(|pack| pack.forwarded_from.is_none()) {
+                let generic = &signature.generics[pack.parameter];
+                if generic.at == reflects.at {
+                    self.check_pack_count_at(
+                        at,
+                        &reflects.name,
+                        reflected_bounds(reflects, generic),
+                        pack.types.len() as u64,
+                    );
+                }
+            }
+        }
+        if self.diagnostics.len() == before {
+            let map: Vec<_> = signature
+                .generics
+                .iter()
+                .map(|generic| generic.at)
+                .zip(arguments)
+                .collect();
+            let reflected = PackTypes::new(&signature.generics, packs);
+            if let Some(fault) = reflected.written_member_fault(unit, declaration, &map) {
+                self.pack_member_fault(at, &fault);
+            }
+        }
     }
 
     /// Report a failed lookup after resolving a pack member's key (GEN-17).
@@ -455,6 +529,13 @@ impl Typer<'_> {
         };
         let report = match *fault {
             Fault::Deferred => return,
+            Fault::Order(index)
+                if self.diagnostics.as_slice().iter().any(|reported| {
+                    reported.primary == at(index) && reported.code.as_str() == codes::ARGUMENT_ORDER
+                }) =>
+            {
+                return;
+            }
             Fault::Order(index) => error(
                 Category::Type,
                 codes::ARGUMENT_ORDER,
@@ -623,8 +704,7 @@ pub(super) fn reflect(template: &FunctionType, callback: &Expr) -> Vec<(PackKey,
         return Vec::new();
     };
     actual
-        .parameters
-        .iter()
+        .ordinary_parameters()
         .skip(template.parameters.len())
         .filter(|input| {
             input
@@ -661,9 +741,13 @@ pub(super) fn bind<'a>(
     let mut ordinary = Vec::new();
     let mut positional = None;
     let mut named = None;
+    let mut position = 0;
     for (index, input) in actual.parameters.iter().enumerate() {
         let name = input.name().ok_or(Fault::Deferred)?;
         let parameter = input.declared();
+        let configuration = parameter.is_some_and(|parameter| parameter.configuration);
+        let in_pack = !configuration && position >= fixed;
+        position += usize::from(!configuration);
         let excluded = without.contains(&name);
         match parameter.and_then(|parameter| parameter.pack) {
             Some(Pack::Positional) => {
@@ -677,7 +761,7 @@ pub(super) fn bind<'a>(
                 }
             }
             None => {
-                if index >= fixed {
+                if in_pack {
                     reflected.push((PackKey::Name(name.to_string()), input.ty().clone()));
                 }
                 if !excluded {
@@ -690,7 +774,7 @@ pub(super) fn bind<'a>(
                         index,
                         name,
                         required,
-                        configuration: parameter.is_some_and(|parameter| parameter.configuration),
+                        configuration,
                         filled: false,
                     });
                 }

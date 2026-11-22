@@ -241,6 +241,10 @@ impl Emitter<'_> {
         // assigns where it stands, which only a statement has room for.
         // This also supplies the list place to core's `append` and
         // `extend` (LIST-1, LIST-2, LIST-3).
+        let native_pack = hgl_lower::instances::NativePack::of(program, callee, arguments);
+        let signature = native_pack
+            .as_ref()
+            .map_or(signature, |pack| &pack.signature);
         let assigns = signature.parameters.iter().any(|parameter| parameter.var);
         if assigns && !statement {
             return self.missing(at, "a call that assigns a place, inside an expression");
@@ -248,6 +252,9 @@ impl Emitter<'_> {
         // The places the call gives its `var` parameters: an argument
         // read from one of them is a copy.
         let parameter_for = |argument: &Argument| {
+            if let Some(pack) = &native_pack {
+                return pack.parameter(argument);
+            }
             concrete.map_or_else(
                 || argument.parameter.filter(|_| argument.pack.is_none()),
                 |instance| instance.parameter(argument),

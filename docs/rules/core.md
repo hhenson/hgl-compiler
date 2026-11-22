@@ -30,10 +30,12 @@ transpiler: done
 
 ## NUM-4
 
-transpiler: done
+transpiler: partial
 
 - Passes absolute and relative tolerances to the selected numeric equality native, which
   applies the exact and configured comparisons.
+- The execution catalogue registers `numeric.invalid_tolerance`. Emitting it for a
+  negative or nonfinite tolerance is planned in #516.
 
 ## NUM-5
 
@@ -103,7 +105,8 @@ analyser: partial
 - `eq_(a, b, abs: ..., rel: ...)` by name through core's candidates in a value function: the tolerances are options of the candidates for numbers, and of no other
 - The same as the symbol's configuration, `a =={abs: ...} b`
 - Accepts scalar tolerances in graph composition and tolerances read in a node hook.
-- Left: a named comparison in a graph accepts a connected tolerance (#505).
+- Moving `abs` and `rel` to declaration braces and rejecting a connected tolerance
+  in either spelling are planned in #553.
 
 transpiler: done
 
@@ -171,10 +174,11 @@ transpiler: done
 
 analyser: done
 
-- The Boolean connectives and `!` take bools in value functions, node hooks and graph composition.
+- Boolean forms take bools. Composition selects `and_`, `or_` or `not_`, and an unparenthesized chain of three or more operands selects `all_` or `any_` over the whole chain.
 
-The C++ target writes the connectives in value functions and node hooks. Boolean
-connectives on connections in graph composition are tracked in #492.
+transpiler: done
+
+- Value code and hooks preserve short-circuiting. Composed Boolean calls use ordinary lifting and give each connected operand its own input.
 
 ## OPS-6
 
@@ -289,9 +293,10 @@ transpiler: done
 
 ## TEN-5
 
-analyser: done
+analyser: partial
 
 - `calendar` is an option of `+` and `-`, an argument of the candidate that takes it (EXPR-10); a calendar is a value `business_day` has a candidate for, and one that has none finds no candidate
+- A lifted `calendar` input in either spelling is planned in #553.
 
 transpiler: done
 
@@ -485,10 +490,11 @@ analyser: done
 
 - A scheduler's three properties, `is_scheduled_now` among them; `schedule` with a `duration` or a `datetime`, a `tag` and `on_wall_clock`; `un_schedule`, with a tag or without, and `reset`
 
-transpiler: done
+transpiler: partial
 
 - Supplies scheduler state and writes schedule, cancellation and reset using the SDK
   adapter. Distinguishes due scheduler wakes from input ticks.
+- Dropped datetime wake requests and their run-log warning are planned in #516 (TIME-8).
 
 ## CAP-5
 
@@ -497,10 +503,11 @@ analyser: done
 - An alarm has no property, and a node injects it or `scheduler` (TIME-8)
 - `schedule` on it takes a `duration` or a `datetime`, and neither a tag nor a clock
 
-transpiler: done
+transpiler: partial
 
 - Supplies the alarm adapter and emits duration or datetime scheduling, retaining the
   earliest outstanding wake.
+- Dropped datetime wake requests and their run-log warning are planned in #516 (TIME-8).
 
 ## CAP-6
 
@@ -515,6 +522,7 @@ transpiler: partial
 
 - Reads a store entry as a whole result before applying the recorded form, and writes
   supported ordinary payloads before a run, at graph build and in hooks.
+- Returning `value.missing_key` for an absent store entry is planned in #516.
 - Left: an explicitly typed nullable store write and a temporal child graph using the surrounding store are declined (CRUN-7).
 
 ## CAP-7
@@ -569,8 +577,9 @@ runner: planned
 transpiler: partial
 
 - Creates an eval entry wired to core's replay and record and binds ordinary const
-  arguments for the run.
-- Left: reports replay of a trace bound from an earlier eval (TST-3, TST-5). Replay and recording require a representable temporal schema (CEVAL-3, CEVAL-4).
+  arguments for the run. Replay of a recorded trace uses its timestamps and deltas
+  (TST-3, TST-5, CEVAL-2).
+- Left: Replay and recording require a representable temporal schema (CEVAL-3, CEVAL-4).
 
 ## CEVAL-2
 

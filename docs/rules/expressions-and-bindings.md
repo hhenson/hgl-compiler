@@ -69,8 +69,8 @@ analyser: partial
 
 analyser: partial
 
-- The Boolean connectives and `!` take bools, in value functions, reading a fallible or nullable operand where a bool is expected (ERR-12, ERR-15)
-- A graph instance fits newly known operands of `!`, `&&`, and `||`, with the right operand of a connective still short-circuited (GEN-7).
+- The Boolean connectives and `!` take bools, reading a fallible or nullable operand where a bool is expected (ERR-12, ERR-15).
+- Composition selects core's Boolean operators, with unparenthesized chains selecting `all_` or `any_` over their operands. A graph instance selects after any deferred operands settle (FN-6, GEN-7, OPS-5).
 - A compile-time constant short-circuits (`constant`): the right operand of `false &&` and `true ||` is not needed where it is a parameter, a constant held by its name, or one whose evaluation fails, which is then no failure (`const NO: bool = false && (1 // 0 == 0)` is `false`); one of no type is held to a `bool` still
 - Left: a guard precedes the payload read it protects
 
@@ -78,6 +78,7 @@ transpiler: done
 
 - Value code and hooks use short-circuit Boolean expressions in operand order, including
   guarding a payload read.
+- A Boolean call over connections wires every connected operand as an input (FN-6, FN-11).
 
 ## EXPR-7
 
@@ -167,18 +168,19 @@ transpiler: done
 
 ## EXPR-14
 
-analyser: done
+analyser: partial
 
 - In a graph an entry of a symbol's configuration given to a value candidate, which the graph lifts, is given no connection (`connection.as_constant`); a temporal candidate's parameter takes one, and so does a call by name (FN-6)
 - An instance checks a brace entry again if its category was unsettled at declaration (GEN-7).
 - In a value function and a hook the entry is a value of the invocation
+- Applying the selected declaration's parameter kind to both call spellings is planned in #553.
 
 transpiler: partial
 
 - Holds scalar options such as numeric tolerances and zoned comparison's `utc` as
   lifted-call configuration. Value and hook calls evaluate the same arguments at
   invocation.
-- Left: Explicit temporal configuration parameters await #363.
+- Using a connected parenthesized option as a lifted input in either spelling is planned in #553.
 
 ## EXPR-15
 

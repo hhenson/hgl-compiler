@@ -231,7 +231,7 @@ It is built in passes:
 | Pass | What it settles | Rules | State |
 | --- | --- | --- | --- |
 | Modules | Files grouped into modules and parts by their `module` lines, and an application's file, headed `application name`, into a unit of its own | UNIT-1, UNIT-14 | done |
-| Declarations | Each module's declarations, test helpers and tests; its declaration scope and test scope; a name declared twice | UNIT-5, UNIT-12, FN-4, TST-1, TST-2, NATIVE-2 | done |
+| Declarations | Module declarations, shared test contexts and named tests; private declarations and candidates within each named test; duplicate bindings | UNIT-5, UNIT-12, FN-4, TST-1, TST-2, NATIVE-2 | done |
 | Imports | The module and the declarations each `use` names; cycles; the operator of each candidate, `impl fn` or `impl const fn`, native or not | UNIT-2, UNIT-3, GEN-4 | done |
 | Resolution | Every name in a signature, body, type and constraint, to the one binding in scope; a binding that takes a name already there; undecided generic applications | UNIT-5, UNIT-6, UNIT-7, UNIT-10, UNIT-12, FN-14, GEN-1, GEN-14, TST-2 | done |
 | Forms | What the grammar admits of a declaration and a rule does not: a pack with a default, const, or before a fixed parameter; a named pack of no type pack; the hooks of a native implementation | FN-8, NATIVE-3 | done |
@@ -511,11 +511,18 @@ execution code of the catalogue, as a string literal written out
 (TST-10, `catalogue::EXECUTION_CODES`); anything else is
 `test.raises_code`.
 
+The declarations before a named test's statements are checked with the
+test as their binding scope (TST-1). A call there sees the module's
+candidates and any candidate of the same operator declared in the test.
+When a generic call needs such a candidate as evidence (GEN-16), the
+call records it as an answer. Lowering distinguishes instances that
+have different test-local answers.
+
 A test's block is then read as value code (`Typer::test`, into
 `Module::test_bodies`), as an application's statements are (TST-3,
 UNIT-14): a test has a name and neither a parameter nor a result. It
 calls `const fn`s only, a temporal call there being `call.role`; an
-operator selects among all its candidates, a value one outranking a
+operator selects among its visible candidates, a value one outranking a
 temporal one of the same parameter types, and a temporal one selected is
 `call.role` too (GEN-5, the typer's `value_code`); nothing is lifted. The call
 an `eval` or a `run` takes is read as composition is. `assert` is a
@@ -941,7 +948,7 @@ The pass is built form by form. So far it reads:
 | `null` | TYPE-14 | The nullable type its place expects. Where the type expected has no `?`, or nothing gives it a type, it is rejected |
 | A name | UNIT-10, GEN-13, UNIT-13 | A parameter, a local, a constant of a module (`ExprKind::Constant`), or a generic value parameter, with its type |
 | A symbol | NUM-1, OPS-1, OPS-2, OPS-3, EXPR-10, GEN-5 | The call of the core operator it stands for, `add_` for `+`: its operands select one of that operator's value candidates, core's or a module's own, and the result is that candidate's. No candidate for the operands is a rejection. Configuration, `a /{zero: .error} b`, gives the call its named arguments. See "Symbols" below |
-| `&&`, `\|\|`, `!` | EXPR-6, OPS-5 | Read as they are written: their operands are bools, and the right operand of a connective is evaluated only where the left does not decide |
+| `&&`, `\|\|`, `!` | EXPR-6, OPS-5 | Bool operands. Value code and hooks short-circuit a connective. Composition selects the core operator, lifting when given connections |
 | A tuple, a sequence of values | EXPR-5, EXPR-9 | Their elements take the types an expected tuple, list or set gives. With none, a sequence is a list of the one type its values have: `f64` when its integer literals stand among `f64` values, and `T?` when a `null` stands among values of `T`. `[]` and `[null]` give no type, and are rejected |
 | A sequence of pairs, `[key: value]` | EXPR-9 | A dictionary where one is expected (`ExprKind::Pairs`): each key is read as the key type and each value as the value type, and no entries make an empty one. With nothing expected the pairs are `sequence.context_type`: syntax alone selects no dictionary |
 | A test against null | ERR-12, ERR-3 | `value == null` and `value != null` prove an immutable nullable parameter, `let` or loop binding is not null: in the branch the test holds for, in the right operand of `&&` or `\|\|` it guards, and from a branch that returns to the end of the block the `if` stands in. There the binding is read as its payload's type. A `var`, a saved bool and a test of anything else prove nothing |
@@ -1025,7 +1032,7 @@ Not read as calls:
 
 | Form | Why | What stands |
 | --- | --- | --- |
-| `&&`, `\|\|`, `!` | Their candidates take a pack, `all_(values: ...bool)`, and a connective does not evaluate its right operand where the left decides (EXPR-6) | The symbol as written, with bool operands |
+| `&&`, `\|\|`, `!` in value code and hooks | A connective evaluates its right operand only where the left does not decide (EXPR-6) | The symbol as written, with bool operands |
 | An operand that is nullable | "null presence checks ... have their own language rules" | The symbol as written; a comparison is a bool |
 | An operand of no known type | Nothing can be selected | The symbol as written |
 
@@ -1403,11 +1410,10 @@ source and its conformance cases there is none. Core declares the public
 endpoint functions. The analyser recognises endpoint forms such as the
 `valid` and `modified` selectors and `scheduled()` in a node (TIME-9).
 A call to core's `is_active` follows ordinary name and argument binding.
-`types(Ts)` and
-`schemas(pack)` are forms of the language too (GEN-9, GEN-10), which no
-pass reads yet: neither name is reported. A program given with no module
-`core` has no prelude and is no whole program: its unbound names are
-listed in the analysed program and not reported.
+The resolver leaves the language forms `types(Ts)` and `schemas(pack)` to
+their own checks (GEN-9, GEN-10). Value checking rejects a borrowed schema
+view in an ordinary value context. A program without `core` has no prelude.
+Its unbound names are listed in the analysed program.
 
 ### Leaving declarations out
 
@@ -1763,7 +1769,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 | `eval target(value: [1, _, 3])` (TST-5 to TST-8, CEVAL-1) | `::hglrt::testing::evaluate<T>` of an entry that wires core's `replay` instance of each trace written to its input, the target's wiring function, and core's `record` of the result under `"run.output"`; `run target(...)` in real time; for a result whose delta is no T, a node of the entry's own, `held_00_`, which keeps the result read whole at each publication (`::hglrt::testing::hold`, none where the read fails), so that a cell written whole is compared with it (TST-5); a target with no result `::hglrt::testing::run`. A value function's is its lifted node, given the replays as its inputs and each default the call leaves out as configuration: a struct `lifted_0F_O_` (the file and the offset of the call) of the test's namespace, ahead of the test |
 | `eval{start: s, length: l} call` (RUN-6, CRUN-2) | The run given `::hglrt::testing::Bounds{.start = s, .length = l}`, each field the configuration names (`lifecycle`); the configuration and then the call's arguments held first, in the order written, where more than one may fail (EXPR-2, EXPR-13). In an integration test that injects `run_config`, a field the eval does not name is the injected one's, `.end = run_config.end()` |
 | `inject run_config{length: 3s}` in an integration test (TST-17, RUN-6) | `const ::hglrt::RunConfig run_config = ::hglrt::RunConfig{::hglrt::RunConfig::Fields{.length = ...}};`: `hgl test` supplies nothing, and the defaults stand. `run_config.start` is `(run_config).start()`, a `std::optional` |
-| `let seen = eval target(...)` | `const auto seen = ...;`, the recording, read where a trace is |
+| `let seen = eval target(...)` | `const auto seen = ...;`, the recording. An eval given `seen` replays its recorded absolute timestamps and deltas (CEVAL-2, CEVAL-4) |
 | Application `demo.app` (UNIT-14) | In its module's unit, `::hglrt::application::Output application_()`, which runs its run statement once; `applications/app-demo-app.cpp`, an entry unit whose `main` is the library's host of that run, `::hglrt::application::main` (`apps`, `assemble`) |
 | Its `inject run_config{...}`, `inject global_state` and `put`s before its run statement (UNIT-14, RUN-6) | The function's first statements, in the order written: `const ::hglrt::RunConfig run_config = ...;` of the braces, which `hgl run` has written what starts it gives over, and a store of its own, `::hglrt::application::Store store_`, which the run gives its graph before the entry is wired |
 | `eval call`, `run call` (RUN-1, RUN-3) | `::hglrt::application::run<T>(store_, entry, bounds_, mode)`: the entry wires the call and core's `record` of its result under `"run.output"`, as an eval's does; `run` of an entry with no result. The call's arguments are an eval's, held in the order written where that shows (EXPR-2); `bounds_` is each field of `run_config`, or `Bounds{}` where the application injects none. `eval` is a simulation, `run` in real time |
@@ -2018,10 +2024,25 @@ optimised ones otherwise (`choose` in `crates/hgl_cli/src/cpp/sdk.rs`):
 those `HGL_HGRAPH_DEBUG` names; else, where neither `HGL_HGRAPH_SDK` nor
 `HGL_HGRAPH_DEPS` is set, those in `../libexec/hgraph-debug` beside the
 resolved executable, where their `hgl-sdk.txt` names the hgraph tag
-`hgl` is built for or no tag. hgraph's installed headers do not depend
-on `NDEBUG`, so the debug build stands in for the optimised one. A debug
-build says on standard error which it links, and why where it links the
-optimised ones, and its JSON description says it too (below).
+`hgl` is built for. Either is taken only whole (`cpp/sdk/package.rs`):
+laid out as above; its SDK's `hgl-sdk.txt` saying `build-type=Debug`;
+and the CMake packages a build configures from, hgraph's, fmt's,
+spdlog's and simdjson's, each there with every library it imports there
+and whole (its headers parse, none of its sections runs past its end,
+read with the [`object`](https://crates.io/crates/object) crate).
+`HGL_HGRAPH_DEBUG` naming a directory that is not is an error that says
+what is wrong; a package beside `hgl` that is not is passed over, and the
+optimised libraries are linked, saying why. A configure against debug
+libraries looks for packages in the SDK and the dependency prefix alone
+(`CONFINED` in `sdk.rs`: not through `PATH`, the environment, the
+system's prefixes or a registry, and hgraph's package fetches none it
+misses), so that a program never links two copies of fmt, spdlog or
+simdjson. hgraph's installed headers do not depend on `NDEBUG`, so the
+debug build stands in for the optimised one. A debug build's runtime
+library is built as CMake's `Debug`, whichever libraries it links. A
+debug build says on standard error, before it builds, which it links,
+and why where it links the optimised ones, and its JSON description says
+it too (below).
 `HGL_HGRAPH_BUILD_TYPE=Debug scripts/provision-hgraph-sdk.sh TAG
 DIR/hgraph-sdk`, with `HGL_HGRAPH_SOURCE` naming a checkout of `TAG` for
 a debugger to read, makes a debug SDK for `HGL_HGRAPH_DEBUG` to name,
@@ -2030,7 +2051,7 @@ it.
 
 A toolchain is prepared once and kept under the cache in
 `toolchains/<hash>`, the hash of which build of hgraph's libraries it
-links, the SDK's and the dependencies' paths
+links and whether it is a debug build's, the SDK's and the dependencies' paths
 and the SDK's own files, the compiler, its family and version and what
 it reads from the environment (`MACOSX_DEPLOYMENT_TARGET` and `SDKROOT`
 on macOS), the linker, the flags and the runtime library's sources,
@@ -2437,10 +2458,12 @@ the job the way the design needs is dropped.
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `pulldown-cmark` | `hgl_parser`, `hgl_doc` | CommonMark fenced block ranges and HTML rendering of documentation comments |
+| KaTeX and Mermaid | `hgl_doc` | Vendored browser renderers for offline formulas and diagrams |
 | `tempfile` | `hgl_cli` | a file of a build written beside the one it replaces and renamed onto it, so that nothing reads half of it |
 | `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
 | `dirs` | `hgl_cli` | the user's cache directory, where the cpp target's builds are kept |
 | `which` | `hgl_cli` | the programs the cpp target builds with, found on the `PATH` |
+| `object` | `hgl_cli` | the headers of a shared library, ELF and Mach-O: that each of hgraph's libraries built for debugging is whole before a debug build links it |
 
 The cpp target's build driver runs programs, not crates: GCC 15 or
 later on Linux or Apple clang 21 or later on macOS, `ninja`, `cmake`
@@ -2488,9 +2511,9 @@ On success stdout is one JSON object with `version: 1`, absolute `executable`,
 inherit alongside the caller's environment), and `hgraph`: the libraries
 it links, `libraries` (`debug` or `optimised`, as "The build driver"
 above chooses them), and the absolute `sdk` and `dependencies` prefixes.
-Standard error says the same in a line, `hgl: a debug build, with
-hgraph's debug libraries in DIR, named by HGL_HGRAPH_DEBUG`, or for the
-optimised ones why no debug ones were taken. Start that exact command in
+Standard error says the same in a line before the build, `hgl: a debug
+build, with hgraph's debug libraries in DIR, named by HGL_HGRAPH_DEBUG`,
+or for the optimised ones why no debug ones were taken. Start that exact command in
 the debugger. Its console mirrors the results protocol. After the run
 returns it prints the recorded publications. The debugger owns process termination and may close stdin.
 Ordinary application runs keep their host stop pipe. HGL statements use the

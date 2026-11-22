@@ -86,6 +86,11 @@ const PENDING_MODULES: &[(&str, &str, &str)] = &[
         "examples.pack_forms",
         "LEX-29, EXPR-16, EXPR-17 and FN-19 (#368)",
     ),
+    (
+        "hgl_spec/spec/language/generics-and-operators.md",
+        "examples.categories",
+        "GEN-3 type category and GEN-10 tuple type pack (#512)",
+    ),
 ];
 
 /// The rejection cases of core the compiler does not yet reject, each as

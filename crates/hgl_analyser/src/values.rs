@@ -77,6 +77,7 @@ mod dependent_packs;
 pub(crate) use dependent_packs::PackTypes;
 // The endpoint operations and an `endpoint<T>` parameter's argument (TIME-9).
 mod endpoints;
+pub(crate) use endpoints::node_endpoint_reads;
 // A test's block, `assert`, `eval` and traces; a run statement and the store (TST-3, RUN-1).
 mod evals;
 // An expression, typed: literals, names, tuples and sequences (EXPR-3, EXPR-9).
@@ -86,7 +87,7 @@ mod fit;
 // The form a result takes from its place, and a `T?` read where a T is expected (ERR-12, ERR-15).
 mod forms;
 mod forwarded_packs;
-pub(crate) use forwarded_packs::{has_forwarded_calls, resolve_forwarded_calls};
+pub(crate) use forwarded_packs::has_forwarded_calls;
 mod function_arguments;
 // Fits destinations whose graph values become known only in an instance (GEN-7).
 mod graph_instance;
@@ -246,9 +247,10 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         // nor a result, so it is read as a graph of that name with an
         // empty signature.
         let mut test_bodies = Vec::with_capacity(module.tests.len());
-        for test in &module.tests {
-            let stand_in =
+        for (owner, test) in module.tests.iter().enumerate() {
+            let mut stand_in =
                 Declaration::stand_in(&test.name, test.at, test.file, &test.syntax, true);
+            stand_in.test_owner = Some(owner);
             let body = Typer::new(program, module, &stand_in, &empty, found, diagnostics)
                 .test(test.integration);
             test_bodies.push(body);
@@ -381,6 +383,89 @@ fn tables(
         .map(|call| ((call.at.file, call.at.span.start), call))
         .collect();
     (bindings, written, calls)
+}
+
+/// Check the lexical body with the concrete types of an instance
+/// (GEN-7). Endpoint admission and forwarded calls use the same local
+/// flow and written annotations as ordinary source checking.
+pub(crate) fn reread_instance_body(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    (signature, map): (&Signature, &[(Location, &crate::Argument)]),
+    (functions, pack_inputs): (&[(usize, hir::Callee)], Option<&[hir::PackInput]>),
+    project: &dyn Fn(&Type) -> Type,
+    diagnostics: &mut Diagnostics,
+) -> Option<hir::Body> {
+    let owner = &program.modules[module];
+    let declared = &owner.declarations[declaration];
+    let (bindings, mut written, mut calls) = tables(owner);
+    let span = declared.syntax.span();
+    let in_body =
+        |(file, start)| file == declared.at.file && (span.start..span.end).contains(&start);
+    let projected: Vec<_> = written
+        .iter()
+        .filter(|&(&at, _)| in_body(at))
+        .map(|(&at, ty)| (at, project(ty)))
+        .collect();
+    written.extend(projected.iter().map(|(at, ty)| (*at, ty)));
+    let projected_calls: Vec<_> = calls
+        .iter()
+        .filter(|&(&at, _)| in_body(at))
+        .map(|(&at, call)| {
+            let arguments = call
+                .arguments
+                .iter()
+                .map(|(at, argument)| {
+                    let argument = match argument {
+                        crate::Argument::Type(ty) => crate::Argument::Type(project(ty)),
+                        crate::Argument::Constant(_) => crate::instance::placed(argument, map),
+                    };
+                    (*at, argument)
+                })
+                .collect();
+            (
+                at,
+                CallArguments {
+                    at: call.at,
+                    arguments,
+                },
+            )
+        })
+        .collect();
+    calls.extend(projected_calls.iter().map(|(at, call)| (*at, call)));
+    let selecting = RefCell::new(Vec::new());
+    let reading = Signature {
+        generics: match &owner.details[declaration] {
+            Detail::Callable(declared) => candidates::in_instance(declared, map).generics,
+            _ => Vec::new(),
+        },
+        ..signature.clone()
+    };
+    let mut typer = Typer::new(
+        program,
+        owner,
+        declared,
+        &reading,
+        Tables {
+            bindings: &bindings,
+            written: &written,
+            calls: &calls,
+            selecting: &selecting,
+        },
+        diagnostics,
+    );
+    typer.instance = map
+        .iter()
+        .map(|(at, argument)| (*at, (*argument).clone()))
+        .collect();
+    typer.pack_inputs = pack_inputs.map(|inputs| inputs.to_vec());
+    typer.pack_functions = functions.to_vec();
+    match owner.phases[declaration] {
+        Some(Phase::Graph) => typer.graph().0,
+        Some(Phase::Node) if crate::phases::is_source(declared) => typer.source(),
+        Some(Phase::Node) => typer.node(),
+        _ => typer.body(),
+    }
 }
 
 /// The call an eval or a run statement takes (TST-5, RUN-1).

@@ -184,6 +184,47 @@ fn a_plain_read_of_the_delta_of_a_window_of_a_duration_rejects() {
     ));
 }
 
+/// GEN-7, TIME-1 and TYPE-11: a generic hook applies the whole-read and
+/// duration-delta admission checks for the endpoint type supplied.
+#[test]
+fn a_generic_hook_checks_admission_of_its_concrete_endpoint_reads() {
+    let checked = module(
+        "fn duration_window(reading: i64) -> rolling_window<i64, 3us, 1us> {
+    when { return reading }
+}
+fn tick_window(reading: i64) -> rolling_window<i64, 3, 1> {
+    when { return reading }
+}
+fn plain_delta<T>(value: T) -> delta<T> {
+    when modified(value) {
+        let plain: delta<T> = delta_value(value)
+        return plain
+    }
+}
+fn bad_delta(reading: i64) -> i64 => plain_delta(duration_window(reading))
+fn good_delta(reading: i64) -> i64 => plain_delta(tick_window(reading))
+fn nullable_whole<T>(probe: i64, value: T) -> bool {
+    when modified(probe) && valid(value) {
+        let observed: T? = value
+        return observed == null
+    }
+}
+fn bad_whole(probe: i64, pair: tuple<i64, i64>) -> bool => nullable_whole(probe, pair)
+",
+    );
+    let summary = checked.summary();
+    assert_eq!(summary.len(), 2, "{}", checked.report);
+    for rule in ["TIME-1", "TYPE-11"] {
+        assert!(
+            summary
+                .iter()
+                .any(|row| row.ends_with(&format!("phase/payload.unguarded {rule}"))),
+            "{}",
+            checked.report
+        );
+    }
+}
+
 /// TYPE-11 and ERR-14: a duration window's delta in a nullable place
 /// gives null where the window ticks with no arrival.
 #[test]

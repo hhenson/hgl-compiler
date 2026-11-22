@@ -655,6 +655,7 @@ impl<'a> Typer<'a> {
         let ExprKind::Call {
             callee: Callee::DeferredOperator(deferred),
             arguments,
+            form,
             ..
         } = &call.kind
         else {
@@ -675,6 +676,9 @@ impl<'a> Typer<'a> {
             return None;
         }
         let list = self.node_at(deferred.list)?;
+        if *form != Form::Named {
+            return self.settle_logic(*form, deferred.identity, &list, arguments);
+        }
         let parent = list.parent()?;
         let callable = if deferred.captured {
             Some(arguments_of(&list).into_iter().next()?.1)
@@ -1095,6 +1099,14 @@ impl<'a> Typer<'a> {
         let mut candidates = Vec::new();
         for (module, declared) in program.modules.iter().enumerate() {
             for (declaration, candidate) in declared.declarations.iter().enumerate() {
+                // TST-1: both direct calls and the requirements they ask
+                // use the candidates visible to the calling named test.
+                if let Some(owner) = candidate.test_owner
+                    && (self.declaration.test_owner != Some(owner)
+                        || declared.path != self.module.path)
+                {
+                    continue;
+                }
                 // GEN-5: "A call in a value function or a runtime body
                 // selects among the value candidates. A call in a test's
                 // or an application's value code (TST-3, UNIT-14)
@@ -1257,7 +1269,11 @@ impl<'a> Typer<'a> {
                     // A named brace entry does not put the parentheses
                     // into their named-argument portion (EXPR-2, EXPR-10).
                     named_seen |= !brace;
-                    options.name_key(name.text(), brace)
+                    if !brace && dependent.is_some() {
+                        Key::Name(name.text().to_string())
+                    } else {
+                        options.name_key(name.text(), brace)
+                    }
                 }
             };
             let own = key.public_parameter(public);
