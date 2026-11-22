@@ -3,3 +3,6 @@ module demo.callback_library
 export const fn plus<const N: i64>(input: i64) -> i64 => input + N
 
 export const fn with_default<const N: i64 = 4>(input: i64) -> i64 => input + N
+
+export const fn apply_if(f: const fn(i64) -> i64, read: bool) -> i64 =>
+    if read { f(1) } else { -1 }

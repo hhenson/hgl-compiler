@@ -39,6 +39,66 @@ fn guarded_hook(input: i64) -> i64 {
     }
 }
 
+# ERR-14, FN-14: an anonymous value helper borrows the child the let holds.
+fn captured_list_child(parts: list<i64, 2>) -> i64 {
+    when all_valid(parts) {
+        let entry = parts[0]
+        return apply(fn(n) => n + entry, 1)
+    }
+}
+
+fn captured_tuple_child(pair: tuple<i64, i64>) -> i64 {
+    when all_valid(pair) {
+        let entry = pair[0]
+        return apply(fn(n) => n + entry, 1)
+    }
+}
+
+fn captured_row(rows: list<tuple<i64, i64>, 2>, position: i64) -> i64 {
+    when {
+        let row = rows[position]
+        return apply(fn(n) => n + row[0], 1)
+    }
+}
+
+fn delayed_child(parts: list<i64, 2>, position: i64, read: bool) -> i64 {
+    when {
+        var selector = position
+        let entry = parts[selector]
+        selector = 0
+        return lib::apply_if(fn(n) => n + entry, read)
+    }
+}
+
+# ERR-14 and FN-14: the callback binds a child of its captured input.
+fn binds_inside_callback(parts: list<i64, 2>) -> i64 {
+    when all_valid(parts) {
+        return apply(fn(n) {
+            let entry = parts[0]
+            return n + entry
+        }, 1)
+    }
+}
+
+fn binds_inside_nested_callback(parts: list<i64, 2>) -> i64 {
+    when all_valid(parts) {
+        return apply(fn(n) => apply(fn(m) {
+            let entry = parts[0]
+            return m + entry
+        }, n), 1)
+    }
+}
+
+fn observes_inside_callback(parts: list<i64, 2>, position: i64, inspect: bool) -> i64 {
+    when {
+        return apply(fn(n) {
+            let entry = parts[position]
+            if inspect && valid(entry) { return n + entry }
+            return -1
+        }, 1)
+    }
+}
+
 fn sample(f: const fn(i64) -> i64, const input: i64) -> i64 {
     yield 1s: f(input)
 }
@@ -157,6 +217,24 @@ test temporal_callbacks {
     assert eval nullable_inputs(input: [2, 3], extra: [_, 9]) == [3, 12]
     assert eval operator_graph(x: [2, 3], offset: [1, 2]) == [5, 8]
     assert eval captured_scalar(input: [2, 3]) == [3, 4]
+}
+
+test bound_child_captures {
+    assert eval captured_list_child(parts: [[3, 4]]) == [4]
+    assert eval captured_tuple_child(pair: [(3, 4)]) == [4]
+    assert eval captured_row(rows: [[(3, 4), (5, 6)]], position: [1]) == [6]
+    assert eval delayed_child(parts: [[3, 4]], position: [1], read: [true]) == [5]
+    assert eval delayed_child(parts: [[3, 4]], position: [2], read: [false]) == [-1]
+    assert raises("value.unset_read") {
+        eval delayed_child(parts: [delta<list<i64, 2>>(updated: [0: 3])], position: [1], read: [true])
+    }
+    assert eval binds_inside_callback(parts: [[3, 4]]) == [4]
+    assert eval binds_inside_nested_callback(parts: [[3, 4]]) == [4]
+    assert eval observes_inside_callback(
+        parts: [delta<list<i64, 2>>(updated: [0: 3]), _, _],
+        position: [0, 1, 2],
+        inspect: [true, _, false],
+    ) == [4, -1, -1]
 }
 
 # FN-17, GEN-8: the specification's explicit generic operator reference.

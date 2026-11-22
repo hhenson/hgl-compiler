@@ -46,71 +46,7 @@ impl<'a> Typer<'a> {
         if context.is_none() && matches!(expected, Type::Nullable(_)) {
             self.record_result_read(&value, Some((expected, what)));
         }
-        // ERR-14: "A read of a collection's child that is checked when
-        // it runs (TIME-1), `parts[i]`, takes its form from its place
-        // (EXPR-5). Where the place expects `result<T, error>`, T the
-        // child's type, it gives `ok` of the child's value, or, for a
-        // child that is not valid, `err`".
-        if let ExprKind::CheckedChild { result: false, .. } = &value.kind
-            && let Type::Result {
-                value: success,
-                error,
-            } = expected
-            && **error == Type::Error
-            && self.admits(success, &value.ty)
-        {
-            let at = value.at;
-            let ExprKind::CheckedChild { read, .. } = value.kind else {
-                return value;
-            };
-            return Expr {
-                kind: ExprKind::CheckedChild { read, result: true },
-                ty: expected.clone(),
-                at,
-                category: ValueCategory::Unsettled,
-            };
-        }
-        // ERR-14: "... and so does ... a read of a window's value before
-        // it is `all_valid`, T being the `list<V>` it reads as
-        // (TYPE-11)". TYPE-11: it "gives an `err` of an `error` with that
-        // code where its place takes a `result<list<V>, error>`".
-        if let Type::Result {
-            value: success,
-            error,
-        } = expected
-            && **error == Type::Error
-            && self.window_read(&value)
-            && self.admits(success, &value.ty)
-        {
-            let at = value.at;
-            return Expr {
-                kind: ExprKind::CheckedWindow(Box::new(value)),
-                ty: expected.clone(),
-                at,
-                category: ValueCategory::Unsettled,
-            };
-        }
-        // ERR-14: `delta_value` takes its form from its place, of any
-        // endpoint: "where the place expects `result<delta<T>, error>` it
-        // gives `ok` of the delta, or `err` of an `error` coded
-        // `value.unset_read` where the endpoint has no delta in the
-        // cycle"; and so does a window's `removed_value`.
-        if let Type::Result {
-            value: success,
-            error,
-        } = expected
-            && **error == Type::Error
-            && reads_cycle(self.program, &value)
-            && self.admits(success, &value.ty)
-        {
-            let at = value.at;
-            return Expr {
-                kind: ExprKind::CheckedDelta(Box::new(value)),
-                ty: expected.clone(),
-                at,
-                category: ValueCategory::Unsettled,
-            };
-        }
+        let value = self.endpoint_read_form(value, expected);
         if is_integer_literal(&value) && accepts_float(expected) {
             let at = value.at;
             return Expr {
@@ -129,6 +65,49 @@ impl<'a> Typer<'a> {
         }
         self.conforms(&value.ty, expected, value.at, what);
         value
+    }
+
+    /// ERR-14: a checked temporal read takes its form at this use.
+    /// Reuse the result read for a nullable place, and let ERR-15
+    /// discard the error. A nullable success is itself the T form.
+    pub(super) fn endpoint_read_form(&mut self, value: Expr, expected: &Type) -> Expr {
+        let nullable = matches!(expected, Type::Nullable(payload)
+            if !matches!(value.ty, Type::Nullable(_)) && self.admits(payload, &value.ty));
+        let result_type = match expected {
+            Type::Result {
+                value: success,
+                error,
+            } if **error == Type::Error && self.admits(success, &value.ty) => expected.clone(),
+            _ if nullable => Type::Result {
+                value: Box::new(value.ty.clone()),
+                error: Box::new(Type::Error),
+            },
+            _ => return value,
+        };
+        let at = value.at;
+        let kind = match value.kind {
+            ExprKind::CheckedChild {
+                read,
+                result: false,
+            } => ExprKind::CheckedChild { read, result: true },
+            _ if self.window_read(&value) => ExprKind::CheckedWindow(Box::new(value)),
+            _ if self.checked_whole_read(&value) => ExprKind::CheckedWhole(Box::new(value)),
+            _ if reads_delta(&value) || (!nullable && reads_cycle(self.program, &value)) => {
+                ExprKind::CheckedDelta(Box::new(value))
+            }
+            _ => return value,
+        };
+        let result = Expr {
+            kind,
+            ty: result_type,
+            at,
+            category: ValueCategory::Unsettled,
+        };
+        if nullable {
+            self.take(result, super::forms::Taken::Nullable)
+        } else {
+            result
+        }
     }
 
     /// [`Self::fit`], for a function's argument or a graph's result. In
@@ -355,15 +334,10 @@ pub(super) fn window_value(window: &Type) -> Type {
 /// lost in it, core's `removed_value`: each takes its form from its place
 /// (ERR-14).
 pub(super) fn reads_cycle(program: &Program, value: &Expr) -> bool {
+    if reads_delta(value) {
+        return true;
+    }
     match &value.kind {
-        ExprKind::Endpoint {
-            operation: EndpointOperation::DeltaValue,
-            ..
-        }
-        | ExprKind::ChildEndpoint {
-            operation: EndpointOperation::DeltaValue,
-            ..
-        } => true,
         ExprKind::Call {
             callee:
                 Callee::Function {
@@ -375,6 +349,21 @@ pub(super) fn reads_cycle(program: &Program, value: &Expr) -> bool {
         } => removes(program, (*module, *declaration)),
         _ => false,
     }
+}
+
+/// True for `delta_value`, whose nullable form is admitted even for a
+/// duration window. `removed_value` remains result-only (TYPE-11).
+fn reads_delta(value: &Expr) -> bool {
+    matches!(
+        value.kind,
+        ExprKind::Endpoint {
+            operation: EndpointOperation::DeltaValue,
+            ..
+        } | ExprKind::ChildEndpoint {
+            operation: EndpointOperation::DeltaValue,
+            ..
+        }
+    )
 }
 
 /// `T?` for a `T`; a type that is nullable already, or not known, as it

@@ -17,7 +17,7 @@ use crate::hir::{
 };
 use crate::program::{DeclarationKind, LocalKind, RUN_CONFIG};
 use crate::read::is_type;
-use crate::syntax::{child, tokens};
+use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{NamedKind, Type};
 use crate::{codes, error, local_error};
 
@@ -414,16 +414,41 @@ impl<'a> Typer<'a> {
             .and_then(|part| self.written.get(&(self.file, part.span().start)))
             .map(|ty| (*ty).clone());
         // The first value: the child that is no type.
+        let binds_child = annotation.is_none() && kind == LocalKind::Let && self.reads_children();
         let value = node
             .children()
             .find(|part| !is_type(part.kind()))
             .map(|value| {
+                let before = self.binding_child;
+                if binds_child {
+                    self.binding_child = Some(self.at(&ungrouped(value.clone())));
+                }
                 let value = self.expression(&value, annotation.as_ref());
+                self.binding_child = before;
                 match &annotation {
                     Some(annotation) => self.fit(value, annotation, "the type written for it"),
                     None => value,
                 }
             });
+        // ERR-14: an inferred `let` captures the selected endpoint.
+        // Its initializer evaluates the receiver and index, and every
+        // read of the payload is represented at the consuming use.
+        let child = binds_child
+            .then(|| self.child_origin(value.as_ref()?))
+            .flatten();
+        let value = value.map(|value| {
+            if child.is_some() {
+                let (ty, at) = (Type::Endpoint(Box::new(value.ty.clone())), value.at);
+                Expr {
+                    kind: ExprKind::ChildEndpointOf(Box::new(value)),
+                    ty,
+                    at,
+                    category: ValueCategory::Unsettled,
+                }
+            } else {
+                value
+            }
+        });
         let ty = match (&annotation, &value) {
             (Some(annotation), _) => annotation.clone(),
             (None, Some(value)) => value.ty.clone(),
@@ -434,6 +459,9 @@ impl<'a> Typer<'a> {
         // is declared with no value ... it is assigned from there".
         let assigned = value.is_some() || matches!(ty, Type::Nullable(_));
         let local = self.declare(name.text(), at, kind, ty, assigned);
+        if let Some(origin) = child {
+            self.bound_children.insert(local, origin);
+        }
         // TIME-8: a local a capability is bound to is that capability.
         if let Some(capability) = value.as_ref().and_then(|value| self.capability_of(value)) {
             self.aliases.insert(local, capability);

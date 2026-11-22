@@ -32,6 +32,14 @@ fn node_stateful(const initial: i64, items: ...i64{1:*}) -> i64 {
 
 fn via_state(first: i64, second: i64) -> i64 => node_stateful(30, first, second)
 
+# ERR-14 and FN-8: expanding a pack remaps the binding and both uses.
+fn packed_child(parts: list<i64, 2>, items: ...i64) -> i64 {
+    when all_valid(parts) {
+        let entry = parts[0]
+        if valid(entry) { return entry }
+    }
+}
+
 fn graph_homogeneous(const fixed: i64, items: ...i64{2}) -> i64 =>
     node_homogeneous(fixed, 9)
 fn graph_different<...Items>(items: ...Items{1:3}) -> i64 {
@@ -99,4 +107,5 @@ test direct_eval_packs {
     assert eval node_named(right: [1, 8], left: [_, true]) == [_, 23]
     assert eval node_stateful(30, [1, 2, 3], [_, 4, _]) == [_, 31, 32]
     assert eval value_homogeneous([1, 8], [_, 5]) == [_, 11]
+    assert eval packed_child([[3, 4]], [1], [2]) == [3]
 }

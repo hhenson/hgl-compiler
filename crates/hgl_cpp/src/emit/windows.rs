@@ -413,22 +413,20 @@ impl Family for Windows {
             // TYPE-11, ERR-14: the read of a window's value where its place
             // expects `result<list<V>, error>`.
             ExprKind::CheckedWindow(read) => {
-                let ExprKind::Local(local) = read.kind else {
-                    return Some(
-                        emitter.missing(value.at, "this read of a window into a `result`"),
-                    );
-                };
-                let Some(ty) = window_type(emitter, locals, local) else {
-                    return Some(
-                        emitter.missing(value.at, "this read of a window into a `result`"),
-                    );
-                };
-                if !reads_endpoints(emitter.kind()) || window(emitter, &ty).is_none() {
+                if !reads_endpoints(emitter.kind()) {
                     return Some(
                         emitter.missing(value.at, "this read of a window into a `result`"),
                     );
                 }
-                let view = emitter.view(locals, local)?;
+                if let ExprKind::Local(local) = read.kind
+                    && window_type(emitter, locals, local)
+                        .is_none_or(|ty| window(emitter, &ty).is_none())
+                {
+                    return Some(
+                        emitter.missing(value.at, "this read of a window into a `result`"),
+                    );
+                }
+                let view = emitter.read_endpoint_view(scope, read)?;
                 scope.read = true;
                 scope.acted = true;
                 Some(format!("{}({view})", library("window_value_checked")))
@@ -455,16 +453,20 @@ impl Family for Windows {
                 let [argument] = arguments.as_slice() else {
                     return Some(emitter.missing(value.at, "this `removed_value`"));
                 };
-                let ExprKind::EndpointOf(local) = argument.value.kind else {
-                    return Some(emitter.missing(value.at, "this `removed_value`"));
-                };
-                let ty = window_type(emitter, locals, local);
-                if !reads_endpoints(emitter.kind())
-                    || ty.is_none_or(|ty| window(emitter, &ty).is_none())
-                {
+                if !reads_endpoints(emitter.kind()) {
                     return Some(emitter.missing(value.at, "this `removed_value`"));
                 }
-                let view = emitter.view(locals, local)?;
+                let view = match &argument.value.kind {
+                    ExprKind::EndpointOf(local) => {
+                        let ty = window_type(emitter, locals, *local)?;
+                        if window(emitter, &ty).is_none() {
+                            return Some(emitter.missing(value.at, "this `removed_value`"));
+                        }
+                        emitter.view(locals, *local)?
+                    }
+                    ExprKind::ChildEndpointOf(child) => emitter.read_endpoint_view(scope, child)?,
+                    _ => return Some(emitter.missing(value.at, "this `removed_value`")),
+                };
                 scope.acted = true;
                 Some(format!("{}({view})", library("fn_removed_value_checked")))
             }

@@ -33,11 +33,14 @@
 
 #include <cstddef>
 #include <expected>
+#include <format>
 #include <optional>
 #include <source_location>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace hglrt {
@@ -102,9 +105,8 @@ inline hgraph::WiringPortRef projected_child(const hgraph::WiringPortRef& whole,
 /// the windows work's, beside these, and named as these are
 /// (`fn_removed_value_checked`).
 ///
-/// `valid`, `modified` and `last_modified` are the view's own for every
-/// form (hgraph: "True when this view or at least one structural child has
-/// a current value", END-7's `valid`). A form that has no specialization is
+/// A form may specialize `valid(view)` when hgraph's own validity includes
+/// a collection that has no valid children (END-7). A form that has no specialization is
 /// one the target does not write yet, and a call of `delta_value` or
 /// `all_valid` of it does not compile.
 template <class Schema>
@@ -282,8 +284,144 @@ void publish_as_form(const O& out, const V& value, std::source_location where) {
 /// publication and after an invalidation (END-4).
 template <class E>
 bool fn_valid(const E& endpoint) {
-    return endpoint.valid();
+    if constexpr (requires { endpoint_read<schema_of<E>>::valid(endpoint); }) {
+        return endpoint_read<schema_of<E>>::valid(endpoint);
+    } else {
+        return endpoint.valid();
+    }
 }
+
+/// A logical child of a collection, whether or not it has a view (TIME-1).
+/// A missing position or key is an invalid endpoint. Core operations take
+/// a child with its own schema as they would take a view.
+template <class V>
+class Child {
+  public:
+    /// The child's hgraph schema.
+    using schema = typename V::schema;
+
+    /// A child the collection does not hold.
+    Child() = default;
+
+    /// The child that `view` is.
+    explicit Child(V view) : view_(std::move(view)) {}
+
+    /// Whether the collection has the child.
+    [[nodiscard]] bool present() const noexcept { return view_.has_value(); }
+
+    /// The child's view; only where it is `present`.
+    [[nodiscard]] const V& view() const { return *view_; }
+
+    /// END-7's `valid` of the child: false where the collection has none.
+    [[nodiscard]] bool valid() const { return view_.has_value() && view_->valid(); }
+
+    /// Whether the child published in the cycle.
+    [[nodiscard]] bool modified() const { return view_.has_value() && view_->modified(); }
+
+    /// The time of the publication the child retains; only where it is valid.
+    [[nodiscard]] hgraph::DateTime last_modified_time() const { return view_->last_modified_time(); }
+
+    /// The child's own value as its view reads it; only where it is valid.
+    [[nodiscard]] decltype(auto) value() const { return view_->value(); }
+
+  private:
+    std::optional<V> view_{};
+};
+
+/// The plain read of a held endpoint raises at the consuming use
+/// (ERR-14). hgraph 0.9.23 keeps the canonical error but discards the
+/// exception subclass during node evaluation. Carry the HGL location in
+/// this read's message so it survives that boundary.
+template <class T>
+T read_bound_child(result<T> read, std::source_location where) {
+    if (read.has_value()) {
+        return std::move(*read);
+    }
+    error failure = std::move(read).error();
+    if (std::string_view{where.file_name()}.ends_with(".hgl")) {
+        failure.message += std::format(", raised at {}:{}", where.file_name(), where.line());
+    }
+    throw hgraph::ExecutionFailure{std::move(failure)};
+}
+
+namespace detail {
+
+template <class E>
+struct is_child : std::false_type {};
+template <class V>
+struct is_child<Child<V>> : std::true_type {};
+
+/// Whether the endpoint `endpoint`, a view or a `Child`, is there to read: a
+/// view always is.
+template <class E>
+bool present(const E& endpoint) {
+    if constexpr (is_child<E>::value) {
+        return endpoint.present();
+    } else {
+        static_cast<void>(endpoint);
+        return true;
+    }
+}
+
+/// The view of the endpoint `endpoint`: a `Child`'s, or the view itself.
+template <class E>
+decltype(auto) viewed(const E& endpoint) {
+    if constexpr (is_child<E>::value) {
+        return endpoint.view();
+    } else {
+        return (endpoint);
+    }
+}
+
+/// The view of an endpoint `E`, unwrapped from a `Child`.
+template <class E>
+using viewed_t = std::remove_cvref_t<decltype(viewed(std::declval<const E&>()))>;
+
+} // namespace detail
+
+/// An ERR-14 child binding or its parent input borrowed by a value helper
+/// (FN-14, FN-17). The calling scope retains both for the duration of the call.
+template <class S>
+class BoundChild {
+    using View = hgraph::In<"", S>;
+
+  public:
+    /// Borrow a generated selector for the duration of the call.
+    template <class Select>
+        requires (!std::is_same_v<std::remove_cvref_t<Select>, BoundChild>
+                  && std::is_invocable_v<const Select&, std::source_location>)
+    BoundChild(Select& select) : select_(&select), project_([](const void* binding, std::source_location at) {
+        const auto child = (*static_cast<const Select*>(binding))(at);
+        if (!detail::present(child)) {
+            return Child<View>{};
+        }
+        const auto& view = detail::viewed(child);
+        // Collection fields can name their view, but the helper only
+        // needs the schema and the same underlying input endpoint.
+        if constexpr (std::is_base_of_v<hgraph::TSInputView, detail::viewed_t<decltype(child)>>) {
+            return Child<View>{View{view.borrowed_ref()}};
+        } else {
+            return Child<View>{View{view.base().borrowed_ref()}};
+        }
+    }) {}
+
+    /// Borrow the parent input of a child that the helper binds.
+    template <hgraph::fixed_string Name, auto... Policy>
+    BoundChild(const hgraph::In<Name, S, Policy...>& input)
+        : select_(&input), project_([](const void* binding, std::source_location) {
+            const auto& view = *static_cast<const hgraph::In<Name, S, Policy...>*>(binding);
+            return Child<View>{View{view.base().borrowed_ref()}};
+        }) {}
+
+    /// Resolve the selected endpoint at this consuming use.
+    [[nodiscard]] Child<View> operator()(std::source_location at) const {
+        return project_(select_, at);
+    }
+
+  private:
+    const void* select_;
+    Child<View> (*project_)(const void*, std::source_location);
+};
 
 /// `all_valid<T>(input: endpoint<T>) -> bool` (END-7, END-9): whether every
 /// element, field or entry of a collection is valid, one level deep, and
@@ -305,7 +443,7 @@ bool fn_all_valid(const E& endpoint) {
 /// hgraph's own is for a scalar.
 template <class E>
 bool fn_modified(const E& endpoint) {
-    return endpoint.valid() && endpoint.modified();
+    return fn_valid(endpoint) && endpoint.modified();
 }
 
 /// The C++ type of the delta of the endpoint view `E`, `delta<T>`.
@@ -365,7 +503,7 @@ result<endpoint_delta_t<E>> fn_delta_value_checked(const E& endpoint) {
 /// designation (END-10).
 template <class E>
 std::optional<datetime> fn_last_modified(const E& endpoint) {
-    if (!endpoint.valid()) {
+    if (!fn_valid(endpoint)) {
         return std::nullopt;
     }
     return endpoint.last_modified_time();
