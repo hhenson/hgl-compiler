@@ -2058,9 +2058,9 @@ its end, read with the [`object`](https://crates.io/crates/object)
 crate); and the name a program loads each by, and each name of the four
 packages' libraries it needs, there in either prefix as a library of
 that name, so that a program built against them starts with them alone.
-A library of a form the check does not read, a static archive or a
-universal Mach-O, is not held against the package: the line `hgl`
-prints says so. `HGL_HGRAPH_DEBUG` naming a directory that is not whole
+A library of a form the check knows and does not read, a static archive
+or a universal Mach-O, is not held against the package: the line `hgl`
+prints says so. One of no form known, or too short to tell, is. `HGL_HGRAPH_DEBUG` naming a directory that is not whole
 is an error that says what is wrong; a package beside `hgl` that is not
 is passed over, and the optimised libraries are linked, saying why.
 hgraph's installed headers do not depend on `NDEBUG`, so the debug build

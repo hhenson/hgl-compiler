@@ -1629,6 +1629,15 @@ mod tests {
             .filter(|(_, value)| value.is_none())
             .map(|(name, _)| name.to_string_lossy().into_owned())
             .collect();
+        // Windows knows a variable's name whatever its case, and keeps
+        // one spelling of `spdlog_ROOT` and `SPDLOG_ROOT`.
+        let same = |name: &str, variable: &str| {
+            if cfg!(windows) {
+                name.eq_ignore_ascii_case(variable)
+            } else {
+                name == variable
+            }
+        };
         for variable in [
             "CMAKE_TOOLCHAIN_FILE",
             "CMAKE_PREFIX_PATH",
@@ -1640,12 +1649,15 @@ mod tests {
             "SPDLOG_ROOT",
             "hgraph_DIR",
         ] {
-            assert!(removed.iter().any(|name| name == variable), "{variable}");
+            assert!(
+                removed.iter().any(|name| same(name, variable)),
+                "{variable}: {removed:?}"
+            );
         }
         assert!(
             !removed
                 .iter()
-                .any(|name| name == "PATH" || name == "SDKROOT")
+                .any(|name| same(name, "PATH") || same(name, "SDKROOT"))
         );
     }
 
