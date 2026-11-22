@@ -798,7 +798,8 @@ pub enum ExprKind {
         index: Box<Expr>,
     },
     /// `ok(value)` or `err(value)`: a result that owns the payload
-    /// (ERR-2). Its type is the result its place expects.
+    /// (ERR-2). Its type is the result its place expects. It can keep
+    /// its checked payload while an inferred constructor field settles.
     Tagged {
         /// True for `ok`, a success; false for `err`, a failure.
         success: bool,

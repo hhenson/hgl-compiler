@@ -292,6 +292,28 @@ fn settled_contextual_field_tail<T>(const value: T) -> i64 {
     return pair.first
 }
 
+# GEN-2 and ERR-2: a result field keeps its payload's scope and
+# evaluates that payload once when an earlier field determines its type.
+struct TaggedField<U> {
+    first: U?
+    extra: result<U, str>
+}
+
+fn inferred_tagged_field<T>(const value: T) -> GraphSide {
+    let chosen = if live_helper(value) > 0 { GraphSide.left }
+    let supplied = GraphSide.right
+    var writes = 0
+    let pair = TaggedField(first: chosen, extra: ok({
+        writes += 1
+        let copy = supplied
+        copy
+    }))
+    if writes != 1 { return GraphSide.left }
+    let tagged = pair.extra
+    if is_ok(tagged) { return tagged.value }
+    return GraphSide.left
+}
+
 # CTRL-15: inferred list elements become the types of loop bindings.
 fn inferred_iteration<T>(const value: T) -> i64 {
     var total = 0
@@ -612,6 +634,7 @@ test an_instance_settles_its_graph_conditions {
     assert eval contextual_fields(value: "s") == [2.5]
     assert eval settled_contextual_fields(value: "s") == [GraphSide.right]
     assert eval settled_contextual_field_tail(value: "s") == [2]
+    assert eval inferred_tagged_field(value: "s") == [GraphSide.right]
     assert eval inferred_iteration(value: "s") == [2]
     assert eval sum_inferred_iteration(value: "s") == [5]
     assert eval deferred_member(value: "s") == [2]

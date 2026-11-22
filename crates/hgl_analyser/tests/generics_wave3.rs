@@ -3003,6 +3003,82 @@ fn graph_instances_resolve_members_of_deferred_bases() {
     }
 }
 
+/// GEN-2 and ERR-2: a result constructed in an inferred field keeps
+/// the payload's lexical bindings while the result type settles.
+#[test]
+fn inferred_struct_fields_fit_tagged_payloads_in_their_scope() {
+    let checked = module(
+        r#"operator predicate<T>(input: T) -> bool
+impl const fn predicate<T>(input: T) -> bool => true
+impl fn predicate(input: i64) -> bool { when { return input > 0 } }
+enum Side { buy, sell }
+struct Pair<U> {
+    first: U?
+    extra: result<U, str>
+    inline: result<U, str>
+}
+fn through<T>(const input: T) -> Side {
+    let chosen = if predicate(input) { Side.buy }
+    let supplied = Side.sell
+    let pair = Pair(first: chosen, extra: ok({
+        let copy = supplied
+        copy
+    }), inline: ok(.sell))
+    return pair.first
+}
+fn ordinary() -> Side => through("s")"#,
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let instance = instance_called_by(&checked, body(&checked, "ordinary"));
+    let Stmt::Declare {
+        value: Some(pair), ..
+    } = &instance.statements[2]
+    else {
+        panic!("the graph declares the pair");
+    };
+    let ExprKind::Construct { arguments, .. } = &pair.kind else {
+        panic!("the fields belong to a constructor");
+    };
+    assert_eq!(arguments[1].value.ty.to_string(), "result<Side, str>");
+    let ExprKind::Tagged {
+        success: true,
+        payload,
+    } = &arguments[1].value.kind
+    else {
+        panic!("the extra field is a success");
+    };
+    assert_eq!(payload.ty.to_string(), "Side");
+    let ExprKind::Tagged {
+        success: true,
+        payload: inline,
+    } = &arguments[2].value.kind
+    else {
+        panic!("the inline field is a success");
+    };
+    assert_eq!(inline.ty.to_string(), "Side");
+    let ExprKind::Block {
+        statements,
+        value: Some(tail),
+        ..
+    } = &payload.kind
+    else {
+        panic!("the success keeps the payload block");
+    };
+    let [
+        Stmt::Declare {
+            local,
+            value: Some(initializer),
+        },
+    ] = statements.as_slice()
+    else {
+        panic!("the block keeps its declaration");
+    };
+    assert_eq!(instance.locals[*local].name, "copy");
+    assert!(matches!(tail.kind, ExprKind::Local(copy) if copy == *local));
+    assert!(matches!(initializer.kind, ExprKind::Local(supplied)
+        if instance.locals[supplied].name == "supplied"));
+}
+
 /// GEN-7, EXPR-6 and ERR-12: specialization refits intrinsic boolean
 /// operands without changing the expression's short-circuit structure.
 #[test]

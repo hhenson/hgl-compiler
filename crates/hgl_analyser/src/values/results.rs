@@ -164,13 +164,7 @@ impl<'a> Typer<'a> {
     ) -> (ExprKind, Type) {
         let argument = self.one_argument(name, list, "ERR-2");
         // The result the place expects: of `result<T, E>?`, the result.
-        let sides = match not_null(expected) {
-            Some(result @ Type::Result { value, error }) if whole(result) => {
-                Some((result.clone(), (**value).clone(), (**error).clone()))
-            }
-            _ => None,
-        };
-        let Some((result, value, failure)) = sides else {
+        let Some(result @ Type::Result { value, error }) = not_null(expected) else {
             // A place whose type is not known has been reported, or is
             // for a later part: nothing is said of what it expects
             // (ERR-9).
@@ -195,17 +189,29 @@ impl<'a> Typer<'a> {
             }
             return (ExprKind::Unread, Type::Unknown);
         };
-        let Some(argument) = argument else {
-            return (ExprKind::Unread, result);
+        let complete = whole(result);
+        let ty = if complete {
+            result.clone()
+        } else {
+            Type::Unknown
         };
-        let (side, what) = tagged_side(success, &value, &failure);
-        let payload = self.expression(&argument, Some(side));
-        let payload = self.fit(payload, side, what);
+        let Some(argument) = argument else {
+            return (ExprKind::Unread, ty);
+        };
+        let (side, what) = tagged_side(success, value, error);
+        let payload = if complete {
+            let payload = self.expression(&argument, Some(side));
+            self.fit(payload, side, what)
+        } else {
+            // GEN-2 and ERR-2: keep the payload in the scope that read it
+            // when another constructor field can still settle this result.
+            self.expression(&argument, Some(&Type::Unknown))
+        };
         let kind = ExprKind::Tagged {
             success,
             payload: Box::new(payload),
         };
-        (kind, result)
+        (kind, ty)
     }
 
     /// `is_ok(value)` or `is_err(value)` (ERR-3): they "take one

@@ -77,3 +77,12 @@ test a_generic_key_resolves_to_a_string_or_position {
     # expect-error(type, "type.mismatch")
     assert keyed_value(scaled, 2.0, key: true) == 1
 }
+
+const fn constrained_callback<T, ...Items>(item: T, rest: ...Items) -> f64
+    requires T == str
+    => 1.0
+
+test a_callback_with_a_pack_must_meet_its_requirements {
+    # expect-error(constraint, "requires.unmet")
+    assert call_shape(constrained_callback, 1) == 11
+}
