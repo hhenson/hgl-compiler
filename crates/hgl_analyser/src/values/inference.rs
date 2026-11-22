@@ -28,6 +28,30 @@ use crate::types::{
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
+    /// FN-17 and GEN-2: the type of the function given can complete its
+    /// receiving template, including a result the template leaves open.
+    fn infer_function_argument(
+        &mut self,
+        node: &SyntaxNode,
+        pattern: &Type,
+        generics: &[GenericParameter],
+        found: &mut [Option<Argument>],
+    ) {
+        let unknown = Argument::Type(Type::Unknown);
+        let map: Vec<_> = generics
+            .iter()
+            .zip(found.iter())
+            .map(|(generic, value)| (generic.at, value.as_ref().unwrap_or(&unknown)))
+            .collect();
+        let Type::Function(template) = substitute_within(pattern, &map) else {
+            return;
+        };
+        let mark = self.mark();
+        let actual = self.function_argument(node, &template);
+        self.take_back(mark, false);
+        infer(pattern, &actual.ty, generics, found);
+    }
+
     /// What a partly resolved parameter learns from an argument. Keep
     /// already resolved parts of the parameter's type (GEN-12), but
     /// leave its other parts open. For `list<T>` given a
@@ -616,7 +640,7 @@ impl<'a> Typer<'a> {
             ));
         }
         let mut late = std::collections::HashSet::new();
-        for position in order {
+        for &position in &order {
             let Assigned {
                 slot, value: node, ..
             } = &assigned[position];
@@ -628,18 +652,7 @@ impl<'a> Typer<'a> {
             }
             let pattern = patterns[index];
             if let Type::Function(_) = pattern {
-                let arguments: Vec<_> = found
-                    .iter()
-                    .map(|found| found.clone().unwrap_or(Argument::Type(Type::Unknown)))
-                    .collect();
-                let map: Vec<_> = own.iter().copied().zip(&arguments).collect();
-                let Type::Function(template) = substitute_within(pattern, &map) else {
-                    continue;
-                };
-                let mark = self.mark();
-                let actual = self.function_argument(node, &template);
-                self.take_back(mark, false);
-                infer(pattern, &actual.ty, generics, &mut found);
+                self.infer_function_argument(node, pattern, generics, &mut found);
                 continue;
             }
             let unfound: Vec<Location> = generics
@@ -791,6 +804,26 @@ impl<'a> Typer<'a> {
             let value = self.expression(node, Some(&Type::Unknown));
             infer(pattern, &value.ty, generics, &mut found);
             self.take_back(mark, false);
+        }
+        // FN-17: a later ordinary argument can supply a callback's
+        // input types. Once they are known the callback can supply its
+        // remaining types before the call takes any defaults (GEN-2).
+        for position in order {
+            let entry = &assigned[position];
+            let Some(index) = entry.slot else {
+                continue;
+            };
+            let pattern = patterns[index];
+            if entry.forwarded.is_none()
+                && matches!(pattern, Type::Function(template) if template.named_pack.is_none())
+                && generics
+                    .iter()
+                    .zip(&found)
+                    .any(|(generic, value)| value.is_none() && mentions(pattern, &[generic.at]))
+                && self.may_reread()
+            {
+                self.infer_function_argument(&entry.value, pattern, generics, &mut found);
+            }
         }
         if let Some((result, requested)) = result_fallback {
             infer(

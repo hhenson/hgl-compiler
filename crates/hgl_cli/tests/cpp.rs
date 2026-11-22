@@ -1732,6 +1732,34 @@ fn function_parameters_run_on_the_sdk() {
     );
 }
 
+/// FN-17 and GEN-6: the selected candidate supplies the callback type and
+/// kind. GEN-18 still reads the law of the selected static argument.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn candidate_function_arguments_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("candidate-function-arguments");
+    let file = write(
+        &root,
+        "demo.candidate_function_arguments.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.candidate_function_arguments.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 13 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-17, FN-18 and GEN-17: reflected callbacks carry their generic
 /// arguments and defaults to the C++ target.
 #[test]
