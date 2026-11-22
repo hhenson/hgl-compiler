@@ -771,8 +771,12 @@ pub(super) fn fill_type(current: &mut Type, inferred: Type) -> bool {
             *current = inferred;
             true
         }
+        // TYPE-9 and TYPE-16: preserve an atomic or delta wrapper
+        // where the inferred type keeps it.
         (Type::Nullable(current), Type::Nullable(inferred))
-        | (Type::Set(current), Type::Set(inferred)) => fill_type(current, *inferred),
+        | (Type::Set(current), Type::Set(inferred))
+        | (Type::Atomic(current), Type::Atomic(inferred))
+        | (Type::Delta(current), Type::Delta(inferred)) => fill_type(current, *inferred),
         (
             Type::Result { value, error },
             Type::Result {

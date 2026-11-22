@@ -959,6 +959,64 @@ fn graph_instances_fit_settled_types_at_destinations() {
     }
 }
 
+/// TYPE-9 and GEN-2: a complete atomic payload stays wrapped, and its
+/// inferred element type is carried to the binding and its read.
+#[test]
+fn graph_instances_propagate_settled_atomic_wrappers() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn whole<U>(value: U) -> atomic<list<U>> { when { return [value] } }\n",
+        "fn wrapper<T>(const input: T) -> atomic<list<i64>> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let copied = whole(chosen)\n",
+        "    return copied\n",
+        "}\n",
+        "fn admitted() -> atomic<list<i64>> => wrapper(1)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    assert_eq!(instance.locals[2].ty.to_string(), "atomic<list<i64>>");
+    let Some(Stmt::Return {
+        value: Some(value), ..
+    }) = instance.statements.last()
+    else {
+        panic!("the graph returns the atomic binding");
+    };
+    assert_eq!(value.ty, instance.locals[2].ty);
+}
+
+/// TYPE-16 and GEN-2: a delta preserves its instantiated collection
+/// identity through inferred bindings and reads in the graph.
+#[test]
+fn graph_instances_propagate_settled_delta_wrappers() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn changes<U>(value: U) -> delta<list<U>> => delta<list<U>>(size_modified: 1)\n",
+        "fn wrapper<T>(const input: T) -> delta<list<i64>> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let changed = changes(chosen)\n",
+        "    let copied = changed\n",
+        "    return copied\n",
+        "}\n",
+        "fn admitted() -> delta<list<i64>> => wrapper(1)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    assert_eq!(instance.locals[2].ty.to_string(), "delta<list<i64>>");
+    assert_eq!(instance.locals[3].ty, instance.locals[2].ty);
+    let Some(Stmt::Return {
+        value: Some(value), ..
+    }) = instance.statements.last()
+    else {
+        panic!("the graph returns the copied delta");
+    };
+    assert_eq!(value.ty, instance.locals[2].ty);
+}
+
 /// GEN-7, TYPE-16 and EXPR-5: a delta's named property keeps its
 /// destination type when the given value becomes known.
 #[test]
