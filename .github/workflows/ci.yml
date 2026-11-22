@@ -214,3 +214,6 @@ jobs:
         run: cargo build --locked --bin hgl
       - if: matrix.part == 'runtime and core'
         run: python3 crates/hgl_cpp/ci/check_core.py target/debug/hgl spec/hgl_core
+      - name: Run Core documentation examples
+        if: matrix.part == 'runtime and core' && matrix.mode == 'plain'
+        run: target/debug/hgl test spec/hgl_core/hgl --target cpp

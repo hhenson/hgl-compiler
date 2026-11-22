@@ -1,9 +1,34 @@
 """Check the CI gate's decisions for the outcomes reported by hgl test."""
 
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
 from subprocess import CompletedProcess
 import unittest
+from unittest.mock import patch
 
-from check_core import gaps_of, verify
+from check_core import gaps_of, main, verify
+
+
+class SuiteRootsTest(unittest.TestCase):
+    def test_every_invocation_has_only_its_own_suite_root(self):
+        # Explicitly naming core would also select its examples (TST-14, SDOC-9).
+        args = ["check_core.py", "hgl", "pinned-core"]
+        completed = CompletedProcess([], 0, stdout="")
+        with (
+            patch("sys.argv", args),
+            patch("check_core.subprocess.run", return_value=completed) as run,
+            patch("check_core.verify", return_value=[]),
+            redirect_stdout(StringIO()),
+        ):
+            self.assertEqual(main(), 0)
+
+        compiler = Path("hgl").resolve()
+        commands = []
+        for suite in ("conformance", "core_conformance"):
+            discovery = [compiler, "test", Path("pinned-core", "tests", suite), "--integration"]
+            commands.extend([discovery, discovery + ["--target", "cpp"]])
+        self.assertEqual([entry.args[0] for entry in run.call_args_list], commands)
 
 
 class CoreGateTest(unittest.TestCase):
