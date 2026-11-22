@@ -60,17 +60,19 @@ fn the_runner_lists_and_selects_examples_and_ordinary_tests() {
 #[test]
 fn example_diagnostics_point_into_the_comment() {
     let root = scratch("diagnostics");
-    for (name, example, target) in [
-        ("bad_type", "assert 1", "assert 1"),
+    for (name, example, target, diagnostic) in [
+        ("bad_type", "assert 1", "assert 1", "type.mismatch"),
         (
             "name_taken",
             "const fn taken() -> i64 => 1\n\n    assert true",
             "const fn taken",
+            "name.duplicate",
         ),
         (
             "late_helper",
             "assert true\n    const fn late() -> bool => true",
             "const fn late",
+            "a test helper must precede the test's statements",
         ),
     ] {
         let source = format!(
@@ -86,6 +88,7 @@ fn example_diagnostics_point_into_the_comment() {
         let output = hgl(&["check", &file]);
         assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout));
         let diagnostics = text(&output.stderr);
+        assert!(diagnostics.contains(diagnostic), "{diagnostics}");
         assert!(
             diagnostics.contains(&format!("{file}:{line}:")),
             "{diagnostics}"
