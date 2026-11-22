@@ -60,3 +60,10 @@ test candidate_conditions_and_temporal_inputs {
     assert packs::routed(packs::scaled, "price") == 55
     assert eval packs::temporal_use(price: [2.0]) == [56]
 }
+
+test callback_operator_uses_dependent_argument_types {
+    assert packs::call_shape(packs::choose, 2.0) == 11
+    assert packs::call_shape(packs::choose, item: "price") == 11
+    assert packs::call_operator(packs::choose, 2.0) == 51
+    assert packs::call_operator(packs::choose, item: "price") == 51
+}

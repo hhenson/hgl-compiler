@@ -1,6 +1,6 @@
 module demo.packdepends_rejections
 
-use demo.packdepends::{call_shape, membership, scaled}
+use demo.packdepends::{call_shape, choose, membership, scaled}
 
 const fn required_scale(price: f64, factor: f64) -> f64 => price * factor
 
@@ -37,4 +37,21 @@ const fn need_two<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}
 test too_few_given_arguments {
     # expect-error(type, "pack.cardinality")
     assert need_two(scaled, 2.0) == 31
+}
+
+const fn inspect<...Ps>(f: const fn(...{Ps}) -> f64) -> i64 => 1
+
+operator alone(item: f64) -> f64
+impl const fn alone(value: f64) -> f64 => value
+
+# FN-17: a result type cannot select a reflected callback, even when the
+# operator has exactly one candidate.
+test no_parameter_type_for_lone_candidate {
+    # expect-error(type, "generic.unresolved")
+    assert inspect(alone) == 1
+}
+
+test no_parameter_type_for_multiple_candidates {
+    # expect-error(type, "generic.unresolved")
+    assert inspect(choose) == 1
 }

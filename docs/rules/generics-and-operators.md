@@ -128,7 +128,7 @@ analyser: partial
 - A call that writes a positional type pack supplies its whole type sequence. An unwritten positional or named pack infers each type from its own argument or eval trace. A graph instance completes its deferred inferred types in capture order (GEN-7, GEN-10). An unresolved type rejects, or a sequence that requires context gives `sequence.context_type` (EXPR-9).
 - One a generic body works out from its own generic parameters is worked out for each instance, and where its evaluation fails there (NUM-2: an `i64` out of range; a division of two `i64` by zero) or is not worked out, the call that makes the instance is `generic.argument_constant` (ERR-9)
 - Two generic value arguments are one where they are the same constant (`ConstantValue::same`), which for an `f64` is not `==`: `Scaled<-0.0>` is not `Scaled<0.0>`, and any two NaNs are one constant (UNIT-13, GEN-13); hgraph writes each as an instance of its own. A comparison of a NaN constant is the language's: false, but `!=` (NUM-5)
-- Left: an operator's own generic value parameter given by name; `instantiate`; type pack reflection; what an operator's other generic arguments say of its operands; temporal bodies; an operation the reader does not work out, a symbol given configuration and a date moved by a tenor
+- Left: an operator's own generic value parameter given by name; `instantiate`; what an operator's other generic arguments say of its operands; temporal bodies; an operation the reader does not work out, a symbol given configuration and a date moved by a tenor
 
 ## GEN-9
 
@@ -152,14 +152,13 @@ analyser: partial
 - A cardinality bounds the arguments a generic type's pack takes, and has its upper bound at least its lower
 - Function and operator calls check the cardinality of captured arguments against the value parameter and its generic type pack. Explicit positional type sequences also constrain the argument count. The HIR records the resolved sequence of types for each captured type pack.
 - A function's `each T in types(Ts)` checks its condition for every resolved type in the pack. An empty capture satisfies it. Equality and membership can test the bound type by name. A verdict the analyser cannot give rejects as untold (GEN-3).
-- Named operator requirements bound by `each`, other pack reflection, and evaluation of `any`, including its generic binding rule (#367), are pending.
+- GEN-17 adds `each` over pack keys. Named operator requirements bound by `each` and evaluation of `any`, including its generic binding rule (#367), are pending.
 
 transpiler: partial
 
 - C++ uses the analysed argument order, names and types when it writes each pack's
   parameters, including an empty capture.
-- Left: Reading a pack as a whole and `schemas(pack)` remain unsupported. Function
-  parameter reflection awaits #366, and `any` over a pack awaits #367.
+- Left: reading a pack as a whole, `schemas(pack)`, and `any` over a pack (#367).
 
 ## GEN-11
 
@@ -241,7 +240,7 @@ analyser: partial
 
 - Reflects the selected callback's fixed suffix and its supplied positional and named pack entries. A dependent pack keeps the callback parameter keys and the types written at the call.
 - Evaluates `each` over `arg_keys`, key comparison and membership, and keyed type projection. A missing member of a known pack reports `pack.name`.
-- Left: selecting an operator callback where the template reflects all operands (#366); explicit generic arguments on an operator reference (#442).
+- An operator callback reflects the public declaration's parameter names and the selected candidate's types (FN-17).
 
 ## GEN-18
 

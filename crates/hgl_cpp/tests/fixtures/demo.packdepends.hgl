@@ -125,3 +125,9 @@ fn temporal_scaled(price: f64) -> f64 {
     when { return price }
 }
 export fn temporal_use(price: f64) -> i64 => temporal_shape(temporal_scaled, price)
+
+# FN-17: an operator callback uses its public parameter name and the
+# candidate selected by the dependent call's resolved argument type.
+export operator choose<T>(item: T) -> f64
+impl const fn choose(value: f64) -> f64 => value
+impl const fn choose(value: str) -> f64 => 1.0

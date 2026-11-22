@@ -372,7 +372,7 @@ fn dependent_call_packs_reject_invalid_arguments() {
         text(&output.stderr)
     );
     assert!(
-        stdout.contains("rejection cases: 6 passed, 0 failed"),
+        stdout.contains("rejection cases: 8 passed, 0 failed"),
         "{stdout}"
     );
 }

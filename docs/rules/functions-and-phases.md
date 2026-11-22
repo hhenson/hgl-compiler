@@ -110,7 +110,7 @@ analyser: partial
 transpiler: partial
 
 - C++ writes a concrete parameter for each captured argument in value functions, nodes, graphs, and lifted calls.
-- Left: uses of a pack as a whole, including reflection (GEN-10).
+- Left: reading, making and forwarding a pack in a body (#368).
 
 ## FN-9
 
@@ -237,7 +237,8 @@ analyser: partial
 
 - Check the fixed template's phase, input names and input and result types. A value target may lift in a temporal template. An anonymous body's phase comes from the accepting template (FN-7).
 - Match a declared function or an operator's selected candidate, infer generic types in either direction, and accept explicit generic arguments on function and operator references. An operator reference uses the public signature, with the written arguments and the template together resolving its generic parameters. Static parameters may be called or passed onward. They hold no runtime value.
-- Applies the proposed plain-parameter restriction to the fixed inputs. Keeps the remaining callback slots in declared order with their modes, defaults and pack shape. Function and operator calls bind the reflected pack once they have a static target.
+- Applies the proposed plain-parameter restriction to the fixed inputs. Keeps the remaining callback slots in declared order with their modes, defaults and pack shape.
+- A reflected operator callback selects from the resolved parameter types, including the dependent arguments. With no resolved parameter type, it reports `generic.unresolved` even for a lone candidate (FN-17).
 - A call through a function parameter gives arguments by position or by a name written in its template (FN-17).
 
 transpiler: partial
@@ -256,13 +257,11 @@ analyser: partial
 - Binds configuration only by name in the braces. Checks defaults, missing and misplaced arguments, naming conflicts, and forbidden parameter modes.
 - Holds omitted operator configuration defaults to the selected candidate's parameter types in the operator's defining scope (GEN-6, UNIT-7, UNIT-8).
 - Fits supplied configuration of a required operator call to the selected candidate's parameters when instantiating the caller (GEN-16, EXPR-5).
-- Left: matching a call with a pack declared for a function and checking configuration defaults against function types (#362, #366).
+- Configuration in braces is separate from a dependent pack in parentheses (FN-8).
 
 transpiler: partial
 
 - Passes configuration as values, const graph inputs or connections in functions, node hooks, graphs and operator candidates. The SDK tests cover each role.
-- Packs declared for a function and function type compatibility await #366.
-
 - Callable configuration parameters await #363.
 
 ## FN-19
@@ -275,4 +274,4 @@ analyser: planned
 
 transpiler: planned
 
-- Making and applying packs of arguments awaits #366 and #368.
+- Making and applying argument packs in a body is tracked in #368.
