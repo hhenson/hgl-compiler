@@ -89,6 +89,7 @@ impl<'a> Typer<'a> {
             },
             SyntaxKind::TupleExpr => self.tuple(node, expected),
             SyntaxKind::SequenceExpr => self.sequence(node, expected),
+            SyntaxKind::ListComprehension => self.list_comprehension(node, expected),
             SyntaxKind::UnaryExpr => self.unary(node, expected),
             SyntaxKind::BinaryExpr => self.binary(node, expected),
             SyntaxKind::CallExpr => self.call(node, expected),

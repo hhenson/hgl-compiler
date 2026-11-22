@@ -83,7 +83,7 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
             element,
             size: Some(size),
         } => match &size.value {
-            ConstantValue::Int(count) if *count > 0 => {
+            ConstantValue::Int(count) if *count >= 0 => {
                 format!(
                     "::std::array<{}, {count}>",
                     cpp_type_in(program, element, generic)?

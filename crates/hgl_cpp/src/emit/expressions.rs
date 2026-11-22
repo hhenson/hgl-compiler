@@ -222,6 +222,12 @@ impl Emitter<'_> {
                     None => self.missing(value.at, "this expression"),
                 }
             }
+            ExprKind::ListComprehension {
+                binding,
+                sequence,
+                entry,
+                ..
+            } => self.list_comprehension(scope, value, (*binding, sequence, entry)),
             // EXPR-9: a sequence is what its type says it makes: a list
             // here.
             ExprKind::Sequence(entries) if matches!(value.ty, Type::List { .. }) => {

@@ -910,6 +910,25 @@ pub enum ExprKind {
     },
     /// `(a, b)`.
     Tuple(Vec<Expr>),
+    /// The iterable of a loop only (EXPR-16). It does not produce an
+    /// ordinary value. Its internal list shape carries the binding type.
+    Range {
+        /// The first bound evaluated before any passes.
+        lower: Box<Expr>,
+        /// The exclusive bound evaluated immediately after the first.
+        upper: Box<Expr>,
+    },
+    /// A list made by iterating once for each entry (EXPR-17).
+    ListComprehension {
+        /// Whether the entries are composed as connections.
+        composition: bool,
+        /// The iteration variable, scoped to the entry.
+        binding: LocalId,
+        /// The iterable is evaluated before the first pass.
+        sequence: Box<Expr>,
+        /// The expression evaluated or composed for each entry.
+        entry: Box<Expr>,
+    },
     /// `[a, b]`: a sequence of values. Its type says what it makes.
     Sequence(Vec<Expr>),
     /// `[key: value, ...]`: a sequence of pairs, which the type its
@@ -1687,6 +1706,15 @@ impl Expr {
             | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes(visit),
             ExprKind::Binary { left, right, .. }
+            | ExprKind::Range {
+                lower: left,
+                upper: right,
+            }
+            | ExprKind::ListComprehension {
+                sequence: left,
+                entry: right,
+                ..
+            }
             | ExprKind::Index {
                 base: left,
                 index: right,
@@ -1833,6 +1861,15 @@ impl Expr {
             | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes_mut(visit),
             ExprKind::Binary { left, right, .. }
+            | ExprKind::Range {
+                lower: left,
+                upper: right,
+            }
+            | ExprKind::ListComprehension {
+                sequence: left,
+                entry: right,
+                ..
+            }
             | ExprKind::Index {
                 base: left,
                 index: right,

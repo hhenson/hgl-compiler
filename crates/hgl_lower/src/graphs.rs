@@ -196,6 +196,12 @@ pub fn named_in(node: hgl_analyser::hir::Node, read: &mut Vec<usize>, declared: 
     match node {
         Node::Statement(Stmt::Declare { local, .. }) => declared.push(*local),
         Node::Statement(Stmt::For { names, .. }) => declared.extend(names),
+        Node::Expression(Expr {
+            kind: ExprKind::ListComprehension { binding, .. },
+            ..
+        }) => {
+            declared.push(*binding);
+        }
         Node::Statement(Stmt::Assign { local, .. }) => read.push(*local),
         Node::Expression(Expr {
             kind: ExprKind::Local(local),

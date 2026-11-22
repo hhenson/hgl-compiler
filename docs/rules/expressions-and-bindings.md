@@ -194,24 +194,29 @@ transpiler: planned
 
 ## EXPR-16
 
-parser: planned
+parser: done
 
-- #368 tracks ranges as a loop sequence in value code and in composition.
+- Reads `..<` only in a loop's iterable, with additive expressions as bounds.
 
-analyser: planned
+analyser: done
 
-transpiler: planned
+- A range binds one `i64` in each pass. A live connection cannot supply a bound in composition.
 
-- Range iteration awaits #368.
+transpiler: done
+
+- Evaluates both bounds once in order and visits the increasing values before the exclusive end. A graph composes its passes while it is built.
 
 ## EXPR-17
 
-parser: planned
+parser: done
 
-- #368 tracks lists built by loops in value code and in composition.
+- Reads `[for name in iterable: expression]`.
 
-analyser: planned
+analyser: done
 
-transpiler: planned
+- Types each entry in the iteration scope. A fixed result gets the range's constant length or its fixed iterable's extent.
 
-- List construction by a loop awaits #368.
+transpiler: partial
+
+- Builds growing and fixed ordinary lists. Composes a nonempty fixed list of connections over a range or a fixed input list.
+- The pinned hgraph SDK requires a positive extent for a fixed temporal list.

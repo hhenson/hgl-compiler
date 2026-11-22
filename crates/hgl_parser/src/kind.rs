@@ -81,7 +81,7 @@ define_syntax_kinds! {
         KwAtomic, KwTuple, KwList, KwSet, KwDict, KwRollingWindow, KwResult, KwRef,
         KwSignal, KwEndpoint, KwDelta, KwError,
         LParen, RParen, LBracket, RBracket, LBrace, RBrace, Comma,
-        Semicolon, Colon, ColonColon, Dot, Ellipsis, At, Question, Bang,
+        Semicolon, Colon, ColonColon, Dot, Ellipsis, RangeUntil, At, Question, Bang,
         Plus, Minus, Star, Slash, SlashSlash, SlashSlashEq, Percent,
         PercentEq, AmpAmp, PipePipe, Eq, PlusEq, MinusEq, StarEq, SlashEq,
         EqEq, BangEq, Lt, LtEq, Gt, GtEq, Spaceship, Arrow, FatArrow,
@@ -267,6 +267,10 @@ define_syntax_kinds! {
         TupleExpr,
         /// `[a, b]`, `[a: b]` or `[]`
         SequenceExpr,
+        /// `[for item in iterable: expression]`.
+        ListComprehension,
+        /// `lower..<upper`, only as a loop iterable.
+        RangeExpr,
         /// `a: b` in a sequence
         SequencePair,
         /// `_` where a value is left out: in a sequence or an `instantiate`

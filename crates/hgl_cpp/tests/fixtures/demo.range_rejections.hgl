@@ -1,0 +1,25 @@
+module demo.range_rejections
+
+test range_is_no_value {
+    # expect-error(parse, "syntax.expected_token")
+    let ranges = 0..<3
+}
+
+# expect-error(type, "type.mismatch")
+const fn wrong_bound() -> list<i64> => [for index in "start"..<2: index]
+
+# expect-error(type, "type.mismatch")
+const fn wrong_fixed_size() -> list<i64, 4> => [for index in 0..<3: index]
+
+# expect-error(type, "list.size")
+const fn runtime_extent(count: i64) -> list<i64, 4> => [for index in 0..<count: index]
+
+fn live_bound(limit: i64) -> i64 {
+    var total = 0
+    # expect-error(phase, "connection.as_constant")
+    for index in 0..<limit { total = total + index }
+    return total
+}
+
+# expect-error(type, "list.size")
+fn growing_list(values: list<i64>) -> list<i64, 4> => [for item in values: item]

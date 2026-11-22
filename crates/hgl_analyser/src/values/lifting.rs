@@ -348,6 +348,17 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
         | ExprKind::PackEntry { pack: local, .. } => {
             locals.get(*local).map_or(Value, |local| local.category)
         }
+        // EXPR-16: a range has ordinary bounds. Its loop variable does
+        // not become a connection even when a bound was reported.
+        ExprKind::Range { .. } => Value,
+        // EXPR-17: the graph builds a fixed list of connections, even
+        // when one or more entries compose as ordinary constants.
+        ExprKind::ListComprehension {
+            composition: true, ..
+        } => Connection,
+        ExprKind::ListComprehension {
+            composition: false, ..
+        } => Value,
         ExprKind::StaticCallable(callee) => match &**callee {
             Callee::Anonymous(function) => function
                 .captures

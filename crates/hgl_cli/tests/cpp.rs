@@ -1504,6 +1504,33 @@ fn dependent_call_packs_run_on_the_sdk() {
     );
 }
 
+/// EXPR-16 and EXPR-17: range bounds, value construction and graph ports.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn ranges_and_list_comprehensions_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("ranges-and-comprehensions");
+    let file = write(
+        &root,
+        "demo.ranges.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.ranges.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-19: value, operator and callback calls forward a pack; graph
 /// calls forward the individual connections.
 #[test]

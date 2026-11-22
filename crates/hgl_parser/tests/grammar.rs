@@ -278,6 +278,7 @@ fn body(
     when modified(x) { count += 1 }
     while { yield 1s: count }
     for key, item in d { count += item }
+    let squares = [for i in 0..<4: i * i]
     switch x {
         case 1: return 1
         default: return 0

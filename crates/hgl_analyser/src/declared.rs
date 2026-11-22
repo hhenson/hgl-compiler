@@ -419,6 +419,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>)
         // `Side(N)` hold it.
         ConstantValue::Unary(..)
         | ConstantValue::Binary(..)
+        | ConstantValue::RangeLength(..)
         | ConstantValue::List(_)
         | ConstantValue::Tuple(_)
         | ConstantValue::Constructed { .. } => {

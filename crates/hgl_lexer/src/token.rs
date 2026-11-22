@@ -194,6 +194,7 @@ define_token_kinds! {
         ColonColon => "::",
         Dot => ".",
         Ellipsis => "...",
+        RangeUntil => "..<",
         At => "@",
         Question => "?",
         Bang => "!",

@@ -260,7 +260,7 @@ impl Parser<'_> {
     }
 
     /// ```text
-    /// for_statement = "for", iteration_pattern, "in", expression, block ;
+    /// for_statement = "for", iteration_pattern, "in", iterable, block ;
     /// iteration_pattern = IDENTIFIER, [ ",", IDENTIFIER ] ;
     /// ```
     fn for_stmt(&mut self) {
@@ -273,7 +273,11 @@ impl Parser<'_> {
         // LEX-10: `in` is a name with a meaning only here.
         if self.expect_word("in") && self.goes_on("an expression") {
             // CTRL-9: the first `{` opens the body.
-            self.subject();
+            let context = Context {
+                no_brace: true,
+                ..self.context
+            };
+            self.nested(context, Self::loop_iterable);
         }
         self.body_block();
         self.finish();

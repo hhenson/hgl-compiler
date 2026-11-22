@@ -377,6 +377,30 @@ fn dependent_call_packs_reject_invalid_arguments() {
     );
 }
 
+/// EXPR-16 and EXPR-17: ranges are loop syntax and fixed comprehensions
+/// need a known extent. A connection cannot supply a range bound.
+#[test]
+fn ranges_and_list_comprehensions_reject_invalid_forms() {
+    let root = scratch("range-rejections");
+    let file = write(
+        &root,
+        "demo.range_rejections.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.range_rejections.hgl"),
+    );
+    let output = hgl(&["test", &file, "--rejections-only"]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 6 passed, 0 failed"),
+        "{stdout}"
+    );
+}
+
 /// FN-19: concrete pack keys use the ordinary call diagnostics and
 /// an operand must name a pack.
 #[test]
