@@ -405,6 +405,17 @@ fn selected_case<T>(const value: T) -> i64 {
     return 5
 }
 
+# TYPE-7 and CTRL-6: the settled enum supplies the implied label's type.
+fn selected_enum_case<T>(const value: T, const left: bool) -> i64 {
+    let side = if left { GraphSide.left } else { GraphSide.right }
+    let key = if live_helper(value) > 0 { side }
+    switch key {
+        case .left: return 6
+        case GraphSide.right: return 7
+    }
+    return 8
+}
+
 test an_instance_settles_its_graph_conditions {
     assert eval deferred_configured_comparison(value: 3) == [true]
     assert eval ordinary_tolerance(value: "s", a: [2.5, 2.5], b: [2.55, 2.7]) == [true, false]
@@ -454,6 +465,8 @@ test an_instance_settles_its_graph_conditions {
     assert eval deferred_generic_default(value: 3) == [1.0]
     assert eval deferred_pack_result(value: 3) == [5]
     assert eval selected_case(value: 3) == [4]
+    assert eval selected_enum_case(value: 3, left: true) == [6]
+    assert eval selected_enum_case(value: 3, left: false) == [7]
     assert eval value_phase_choice(value: 3) == [1]
     assert eval value_phase_choice(value: "s") == [-1]
 }

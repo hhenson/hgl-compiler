@@ -5,10 +5,11 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Diagnostics, Location};
+use hgl_parser::SyntaxKind;
 use hgl_source::Span;
 
 use super::arguments::Takes;
-use super::control::{bound_by_loop, iterates};
+use super::control::{bound_by_loop, duplicate_switch_label, iterates};
 use super::fit::{open, whole};
 use super::inference::type_pack;
 use super::lifting::{assignment_category, record, record_with};
@@ -24,6 +25,7 @@ use crate::hir::{
     Stmt, UnaryOperator, Value, ValueCategory,
 };
 use crate::program::{OperatorRef, Program, Role};
+use crate::syntax::ungrouped;
 use crate::types::{Argument, Detail, Signature, Type};
 
 /// Source checks awaiting concrete types and categories in a graph instance.
@@ -564,7 +566,20 @@ impl GraphDestinations {
         if open(&ty) {
             return;
         }
+        let mut members = HashMap::<usize, (Location, bool)>::new();
         for case in cases {
+            let mut replayed = false;
+            if selector_settled
+                && case.value.is_none()
+                && case.label.ty == Type::Unknown
+                && matches!(case.label.kind, ExprKind::Unread)
+                && let Some(node) = typer.syntax_of(&case.label).map(ungrouped)
+                && node.kind() == SyntaxKind::ImpliedMember
+            {
+                // TYPE-7: the source label needed the selector's enum.
+                case.label = typer.expression(&node, Some(&ty));
+                replayed = true;
+            }
             if whole(&case.label.ty) && (selector_settled || self.known(&case.label)) {
                 case.label = typer.fit(case.label.clone(), &ty, "the selector");
                 if case.value.is_none()
@@ -572,6 +587,22 @@ impl GraphDestinations {
                     && let ExprKind::EnumMember { member, .. } = case.label.kind
                 {
                     case.value = Some(hir::LabelValue::Member(member));
+                }
+            }
+            if case.label.ty == ty
+                && let Some(hir::LabelValue::Member(member)) = case.value
+            {
+                // TYPE-7 gives each member of this enum a unique value.
+                // Source already checked a repeat between its own labels.
+                if let Some((first, seen_at_source)) = members.get_mut(&member) {
+                    if replayed || !*seen_at_source {
+                        typer
+                            .diagnostics
+                            .emit(duplicate_switch_label(case.label.at, *first));
+                    }
+                    *seen_at_source |= !replayed;
+                } else {
+                    members.insert(member, (case.label.at, !replayed));
                 }
             }
         }

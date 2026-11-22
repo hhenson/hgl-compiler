@@ -1631,6 +1631,73 @@ fn graph_instances_check_settled_switch_selectors_and_labels() {
     );
 }
 
+/// TYPE-7, CTRL-6 and GEN-7: an implied label uses the settled selector
+/// and can repeat an explicit spelling of the same enum member.
+#[test]
+fn graph_instances_resolve_implied_switch_labels() {
+    let checked = module(
+        "enum Side { buy, sell }
+operator predicate<T>(input: T) -> bool
+impl const fn predicate<T>(input: T) -> bool => true
+impl fn predicate(input: i64) -> bool { when { return input > 0 } }
+fn selected<T>(const input: T) -> i64 {
+    let key = if predicate(input) { Side.buy }
+    switch key {
+        case (.buy): return 1
+        case Side.sell: return 2
+    }
+    return 0
+}
+fn missing<T>(const input: T) -> i64 {
+    let key = if predicate(input) { Side.buy }
+    switch key { case .hold: return 1 }
+    return 0
+}
+fn repeated<T>(const input: T) -> i64 {
+    let key = if predicate(input) { Side.buy }
+    switch key {
+        case .buy: return 1
+        case Side(\"buy\"): return 2
+        case Side.sell: return 3
+        case .sell: return 4
+    }
+    return 0
+}
+fn admitted() -> i64 => selected(1)
+fn no_member() -> i64 => missing(1)
+fn duplicates() -> i64 => repeated(1)",
+    );
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    let Some(Stmt::Switch {
+        selector, cases, ..
+    }) = instance.statements.get(1)
+    else {
+        panic!("the instance switches on the settled selector");
+    };
+    assert_eq!(selector.ty.to_string(), "Side");
+    assert_eq!(cases.len(), 2);
+    for (member, case) in cases.iter().enumerate() {
+        assert_eq!(
+            case.value,
+            Some(hgl_analyser::hir::LabelValue::Member(member))
+        );
+        assert!(matches!(
+            case.label.kind,
+            ExprKind::EnumMember { member: resolved, .. } if resolved == member
+        ));
+    }
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:23:14 type/switch.duplicate_label CTRL-6",
+            "m.hgl:25:14 type/switch.duplicate_label CTRL-6",
+            "m.hgl:30:26 name/member.unknown TYPE-7",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-7, EXPR-5 and EXPR-9: contextual dictionary and set entries
 /// retain their destination types even when the value settled later.
 #[test]

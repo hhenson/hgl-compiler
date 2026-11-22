@@ -51,6 +51,7 @@ analyser: partial
 
 - A label is a compile-time constant of the selector's type (`switch.label_constant`, CTRL-12 and UNIT-13), read by the one reader (`constant`) and compared as the selector's `==` compares them (`ConstantValue::equals`): a literal however written, an enum member however written, a constant followed to its value, and a constant expression of those
 - A repeated value is rejected (`switch.duplicate_label`), `case 1:` beside `case 0x1:` among them, and an enum's coverage by such labels stands for a `default`
+- A generic graph reads an implied enum label when its selector settles and checks repeats against that enum's resolved labels (TYPE-7, GEN-7).
 - Two labels are duplicates where `==` of the selector's type holds for them, as CTRL-6 has it; a selector is a `bool`, an `i64`, a `str` or an enum (CTRL-12), whose `==` is their sameness as constants (UNIT-13)
 - Left: a label whose value is not worked out, a generic value parameter's or one of a candidate of the program's own, whose repeat is not judged
 

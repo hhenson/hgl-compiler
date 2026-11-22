@@ -892,16 +892,9 @@ impl<'a> Typer<'a> {
                             // program runs (`ConstantValue::equals`).
                             .find(|(other, _)| other.equals(&constant) == Some(true))
                         {
-                            Some((_, first)) => self.diagnostics.emit(
-                                error(
-                                    Category::Type,
-                                    codes::SWITCH_DUPLICATE_LABEL,
-                                    label.at,
-                                    "this label has the value of an earlier one".to_string(),
-                                    "CTRL-6",
-                                )
-                                .with_related(*first, "first here"),
-                            ),
+                            Some((_, first)) => self
+                                .diagnostics
+                                .emit(duplicate_switch_label(label.at, *first)),
                             None => seen.push((constant, label.at)),
                         }
                     }
@@ -1085,6 +1078,18 @@ fn widened_block(branch: &Expr) -> Option<Expr> {
         at: branch.at,
         category: ValueCategory::Unsettled,
     })
+}
+
+/// CTRL-6: a later switch label repeats the first label's resolved value.
+pub(super) fn duplicate_switch_label(label: Location, first: Location) -> Diagnostic {
+    error(
+        Category::Type,
+        codes::SWITCH_DUPLICATE_LABEL,
+        label,
+        "this label has the value of an earlier one".to_string(),
+        "CTRL-6",
+    )
+    .with_related(first, "first here")
 }
 
 /// A constant as the stages after the analyser hold a `switch` label's
