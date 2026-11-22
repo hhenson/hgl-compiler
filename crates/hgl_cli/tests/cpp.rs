@@ -1254,6 +1254,45 @@ fn runnable_documentation_examples_use_the_named_test_runner() {
     );
 }
 
+/// TST-14 and SDOC-9: giving Core's source makes its tests executable.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn explicitly_supplied_core_examples_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("explicit-core-documentation-examples");
+    let file = write(
+        &root,
+        "core.hgl",
+        concat!(
+            "/** Core.\n\nExamples:\n    ```hgl\n    assert true\n    ```\n*/\n",
+            "module core\n",
+            "test supplied { assert true }\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("passed   executable  core::[module]#example-1"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("passed   executable  core::supplied"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// SDOC-6: an invalid documentation example cannot affect a production run,
 /// including the second parse that applies its argument override.
 #[test]

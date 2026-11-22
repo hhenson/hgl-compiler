@@ -164,13 +164,12 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             })
             .map(|(piece, _)| piece)
             .collect();
-        // TST-2: a test gets its own executable entry. Core's tests
-        // are excluded from the program's test list.
+        // TST-2: each in-scope test gets its own executable entry.
         let tests: Vec<(usize, &Piece)> = module
             .tests
             .iter()
             .enumerate()
-            .filter(|(test, _)| Some(index) != core && blocks[index].tests[*test].is_none())
+            .filter(|(test, _)| blocks[index].tests[*test].is_none())
             .collect();
         // An application's run statement, where it is clear (UNIT-14).
         let application = module
@@ -302,9 +301,6 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
     let mut executables = Vec::new();
     let mut tests = Vec::new();
     for (index, module) in written.iter().enumerate() {
-        if Some(index) == core {
-            continue;
-        }
         let declared = &program.modules[index];
         let clear: Vec<(usize, &Piece)> = module
             .tests

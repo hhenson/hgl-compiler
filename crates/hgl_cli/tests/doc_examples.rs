@@ -18,6 +18,7 @@ fn the_runner_lists_and_selects_examples_and_ordinary_tests() {
     let listed = hgl(&["test", &file]);
     assert_eq!(listed.status.code(), Some(2), "{}", text(&listed.stderr));
     let listing = text(&listed.stdout);
+    assert!(!listing.contains("core::"), "{listing}");
     for name in [
         "ordinary",
         "[module]#example-1",
@@ -56,6 +57,29 @@ fn the_runner_lists_and_selects_examples_and_ordinary_tests() {
         "{listing}"
     );
     assert!(listing.contains("twice#example-3"), "{listing}");
+}
+
+/// TST-14 and SDOC-9: Core is under test when its source is given.
+#[test]
+fn explicitly_supplied_core_examples_are_checked_and_listed() {
+    let root = scratch("explicit-core-examples");
+    let core_source =
+        "/** Core.\n\nExamples:\n    ```hgl\n    assert 1\n    ```\n*/\nmodule core\n";
+    let core = write(&root, "core.hgl", core_source);
+    let output = hgl(&["check", &core]);
+    assert_eq!(output.status.code(), Some(1));
+    let diagnostics = text(&output.stderr);
+    assert!(diagnostics.contains("type.mismatch"), "{diagnostics}");
+    assert!(diagnostics.contains(&format!("{core}:5:")), "{diagnostics}");
+
+    fs::write(&core, core_source.replace("assert 1", "assert true")).unwrap();
+    let output = hgl(&["test", &core]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr));
+    assert!(
+        text(&output.stdout).contains("not run  executable  core::[module]#example-1\n"),
+        "{}",
+        text(&output.stdout)
+    );
 }
 
 #[test]
