@@ -2498,7 +2498,8 @@ impl ConstantValue {
                 | V::Named { .. }
                 | V::Constructed { .. }
                 | V::Unary(..)
-                | V::Binary(..),
+                | V::Binary(..)
+                | V::RangeLength(..),
             ) => None,
             (V::Int(_), V::Float(_)) | (V::Float(_), V::Int(_)) => None,
             (V::Int(left), V::Int(right)) => Some(left == right),
@@ -2795,6 +2796,19 @@ impl ConstantValue {
             };
         }
         Self::RangeLength(Box::new(lower), Box::new(upper))
+    }
+
+    /// TYPE-10: a fixed extent is nonnegative. When its written value
+    /// is the range's difference, that difference needs no clamping.
+    pub(crate) fn same_extent(&self, other: &Self) -> bool {
+        let Self::RangeLength(lower, upper) = self else {
+            return false;
+        };
+        if matches!(**lower, Self::Int(0)) && upper.same(other) == Some(true) {
+            return true;
+        }
+        Self::Binary(BinaryOperator::Subtract, upper.clone(), lower.clone()).same(other)
+            == Some(true)
     }
 
     /// This constant with each generic value parameter `given` gives a

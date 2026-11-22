@@ -11,7 +11,7 @@ use hgl_parser::{HasSpan, SyntaxNode};
 use hgl_source::FileId;
 
 use crate::declared::{names_one_of, substitute_within};
-use crate::hir::{Body, DefaultExpr, Expr, Run};
+use crate::hir::{Body, DefaultExpr, Run};
 use crate::types::{Argument, CallArguments, Detail, GenericKind, NamedKind, Type, WrittenType};
 
 /// Every module found in the files analysed, in order of module path.
@@ -210,7 +210,7 @@ pub struct Module {
     /// The value each constant is written with, read as a value of the
     /// constant's type (UNIT-13): one entry for each of `declarations`,
     /// in the same order, `None` for a declaration that is no constant.
-    pub constants: Vec<Option<Expr>>,
+    pub constants: Vec<Option<DefaultExpr>>,
     /// An application's run statement, as it is written (RUN-1): its
     /// first, where it writes more than one. `None` for a module, and
     /// for an application that writes none.

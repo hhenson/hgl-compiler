@@ -80,7 +80,7 @@ fn a_constant_names_one_value_of_its_type() {
         .position(|declaration| declaration.name == "scale")
         .unwrap();
     assert!(matches!(
-        module.constants[late].as_ref().unwrap().kind,
+        module.constants[late].as_ref().unwrap().value.kind,
         ExprKind::Constant { declaration, .. } if declaration == scale
     ));
     // UNIT-3: it is private unless exported.

@@ -87,7 +87,7 @@ impl Emitter<'_> {
                 declaration,
             } => {
                 if let Some(Some(value)) = self.program.modules[*module].constants.get(*declaration)
-                    && may_fail(value)
+                    && may_fail(&value.value)
                 {
                     scope.acted = true;
                 }

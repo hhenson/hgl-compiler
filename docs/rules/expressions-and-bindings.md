@@ -197,7 +197,7 @@ transpiler: planned
 
 parser: done
 
-- Reads `..<` only in a loop's iterable, with additive expressions as bounds.
+- Reads `..<` only in a loop's iterable, with additive expressions as bounds. In a value position the parser reports the illegal range as one expression.
 
 analyser: done
 
@@ -215,9 +215,10 @@ parser: done
 
 analyser: done
 
-- Types each entry in the iteration scope. A fixed result gets the range's constant length or its fixed iterable's extent.
+- Types each entry in the iteration scope. A fixed result gets the range's constant length or its fixed iterable's extent, which must agree with the destination after selection.
 
 transpiler: partial
 
 - Builds growing and fixed ordinary lists. Composes a nonempty fixed list of connections over a range or a fixed input list.
+- Cold constant initializers and field defaults keep their comprehension bindings. The target visits the source's extent and checks the count before constructing a fixed result.
 - The pinned hgraph SDK requires a positive extent for a fixed temporal list.

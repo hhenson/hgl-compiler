@@ -45,6 +45,14 @@ enum Shape<'t> {
     Fixed(&'t Type, i64),
 }
 
+/// Keep the fixed container conversion guarded even when the analyser
+/// could not compare the extents. The loop itself always visits its source.
+fn check_extent(items: &str, count: i64) -> String {
+    format!(
+        "if ({items}.size() != ::std::size_t{{{count}}}) throw ::std::logic_error(\"list comprehension extent does not match its result type\");\n"
+    )
+}
+
 /// The shape of `ty`, where it is a list this family writes: a fixed list
 /// of a positive size (TYPE-10 allows none of no position that hgraph's
 /// `TSL` takes).
@@ -178,15 +186,17 @@ impl Emitter<'_> {
         let before_entry = std::mem::replace(&mut scope.before, saved).join("\n");
         scope.conditional -= 1;
         scope.acted = true;
-        let output = if let Some((count, _)) = fixed {
-            format!(
+        let (check, output) = if let Some((count, _)) = fixed {
+            let check = check_extent(&items, count);
+            let output = format!(
                 "[&]<::std::size_t... I>(::std::index_sequence<I...>) {{ return {result}{{::std::move({items}[I])...}}; }}(::std::make_index_sequence<{count}>{{}})"
-            )
+            );
+            (check, output)
         } else {
-            items.clone()
+            (String::new(), items.clone())
         };
         format!(
-            "[&]() -> {result} {{\n{begin}\n{collection} {items};\n{header}\n{before_entry}\n{items}.emplace_back({entry});\n}}\nreturn {output};\n}}()"
+            "[&]() -> {result} {{\n{begin}\n{collection} {items};\n{header}\n{before_entry}\n{items}.emplace_back({entry});\n}}\n{check}return {output};\n}}()"
         )
     }
 
@@ -208,6 +218,18 @@ impl Emitter<'_> {
         let Some(schema) = self.temporal_schema(&value.ty, value.at) else {
             return "0".to_string();
         };
+        let input_count = match &sequence.kind {
+            ExprKind::Range { .. } => count,
+            _ => match shape(&sequence.ty) {
+                Some(Shape::Fixed(_, count)) => count,
+                _ => {
+                    return self.missing(
+                        sequence.at,
+                        "a comprehension over a list without a fixed size",
+                    );
+                }
+            },
+        };
         let name = names::identifier(&scope.body.locals[binding].name);
         let children = names::temporary("comprehension_children", self.temporary());
         let cursor = names::temporary("comprehension_position", self.temporary());
@@ -222,7 +244,7 @@ impl Emitter<'_> {
                 .before
                 .push(format!("const auto {source_port} = {source};"));
             format!(
-                "for (::hgraph::Int {cursor} = 0; {cursor} < {count}; ++{cursor}) {{ [[maybe_unused]] const auto {name} = ::{}::element_port({source_port}, {cursor});",
+                "for (::hgraph::Int {cursor} = 0; {cursor} < {input_count}; ++{cursor}) {{ [[maybe_unused]] const auto {name} = ::{}::element_port({source_port}, {cursor});",
                 runtime::NAMESPACE
             )
         };
@@ -231,8 +253,9 @@ impl Emitter<'_> {
         let before_entry = std::mem::replace(&mut scope.before, saved).join("\n");
         scope.conditional -= 1;
         scope.acted = true;
+        let check = check_extent(&children, count);
         format!(
-            "[&]() -> ::hgraph::Port<{schema}> {{\n{begin}\n::std::vector<::hgraph::WiringPortRef> {children};\n{children}.reserve({count});\n{header}\n{before_entry}\n{children}.push_back(({entry}).erased());\n}}\nreturn {{&{WIRING}, ::hgraph::WiringPortRef::structural_source(::hgraph::schema_descriptor<{schema}>::ts_meta(), ::std::move({children}))}};\n}}()"
+            "[&]() -> ::hgraph::Port<{schema}> {{\n{begin}\n::std::vector<::hgraph::WiringPortRef> {children};\n{children}.reserve({count});\n{header}\n{before_entry}\n{children}.push_back(({entry}).erased());\n}}\n{check}return {{&{WIRING}, ::hgraph::WiringPortRef::structural_source(::hgraph::schema_descriptor<{schema}>::ts_meta(), ::std::move({children}))}};\n}}()"
         )
     }
 

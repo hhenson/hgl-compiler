@@ -58,7 +58,20 @@ impl Parser<'_> {
     /// Parses nothing, with a report, when no expression starts at the
     /// cursor.
     pub(crate) fn expression(&mut self) {
+        let mark = self.mark();
         self.binary_expr(1);
+        if self.at(RangeUntil) && !self.nl() {
+            self.error(
+                "a range is only written as the iterable of a loop",
+                "EXPR-16",
+                None,
+            );
+            while self.at(RangeUntil) && !self.nl() {
+                self.bump();
+                self.binary_expr(1);
+            }
+            self.wrap(mark, Error);
+        }
     }
 
     /// The six binary levels of the grammar, `or_expr` down to

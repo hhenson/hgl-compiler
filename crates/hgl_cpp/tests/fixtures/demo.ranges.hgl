@@ -116,3 +116,39 @@ const fn observe_bounds() -> i64 {
 test bounds_evaluate_once_in_order {
     assert observe_bounds() == 12346
 }
+
+# UNIT-7, UNIT-13 and EXPR-17: cold expressions keep their own loop bindings.
+const cold_squares: list<i64> = [for i in 0..<4: i * i]
+const cold_fixed: list<i64, 3> = [for i in 1..<4: i * i]
+
+struct ColdList {
+    entries: list<i64> = [for i in 0..<2: i + 5]
+}
+
+test cold_list_comprehensions {
+    let i = 100
+    let holder = ColdList()
+    assert cold_squares == [0, 1, 4, 9]
+    assert cold_fixed == [1, 4, 9]
+    assert holder.entries == [5, 6]
+    assert i == 100
+}
+
+# EXPR-17 and TYPE-10: the inferred extent fits the written generic size.
+fn spread<N>(x: i64, xs: list<i64, N>) -> list<i64, N> {
+    let ys = [for i in 0..<N: x + i]
+    return ys
+}
+
+fn spread_k<const K: i64>(x: i64) -> list<i64, K> {
+    let ys = [for i in 0..<K: x + i]
+    return ys
+}
+
+fn spread_two(x: i64, k: i64) -> list<i64, 2> => spread(x, [k, k])
+fn spread_k3(x: i64) -> list<i64, 3> => spread_k<3>(x)
+
+test inferred_generic_extent_in_composition {
+    assert eval spread_two([1], [0]) == [[1, 2]]
+    assert eval spread_k3([1]) == [[1, 2, 3]]
+}

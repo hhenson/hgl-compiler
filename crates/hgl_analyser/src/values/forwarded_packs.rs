@@ -304,7 +304,7 @@ pub(super) fn check_instances(
             run.call.walk(&mut record);
         }
         for constant in unit.constants.iter().flatten() {
-            constant.walk(&mut record);
+            constant.value.walk(&mut record);
         }
     }
     for (initial, at) in roots {

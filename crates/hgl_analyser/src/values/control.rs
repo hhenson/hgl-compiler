@@ -91,6 +91,21 @@ pub(super) fn fixed_list_extent(ty: &Type) -> Option<&Constant> {
     (!matches!(size.value, ConstantValue::Unbounded)).then_some(size)
 }
 
+/// Show a symbolic range extent as an expression instead of a range type.
+fn extent_text(node: &SyntaxNode, value: &ConstantValue) -> String {
+    let mut bounds = node.children();
+    if let ConstantValue::RangeLength(lower, _) = value
+        && let (Some(first), Some(last)) = (bounds.next(), bounds.next())
+    {
+        if matches!(**lower, ConstantValue::Int(0)) {
+            return last.text().to_string();
+        }
+        let (first, last) = (first.text(), last.text());
+        return format!("if ({last}) > ({first}) {{ ({last}) - ({first}) }} else {{ 0 }}");
+    }
+    node.text().to_string()
+}
+
 /// What a `for` binds, and whether it makes one child for each member,
 /// by what it loops over (CTRL-15).
 ///
@@ -929,20 +944,8 @@ impl<'a> Typer<'a> {
             }
             return expected.cloned();
         };
-        if let (Some(expected), ConstantValue::RangeLength(lower, upper)) = (expected, &value) {
-            let subtraction =
-                ConstantValue::Binary(hir::BinaryOperator::Subtract, upper.clone(), lower.clone());
-            // TYPE-10: the expected fixed extent is nonnegative. Where
-            // it is the range's difference, clamping to zero adds nothing.
-            if expected.value.same(&subtraction) == Some(true)
-                || matches!(**lower, ConstantValue::Int(0))
-                    && expected.value.same(upper) == Some(true)
-            {
-                return Some(expected.clone());
-            }
-        }
         Some(Constant {
-            text: value.key().unwrap_or_else(|| node.text().to_string()),
+            text: value.key().unwrap_or_else(|| extent_text(node, &value)),
             value,
         })
     }
@@ -954,18 +957,18 @@ impl<'a> Typer<'a> {
             return types.into_iter().cloned().collect();
         }
         if !open(ty) {
-            let takes = if matches!(sequence.kind, ExprKind::Range { .. }) {
-                "a range gives one iteration binding"
+            let message = if matches!(sequence.kind, ExprKind::Range { .. }) {
+                "a range gives one iteration binding".to_string()
             } else if count == 1 {
-                "`for` with one name loops over a list or a set"
+                format!("this is `{ty}`, and `for` with one name loops over a list or a set")
             } else {
-                "`for` with two names loops over a dictionary"
+                format!("this is `{ty}`, and `for` with two names loops over a dictionary")
             };
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::TYPE_MISMATCH,
                 sequence.at,
-                format!("this is `{ty}`, and {takes}"),
+                message,
                 self.loop_rule(),
             ));
         }

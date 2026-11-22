@@ -65,7 +65,7 @@ pub struct Body {
     pub statements: Vec<Stmt>,
 }
 
-/// A checked default and the local bindings declared inside it (UNIT-7).
+/// A checked constant initializer or default and its own locals (UNIT-7, UNIT-13).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DefaultExpr {
     /// The value computed in the declaration's enclosing scope.

@@ -643,14 +643,9 @@ impl Instances {
             }
             // What is worked out with no body around it: a constant's
             // value, and a default (UNIT-13, UNIT-8).
-            let defaults = module
-                .defaults
-                .iter()
-                .flatten()
-                .flatten()
-                .map(|default| &default.value);
+            let defaults = module.defaults.iter().flatten().flatten();
             for value in module.constants.iter().flatten().chain(defaults) {
-                waiting.extend(instances.asked_in(program, value));
+                waiting.extend(instances.asked_in(program, &value.value));
             }
         }
         // Each call asked from where the search starts is a root, and

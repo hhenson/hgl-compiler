@@ -5,11 +5,40 @@ test range_is_no_value {
     let ranges = 0..<3
 }
 
+const fn take_list(values: list<i64>) -> i64 => 3
+
+test range_is_no_argument {
+    # expect-error(parse, "syntax.expected_token")
+    assert take_list(0..<3) == 3
+}
+
+test range_is_no_assigned_value {
+    var values: list<i64> = []
+    # expect-error(parse, "syntax.expected_token")
+    values = 0..<3
+}
+
+test range_has_one_binding {
+    # expect-error(type, "type.mismatch")
+    for i, j in 0..<3 {}
+}
+
 # expect-error(type, "type.mismatch")
 const fn wrong_bound() -> list<i64> => [for index in "start"..<2: index]
 
 # expect-error(type, "type.mismatch")
 const fn wrong_fixed_size() -> list<i64, 4> => [for index in 0..<3: index]
+
+# expect-error(type, "type.mismatch")
+fn wrong_graph_range_size(x: i64) -> list<i64, 2> => [for index in 0..<3: x + index]
+
+# expect-error(type, "type.mismatch")
+fn wrong_graph_list_size(values: list<i64, 2>) -> list<i64, 3> => [for item in values: item]
+
+const fn triple() -> list<i64, 3> => [10, 20, 30]
+
+# expect-error(type, "type.mismatch")
+const fn wrong_value_input_size() -> list<i64, 2> => [for item in triple(): item]
 
 # expect-error(type, "list.size")
 const fn runtime_extent(count: i64) -> list<i64, 4> => [for index in 0..<count: index]
