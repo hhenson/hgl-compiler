@@ -2452,8 +2452,8 @@ fn a_default_that_leaves_itself_out_is_reported() {
 fn named_test_helpers_have_test_local_cpp_names() {
     let emitted = emit_with(
         &[(
-            "core_implementation.named_test_helpers.hgl",
-            include_str!("fixtures/core_implementation.named_test_helpers.hgl"),
+            "core_conformance.named_test_helpers.hgl",
+            include_str!("fixtures/core_conformance.named_test_helpers.hgl"),
         )],
         &hgl_cpp::runtime::provides,
     );
@@ -2467,44 +2467,38 @@ fn named_test_helpers_have_test_local_cpp_names() {
     assert_eq!(
         tests,
         [
+            ("core_conformance::first_helpers".to_owned(), false, Some(0)),
             (
-                "core_implementation::first_helpers".to_owned(),
+                "core_conformance::second_helpers".to_owned(),
                 false,
                 Some(0)
             ),
-            (
-                "core_implementation::second_helpers".to_owned(),
-                false,
-                Some(0)
-            ),
-            ("core_implementation::live_helper".to_owned(), true, Some(0)),
+            ("core_conformance::live_helper".to_owned(), true, Some(0)),
         ]
     );
     let unit = &output
         .files
         .iter()
-        .find(|file| file.path == "modules/mod-core_implementation.cpp")
+        .find(|file| file.path == "modules/mod-core_conformance.cpp")
         .unwrap()
         .text;
     for owner in [0, 1, 2] {
         let helper = format!("t_::helpers_0{owner}_");
         assert!(unit.contains(&format!("namespace {helper}")), "{unit}");
         assert!(
-            unit.contains(&format!(
-                "::hgl::core_implementation::m_::{helper}::adjust("
-            )),
+            unit.contains(&format!("::hgl::core_conformance::m_::{helper}::adjust(")),
             "{unit}"
         );
         if owner < 2 {
             assert!(
                 unit.contains(&format!(
-                    "::hgl::core_implementation::m_::w_::{helper}::adjust("
+                    "::hgl::core_conformance::m_::w_::{helper}::adjust("
                 )),
                 "{unit}"
             );
             assert!(
                 unit.contains(&format!(
-                    "::hgl::core_implementation::m_::{helper}::i_::keep::of_i64("
+                    "::hgl::core_conformance::m_::{helper}::i_::keep::of_i64("
                 )),
                 "{unit}"
             );

@@ -2114,7 +2114,7 @@ listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml).
 The list covers the remaining nullable store put case. Build `hgl` and run
 `check_core.py`, which runs the pinned core's `tests/conformance`
-and `tests/implementation` on the target, including integration tests:
+and `tests/core_conformance` on the target, including integration tests:
 
 ```sh
 cargo build --locked --bin hgl
