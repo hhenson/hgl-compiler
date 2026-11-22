@@ -39,11 +39,6 @@ const DIAGNOSTICS: &str = "hgl_core/spec/diagnostics.md";
 const PENDING: &[Pending] = &[
     Pending {
         file: FUNCTIONS,
-        opening: "module examples.configuration_parameters",
-        reason: "FN-18, EXPR-10 (#363)",
-    },
-    Pending {
-        file: FUNCTIONS,
         opening: "module examples.pack_forms",
         reason: "LEX-29, EXPR-16, EXPR-17, FN-19 (#368)",
     },
@@ -65,7 +60,7 @@ const PENDING: &[Pending] = &[
     Pending {
         file: GENERICS,
         opening: r#"operator each_wanted<K, R, ...Ps, ...As, const key: str = "key">{"#,
-        reason: "GEN-17 and FN-8 (#366), FN-18 and EXPR-10 (#363)",
+        reason: "GEN-17 and FN-8 (#366)",
     },
     Pending {
         file: GENERICS,
@@ -75,12 +70,7 @@ const PENDING: &[Pending] = &[
     Pending {
         file: MAPPING,
         opening: "export enum Join { inner, outer, left }",
-        reason: "GEN-17 and FN-8 (#366), FN-18 (#363), GEN-10 and GEN-18 (#367), EXPR-16, EXPR-17 and FN-19 (#368)",
-    },
-    Pending {
-        file: MAPPING,
-        opening: "module examples.mapping",
-        reason: "EXPR-10 (#363)",
+        reason: "GEN-17 and FN-8 (#366), GEN-10 and GEN-18 (#367), EXPR-16, EXPR-17 and FN-19 (#368)",
     },
     Pending {
         file: DIAGNOSTICS,

@@ -1279,6 +1279,35 @@ fn function_parameters_run_on_the_sdk() {
     );
 }
 
+/// FN-18 and EXPR-10: brace arguments reach their ordinary, generic,
+/// value and temporal slots. Graphs pass const values and connections
+/// on to a node, and configuration defaults are used when omitted.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn configuration_parameters_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("configuration_parameters");
+    let file = write(
+        &root,
+        "demo.configuration_parameters.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.configuration_parameters.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// ERR-5, ERR-6, ERR-12 and ERR-15 through generated value code and
 /// temporal nodes, including result guards (ERR-3), SOURCE-2 yield times
 /// and an application failure.
@@ -2900,6 +2929,89 @@ fn a_tests_failure_is_named_after_a_node_written_ahead_of_it() {
     );
     assert!(
         stdout.contains(&format!("    {file}:5:5: the assertion does not hold\n")),
+        "{stdout}"
+    );
+}
+
+/// FN-18, GEN-6, EXPR-10, EXPR-13: a named or symbol operator gives
+/// the selected candidate its configuration in written evaluation order.
+/// An inherited default keeps the operator's generic environment (UNIT-7).
+/// A requirement describes the ordinary operands (GEN-16).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn operator_configuration_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("operator_configuration");
+    let file = write(
+        &root,
+        "demo.operator_configuration.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.operator_configuration.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// GEN-16, UNIT-8: a required symbol keeps the public generic arguments
+/// that its selected candidate's inherited configuration default reads.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn required_symbols_inherit_configuration_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("required_symbol_configuration");
+    write(
+        &root,
+        "core.hgl",
+        concat!(
+            "module core\n",
+            "export operator add_<T, const N: i64 = 2>{adjustment: i64 = N}(lhs: T, rhs: T) -> T\n",
+            "impl const fn add_{adjustment: i64}(lhs: i64, rhs: i64) -> i64 => adjustment\n",
+            "export operator neg_<T, const N: i64 = 3>{adjustment: i64 = N}(value: T) -> T\n",
+            "impl const fn neg_{adjustment: i64}(value: i64) -> i64 => adjustment\n",
+            "export operator eq_(lhs: i64, rhs: i64) -> bool\n",
+            "native impl const fn eq_(lhs: i64, rhs: i64, abs: f64 = 0.0, rel: f64 = 0.0) -> bool\n",
+        ),
+    );
+    write(
+        &root,
+        "demo.required_symbol_configuration.hgl",
+        concat!(
+            "module demo.required_symbol_configuration\n",
+            "const fn sum<T>(lhs: T, rhs: T) -> T requires add_(T, T) -> T => lhs + rhs\n",
+            "const fn negate<T>(value: T) -> T requires neg_(T) -> T => -value\n",
+            "test inherited_configuration_reads_defaults {\n",
+            "    assert sum(11, 12) == 2\n",
+            "    assert negate(13) == 3\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(
+        &["test", root.to_str().unwrap(), "--target", "cpp"],
+        &[],
+        &[],
+    );
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

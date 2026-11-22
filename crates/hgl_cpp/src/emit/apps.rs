@@ -19,8 +19,10 @@
 //! The library's `run` gives the run's output as text, and its host
 //! (`hglrt/application_host.h`) writes it for the driver (`hgl_cli`).
 
-use hgl_analyser::hir::{Body, ExprKind, Stmt};
-use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
+use std::ops::Deref;
+
+use hgl_analyser::hir::{Body, Callee, ExprKind, Stmt};
+use hgl_lower::calls::{DefaultValue, LeftOut, left_out, runtime_arguments};
 use hgl_lower::instances::run_result;
 
 use super::Emitter;
@@ -131,10 +133,6 @@ impl Emitter<'_> {
         // out", as an eval's (`tests`): where more than one of them may
         // fail, or one runs statements, each argument and each default is
         // held first, in that order, as its HGL type.
-        let none = Body {
-            locals: Vec::new(),
-            statements: Vec::new(),
-        };
         let entry_arguments = Body {
             locals: run.locals.clone(),
             statements: Vec::new(),
@@ -143,14 +141,14 @@ impl Emitter<'_> {
         let (callee, arguments) = match &run.call.kind {
             ExprKind::Call {
                 callee, arguments, ..
-            } => (callee.declaration(), arguments.as_slice()),
+            } => (Some(callee), arguments.as_slice()),
             _ => (None, &[][..]),
         };
         let left = callee.map_or_else(Vec::new, |callee| left_defaults(program, callee, arguments));
         let held = arguments
             .iter()
             .map(|argument| &argument.value)
-            .chain(left.iter().map(|(_, default)| *default))
+            .chain(left.iter().map(|(_, default)| default.deref()))
             .filter(|part| may_fail(part))
             .count()
             > 1
@@ -193,17 +191,9 @@ impl Emitter<'_> {
                 given.push((position, name));
             }
             for (index, default) in &left {
-                if changes(default) {
-                    self.unsupported(default.at, "a default that runs statements");
+                let Some(written) = self.write_default(default) else {
                     return;
-                }
-                // A default is read with no local in scope (UNIT-7).
-                let mut cold = Scope::cold(program, &none);
-                let written = self.expression(&mut cold, default);
-                if !cold.before.is_empty() {
-                    self.unsupported(default.at, "a default that propagates a failure");
-                    return;
-                }
+                };
                 let Some(ty) = self.written_type(&default.ty, default.at) else {
                     return;
                 };
@@ -292,11 +282,14 @@ impl Emitter<'_> {
 /// order of the parameters.
 fn left_defaults<'p>(
     program: &'p hgl_analyser::Program,
-    callee: (usize, usize),
+    callee: &Callee,
     arguments: &[hgl_analyser::hir::Argument],
-) -> Vec<(usize, &'p hgl_analyser::hir::Expr)> {
+) -> Vec<(usize, DefaultValue<'p>)> {
+    let Some((module, declaration)) = callee.declaration() else {
+        return Vec::new();
+    };
     let Some(hgl_analyser::Detail::Callable(signature)) =
-        program.modules[callee.0].details.get(callee.1)
+        program.modules[module].details.get(declaration)
     else {
         return Vec::new();
     };
@@ -311,7 +304,7 @@ fn left_defaults<'p>(
                     .any(|argument| argument.parameter == Some(*index))
         })
         .filter_map(
-            |(index, parameter)| match left_out(program, Some(callee), index, parameter) {
+            |(index, parameter)| match left_out(program, callee, index, parameter) {
                 Some(LeftOut::Default(default)) => Some((index, default)),
                 _ => None,
             },

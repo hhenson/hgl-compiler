@@ -30,7 +30,10 @@ impl<'a> Typer<'a> {
             "err" => self.tagged(false, name, list, expected),
             "is_ok" => self.tag_test(true, name, list),
             "is_err" => self.tag_test(false, name, list),
-            "capture" => self.capture(name, list),
+            "capture" => {
+                self.reject_configuration(name, list);
+                self.capture(name, list)
+            }
             _ => return None,
         })
     }
@@ -45,6 +48,7 @@ impl<'a> Typer<'a> {
         list: &SyntaxNode,
         rule: &'static str,
     ) -> Option<SyntaxNode> {
+        self.reject_configuration(form, list);
         let mut arguments = arguments_of(list).into_iter();
         let Some((label, first)) = arguments.next() else {
             self.diagnostics.emit(error(

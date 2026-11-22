@@ -92,6 +92,11 @@ mod lifting;
 mod members;
 // A node's body and a source's: hooks, headers, admission (FN-2, TIME-3).
 mod node;
+// Omitted configuration defaults in selected operator calls (GEN-6, UNIT-8).
+mod operator_defaults;
+pub(crate) use operator_defaults::{
+    fit_operator_default, fit_required_configuration, operator_default_answers,
+};
 // A call of an operator: its requested output, arguments and candidates (GEN-5, GEN-6).
 mod operators;
 // `requires`, and what a generic body may call by it (GEN-3, GEN-7, GEN-16).
@@ -252,6 +257,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         // type, whatever its declaration is: a function, a candidate,
         // an operator, or the contract of a native one.
         let mut defaults = Vec::with_capacity(module.declarations.len());
+        selecting.borrow_mut().clear();
         for (position, declaration) in module.declarations.iter().enumerate() {
             let read = match module.details.get(position) {
                 Some(Detail::Callable(signature))
@@ -278,6 +284,12 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                 _ => Vec::new(),
             };
             defaults.push(read);
+            let calls = selecting.take();
+            if declaration.kind == DeclarationKind::Operator {
+                // The operator has no body. Its inherited defaults use
+                // this table when specialized in that scope (UNIT-7).
+                selected[position].extend(calls);
+            }
         }
         // What each expression is and which calls are lifted (FN-3,
         // FN-6), written on what was read for the stages after this
@@ -298,8 +310,12 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         if let Some(run) = &mut run_body {
             lifting::record_run(program, run);
         }
-        for value in defaults.iter_mut().flatten().flatten() {
-            lifting::record_value(program, value);
+        for slot in defaults.iter_mut().flatten() {
+            if let Some(default) = slot.take() {
+                let mut body = default.into_body();
+                lifting::record(program, &mut body, false);
+                *slot = Some(hir::DefaultExpr::from_body(body));
+            }
         }
         program.modules[index].bodies = bodies;
         program.modules[index].test_bodies = test_bodies;
@@ -310,7 +326,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     }
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
-    requirements::instances_hold(program, diagnostics);
+    operators::inherit_configuration_defaults(program);
+    let default_calls = operator_defaults::check(program, diagnostics);
+    requirements::instances_hold(program, default_calls, diagnostics);
     // TYPE-10, TYPE-11: the sizes each struct application written in a
     // type gives the struct's lists and windows.
     sizes::applied_sizes(program, diagnostics);

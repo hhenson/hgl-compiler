@@ -288,6 +288,7 @@ impl Typer<'_> {
             let requirements = self.answers(module, declaration, &chosen.generics);
             let callee = Callee::Candidate {
                 operator: (operator.module, operator.declaration),
+                operator_generics: Vec::new(),
                 module,
                 declaration,
                 generics: chosen.generics,
@@ -408,6 +409,7 @@ impl Typer<'_> {
             .parameters
             .iter()
             .map(|(name, ty)| Slot {
+                configuration: false,
                 name: name.as_deref().unwrap_or(""),
                 ty: ty.clone(),
                 required: !matches!(ty, Type::Nullable(_)),

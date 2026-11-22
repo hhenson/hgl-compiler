@@ -164,7 +164,10 @@ analyser: done
 
 analyser: done
 
-- An inferred `let` given a child holds the endpoint. Endpoint operations name it and a value use reads it under TIME-1 admission. An inferred `var` still reads the value at initialization, as ruled pending the owner's reading in #440.
+- An inferred `let` given a child holds the endpoint. Endpoint operations
+  name it and a value use reads it under TIME-1 admission. A hook's `var`
+  reads the child at initialization. A graph's `var` given a child denotes
+  its connection (EXPR-4).
 - A runtime-checked child read, or an admitted whole read of a dictionary, an unsized list or a window, gives T, `result<T, error>`, or `T?` according to its place. The nullable form discards the error as ERR-15 does.
 - `delta_value` takes the same forms. TYPE-11 restricts a duration-window delta to a result or nullable place, and `removed_value` to a result place for every window.
 

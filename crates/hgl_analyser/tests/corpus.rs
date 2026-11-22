@@ -74,12 +74,7 @@ const PENDING_MODULES: &[(&str, &str, &str)] = &[
     (
         "hgl_core/spec/mapping.md",
         "examples.mapping",
-        "EXPR-10 (#363), MAP-1 and RED-1 (#369, #370)",
-    ),
-    (
-        "hgl_spec/spec/language/functions-and-phases.md",
-        "examples.configuration_parameters",
-        "FN-18 and EXPR-10 (#363)",
+        "MAP-1 and RED-1 (#369, #370)",
     ),
     (
         "hgl_spec/spec/language/functions-and-phases.md",

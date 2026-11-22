@@ -505,6 +505,30 @@ fn a_requirement_is_met_by_the_callers_own() {
     assert_eq!(callees(&checked, "uses"), ["candidate", "candidate"]);
 }
 
+/// FN-18 and GEN-16: a named requirement supplies the ordinary operands;
+/// a brace entry is type-checked in its own configuration slot.
+#[test]
+fn a_required_operator_accepts_well_typed_configuration() {
+    let checked = module(concat!(
+        "operator pick<T>{fallback: T? = null}(value: T) -> i64\n",
+        "impl const fn pick{fallback: i64?}(value: i64) -> i64 => value\n",
+        "impl const fn pick{fallback: bool?}(value: bool) -> i64 => 0\n",
+        "const fn configured<T>(value: T) -> i64 requires pick(T) -> i64 =>\n",
+        "    pick{fallback: value}(value)\n",
+        "const fn bad<T>(value: T) -> i64 requires pick(T) -> i64 =>\n",
+        "    pick{fallback: 1}(value)\n",
+        "const fn one() -> i64 => configured(1)\n",
+        "const fn zero() -> i64 => configured(true)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:8:20 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+    assert_eq!(callees(&checked, "configured"), ["pick"]);
+}
+
 /// GEN-7, FN-3: "Any body calls an operator; in a runtime body or a
 /// value function the call selects a value candidate." A node's hook
 /// and a graph's body are checked under their declaration's

@@ -208,7 +208,7 @@ impl Parser<'_> {
 
     /// ```text
     /// postfix_expr = primary_expr, { call_suffix | index_suffix | member_suffix | "?" } ;
-    /// call_suffix = "(", [ arguments ], ")" ;
+    /// call_suffix = [ operator_configuration ], "(", [ arguments ], ")" ;
     /// index_suffix = "[", expression, "]" ;
     /// member_suffix = ".", member_name ;
     /// ```
@@ -230,6 +230,47 @@ impl Parser<'_> {
         self.finish();
     }
 
+    /// EXPR-10: a named-entry brace before a call's parentheses is its
+    /// configuration. In a control header the brace opens the body.
+    fn call_configuration_ahead(&self) -> bool {
+        if !self.at(LBrace)
+            || self.nl()
+            || self.context.no_brace
+            || !(self.nth(1) == RBrace || self.nth_member_name(1) && self.nth(2) == Colon)
+        {
+            return false;
+        }
+        // A body can also start with a name and a colon, as in a
+        // struct following a constraint. Only the call has `(` after
+        // the closing brace. Entries may themselves contain braces.
+        let mut depth = 1;
+        for offset in 1.. {
+            match self.nth(offset) {
+                LBrace => depth += 1,
+                RBrace if depth == 1 => {
+                    return self.nth(offset + 1) == LParen && !self.nl_at(offset + 1);
+                }
+                RBrace => depth -= 1,
+                Eof => break,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Reports the opening parenthesis as the token expected after configuration.
+    fn call_suffix(&mut self) {
+        if self.call_configuration_ahead() {
+            self.configuration();
+        }
+        if self.at(LParen) && !self.nl() {
+            self.attached(Bracket::Call);
+            self.arg_list(ArgMode::Call);
+        } else {
+            self.expected("`(`");
+        }
+    }
+
     fn postfix_expr(&mut self) -> bool {
         let mark = self.mark();
         let start = self.position;
@@ -245,6 +286,7 @@ impl Parser<'_> {
                 // their own (LEX-5); apart on the same line they are
                 // reported, and read.
                 LParen if self.suffix_at(0) => CallExpr,
+                LBrace if self.call_configuration_ahead() => CallExpr,
                 LBracket if self.suffix_at(0) => IndexExpr,
                 // LEX-5: `.` cannot begin a statement, so it may start a
                 // line.
@@ -261,10 +303,7 @@ impl Parser<'_> {
                 bare_fn = false;
             }
             match kind {
-                CallExpr => {
-                    self.attached(Bracket::Call);
-                    self.arg_list(ArgMode::Call);
-                }
+                CallExpr => self.call_suffix(),
                 IndexExpr => {
                     self.attached(Bracket::Index);
                     self.index_suffix();
@@ -413,14 +452,8 @@ impl Parser<'_> {
             self.name();
             self.finish();
         }
-        if self.at(LParen) && !self.nl() {
-            // LEX-27: a call's `(` touches what it calls.
-            self.attached(Bracket::Call);
-            self.arg_list(ArgMode::Call);
-            self.wrap(mark, if generic { TypedConstructor } else { CallExpr });
-        } else {
-            self.expected("`(`");
-        }
+        self.call_suffix();
+        self.wrap(mark, if generic { TypedConstructor } else { CallExpr });
     }
 
     // ---- Names and constructors ----
@@ -496,7 +529,15 @@ impl Parser<'_> {
         // gap.
         let mut attached = self.adjacent_at(0);
         let shape = self.generic_args_unchecked();
-        if self.errors != errors || !shape.closed || !self.at(LParen) || self.nl() {
+        if self.errors != errors || !shape.closed {
+            return Verdict::No;
+        }
+        if self.call_configuration_ahead() {
+            // EXPR-10: these entries belong to a call. They cannot be
+            // the right operand of a comparison.
+            return Verdict::Yes;
+        }
+        if !self.at(LParen) || self.nl() {
             return Verdict::No;
         }
         attached &= self.adjacent_at(0);
@@ -543,12 +584,7 @@ impl Parser<'_> {
         } else {
             TypedConstructor
         };
-        if self.at(LParen) && !self.nl() {
-            self.attached(Bracket::Call);
-            self.arg_list(ArgMode::Call);
-        } else {
-            self.expected("`(`");
-        }
+        self.call_suffix();
         self.wrap(mark, kind);
     }
 

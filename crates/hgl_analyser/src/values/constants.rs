@@ -13,7 +13,7 @@ use super::fit::{not_null, whole};
 use super::inference::placed;
 use crate::constant::{Fault, Scope, Typed};
 use crate::declared::names_parameter;
-use crate::hir::{Expr, ExprKind, Value};
+use crate::hir::{DefaultExpr, Expr, ExprKind, Value};
 use crate::program::Declaration;
 use crate::read::{default_of, parameters};
 use crate::syntax::{child, tokens};
@@ -48,13 +48,15 @@ impl<'a> Typer<'a> {
     /// as a value of the parameter's type; `None` for a parameter with
     /// none.
     ///
-    /// A default is cold: it reads no parameter and no local (UNIT-7,
-    /// which the resolver holds it to), so it is read here apart from
-    /// the body. A parameter whose type names a generic parameter has a
+    /// A default is cold and reads no formal argument (UNIT-7), so it
+    /// is read apart from the body. A type naming a generic parameter has a
     /// type only a call gives, and its default is not held to one;
     /// neither is the default of a temporal shape that is no ordinary
     /// value type.
-    pub(super) fn defaults(mut self) -> Vec<Option<Expr>> {
+    pub(super) fn defaults(mut self) -> Vec<Option<DefaultExpr>> {
+        self.locals.clear();
+        self.declared.clear();
+        self.assigned.clear();
         let signature = self.signature;
         let syntax = self.declaration.syntax.clone();
         signature
@@ -89,9 +91,10 @@ impl<'a> Typer<'a> {
                         format!("{place} is a `signal`, which takes no default but `null`"),
                         "TYPE-12",
                     ));
-                    return Some(value);
+                    return Some(self.take_default(value));
                 }
-                Some(self.fit(value, &expected, &place))
+                let value = self.fit(value, &expected, &place);
+                Some(self.take_default(value))
             })
             .collect()
     }
@@ -114,7 +117,7 @@ impl<'a> Typer<'a> {
     /// construction gives, and its default is not held to one; neither
     /// is the default of an `atomic<...>` field, as a parameter's of
     /// that shape is not.
-    pub(super) fn field_defaults(mut self, read: &StructType) -> Vec<Option<Expr>> {
+    pub(super) fn field_defaults(mut self, read: &StructType) -> Vec<Option<DefaultExpr>> {
         let syntax = self.declaration.syntax.clone();
         let own: Vec<Location> = read.generics.iter().map(|generic| generic.at).collect();
         read.fields
@@ -157,9 +160,21 @@ impl<'a> Typer<'a> {
                 };
                 let value = self.expression(&written, Some(&expected));
                 let place = format!("the field `{}`", field.name);
-                Some(self.fit(value, &expected, &place))
+                let value = self.fit(value, &expected, &place);
+                Some(self.take_default(value))
             })
             .collect()
+    }
+
+    /// Keep local IDs relative to this default alone (UNIT-7).
+    fn take_default(&mut self, value: Expr) -> DefaultExpr {
+        self.declared.clear();
+        self.assigned.clear();
+        self.returned = false;
+        DefaultExpr {
+            value,
+            locals: std::mem::take(&mut self.locals),
+        }
     }
 
     /// What the compile-time constant `node`, written in `file`, reads

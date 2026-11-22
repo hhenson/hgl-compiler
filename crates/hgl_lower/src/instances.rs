@@ -53,7 +53,7 @@ use hgl_analyser::{
 };
 use hgl_diagnostics::Location;
 
-use crate::calls::runtime_arguments;
+use crate::calls::{DefaultValue, LeftOut, left_out, runtime_arguments};
 use crate::canonical::{canonical, canonical_argument};
 use crate::packs::{Captures, Slot};
 
@@ -551,7 +551,12 @@ impl Instances {
             }
             // What is worked out with no body around it: a constant's
             // value, and a default (UNIT-13, UNIT-8).
-            let defaults = module.defaults.iter().flatten().flatten();
+            let defaults = module
+                .defaults
+                .iter()
+                .flatten()
+                .flatten()
+                .map(|default| &default.value);
             for value in module.constants.iter().flatten().chain(defaults) {
                 waiting.extend(instances.asked_in(program, value));
             }
@@ -647,7 +652,12 @@ impl Instances {
     /// the ones its run is wired with, core's `replay` for each input
     /// it gives a trace and core's `record` for its target's result
     /// (core's CEVAL-1).
-    fn asks(&self, program: &Program, value: &Expr) -> Vec<Asked> {
+    fn asks(
+        &self,
+        program: &Program,
+        value: &Expr,
+        expanding: &mut Vec<(usize, usize, usize)>,
+    ) -> Vec<Asked> {
         if let ExprKind::Eval { call, .. } = &value.kind {
             let Some(wiring) = run_wiring(program, call, &value.ty) else {
                 return Vec::new();
@@ -679,7 +689,11 @@ impl Instances {
             return Vec::new();
         };
         if let Callee::Anonymous(function) = callee {
-            return self.asked(program, &function.body.statements);
+            let mut found = Vec::new();
+            walk_statements(&function.body.statements, &mut |value| {
+                found.extend(self.asks(program, value, expanding));
+            });
+            return found;
         }
         let (Callee::Function {
             module,
@@ -698,30 +712,60 @@ impl Instances {
         else {
             return Vec::new();
         };
-        if !self.instanced(program, *module, *declaration) {
-            return Vec::new();
-        }
         let Some(Detail::Callable(signature)) = program.modules[*module].details.get(*declaration)
         else {
             return Vec::new();
         };
-        vec![Asked {
-            module: *module,
-            declaration: *declaration,
-            generics: generics.clone(),
-            type_packs: callee.type_packs().to_vec(),
-            captures: Captures::of(program, callee, signature, arguments),
-            requirements: requirements.clone(),
-            functions: functions_of(arguments),
-        }]
+        let mut found = Vec::new();
+        if self.instanced(program, *module, *declaration) {
+            found.push(Asked {
+                module: *module,
+                declaration: *declaration,
+                generics: generics.clone(),
+                type_packs: callee.type_packs().to_vec(),
+                captures: Captures::of(program, callee, signature, arguments),
+                requirements: requirements.clone(),
+                functions: functions_of(arguments),
+            });
+        }
+        // The declaration's open default was already visited. Here it may
+        // ask for a concrete instance once the operator's arguments are placed.
+        if let Callee::Candidate {
+            operator_generics, ..
+        } = callee
+            && !operator_generics.is_empty()
+        {
+            for (index, parameter) in signature.parameters.iter().enumerate() {
+                let key = (*module, *declaration, index);
+                if !parameter.configuration
+                    || arguments
+                        .iter()
+                        .any(|argument| argument.parameter == Some(index))
+                    || expanding.contains(&key)
+                {
+                    continue;
+                }
+                if let Some(LeftOut::Default(DefaultValue::Specialized(default))) =
+                    left_out(program, callee, index, parameter)
+                {
+                    expanding.push(key);
+                    default
+                        .value
+                        .walk(&mut |value| found.extend(self.asks(program, value, expanding)));
+                    expanding.pop();
+                }
+            }
+        }
+        found
     }
 
     /// The instances the calls in `statements` ask for, in the order
     /// the calls are met.
     fn asked(&self, program: &Program, statements: &[Stmt]) -> Vec<Asked> {
         let mut found = Vec::new();
+        let mut expanding = Vec::new();
         walk_statements(statements, &mut |value| {
-            found.extend(self.asks(program, value));
+            found.extend(self.asks(program, value, &mut expanding));
         });
         found
     }
@@ -730,7 +774,8 @@ impl Instances {
     /// the calls are met.
     fn asked_in(&self, program: &Program, expression: &Expr) -> Vec<Asked> {
         let mut found = Vec::new();
-        expression.walk(&mut |value| found.extend(self.asks(program, value)));
+        let mut expanding = Vec::new();
+        expression.walk(&mut |value| found.extend(self.asks(program, value, &mut expanding)));
         found
     }
 
