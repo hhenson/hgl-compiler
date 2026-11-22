@@ -2005,13 +2005,32 @@ is not used yet.
 | --- | --- |
 | `HGL_HGRAPH_SDK` | hgraph's C++ SDK prefix. Defaults to `../libexec/hgraph-sdk` beside the resolved executable |
 | `HGL_HGRAPH_DEPS` | The SDK's dependency prefix. Defaults to `../libexec/hgraph-deps` beside the resolved executable |
+| `HGL_HGRAPH_DEBUG` | hgraph's libraries built for debugging, which a debug build links: a directory laid out as a release's `libexec`, with the SDK in `hgraph-sdk` and its dependency prefix in `hgraph-deps`. Defaults to `../libexec/hgraph-debug` beside the resolved executable, where the `hgl-debug` package installs them |
 | `CXX` | The compiler, of the platform's family: GCC 15 or later on Linux, Apple clang 21 or later on macOS. Otherwise, on Linux, the first of `g++-17`, `g++-16`, `g++-15`, `g++` on the `PATH` that is GCC 15 or later, and on macOS `clang++`. A compiler is known by the macros it defines (`-dM -E`), not by its name |
 | `HGL_CPP_FLAGS` | Flags added to every compile and link, the runtime library's too: `-O2`, `-g`, the sanitizers |
 | `HGL_NATIVE_CACHE` | Where builds are kept; otherwise `hgl/native` in the user's cache directory |
 | `CMAKE_BUILD_PARALLEL_LEVEL` | How many jobs a build, and the executables run, take at once |
 
+An ordinary build links the optimised libraries: those `HGL_HGRAPH_SDK`
+and `HGL_HGRAPH_DEPS` name, or the release's own. A debug build links
+hgraph's libraries built for debugging where they are given, and the
+optimised ones otherwise (`choose` in `crates/hgl_cli/src/cpp/sdk.rs`):
+those `HGL_HGRAPH_DEBUG` names; else, where neither `HGL_HGRAPH_SDK` nor
+`HGL_HGRAPH_DEPS` is set, those in `../libexec/hgraph-debug` beside the
+resolved executable, where their `hgl-sdk.txt` names the hgraph tag
+`hgl` is built for or no tag. hgraph's installed headers do not depend
+on `NDEBUG`, so the debug build stands in for the optimised one. A debug
+build says on standard error which it links, and why where it links the
+optimised ones, and its JSON description says it too (below).
+`HGL_HGRAPH_BUILD_TYPE=Debug scripts/provision-hgraph-sdk.sh TAG
+DIR/hgraph-sdk`, with `HGL_HGRAPH_SOURCE` naming a checkout of `TAG` for
+a debugger to read, makes a debug SDK for `HGL_HGRAPH_DEBUG` to name,
+beside `DIR/hgraph-deps`, the prefix it was built against or a link to
+it.
+
 A toolchain is prepared once and kept under the cache in
-`toolchains/<hash>`, the hash of the SDK's and the dependencies' paths
+`toolchains/<hash>`, the hash of which build of hgraph's libraries it
+links, the SDK's and the dependencies' paths
 and the SDK's own files, the compiler, its family and version and what
 it reads from the environment (`MACOSX_DEPLOYMENT_TARGET` and `SDKROOT`
 on macOS), the linker, the flags and the runtime library's sources,
@@ -2310,8 +2329,12 @@ CMake and Ninja, at fixed versions, with micromamba given a home directory
 of its own, so that nothing outside the prefix and a temporary directory
 is written. The compiler is the caller's: GCC 15 or later on Linux, Apple
 clang 21 or later on macOS (`clang++`, the default there); the script runs
-under macOS's own bash 3.2. `DIR/hgl-sdk.txt` says the tag, its commit,
-`arrow=off`, the compiler and the prefix; an SDK of the tag built
+under macOS's own bash 3.2. `HGL_HGRAPH_BUILD_TYPE=Debug` builds it with
+no optimisation and with debug information, as CMake's `Debug` does
+(169 MB on Linux with GCC 15.2, built in 26 s with 16 jobs).
+`DIR/hgl-sdk.txt` says the tag, its commit,
+`arrow=off`, the compiler and the prefix, and `build-type=Debug` for a
+debug build; an SDK of the tag built
 otherwise is not taken for one. The SDK is 14 MB (54 MB with Arrow), and
 its runtime and wiring libraries need fmt and spdlog alone; it builds in
 28 to 33 s with 12 jobs here (77 s with Arrow). On a macOS machine (Apple
@@ -2461,8 +2484,13 @@ application with symbols and no optimization in its generated units. Each
 launch has its own subdirectory under DIR. The caller owns its lifetime.
 
 On success stdout is one JSON object with `version: 1`, absolute `executable`,
-`arguments` (an array), `workingDirectory`, and `environment` (overrides to
-inherit alongside the caller's environment). Start that exact command in
+`arguments` (an array), `workingDirectory`, `environment` (overrides to
+inherit alongside the caller's environment), and `hgraph`: the libraries
+it links, `libraries` (`debug` or `optimised`, as "The build driver"
+above chooses them), and the absolute `sdk` and `dependencies` prefixes.
+Standard error says the same in a line, `hgl: a debug build, with
+hgraph's debug libraries in DIR, named by HGL_HGRAPH_DEBUG`, or for the
+optimised ones why no debug ones were taken. Start that exact command in
 the debugger. Its console mirrors the results protocol. After the run
 returns it prints the recorded publications. The debugger owns process termination and may close stdin.
 Ordinary application runs keep their host stop pipe. HGL statements use the

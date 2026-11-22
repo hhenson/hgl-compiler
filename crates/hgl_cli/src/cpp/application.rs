@@ -135,7 +135,7 @@ pub(super) fn run(
     stop: &Stop,
 ) -> RanApplication {
     match built(output, application, keep, roots, false) {
-        Ok((workspace, libraries)) => launch(&workspace, application, &libraries, stop),
+        Ok((workspace, libraries, _)) => launch(&workspace, application, &libraries, stop),
         Err(reason) => RanApplication::NotRun(reason),
     }
 }
@@ -145,19 +145,20 @@ pub(super) fn run(
 type Libraries = Option<(&'static str, std::ffi::OsString)>;
 
 /// The workspace with `application`'s executable built in it, held
-/// until the run has ended, and the libraries' path it runs with; or why
-/// it could not be built.
+/// until the run has ended, the libraries' path it runs with, and
+/// hgraph's libraries it links; or why it could not be built.
 fn built(
     output: &Output,
     application: &Application,
     keep: Option<&Path>,
     roots: &[PathBuf],
     debug: bool,
-) -> Result<(Workspace, Libraries), String> {
-    let mut toolchain = Toolchain::find()?;
-    if debug {
-        toolchain.enable_debug();
-    }
+) -> Result<(Workspace, Libraries, sdk::Hgraph), String> {
+    let toolchain = if debug {
+        Toolchain::find_debug()?
+    } else {
+        Toolchain::find()?
+    };
     let cache = build::cache()?;
     let jobs = std::env::var(build::JOBS)
         .ok()
@@ -172,23 +173,29 @@ fn built(
         let failure = built.failure.unwrap_or_default();
         return Err(format!("the build of its executable failed:\n{failure}"));
     }
-    Ok((workspace, sdk::library_path(&description)))
+    Ok((
+        workspace,
+        sdk::library_path(&description),
+        toolchain.hgraph().clone(),
+    ))
 }
 
 /// Builds an isolated debug session. Its owner keeps the session directory
 /// until the debugger exits, so later builds cannot replace its symbols.
+/// Gives the launch's JSON description and hgraph's libraries it links.
 pub(super) fn debug_launch(
     output: &Output,
     application: &Application,
     directory: &Path,
     roots: &[PathBuf],
-) -> Result<serde_json::Value, String> {
+) -> Result<(serde_json::Value, sdk::Hgraph), String> {
     fs::create_dir_all(directory).map_err(|e| format!("{}: {e}", directory.display()))?;
     let session = tempfile::Builder::new()
         .prefix("session-")
         .tempdir_in(directory)
         .map_err(|e| format!("{}: {e}", directory.display()))?;
-    let (workspace, libraries) = built(output, application, Some(session.path()), roots, true)?;
+    let (workspace, libraries, hgraph) =
+        built(output, application, Some(session.path()), roots, true)?;
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut environment = serde_json::Map::new();
     if let Some((name, value)) = libraries {
@@ -209,9 +216,10 @@ pub(super) fn debug_launch(
         "arguments": [results, "--debug-console"],
         "workingDirectory": path_text(&cwd)?,
         "environment": environment,
+        "hgraph": hgraph.json(),
     });
     let _directory = session.keep();
-    Ok(data)
+    Ok((data, hgraph))
 }
 
 /// Runs the executable of `application` built in `workspace`, with
