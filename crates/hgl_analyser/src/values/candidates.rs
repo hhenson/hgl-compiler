@@ -3,7 +3,7 @@
 //! (GEN-2, GEN-5, GEN-6). Part of the typing pass ([`super`]): a symbol
 //! and a call of an operator by its name both select here.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
@@ -1214,6 +1214,7 @@ impl<'a> Typer<'a> {
             scope: None,
             result: None,
             result_read: None,
+            tag_test: None,
         };
         if admits_without_membership {
             if let Some(chosen) = provisional {
@@ -1405,14 +1406,18 @@ impl<'a> Typer<'a> {
                 given
             })
             .collect();
+        // ERR-3 checks the selected result. A tag test does not supply
+        // the provisional result type as the operator's expected place.
         let place = selecting
             .place
             .as_ref()
             .or_else(|| {
                 if let Some(read) = &selecting.result_read {
                     read.expected.as_ref().map(|(ty, _)| ty)
-                } else {
+                } else if selecting.tag_test.is_none() {
                     selecting.result.as_ref()
+                } else {
+                    None
                 }
             })
             .map(in_place);
@@ -1503,6 +1508,12 @@ impl<'a> Typer<'a> {
                 return self.fit_with(value, &in_place(ty), what, Some(&scope));
             }
             return self.compared_with_null(value, Some(&scope));
+        }
+        if let Some((success, at)) = call.tag_test
+            && !matches!(value.ty, Type::Result { .. })
+        {
+            self.check_tag_test(success, &value.ty, at);
+            return value;
         }
         if let Some(expected) = call.result.as_ref().map(in_place)
             && expected != value.ty
@@ -1675,6 +1686,53 @@ pub(crate) struct Selecting {
     pub(super) result: Option<Type>,
     /// A place that takes the selected candidate's result in its own form.
     result_read: Option<InstanceResultRead>,
+    /// An ERR-3 test of this call or its immutable binding.
+    tag_test: Option<(bool, Location)>,
+}
+
+/// ERR-3 checks the selected result without choosing its candidate.
+/// Retain tag tests of calls and of directly initialized `let` bindings.
+pub(super) fn record_tag_tests(body: &hir::Body, calls: &mut [Selecting]) {
+    if calls.is_empty() {
+        return;
+    }
+    let mut calls: HashMap<_, _> = calls.iter_mut().map(|call| (call.at, call)).collect();
+    let mut initializers = vec![None; body.locals.len()];
+    hir::walk_statement_nodes(&body.statements, &mut |node| match node {
+        hir::Node::Statement(hir::Stmt::Declare {
+            local,
+            value: Some(value),
+        }) if body.locals[*local].kind == LocalKind::Let => {
+            initializers[*local] = selected_call_at(value);
+        }
+        hir::Node::Expression(Expr {
+            kind: ExprKind::TagTest { success, value },
+            ..
+        }) => {
+            let initializer = match value.kind {
+                ExprKind::Local(local) => initializers[local],
+                _ => selected_call_at(value),
+            };
+            if let Some(at) = initializer
+                && let Some(call) = calls.get_mut(&at)
+                && call.tag_test.is_none()
+            {
+                call.tag_test = Some((*success, value.at));
+            }
+        }
+        _ => {}
+    });
+}
+
+fn selected_call_at(value: &Expr) -> Option<Location> {
+    matches!(
+        value.kind,
+        ExprKind::Call {
+            callee: Callee::Unread | Callee::DeferredValue,
+            ..
+        }
+    )
+    .then_some(value.at)
 }
 
 /// The source place of a provisional call, including its failure scope.

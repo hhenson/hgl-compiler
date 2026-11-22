@@ -3167,6 +3167,35 @@ fn graph_instances_fit_settled_result_payloads() {
     }
 }
 
+/// GEN-7 and ERR-3: a tag test checks the specialized call's result.
+#[test]
+fn value_instances_check_tag_tests_after_candidate_selection() {
+    let checked = module(
+        r#"operator parse<T>(value: T) -> result<i64, error>
+impl const fn parse<T>(value: T) -> result<i64, error> => err(error(message: "generic"))
+impl const fn parse(value: i64) -> i64 => value
+const fn inferred<T>(v: T) -> i64 {
+    let r = parse(v)
+    if is_ok(r) { return r.value }
+    return -1
+}
+const fn written<T>(v: T) -> i64 {
+    let r: result<i64, error> = parse(v)
+    if is_ok(r) { return r.value }
+    return -1
+}
+const fn bad() -> i64 => inferred(3)
+const fn good() -> i64 => written(3)
+const fn other() -> i64 => inferred("s")"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:15:26 type/type.mismatch ERR-3"],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-7 and ERR-4: the constructor reads a required message and keeps
 /// an optional code. Both inputs must fit after instance selection.
 #[test]

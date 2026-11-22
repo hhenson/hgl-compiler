@@ -227,7 +227,7 @@ impl<'a> Typer<'a> {
             return (ExprKind::Unread, BOOL);
         };
         let value = self.expression(&argument, None);
-        self.check_tag_test(success, &value);
+        self.check_tag_test(success, &value.ty, value.at);
         let kind = ExprKind::TagTest {
             success,
             value: Box::new(value),
@@ -236,17 +236,14 @@ impl<'a> Typer<'a> {
     }
 
     /// ERR-3: a tag test takes a result itself, before any implicit read.
-    pub(super) fn check_tag_test(&mut self, success: bool, value: &Expr) {
-        if !matches!(value.ty, Type::Result { .. }) && whole(&value.ty) && !open(&value.ty) {
+    pub(super) fn check_tag_test(&mut self, success: bool, ty: &Type, at: Location) {
+        if !matches!(ty, Type::Result { .. }) && whole(ty) && !open(ty) {
             let name = if success { "is_ok" } else { "is_err" };
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::TYPE_MISMATCH,
-                value.at,
-                format!(
-                    "`{name}` tests a `result<T, E>`, and this is `{}`",
-                    value.ty
-                ),
+                at,
+                format!("`{name}` tests a `result<T, E>`, and this is `{ty}`"),
                 "ERR-3",
             ));
         }
