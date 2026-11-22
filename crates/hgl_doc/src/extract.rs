@@ -389,29 +389,106 @@ fn generics<'a>(syntax: &SyntaxNode, parameters: &'a [GenericParameter]) -> Vec<
 fn documentation(syntax: &SyntaxNode) -> Option<Documentation> {
     let token = attached(syntax)?;
     let comment = Comment::read(&token);
+    let mut summary = String::new();
+    let mut sections = Vec::new();
+    prose_sections(&comment.summary(), &mut sections, Some(&mut summary));
+    for section in comment.sections() {
+        let text = section.text();
+        let Some(heading) = section.heading() else {
+            prose_sections(&text, &mut sections, None);
+            continue;
+        };
+        let entries = section
+            .entries()
+            // SDOC-3 does not give a spelling for struct field keys.
+            .filter(|_| syntax.kind() != SyntaxKind::StructDecl || heading != "Args:")
+            .map(|entry| Entry {
+                key: entry.name.to_string(),
+                text: entry.text(),
+            })
+            .collect();
+        sections.push(Section {
+            heading: Some(heading.to_string()),
+            recognized: true,
+            text,
+            entries,
+        });
+    }
     Some(Documentation {
         text: comment.text(),
-        summary: comment.summary(),
-        sections: comment
-            .sections()
-            .map(|section| Section {
-                heading: section.heading(),
-                text: section.text(),
-                entries: section
-                    .entries()
-                    // SDOC-3 does not give a spelling for struct field keys.
-                    .filter(|_| {
-                        syntax.kind() != SyntaxKind::StructDecl
-                            || section.heading() != Some("Args:")
-                    })
-                    .map(|entry| Entry {
-                        key: entry.name.to_string(),
-                        text: entry.text(),
-                    })
-                    .collect(),
-            })
-            .collect(),
+        summary,
+        sections,
     })
+}
+
+/// Splits the prose left by SDOC-3 into a first-paragraph summary, plain
+/// prose, and authored headings. Only the parser's recognized sections
+/// above can carry entries for the declaration.
+fn prose_sections(text: &str, sections: &mut Vec<Section>, summary: Option<&mut String>) {
+    let lines: Vec<_> = text.lines().collect();
+    let mut at = 0;
+    if let Some(summary) = summary {
+        while at < lines.len() && !blank(lines[at]) && authored_heading(&lines[at..]).is_none() {
+            at += 1;
+        }
+        *summary = lines[..at].join("\n");
+    }
+
+    while let Some(&line) = lines.get(at) {
+        if blank(line) {
+            at += 1;
+            continue;
+        }
+        let heading = authored_heading(&lines[at..]);
+        let start = at + usize::from(heading.is_some());
+        at = start + 1;
+        while at < lines.len() {
+            let next = lines[at];
+            let in_section = match heading {
+                Some(_) => blank(next) || next.starts_with("    "),
+                None => authored_heading(&lines[at..]).is_none(),
+            };
+            if !in_section {
+                break;
+            }
+            at += 1;
+        }
+        let contents = &lines[start..at];
+        let end = contents
+            .iter()
+            .rposition(|line| !blank(line))
+            .map_or(0, |last| last + 1);
+        let text = contents[..end]
+            .iter()
+            .map(|line| {
+                if heading.is_some() {
+                    line.strip_prefix("    ").unwrap_or(line)
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        sections.push(Section {
+            heading: heading.map(str::to_string),
+            recognized: false,
+            text,
+            entries: Vec::new(),
+        });
+    }
+}
+
+fn authored_heading<'a>(lines: &[&'a str]) -> Option<&'a str> {
+    let [line, contents, ..] = lines else {
+        return None;
+    };
+    let heading = line.trim_end();
+    (!line.starts_with([' ', '\t']) && heading.ends_with(':') && contents.starts_with("    "))
+        .then_some(heading)
+}
+
+fn blank(line: &str) -> bool {
+    line.trim().is_empty()
 }
 
 fn encloses(node: &SyntaxNode, at: Location) -> bool {

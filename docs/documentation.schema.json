@@ -140,18 +140,26 @@
     },
     "section": {
       "type": "object",
-      "required": ["heading", "text", "entries"],
+      "required": ["heading", "recognized", "text", "entries"],
       "additionalProperties": false,
       "properties": {
-        "heading": {
-          "enum": [
-            "Args:", "Type Args:", "Returns:", "Raises:", "Ticks:", "Validity:",
-            "Properties:", "Requires:", "Notes:", "Examples:", null
-          ]
-        },
+        "heading": { "$ref": "#/$defs/nullableString" },
+        "recognized": { "type": "boolean" },
         "text": { "type": "string" },
         "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
-      }
+      },
+      "if": { "properties": { "recognized": { "const": true } } },
+      "then": {
+        "properties": {
+          "heading": {
+            "enum": [
+              "Args:", "Type Args:", "Returns:", "Raises:", "Ticks:", "Validity:",
+              "Properties:", "Requires:", "Notes:", "Examples:"
+            ]
+          }
+        }
+      },
+      "else": { "properties": { "entries": { "maxItems": 0 } } }
     },
     "entry": {
       "type": "object",

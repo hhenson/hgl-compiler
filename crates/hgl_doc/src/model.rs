@@ -128,10 +128,11 @@ pub(crate) struct Documentation {
     pub(crate) sections: Vec<Section>,
 }
 
-/// A recognized SDOC heading or intervening unheaded prose.
+/// A recognized SDOC heading, authored heading or unheaded prose.
 #[derive(Serialize)]
 pub(crate) struct Section {
-    pub(crate) heading: Option<&'static str>,
+    pub(crate) heading: Option<String>,
+    pub(crate) recognized: bool,
     pub(crate) text: String,
     pub(crate) entries: Vec<Entry>,
 }

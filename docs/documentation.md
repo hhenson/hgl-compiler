@@ -46,15 +46,18 @@ The [JSON Schema](documentation.schema.json) specifies the fields of
   innermost such root. An individual file outside those directories
   uses its basename. The embedded prelude uses `<core>/` paths.
 - `documentation.text` is all the comment's text, after SDOC-2 removes
-  delimiters, outer blank lines and common indentation. `summary` is
-  the initial prose. `sections` follows the source order, with SDOC-3
-  headings including their colons. Unheaded prose after a section,
-  including an unknown heading, has a null heading. Section text
-  removes its four-space margin. In `Args:` and `Type Args:`, each
-  `entries` record gives its key and description, with a missing
-  description represented by an empty string. `Requires:`, `Properties:`
-  and a struct's `Args:` retain their text while the specification settles
-  how their keys are written.
+  delimiters, outer blank lines and common indentation. `summary` is the
+  first paragraph of introductory prose, or an empty string if absent.
+  `sections` follows source order. After the summary, unheaded prose
+  has a null heading and `recognized: false`. SDOC-3 headings include
+  their colons and have `recognized: true`. Other column-zero lines
+  ending in a colon and followed by a four-space-indented line keep
+  their heading and use `recognized: false`. A headed section's text
+  removes its four-space margin.
+- Only recognized `Args:` and `Type Args:` sections carry `entries` with
+  keys and descriptions. A missing description is an empty string.
+  `Requires:`, `Properties:` and a struct's `Args:` retain their text
+  while the specification settles how their keys are written.
 
 The JSON is indented with two spaces and ends with one LF. Source
 fragments and comments use LF for each LEX-15 line break. Generated

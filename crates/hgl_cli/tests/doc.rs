@@ -80,6 +80,7 @@ fn declaration_fixture_preserves_interfaces_and_comment_structure() {
         json!([
             {
                 "heading": "Args:",
+                "recognized": true,
                 "text": "input: A café value with  two spaces.\n    A continuation that keeps its indent.\ncount:",
                 "entries": [
                     {"key": "input", "text": "A café value with  two spaces.\n    A continuation that keeps its indent."},
@@ -88,14 +89,15 @@ fn declaration_fixture_preserves_interfaces_and_comment_structure() {
             },
             {
                 "heading": "Type Args:",
+                "recognized": true,
                 "text": "T: Its type.\nN: Its maximum.",
                 "entries": [{"key": "T", "text": "Its type."}, {"key": "N", "text": "Its maximum."}]
             },
-            {"heading": null, "text": "Unknown:\n    A heading that stays prose.", "entries": []},
-            {"heading": "Returns:", "text": "The same value, `input`.", "entries": []},
-            {"heading": "Requires:", "text": "N: The constraint is prose until key spelling is specified.", "entries": []},
-            {"heading": "Notes:", "text": "|x|     |y|\n| ----- | - |\n| café  | \\\\ |", "entries": []},
-            {"heading": "Examples:", "text": "~~~hgl\nassert false\n~~~", "entries": []}
+            {"heading": "Unknown:", "recognized": false, "text": "A heading that stays prose.", "entries": []},
+            {"heading": "Returns:", "recognized": true, "text": "The same value, `input`.", "entries": []},
+            {"heading": "Requires:", "recognized": true, "text": "N: The constraint is prose until key spelling is specified.", "entries": []},
+            {"heading": "Notes:", "recognized": true, "text": "|x|     |y|\n| ----- | - |\n| café  | \\\\ |", "entries": []},
+            {"heading": "Examples:", "recognized": true, "text": "~~~hgl\nassert false\n~~~", "entries": []}
         ])
     );
     let temporal = &api["declarations"][5];
@@ -138,6 +140,102 @@ fn declaration_fixture_preserves_interfaces_and_comment_structure() {
     let test = declaration(api, "works");
     assert_eq!(test["kind"], "test");
     assert_eq!(test["documentation"]["summary"], "A named test.");
+}
+
+/// SDOC-2 and SDOC-3. The JSON layout isolates the first paragraph and
+/// preserves author-supplied headings without making their content keyed.
+#[test]
+fn first_paragraph_and_authored_headings_keep_their_own_sections() {
+    let root = scratch("documentation-sections");
+    let source = write(
+        &root,
+        "sections.hgl",
+        r#"module sections
+
+/**
+Rules:
+    A check must pass.
+Status:
+    Covered.
+*/
+test works { assert true }
+
+/** Keep the value.
+    Args:
+        value: Passed through unchanged.
+    Options:
+        fallback: Prose, even with a key-like name.
+            Keep the relative indentation.
+
+        A second paragraph about the option.
+    Returns:
+        The supplied value.
+*/
+export const fn retain(value: i64) -> i64 => value
+
+/** A short lead
+    still in the first paragraph.
+
+    A second paragraph introduces this table:
+
+    | Value | Meaning |
+    | ----- | ------- |
+    | One   | Start   |
+
+    Notes:
+        More detail.
+*/
+export const one: i64 = 1
+"#,
+    );
+    let model: Value = serde_json::from_slice(&document(&[&source, "--private"])).unwrap();
+    let sections = module(&model, "sections");
+    let test = &declaration(sections, "works")["documentation"];
+    assert_eq!(test["summary"], "");
+    assert_eq!(
+        test["sections"],
+        json!([
+            {"heading": "Rules:", "recognized": false, "text": "A check must pass.", "entries": []},
+            {"heading": "Status:", "recognized": false, "text": "Covered.", "entries": []}
+        ])
+    );
+    let function = &declaration(sections, "retain")["documentation"];
+    assert_eq!(function["summary"], "Keep the value.");
+    assert_eq!(
+        function["sections"],
+        json!([
+            {
+                "heading": "Args:",
+                "recognized": true,
+                "text": "value: Passed through unchanged.",
+                "entries": [{"key": "value", "text": "Passed through unchanged."}]
+            },
+            {
+                "heading": "Options:",
+                "recognized": false,
+                "text": "fallback: Prose, even with a key-like name.\n    Keep the relative indentation.\n\nA second paragraph about the option.",
+                "entries": []
+            },
+            {"heading": "Returns:", "recognized": true, "text": "The supplied value.", "entries": []}
+        ])
+    );
+    let table = &declaration(sections, "one")["documentation"];
+    assert_eq!(
+        table["summary"],
+        "A short lead\nstill in the first paragraph."
+    );
+    assert_eq!(
+        table["sections"],
+        json!([
+            {
+                "heading": null,
+                "recognized": false,
+                "text": "A second paragraph introduces this table:\n\n| Value | Meaning |\n| ----- | ------- |\n| One   | Start   |",
+                "entries": []
+            },
+            {"heading": "Notes:", "recognized": true, "text": "More detail.", "entries": []}
+        ])
+    );
 }
 
 /// SDOC-4. Candidates follow their operator, including native candidates
