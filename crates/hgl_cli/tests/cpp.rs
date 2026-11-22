@@ -859,6 +859,34 @@ fn bound_result_children_run_on_the_sdk() {
     );
 }
 
+/// ERR-14 and GEN-7: a generic node's whole read takes the nullable form
+/// of the actual dictionary or unsized list.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn generic_endpoint_read_forms_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic-endpoint-read-forms");
+    let file = write(
+        &root,
+        "demo.generic_endpoint_read_forms.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.generic_endpoint_read_forms.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The temporal code of scalars on the SDK: a graph with lifted calls, a
 /// constant connection, nodes with state, handlers in order and
 /// capabilities, a source, and the evals of them (`demo.temporal`).
@@ -1506,6 +1534,34 @@ fn function_parameters_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// FN-17, FN-18 and GEN-17: reflected callbacks carry their generic
+/// arguments and defaults to the C++ target.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn reflected_pack_followups_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("reflected-pack-followups");
+    let file = write(
+        &root,
+        "demo.reflected_pack_followups.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.reflected_pack_followups.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

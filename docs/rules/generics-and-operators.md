@@ -239,7 +239,8 @@ parser: partial
 analyser: partial
 
 - Reflects the selected callback's fixed suffix and its supplied positional and named pack entries. A dependent pack keeps the callback parameter keys and the types written at the call.
-- Evaluates `each` over `arg_keys`, key comparison and membership, and keyed type projection. A missing member of a known pack reports `pack.name`.
+- Evaluates `each` over `arg_keys`, constant key membership, and keyed type projection. Candidate requirements can compare bare pack members. A missing member of a known pack reports `pack.name`.
+- A generic call that receives another function parameter checks its pack requirements when the caller supplies the reflected types.
 - An operator callback reflects the public declaration's parameter names and the selected candidate's types (FN-17).
 
 ## GEN-18
