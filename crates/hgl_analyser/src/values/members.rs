@@ -12,7 +12,7 @@ use super::forms::received_type;
 use super::inference::{fixed, placed};
 use crate::constant::Fault;
 use crate::declared::substitute_within;
-use crate::hir::{Expr, ExprKind, ValueCategory};
+use crate::hir::{Expr, ExprKind, Value, ValueCategory};
 use crate::program::DeclarationKind;
 use crate::syntax::{name_token, tokens};
 use crate::types::{Argument, ConstantValue, Detail, NamedKind, Scalar, Type};
@@ -330,50 +330,11 @@ impl<'a> Typer<'a> {
                     .unwrap_or(Type::Unknown);
                 (self.fit(index, expected, place), ty)
             }
-            // EXPR-7: "A tuple's index is a constant within its length:
-            // it selects the element's type."
-            Type::Tuple(elements) => {
+            Type::Tuple(_) => {
                 let (integer, place) = index_operand(&base.ty).expect("a tuple index");
-                // UNIT-13: an index that names a constant of a module is
-                // that constant's value: the index is read as every
-                // constant is (`crate::constant`).
-                let found = self.read_constant(&index, Some(integer));
-                let index = self.expression(&index, Some(integer));
-                // EXPR-7: "by an `i64` index". An index of another type,
-                // `pair[0 / 1]` or `pair[0 == 0]`, is reported as that,
-                // and is not evaluated.
-                let is_integer = self.admits(integer, &index.ty);
-                let index = self.fit(index, integer, place);
-                let element = match found {
-                    _ if !is_integer => Some(&Type::Unknown),
-                    Ok(ConstantValue::Int(value)) => index_result(&base.ty, Some(value)),
-                    // No compile-time constant: a local, a parameter, a
-                    // call.
-                    Err(Fault::NotConstant) => None,
-                    // A constant whose value is not known here, a
-                    // generic value parameter's or one this pass does
-                    // not work out, or one reported: the element's type
-                    // is then not known, and nothing is reported of it.
-                    _ => Some(&Type::Unknown),
-                };
-                let ty = match element {
-                    Some(element) => element.clone(),
-                    None => {
-                        self.diagnostics.emit(error(
-                            Category::Type,
-                            codes::TUPLE_INDEX,
-                            index.at,
-                            format!(
-                                "a tuple's index is a constant, here one of 0 to {}: it \
-                                 selects the element's type",
-                                elements.len().saturating_sub(1)
-                            ),
-                            "EXPR-7",
-                        ));
-                        Type::Unknown
-                    }
-                };
-                (index, ty)
+                let mut value = self.expression(&index, Some(integer));
+                let ty = self.tuple_index(&base.ty, &mut value, Some(&index), true);
+                (self.fit(value, integer, place), ty)
             }
             // EXPR-7: "Brackets read an element of a list or a tuple by
             // an `i64` index, and the value a dictionary has for a
@@ -399,6 +360,62 @@ impl<'a> Typer<'a> {
             index: Box::new(index),
         };
         (kind, ty)
+    }
+
+    /// EXPR-7: a tuple index is a constant within its length. Read it
+    /// as UNIT-13 reads other constants and retain the folded position.
+    /// Type settlement can recover the type without reporting until
+    /// the instance checks its destinations.
+    pub(super) fn tuple_index(
+        &mut self,
+        base: &Type,
+        index: &mut Expr,
+        written: Option<&SyntaxNode>,
+        report: bool,
+    ) -> Type {
+        let Type::Tuple(elements) = base else {
+            return Type::Unknown;
+        };
+        let (integer, _) = index_operand(base).expect("a tuple index");
+        // A wrong index type is reported by the normal fit.
+        if !self.admits(integer, &index.ty) {
+            return Type::Unknown;
+        }
+        let found = match index.kind {
+            ExprKind::Literal(Value::Int(position)) => Ok(ConstantValue::Int(position)),
+            _ => written
+                .cloned()
+                .or_else(|| self.syntax_of(index))
+                .map_or(Err(Fault::Reported), |node| {
+                    self.read_constant(&node, Some(integer))
+                }),
+        };
+        match found {
+            Ok(ConstantValue::Int(position)) => {
+                if let Some(ty) = index_result(base, Some(position)) {
+                    index.kind = ExprKind::Literal(Value::Int(position));
+                    index.ty = integer.clone();
+                    return ty.clone();
+                }
+            }
+            Err(Fault::NotConstant) => {}
+            // A value not known yet, a failed constant or a reported
+            // fault does not establish the type of the element.
+            _ => return Type::Unknown,
+        }
+        if report {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TUPLE_INDEX,
+                index.at,
+                format!(
+                    "a tuple's index is a constant, here one of 0 to {}: it selects the element's type",
+                    elements.len().saturating_sub(1)
+                ),
+                "EXPR-7",
+            ));
+        }
+        Type::Unknown
     }
 }
 

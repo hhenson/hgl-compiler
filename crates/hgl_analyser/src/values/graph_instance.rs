@@ -29,6 +29,7 @@ pub(crate) struct GraphDestinations {
     expressions: HashSet<Location>,
     captures: HashSet<Location>,
     store_arguments: HashSet<Location>,
+    tuple_indices: HashSet<Location>,
 }
 
 impl GraphDestinations {
@@ -37,9 +38,18 @@ impl GraphDestinations {
         let mut expressions = HashSet::new();
         let mut captures = HashSet::new();
         let mut store_arguments = HashSet::new();
+        let mut tuple_indices = HashSet::new();
         hir::walk_statements(&body.statements, &mut |value| {
             if !whole(&value.ty) {
                 expressions.insert(value.at);
+            }
+            if let ExprKind::Index { base, .. } = &value.kind
+                && !whole(&base.ty)
+                && !matches!(indexed_payload(&base.ty), Type::Tuple(_))
+            {
+                // A known tuple shape already checked the constant and
+                // its bounds, even if some elements had unknown types.
+                tuple_indices.insert(value.at);
             }
             if let ExprKind::Capture(call) = &value.kind
                 && call.category == ValueCategory::Unsettled
@@ -60,6 +70,7 @@ impl GraphDestinations {
             expressions,
             captures,
             store_arguments,
+            tuple_indices,
         }
     }
 
@@ -383,9 +394,10 @@ impl GraphDestinations {
             }
             NodeMut::Expression(Expr {
                 kind: ExprKind::Index { base, index },
+                at,
                 ..
             }) => {
-                self.fit_index(typer, base, index);
+                self.fit_index(typer, base, index, self.tuple_indices.contains(at));
                 return;
             }
             _ => return,
@@ -415,11 +427,20 @@ impl GraphDestinations {
 
     /// A previously unknown base may need its result or nullable value
     /// read, and a newly known index must fit the selected collection.
-    fn fit_index(&self, typer: &mut Typer<'_>, base: &mut Expr, index: &mut Expr) {
+    fn fit_index(
+        &self,
+        typer: &mut Typer<'_>,
+        base: &mut Expr,
+        index: &mut Expr,
+        tuple_pending: bool,
+    ) {
         let base_settled = self.known(base);
         let received = indexed_payload(&base.ty);
         if base_settled && received != &base.ty && index_collection(received) {
             *base = typer.received(base.clone(), index_collection);
+        }
+        if tuple_pending && whole(&index.ty) && matches!(base.ty, Type::Tuple(_)) {
+            typer.tuple_index(&base.ty, index, None, true);
         }
         if let Some((expected, place)) = index_operand(&base.ty)
             && whole(&index.ty)

@@ -754,11 +754,19 @@ fn settled_type(
         // The base may have acquired an element type after a conditional
         // inside a list or tuple settled. Keep the existing projection.
         ExprKind::Index { base, index } => {
-            let position = match index.kind {
-                ExprKind::Literal(Value::Int(position)) => Some(position),
-                _ => None,
-            };
-            index_result(indexed_payload(&base.ty), position)?.clone()
+            let ty = indexed_payload(&base.ty);
+            if matches!(ty, Type::Tuple(_))
+                && whole(&index.ty)
+                && let Some(typer) = typer
+            {
+                typer.tuple_index(ty, index, None, false)
+            } else {
+                let position = match index.kind {
+                    ExprKind::Literal(Value::Int(position)) => Some(position),
+                    _ => None,
+                };
+                index_result(ty, position)?.clone()
+            }
         }
         ExprKind::Construct {
             arguments,

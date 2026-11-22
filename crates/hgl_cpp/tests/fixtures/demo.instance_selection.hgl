@@ -141,6 +141,13 @@ fn indexed_elements<T>(const value: T) -> i64 {
     return chosen_or_skip(item) + chosen_or_skip(pair[0])
 }
 
+# EXPR-7: once the base is a tuple, the index is a constant position.
+fn folded_tuple_index<T>(const value: T) -> str {
+    let values = if live_helper(value) > 0 { (1, "selected") }
+    let item = values[1 + 0]
+    return item
+}
+
 fn optional_elements<T>(const value: T) -> i64 {
     let values = if positive(value) { [2] }
     return values[0]
@@ -242,6 +249,7 @@ test an_instance_settles_its_graph_conditions {
     assert eval inferred_list(value: "s") == [-1]
     assert eval indexed_elements(value: 3) == [5]
     assert eval indexed_elements(value: "s") == [-2]
+    assert eval folded_tuple_index(value: "s") == ["selected"]
     assert eval optional_elements(value: 3) == [2]
     assert raises("value.null") { eval optional_elements(value: "s") }
     assert eval dictionary_entries(value: 3) == [4]

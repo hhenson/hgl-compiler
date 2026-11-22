@@ -1510,6 +1510,74 @@ fn graph_instances_propagate_indexed_types_and_reads() {
     }
 }
 
+/// GEN-7 and EXPR-7: a tuple that settles in the instance takes a
+/// constant index within its bounds, and that position selects a type.
+#[test]
+fn graph_instances_check_settled_tuple_indices() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn folded<T>(const input: T) -> str {\n",
+        "    let values = if predicate(input) { (1, \"selected\") }\n",
+        "    let item = values[1 + 0]\n",
+        "    return item\n",
+        "}\n",
+        "fn outside<T>(const input: T) -> i64 {\n",
+        "    let values = if predicate(input) { (1, 2) }\n",
+        "    let item = values[5]\n",
+        "    return item\n",
+        "}\n",
+        "fn moving<T>(const input: T, const position: i64) -> i64 {\n",
+        "    let values = if predicate(input) { (1, 2) }\n",
+        "    return values[position]\n",
+        "}\n",
+        "fn known_shape<T>(const input: T) -> i64 {\n",
+        "    let values = (if predicate(input) { 1 }, 2)\n",
+        "    return values[5]\n",
+        "}\n",
+        "fn ordinary() -> str => folded(\"s\")\n",
+        "fn temporal() -> str => folded(1)\n",
+        "fn out_of_bounds() -> i64 => outside(1)\n",
+        "fn nonconstant() -> i64 => moving(\"s\", 1)\n",
+        "fn source_check_once() -> i64 => known_shape(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:21:19 type/tuple.index EXPR-7",
+            "m.hgl:25:30 type/tuple.index EXPR-7",
+            "m.hgl:26:28 type/tuple.index EXPR-7",
+        ],
+        "{}",
+        checked.report
+    );
+    for (caller, category) in [
+        ("ordinary", ValueCategory::Value),
+        ("temporal", ValueCategory::Connection),
+    ] {
+        let instance = instance_called_by(&checked, body(&checked, caller));
+        let mut projections = 0;
+        walk_statements(&instance.statements, &mut |value| {
+            let ExprKind::Index { base, index } = &value.kind else {
+                return;
+            };
+            assert_eq!(value.ty.to_string(), "str");
+            assert_eq!(value.category, category);
+            assert_eq!(
+                matches!(base.kind, ExprKind::NullRead { .. }),
+                caller == "ordinary"
+            );
+            assert!(matches!(
+                index.kind,
+                ExprKind::Literal(hgl_analyser::hir::Value::Int(1))
+            ));
+            projections += 1;
+        });
+        assert_eq!(projections, 1);
+    }
+}
+
 /// GEN-2 and GEN-7: a deferred constructor field can determine an
 /// unbound type parameter. EXPR-7 projections and GEN-3 requirements
 /// use that concrete struct application.
