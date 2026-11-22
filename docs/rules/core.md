@@ -100,13 +100,10 @@ transpiler: done
 
 ## NUM-11
 
-analyser: partial
+analyser: done
 
-- `eq_(a, b, abs: ..., rel: ...)` by name through core's candidates in a value function: the tolerances are options of the candidates for numbers, and of no other
-- The same as the symbol's configuration, `a =={abs: ...} b`
-- Accepts scalar tolerances in graph composition and tolerances read in a node hook.
-- Moving `abs` and `rel` to declaration braces and rejecting a connected tolerance
-  in either spelling are planned in #553.
+- Numeric `eq_` and `ne_` declare `abs` and `rel` in braces. `eq_{abs: ...}(a, b)` and `a =={abs: ...} b` bind the same option. A tolerance named in parentheses rejects (`argument.unknown`).
+- Graph construction accepts scalar tolerances and rejects connected ones. Value functions and hooks evaluate them in the current invocation (EXPR-14).
 
 transpiler: done
 
@@ -144,7 +141,7 @@ analyser: partial
 
 - In a value function, ordering between two of one ordered type and equality between two values of one type, by symbol and by name through core's candidates
 - An operand that is a generic parameter is compared as its declaration's requirements state (GEN-7)
-- Two zoned datetimes, in a value function, a hook and a graph: `==` and `!=` select core's candidates for them, `utc` a `bool` they alone declare; no order of a zoned type; in a graph `utc` is no connection (EXPR-14)
+- Two zoned datetimes, in a value function, a hook and a graph: `==` and `!=` select core's candidates for them. The ordinary `utc` parameter can be a lifted input (EXPR-14). A zoned type has no ordering.
 - Left: a comparison with a nullable operand; other types in temporal bodies
 
 transpiler: done
@@ -293,10 +290,10 @@ transpiler: done
 
 ## TEN-5
 
-analyser: partial
+analyser: done
 
 - `calendar` is an option of `+` and `-`, an argument of the candidate that takes it (EXPR-10); a calendar is a value `business_day` has a candidate for, and one that has none finds no candidate
-- A lifted `calendar` input in either spelling is planned in #553.
+- A connected calendar is an input of the selected value candidate in either spelling (EXPR-14 and FN-6).
 
 transpiler: done
 
