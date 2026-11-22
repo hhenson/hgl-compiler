@@ -1066,10 +1066,11 @@ places none of its own before or after them.
 Its rejection is `default.order`, and a tuple's index that is no
 constant or is outside the tuple is `tuple.index`.
 
-A selected value candidate is checked for any omitted nonconstant ordinary parameter
-that has neither its own default nor a nullable type (GEN-6, UNIT-8).
+An omitted nullable public slot is checked against the selected value
+candidate's nonconstant ordinary parameter. If it has neither its own
+default nor a nullable type, the argument is required (GEN-6, UNIT-8).
 `Typer::called` reports `argument.missing` at the call, with the candidate
-parameter as a related location. A public ordinary default does not supply
+parameter as a related location. A nullable public slot does not supply
 a required candidate argument; default availability does not select a
 less-specific fallback. Configuration defaults retain FN-18 inheritance.
 The C++ target writes a literal null default using the selected nullable

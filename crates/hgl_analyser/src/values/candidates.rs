@@ -785,8 +785,8 @@ impl<'a> Typer<'a> {
     /// The call of the candidate `chosen` of `operator` with the
     /// arguments `given`, written as `form` says. Each argument is of
     /// the type the candidate's parameter has: the candidate was
-    /// admitted, so each is given to one of its parameters. An omitted
-    /// nonconstant ordinary argument follows this candidate's defaults (UNIT-8).
+    /// admitted, so each is given to one of its parameters. A nullable
+    /// public slot does not supply a required ordinary argument (UNIT-8).
     pub(super) fn called(
         &mut self,
         operator: OperatorRef,
@@ -904,8 +904,8 @@ impl<'a> Typer<'a> {
                 && !matches!(parameter.ty, Type::Nullable(_))
                 && !bound.contains(&Place::Parameter(index))
             {
-                // GEN-6, UNIT-8: an ordinary public default does not
-                // supply a selected candidate's required argument. Check
+                // GEN-6, UNIT-8: a nullable public slot does not supply
+                // a selected candidate's required ordinary argument. Check
                 // after selection, as for `var`; RED-5 depends on this.
                 // Constant selectors keep their public defaults, including
                 // when the candidate does not repeat the `const` mark.
@@ -921,13 +921,14 @@ impl<'a> Typer<'a> {
                         .find_map(|(parameter, slot)| (slot == Some(index)).then_some(parameter)),
                     _ => None,
                 };
-                if public_parameter
-                    .is_some_and(|parameter| parameter.constant || parameter.configuration)
-                {
+                let Some(public_parameter) = public_parameter.filter(|parameter| {
+                    !parameter.constant
+                        && !parameter.configuration
+                        && matches!(parameter.ty, Type::Nullable(_))
+                }) else {
                     continue;
-                }
-                let public_name = public_parameter
-                    .map_or(parameter.name.as_str(), |parameter| parameter.name.as_str());
+                };
+                let public_name = &public_parameter.name;
                 self.diagnostics.emit(
                     error(
                         Category::Type,
