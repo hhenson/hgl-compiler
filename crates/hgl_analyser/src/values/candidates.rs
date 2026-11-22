@@ -3,7 +3,7 @@
 //! (GEN-2, GEN-5, GEN-6). Part of the typing pass ([`super`]): a symbol
 //! and a call of an operator by its name both select here.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
@@ -1604,8 +1604,9 @@ impl<'a> Typer<'a> {
             }
             return self.compared_with_null(value, Some(&scope));
         }
-        if let Some((success, at)) = call.tag_test
-            && self.check_tag_test(success, &value.ty, at)
+        if let Some(test) = call.tag_test
+            && (self.check_tag_test(test.success, &value.ty, test.at)
+                || !test.keeps_result_type && matches!(value.ty, Type::Result { .. }))
         {
             return value;
         }
@@ -1781,7 +1782,15 @@ pub(crate) struct Selecting {
     /// A place that takes the selected candidate's result in its own form.
     result_read: Option<InstanceResultRead>,
     /// An ERR-3 test of this call or its immutable binding.
-    tag_test: Option<(bool, Location)>,
+    tag_test: Option<InstanceTagTest>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InstanceTagTest {
+    success: bool,
+    at: Location,
+    local: Option<hir::LocalId>,
+    keeps_result_type: bool,
 }
 
 /// ERR-3 checks the selected result without choosing its candidate.
@@ -1792,6 +1801,14 @@ pub(super) fn record_tag_tests(body: &hir::Body, calls: &mut [Selecting]) {
     }
     let mut calls: HashMap<_, _> = calls.iter_mut().map(|call| (call.at, call)).collect();
     let mut initializers = vec![None; body.locals.len()];
+    let mut uses = vec![(0, 0); body.locals.len()];
+    let count_captures = |callee: &Callee, uses: &mut [(usize, usize)]| {
+        if let Callee::Anonymous(function) = callee {
+            for &local in &function.captures {
+                uses[local].0 += 1;
+            }
+        }
+    };
     hir::walk_statement_nodes(&body.statements, &mut |node| match node {
         hir::Node::Statement(hir::Stmt::Declare {
             local,
@@ -1803,19 +1820,52 @@ pub(super) fn record_tag_tests(body: &hir::Body, calls: &mut [Selecting]) {
             kind: ExprKind::TagTest { success, value },
             ..
         }) => {
-            let initializer = match value.kind {
-                ExprKind::Local(local) => initializers[local],
-                _ => selected_call_at(value),
+            let (initializer, local) = match value.kind {
+                ExprKind::Local(local) => {
+                    uses[local].1 += 1;
+                    (initializers[local], Some(local))
+                }
+                _ => (selected_call_at(value), None),
             };
             if let Some(at) = initializer
                 && let Some(call) = calls.get_mut(&at)
+                && call.place.is_none()
                 && call.tag_test.is_none()
             {
-                call.tag_test = Some((*success, value.at));
+                call.tag_test = Some(InstanceTagTest {
+                    success: *success,
+                    at: value.at,
+                    local,
+                    keeps_result_type: false,
+                });
             }
+        }
+        hir::Node::Expression(Expr {
+            kind: ExprKind::Local(local) | ExprKind::DeferredPresent(local),
+            ..
+        }) => uses[*local].0 += 1,
+        hir::Node::Expression(Expr {
+            kind: ExprKind::Call { callee, .. },
+            ..
+        }) => {
+            count_captures(callee, &mut uses);
+        }
+        hir::Node::Expression(Expr {
+            kind: ExprKind::StaticCallable(callee),
+            ..
+        }) => {
+            count_captures(callee, &mut uses);
         }
         _ => {}
     });
+    for test in calls.values_mut().filter_map(|call| call.tag_test.as_mut()) {
+        // A value used elsewhere must still fit the type under which
+        // those other expressions were checked (GEN-7).
+        test.keeps_result_type = test.local.is_some_and(|local| {
+            let (reads, tag_reads) = uses[local];
+            reads != tag_reads
+        });
+    }
 }
 
 fn selected_call_at(value: &Expr) -> Option<Location> {
@@ -1931,6 +1981,7 @@ pub(crate) fn select_in_instance(
     // The instance's own locals, which its arguments read: each has a
     // value where a call reads it (EXPR-3).
     typer.use_instance_locals(body.locals.clone());
+    let mut retagged = HashSet::new();
     hir::walk_statements_mut(&mut body.statements, &mut |expression| {
         // A source read of the provisional result can be obsolete.
         // Replace it with the selected call in the actual place's form.
@@ -1985,7 +2036,27 @@ pub(crate) fn select_in_instance(
         };
         *expression = typer.fit_selected_result(call, selected, |ty| substitute_within(ty, &map));
         after(expression);
+        if let Some(test) = call.tag_test
+            && !test.keeps_result_type
+            && let Some(local) = test.local
+            && matches!(expression.ty, Type::Result { .. })
+            && typer.locals[local].ty != expression.ty
+        {
+            // EXPR-3 and ERR-3: a tag-only local takes the selected
+            // result type from its initializer.
+            typer.locals[local].ty = expression.ty.clone();
+            retagged.insert(local);
+        }
     });
+    if !retagged.is_empty() {
+        hir::walk_statements_mut(&mut body.statements, &mut |expression| {
+            if let ExprKind::Local(local) = expression.kind
+                && retagged.contains(&local)
+            {
+                expression.ty = typer.locals[local].ty.clone();
+            }
+        });
+    }
     body.locals = typer.locals;
 }
 
