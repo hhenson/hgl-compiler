@@ -840,7 +840,7 @@ impl<'a> Typer<'a> {
         // give no type: `[]`, `[null]`." Where what the place expects
         // is not known, neither is the sequence, and nothing is
         // reported.
-        let Some(of) = sequence_element(&known, has_null) else {
+        let Some(mut of) = sequence_element(&known, has_null) else {
             if unexpected {
                 self.diagnostics.emit(error(
                     Category::Type,
@@ -856,6 +856,25 @@ impl<'a> Typer<'a> {
                 .collect();
             return (ExprKind::Sequence(elements), unjudged);
         };
+        let mut rejected = false;
+        if pending && unexpected && known.first().is_some_and(|ty| whole(ty)) {
+            // Once the first entry supplies its type, a pending entry
+            // cannot repair a conflict among the complete ones. A float
+            // can widen integer literals but cannot convert i64 values.
+            let known: Vec<&Type> = known.into_iter().filter(|ty| whole(ty)).collect();
+            if let Some(joined) = sequence_element(&known, has_null) {
+                let before = self.diagnostics.len();
+                for entry in read.iter().flatten().filter(|entry| whole(&entry.ty)) {
+                    self.fit(entry.clone(), &joined, "an element, as the first is,");
+                }
+                rejected = self.diagnostics.len() != before;
+                if rejected {
+                    // Keep the explicit error on the source entry. There
+                    // is no pending join to recheck for this sequence.
+                    of = joined;
+                }
+            }
+        }
         // Where what the place expects is not known, it may be what
         // gives entries of two types their one type: a `list<Base>` for
         // an `A` and a `B` that inherit from it. Such entries are not
@@ -892,7 +911,7 @@ impl<'a> Typer<'a> {
                 }
             })
             .collect();
-        let element = match (pending, has_null) {
+        let element = match (pending && !rejected, has_null) {
             (false, _) => of,
             (true, false) => Type::Unknown,
             (true, true) => Type::Nullable(Box::new(Type::Unknown)),

@@ -1614,6 +1614,7 @@ fn recovered<T>(const input: T) -> f64 {
     let copied = forward
     let explicit: list<f64, 2> = [1, chosen]
     let nullable = [1, chosen, null]
+    let known_float = [1, 2.5, chosen]
     return 0.0
 }
 
@@ -1632,6 +1633,12 @@ fn nonliteral<T>(const input: T) -> f64 {
     return 0.0
 }
 
+fn unused_mismatch<T>(const input: T) -> f64 {
+    let chosen = if predicate(input) { 2.5 }
+    let rejected = [1, "incompatible", chosen]
+    return 0.0
+}
+
 fn accepted() -> f64 => recovered(1)
 fn wrong_type() -> f64 => typed(1)
 fn wrong_element() -> f64 => nonliteral(1)"#,
@@ -1639,8 +1646,9 @@ fn wrong_element() -> f64 => nonliteral(1)"#,
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:32:27 type/type.mismatch EXPR-5",
-            "m.hgl:33:30 type/type.mismatch EXPR-5",
+            "m.hgl:34:24 type/type.mismatch EXPR-5",
+            "m.hgl:39:27 type/type.mismatch EXPR-5",
+            "m.hgl:40:30 type/type.mismatch EXPR-5",
         ],
         "{}",
         checked.report
@@ -1652,6 +1660,7 @@ fn wrong_element() -> f64 => nonliteral(1)"#,
         ("copied", "list<f64>"),
         ("explicit", "list<f64, 2>"),
         ("nullable", "list<f64?>"),
+        ("known_float", "list<f64>"),
     ] {
         let local = instance
             .locals
@@ -1673,7 +1682,7 @@ fn wrong_element() -> f64 => nonliteral(1)"#,
             lists += 1;
         }
     });
-    assert_eq!(lists, 4);
+    assert_eq!(lists, 5);
 }
 
 /// EXPR-3, EXPR-5 and GEN-7: a list literal assigned to an inferred
