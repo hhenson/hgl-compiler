@@ -4,11 +4,13 @@
 //! independent of the candidate selected to implement its call. Nothing here
 //! proves a law or authorizes an optimizer to regroup arithmetic.
 
-use hgl_parser::{SyntaxKind, SyntaxNode};
+use hgl_diagnostics::Location;
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
+use hgl_source::FileId;
 
 use crate::declared::{names_parameter, same_type};
 use crate::hir::Callee;
-use crate::program::Program;
+use crate::program::{Module, Program};
 use crate::syntax::{child, name_token, tokens, ungrouped};
 use crate::types::{FunctionType, Signature, Type};
 
@@ -30,15 +32,20 @@ impl Law {
     }
 }
 
-/// A GEN-18 predicate of one bare function parameter, in a requirement
-/// or generic default. Other call forms retain ordinary name resolution.
-pub(crate) fn predicate(node: &SyntaxNode) -> Option<(Law, String)> {
+fn query_node(node: &SyntaxNode) -> Option<SyntaxNode> {
     let mut node = ungrouped(node.clone());
     // GEN-15: constraint grouping preserves a law predicate's meaning,
     // including when the grouped predicate follows a negation.
     while node.kind() == SyntaxKind::ConstraintParen {
         node = ungrouped(node.children().next()?);
     }
+    Some(node)
+}
+
+/// A GEN-18 predicate of one bare function parameter, in a requirement
+/// or generic default. Other call forms retain ordinary name resolution.
+pub(crate) fn predicate(node: &SyntaxNode) -> Option<(Law, String)> {
+    let node = query_node(node)?;
     let (name, operands) = match node.kind() {
         SyntaxKind::ConstraintCall => {
             if child(&node, SyntaxKind::QualifiedName).is_some()
@@ -84,6 +91,75 @@ pub(crate) fn predicate(node: &SyntaxNode) -> Option<(Law, String)> {
         return None;
     }
     Some((law, name_token(operand)?.text().to_string()))
+}
+
+/// A GEN-18 requirement only where ordinary name resolution binds no
+/// operator to its callee (UNIT-10, GEN-16).
+pub(crate) fn requirement(
+    module: &Module,
+    file: FileId,
+    node: &SyntaxNode,
+) -> Option<(Law, String)> {
+    let node = query_node(node)?;
+    if node.kind() != SyntaxKind::ConstraintCall {
+        return None;
+    }
+    let name = name_token(&node)?;
+    if module
+        .uses
+        .iter()
+        .any(|used| used.at == Location::new(file, name.span()))
+    {
+        return None;
+    }
+    predicate(&node)
+}
+
+/// Recognize a law query at a call: requirements honor the binding of
+/// their callee; defaults retain GEN-18's special formal-argument query.
+pub(crate) fn query(module: &Module, file: FileId, node: &SyntaxNode) -> Option<(Law, String)> {
+    let node = query_node(node)?;
+    if node.kind() == SyntaxKind::ConstraintCall {
+        requirement(module, file, &node)
+    } else {
+        predicate(&node)
+    }
+}
+
+/// GEN-18: a law requirement names a formal parameter that takes a
+/// function. Reject an invalid operand where the requirement is declared.
+pub(crate) fn check_requirements(
+    program: &Program,
+    diagnostics: &mut hgl_diagnostics::Diagnostics,
+) {
+    for module in &program.modules {
+        for (declaration, detail) in module.declarations.iter().zip(&module.details) {
+            let crate::types::Detail::Callable(signature) = detail else {
+                continue;
+            };
+            let Some(condition) = child(&declaration.syntax, SyntaxKind::RequiresClause) else {
+                continue;
+            };
+            for node in condition
+                .descendants()
+                .filter(|node| node.kind() == SyntaxKind::ConstraintCall)
+            {
+                let Some((_, name)) = requirement(module, declaration.at.file, &node) else {
+                    continue;
+                };
+                if parameter(signature, &name).is_none() {
+                    diagnostics.emit(crate::error(
+                        hgl_diagnostics::Category::Type,
+                        crate::codes::TYPE_MISMATCH,
+                        Location::new(declaration.at.file, node.span()),
+                        "a law requirement must query a formal parameter that takes a function"
+                            .to_string(),
+                        "GEN-18",
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// The function parameter a well-formed predicate asks about.
@@ -174,47 +250,43 @@ pub(crate) fn value(program: &Program, law: Law, expression: &crate::hir::Expr) 
     holds(program, law, callback, template)
 }
 
-/// Resolve each law query in a condition using this call's formal slots.
-pub(crate) fn verdicts<'a>(
-    evaluate: &dyn Fn(Law, &crate::hir::Expr) -> Option<bool>,
-    signature: &Signature,
+/// Collect this call's answers to the built-in law requirements. The
+/// query returns no entry for an ordinary named-operator requirement.
+pub(crate) fn verdicts(
     condition: &SyntaxNode,
-    argument: &dyn Fn(usize) -> Option<&'a crate::hir::Expr>,
+    query: &dyn Fn(&SyntaxNode) -> Option<Option<bool>>,
 ) -> Vec<(u32, Option<bool>)> {
-    use hgl_parser::HasSpan;
     condition
         .descendants()
-        .filter_map(|node| {
-            let (law, name) = predicate(&node)?;
-            let answer = parameter(signature, &name)
-                .and_then(argument)
-                .and_then(|expression| evaluate(law, expression));
-            Some((node.span().start, answer))
-        })
+        .filter(|node| node.kind() == SyntaxKind::ConstraintCall)
+        .filter_map(|node| Some((node.span().start, query(&node)?)))
         .collect()
 }
 
 /// A law stated as a positive conjunct (or its negation), GEN-7 and GEN-18.
 pub(crate) fn stated(
+    context: (&Module, FileId),
     signature: &Signature,
     declaration: &SyntaxNode,
     parameter: usize,
     law: Law,
 ) -> Option<bool> {
-    fn term(node: &SyntaxNode, name: &str, law: Law) -> Option<bool> {
+    fn term(context: (&Module, FileId), node: &SyntaxNode, name: &str, law: Law) -> Option<bool> {
         match node.kind() {
-            SyntaxKind::ConstraintParen => term(&node.children().next()?, name, law),
+            SyntaxKind::ConstraintParen => term(context, &node.children().next()?, name, law),
             SyntaxKind::ConstraintBinary
                 if tokens(node).any(|token| token.kind() == SyntaxKind::AmpAmp) =>
             {
-                node.children().find_map(|side| term(&side, name, law))
+                node.children()
+                    .find_map(|side| term(context, &side, name, law))
             }
             SyntaxKind::ConstraintNot => {
-                let (other, function) = predicate(&node.children().next()?)?;
+                let (other, function) =
+                    requirement(context.0, context.1, &node.children().next()?)?;
                 (other == law && function == name).then_some(false)
             }
             _ => {
-                let (other, function) = predicate(node)?;
+                let (other, function) = requirement(context.0, context.1, node)?;
                 (other == law && function == name).then_some(true)
             }
         }
@@ -222,7 +294,12 @@ pub(crate) fn stated(
     let condition = child(declaration, SyntaxKind::RequiresClause)?
         .children()
         .next()?;
-    term(&condition, &signature.parameters.get(parameter)?.name, law)
+    term(
+        context,
+        &condition,
+        &signature.parameters.get(parameter)?.name,
+        law,
+    )
 }
 
 /// GEN-9: property domains are concrete ordinary value types. The

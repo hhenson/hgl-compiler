@@ -27,6 +27,7 @@ use crate::{codes, error};
 pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
     constant_failures(program, diagnostics);
     generic_defaults(program, diagnostics);
+    crate::laws::check_requirements(program, diagnostics);
     crate::laws::check_domains(program, diagnostics);
     option_kinds(program, diagnostics);
     pack_declarations(program, diagnostics);
