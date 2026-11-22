@@ -67,7 +67,7 @@ docs: done
 
 runner: planned
 
-- Fenced HGL in Examples runs as a named test (#458)
+- Checking and running fenced HGL examples as named tests of explicit source modules is planned in #458.
 
 ## SDOC-10
 

@@ -40,6 +40,8 @@ transpiler: partial
 analyser: partial
 
 - Binding a generic from a positive `any` conjunct awaits #367.
+- Parsing and testing `!=` without binding a parameter are planned in #516.
+- Naming a capability type in an operator declaration's type membership is planned in #562 (TIME-8).
 
 - A parameter compared in a constraint is a const option or is rejected, and each constant it is compared with is a value of the option's type (`type.mismatch`, `member.unknown`, `enum.context_type`, at the declaration); a constant of a module among those is its value (UNIT-13)
 - At a named operator call in a value function, a candidate's `T in {types}` and `T == type` are checked against what `T` stands for, and a named operator requirement is tested with the call's types (GEN-16)
@@ -255,6 +257,7 @@ parser: planned
 analyser: planned
 
 - Reading the given function's laws in requirements and defaults awaits #367.
+- Checking a forwarded law guarantee at its declaration and testing it at the concrete call are planned in #367 (GEN-7).
 
 transpiler: planned
 
