@@ -474,6 +474,95 @@ fn run_and_test_repair_rewritten_workspace_artifacts() {
     }
 }
 
+/// TST-14, TST-17: file and kind selectors change the executions without
+/// changing the native inventory shared by subsequent test invocations.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn changing_test_paths_and_kinds_reuses_the_full_build() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("build-test-paths");
+    write(
+        &root,
+        "src/dependency.hgl",
+        "module selected.dependency\nexport const fn answer() -> i64 => 7\n",
+    );
+    let first = write(
+        &root,
+        "src/first file.hgl",
+        concat!(
+            "module selected.first\n",
+            "use selected.dependency::{answer}\n",
+            "test unit { assert answer() == 7 }\n",
+            "integration_test integration_first { assert true }\n",
+        ),
+    );
+    let second = write(
+        &root,
+        "src/sub/second.hgl",
+        concat!(
+            "module selected.second\n",
+            "# expect-error(type, \"type.mismatch\")\n",
+            "const fn outside_mismatch() -> i64 => 1\n",
+            "test failing_unit { assert false }\n",
+            "integration_test integration_second { assert true }\n",
+            "integration_test rejected_integration {\n",
+            "    # expect-error(type, \"type.mismatch\")\n",
+            "    assert 1\n",
+            "}\n",
+        ),
+    );
+    let ninja = NinjaTrace::new(&root);
+    let source = argument(&root.join("src"));
+    let workspace = argument(&ninja.workspace);
+    let run = |options: &[&str]| {
+        success(
+            ninja
+                .hgl(&["test", &source, "--target", "cpp", "--keep", &workspace])
+                .args(options)
+                .output()
+                .unwrap(),
+        )
+    };
+
+    let written = run(&["--test-path", &first]);
+    assert!(
+        written.contains("passed   executable  selected.first::unit\n"),
+        "{written}"
+    );
+    assert!(!written.contains("integration_first"), "{written}");
+    assert!(!written.contains("failing_unit"), "{written}");
+    assert!(!written.contains("outside_mismatch"), "{written}");
+    assert_eq!(ninja.calls(), 1);
+
+    let written = run(&["--test-path", &second, "--integration-only"]);
+    assert!(
+        written.contains("passed   executable  selected.second::integration_second\n"),
+        "{written}"
+    );
+    assert!(!written.contains("integration_first"), "{written}");
+    assert!(!written.contains("failing_unit"), "{written}");
+    assert!(!written.contains("outside_mismatch"), "{written}");
+    assert!(
+        written.contains("passed   rejection   selected.second::rejected_integration\n"),
+        "{written}"
+    );
+    assert_eq!(ninja.calls(), 1);
+
+    let written = run(&["--integration-only"]);
+    assert!(
+        written.contains("passed   executable  selected.first::integration_first\n"),
+        "{written}"
+    );
+    assert!(
+        written.contains("passed   executable  selected.second::integration_second\n"),
+        "{written}"
+    );
+    assert!(!written.contains("failing_unit"), "{written}");
+    assert_eq!(ninja.calls(), 1);
+}
+
 /// A default build has no test executable. A test fills that coverage,
 /// reuses it on a hit, and rebuilds for content changes or missing files.
 #[test]

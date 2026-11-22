@@ -58,9 +58,13 @@ impl<'a> BuildRequest<'a> {
         }
     }
 
-    pub(super) fn start(&self) -> Result<BuildStart, ExitCode> {
+    pub(super) fn start(&self, paths: Option<&[PathBuf]>) -> Result<BuildStart, ExitCode> {
         let session = BuildSession::open(self.roots, self.keep, self.debug);
-        let inputs = match ProgramSources::read(self.roots) {
+        let inputs = match paths {
+            Some(paths) => ProgramSources::read_paths(paths),
+            None => ProgramSources::read(self.roots),
+        };
+        let inputs = match inputs {
             Ok(inputs) => inputs,
             Err(status) => {
                 if let Ok(session) = session {
@@ -88,7 +92,7 @@ impl<'a> BuildRequest<'a> {
     }
 
     fn build(&self, interrupt: &Interrupt) -> Result<(BuildSession, BuiltProgram), ExitCode> {
-        let (inputs, session) = match self.start()? {
+        let (inputs, session) = match self.start(None)? {
             BuildStart::Hit(session, built) => {
                 interrupt.finish().map_err(build_error)?;
                 return Ok((session, built));

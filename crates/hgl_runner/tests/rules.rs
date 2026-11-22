@@ -789,9 +789,8 @@ fn every_case_is_reported_with_its_identity_kind_and_outcome() {
 #[test]
 fn a_rejection_only_run_selects_no_test_to_run() {
     let selection = Selection {
-        tests: Vec::new(),
         rejections_only: true,
-        integration: false,
+        ..Selection::default()
     };
     let ran = run_selected(&SELECTABLE, &selection);
     assert_eq!(
@@ -811,8 +810,7 @@ fn a_selector_names_tests_and_declaration_owned_cases_always_run() {
     let select = |tests: &[&str]| {
         let selection = Selection {
             tests: tests.iter().map(|name| name.to_string()).collect(),
-            rejections_only: false,
-            integration: false,
+            ..Selection::default()
         };
         run_selected(&SELECTABLE, &selection).cases
     };
@@ -856,22 +854,15 @@ fn an_integration_test_is_left_out_unless_it_is_asked_for() {
     let select = |tests: &[&str], integration: bool| {
         let selection = Selection {
             tests: tests.iter().map(|name| name.to_string()).collect(),
-            rejections_only: false,
             integration,
+            ..Selection::default()
         };
         let ran = run_selected(&PROGRAM, &selection);
         assert_eq!(ran.stopped, NONE);
         ran.cases
     };
-    // A run of the module's tests leaves `live` out. A rejection case
-    // runs nothing, and is checked whoever owns it.
-    assert_eq!(
-        select(&[], false),
-        [
-            "passed rejection one::wrong",
-            "not-run executable one::first",
-        ]
-    );
+    // The integration test and its rejection case are both left out.
+    assert_eq!(select(&[], false), ["not-run executable one::first"]);
     // Asked for, it is a test as any other.
     assert_eq!(
         select(&[], true),
@@ -883,6 +874,7 @@ fn an_integration_test_is_left_out_unless_it_is_asked_for() {
     );
     // Its name asks for it.
     assert_eq!(select(&["live"], false), ["not-run executable one::live"]);
+    assert_eq!(select(&["wrong"], false), ["passed rejection one::wrong"]);
     assert_eq!(select(&["first"], true), ["not-run executable one::first"]);
 }
 
@@ -915,8 +907,7 @@ fn a_test_of_an_application_is_named_by_its_path() {
     // The path selects it.
     let selection = Selection {
         tests: vec!["app.live::rejected".to_string()],
-        rejections_only: false,
-        integration: false,
+        ..Selection::default()
     };
     let ran = run_selected(&PROGRAM, &selection);
     assert_eq!(ran.stopped, NONE);
@@ -966,8 +957,7 @@ fn an_unknown_selector_stops_the_run() {
             "third".to_string(),
             "one::second".to_string(),
         ],
-        rejections_only: false,
-        integration: false,
+        ..Selection::default()
     };
     let ran = run_selected(&SELECTABLE, &selection);
     assert_eq!(
@@ -1127,8 +1117,7 @@ fn executable_cases_are_run_by_the_executor() {
     let mut executor = Scripted::saying(vec![Outcome::Passed]);
     let selection = Selection {
         tests: vec!["second".to_string()],
-        rejections_only: false,
-        integration: false,
+        ..Selection::default()
     };
     let ran = run_on(&[("run.hgl", TO_RUN)], &selection, Some(&mut executor));
     assert_eq!(executor.asked, [["examples.runs::second"]]);
@@ -1159,9 +1148,8 @@ fn a_stopped_run_executes_nothing() {
 
     let mut executor = Scripted::saying(vec![Outcome::Passed]);
     let selection = Selection {
-        tests: Vec::new(),
         rejections_only: true,
-        integration: false,
+        ..Selection::default()
     };
     let ran = run_on(&[("run.hgl", TO_RUN)], &selection, Some(&mut executor));
     assert_eq!(executor.asked, Vec::<Vec<String>>::new());

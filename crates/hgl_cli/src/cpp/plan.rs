@@ -30,6 +30,10 @@ pub(super) struct Application {
 #[derive(Deserialize, Serialize)]
 pub(super) struct TestCase {
     pub(super) identity: String,
+    /// The written source name, separate from the identity printed to users.
+    /// Older stamps can still supply their artifact inventory.
+    #[serde(default)]
+    pub(super) file: String,
     pub(super) kind: CaseKind,
     pub(super) selection: CaseSelection,
     pub(super) action: Action,
@@ -174,6 +178,7 @@ impl TestCase {
         };
         Self {
             identity: case.identity.clone(),
+            file: sources.file(case.file).name().to_string(),
             kind: case.kind,
             selection: case.selection,
             action,
@@ -181,13 +186,7 @@ impl TestCase {
     }
 
     pub(super) fn selected(&self, selection: &Selection) -> bool {
-        if self.kind == CaseKind::Executable && selection.rejections_only {
-            return false;
-        }
-        match self.selection {
-            CaseSelection::Always => true,
-            CaseSelection::Named { integration } => selection.selects(&self.identity, integration),
-        }
+        selection.selects_case(&self.identity, self.kind, self.selection, &self.file)
     }
 }
 
