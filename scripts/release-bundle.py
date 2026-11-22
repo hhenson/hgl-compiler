@@ -66,6 +66,7 @@ def native_cache_key():
         "HGRAPH_TAG",
         "scripts/hgraph-dependencies.sh",
         "scripts/gather-dsyms.sh",
+        "scripts/keep-lto-objects.sh",
         "scripts/provision-hgraph-sdk.sh",
         "scripts/package-release.sh",
         "scripts/release-bundle.py",
