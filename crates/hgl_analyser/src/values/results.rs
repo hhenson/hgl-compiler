@@ -14,6 +14,22 @@ use crate::syntax::{child, name_token, tokens};
 use crate::types::{Detail, Scalar, Type};
 use crate::{codes, error};
 
+/// The immutable name a tag can prove. An inferred child binding
+/// keeps its identity through a checked endpoint read (ERR-3, ERR-14).
+pub(super) fn result_binding(value: &Expr) -> Option<crate::hir::LocalId> {
+    match &value.kind {
+        ExprKind::Local(local) | ExprKind::BoundChild(local) => Some(*local),
+        ExprKind::CheckedChild {
+            read,
+            result: false,
+        } => match &read.kind {
+            ExprKind::BoundChild(local) => Some(*local),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 impl<'a> Typer<'a> {
     // ---- Result forms (ERR-2 to ERR-5) ----
 
@@ -213,22 +229,23 @@ impl<'a> Typer<'a> {
                 return (ExprKind::Unread, Type::Unknown);
             }
         };
-        let fact = match base.kind {
-            ExprKind::Local(local) if success => Some(Fact::Success(local)),
-            ExprKind::Local(local) => Some(Fact::Failure(local)),
-            _ => None,
-        };
+        let binding = result_binding(&base);
+        let fact = binding.map(if success {
+            Fact::Success
+        } else {
+            Fact::Failure
+        });
         if !fact.is_some_and(|fact| self.present.contains(&fact)) {
             let (test, tag) = if success {
                 ("is_ok", "a success")
             } else {
                 ("is_err", "a failure")
             };
-            let message = match &base.kind {
-                ExprKind::Local(local) => format!(
+            let message = match binding {
+                Some(local) => format!(
                     "`.{}` is read where `{}` is {tag}, and nothing here proves it one",
                     name.text(),
-                    self.locals[*local].name
+                    self.locals[local].name
                 ),
                 _ => format!(
                     "`.{}` is read of a binding a guard has proved {tag}, and this is no \

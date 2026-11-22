@@ -10,6 +10,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use super::control::{Outcome, branch_is_null, branch_takes_its_type};
 use super::fit::{accepts_float, is_integer_literal, not_null, nullable, open, window_value};
 use super::node::RefRead;
+use super::results::result_binding;
 use super::{Fact, Typer, children};
 use crate::hir::{
     BinaryOperator, EndpointOperation, Expr, ExprKind, Hook, LocalId, UnaryOperator, Value,
@@ -518,6 +519,9 @@ impl<'a> Typer<'a> {
             let present = Fact::Present(local);
             let result = match &self.locals[local].ty {
                 Type::Result { .. } => true,
+                Type::Endpoint(payload) if self.bound_children.contains_key(&local) => {
+                    matches!(**payload, Type::Result { .. })
+                }
                 Type::Nullable(inner) => {
                     matches!(**inner, Type::Result { .. })
                         && (self.present.contains(&present) || known.contains(&present))
@@ -984,9 +988,8 @@ fn null_tests(condition: &Expr, proofs: &Proofs, assumed: &[Fact]) -> (Vec<Fact>
         // it is a success and where it does not a failure, and `is_err`
         // the reverse."
         ExprKind::TagTest { success, value } => {
-            let local = match value.kind {
-                ExprKind::Local(local) if tagged(local, assumed) => local,
-                _ => return (Vec::new(), Vec::new()),
+            let Some(local) = result_binding(value).filter(|local| tagged(*local, assumed)) else {
+                return (Vec::new(), Vec::new());
             };
             let (success_where, failure_where) =
                 (vec![Fact::Success(local)], vec![Fact::Failure(local)]);

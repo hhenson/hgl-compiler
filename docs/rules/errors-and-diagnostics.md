@@ -38,6 +38,7 @@ analyser: partial
 - `is_ok` and `is_err` take one result by position and give a `bool`
 - A direct guard on an immutable result binding proves its tag: in the branch it holds for, across `!` and the Boolean connectives, and after a branch that returns
 - `binding.value` and `binding.error` need the matching fact (`result.required_variant`), and have the T and the E
+- A tag proof for a child held by an inferred `let` applies to that binding. The read still has the child admission and validity checks (ERR-14, TIME-1).
 - In a graph a test of a connection gives no fact
 - Left: a fact carried through a `switch` or a loop
 
