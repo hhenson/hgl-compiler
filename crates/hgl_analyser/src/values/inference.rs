@@ -625,6 +625,7 @@ impl<'a> Typer<'a> {
             let listed = slots[index].listed;
             let mut learn = |this: &Self, value: &Expr, found: &mut Vec<Option<Argument>>| {
                 if this.graph
+                    && this.hook.is_none()
                     && takes == Takes::Parameters
                     && !whole(&value.ty)
                     && this.category(value) == ValueCategory::Unsettled
@@ -812,17 +813,17 @@ impl<'a> Typer<'a> {
                 // EXPR-9 and ERR-2: an empty sequence or a form with no
                 // type of its own needs the slot another argument can
                 // settle in the graph instance (GEN-2).
-                let ungrouped = ungrouped(node.clone());
-                let needs_place = takes_its_type(&ungrouped)
-                    || ungrouped.kind() == SyntaxKind::SequenceExpr
-                        && ungrouped.children().next().is_none();
-                let depends_on_instance = !whole(&slot.ty)
-                    && needs_place
-                    && unfound.iter().any(|at| mentions(pattern, &[*at]))
-                    && unfound
+                let depends_on_instance = !late.is_empty() && !traced && !whole(&slot.ty) && {
+                    let syntax = ungrouped(node.clone());
+                    let needs_place = takes_its_type(&syntax)
+                        || syntax.kind() == SyntaxKind::SequenceExpr
+                            && syntax.children().next().is_none();
+                    let mut missing = unfound
                         .iter()
                         .filter(|at| mentions(pattern, &[**at]))
-                        .all(|at| late.contains(at));
+                        .peekable();
+                    needs_place && missing.peek().is_some() && missing.all(|at| late.contains(at))
+                };
                 // A place whose type names a parameter nothing resolved
                 // is not known, and where the call is settled it never
                 // will be. Its argument is then read as one of which
@@ -855,6 +856,8 @@ impl<'a> Typer<'a> {
                             Fact::Failure(local) => {
                                 Some(hir::ArgumentFact::Failure(self.locals[*local].at))
                             }
+                            // Child reads consume these only in hooks
+                            // (TIME-1); replay is graph composition.
                             Fact::AllValid(_) | Fact::ChildValid(_) => None,
                         })
                         .collect()
