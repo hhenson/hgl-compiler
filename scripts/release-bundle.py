@@ -1,4 +1,4 @@
-"""Prepare, verify and find reusable macOS release assets."""
+"""Prepare, verify and find reusable release assets."""
 
 import argparse
 import errno
@@ -14,8 +14,14 @@ import tomllib
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-TARGET = "aarch64-apple-darwin"
-ARTIFACT = "hgl-macos-arm64"
+MACOS_TARGET = "aarch64-apple-darwin"
+LINUX_TARGET = "x86_64-unknown-linux-gnu"
+ARTIFACTS = ("hgl-macos-arm64", "hgl-linux-x86_64")
+LINUX_GLIBC = (2, 43)
+LINUX_SYSTEM_LIBRARIES = {
+    "ld-linux-x86-64.so.2", "libc.so.6", "libdl.so.2", "libgcc_s.so.1",
+    "libm.so.6", "libpthread.so.0", "librt.so.1", "libstdc++.so.6",
+}
 NATIVE_LIBRARIES = ("fmt", "spdlog", "simdjson")
 NATIVE_DIRECTORIES = (
     "libexec/hgraph-sdk",
@@ -59,7 +65,7 @@ def native_cache_key():
         "CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS",
         "DEVELOPER_DIR", "SDKROOT", "MACOSX_DEPLOYMENT_TARGET",
     ]
-    inputs = {"target": TARGET}
+    inputs = {"target": MACOS_TARGET}
     inputs.update({name: os.environ.get(name, "") for name in environment})
     for name, args in [
         ("compiler", [os.environ.get("CXX") or "/usr/bin/clang++", "--version"]),
@@ -103,7 +109,7 @@ def github_items(endpoint, key):
 
 
 def verified_run(repository, commit, current_run):
-    """Find a completed main push that verified this commit's live artifact."""
+    """Find a completed main push that verified both live artifacts for this commit."""
     base = f"repos/{repository}/actions"
     query = urlencode({
         "branch": "main", "event": "push", "head_sha": commit,
@@ -114,29 +120,32 @@ def verified_run(repository, commit, current_run):
             commit, "main", "push", "success",
         ) or str(run["id"]) == current_run:
             continue
-        artifacts = github_items(f"{base}/runs/{run['id']}/artifacts?per_page=100", "artifacts")
-        name = f"{ARTIFACT}-{run['run_attempt']}"
-        for artifact in artifacts:
-            if artifact["name"] == name and not artifact["expired"]:
-                return run["id"], artifact["id"]
+        live = {
+            artifact["name"]: artifact["id"]
+            for artifact in github_items(f"{base}/runs/{run['id']}/artifacts?per_page=100", "artifacts")
+            if not artifact["expired"]
+        }
+        names = [f"{artifact}-{run['run_attempt']}" for artifact in ARTIFACTS]
+        if all(name in live for name in names):
+            return run["id"], *(live[name] for name in names)
     return None
 
 
-def rust_licenses(destination):
+def rust_licenses(destination, triple):
     """Collect notices from the Rust distribution and the Cargo build graph."""
     std = Path(command("rustc", "--print", "sysroot").strip()) / "share/doc/rust"
     shutil.copytree(std / "licenses", destination / "rust")
     for copyright_file in std.glob("COPYRIGHT*.html"):
         shutil.copy2(copyright_file, destination / "rust")
 
-    target = ["--target", TARGET, "--locked"]
+    target = ["--target", triple, "--locked"]
     tree = command(
         "cargo", "tree", "-p", "hgl_cli", *target,
         "--edges", "normal,build", "--prefix", "none", "--format", "{p}",
     )
     used = {tuple(line.split()[:2]) for line in tree.splitlines()}
     metadata = json.loads(command(
-        "cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", TARGET,
+        "cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", triple,
     ))
     for package in metadata["packages"]:
         name, version = package["name"], package["version"]
@@ -167,8 +176,8 @@ def upstream_notice(package, source, target_dir):
         (target_dir / "LICENSE.md").write_bytes(response.read())
 
 
-def verify(bundle, forbidden):
-    """Check paths, dylib install names, architecture and bundled libraries."""
+def verify(bundle, forbidden, target):
+    """Check relocatability, architecture and system library requirements."""
     bundle = bundle.resolve(strict=True)
     bin_file = bundle / "bin/hgl"
     sdk = bundle / "libexec/hgraph-sdk"
@@ -186,18 +195,23 @@ def verify(bundle, forbidden):
         if not any(file.is_file() and NOTICE.match(file.name) for file in notices.glob("*")):
             raise ValueError(f"missing license notice for {library}")
 
-    libraries = [*sdk.glob("lib/*.dylib"), *deps.glob("lib/*.dylib")]
+    macos = target == MACOS_TARGET
+    suffix = "*.dylib" if macos else "*.so*"
+    library_version = r"(?:\.[0-9]+)*\.dylib" if macos else r"\.so(?:\.[0-9]+)*"
+    libraries = [*sdk.glob(f"lib/{suffix}"), *deps.glob(f"lib/{suffix}")]
     names = {lib.name for lib in libraries}
     for prefix in ("libhgraph_runtime", "libhgraph_wiring", "libfmt", "libspdlog", "libsimdjson"):
         if not any(name.startswith(prefix) for name in names):
-            raise ValueError(f"missing {prefix} dylib")
+            raise ValueError(f"missing {prefix} shared library")
     if sorted(p.name for p in deps.iterdir()) != ["include", "lib"]:
         raise ValueError("unexpected dependency prefix contents")
     for file in (deps / "lib").iterdir():
         if file.name != "cmake" and not re.fullmatch(
-            r"lib(?:fmt|spdlog|simdjson)(?:\.[0-9]+)*\.dylib", file.name,
+            r"lib(?:fmt|spdlog|simdjson)" + library_version, file.name,
         ):
             raise ValueError(f"unexpected dependency library: {file.name}")
+    if not macos and names.intersection(LINUX_SYSTEM_LIBRARIES):
+        raise ValueError("system C or C++ runtime bundled on Linux")
 
     prefixes = {
         str(candidate).encode()
@@ -205,7 +219,13 @@ def verify(bundle, forbidden):
         for candidate in (path, path.resolve())
         if str(candidate) not in ("", "/")
     }
-    scratch_path = re.compile(rb"(?:/private)?/var/folders/[^\s\x00]+|/Users/[^\s\x00]+")
+    # Ignore URL paths inside license notices, such as crates.io/crates/home.
+    path_start = rb"(?:file://|(?<![\w./~%-]))"
+    scratch_path = re.compile(
+        path_start + rb"(?:(?:/private)?/var/folders/|/(?:Users|home|root)/|/tmp/hgl-release\.)[^\s\x00]+"
+    )
+    local_path = re.compile(path_start + rb"(?:" + b"|".join(map(re.escape, sorted(prefixes)))
+                            + rb")(?![\w.~-])") if prefixes else None
     for path in bundle.rglob("*"):
         if path.is_symlink():
             if path.readlink().is_absolute() or not path.resolve(strict=True).is_relative_to(bundle):
@@ -213,15 +233,18 @@ def verify(bundle, forbidden):
             continue
         if path.is_file():
             data = path.read_bytes()
-            if any(prefix in data for prefix in prefixes) or scratch_path.search(data):
+            if scratch_path.search(data) or (local_path and local_path.search(data)):
                 raise ValueError(f"build path in {path.relative_to(bundle)}")
             if path.suffix in RELEASE_METADATA:
                 verify_metadata_paths(bundle, path, data)
 
     for binary in {bin_file, *(lib.resolve(strict=True) for lib in libraries)}:
-        if command("lipo", "-archs", binary).strip() != "arm64":
-            raise ValueError(f"{binary.relative_to(bundle)} is not arm64")
-        verify_load_paths(bundle, binary, names)
+        if macos:
+            if command("lipo", "-archs", binary).strip() != "arm64":
+                raise ValueError(f"{binary.relative_to(bundle)} is not arm64")
+            verify_load_paths(bundle, binary, names)
+        else:
+            verify_elf(bundle, binary, names)
     print(f"Verified {bundle.name}")
 
 
@@ -255,6 +278,27 @@ def verify_load_paths(bundle, binary, names):
         raise ValueError(f"external Mach-O load path in {binary.relative_to(bundle)}: {path}")
 
 
+def verify_elf(bundle, binary, names):
+    """Check x86-64 ELF linkage against the bundle and Ubuntu's system runtime."""
+    relative = binary.relative_to(bundle)
+    header = command("readelf", "--file-header", binary)
+    if not re.search(r"^\s*Machine:\s+Advanced Micro Devices X86-64$", header, re.MULTILINE):
+        raise ValueError(f"{relative} is not x86-64")
+    dynamic = command("readelf", "--dynamic", "--wide", binary)
+    for library in re.findall(r"\(NEEDED\).*\[(.+)\]", dynamic):
+        if library not in names and library not in LINUX_SYSTEM_LIBRARIES:
+            raise ValueError(f"external ELF library in {relative}: {library}")
+    for paths in re.findall(r"\((?:RPATH|RUNPATH)\).*\[(.*)\]", dynamic):
+        for path in paths.split(":"):
+            origin, _, child = path.partition("/")
+            if origin != "$ORIGIN" or not (binary.parent / child).resolve().is_relative_to(bundle):
+                raise ValueError(f"external ELF load path in {relative}: {path}")
+    versions = command("readelf", "--version-info", "--wide", binary)
+    for version in re.findall(r"\bName: GLIBC_(\d+(?:\.\d+)+)\b", versions):
+        if tuple(map(int, version.split("."))) > LINUX_GLIBC:
+            raise ValueError(f"{relative} requires glibc {version}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_subparsers(dest="mode", required=True)
@@ -268,10 +312,13 @@ def main():
     reuse.add_argument("repository")
     reuse.add_argument("commit")
     reuse.add_argument("current_run")
-    modes.add_parser("licenses").add_argument("destination", type=Path)
+    licenses = modes.add_parser("licenses")
+    licenses.add_argument("destination", type=Path)
     audit = modes.add_parser("verify")
     audit.add_argument("bundle", type=Path)
     audit.add_argument("--forbid", type=Path, action="append", default=[])
+    for mode in (licenses, audit):
+        mode.add_argument("--target", choices=[MACOS_TARGET, LINUX_TARGET], default=MACOS_TARGET)
     args = parser.parse_args()
     if args.mode == "version":
         print(version())
@@ -284,12 +331,12 @@ def main():
     elif args.mode == "find-verified-run":
         found = verified_run(args.repository, args.commit, args.current_run)
         if found:
-            run, artifact = found
-            print(f"run-id={run}\nartifact-id={artifact}")
+            run, macos, linux = found
+            print(f"run-id={run}\nartifact-id={macos}\nlinux-artifact-id={linux}")
     elif args.mode == "licenses":
-        rust_licenses(args.destination)
+        rust_licenses(args.destination, args.target)
     else:
-        verify(args.bundle, args.forbid)
+        verify(args.bundle, args.forbid, args.target)
 
 
 if __name__ == "__main__":
