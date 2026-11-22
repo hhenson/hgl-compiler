@@ -134,9 +134,6 @@ impl<'a> Typer<'a> {
         given: Option<Vec<Argument>>,
         settled: bool,
     ) -> (ExprKind, Type) {
-        if let Some(unread) = self.unread_pack_call(list) {
-            return unread;
-        }
         let program = self.program;
         let declared = &program.modules[module].declarations[declaration];
         let Some(Detail::Struct(read)) = program.modules[module].details.get(declaration) else {
@@ -168,6 +165,25 @@ impl<'a> Typer<'a> {
         // With none given, a generic struct's arguments are found from
         // the fields it is given.
         let inferring = given.is_none() && !read.generics.is_empty();
+        let structure = |arguments| Type::Named {
+            name: declared.name.clone(),
+            module,
+            declaration,
+            arguments,
+            kind: NamedKind::Struct,
+        };
+        // FN-19: a constructor receives the named entries through its
+        // ordinary field binding once the enclosing pack is known.
+        if super::forwarded_packs::spread_operands(list)
+            .next()
+            .is_some()
+        {
+            let result =
+                (!inferring && !reported).then(|| structure(given.clone().unwrap_or_default()));
+            if let Some(call) = self.defer_pack_call(list, result.as_ref(), None) {
+                return call;
+            }
+        }
         // The struct's own parameters. A field's type that still names
         // one once the arguments are in place has been given none: with
         // no arguments given, or where a pack's place is not filled in.
@@ -254,13 +270,7 @@ impl<'a> Typer<'a> {
         let ty = if reported {
             Type::Unknown
         } else {
-            Type::Named {
-                name: declared.name.clone(),
-                module,
-                declaration,
-                arguments: arguments_of_type,
-                kind: NamedKind::Struct,
-            }
+            structure(arguments_of_type)
         };
         // GEN-3: the struct's `requires` holds with its arguments. Not
         // where something else was reported of the construction
@@ -514,11 +524,10 @@ impl<'a> Typer<'a> {
                     // generic value parameters, then ordinary ones.
                     // FN-18: the parentheses of a declaration with
                     // a dependent pack supply that callback's arguments.
-                    if !configuration
-                        && forwarded.is_none()
-                        && (brace || dependent.is_none())
-                        && aside.contains(&text)
-                    {
+                    if !configuration && (brace || dependent.is_none()) && aside.contains(&text) {
+                        if forwarded.is_some() {
+                            self.report_forwarded_generic_value(callee, text, name_at);
+                        }
                         continue;
                     }
                     let found = found.filter(|_| {
@@ -627,6 +636,26 @@ impl<'a> Typer<'a> {
             );
         }
         arguments
+    }
+
+    /// GEN-8 and FN-19: an ordinary pack entry is a runtime value,
+    /// including when its original argument was a literal.
+    pub(super) fn report_forwarded_generic_value(
+        &mut self,
+        callee: &SyntaxToken,
+        name: &str,
+        at: Location,
+    ) {
+        self.diagnostics.emit(error(
+            Category::Type,
+            codes::GENERIC_ARGUMENT_CONSTANT,
+            at,
+            format!(
+                "a forwarded pack entry is a runtime value, but the generic value parameter `{name}` of `{}` needs a compile-time constant",
+                callee.text()
+            ),
+            "GEN-8",
+        ));
     }
 
     /// GEN-10 and the owner's decision on #336: blame the first excess
