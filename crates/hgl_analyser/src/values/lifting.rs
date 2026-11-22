@@ -16,11 +16,11 @@ use super::members::{index_result, indexed_payload};
 use super::results::{captured_binding, captured_output};
 use super::{CapturedOutput, Typer};
 use crate::hir::{
-    Body, Callee, Expr, ExprKind, Form, IfInference, Local, LocalId, Node, NodeMut, Run, Stmt,
-    Value, ValueCategory, walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
+    Body, Callee, Expr, ExprKind, IfInference, Local, LocalId, Node, NodeMut, Run, Stmt, Value,
+    ValueCategory, walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
 };
-use crate::program::{DeclarationKind, OperatorRef, Program, Role};
-use crate::types::{Argument, Detail, Parameter, Type};
+use crate::program::{DeclarationKind, Program, Role};
+use crate::types::{Argument, Detail, Type};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -74,64 +74,6 @@ impl<'a> Typer<'a> {
     /// graph without reading live payloads."
     pub(super) fn constants_of(&mut self, kind: &ExprKind) {
         check_const_arguments(self.program, &self.locals, kind, self.diagnostics);
-    }
-
-    /// An entry of the configuration of the symbol written `form` in a
-    /// graph, `value` given to the option `option` of the value
-    /// candidate selected, which the graph lifts (FN-6).
-    ///
-    /// EXPR-14: "Scalar operator configuration binds during graph
-    /// construction in temporal composition ... Configuration must not
-    /// silently introduce a temporal input: time-varying temporal
-    /// configuration requires a signature explicitly admitting that
-    /// input." A value candidate's parameter is a scalar one: a
-    /// connection there would be an input the configuration brought
-    /// in. A temporal candidate's parameter admits one, and a call by
-    /// name, `eq_(a, b, abs: tolerance)`, gives it explicitly (FN-6).
-    /// TIME-2: "Composition describes a typed graph without reading
-    /// live payloads." So the entry is given what is known where the
-    /// graph is built (`connection.as_constant`).
-    pub(super) fn configuration_input(
-        &mut self,
-        (operator, form): (OperatorRef, Form),
-        (module, declaration): (usize, usize),
-        parameter: &Parameter,
-        value: &Expr,
-        category: ValueCategory,
-    ) {
-        if !self.graph
-            || parameter.constant
-            || category != ValueCategory::Connection
-            || !matches!(
-                self.program.modules[module].declarations[declaration]
-                    .kind
-                    .candidate(),
-                Some((Role::Value, _))
-            )
-        {
-            return;
-        }
-        let operator = match form {
-            Form::Named => self.program.modules[operator.module].declarations[operator.declaration]
-                .name
-                .as_str(),
-            Form::Binary(operator) => operator.symbol(),
-            Form::Unary(operator) => operator.symbol(),
-        };
-        let option = &parameter.name;
-        self.diagnostics.emit(
-            error(
-                Category::Phase,
-                codes::CONNECTION_AS_CONSTANT,
-                value.at,
-                format!(
-                    "`{option}` configures `{operator}`, which binds it where the graph is built, \
-                     and this is a connection"
-                ),
-                "EXPR-14",
-            )
-            .with_note("a constant or a `const` parameter is known where the graph is built"),
-        );
     }
 
     /// True when `value` is a connection of a graph's body: what a

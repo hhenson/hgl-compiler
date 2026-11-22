@@ -168,19 +168,15 @@ transpiler: done
 
 ## EXPR-14
 
-analyser: partial
+analyser: done
 
-- In a graph an entry of a symbol's configuration given to a value candidate, which the graph lifts, is given no connection (`connection.as_constant`); a temporal candidate's parameter takes one, and so does a call by name (FN-6)
-- An instance checks a brace entry again if its category was unsettled at declaration (GEN-7).
-- In a value function and a hook the entry is a value of the invocation
-- Applying the selected declaration's parameter kind to both call spellings is planned in #553.
+- A value function's declared configuration slots take graph-construction values. Both spelling forms reject a connection in such a slot (`connection.as_constant`).
+- An ordinary slot can receive a lifted input, including through a symbol's braces (FN-6). The selected declaration decides when candidates use the same option name in different slots.
+- An instance checks a configuration argument again if its category was unsettled at declaration (GEN-7). In a value function or hook it is a value of the invocation.
 
-transpiler: partial
+transpiler: done
 
-- Holds scalar options such as numeric tolerances and zoned comparison's `utc` as
-  lifted-call configuration. Value and hook calls evaluate the same arguments at
-  invocation.
-- Using a connected parenthesized option as a lifted input in either spelling is planned in #553.
+- Holds numeric tolerances at graph construction. Lifts an ordinary connection such as `calendar` or `utc` as an input. Value and hook calls evaluate their configuration at invocation.
 
 ## EXPR-15
 

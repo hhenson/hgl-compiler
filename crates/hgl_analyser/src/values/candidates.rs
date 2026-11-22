@@ -342,16 +342,19 @@ impl<'a> Typer<'a> {
                 let widens = |decided: &Type, later: &Type| self.widens(decided, later);
                 let defaults = |generic: &GenericParameter| {
                     if let Some(default) = generic_default(&candidate.syntax, generic)
-                        && let Some((law, name)) = crate::laws::predicate(&default)
-                    {
-                        let value = crate::laws::parameter(signature, &name)
-                            .and_then(|parameter| {
-                                bound
+                        && let Some(value) = self.law_call(
+                            (module, declaration),
+                            signature,
+                            &default,
+                            &|parameter| {
+                                let position = bound
                                     .iter()
-                                    .position(|place| place.parameter() == Some(parameter))
-                            })
-                            .and_then(|position| self.law_value(law, &given[position].value))
-                            .map_or(ConstantValue::Unknown, ConstantValue::Bool);
+                                    .position(|place| place.parameter() == Some(parameter))?;
+                                Some(&given[position].value)
+                            },
+                        )
+                    {
+                        let value = value.map_or(ConstantValue::Unknown, ConstantValue::Bool);
                         return Some(Constant {
                             text: constant_text(&default),
                             value,
@@ -845,13 +848,6 @@ impl<'a> Typer<'a> {
                 };
                 if from_braces {
                     braced.push(value.at);
-                    self.configuration_input(
-                        (operator, form),
-                        (module, declaration),
-                        parameter,
-                        &value,
-                        self.category(&value),
-                    );
                 }
                 Some(hir::Argument {
                     parameter: Some(index),
@@ -1058,17 +1054,14 @@ impl<'a> Typer<'a> {
         let Some(condition) = clause.children().next() else {
             return Admits::Yes;
         };
-        let laws = crate::laws::verdicts(
-            &|law, expression| self.law_value(law, expression),
-            signature,
-            &condition,
-            &|parameter| {
+        let laws = crate::laws::verdicts(&condition, &|node| {
+            self.law_call((module, declaration), signature, node, &|parameter| {
                 let position = bound
                     .iter()
                     .position(|place| place.parameter() == Some(parameter))?;
                 Some(&given[position].value)
-            },
-        );
+            })
+        });
         let pack_operand = |node: SyntaxNode| match node.kind() {
             SyntaxKind::ConstraintEach | SyntaxKind::ConstraintAny | SyntaxKind::PackMemberType => {
                 true
@@ -1104,14 +1097,10 @@ impl<'a> Typer<'a> {
             &condition,
         );
         let callable = |node: &SyntaxNode| -> Option<bool> {
-            if let Some((law, name)) = crate::laws::predicate(node) {
-                let parameter = crate::laws::parameter(signature, &name)?;
-                let position = bound
-                    .iter()
-                    .position(|place| place.parameter() == Some(parameter))?;
-                return self.law_value(law, &given[position].value);
-            }
             let start = node.span().start;
+            if let Some((_, answer)) = laws.iter().find(|(at, _)| *at == start) {
+                return *answer;
+            }
             callable
                 .iter()
                 .find(|(at, _)| *at == start)
@@ -2483,6 +2472,24 @@ pub(super) fn bound(
         .filter(|(_, p)| !p.configuration && p.pack.is_none())
         .map(|(index, _)| index)
         .collect();
+    let ordinary_named = |name: &str| {
+        let matches = |parameter: &crate::types::Parameter| {
+            !parameter.configuration && parameter.pack.is_none() && parameter.name == name
+        };
+        public
+            .parameters
+            .iter()
+            .position(matches)
+            .map(|index| mapping[index])
+            .or_else(|| {
+                signature
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .find(|(index, option)| !mapping.contains(index) && matches(option))
+                    .map(|(index, _)| index)
+            })
+    };
     let mut places = Vec::with_capacity(given.len());
     for given in given {
         let place = match &given.key {
@@ -2503,10 +2510,13 @@ pub(super) fn bound(
                 }
             }
             Key::Configuration(name) => {
+                // EXPR-10: another candidate may declare configuration
+                // of this name. This one may instead take an ordinary input.
                 let index = signature
                     .parameters
                     .iter()
-                    .position(|parameter| parameter.configuration && parameter.name == *name)?;
+                    .position(|parameter| parameter.configuration && parameter.name == *name)
+                    .or_else(|| ordinary_named(name))?;
                 Place::Parameter(index)
             }
             Key::Generic(_) => {
@@ -2519,24 +2529,7 @@ pub(super) fn bound(
                 }
             }
             Key::Name(name) | Key::Brace(name) => {
-                if let Some(index) = given
-                    .key
-                    .public_parameter(public)
-                    .map(|index| mapping[index])
-                    .or_else(|| {
-                        signature
-                            .parameters
-                            .iter()
-                            .enumerate()
-                            .find(|(index, option)| {
-                                !mapping.contains(index)
-                                    && !option.configuration
-                                    && option.pack.is_none()
-                                    && option.name == *name
-                            })
-                            .map(|(index, _)| index)
-                    })
-                {
+                if let Some(index) = ordinary_named(name) {
                     Place::Parameter(index)
                 } else {
                     let index = named_pack?;

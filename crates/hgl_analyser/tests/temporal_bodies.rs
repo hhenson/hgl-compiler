@@ -411,17 +411,15 @@ fn composition_reads_no_live_payload() {
 /// bindings chapter's fragments: `a =={abs: 1e-9, rel: 1e-6} b`, and a
 /// tolerance "bound during graph construction", here a `const`
 /// parameter. In a value function and a hook the tolerance is a value of
-/// the invocation. FN-6: a call by name gives its argument explicitly,
-/// "A supplied temporal argument remains an input even when its
-/// parameter has a default". A temporal candidate's parameter is
-/// "a signature explicitly admitting that input".
+/// the invocation. The named call binds the same configuration slot.
+/// A temporal candidate's ordinary parameter can receive a connection (FN-6).
 #[test]
 fn configuration_binds_where_the_graph_is_built() {
     let checked = module(concat!(
         "fn written(a: f64, b: f64) -> bool => a =={abs: 1e-9, rel: 1e-6} b\n",
         "fn configured(a: f64, b: f64, const tolerance: f64) -> bool =>\n",
         "    a =={abs: tolerance} b\n",
-        "fn named(a: f64, b: f64, tolerance: f64) -> bool => eq_(a, b, abs: tolerance)\n",
+        "fn named(a: f64, b: f64, const tolerance: f64) -> bool => eq_{abs: tolerance}(a, b)\n",
         "const fn valued(a: f64, b: f64, tolerance: f64) -> bool => a =={abs: tolerance} b\n",
         "fn hooked(a: f64, b: f64, tolerance: f64) -> bool {\n",
         "    when { return a =={abs: tolerance} b }\n",
@@ -462,8 +460,8 @@ fn configuration_introduces_no_temporal_input() {
     );
 }
 
-/// EXPR-14 and GEN-7: a brace entry that becomes a connection after
-/// selection is still held to a value candidate's wiring-time option.
+/// EXPR-14 and GEN-7: an argument that becomes a connection in an
+/// instance is still held to its selected configuration slot.
 #[test]
 fn instances_check_the_category_of_braced_configuration() {
     let checked = module(concat!(
@@ -474,8 +472,9 @@ fn instances_check_the_category_of_braced_configuration() {
         "    a =={abs: helper(input)} b\n",
         "fn named_braced<T>(const input: T, a: f64, b: f64) -> bool =>\n",
         "    eq_{abs: helper(input)}(a, b)\n",
+        "const fn near{abs: f64}(a: f64, b: f64) -> bool => a =={abs: abs} b\n",
         "fn named<T>(const input: T, a: f64, b: f64) -> bool =>\n",
-        "    eq_(a, b, abs: helper(input))\n",
+        "    near{abs: helper(input)}(a, b)\n",
         "fn already_reported<T>(const input: T, a: f64, b: f64, abs: f64) -> bool {\n",
         "    let unused = helper(input)\n",
         "    return a =={abs: abs} b\n",
@@ -483,15 +482,16 @@ fn instances_check_the_category_of_braced_configuration() {
         "fn live(a: f64, b: f64) -> bool => braced(1, a, b)\n",
         "fn live_named_braces(a: f64, b: f64) -> bool => named_braced(1, a, b)\n",
         "fn ordinary(a: f64, b: f64) -> bool => braced(\"s\", a, b)\n",
-        "fn live_parentheses(a: f64, b: f64) -> bool => named(1, a, b)\n",
+        "fn live_function(a: f64, b: f64) -> bool => named(1, a, b)\n",
         "fn source_once(a: f64, b: f64, abs: f64) -> bool => already_reported(1, a, b, abs)\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:13:22 phase/connection.as_constant EXPR-14",
-            "m.hgl:15:36 phase/connection.as_constant EXPR-14",
-            "m.hgl:16:49 phase/connection.as_constant EXPR-14",
+            "m.hgl:14:22 phase/connection.as_constant EXPR-14",
+            "m.hgl:16:36 phase/connection.as_constant EXPR-14",
+            "m.hgl:17:49 phase/connection.as_constant EXPR-14",
+            "m.hgl:19:45 phase/connection.as_constant EXPR-14",
         ],
         "{}",
         checked.report

@@ -249,7 +249,7 @@ fn a_comparison_is_of_two_values_of_one_type() {
         "    let e2 = eq_(text, text)\n",
         "    let e3 = eq_(q, q)\n",
         "    let e4 = eq_(n, a)\n",
-        "    let e5 = eq_(a, a, abs: 0.01)\n",
+        "    let e5 = eq_{abs: 0.01}(a, a)\n",
         "    let l1 = lt_(text, text)\n",
         "    let l2 = lt_(day, day)\n",
         "    let l3 = lt_(n, a)\n",
@@ -259,7 +259,7 @@ fn a_comparison_is_of_two_values_of_one_type() {
         "    let bad1 = lt_(q, q)\n",
         "    let bad2 = lt_(zone, zone)\n",
         "    let bad3 = eq_(text, n)\n",
-        "    let bad4 = eq_(text, text, abs: 0.01)\n",
+        "    let bad4 = eq_{abs: 0.01}(text, text)\n",
         "}\n",
     ));
     assert_eq!(

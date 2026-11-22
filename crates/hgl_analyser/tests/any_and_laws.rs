@@ -67,6 +67,113 @@ fn a_grouped_pack_view_preserves_existential_binding_inference() {
 }
 
 #[test]
+fn any_infers_a_generic_list_length_from_either_equality_operand() {
+    // GEN-3, GEN-10: a const generic nested in a type is unresolved
+    // data too; the concrete pack member is the known side in either order.
+    for equality in ["T == list<i64, N>", "list<i64, N> == T"] {
+        let declarations = format!(
+            "module m\nconst fn arity<const N: i64, ...Ts>(xs: ...Ts) -> i64 requires any T in types(Ts) {{ {equality} }} => N\n"
+        );
+        let accepted = check(&[(
+            "m.hgl",
+            &format!("{declarations}const fn good(pair: list<i64, 2>) -> i64 => arity(pair)\n"),
+        )]);
+        assert!(!accepted.rejected, "{equality}: {}", accepted.report);
+        let rejected = check(&[(
+            "m.hgl",
+            &format!("{declarations}const fn bad(pair: list<i64, 2>) -> i64 => arity<3>(pair)\n"),
+        )]);
+        assert!(
+            rejected
+                .findings
+                .iter()
+                .any(|finding| finding.code == "constraint/requires.unmet"),
+            "{equality}: {}",
+            rejected.report
+        );
+    }
+}
+
+#[test]
+fn an_unmatched_binding_any_rejects_before_reporting_an_unresolved_result() {
+    // GEN-3, GEN-10: a known shape mismatch settles the existential,
+    // even though its missing binding also leaves the result unknown.
+    let declarations = concat!(
+        "module m\n",
+        "native const fn first<U, ...Ts>(xs: ...Ts) -> U requires any T in types(Ts) { T == list<U> }\n",
+        "operator inspect<T>(x: T) -> i64\n",
+        "impl const fn inspect<T>(x: T) -> i64 => 1\n",
+    );
+    for body in [
+        "const fn bad() -> i64 { let selected = first(true, 1)\n return 1 }",
+        "const fn bad() -> i64 { let selected = first()\n return 1 }",
+        "const fn bad() -> i64 => inspect(first(true, 1))",
+    ] {
+        let rejected = check(&[("m.hgl", &format!("{declarations}{body}\n"))]);
+        assert!(
+            rejected
+                .findings
+                .iter()
+                .any(|finding| finding.code == "constraint/requires.unmet"),
+            "{}",
+            rejected.report
+        );
+        assert!(
+            !rejected
+                .findings
+                .iter()
+                .any(|finding| finding.code == "type/generic.unresolved"),
+            "{}",
+            rejected.report
+        );
+        assert!(
+            !rejected.report.contains("cannot judge"),
+            "{}",
+            rejected.report
+        );
+    }
+}
+
+#[test]
+fn the_keyed_example_reports_an_unmatched_existential_at_the_call() {
+    // GEN-10's keyed illustration: neither scalar argument can be dict<K, V>.
+    let declarations = concat!(
+        "module m\n",
+        "const fn keyed<K, R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> dict<K, R>\n",
+        " requires any arg in arg_keys(As) { As[arg] == dict<K, Ps[arg]> }\n",
+        " && each arg in arg_keys(As) { As[arg] in {Ps[arg], dict<K, Ps[arg]>} } => []\n",
+        "const fn scaled(price: f64, factor: f64) -> f64 => price * factor\n",
+    );
+    let rejected = check(&[(
+        "m.hgl",
+        &format!(
+            "{declarations}const fn bad() -> i64 {{ let selected = keyed(scaled, 1.0, 2.0)\n return 1 }}\n"
+        ),
+    )]);
+    assert!(
+        rejected
+            .findings
+            .iter()
+            .any(|finding| finding.code == "constraint/requires.unmet"),
+        "{}",
+        rejected.report
+    );
+    assert!(
+        !rejected
+            .findings
+            .iter()
+            .any(|finding| finding.code == "type/generic.unresolved"),
+        "{}",
+        rejected.report
+    );
+    assert!(
+        !rejected.report.contains("cannot judge"),
+        "{}",
+        rejected.report
+    );
+}
+
+#[test]
 fn a_bool_generic_is_a_requirement_term_in_functions_and_candidates() {
     // GEN-3: bare values compose by !, && and ||, and false rejects a call.
     let declarations =
@@ -357,6 +464,33 @@ fn an_existential_can_test_an_inequality_without_binding() {
 }
 
 #[test]
+fn an_inequality_requirement_reads_a_named_constant_as_a_value() {
+    // GEN-3, GEN-17, UNIT-13: != uses the same constant operands as ==.
+    for condition in ["N != LIMIT", "LIMIT != N"] {
+        let declarations = format!(
+            "module m\nconst LIMIT: i64 = 2\nconst fn gated<const N: i64>() -> i64 requires {condition} => 1\n"
+        );
+        let accepted = check(&[(
+            "m.hgl",
+            &format!("{declarations}const fn good() -> i64 => gated<3>()\n"),
+        )]);
+        assert!(!accepted.rejected, "{}", accepted.report);
+        let rejected = check(&[(
+            "m.hgl",
+            &format!("{declarations}const fn bad() -> i64 => gated<2>()\n"),
+        )]);
+        assert!(
+            rejected
+                .findings
+                .iter()
+                .any(|finding| finding.code == "constraint/requires.unmet"),
+            "{}",
+            rejected.report
+        );
+    }
+}
+
+#[test]
 fn law_queries_and_bare_terms_reject_runtime_formal_values() {
     // GEN-3, GEN-18: only a function formal supplies a law default;
     // a bare bool term names a generic value, not a runtime parameter.
@@ -373,6 +507,74 @@ fn law_queries_and_bare_terms_reject_runtime_formal_values() {
             "{}",
             rejected.report
         );
+    }
+}
+
+#[test]
+fn a_law_requirement_rejects_a_non_function_operand_at_its_declaration() {
+    // GEN-18: the operand is a formal parameter that takes a function,
+    // just as in a law default; no call is needed to reject the declaration.
+    for law in ["associative", "commutative"] {
+        for declaration in [
+            format!("const fn bad(a: i64) -> i64 requires {law}(a) => a"),
+            format!("const fn bad<V>(a: V) -> V requires {law}(V) => a"),
+        ] {
+            let rejected = check(&[("m.hgl", &format!("module m\n{declaration}\n"))]);
+            assert!(
+                rejected.findings.iter().any(|finding| finding.rule == "GEN-18" && finding.code == "type/type.mismatch"),
+                "{}",
+                rejected.report
+            );
+        }
+    }
+}
+
+#[test]
+fn a_user_operator_named_after_a_law_keeps_its_named_requirement() {
+    // GEN-16, UNIT-10: an operator in scope keeps ordinary name resolution.
+    let accepted = check(&[(
+        "m.hgl",
+        "module m\noperator associative<T>(x: T) -> bool\nimpl const fn associative(x: i64) -> bool => true\nconst fn bare<V>(x: V) -> bool requires associative(V) => associative(x)\nconst fn arrow<V>(x: V) -> bool requires associative(V) -> bool => associative(x)\n",
+    )]);
+    assert!(!accepted.rejected, "{}", accepted.report);
+}
+
+#[test]
+fn an_imported_operator_named_after_a_law_keeps_callability_at_calls() {
+    // GEN-16, UNIT-2, UNIT-10: a named requirement asks whether the
+    // operator is callable; it does not evaluate that operator's result.
+    for law in ["associative", "commutative"] {
+        for requirement in [format!("{law}(V)"), format!("{law}(V) -> bool")] {
+            let operator = format!(
+                "module ops\nexport operator {law}<T>(x: T) -> bool\nimpl const fn {law}(x: i64) -> bool => false\n"
+            );
+            let functions = format!(
+                "module m\nuse ops::{{{law}}}\nconst fn through<V>(x: V) -> bool requires {requirement} => {law}(x)\n"
+            );
+            let accepted = check(&[
+                ("ops.hgl", &operator),
+                (
+                    "m.hgl",
+                    &format!("{functions}const fn good() -> bool => through(1)\n"),
+                ),
+            ]);
+            assert!(!accepted.rejected, "{requirement}: {}", accepted.report);
+            let rejected = check(&[
+                ("ops.hgl", &operator),
+                (
+                    "m.hgl",
+                    &format!("{functions}const fn bad() -> bool => through(\"no candidate\")\n"),
+                ),
+            ]);
+            assert!(
+                rejected
+                    .findings
+                    .iter()
+                    .any(|finding| finding.code == "constraint/requires.unmet"),
+                "{requirement}: {}",
+                rejected.report
+            );
+        }
     }
 }
 
