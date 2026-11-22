@@ -17,7 +17,7 @@ use hgl_source::FileId;
 
 use crate::constant::is_least_magnitude;
 use crate::program::{DeclarationKind, Program, Role};
-use crate::syntax::{child, tokens};
+use crate::syntax::{child, test_statements, tokens};
 use crate::{codes, error, local_error};
 
 /// Checks every declaration of the program.
@@ -42,7 +42,10 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
             cardinalities(node, file, diagnostics);
         }
         for test in &module.tests {
-            integer_range(&test.syntax, module.files[test.file].file, diagnostics);
+            let file = module.files[test.file].file;
+            for statement in test_statements(&test.syntax) {
+                integer_range(&statement, file, diagnostics);
+            }
         }
         for (file, node) in &module.instantiations {
             integer_range(node, module.files[*file].file, diagnostics);

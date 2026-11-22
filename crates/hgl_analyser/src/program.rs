@@ -537,9 +537,11 @@ pub struct Declaration {
     pub kind: DeclarationKind,
     /// True when the declaration is marked `export` (UNIT-3).
     pub exported: bool,
-    /// True when it is declared in an unnamed test context: a helper or
-    /// type of the module's test scope (TST-1).
+    /// True for a declaration in the module's test scope or a named test's own scope (TST-1).
     pub test_only: bool,
+    /// The position in [\`Module::tests\`] of the test that owns this helper (TST-1).
+    /// A helper from an unnamed context has no such owner.
+    pub test_owner: Option<usize>,
     /// The position of its file in [`Module::files`].
     pub file: usize,
     /// The declaration's syntax tree.
@@ -570,6 +572,7 @@ impl Declaration {
             kind: DeclarationKind::Function(Role::Temporal),
             exported: false,
             test_only,
+            test_owner: None,
             file,
             syntax: syntax.clone(),
         }
@@ -596,6 +599,8 @@ pub struct Test {
     pub file: usize,
     /// The test's syntax tree.
     pub syntax: SyntaxNode,
+    /// Names private to this test, as positions in the module's declarations.
+    pub(crate) helpers: HashMap<String, Vec<usize>>,
 }
 
 /// A statement an application sets its run's store with, as it is
