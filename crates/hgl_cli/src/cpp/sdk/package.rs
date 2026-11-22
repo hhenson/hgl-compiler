@@ -13,6 +13,7 @@
 //! debugging.
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use object::read::elf::{ElfFile, FileHeader};
@@ -38,6 +39,32 @@ const FAMILY: [&str; 4] = ["libhgraph", "libfmt", "libspdlog", "libsimdjson"];
 
 /// The directories of the two prefixes the libraries are in.
 const LIBRARY_DIRECTORIES: [&str; 2] = ["hgraph-sdk/lib", "hgraph-deps/lib"];
+
+/// The hgl version the archive's debug libraries and symbol files belong to.
+pub(super) const VERSION_STAMP: &str = "hgl-debug.txt";
+
+/// Whether this package belongs to the release of hgl using it.
+pub(super) fn version_matches(directory: &Path) -> Result<(), String> {
+    let text = match fs::read_to_string(directory.join(VERSION_STAMP)) {
+        Ok(text) => text,
+        Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("cannot read its `{VERSION_STAMP}`: {error}")),
+    };
+    let version = text.trim();
+    let hgl = env!("CARGO_PKG_VERSION");
+    if version.is_empty() {
+        return Err(format!(
+            "holds no `{VERSION_STAMP}` identifying its hgl version"
+        ));
+    }
+    if version != hgl {
+        return Err(format!(
+            "is for hgl {}, and this hgl is {hgl}",
+            version.escape_debug()
+        ));
+    }
+    Ok(())
+}
 
 /// The lines of an SDK's `hgl-sdk.txt` (the provisioning script's stamp,
 /// `scripts/provision-hgraph-sdk.sh`) that a debug build reads.

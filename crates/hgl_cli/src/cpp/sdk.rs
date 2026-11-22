@@ -888,6 +888,9 @@ fn chosen(debug: bool) -> Result<Hgraph, String> {
 ///    whole, built for debugging and of the hgraph tag this `hgl` writes
 ///    for;
 /// 3. else the optimised ones, saying why.
+///
+/// Both forms of debug package must name this hgl version in their version
+/// stamp. A version problem uses the optimised libraries, with its reason.
 fn choose(debug: bool, variables: Variables, bundle: Option<&Path>) -> Result<Hgraph, String> {
     let libexec = bundle.map(|bundle| bundle.join("libexec"));
     let optimised = |why: String| -> Result<Hgraph, String> {
@@ -914,6 +917,9 @@ fn choose(debug: bool, variables: Variables, bundle: Option<&Path>) -> Result<Hg
             deps,
         })
     };
+    let incompatible = |reason: String| {
+        optimised(format!(": {reason}")).map_err(|error| format!("{reason}. {error}"))
+    };
     if !debug {
         return optimised(String::new());
     }
@@ -930,6 +936,12 @@ fn choose(debug: bool, variables: Variables, bundle: Option<&Path>) -> Result<Hg
                 directory.display()
             )
         })?;
+        if let Err(problem) = package::version_matches(&directory) {
+            return incompatible(format!(
+                "{DEBUG} names {}, which {problem}",
+                directory.display()
+            ));
+        }
         return debug_libraries(&directory, &format!("named by {DEBUG}"), &notes);
     }
     if let Some(own) = [SDK, DEPS]
@@ -955,6 +967,12 @@ fn choose(debug: bool, variables: Variables, bundle: Option<&Path>) -> Result<Hg
             ));
         }
     };
+    if let Err(problem) = package::version_matches(&beside) {
+        return incompatible(format!(
+            "the `hgl-debug` package beside hgl, in {}, {problem}",
+            beside.display()
+        ));
+    }
     let tag = package::stamp(&beside.join("hgraph-sdk")).and_then(|stamp| stamp.tag);
     if tag.as_deref() != Some(HGRAPH_TAG) {
         return optimised(format!(
@@ -1356,14 +1374,18 @@ mod tests {
         }
     }
 
-    /// A library at `path`: on a Unix, a link to this test's own
-    /// executable, an object file whose headers parse whole.
+    /// A library at `path`: a link to this test's executable on Unix,
+    /// or a recognised static archive elsewhere.
     fn library(path: &Path) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(std::env::current_exe().unwrap(), path).unwrap();
         #[cfg(not(unix))]
-        fs::write(path, "").unwrap();
+        {
+            let mut archive = b"!<arch>\n".to_vec();
+            archive.extend([b' '; 60]);
+            fs::write(path, archive).unwrap();
+        }
     }
 
     /// Lays out in `directory` hgraph's libraries built for debugging, of
@@ -1372,6 +1394,11 @@ mod tests {
     /// the libraries it imports.
     fn lay_out_debug(directory: &Path, tag: &str) {
         lay_out(directory, tag);
+        fs::write(
+            directory.join(super::package::VERSION_STAMP),
+            concat!(env!("CARGO_PKG_VERSION"), "\n"),
+        )
+        .unwrap();
         fs::write(
             directory.join("hgraph-sdk/hgl-sdk.txt"),
             format!("tag={tag}\nbuild-type=Debug\n"),
@@ -1594,6 +1621,40 @@ mod tests {
                  is not installed beside hgl, and HGL_HGRAPH_DEBUG is not set",
                 real(bundle.path().join("libexec/hgraph-sdk")).display()
             )
+        );
+    }
+
+    /// A version problem passes over the package from either source, even
+    /// when the rest of the package matches the current hgraph tag.
+    fn check_debug_version_fallback(update_stamp: impl FnOnce(&Path), reason: &str) {
+        let bundle = release(Some(HGRAPH_TAG));
+        let named = bundle.path().join("libexec/hgraph-debug");
+        update_stamp(&named.join(super::package::VERSION_STAMP));
+        for variables in [vec![], vec![("HGL_HGRAPH_DEBUG", named.as_path())]] {
+            let hgraph = chosen_with(true, &variables, Some(bundle.path())).unwrap();
+            assert_eq!(hgraph.build, Build::Optimised, "{}", hgraph.said());
+            assert_eq!(hgraph.sdk, real(bundle.path().join("libexec/hgraph-sdk")));
+            assert_eq!(hgraph.deps, real(bundle.path().join("libexec/hgraph-deps")));
+            assert!(hgraph.said().ends_with(reason), "{}", hgraph.said());
+        }
+    }
+
+    #[test]
+    fn a_debug_package_of_another_hgl_version_is_passed_over() {
+        check_debug_version_fallback(
+            |stamp| fs::write(stamp, "0.0.1\n").unwrap(),
+            concat!(
+                "is for hgl 0.0.1, and this hgl is ",
+                env!("CARGO_PKG_VERSION")
+            ),
+        );
+    }
+
+    #[test]
+    fn a_debug_package_with_no_hgl_version_stamp_is_passed_over() {
+        check_debug_version_fallback(
+            |stamp| fs::remove_file(stamp).unwrap(),
+            "holds no `hgl-debug.txt` identifying its hgl version",
         );
     }
 

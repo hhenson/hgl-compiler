@@ -249,6 +249,9 @@ if [[ -n $native_cache && ! -d $native_cache/libexec ]]; then
     python3 scripts/release-bundle.py save-native "$bundle" "$native_cache" --debug "$debug_tree"
 fi
 
+# This metadata belongs to the archive, including builds that reuse native libraries.
+rm -f -- "$debug/hgl-debug.txt"
+printf '%s\n' "$version" >"$debug/hgl-debug.txt"
 mkdir -p -- "$destination"
 destination=$(cd -- "$destination" && pwd -P)
 # The debug archive's top directory is the release's, so that the two unpack

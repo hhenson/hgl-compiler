@@ -2696,12 +2696,14 @@ fn builds_an_isolated_debug_application_without_running_it() {
     write(&root, "ticks.hgl", TICKS);
     write(&root, "backtest.hgl", BACKTEST);
     let builds = root.join("debug builds");
-    // hgraph's libraries built for debugging where HGL_HGRAPH_DEBUG names
-    // them, and the optimised ones HGL_HGRAPH_SDK names otherwise: the
-    // binary under test has no release beside it.
-    let libraries = match std::env::var_os("HGL_HGRAPH_DEBUG") {
-        Some(_) => "debug",
-        None => "optimised",
+    // The test binary has no release beside it. Only a package stamped
+    // for this hgl can supply debug libraries through HGL_HGRAPH_DEBUG.
+    let version = std::env::var_os("HGL_HGRAPH_DEBUG")
+        .and_then(|directory| fs::read_to_string(Path::new(&directory).join("hgl-debug.txt")).ok());
+    let libraries = if version.as_deref().map(str::trim) == Some(env!("CARGO_PKG_VERSION")) {
+        "debug"
+    } else {
+        "optimised"
     };
     let prepare = || {
         let report = hgl_in(
