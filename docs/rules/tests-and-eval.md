@@ -7,23 +7,24 @@
 parser: done
 
 - An unnamed test context holds functions, structs, enums and named tests only
-- A named test, including an integration test, admits private helpers before its statements
+- A named test, including an integration test, admits private functions, constants, structs, enums, operators and candidates before its statements. Imports, native declarations, exports and declarations after statements reject.
 
 analyser: done
 
-- Unnamed test contexts share a scope across parts; each named test gives its own helpers a private scope. Exports and operator implementations are rejected in test contexts.
+- Unnamed test contexts share a scope across parts. Each named test binds its own private declarations and selects its candidates only in calls written within that test. A type or operator it declares has identity `(module, test, name)`.
 
 ## TST-2
 
 analyser: done
 
-- Production names no test-only declaration. Named-test helpers do not take names visible outside their test; within it, one helper per role is admitted under FN-4. Duplicate test names and repeated helper roles reject.
+- Production and other tests cannot name a named test’s private declarations. A test-local declaration cannot reuse a name visible to its test. FN-4 allows a pair of function roles within one test. Duplicate test names, declarations and roles reject.
 
 transpiler: partial
 
 - Application entry units link reachable production pieces. Named tests have separate
-  entry units and their own runnable dependency set. Helpers of a named test
-  have a separate generated namespace for that test.
+  entry units and their own runnable dependency set. Test-local types and
+  callables have distinct generated identities. Generic instances retain the
+  test-local candidates that answer their requirements (GEN-16).
 - Left: Production module units can still contain test pieces. The emitter reports a
   missing test block or a return in a test defensively.
 

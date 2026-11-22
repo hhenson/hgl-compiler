@@ -134,7 +134,7 @@ pub(super) fn run(
     roots: &[PathBuf],
     stop: &Stop,
 ) -> RanApplication {
-    match built(output, application, keep, roots) {
+    match built(output, application, keep, roots, false) {
         Ok((workspace, libraries)) => launch(&workspace, application, &libraries, stop),
         Err(reason) => RanApplication::NotRun(reason),
     }
@@ -152,8 +152,12 @@ fn built(
     application: &Application,
     keep: Option<&Path>,
     roots: &[PathBuf],
+    debug: bool,
 ) -> Result<(Workspace, Libraries), String> {
-    let toolchain = Toolchain::find()?;
+    let mut toolchain = Toolchain::find()?;
+    if debug {
+        toolchain.enable_debug();
+    }
     let cache = build::cache()?;
     let jobs = std::env::var(build::JOBS)
         .ok()
@@ -169,6 +173,45 @@ fn built(
         return Err(format!("the build of its executable failed:\n{failure}"));
     }
     Ok((workspace, sdk::library_path(&description)))
+}
+
+/// Builds an isolated debug session. Its owner keeps the session directory
+/// until the debugger exits, so later builds cannot replace its symbols.
+pub(super) fn debug_launch(
+    output: &Output,
+    application: &Application,
+    directory: &Path,
+    roots: &[PathBuf],
+) -> Result<serde_json::Value, String> {
+    fs::create_dir_all(directory).map_err(|e| format!("{}: {e}", directory.display()))?;
+    let session = tempfile::Builder::new()
+        .prefix("session-")
+        .tempdir_in(directory)
+        .map_err(|e| format!("{}: {e}", directory.display()))?;
+    let (workspace, libraries) = built(output, application, Some(session.path()), roots, true)?;
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let mut environment = serde_json::Map::new();
+    if let Some((name, value)) = libraries {
+        let value = value
+            .into_string()
+            .map_err(|_| format!("{name} is not UTF-8"))?;
+        environment.insert(name.into(), value.into());
+    }
+    let path_text = |path: &Path| {
+        path.to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| format!("debug launch path is not UTF-8: {}", path.display()))
+    };
+    let results = path_text(&workspace.directory.join("results.txt"))?;
+    let data = serde_json::json!({
+        "version": 1,
+        "executable": path_text(&workspace.application(&application.path))?,
+        "arguments": [results, "--debug-console"],
+        "workingDirectory": path_text(&cwd)?,
+        "environment": environment,
+    });
+    let _directory = session.keep();
+    Ok(data)
 }
 
 /// Runs the executable of `application` built in `workspace`, with

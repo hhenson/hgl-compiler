@@ -62,6 +62,7 @@ parser: partial
 analyser: partial
 
 - An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares, its file imports, or the prelude binds, and one that names no operator is `impl.unknown_operator`; a value candidate's body is read as a value function's
+- An operator declared in a named test has that test in its identity. A test-local candidate binds its operator in the test’s scope and participates only in selection within that test (TST-1).
 - An operator's requirement `O in {...}` on its bare result parameter limits its candidates' results
 - Operator identity in selection and other requirements of an operator are pending.
 - A private operator is used only in its own module. Importing one rejects with `import.private` (UNIT-3). A candidate in another module needs a binding to an exported operator or reports `impl.unknown_operator`.
@@ -225,7 +226,8 @@ analyser: partial
 transpiler: partial
 
 - Lowers a generic instance's supplied answer to a named operator requirement to its
-  resolved candidate.
+  resolved candidate. Instances with test-local answers are kept distinct even
+  when the generic arguments are identical (TST-1).
 - Left: An operator requirement left without an executable answer is reported. Function
   law predicates await #367 (GEN-18).
 
@@ -239,7 +241,8 @@ parser: partial
 analyser: partial
 
 - Reflects the selected callback's fixed suffix and its supplied positional and named pack entries. A dependent pack keeps the callback parameter keys and the types written at the call.
-- Evaluates `each` over `arg_keys`, key comparison and membership, and keyed type projection. A missing member of a known pack reports `pack.name`.
+- Evaluates `each` over `arg_keys`, constant key membership, and keyed type projection. Candidate requirements can compare bare pack members. A missing member of a known pack reports `pack.name`.
+- A generic call that receives another function parameter checks its pack requirements when the caller supplies the reflected types.
 - An operator callback reflects the public declaration's parameter names and the selected candidate's types (FN-17).
 
 ## GEN-18

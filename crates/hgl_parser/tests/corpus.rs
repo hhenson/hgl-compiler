@@ -44,6 +44,11 @@ const PENDING: &[Pending] = &[
     },
     Pending {
         file: GENERICS,
+        opening: "module examples.categories",
+        reason: "GEN-3 type category and GEN-10 tuple type pack (#512)",
+    },
+    Pending {
+        file: GENERICS,
         opening: "operator keyed<K, R, ...Ps, ...As>(",
         reason: "GEN-10 and GEN-18 (#367)",
     },

@@ -1025,14 +1025,20 @@ impl<'a> Typer<'a> {
         let Some(condition) = clause.children().next() else {
             return Admits::Yes;
         };
-        if !type_packs.is_empty()
-            && condition.descendants().any(|node| {
-                matches!(
-                    node.kind(),
-                    SyntaxKind::ConstraintEach | SyntaxKind::PackMemberType
-                )
-            })
-        {
+        let pack_operand = |node: SyntaxNode| match node.kind() {
+            SyntaxKind::ConstraintEach | SyntaxKind::PackMemberType => true,
+            // A bare member in a constraint can also parse as an
+            // index. The read table resolves whether it is a type.
+            SyntaxKind::IndexExpr => self.program.modules[module].written.iter().any(|read| {
+                read.at.file == candidate.at.file
+                    && read.at.span.start == node.span().start
+                    && matches!(read.ty, Type::PackMember { .. })
+            }),
+            SyntaxKind::CallExpr => super::requirements::pack_view(node)
+                .is_some_and(|(view, _)| view.text() == "arg_keys"),
+            _ => false,
+        };
+        if !type_packs.is_empty() && condition.descendants().any(pack_operand) {
             return match self
                 .requires_told_with_packs((module, declaration), generics, type_packs, None)
                 .and_then(|(_, held, _)| held)
@@ -2121,6 +2127,8 @@ impl Given {
 pub(super) enum Key {
     /// With no name: the place it stands in, from 0.
     Position(usize),
+    /// An unnamed spread entry and the public slot it fills, if any.
+    ForwardedPosition(Option<usize>),
     /// `name: value` in the parentheses.
     Name(String),
     /// A brace entry naming an ordinary parameter.
@@ -2135,7 +2143,7 @@ impl Key {
     /// The name written in either argument list.
     pub(super) fn name(&self) -> Option<&str> {
         match self {
-            Self::Position(_) => None,
+            Self::Position(_) | Self::ForwardedPosition(_) => None,
             Self::Name(name)
             | Self::Brace(name)
             | Self::Configuration(name)
@@ -2162,6 +2170,7 @@ impl Key {
     pub(super) fn public_parameter(&self, signature: &Signature) -> Option<usize> {
         match self {
             Self::Generic(_) => None,
+            Self::ForwardedPosition(index) => *index,
             Self::Position(position) => signature
                 .parameters
                 .iter()
@@ -2307,12 +2316,18 @@ impl CallbackRequest<'_> {
         (given, bound): (&[Given], &[Place]),
         result: Option<&Type>,
     ) -> bool {
+        let ordinary = signature
+            .parameters
+            .iter()
+            .filter(|parameter| !parameter.configuration)
+            .count();
         self.reference == signature.reference
             && (self.reflected.is_some()
-                || signature.parameters.len() == given.len()
+                || ordinary == given.len()
                     && given.iter().zip(bound).all(|(given, place)| {
                         matches!(*place, Place::Parameter(index)
-                            if agree(given.ty(), &signature.parameters[index].ty))
+                            if !signature.parameters[index].configuration
+                                && agree(given.ty(), &signature.parameters[index].ty))
                     }))
             && match (result, &signature.result) {
                 (Some(expected), Some(actual)) => agree(expected, actual),
@@ -2416,6 +2431,15 @@ pub(super) fn bound(
                     Place::Pack(index, captured[index])
                 }
             },
+            Key::ForwardedPosition(Some(index)) => Place::Parameter(mapping[*index]),
+            Key::ForwardedPosition(None) => {
+                if let Some(&index) = positional.iter().find(|&&index| !taken[index]) {
+                    Place::Parameter(index)
+                } else {
+                    let index = positional_pack.or(dependent)?;
+                    Place::Pack(index, captured[index])
+                }
+            }
             Key::Configuration(name) => {
                 let index = signature
                     .parameters

@@ -69,8 +69,8 @@ analyser: partial
 
 analyser: partial
 
-- The Boolean connectives and `!` take bools, in value functions, reading a fallible or nullable operand where a bool is expected (ERR-12, ERR-15)
-- A graph instance fits newly known operands of `!`, `&&`, and `||`, with the right operand of a connective still short-circuited (GEN-7).
+- The Boolean connectives and `!` take bools, reading a fallible or nullable operand where a bool is expected (ERR-12, ERR-15).
+- Composition selects core's Boolean operators, with unparenthesized chains selecting `all_` or `any_` over their operands. A graph instance selects after any deferred operands settle (FN-6, GEN-7, OPS-5).
 - A compile-time constant short-circuits (`constant`): the right operand of `false &&` and `true ||` is not needed where it is a parameter, a constant held by its name, or one whose evaluation fails, which is then no failure (`const NO: bool = false && (1 // 0 == 0)` is `false`); one of no type is held to a `bool` still
 - Left: a guard precedes the payload read it protects
 
@@ -78,6 +78,7 @@ transpiler: done
 
 - Value code and hooks use short-circuit Boolean expressions in operand order, including
   guarding a payload read.
+- A Boolean call over connections wires every connected operand as an input (FN-6, FN-11).
 
 ## EXPR-7
 

@@ -261,6 +261,15 @@ pub struct Module {
 }
 
 impl Module {
+    /// Qualifies a name with this module's path and its named test's
+    /// identity when the declaration belongs to a test (TST-1).
+    pub fn qualified_declaration_name(&self, name: &str, test_owner: Option<usize>) -> String {
+        match test_owner {
+            Some(owner) => format!("{}::{}::{name}", self.path, self.tests[owner].name),
+            None => format!("{}::{name}", self.path),
+        }
+    }
+
     /// True where the body of `declaration` has a call whose candidate
     /// is selected for each instance of the declaration: its candidate
     /// is known only in an instance ([`Program::instance`]), so the
@@ -540,8 +549,8 @@ pub struct Declaration {
     pub exported: bool,
     /// True for a declaration in the module's test scope or a named test's own scope (TST-1).
     pub test_only: bool,
-    /// The position in [\`Module::tests\`] of the test that owns this helper (TST-1).
-    /// A helper from an unnamed context has no such owner.
+    /// The position in [`Module::tests`] of the named test that declares it (TST-1).
+    /// A declaration from an unnamed context has no individual test owner.
     pub test_owner: Option<usize>,
     /// The position of its file in [`Module::files`].
     pub file: usize,
@@ -601,7 +610,7 @@ pub struct Test {
     /// The test's syntax tree.
     pub syntax: SyntaxNode,
     /// Names private to this test, as positions in the module's declarations.
-    pub(crate) helpers: HashMap<String, Vec<usize>>,
+    pub(crate) scope: HashMap<String, Vec<usize>>,
 }
 
 /// A statement an application sets its run's store with, as it is
