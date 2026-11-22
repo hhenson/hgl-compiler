@@ -771,12 +771,22 @@ pub(super) fn fill_type(current: &mut Type, inferred: Type) -> bool {
             *current = inferred;
             true
         }
-        // TYPE-9 and TYPE-16: preserve an atomic or delta wrapper
-        // where the inferred type keeps it.
         (Type::Nullable(current), Type::Nullable(inferred))
         | (Type::Set(current), Type::Set(inferred))
         | (Type::Atomic(current), Type::Atomic(inferred))
         | (Type::Delta(current), Type::Delta(inferred)) => fill_type(current, *inferred),
+        // TYPE-9: a payload that settles to a whole publication can
+        // lose its provisional atomic wrapper.
+        (current @ Type::Atomic(_), inferred) => {
+            let Type::Atomic(payload) = current else {
+                unreachable!();
+            };
+            if !fill_type(payload, inferred) {
+                return false;
+            }
+            *current = Type::atomic((**payload).clone());
+            true
+        }
         (
             Type::Result { value, error },
             Type::Result {
@@ -946,9 +956,11 @@ fn settled_type(
             infer_types: true,
             ..
         } => typer?.infer_settled_fields(value.ty.clone(), arguments)?,
-        // EXPR-7 and TYPE-16: the member's position was checked where
-        // it was read. Recover its type using the now-concrete base.
+        // EXPR-7: the member's position was checked where it was read.
+        // Recover its type using the settled base, keeping TYPE-9's
+        // atomic normalization and TYPE-16's delta properties.
         ExprKind::Field { base, member } => match &base.ty {
+            Type::Atomic(of) => Type::atomic(program.field_types(of)?.get(*member)?.clone()),
             Type::Delta(of) => program.delta_properties(of)?.into_iter().nth(*member)?.1,
             ty => program.field_types(ty)?.get(*member)?.clone(),
         },

@@ -987,6 +987,44 @@ fn graph_instances_propagate_settled_atomic_wrappers() {
     assert_eq!(value.ty, instance.locals[2].ty);
 }
 
+/// TYPE-9 and EXPR-7: a field uses its atomic base's settled type.
+/// Lists remain atomic and scalar fields normalize to their own type.
+#[test]
+fn graph_instances_read_fields_of_settled_atomic_structs() {
+    for (field_type, initial, expected) in [
+        ("list<U>", "[value]", "atomic<list<i64>>"),
+        ("U", "value", "i64"),
+        ("U?", "value", "i64?"),
+    ] {
+        let checked = module(&format!(
+            "operator predicate<T>(input: T) -> bool\n\
+             impl const fn predicate<T>(input: T) -> bool => true\n\
+             impl fn predicate(input: i64) -> bool {{ when {{ return input > 0 }} }}\n\
+             struct Payload<U> {{ field: {field_type} }}\n\
+             fn whole<U>(value: U) -> atomic<Payload<U>> {{\n\
+                 when {{ return Payload<U>(field: {initial}) }}\n\
+             }}\n\
+             fn wrapper<T>(const input: T) -> {expected} {{\n\
+                 let chosen = if predicate(input) {{ 1 }}\n\
+                 let held = whole(chosen)\n\
+                 let copied = held.field\n\
+                 return copied\n\
+             }}\n\
+             fn admitted() -> {expected} => wrapper(1)\n"
+        ));
+        assert_eq!(checked.summary(), NONE, "{field_type}: {}", checked.report);
+        let instance = instance_called_by(&checked, body(&checked, "admitted"));
+        let Some(Stmt::Return {
+            value: Some(read), ..
+        }) = instance.statements.last()
+        else {
+            panic!("{field_type}: the graph returns the projected field");
+        };
+        assert_eq!(instance.locals[3].ty.to_string(), expected, "{field_type}");
+        assert_eq!(read.ty, instance.locals[3].ty, "{field_type}");
+    }
+}
+
 /// TYPE-16 and GEN-2: a delta preserves its instantiated collection
 /// identity through inferred bindings and reads in the graph.
 #[test]

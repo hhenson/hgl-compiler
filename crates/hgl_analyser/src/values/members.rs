@@ -209,7 +209,19 @@ impl<'a> Typer<'a> {
         let ty = substitute_within(&read.members[member].ty, &map);
         let own: Vec<Location> = read.generics.iter().map(|generic| generic.at).collect();
         let ty = placed(ty, &own);
-        let ty = if atomic { Type::atomic(ty) } else { ty };
+        let ty = if atomic {
+            // TYPE-9: an inferred field may become a scalar. Where
+            // even its shape is open, wait to decide whether it is atomic.
+            match &ty {
+                Type::Unknown => Type::Unknown,
+                Type::Nullable(payload) | Type::Delta(payload) if **payload == Type::Unknown => {
+                    Type::Unknown
+                }
+                _ => Type::atomic(ty),
+            }
+        } else {
+            ty
+        };
         let kind = ExprKind::Field {
             base: Box::new(base),
             member,

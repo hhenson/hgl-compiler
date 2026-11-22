@@ -126,7 +126,7 @@ analyser: partial
 - An atomic payload is an ordinary value type
 - A node publishes a V to a result of `atomic<V>`
 - `atomic<S>` of a non-composite S is S, where the type is written and where a generic parameter is replaced, and an `atomic<T>` given a value of such a type says what `T` is
-- A graph instance fills inferred types inside a retained `atomic<V>` wrapper (GEN-7).
+- A graph instance fills inferred types inside a retained `atomic<V>` wrapper and normalizes a field from its settled payload (GEN-7, EXPR-7).
 - A field of an `atomic<S>` struct is an atomic of the field's type
 - In a hook an atomic input's payload is its V
 - Left: temporalization of composite types; an atomic connection given to a lifted value function of V
