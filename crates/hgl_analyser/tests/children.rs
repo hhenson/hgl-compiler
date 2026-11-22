@@ -303,6 +303,98 @@ fn unchecked_tag(parts: list<result<i64, error>, 2>) -> bool {
     );
 }
 
+/// ERR-12, ERR-14 and TIME-1: a direct null guard refines only the
+/// alias whose payload it tests, while admission is checked separately.
+#[test]
+fn a_bound_nullable_child_requires_its_own_null_proof_and_validity() {
+    let checked = module(
+        "fn guarded(parts: list<i64?, 2>) -> i64 {
+    when all_valid(parts) {
+        let entry = parts[0]
+        if entry != null { return entry }
+        return 0
+    }
+}
+
+fn guarded_runtime(parts: list<i64?, 2>, slot: i64) -> i64 {
+    when {
+        let entry = parts[slot]
+        if null == entry { return 0 }
+        if !valid(entry) { return 0 }
+        return entry
+    }
+}
+
+fn unchecked(parts: list<i64?, 2>) -> i64 {
+    when {
+        let entry = parts[0]
+        if entry != null { return entry }
+        return 0
+    }
+}
+
+fn unrefined(parts: list<i64?, 2>) -> i64 {
+    when all_valid(parts) {
+        let entry = parts[0]
+        return entry
+    }
+}
+
+fn different_binding(parts: list<i64?, 2>) -> i64 {
+    when all_valid(parts) {
+        let original = parts[0]
+        if original != null {
+            let entry = original
+            return entry
+        }
+        return 0
+    }
+}",
+    );
+    for (name, expected_proved, expected_checked) in [
+        ("guarded", 1, 0),
+        ("guarded_runtime", 1, 0),
+        ("unchecked", 1, 0),
+        ("unrefined", 0, 1),
+        ("different_binding", 0, 1),
+    ] {
+        let node = body(&checked, name);
+        let entry = node
+            .locals
+            .iter()
+            .position(|local| local.name == "entry")
+            .unwrap();
+        assert_eq!(node.locals[entry].ty.to_string(), "endpoint<i64?>");
+        let mut proved_reads = 0;
+        let mut null_reads = 0;
+        walk_statements(&node.statements, &mut |value| match &value.kind {
+            ExprKind::PresentChild(read) => {
+                assert_eq!(value.ty.to_string(), "i64");
+                assert_eq!(read.ty.to_string(), "i64?");
+                if name == "guarded_runtime" {
+                    assert!(
+                        matches!(&read.kind, ExprKind::CheckedChild { read, result: false }
+                        if read.kind == ExprKind::BoundChild(entry))
+                    );
+                } else {
+                    assert_eq!(read.kind, ExprKind::BoundChild(entry));
+                }
+                proved_reads += 1;
+            }
+            ExprKind::NullRead { .. } => null_reads += 1,
+            _ => {}
+        });
+        assert_eq!(proved_reads, expected_proved, "{name}: {}", checked.report);
+        assert_eq!(null_reads, expected_checked, "{name}: {}", checked.report);
+    }
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:22:12 phase/payload.unguarded TIME-1"],
+        "{}",
+        checked.report
+    );
+}
+
 /// TIME-1, TIME-4, ERR-14: reading a bound static child needs its
 /// guard at the use, and a guard of that same child can name the alias.
 /// An inferred `var` still needs the value at its initializer.

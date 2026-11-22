@@ -831,7 +831,8 @@ fn endpoint_read_forms_run_on_the_sdk() {
 }
 
 /// ERR-3 and ERR-14: observe validity separately from the tag of a bound
-/// result child, and use the matching success or error payload.
+/// result child, and use the matching success or error payload. ERR-12:
+/// a present nullable child refines only the alias named in the guard.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn bound_result_children_run_on_the_sdk() {
@@ -853,7 +854,7 @@ fn bound_result_children_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

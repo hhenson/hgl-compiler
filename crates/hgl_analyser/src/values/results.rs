@@ -14,9 +14,9 @@ use crate::syntax::{child, name_token, tokens};
 use crate::types::{Detail, Scalar, Type};
 use crate::{codes, error};
 
-/// The immutable name a tag can prove. An inferred child binding
-/// keeps its identity through a checked endpoint read (ERR-3, ERR-14).
-pub(super) fn result_binding(value: &Expr) -> Option<crate::hir::LocalId> {
+/// The immutable name a tag or null test can prove. An inferred child
+/// binding keeps its identity through an endpoint read (ERR-3, ERR-12, ERR-14).
+pub(super) fn proof_binding(value: &Expr) -> Option<crate::hir::LocalId> {
     match &value.kind {
         ExprKind::Local(local) | ExprKind::BoundChild(local) => Some(*local),
         ExprKind::CheckedChild {
@@ -26,6 +26,7 @@ pub(super) fn result_binding(value: &Expr) -> Option<crate::hir::LocalId> {
             ExprKind::BoundChild(local) => Some(*local),
             _ => None,
         },
+        ExprKind::PresentChild(read) => proof_binding(read),
         _ => None,
     }
 }
@@ -229,7 +230,7 @@ impl<'a> Typer<'a> {
                 return (ExprKind::Unread, Type::Unknown);
             }
         };
-        let binding = result_binding(&base);
+        let binding = proof_binding(&base);
         let fact = binding.map(if success {
             Fact::Success
         } else {

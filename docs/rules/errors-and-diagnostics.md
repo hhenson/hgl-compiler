@@ -145,6 +145,7 @@ transpiler: done
 analyser: done
 
 - In a value function, a hook and a graph a direct test against null refines an immutable nullable parameter, `let` or loop binding to its payload's type: in the branch the test holds for, across `!` and the Boolean connectives, and after a branch that returns
+- The proof of an inferred nullable child applies to value reads of that alias and retains the child's separate admission check (ERR-14, TIME-1).
 - A nullable read in a place that expects its payload records a possible `value.null` failure and its phase. A written null still needs a nullable type (TYPE-14).
 
 transpiler: done

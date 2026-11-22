@@ -302,7 +302,8 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
         // value they take is: a connection of the form where it is one.
         ExprKind::Raised { result: inner, .. }
         | ExprKind::OrNull { result: inner, .. }
-        | ExprKind::NullRead { value: inner, .. } => category(inner),
+        | ExprKind::NullRead { value: inner, .. }
+        | ExprKind::PresentChild(inner) => category(inner),
         // ERR-7: a capture is a temporal boundary, and what is read
         // of it a connection.
         ExprKind::Capture(_) | ExprKind::Captured { .. } => Connection,

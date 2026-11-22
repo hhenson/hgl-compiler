@@ -17,3 +17,24 @@ test child_tag_guards {
         parts: [(null, 1), (ok(7), null), (err(error(message: "bad")), null)],
     ) == [-2, 7, -1]
 }
+
+# ERR-12 and ERR-14: a direct proof gives only that alias its payload
+# type. Endpoint operations and a new inferred alias take the locator.
+operator child_score<T>(value: T) -> i64
+impl const fn child_score<T>(value: T) -> i64 requires T in {i64} => 7
+impl const fn child_score<T>(value: T) -> i64 requires T in {i64?} => -1
+
+fn guarded_nullable(parts: list<i64?, 2>) -> i64 {
+    when all_valid(parts) {
+        let entry = parts[0]
+        if entry != null && valid(entry) {
+            let alias = entry
+            return entry + child_score(entry) + child_score(alias)
+        }
+        return 0
+    }
+}
+
+test child_null_guards {
+    assert eval guarded_nullable(parts: [[null, 1], [7, 1], [null, 2]]) == [0, 13, 0]
+}

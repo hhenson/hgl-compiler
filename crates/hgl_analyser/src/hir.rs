@@ -797,6 +797,10 @@ pub enum ExprKind {
         /// The code of the failure a null gives: [`NULL_READ_CODE`].
         code: &'static str,
     },
+    /// A nullable bound child's payload on a path that proves this
+    /// alias is present (ERR-12). The inner read retains its endpoint
+    /// admission and failure checks (ERR-14, TIME-1).
+    PresentChild(Box<Expr>),
     /// `capture(callable, args...)`: a temporal error boundary around
     /// the call it holds (ERR-7).
     Capture(Box<Expr>),
@@ -1411,6 +1415,7 @@ impl Expr {
             | ExprKind::Raised { result: inner, .. }
             | ExprKind::OrNull { result: inner, .. }
             | ExprKind::NullRead { value: inner, .. }
+            | ExprKind::PresentChild(inner)
             | ExprKind::Capture(inner)
             | ExprKind::Captured { capture: inner, .. }
             | ExprKind::ChildEndpoint { child: inner, .. }
@@ -1523,6 +1528,7 @@ impl Expr {
             | ExprKind::Raised { result: inner, .. }
             | ExprKind::OrNull { result: inner, .. }
             | ExprKind::NullRead { value: inner, .. }
+            | ExprKind::PresentChild(inner)
             | ExprKind::Capture(inner)
             | ExprKind::Captured { capture: inner, .. }
             | ExprKind::ChildEndpoint { child: inner, .. }
