@@ -174,6 +174,17 @@ struct whole<hgraph::TSL<C, N>> {
     }
 };
 
+namespace detail {
+/// ERR-14: a child read identifies the child in its failure message.
+template <class E>
+constexpr const char* checked_read_message() {
+    if constexpr (is_child<E>::value) {
+        return "the child read has no complete value";
+    }
+    return "a value read whole that may not be read whole there";
+}
+} // namespace detail
+
 /// The value of the endpoint `endpoint` read whole where the read is checked
 /// when it runs (TIME-1, ERR-14): a read of a temporal input in a hook, of a
 /// child named at an index known only then, and what a lifted helper is
@@ -184,7 +195,7 @@ schema_value_t<schema_of<E>> checked_whole(const E& endpoint,
                                            std::source_location where = std::source_location::current()) {
     std::optional<schema_value_t<schema_of<E>>> read = whole<schema_of<E>>::read(endpoint);
     if (!read.has_value()) {
-        unset_read("a value read whole that may not be read whole there", where);
+        unset_read(detail::checked_read_message<E>(), where);
     }
     return std::move(*read);
 }
@@ -195,7 +206,7 @@ template <class E>
 result<schema_value_t<schema_of<E>>> checked_whole_result(const E& endpoint) {
     std::optional<schema_value_t<schema_of<E>>> read = whole<schema_of<E>>::read(endpoint);
     if (!read.has_value()) {
-        return detail::unset_result("a value read whole that may not be read whole there");
+        return detail::unset_result(detail::checked_read_message<E>());
     }
     return std::move(*read);
 }

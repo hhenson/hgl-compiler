@@ -241,6 +241,11 @@ impl<'a> Typer<'a> {
             let Some(default) = generic_default(&declaration.syntax, generic) else {
                 continue;
             };
+            // GEN-18 is evaluated against the static function argument
+            // by the call reader, rather than by the cold constant reader.
+            if crate::laws::predicate(&default).is_some() {
+                continue;
+            }
             // A default that is not of the type as it is declared is
             // reported there (`signatures`). One whose type names a
             // type parameter is of it for one call and not another: the

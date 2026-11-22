@@ -168,6 +168,10 @@ define_syntax_kinds! {
         ConstraintCall,
         /// `each T in Ts { numeric(T) }`
         ConstraintEach,
+        /// `any T in types(Ts) { T == i64 }`
+        ConstraintAny,
+        /// A bool generic value parameter as a constraint term
+        ConstraintValue,
         /// `{i64, f64}` as a constraint operand
         ConstraintSet,
 
