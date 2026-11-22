@@ -10,7 +10,7 @@ parser: done
 
 ## SDOC-2
 
-docs: unscheduled
+docs: done
 
 - Documentation text: delimiters, indentation, line breaks
 
@@ -21,15 +21,16 @@ analyser: partial
 - A key of an `Args:` or a `Type Args:` section, a name and a `:` four spaces in once SDOC-2's common indentation is removed, names a parameter or a generic parameter of what the comment documents; a declaration with none has none to name (`doc.unknown_key`)
 - Left: `Requires:` and `Properties:` keys, which the chapter does not say how to write; `Args:` of a struct, whose fields are its construction's arguments
 
-docs: unscheduled
+docs: partial
 
-- Section headings and their contents
+- Recognized headings, prose and Args/Type Args entries in the JSON model
+- Left: key spelling of Requires, Properties and a struct’s Args
 
 ## SDOC-4
 
-docs: unscheduled
+docs: done
 
-- Interface text kept with its identity, signature and part
+- JSON interfaces, candidates and members carry their own canonical identity, signatures and source parts
 
 ## SDOC-5
 

@@ -285,6 +285,7 @@ dependencies = [
  "hgl_analyser",
  "hgl_cpp",
  "hgl_diagnostics",
+ "hgl_doc",
  "hgl_lexer",
  "hgl_parser",
  "hgl_runner",
@@ -313,6 +314,18 @@ version = "0.2.0"
 dependencies = [
  "codespan-reporting",
  "hgl_source",
+]
+
+[[package]]
+name = "hgl_doc"
+version = "0.2.0"
+dependencies = [
+ "hgl_analyser",
+ "hgl_diagnostics",
+ "hgl_parser",
+ "hgl_source",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

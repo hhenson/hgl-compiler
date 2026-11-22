@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HGL API documentation model version 1",
+  "type": "object",
+  "required": ["schemaVersion", "modules"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "modules": { "type": "array", "items": { "$ref": "#/$defs/module" } }
+  },
+  "$defs": {
+    "nullableString": { "type": ["string", "null"] },
+    "module": {
+      "type": "object",
+      "required": ["name", "application", "parts", "declarations"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "application": { "type": "boolean" },
+        "parts": { "type": "array", "items": { "$ref": "#/$defs/part" } },
+        "declarations": { "type": "array", "items": { "$ref": "#/$defs/declaration" } }
+      }
+    },
+    "part": {
+      "type": "object",
+      "required": ["name", "source", "documentation"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/nullableString" },
+        "source": { "$ref": "#/$defs/source" },
+        "documentation": { "$ref": "#/$defs/optionalDocumentation" }
+      }
+    },
+    "declaration": {
+      "type": "object",
+      "required": [
+        "kind", "name", "canonicalName", "role", "exported", "source", "documentation",
+        "genericParameters", "configurationParameters", "parameters", "result", "requires",
+        "properties", "parents", "type", "default", "value", "abstractStruct", "members", "candidates"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "function", "nativeFunction", "nativeImplementation", "operator", "candidate",
+            "nativeCandidate", "nativeCandidateImplementation", "struct", "field",
+            "enum", "enumMember", "nativeType", "nativeProperty", "constant", "test"
+          ]
+        },
+        "name": { "type": "string" },
+        "canonicalName": { "type": "string" },
+        "role": { "enum": ["value", "temporal", null] },
+        "exported": { "type": "boolean" },
+        "source": { "$ref": "#/$defs/source" },
+        "documentation": { "$ref": "#/$defs/optionalDocumentation" },
+        "genericParameters": { "type": "array", "items": { "$ref": "#/$defs/generic" } },
+        "configurationParameters": { "type": "array", "items": { "$ref": "#/$defs/parameter" } },
+        "parameters": { "type": "array", "items": { "$ref": "#/$defs/parameter" } },
+        "result": { "anyOf": [{ "$ref": "#/$defs/result" }, { "type": "null" }] },
+        "requires": { "$ref": "#/$defs/nullableString" },
+        "properties": { "type": "array", "items": { "type": "string" } },
+        "parents": { "type": "array", "items": { "type": "string" } },
+        "type": { "$ref": "#/$defs/nullableString" },
+        "default": { "$ref": "#/$defs/nullableString" },
+        "value": { "$ref": "#/$defs/nullableString" },
+        "abstractStruct": { "type": "boolean" },
+        "members": { "type": "array", "items": { "$ref": "#/$defs/declaration" } },
+        "candidates": { "type": "array", "items": { "$ref": "#/$defs/declaration" } }
+      }
+    },
+    "generic": {
+      "type": "object",
+      "required": ["name", "kind", "type", "bounds", "written", "default"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "kind": { "enum": ["plain", "type", "pack", "value"] },
+        "type": { "$ref": "#/$defs/nullableString" },
+        "bounds": { "$ref": "#/$defs/optionalBounds" },
+        "written": { "$ref": "#/$defs/nullableString" },
+        "default": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "required": ["name", "type", "written", "constant", "var", "reference", "pack", "bounds", "default"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "written": { "$ref": "#/$defs/nullableString" },
+        "constant": { "type": "boolean" },
+        "var": { "type": "boolean" },
+        "reference": { "type": "boolean" },
+        "pack": { "enum": ["named", "positional", null] },
+        "bounds": { "$ref": "#/$defs/optionalBounds" },
+        "default": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "optionalBounds": {
+      "type": ["object", "null"],
+      "required": ["minimum", "maximum"],
+      "additionalProperties": false,
+      "properties": {
+        "minimum": { "type": "integer", "minimum": 0 },
+        "maximum": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["type", "written", "reference"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string" },
+        "written": { "$ref": "#/$defs/nullableString" },
+        "reference": { "type": "boolean" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["module", "part", "file", "line", "column"],
+      "additionalProperties": false,
+      "properties": {
+        "module": { "type": "string" },
+        "part": { "$ref": "#/$defs/nullableString" },
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "optionalDocumentation": {
+      "type": ["object", "null"],
+      "required": ["text", "summary", "sections"],
+      "additionalProperties": false,
+      "properties": {
+        "text": { "type": "string" },
+        "summary": { "type": "string" },
+        "sections": { "type": "array", "items": { "$ref": "#/$defs/section" } }
+      }
+    },
+    "section": {
+      "type": "object",
+      "required": ["heading", "text", "entries"],
+      "additionalProperties": false,
+      "properties": {
+        "heading": {
+          "enum": [
+            "Args:", "Type Args:", "Returns:", "Raises:", "Ticks:", "Validity:",
+            "Properties:", "Requires:", "Notes:", "Examples:", null
+          ]
+        },
+        "text": { "type": "string" },
+        "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "required": ["key", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string" },
+        "text": { "type": "string" }
+      }
+    }
+  }
+}
