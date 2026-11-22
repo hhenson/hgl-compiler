@@ -9,6 +9,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::arguments::{Assigned, Slot, Takes};
 use super::candidates::typed_by_place;
 use super::constants::{constant_text, generic_default};
+use super::dependent_packs::{PackTypes, dependent_slot};
 use super::control::value_of_branch;
 use super::evals::{holds_trace, publications, trace_input_type, trace_pack_type};
 use super::expressions::{holds_block, takes_its_type, written_null};
@@ -376,11 +377,7 @@ impl<'a> Typer<'a> {
                     }
                 })
                 .collect();
-            pack = Some(hir::TypePackArgument {
-                parameter: index,
-                types,
-                infer_from_arguments: false,
-            });
+            pack = Some(hir::TypePackArgument::positional(index, types));
         }
         Some(ExplicitGenerics {
             fixed,
@@ -546,11 +543,15 @@ impl<'a> Typer<'a> {
             written_pack,
             result_fallback,
             defaults,
+            callable,
         } = places;
         // The parameters being resolved. A place's type that still
         // names one once what was found is in place is not known.
         let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
-        let assigned = self.assign(name, list, slots, takes, aside);
+        let dependent = callable.and_then(|(module, signature)| {
+            dependent_slot(&self.program.modules[module], signature)
+        });
+        let mut assigned = self.assign_dependent(name, list, slots, takes, aside, dependent);
         let mut values: Vec<Option<Expr>> = vec![None; assigned.len()];
         // True for a value kept from its first reading that is not
         // then fitted to its place.
@@ -802,18 +803,38 @@ impl<'a> Typer<'a> {
                 defaulted.push(index);
             }
         }
-        // Every argument is of its place's type with what was found in
-        // place: `Pair(first: 1, second: "x")` gives `second: T` a `str`
-        // where `T` is `i64`.
-        let resolved: Vec<Argument> = found
+        // A resolved callback determines its reflected types before
+        // another place can use a keyed member of those types (GEN-17).
+        let type_packs = callable.map_or_else(Vec::new, |(module, signature)| {
+            let unresolved = Argument::Type(Type::Unknown);
+            let map: Vec<_> = generics
+                .iter()
+                .zip(&found)
+                .filter(|(generic, _)| !matches!(generic.kind, GenericKind::Pack { .. }))
+                .map(|(generic, argument)| (generic.at, argument.as_ref().unwrap_or(&unresolved)))
+                .collect();
+            self.read_dependent_call(
+                (name, list),
+                (module, signature, dependent),
+                (slots, &map),
+                (&mut assigned, &mut values),
+            )
+        });
+        for (entry, value) in assigned.iter().zip(&values) {
+            if let (Some(index), Some(value)) = (entry.slot, value)
+                && matches!(value.kind, hir::ExprKind::StaticCallable(_))
+            {
+                infer(patterns[index], &value.ty, generics, &mut found);
+            }
+        }
+        let pack_types = PackTypes::new(generics, &type_packs);
+        // Each argument now takes its place with the resolved parameters.
+        let unresolved = Argument::Type(Type::Unknown);
+        let map: Vec<_> = generics
             .iter()
-            .map(|found| found.clone().unwrap_or(Argument::Type(Type::Unknown)))
-            .collect();
-        let map: Vec<(Location, &Argument)> = generics
-            .iter()
-            .zip(&resolved)
+            .zip(&found)
             .filter(|(generic, _)| !matches!(generic.kind, GenericKind::Pack { .. }))
-            .map(|(generic, argument)| (generic.at, argument))
+            .map(|(generic, argument)| (generic.at, argument.as_ref().unwrap_or(&unresolved)))
             .collect();
         // The parameters nothing resolved.
         let unfound: Vec<Location> = generics
@@ -832,13 +853,20 @@ impl<'a> Typer<'a> {
                     slot,
                     pack,
                     value: node,
+                    ..
                 } = assigned;
                 let Some(index) = *slot else {
                     return self.argument(None, node, None, takes);
                 };
                 let pattern = patterns[index];
                 let traced = matches!(pattern, Type::Trace { .. });
-                let resolved_type = |ty| placed(substitute_within(ty, &map), &own);
+                let mut resolved_type = |ty| {
+                    let ty = pack_types.project(ty, &map).unwrap_or_else(|missing| {
+                        self.missing_pack_member(self.at(node), &missing);
+                        Type::Unknown
+                    });
+                    placed(ty, &own)
+                };
                 let written_type = written_pack
                     .filter(|(generic, _)| slots[index].type_pack == Some(*generic))
                     .and_then(|(_, types)| types.get(pack.as_ref()?.0));
@@ -926,11 +954,17 @@ impl<'a> Typer<'a> {
                             value,
                         }
                     }
-                    Some(value) if unfitted[position] => hir::Argument {
-                        parameter: Some(index),
-                        pack: None,
-                        value,
-                    },
+                    Some(value)
+                        if unfitted[position]
+                            || matches!(slot.ty, Type::Function(_))
+                                && matches!(value.kind, hir::ExprKind::StaticCallable(_) | hir::ExprKind::Unread) =>
+                    {
+                        hir::Argument {
+                            parameter: Some(index),
+                            pack: None,
+                            value,
+                        }
+                    }
                     // A value that holds a trace is the place's to
                     // report where the call is finished (TST-3), and is
                     // not held to its type.
@@ -1021,6 +1055,7 @@ impl<'a> Typer<'a> {
             defaulted,
             contextual,
             missing_pack_context,
+            type_packs,
         }
     }
 }
@@ -1120,6 +1155,8 @@ pub(super) struct Places<'s> {
     /// The default of each generic value parameter that has one (GEN-2):
     /// an entry for each of `generics`, or none at all.
     pub(super) defaults: Vec<Option<Constant>>,
+    /// A callable declaration whose callbacks may reflect parameter packs.
+    pub(super) callable: Option<(usize, &'s Signature)>,
 }
 
 /// What [`Typer::infer_arguments`] read.
@@ -1139,6 +1176,8 @@ pub(super) struct Inferred {
     /// Generic packs with an element that has no type of its own
     /// (GEN-8, ERR-2), even when an instance selects other argument types.
     pub(super) missing_pack_context: Vec<usize>,
+    /// Packs determined by static callback reflection (GEN-17).
+    pub(super) type_packs: Vec<hir::TypePackArgument>,
 }
 
 /// The positions of a call's arguments in the order their places are
@@ -1192,8 +1231,8 @@ pub(super) fn infer(
             find(*at, Argument::Type(actual.clone()), generics, found);
         }
         (Type::Function(pattern), Type::Function(actual)) => {
-            for ((_, pattern), (_, actual)) in pattern.parameters.iter().zip(&actual.parameters) {
-                infer(pattern, actual, generics, found);
+            for (pattern, actual) in pattern.parameters.iter().zip(&actual.parameters) {
+                infer(pattern.ty(), actual.ty(), generics, found);
             }
             if let (Some(pattern), Some(actual)) = (&pattern.result, &actual.result) {
                 infer(pattern, actual, generics, found);
