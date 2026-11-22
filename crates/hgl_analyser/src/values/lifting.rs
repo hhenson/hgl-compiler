@@ -907,14 +907,42 @@ fn contextual_type(value: &Expr, typer: Option<&Typer<'_>>) -> Option<Type> {
 
 /// TYPE-7: an unread `.member` takes its type from the list, so it
 /// cannot supply that type. Other unread expressions may still need
-/// to settle before the list has one type.
+/// to settle before the list has one type. A block takes its type from
+/// its value (CTRL-10).
 fn contextual_member(typer: &Typer<'_>, entry: &Expr) -> Option<SyntaxNode> {
-    if !matches!(entry.kind, ExprKind::Unread) || whole(&entry.ty) {
+    if whole(&entry.ty) {
         return None;
     }
-    typer
-        .syntax_of(entry)
-        .filter(|node| node.kind() == SyntaxKind::ImpliedMember)
+    match &entry.kind {
+        ExprKind::Block {
+            value: Some(tail), ..
+        } => contextual_member(typer, tail),
+        ExprKind::Unread => {
+            let node = typer.syntax_of(entry)?;
+            // A block's tail and its expression statement share a span.
+            let expression = if node.kind() == SyntaxKind::ExprStmt {
+                node.children().next()?
+            } else {
+                node
+            };
+            (expression.kind() == SyntaxKind::ImpliedMember).then_some(expression)
+        }
+        _ => None,
+    }
+}
+
+/// Replace only the contextual tail, keeping any statements already
+/// checked in the block's own scope.
+fn resolve_contextual_member(entry: &mut Expr, member: (ExprKind, Type)) {
+    if let ExprKind::Block {
+        value: Some(tail), ..
+    } = &mut entry.kind
+    {
+        resolve_contextual_member(tail, member);
+        entry.ty = tail.ty.clone();
+    } else {
+        (entry.kind, entry.ty) = member;
+    }
 }
 
 /// CTRL-13: decide a no-else expression's type once its categories
@@ -961,7 +989,10 @@ fn settled_type(
             {
                 for entry in entries {
                     if let Some(node) = contextual_member(typer, entry) {
-                        (entry.kind, entry.ty) = typer.implied_member(&node, Some(element));
+                        resolve_contextual_member(
+                            entry,
+                            typer.implied_member(&node, Some(element)),
+                        );
                     }
                 }
             }

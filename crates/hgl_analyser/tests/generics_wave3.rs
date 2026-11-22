@@ -1761,6 +1761,10 @@ fn values<T>(const input: T) -> i64 {
     let chosen = if predicate(input) { Side.buy }
     let observed = [chosen, .sell]
     let reverse = [(.sell), chosen]
+    let wrapped = [chosen, {
+        let preserved = Side.buy
+        { .sell }
+    }]
     return 0
 }
 fn bad<T>(const input: T) -> i64 {
@@ -1774,7 +1778,7 @@ fn invalid() -> i64 => bad(3)"#,
     );
     assert_eq!(
         checked.summary(),
-        ["m.hgl:20:24 name/member.unknown TYPE-7"],
+        ["m.hgl:24:24 name/member.unknown TYPE-7"],
         "{}",
         checked.report
     );
@@ -1784,6 +1788,7 @@ fn invalid() -> i64 => bad(3)"#,
     ] {
         let instance = instance_called_by(&checked, body(&checked, name));
         let mut members = Vec::new();
+        let mut block = false;
         walk_statements(&instance.statements, &mut |value| {
             if let ExprKind::Sequence(entries) = &value.kind {
                 let expected = format!("list<{element}>");
@@ -1792,9 +1797,25 @@ fn invalid() -> i64 => bad(3)"#,
                 members.push(entries.iter().position(|entry| {
                     matches!(entry.kind, ExprKind::EnumMember { member: 1, .. })
                 }));
+                if let ExprKind::Block {
+                    statements,
+                    value: Some(tail),
+                } = &entries[1].kind
+                {
+                    assert!(matches!(statements.as_slice(), [Stmt::Declare { .. }]));
+                    assert!(matches!(
+                        &tail.kind,
+                        ExprKind::Block { value: Some(member), .. }
+                            if matches!(member.kind, ExprKind::EnumMember { member: 1, .. })
+                    ));
+                    assert_eq!(tail.ty.to_string(), "Side");
+                    assert_eq!(entries[1].ty.to_string(), "Side");
+                    block = true;
+                }
             }
         });
-        assert_eq!(members, [Some(1), Some(0)]);
+        assert_eq!(members, [Some(1), Some(0), None]);
+        assert!(block);
     }
 }
 
