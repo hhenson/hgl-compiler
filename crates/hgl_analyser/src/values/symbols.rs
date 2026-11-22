@@ -12,7 +12,7 @@ use super::control::joined;
 use super::expressions::{takes_its_type, written_null};
 use super::fit::{open, whole};
 use super::operators::{
-    from_place, has_generic_configuration_default, options_of, public_inputs, unreadable,
+    from_place, has_generic_configuration_default, options_of, public_output_inputs, unreadable,
 };
 use super::{BOOL, Typer};
 use crate::constant::is_least_magnitude;
@@ -1078,7 +1078,7 @@ impl<'a> Typer<'a> {
         let has_default = has_generic_configuration_default(public);
         let (requested, among, operator_generics) = if said || has_default {
             from_place(public, symbol.place.as_ref(), &mut found);
-            let supplied = public_inputs(public, &given);
+            let supplied = public_output_inputs(public, &given);
             let requested = self.output_requested(operator, public, found, &supplied, said);
             if let Some(unfit) = &requested.unfit {
                 self.diagnostics.emit(unfit.diagnostic(public, symbol.at));

@@ -3892,3 +3892,31 @@ fn named_law_requirements_run_on_the_sdk() {
         "{stdout}"
     );
 }
+
+/// GEN-2, GEN-6, GEN-8: literal arguments take each candidate's type
+/// without an unrelated operator option requesting their initial i64 type.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn operator_literal_options_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("operator_literal_options");
+    let file = write(
+        &root,
+        "demo.operator_literal_options.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.operator_literal_options.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}

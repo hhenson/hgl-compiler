@@ -1336,6 +1336,17 @@ parameter's type as resolved (GEN-13), and the operator's own
 requirement of its result. So a requirement holds exactly where the
 call it names would select one candidate.
 
+For value arguments, `values::public_output_inputs` leaves an integer literal's
+preliminary reading out of this output inference (EXPR-5, GEN-2, GEN-6).
+A defaulted operator option must not promote that reading to an `i64`
+result request before a candidate can widen the literal to `f64`.
+`public_inputs` still supplies those readings for contextual argument inference;
+selection reads each literal against the candidate's own signature.
+`Typer::called` completes any public type left open from those selected
+parameter types before an inherited configuration default is specialized.
+Written type arguments, expected results, typed values and result-shape
+option defaults remain requests.
+
 Where two requirements name one operator with the same types and
 different results, the call is the one that gives what its place
 expects (GEN-5), and the first stated where nothing is asked.

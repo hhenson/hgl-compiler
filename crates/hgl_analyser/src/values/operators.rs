@@ -14,7 +14,7 @@ use super::constants::{constant_text, generic_default};
 use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
 };
-use super::fit::{open, whole};
+use super::fit::{is_integer_literal, open, whole};
 use super::function_arguments::CallbackInputs;
 use super::inference::{
     ExplicitGenerics, bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed,
@@ -437,7 +437,7 @@ impl<'a> Typer<'a> {
         // Then its arguments, in the order the operator declares its
         // parameters (GEN-12), and its defaults: see
         // `Typer::output_requested`.
-        let supplied = public_inputs(public, &given);
+        let supplied = public_output_inputs(public, &given);
         let Requested {
             place: mut requested,
             among,
@@ -1534,6 +1534,26 @@ pub(super) fn public_inputs<'a>(public: &Signature, given: &'a [Given]) -> Vec<O
     for argument in given {
         if let Some(index) = argument.key.public_parameter(public) {
             inputs[index] = Some(argument.ty());
+        }
+    }
+    inputs
+}
+
+/// GEN-2, GEN-6, EXPR-5: an integer literal takes the candidate's
+/// expected type. Its initial i64 reading does not request an i64 result
+/// through an operator option or default. Written types and places have
+/// already supplied their constraints separately.
+pub(super) fn public_output_inputs<'a>(
+    public: &Signature,
+    given: &'a [Given],
+) -> Vec<Option<&'a Type>> {
+    let mut inputs = public_inputs(public, given);
+    for argument in given
+        .iter()
+        .filter(|argument| is_integer_literal(&argument.value))
+    {
+        if let Some(index) = argument.key.public_parameter(public) {
+            inputs[index] = None;
         }
     }
     inputs

@@ -1,0 +1,113 @@
+module demo.operator_literal_options
+
+# GEN-2, GEN-6: each candidate decides how the literal zero is read.
+operator n2<L, C, const on: bool = true>(items: C, zero: L? = null) -> L
+impl const fn n2<V, const on: bool = true>(items: list<V>, zero: V? = null) -> V
+    requires on => items[0]
+operator n1<L, C>(items: C, zero: L? = null) -> L
+impl const fn n1<V>(items: list<V>, zero: V? = null) -> V => items[0]
+
+operator tc<L, R, C, const on: bool = true>(
+    f: const fn(L, R) -> L, items: C, zero: L? = null) -> L
+impl const fn tc<V, const on: bool = true>(
+    f: const fn(V, V) -> V, items: list<V>, zero: V? = null) -> V
+    requires on => f(items[0], items[1])
+
+operator td<L, R, C, const on: bool = true>(
+    f: const fn(L, R) -> L, items: C, zero: L? = null) -> L
+impl const fn td<V, const on: bool = true>(
+    f: const fn(V, V) -> V, items: list<V>, zero: V? = null) -> V => f(items[0], items[1])
+
+const fn fsub(a: f64, b: f64) -> f64 => a - b
+operator o1<L, R, C>(f: const fn(L, R) -> L, items: C, zero: L? = null) -> L
+impl const fn o1<L, R>(f: const fn(L, R) -> L, items: list<R>, zero: L) -> L => f(f(zero, items[0]), items[1])
+
+operator red<L, R, C, const law: bool = associative(f)>(
+    f: const fn(L, R) -> L, items: C, zero: L? = null) -> L
+impl const fn red<V, const law: bool = associative(f)>(
+    f: const fn(V, V) -> V, items: list<V>, zero: V? = null) -> V
+    requires law => f(items[0], items[1])
+impl const fn red<L, R, const law: bool = associative(f)>(
+    f: const fn(L, R) -> L, items: list<R>, zero: L) -> L
+    requires !law => f(f(zero, items[0]), items[1])
+
+# Reading a widened seed must preserve its value, not just admit the call.
+operator seeded<L, C, const on: bool = true>(items: C, zero: L? = null) -> L
+impl const fn seeded<const on: bool = true>(items: list<f64>, zero: f64) -> f64
+    requires on => zero + items[0] + items[1]
+
+operator window<T, const size: i64 = 3>(value: T) -> list<T, size>
+impl const fn window(value: f64) -> list<f64, 3> => [value, value, value]
+impl const fn window(value: f64) -> list<f64, 5> => [value, value, value, value, value]
+
+# GEN-2, UNIT-8: inherited defaults use the selected literal type.
+operator make_seed<T>() -> T
+impl const fn make_seed() -> f64 => 2.5
+operator default_seed<T, const on: bool = true>{seed: T = make_seed<T>()}(item: T) -> T
+    requires make_seed() -> T
+impl const fn default_seed<const on: bool = true>{seed: f64}(item: f64) -> f64
+    requires on => seed + item
+
+fn graph_plain(items: list<f64>) -> f64 {
+    let selected = n2(items, 1)
+    return selected
+}
+fn graph_callback(items: list<f64>) -> f64 {
+    let selected = tc(add_, items, 1)
+    return selected
+}
+fn graph_anonymous(items: list<f64>) -> f64 {
+    let selected = tc(fn(a, b) => a + b, items, 1)
+    return selected
+}
+
+/** GEN-2, GEN-6: the option does not make the seed a requested i64 result. */
+test literal_without_a_function {
+    assert n1([1.5, 2.0], 1) == 1.5
+    assert n2([1.5, 2.0], 1) == 1.5
+    assert n2{on: true}([1.5, 2.0], -1) == 1.5
+    assert seeded([1.5, 2.0], 1) == 4.5
+    assert seeded([1.5, 2.0], -1) == 2.5
+    assert default_seed(1) == 3.5
+}
+
+/** GEN-2, GEN-6, FN-17: operator and anonymous callbacks use the candidate. */
+test literal_with_a_function {
+    assert tc(add_, [1.5, 2.0], 1) == 3.5
+    assert tc(fn(a, b) => a + b, [1.5, 2.0], 1) == 3.5
+    assert td(add_, [1.5, 2.0], 1) == 3.5
+    assert red(add_, [1.5, 2.0], 1) == 3.5
+}
+
+/** GEN-2: a named function's signature still decides before the literal. */
+test named_function_decides_first {
+    assert o1(fsub, [1.5, 2.0], 10) == 6.5
+    assert red(fsub, [1.5, 2.0], 10) == 6.5
+}
+
+/** GEN-2, GEN-6: the same candidate-local reading works in a graph. */
+test graph_literals {
+    assert eval graph_plain(items: [[1.5, 2.0]]) == [1.5]
+    assert eval graph_callback(items: [[1.5, 2.0]]) == [3.5]
+    assert eval graph_anonymous(items: [[1.5, 2.0]]) == [3.5]
+}
+
+/** GEN-6, GEN-8: a result-shape default remains a request. */
+test output_shape_defaults {
+    assert window(1) == [1.0, 1.0, 1.0]
+    assert window{size: 5}(1) == [1.0, 1.0, 1.0, 1.0, 1.0]
+}
+
+test an_explicit_result_type_remains_a_request {
+    # expect-error(operator, "operator.no_candidate")
+    assert n2<i64>([1.5, 2.0], 1) == 1
+}
+test an_explicit_option_still_selects {
+    # expect-error(operator, "operator.no_candidate")
+    assert n2{on: false}([1.5, 2.0], 1) == 1.5
+}
+test a_typed_integer_is_not_a_literal {
+    let seed: i64 = 1
+    # expect-error(operator, "operator.no_candidate")
+    assert n2([1.5, 2.0], seed) == 1.5
+}

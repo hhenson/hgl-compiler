@@ -24,6 +24,7 @@ analyser: partial
 - A nullable type the call writes for an operator's result that is a type parameter is given whole to a generic candidate whose result is one: `get<i64?>(...)` gives core's candidate an `i64?`
 - A nullable place leaves a bare result parameter for the inputs to decide. A fallible dictionary read resolves its success type from the dictionary. A store read can infer it from its place (CAP-6).
 - A plain result place can resolve the success type of a fallible generic call and let a bare parameter read the success of a result argument (ERR-15).
+- An operator's defaulted option does not turn an integer literal's preliminary `i64` reading into a requested result. Each candidate reads that literal against its own parameter type, including a nullable `f64`; written type arguments, an expected result and a typed integer argument still constrain selection (GEN-6, EXPR-5).
 - A generic value parameter takes its default where nothing else says what it is: a function's and a candidate's at a call, a struct's where it is named bare or constructed, an operator's in the output requested
 - Left: packs; solvable equalities; temporal bodies
 

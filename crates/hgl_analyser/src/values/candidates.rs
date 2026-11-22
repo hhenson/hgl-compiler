@@ -807,6 +807,35 @@ impl<'a> Typer<'a> {
         } = chosen;
         let signature: &Signature = &taken;
         let program = self.program;
+        // GEN-2, GEN-6, UNIT-8: the public output request leaves a
+        // widenable literal's type open. Once selected, the candidate
+        // supplies that type to inherited configuration defaults.
+        let mut operator_generics = operator_generics;
+        if !operator_generics.is_empty()
+            && let Some(Detail::Callable(public)) = program.modules[operator.module]
+                .details
+                .get(operator.declaration)
+        {
+            let mut found: Vec<_> = operator_generics
+                .iter()
+                .map(|argument| match argument {
+                    Argument::Type(Type::Unknown) => None,
+                    argument => Some(argument.clone()),
+                })
+                .collect();
+            let mut supplied = vec![None; public.parameters.len()];
+            for (argument, &slot) in given.iter().zip(&bound) {
+                if let Some(index) = argument.key.public_parameter(public) {
+                    supplied[index] = parameter_type(signature, &type_packs, slot);
+                }
+            }
+            self.infer_operator_inputs(public, &mut found, &supplied);
+            for (argument, resolved) in operator_generics.iter_mut().zip(found) {
+                if let Some(resolved) = resolved {
+                    *argument = resolved;
+                }
+            }
+        }
         let reported = self.diagnostics.len();
         // GEN-5: in a test's or an application's value code "a temporal
         // candidate it selects rejects" (TST-3, UNIT-14), the code
