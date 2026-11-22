@@ -60,3 +60,128 @@ test unassigned_written_argument {
     # expect-error(name, "binding.unassigned")
     assert unassigned() == 0
 }
+
+# UNIT-7, FN-19: parameter and field defaults reach instance checking.
+const fn needs_i64(x: i64) -> i64 => x
+const fn relay_one<...A>(values: ...A) -> i64 => needs_i64(...values)
+
+# expect-error(type, "type.mismatch")
+const fn bad_parameter_default(x: i64 = relay_one("bad")) -> i64 => x
+
+# expect-error(type, "type.mismatch")
+struct BadFieldDefault { x: i64 = relay_one("bad") }
+
+# FN-14, FN-19: follow calls in anonymous bodies, with or without a pack capture.
+const fn receive_three(a: i64, b: i64, c: i64) -> i64 => a * 100 + b * 10 + c
+const fn relay_many<...A>(values: ...A) -> i64 => receive_three(...values)
+const fn apply_one(f: const fn(i64) -> i64) -> i64 => f(1)
+const fn captured<...A>(values: ...A) -> i64 =>
+    apply_one(fn(x) => receive_three(x, ...values))
+
+test missing_in_anonymous_body {
+    # expect-error(type, "argument.missing")
+    assert apply_one(fn(x) => relay_many(x, 2)) == 12
+}
+
+test captured_wrong_type {
+    # expect-error(type, "type.mismatch")
+    assert captured(2, "bad") == 123
+}
+
+test captured_missing {
+    # expect-error(type, "argument.missing")
+    assert captured(2) == 123
+}
+
+test captured_extra {
+    # expect-error(type, "argument.unexpected")
+    assert captured(2, 3, "bad") == 123
+}
+
+# FN-17: a forwarded name has to be written in the callback type.
+const fn differently_named(x: i64, y: i64) -> i64 => x * 10 + y
+const fn unnamed_template<...F>(f: const fn(i64, i64) -> i64, fields: ...{F}) -> i64 =>
+    f(...fields)
+
+test hidden_callback_names_reject {
+    # expect-error(name, "argument.unknown")
+    assert unnamed_template(receive, b: 2, a: 1) == 12
+}
+
+test same_template_error_for_other_target {
+    # expect-error(name, "argument.unknown")
+    assert unnamed_template(differently_named, b: 2, a: 1) == 12
+}
+
+# FN-19, TYPE-5: a spread is checked against the struct's fields.
+struct Point {
+    x: i64
+    y: i64
+}
+const fn make_point<...F>(fields: ...{F}) -> Point => Point(...fields)
+const fn make_positionally<...F>(fields: ...F) -> Point => Point(...fields)
+
+test wrong_field_type {
+    # expect-error(type, "type.mismatch")
+    assert make_point(x: "bad", y: 2).x == 1
+}
+
+test missing_field {
+    # expect-error(type, "argument.missing")
+    assert make_point(x: 1).x == 1
+}
+
+test unknown_field {
+    # expect-error(name, "argument.unknown")
+    assert make_point(x: 1, y: 2, z: 3).x == 1
+}
+
+test positional_field {
+    # expect-error(type, "argument.unexpected")
+    assert make_positionally(1).x == 1
+}
+
+# TYPE-7: a spread in an enum constructor is reported when it is written.
+enum Direction { left, right }
+
+# expect-error(type, "argument.unexpected")
+const fn make_direction<...F>(values: ...F) -> Direction => Direction(...values)
+
+# FN-15, GEN-8: entries are immutable runtime values.
+const fn bump(var count: i64, by: i64) { count = count + by }
+const fn relay_var<...A>(values: ...A) { bump(...values) }
+const fn configured<const k: i64 = 1>(x: i64) -> i64 => x + k
+const fn relay_generic<...F>(values: ...{F}) -> i64 => configured(...values)
+
+test immutable_entry {
+    let n = 1
+    # expect-error(name, "binding.immutable")
+    relay_var(n, 2)
+}
+
+test runtime_generic_entry {
+    # expect-error(type, "generic.argument_constant")
+    assert relay_generic(x: 2, k: 3) == 5
+}
+
+# GEN-17: the receiving pack includes the original named fixed inputs.
+const reflected_key: str = "value"
+const fn reflected_input(value: i64) -> i64 => value
+const fn differently_named_input(other: i64) -> i64 => other
+const fn two_reflected_inputs(value: i64, other: i64) -> i64 => value + other
+const fn one_reflected_input<...Ps{1}>(f: const fn(...{Ps}) -> i64) -> i64
+    requires reflected_key in arg_keys(Ps) => 51
+const fn reflect_all<...Ps>(f: const fn(i64, ...{Ps}) -> i64) -> i64 =>
+    one_reflected_input(f)
+const fn reflect_through<...Ps>(f: const fn(i64, ...{Ps}) -> i64) -> i64 => reflect_all(f)
+
+test fixed_input_counts_toward_receiving_bound {
+    # expect-error(type, "pack.cardinality")
+    assert reflect_all(two_reflected_inputs) == 51
+}
+
+test receiving_pack_uses_the_callback_name {
+    assert reflect_through(reflected_input) == 51
+    # expect-error(constraint, "requires.unmet")
+    assert reflect_through(differently_named_input) == 51
+}

@@ -466,6 +466,7 @@ impl Resolver<'_> {
             }
             SyntaxKind::InjectDecl => self.inject(node),
             SyntaxKind::ForStmt => self.for_statement(node),
+            SyntaxKind::ListComprehension => self.list_comprehension(node),
             SyntaxKind::FnExpr => self.function_expression(node),
             SyntaxKind::ConstraintEach | SyntaxKind::ConstraintAny => self.each_constraint(node),
             SyntaxKind::PackMemberType => {
@@ -656,6 +657,22 @@ impl Resolver<'_> {
         }
         if let Some(body) = child(node, SyntaxKind::Block) {
             self.walk(&body);
+        }
+        self.frames.pop();
+    }
+
+    /// Bind the EXPR-17 iteration variable in the entry expression only.
+    fn list_comprehension(&mut self, node: &SyntaxNode) {
+        let mut parts = node.children();
+        if let Some(sequence) = parts.next() {
+            self.walk(&sequence);
+        }
+        self.frames.push(Frame::default());
+        if let Some(name) = identifiers(node).next() {
+            self.bind(&name, LocalKind::Iteration);
+        }
+        if let Some(entry) = parts.next() {
+            self.walk(&entry);
         }
         self.frames.pop();
     }

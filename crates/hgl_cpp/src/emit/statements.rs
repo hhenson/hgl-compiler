@@ -132,6 +132,32 @@ impl Emitter<'_> {
         self.push_stamped(scope, statement, &whole, text);
     }
 
+    /// Write the loop header after holding both bounds in source order
+    /// (EXPR-16). Advancing the last included value cannot overflow: the
+    /// cursor needs only reach the exclusive bound.
+    pub(super) fn range_header(
+        &mut self,
+        scope: &mut Scope,
+        lower: &Expr,
+        upper: &Expr,
+        binding: &str,
+    ) -> String {
+        let start = names::temporary("range_start", self.temporary());
+        let limit = names::temporary("range_limit", self.temporary());
+        let cursor = names::temporary("range_value", self.temporary());
+        let value = self.expression(scope, lower);
+        scope
+            .before
+            .push(format!("const ::hgraph::Int {start} = {value};"));
+        let value = self.expression(scope, upper);
+        scope
+            .before
+            .push(format!("const ::hgraph::Int {limit} = {value};"));
+        format!(
+            "for (auto {cursor} = {start}; {cursor} < {limit}; ++{cursor}) {{ [[maybe_unused]] const auto {binding} = {cursor};"
+        )
+    }
+
     /// Pushes `written`, the code of `statement`, onto `text`, each of its
     /// lines given the statement's HGL file and line outside a test
     /// (`stamped`).
@@ -373,6 +399,16 @@ impl Emitter<'_> {
                 body: statements,
                 at,
             } => {
+                if let (ExprKind::Range { lower, upper }, [name]) =
+                    (&sequence.kind, bound.as_slice())
+                {
+                    let name = identifier(&body.locals[*name].name);
+                    let header = self.range_header(scope, lower, upper, &name);
+                    text.push_str(&format!("{indent}{header}\n"));
+                    self.statements(scope, statements, depth + 1, text);
+                    text.push_str(&format!("{indent}}}\n"));
+                    return;
+                }
                 // CTRL-12: over a set or a dictionary (`composites`).
                 if matches!(sequence.ty, Type::Set(_) | Type::Dict { .. }) {
                     self.composite_for(scope, bound, sequence, statements, *at, depth, text);

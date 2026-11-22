@@ -202,6 +202,6 @@ parser: done
 
 ## LEX-29
 
-lexer: planned
+lexer: done
 
-- The `..<` token and digit boundary await #368.
+- Reads `..<` as one token and the digit run directly before it as an integer.

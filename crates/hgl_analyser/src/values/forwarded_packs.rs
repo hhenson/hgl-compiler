@@ -6,8 +6,8 @@ use hgl_diagnostics::Category;
 use hgl_parser::{SyntaxKind, SyntaxNode};
 
 use super::Typer;
-use crate::declared::names_parameter;
-use crate::hir::{Callee, Expr, ExprKind, Form, PackKey};
+use crate::declared::{names_parameter, substitute_within};
+use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey};
 use crate::syntax::ungrouped;
 use crate::types::Type;
 use crate::{codes, error};
@@ -125,7 +125,7 @@ pub(super) fn spread_operands(list: &SyntaxNode) -> impl Iterator<Item = SyntaxN
 /// Whether the shape of a parameter pack still needs to be applied.
 pub(crate) fn has_forwarded_calls(body: &crate::hir::Body) -> bool {
     let mut pending = false;
-    crate::hir::walk_statements(&body.statements, &mut |value| {
+    walk_nested_calls(&body.statements, &mut |value| {
         pending |= is_forwarded_call(value);
     });
     pending
@@ -150,6 +150,74 @@ struct ForwardingInstance {
     functions: Vec<(usize, Callee)>,
     type_packs: Vec<crate::hir::TypePackArgument>,
     pack_inputs: Vec<crate::hir::PackInput>,
+}
+
+impl crate::Program {
+    /// The type and source key of each pack entry bound to a call (FN-8,
+    /// FN-19). A concrete parameter type takes precedence over the type
+    /// of the argument read at the call. For a trace that supplies an
+    /// independently typed entry, use its replay payload (TST-5).
+    pub fn call_pack_inputs(
+        &self,
+        callee: &Callee,
+        signature: &crate::Signature,
+        arguments: &[crate::hir::Argument],
+    ) -> Vec<PackInput> {
+        let mut counts = vec![0; signature.parameters.len()];
+        let bindings: Vec<_> = signature
+            .generics
+            .iter()
+            .map(|parameter| parameter.at)
+            .zip(callee.generics())
+            .collect();
+        arguments
+            .iter()
+            .filter_map(|argument| {
+                let parameter = argument.parameter?;
+                let key = argument.pack.as_ref()?;
+                let declared = &signature.parameters[parameter];
+                let index = &mut counts[parameter];
+                let expected = super::inference::type_pack(declared, &signature.generics)
+                    .and_then(|generic| {
+                        callee
+                            .type_packs()
+                            .iter()
+                            .find(|pack| pack.parameter == generic)
+                    })
+                    .and_then(|pack| pack.types.get(*index))
+                    .cloned()
+                    .unwrap_or_else(|| substitute_within(&declared.ty, &bindings));
+                *index += 1;
+                let unresolved = expected.any_part(
+                    &|part| {
+                        matches!(
+                            part,
+                            Type::Unknown
+                                | Type::Parameter { .. }
+                                | Type::PackMember { .. }
+                                | Type::Trace { .. }
+                                | Type::Function(_)
+                        )
+                    },
+                    &|constant| constant.value.key().is_none(),
+                );
+                let ty = if unresolved {
+                    argument
+                        .value
+                        .ty
+                        .trace_payload()
+                        .unwrap_or_else(|| argument.value.ty.clone())
+                } else {
+                    expected
+                };
+                Some(PackInput {
+                    parameter,
+                    key: key.clone(),
+                    ty,
+                })
+            })
+            .collect()
+    }
 }
 
 impl ForwardingInstance {
@@ -189,37 +257,17 @@ impl ForwardingInstance {
         {
             return None;
         }
-        let mut indices = vec![0; signature.parameters.len()];
-        let mut pack_inputs = Vec::new();
-        let mut functions = Vec::new();
-        for argument in arguments {
-            let Some(parameter) = argument.parameter else {
-                continue;
-            };
-            if let ExprKind::StaticCallable(callee) = &argument.value.kind {
-                functions.push((parameter, (**callee).clone()));
-                continue;
-            }
-            let Some(key) = &argument.pack else {
-                continue;
-            };
-            let index = &mut indices[parameter];
-            let ty =
-                super::inference::type_pack(&signature.parameters[parameter], &signature.generics)
-                    .and_then(|generic| type_packs.iter().find(|pack| pack.parameter == generic))
-                    .and_then(|pack| pack.types.get(*index))
-                    .or_else(|| super::evals::trace_pack_type(&argument.value.ty))
-                    .unwrap_or(&argument.value.ty);
-            if !known(ty) {
-                return None;
-            }
-            *index += 1;
-            pack_inputs.push(crate::hir::PackInput {
-                parameter,
-                key: key.clone(),
-                ty: ty.clone(),
-            });
+        let pack_inputs = program.call_pack_inputs(callee, signature, arguments);
+        if pack_inputs.iter().any(|entry| !known(&entry.ty)) {
+            return None;
         }
+        let functions = arguments
+            .iter()
+            .filter_map(|argument| match &argument.value.kind {
+                ExprKind::StaticCallable(callee) => Some((argument.parameter?, (**callee).clone())),
+                _ => None,
+            })
+            .collect();
         let requirements = match callee {
             Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
                 requirements.clone()
@@ -245,13 +293,32 @@ impl ForwardingInstance {
     }
 }
 
+/// Include anonymous bodies, which have their own local tables and
+/// are separate from an ordinary HIR expression walk (FN-14).
+fn visit_anonymous_bodies(value: &Expr, visit: &mut dyn FnMut(&Expr)) {
+    visit(value);
+    let callee = match &value.kind {
+        ExprKind::Call { callee, .. } => callee,
+        ExprKind::StaticCallable(callee) => callee,
+        _ => return,
+    };
+    if let Callee::Anonymous(function) = callee {
+        walk_nested_calls(&function.body.statements, visit);
+    }
+}
+
+fn walk_nested_calls(statements: &[crate::hir::Stmt], visit: &mut dyn FnMut(&Expr)) {
+    crate::hir::walk_statements(statements, &mut |value| {
+        visit_anonymous_bodies(value, visit)
+    });
+}
+
 /// Check forwarded calls under the concrete shapes that reach them (FN-19).
 /// A forwarding error belongs to the call that supplies that pack shape.
 pub(super) fn check_instances(
     program: &crate::Program,
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
-    use crate::hir::walk_statements;
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = HashSet::new();
@@ -260,7 +327,7 @@ pub(super) fn check_instances(
         for (declaration, body) in unit.bodies.iter().enumerate() {
             let Some(body) = body else { continue };
             let owner = (module, declaration);
-            walk_statements(&body.statements, &mut |value| {
+            walk_nested_calls(&body.statements, &mut |value| {
                 if let ExprKind::Call { callee, .. } = &value.kind {
                     if matches!(callee, Callee::DeferredPackCall) {
                         forwarding.insert(owner);
@@ -298,13 +365,21 @@ pub(super) fn check_instances(
             .chain(unit.test_bodies.iter().flatten())
             .chain(&unit.store_body)
         {
-            walk_statements(&body.statements, &mut record);
+            walk_nested_calls(&body.statements, &mut record);
         }
         if let Some(run) = &unit.run_body {
-            run.call.walk(&mut record);
+            run.call
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
         }
         for constant in unit.constants.iter().flatten() {
-            constant.walk(&mut record);
+            constant
+                .value
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
+        }
+        for default in unit.defaults.iter().flatten().flatten() {
+            default
+                .value
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
         }
     }
     for (initial, at) in roots {
@@ -336,7 +411,6 @@ pub(super) fn check_instances(
                 &reports,
                 &mut graph_reports,
             );
-            seen.push(instance);
             for report in graph_reports.as_slice() {
                 if diagnostics.as_slice().contains(report) {
                     continue;
@@ -349,8 +423,17 @@ pub(super) fn check_instances(
                     diagnostics.emit(report);
                 }
             }
-            if let Some((_, body)) = checked {
-                walk_statements(&body.statements, &mut |value| {
+            if let Some(checked) = checked {
+                if let Some(result_uses) = &checked.result_uses {
+                    super::requirements::report_instance_result_uses(
+                        program,
+                        (instance.declaration, &instance.generics),
+                        result_uses,
+                        &[at],
+                        diagnostics,
+                    );
+                }
+                walk_nested_calls(&checked.body.statements, &mut |value| {
                     if let Some(child) = ForwardingInstance::of(program, value)
                         && forwarding.contains(&child.declaration)
                     {
@@ -358,6 +441,7 @@ pub(super) fn check_instances(
                     }
                 });
             }
+            seen.push(instance);
         }
     }
 }

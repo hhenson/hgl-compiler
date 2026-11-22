@@ -1,6 +1,6 @@
 //! Writes constructors, field and delta properties, and access to their places.
 
-use hgl_analyser::hir::{Argument, Body, Expr, ExprKind, Value};
+use hgl_analyser::hir::{Argument, DefaultExpr, Expr, ExprKind, Value};
 use hgl_analyser::{Detail, NamedKind, Type};
 use hgl_lower::calls::field_default;
 use hgl_lower::types::inherited;
@@ -94,7 +94,7 @@ impl Emitter<'_> {
                 Some(default) => {
                     let key = (*module, *declaration, usize::MAX - slot);
                     if self.expanding.contains(&key) {
-                        return self.missing(default.at, "a default that leaves itself out");
+                        return self.missing(default.value.at, "a default that leaves itself out");
                     }
                     self.expanding.push(key);
                     let made = self.field_default(default, field_type, generics.is_empty());
@@ -105,7 +105,7 @@ impl Emitter<'_> {
                     Given {
                         slot,
                         text: made,
-                        fails: may_fail(default),
+                        fails: may_fail(&default.value),
                         changes: false,
                         refers: false,
                         ty: slot_type,
@@ -159,41 +159,36 @@ impl Emitter<'_> {
     /// written, which is reported.
     fn field_default(
         &mut self,
-        default: &Expr,
+        default: &DefaultExpr,
         field_type: &Type,
         concrete: bool,
     ) -> Option<String> {
-        let empty = matches!(&default.kind, ExprKind::Sequence(entries) if entries.is_empty())
-            || matches!(&default.kind, ExprKind::Pairs(entries) if entries.is_empty());
+        let value = &default.value;
+        let empty = matches!(&value.kind, ExprKind::Sequence(entries) if entries.is_empty())
+            || matches!(&value.kind, ExprKind::Pairs(entries) if entries.is_empty());
         if empty {
             // TYPE-4: "optional fields may have non-null defaults": the
             // empty collection, which an optional field then holds, made
             // as the collection and not as the optional.
-            let ty = self.written_type(collection_of(field_type), default.at)?;
+            let ty = self.written_type(collection_of(field_type), value.at)?;
             return Some(format!("{ty}{{}}"));
         }
-        if matches!(default.kind, ExprKind::Literal(Value::Null)) {
+        if matches!(value.kind, ExprKind::Literal(Value::Null)) {
             return Some("::std::nullopt".to_string());
         }
-        if !concrete && default.ty != *field_type {
-            self.unsupported(default.at, "a default of a generic struct's field");
+        if !concrete && value.ty != *field_type {
+            self.unsupported(value.at, "a default of a generic struct's field");
             return None;
         }
-        // A default is read with no local in scope (UNIT-7), and its
-        // value is written over an empty body: one that runs statements
-        // of its own, which have locals of their own, is not written yet.
-        if changes(default) {
-            self.unsupported(default.at, "a default that runs statements");
+        if changes(value) {
+            self.unsupported(value.at, "a default that runs statements");
             return None;
         }
-        let cold = Body {
-            locals: Vec::new(),
-            statements: Vec::new(),
-        };
+        let cold = default.clone().into_body();
         let mut defaults = Scope::cold(self.program, &cold);
-        let text = self.expression(&mut defaults, default);
+        let text = self.expression(&mut defaults, value);
         if !defaults.before.is_empty() {
-            self.unsupported(default.at, "a default that propagates a failure");
+            self.unsupported(value.at, "a default that propagates a failure");
             return None;
         }
         Some(text)

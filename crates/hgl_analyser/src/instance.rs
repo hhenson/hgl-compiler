@@ -68,14 +68,36 @@ struct InstanceArguments<'a> {
     generics: &'a [Argument],
     types: &'a Map<'a>,
     packs: &'a PackTypes<'a>,
+    type_packs: &'a [TypePackArgument],
+    pack_inputs: &'a [PackInput],
     requirements: &'a [Answer],
     diagnostics: &'a RefCell<Diagnostics>,
+    changed_results: RefCell<Vec<Location>>,
 }
 
 impl InstanceArguments<'_> {
     fn project(&self, ty: &Type) -> Type {
         self.packs.project(ty, self.types).unwrap_or(Type::Unknown)
     }
+}
+
+/// A specialized callable, with any reports from rechecking the uses
+/// of an operator result whose type changed (GEN-7).
+pub(crate) struct CheckedInstance {
+    /// The concrete signature used to read the body.
+    pub(crate) signature: Signature,
+    /// The body with its concrete types and callees.
+    pub(crate) body: Body,
+    /// Checks made when a selected result differs from the admitting result.
+    pub(crate) result_uses: Option<ResultUseChecks>,
+}
+
+/// The calls whose results changed and the checks their new types caused.
+pub(crate) struct ResultUseChecks {
+    /// Written locations of the calls that selected a different result.
+    pub(crate) changed_results: Vec<Location>,
+    /// Type checks from reading the body with the selected results.
+    pub(crate) reports: Diagnostics,
 }
 
 impl Program {
@@ -168,8 +190,11 @@ impl Program {
             generics,
             types: &types,
             packs: &PackTypes::new(&[], &[]),
+            type_packs: &[],
+            pack_inputs: &[],
             requirements: &requirements,
             diagnostics: &reports,
+            changed_results: RefCell::new(Vec::new()),
         };
         // UNIT-7: a default has no formal parameters in scope. Run the
         // same membership-based selection here as in a specialized body.
@@ -279,6 +304,7 @@ impl Program {
             &RefCell::new(Diagnostics::new()),
             &mut Diagnostics::new(),
         )
+        .map(|instance| (instance.signature, instance.body))
     }
 
     /// Instantiate a body and report any configuration that fails to fit
@@ -292,7 +318,7 @@ impl Program {
         inputs: InstanceInputs<'_>,
         diagnostics: &RefCell<Diagnostics>,
         body_diagnostics: &mut Diagnostics,
-    ) -> Option<(Signature, Body)> {
+    ) -> Option<CheckedInstance> {
         let declared = self.modules.get(module)?;
         let Some(Detail::Callable(signature)) = declared.details.get(declaration) else {
             return None;
@@ -322,18 +348,21 @@ impl Program {
         let mut body = body.clone();
         let temporal = declared.declarations[declaration].kind.role() == Some(Role::Temporal);
         let functions = hidden_captures(inputs.functions, &mut taken, &mut body, temporal);
+        let pending_forwards = inputs
+            .pack_inputs
+            .filter(|_| crate::values::has_forwarded_calls(&body));
         let arguments = InstanceArguments {
             declaration: (module, declaration),
             generics,
             types: &map,
             packs: &packs,
+            type_packs: inputs.type_packs,
+            pack_inputs: pending_forwards.unwrap_or_default(),
             requirements,
             diagnostics,
+            changed_results: RefCell::new(Vec::new()),
         };
         let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
-        let pending_forwards = inputs
-            .pack_inputs
-            .filter(|_| crate::values::has_forwarded_calls(&body));
         let recheck_endpoints =
             crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
         if (recheck_endpoints || pending_forwards.is_some())
@@ -352,8 +381,34 @@ impl Program {
             && (!declared.selecting[declaration].is_empty()
                 || !requirements.is_empty()
                 || pending_forwards.is_some());
-        let destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
+        let mut destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
+        let mut result_uses = None;
+        let before = diagnostics.borrow().len();
         self.place_body(&mut body, &arguments, &functions);
+        let changed_results = std::mem::take(&mut *arguments.changed_results.borrow_mut());
+        if !changed_results.is_empty() {
+            // GEN-7: the original body used the admitting candidate's
+            // result. Read its uses with the selected type in place,
+            // including inferred locals and the calls that consume them.
+            let mut reports = Diagnostics::new();
+            if let Some(reread) = crate::values::reread_instance_body(
+                self,
+                (module, declaration),
+                (&taken, &map),
+                (&functions, pending_forwards),
+                &project,
+                &mut reports,
+            ) {
+                diagnostics.borrow_mut().truncate(before);
+                body = reread;
+                destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
+                self.place_body(&mut body, &arguments, &functions);
+            }
+            result_uses = Some(ResultUseChecks {
+                changed_results,
+                reports,
+            });
+        }
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
         // could not say of an operation it requires or a pack it forwards.
@@ -369,7 +424,11 @@ impl Program {
         } else {
             crate::values::record(self, &mut body, graph);
         }
-        Some((taken, body))
+        Some(CheckedInstance {
+            signature: taken,
+            body,
+            result_uses,
+        })
     }
 
     /// Specialize one lexical body using its own local table. A call
@@ -388,13 +447,14 @@ impl Program {
         walk_statements_mut(&mut body.statements, &mut |expression| {
             self.place(expression, instance, functions);
         });
-        crate::values::select_in_instance(
+        let changed = crate::values::select_in_instance(
             self,
             instance.declaration,
             instance.generics,
             body,
             &|call| call.walk_mut(&mut |inner| self.place(inner, instance, functions)),
         );
+        instance.changed_results.borrow_mut().extend(changed);
     }
 
     /// Puts the instance's arguments in place in an expression's type,
@@ -579,9 +639,29 @@ impl Program {
             if let Type::Function(template) = instance.project(&template) {
                 function.template = *template;
             }
-            function
-                .specialization
-                .extend(instance.types.iter().map(|(_, value)| (*value).clone()));
+            let specialization = &mut function.specialization;
+            // A type pack's slot holds a placeholder. Keep its concrete
+            // type sequence and keys separately.
+            let type_pack = |index| {
+                instance
+                    .type_packs
+                    .iter()
+                    .any(|pack| pack.parameter == index)
+            };
+            specialization.generics.extend(
+                instance
+                    .types
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| !type_pack(*index))
+                    .map(|(_, (_, value))| (*value).clone()),
+            );
+            specialization
+                .type_packs
+                .extend_from_slice(instance.type_packs);
+            specialization
+                .pack_inputs
+                .extend_from_slice(instance.pack_inputs);
             self.place_body(&mut function.body, instance, &functions);
             crate::values::record(self, &mut function.body, !function.template.value);
         } else {
@@ -733,16 +813,28 @@ fn inherited_functions(
             continue;
         };
         let target_inputs = target.template.parameters.len();
-        for (index, captured) in target.captures.iter_mut().enumerate() {
-            let position = function.captures.iter().position(|outer| outer == captured);
+        for index in 0..target.captures.len() {
+            let captured = target.captures[index];
+            let key = target.capture_pack_key(index);
+            let position = function
+                .captures
+                .iter()
+                .enumerate()
+                .position(|(index, outer)| {
+                    *outer == captured && function.capture_pack_key(index) == key
+                });
             let offset = position.unwrap_or_else(|| {
                 let offset = function.captures.len();
-                function.captures.push(*captured);
+                function.captures.push(captured);
+                if let Some(key) = key {
+                    function.pack_captures.push((offset, key.clone()));
+                }
                 added.push(target.body.locals[target_inputs + index].clone());
                 offset
             });
-            *captured = inputs + offset;
+            target.captures[index] = inputs + offset;
         }
+        target.pack_captures.clear();
     }
     if !added.is_empty() {
         let remapped: Vec<_> = (0..function.body.locals.len())
@@ -818,6 +910,7 @@ fn hidden_captures(
             });
             locals.push(local);
         }
+        function.pack_captures.clear();
     }
     if !locals.is_empty() {
         let added = locals.len();
@@ -877,9 +970,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
     }
     if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } = callee {
         for pack in type_packs {
-            for ty in &mut pack.types {
-                *ty = substitute_within(ty, map);
-            }
+            pack.place_types(|ty| substitute_within(ty, map));
         }
     }
     if let Callee::Candidate {

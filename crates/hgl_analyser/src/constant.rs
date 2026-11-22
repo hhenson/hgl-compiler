@@ -1878,7 +1878,8 @@ fn negated_or_not(operator: UnaryOperator, value: &ConstantValue) -> ConstantVal
             | V::Named { .. }
             | V::Constructed { .. }
             | V::Unary(..)
-            | V::Binary(..),
+            | V::Binary(..)
+            | V::RangeLength(..),
         ) => {
             return V::Unary(operator, Box::new(value.clone()));
         }
@@ -2305,7 +2306,9 @@ pub(crate) fn worked_out(value: &ConstantValue) -> bool {
         ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
             worked_out(operand)
         }
-        ConstantValue::Binary(_, left, right) => worked_out(left) && worked_out(right),
+        ConstantValue::Binary(_, left, right) | ConstantValue::RangeLength(left, right) => {
+            worked_out(left) && worked_out(right)
+        }
         ConstantValue::List(values) | ConstantValue::Tuple(values) => values.iter().all(worked_out),
         _ => true,
     }
@@ -2459,6 +2462,15 @@ impl ConstantValue {
                 &[(**left).clone(), (**right).clone()],
                 &[(**other_left).clone(), (**other_right).clone()],
             )),
+            (V::RangeLength(lower, upper), V::RangeLength(other_lower, other_upper)) => {
+                alike(lower.compared(other_lower, floats).and_then(|same| {
+                    if same {
+                        upper.compared(other_upper, floats)
+                    } else {
+                        Some(false)
+                    }
+                }))
+            }
             (
                 V::Constructed {
                     of: left_of,
@@ -2476,7 +2488,8 @@ impl ConstantValue {
                 | V::Named { .. }
                 | V::Constructed { .. }
                 | V::Unary(..)
-                | V::Binary(..),
+                | V::Binary(..)
+                | V::RangeLength(..),
                 _,
             )
             | (
@@ -2485,7 +2498,8 @@ impl ConstantValue {
                 | V::Named { .. }
                 | V::Constructed { .. }
                 | V::Unary(..)
-                | V::Binary(..),
+                | V::Binary(..)
+                | V::RangeLength(..),
             ) => None,
             (V::Int(_), V::Float(_)) | (V::Float(_), V::Int(_)) => None,
             (V::Int(left), V::Int(right)) => Some(left == right),
@@ -2638,6 +2652,7 @@ impl ConstantValue {
             | V::Constructed { .. }
             | V::Unary(..)
             | V::Binary(..)
+            | V::RangeLength(..)
             | V::Unevaluated
             | V::Unknown => return None,
         })
@@ -2758,7 +2773,7 @@ impl ConstantValue {
             ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
                 operand.names_one_of(own)
             }
-            ConstantValue::Binary(_, left, right) => {
+            ConstantValue::Binary(_, left, right) | ConstantValue::RangeLength(left, right) => {
                 left.names_one_of(own) || right.names_one_of(own)
             }
             ConstantValue::List(values) | ConstantValue::Tuple(values) => {
@@ -2766,6 +2781,34 @@ impl ConstantValue {
             }
             _ => false,
         }
+    }
+
+    /// The length of `lower..<upper`, as an i64 list size (EXPR-16,
+    /// EXPR-17, TYPE-10), deferring arithmetic on generic bounds.
+    pub(crate) fn range_length(lower: Self, upper: Self) -> Self {
+        if let (Self::Int(lower), Self::Int(upper)) = (&lower, &upper) {
+            return if upper <= lower {
+                Self::Int(0)
+            } else {
+                upper
+                    .checked_sub(*lower)
+                    .map_or(Self::Unevaluated, Self::Int)
+            };
+        }
+        Self::RangeLength(Box::new(lower), Box::new(upper))
+    }
+
+    /// TYPE-10: a fixed extent is nonnegative. When its written value
+    /// is the range's difference, that difference needs no clamping.
+    pub(crate) fn same_extent(&self, other: &Self) -> bool {
+        let Self::RangeLength(lower, upper) = self else {
+            return false;
+        };
+        if matches!(**lower, Self::Int(0)) && upper.same(other) == Some(true) {
+            return true;
+        }
+        Self::Binary(BinaryOperator::Subtract, upper.clone(), lower.clone()).same(other)
+            == Some(true)
     }
 
     /// This constant with each generic value parameter `given` gives a
@@ -2786,6 +2829,9 @@ impl ConstantValue {
                 &left.substituted(given),
                 &right.substituted(given),
             ),
+            ConstantValue::RangeLength(lower, upper) => {
+                Self::range_length(lower.substituted(given), upper.substituted(given))
+            }
             // TYPE-7: "`Side(1)` is the member whose number is 1, and
             // `Side("buy")` the member of that exact name." One that
             // names none is rejected where it is called, and has no

@@ -6,11 +6,10 @@ use hgl_analyser::hir::{
     Argument, Body, Callee, ExprKind, LocalId, NodeMut, PackInput, PackKey, Stmt,
     walk_statement_nodes_mut,
 };
-use hgl_analyser::{Program, Signature, Type, substitute_within};
+use hgl_analyser::{Program, Signature, Type};
 use hgl_diagnostics::Location;
 
 use crate::canonical::canonical;
-use crate::instances::trace_payload;
 
 /// A concrete parameter's origin in the unexpanded call.
 #[derive(PartialEq, Eq)]
@@ -41,43 +40,19 @@ impl Captures {
         signature: &Signature,
         arguments: &[Argument],
     ) -> Self {
-        let mut entries = Vec::new();
-        let mut counts = vec![0; signature.parameters.len()];
-        let bindings: Vec<_> = signature
-            .generics
-            .iter()
-            .map(|parameter| parameter.at)
-            .zip(callee.generics())
+        let entries = program
+            .call_pack_inputs(callee, signature, arguments)
+            .into_iter()
+            .map(|PackInput { parameter, key, ty }| {
+                (
+                    Slot {
+                        parameter,
+                        pack: Some(key),
+                    },
+                    ty,
+                )
+            })
             .collect();
-        for argument in arguments {
-            let (Some(parameter), Some(pack)) = (argument.parameter, &argument.pack) else {
-                continue;
-            };
-            let declared = &signature.parameters[parameter];
-            let expected = match &declared.ty {
-                Type::Parameter { at, .. } => callee.type_packs().iter().find_map(|given| {
-                    (signature.generics[given.parameter].at == *at)
-                        .then(|| given.types.get(counts[parameter]))
-                        .flatten()
-                }),
-                _ => None,
-            };
-            let ty = expected
-                .cloned()
-                .unwrap_or_else(|| substitute_within(&declared.ty, &bindings));
-            let ty = canonical(program, &ty)
-                .map(|_| ty)
-                .or_else(|| trace_payload(&argument.value.ty))
-                .unwrap_or_else(|| argument.value.ty.clone());
-            counts[parameter] += 1;
-            entries.push((
-                Slot {
-                    parameter,
-                    pack: Some(pack.clone()),
-                },
-                ty,
-            ));
-        }
         Self { entries }
     }
 
@@ -228,38 +203,57 @@ impl Captures {
                 _ => {}
             },
             NodeMut::Expression(expression) => {
-                let mut read = |local: &mut LocalId| {
+                // Each runtime slot and its input local were added together.
+                let entry = |pack, key: &PackKey| {
+                    slots
+                        .iter()
+                        .position(|slot| slot.parameter == pack && slot.pack.as_ref() == Some(key))
+                };
+                let read = |local: &mut LocalId, unsupported: &mut Option<Location>| {
                     if packed.get(*local) == Some(&true) {
                         unsupported.get_or_insert(expression.at);
                     }
                     change(local);
                 };
-                let remap_captures = |callee: &mut Callee| {
+                let mut remap_captures = |callee: &mut Callee| {
                     if let Callee::Anonymous(function) = callee {
-                        function.captures.iter_mut().for_each(change);
+                        for index in 0..function.captures.len() {
+                            let capture = function.captures[index];
+                            function.captures[index] = match function.capture_pack_key(index) {
+                                Some(key) => entry(capture, key).unwrap_or_else(|| {
+                                    unsupported.get_or_insert(expression.at);
+                                    remapped[capture]
+                                }),
+                                None => remapped[capture],
+                            };
+                        }
+                        function.pack_captures.clear();
                     }
                 };
                 match &mut expression.kind {
                     ExprKind::Call { callee, .. } => remap_captures(callee),
                     ExprKind::StaticCallable(callee) => remap_captures(callee),
                     ExprKind::PackEntry { pack, key } => {
-                        // Each runtime slot and its input local were added
-                        // together, so their indices are the same.
-                        if let Some(local) = slots.iter().position(|slot| {
-                            slot.parameter == *pack && slot.pack.as_ref() == Some(key)
-                        }) {
+                        if let Some(local) = entry(*pack, key) {
                             expression.kind = ExprKind::Local(local);
                         } else {
                             unsupported.get_or_insert(expression.at);
                         }
                     }
+                    ExprKind::ListComprehension { binding, .. } => change(binding),
                     ExprKind::Local(local)
                     | ExprKind::EndpointOf(local)
-                    | ExprKind::BoundChild(local) => read(local),
+                    | ExprKind::BoundChild(local) => {
+                        read(local, &mut unsupported);
+                    }
                     ExprKind::Endpoint {
                         inputs: Some(locals),
                         ..
-                    } => locals.iter_mut().for_each(read),
+                    } => {
+                        locals
+                            .iter_mut()
+                            .for_each(|local| read(local, &mut unsupported));
+                    }
                     ExprKind::Eval {
                         inherited: Some(local),
                         ..

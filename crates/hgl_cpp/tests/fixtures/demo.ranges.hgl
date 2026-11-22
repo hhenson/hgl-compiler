@@ -1,0 +1,160 @@
+module demo.ranges
+
+const fn range_sum(first: i64, last: i64) -> i64 {
+    var total = 0
+    for i in first..<last {
+        total = total + i
+    }
+    return total
+}
+
+const fn squares(n: i64) -> list<i64> => [for i in 0..<n: i * i]
+const fn fixed_squares() -> list<i64, 3> => [for i in 1..<4: i * i]
+const fn empty_fixed() -> list<i64, 0> => [for i in 3..<2: i]
+const fn copied(values: list<i64>) -> list<i64> => [for x in values: x + 1]
+
+fn graph_range_sum() -> i64 {
+    var total = 0
+    for i in 1..<4 {
+        total = total + i
+    }
+    return total
+}
+
+fn graph_range(x: i64) -> list<i64, 3> => [for i in 0..<3: x + i]
+fn graph_fixed(xs: list<i64, 3>) -> list<i64, 3> => [for x in xs: x * 2]
+
+test iterate_ranges {
+    assert range_sum(-2, 2) == -2
+    assert range_sum(3, 1) == 0
+    assert range_sum(9223372036854775806, 9223372036854775807) == 9223372036854775806
+}
+
+test collect_value_lists {
+    assert squares(4) == [0, 1, 4, 9]
+    assert fixed_squares()[2] == 9
+    assert empty_fixed() == []
+    assert copied([1, 3]) == [2, 4]
+}
+
+test value_loops_compose {
+    assert eval graph_range_sum() == [6]
+}
+
+test list_loops_compose {
+    assert eval graph_range([2, 4]) == [[2, 3, 4], [4, 5, 6]]
+    assert eval graph_fixed([[1, 2, 3], [4, 5, 6]]) == [[2, 4, 6], [8, 10, 12]]
+}
+
+operator selected_extent<T>(value: T) -> i64
+impl const fn selected_extent<T>(value: T) -> i64 => 5
+impl fn selected_extent(value: i64) -> i64 {
+    when { return value }
+}
+
+fn selected_range_sum<T>(const value: T) -> i64 {
+    var total = 0
+    for index in 0..<selected_extent(value) { total = total + index }
+    return total
+}
+
+operator fixed_items<T>(value: T) -> list<i64, 2>
+impl const fn fixed_items<T>(value: T) -> list<i64, 2> => [2, 3]
+impl fn fixed_items(value: i64) -> list<i64, 2> {
+    when { return [value, value + 1] }
+}
+
+fn selected_list<T>(const value: T) -> list<i64, 2> =>
+    [for item in fixed_items(value): item + 1]
+
+operator appears<T>(value: T) -> bool
+impl const fn appears<T>(value: T) -> bool => false
+impl fn appears(value: i64) -> bool {
+    when { return value > 0 }
+}
+
+fn selected_list_extent<T>(const value: T) -> list<i64, 2> =>
+    [for item in (if appears(value) { fixed_items(value) }): item + 1]
+
+fn inferred_selected_extent<T>(const value: T) -> list<i64, 2> {
+    let selected = [for item in (if appears(value) { fixed_items(value) }): item + 1]
+    return selected
+}
+
+test generic_iterables_settle_after_selection {
+    assert eval selected_range_sum(value: "ordinary") == [10]
+    assert eval selected_list(value: 3) == [[4, 5]]
+    assert eval selected_list_extent(value: 3) == [[4, 5]]
+    assert eval inferred_selected_extent(value: 3) == [[4, 5]]
+}
+
+const fn generic_squares<const N: i64>() -> list<i64, N> => [for i in 0..<N: i * i]
+const fn generic_shift<const First: i64, const Last: i64>() -> list<i64, Last - First> =>
+    [for i in First..<Last: i + 1]
+
+test generic_fixed_extents {
+    assert generic_squares<3>()[2] == 4
+    assert generic_shift<2, 4>()[1] == 4
+}
+
+const fn observe_bounds() -> i64 {
+    var order = 0
+    var total = 0
+    for i in ({
+        order = order * 10 + 1
+        1
+    })..<({
+        order = order * 10 + 2
+        4
+    }) {
+        total = total + i
+    }
+    let items = [for i in ({
+        order = order * 10 + 3
+        3
+    })..<({
+        order = order * 10 + 4
+        2
+    }): i]
+    return if items == [] { order * 10 + total } else { -1 }
+}
+
+test bounds_evaluate_once_in_order {
+    assert observe_bounds() == 12346
+}
+
+# UNIT-7, UNIT-13 and EXPR-17: cold expressions keep their own loop bindings.
+const cold_squares: list<i64> = [for i in 0..<4: i * i]
+const cold_fixed: list<i64, 3> = [for i in 1..<4: i * i]
+
+struct ColdList {
+    entries: list<i64> = [for i in 0..<2: i + 5]
+}
+
+test cold_list_comprehensions {
+    let i = 100
+    let holder = ColdList()
+    assert cold_squares == [0, 1, 4, 9]
+    assert cold_fixed == [1, 4, 9]
+    assert holder.entries == [5, 6]
+    assert i == 100
+}
+
+# EXPR-17 and TYPE-10: the inferred extent fits the written generic size.
+fn spread<N>(x: i64, xs: list<i64, N>) -> list<i64, N> {
+    let ys = [for i in 0..<N: x + i]
+    return ys
+}
+
+fn spread_k<const K: i64>(x: i64) -> list<i64, K> {
+    let ys = [for i in 0..<K: x + i]
+    return ys
+}
+
+fn spread_two(x: i64, xs: list<i64, 2>) -> list<i64, 2> => spread(x, xs)
+fn spread_k3(x: i64) -> list<i64, 3> => spread_k<3>(x)
+
+test inferred_generic_extent_in_composition {
+    assert eval spread_two([1], [[0, 0]]) == [[1, 2]]
+    assert eval spread_k3([1]) == [[1, 2, 3]]
+}

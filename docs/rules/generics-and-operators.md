@@ -117,6 +117,7 @@ analyser: partial
 - The call records the position of the requirement it is (`Callee::Required`), so that a call of the declaration says which candidate it calls
 - "It is judged once, where it is declared, by what its `requires` states, and never again for the generic arguments a call of it gives": a call of an operator in it is admitted where a candidate takes every generic argument the requirements admit, where a named operator requirement states it, or under a membership where each listed type has one (GEN-3), and otherwise the declaration rejects (`operator.no_candidate`, with a note), by name and by symbol, in a value function and a graph: the fragments `less` and `wrap` with no `requires`
 - Each instance selects again for an operator call whose operand types use the enclosing declaration's generic parameters, including when a generic candidate admitted the body. The new selection uses the instance's operands and the operator binding at the call (GEN-5), including private operators, symbols, and calls in nodes and graphs.
+- An instance selects with the call's written or contextual output request. It rechecks uses when the selected result changes type, including inferred locals, calls, indexing and loops. A failed use reports its ordinary diagnostic in the body and names the instance (GEN-7).
 - A generic body's value parameter, including a fixed list's size `N` (GEN-13), is specified to be read as a constant, such as in `0..<N` or an index. #368 tracks ranges.
 - Left: a requirement met by widening an argument, and checking misuse of a type or size parameter as a runtime value
 
@@ -252,7 +253,7 @@ analyser: partial
 
 - Reflects the selected callback's fixed suffix and its supplied positional and named pack entries. A dependent pack keeps the callback parameter keys and the types written at the call.
 - Evaluates `each` over `arg_keys`, constant key membership, and keyed type projection. Candidate requirements can compare bare pack members. A missing member of a known pack reports `pack.name`.
-- A generic call that receives another function parameter checks its pack requirements when the caller supplies the reflected types.
+- A generic call that receives another function parameter checks its pack requirements when the caller supplies the reflected types. The receiver's fixed positions determine which original inputs its pack reflects.
 - An operator callback reflects the public declaration's parameter names and the selected candidate's types (FN-17).
 
 ## GEN-18
