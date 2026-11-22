@@ -532,6 +532,14 @@ transpiler: done
 - Exposes the supplied start, end and length as nullable properties, distinct from the
   bounds resolved for execution.
 
+## CAP-8
+
+transpiler: planned
+
+- The meanings of the clock's, the scheduler's and the logger's members are the engine's, reached
+  through the SDK as CAP-2 to CAP-5 write them. Nothing here cites or checks them yet: the
+  examples of core's comments run them once examples run as tests (#458).
+
 ## CONF-1
 
 runner: planned
