@@ -147,3 +147,52 @@ const marker: i64 = 1
         diagnostics.as_slice()
     );
 }
+
+#[test]
+fn a_fence_must_be_one_complete_test_body() {
+    let input = r#"module demo.docs
+
+/**
+Examples:
+    ~~~hgl
+    }
+    test another {
+        assert true
+    ~~~
+    ~~~hgl
+    let closing_brace = "}"
+    assert closing_brace == "}"
+    ~~~
+*/
+const marker: i64 = 1
+"#;
+    let mut sources = SourceMap::new();
+    let file = sources.add("early-close.hgl", input).unwrap();
+    let mut diagnostics = Diagnostics::new();
+    let limits = Limits::default();
+    let tokens = lex(&sources, file, &mut diagnostics);
+    let parsed = parse(
+        &sources,
+        file,
+        &tokens,
+        Entry::SourceFile,
+        limits,
+        &mut diagnostics,
+    );
+    let examples = parse_examples(&sources, file, &parsed.syntax(), limits, &mut diagnostics);
+    assert_eq!(examples.len(), 1);
+    assert_eq!(examples[0].position, 2);
+    let [diagnostic] = diagnostics.as_slice() else {
+        panic!("{diagnostics:?}");
+    };
+    assert!(diagnostics.has_errors());
+    assert_eq!(diagnostic.primary.file, file);
+    assert_eq!(sources.file(file).slice(diagnostic.primary.span), "}");
+    assert_eq!(
+        sources
+            .file(file)
+            .line_col(diagnostic.primary.span.start)
+            .line,
+        6
+    );
+}

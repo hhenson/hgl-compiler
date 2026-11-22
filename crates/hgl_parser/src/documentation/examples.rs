@@ -1,14 +1,14 @@
 //! SDOC-9: reads runnable code fences through the ordinary named-test
 //! grammar. Their syntax keeps the byte positions in the source comment.
 
-use hgl_diagnostics::{Diagnostics, Location};
+use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_lexer::{lex, literal::validate_literals};
 use hgl_source::{FileId, SourceFile, SourceMap, Span};
 use rowan::{GreenNode, GreenNodeBuilder, GreenToken, Language, NodeOrToken, WalkEvent};
 
 use crate::documentation::{Comment, Example, attached};
 use crate::tree::HglLanguage;
-use crate::{Entry, HasSpan, Limits, SyntaxKind, SyntaxNode, parse};
+use crate::{Entry, HasSpan, Limits, SyntaxKind, SyntaxNode, codes, parse};
 
 /// A runnable fence and the declaration whose comment owns it.
 #[derive(Debug, Clone)]
@@ -187,6 +187,27 @@ fn read_test(
         .syntax()
         .children()
         .find(|node| node.kind() == SyntaxKind::TestDecl)?;
+    let mut closing = test.last_token()?;
+    while closing.kind().is_trivia() {
+        closing = closing.prev_token()?;
+    }
+    // The test must close with the wrapper's brace. An earlier one can
+    // leave a second, syntactically valid declaration in the fragment.
+    let wrapper_brace = fragment.file(fragment_file).text().len() - 1;
+    if closing.kind() != SyntaxKind::RBrace || closing.span().start as usize != wrapper_brace {
+        if !reports.has_errors() {
+            diagnostics.emit(
+                Diagnostic::error(
+                    Category::Parse,
+                    Code::Catalogued(codes::SYNTAX_EXPECTED_TOKEN),
+                    Location::new(file, positions.span(closing.span())),
+                    "unexpected closing brace before the end of the documentation example",
+                )
+                .with_rule("SDOC-9"),
+            );
+        }
+        return None;
+    }
     Some((start, at_source_positions(&test, &positions)))
 }
 
