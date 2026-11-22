@@ -882,6 +882,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
     // application is read again with each written in it, and the
     // program checked again: each is held to what the application
     // writes is.
+    let mut original_source = None;
     if !arguments.arguments.is_empty() || !arguments.config.is_empty() {
         let written = replace::EntryCall::of(&program, &chosen);
         let written_as = written
@@ -895,7 +896,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
         // reads as it did. Its file may have no name for one of them.
         let inferred = replace::inferred_generics(&parsed, &program, &chosen);
         let explicit = inferred.as_ref().filter(|generics| {
-            let Ok((file, text)) = replace::replaced(
+            let Ok((file, text, _)) = replace::replaced(
                 &sources,
                 &parsed,
                 &program,
@@ -919,7 +920,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
             let read = hgl_analyser::analyse(&files, &mut found);
             !found.has_errors() && replace::EntryCall::of(&read, &chosen) == written
         });
-        let (file, text) = match replace::replaced(
+        let (file, text, edits) = match replace::replaced(
             &sources,
             &parsed,
             &program,
@@ -946,6 +947,9 @@ fn run(arguments: &RunArgs) -> ExitCode {
             Err(status) => return status,
         };
         program = hgl_analyser::analyse(&parsed, &mut found);
+        if arguments.debug_build.is_some() {
+            original_source = Some((sources.file(file).clone(), edits));
+        }
         sources = read_again;
         if found.has_errors() {
             if arguments.debug_build.is_none() {
@@ -988,6 +992,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
             arguments.keep.as_deref(),
             &arguments.roots,
             arguments.debug_build.as_deref(),
+            original_source.as_ref(),
         ),
     }
 }

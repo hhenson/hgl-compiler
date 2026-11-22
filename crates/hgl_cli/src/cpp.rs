@@ -474,17 +474,25 @@ pub(super) fn run(
     keep: Option<&Path>,
     roots: &[PathBuf],
     debug_build: Option<&Path>,
+    original_source: Option<&(hgl_source::SourceFile, super::replace::SourceEdits)>,
 ) -> ExitCode {
     let mut unwritten = Diagnostics::new();
-    let file_name = |at: Location| {
+    let position = |at: Location, line: usize| {
         let name = sources.file(at.file).name();
-        if debug_build.is_some() && !name.starts_with('<') {
+        let line = match original_source {
+            Some((original, edits)) if original.name() == name => {
+                original.line_index(edits.original_offset(at.span.start)?) + 1
+            }
+            _ => line,
+        };
+        let path = if debug_build.is_some() && !name.starts_with('<') {
             std::path::absolute(name).map_or_else(|_| name.to_string(), |p| p.display().to_string())
         } else {
             name.to_string()
-        }
+        };
+        Some((path, line))
     };
-    let output = hgl_cpp::transpile(program, &file_name, &mut unwritten);
+    let output = hgl_cpp::transpile_with_positions(program, &position, &mut unwritten);
     let name = hgl_cpp::TARGET;
     let Some(application) = output
         .applications

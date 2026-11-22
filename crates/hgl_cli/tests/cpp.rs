@@ -2372,6 +2372,64 @@ fn builds_an_isolated_debug_application_without_running_it() {
     );
 }
 
+/// RUN-2, RUN-6: inserting a configuration or replacing a multiline one
+/// keeps the native bounds and entry call on the eval line the user sees.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn debug_overrides_keep_the_on_disk_eval_line() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("debug overrides");
+    write(&root, "ticks.hgl", TICKS);
+    for inject in ["", "inject run_config{\n    length: 2s\n}\n"] {
+        let app = format!(
+            "application demo.backtest\nuse demo.ticks::{{doubled}}\n{inject}eval doubled(values: [1, 2])\n"
+        );
+        let file = write(&root, "entry.hgl", &app);
+        let result = hgl_in(
+            &[
+                "run",
+                &argument(&root),
+                "--config",
+                "length=4s",
+                "--arg",
+                "values=[3]",
+                "--debug-build",
+                &argument(&root.join("builds")),
+            ],
+            &[],
+            &[],
+        );
+        assert!(result.status.success(), "{}", text(&result.stderr));
+        let manifest: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        let executable = std::path::Path::new(manifest["executable"].as_str().unwrap());
+        let build = executable.parent().unwrap().parent().unwrap();
+        let unit = fs::read_to_string(build.join("modules/mod-demo-backtest.cpp")).unwrap();
+        let eval_line = app.lines().count();
+        assert!(unit.contains(&format!("demo.backtest, line {eval_line}: `eval`")));
+        let directive = format!("#line {eval_line} {file:?}");
+        let preceding = |code: &str| {
+            unit.lines()
+                .zip(unit.lines().skip(1))
+                .find_map(|(before, line)| line.contains(code).then_some(before))
+                .unwrap()
+        };
+        assert_eq!(preceding("::Bounds bounds_ ="), directive);
+        assert_eq!(preceding("::record::"), directive);
+        let config = preceding("::RunConfig run_config =");
+        if inject.is_empty() {
+            assert!(
+                config.ends_with(r#""modules/mod-demo-backtest.cpp""#),
+                "{config}"
+            );
+        } else {
+            assert_eq!(config, format!("#line 3 {file:?}"));
+        }
+        assert_eq!(fs::read_to_string(file).unwrap(), app);
+    }
+}
+
 /// A rejected debug build has no launch description on stdout.
 #[test]
 fn a_rejected_debug_application_has_no_launch_description() {

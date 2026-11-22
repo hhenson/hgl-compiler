@@ -142,7 +142,7 @@ pub(crate) fn module(
     program: &Program,
     index: usize,
     provides: &dyn Fn(&str) -> bool,
-    file_name: Option<crate::FileName>,
+    position: Option<crate::SourcePosition>,
     instances: &Instances,
     readers: &readers::Readers,
     diagnostics: &mut Diagnostics,
@@ -151,7 +151,7 @@ pub(crate) fn module(
         program,
         module: index,
         provides,
-        file_name,
+        position,
         lines: Vec::new(),
         instances,
         readers,
@@ -199,10 +199,10 @@ struct Emitter<'a> {
     module: usize,
     /// Whether the runtime library defines a native, by its name.
     provides: &'a dyn Fn(&str) -> bool,
-    /// The name of the file a place is in, where the driver gives it: the
+    /// The source position to show, where the driver gives one: the
     /// generated code then sets the HGL file and line of each statement
     /// with `#line` ([`Emitter::line_directive`]).
-    file_name: Option<crate::FileName<'a>>,
+    position: Option<crate::SourcePosition<'a>>,
     /// Where each line starts in each file a directive was written for: a
     /// place in the file, by which it is told apart, and the offsets.
     lines: Vec<(Location, Vec<usize>)>,
@@ -301,9 +301,12 @@ impl Emitter<'_> {
     /// again. `None` where the driver gave no file names, or `at` is in no
     /// file of the program.
     fn line_directive(&mut self, at: Location) -> Option<String> {
-        let file_name = self.file_name?;
+        let position = self.position?;
         let line = self.hgl_line(at)?;
-        Some(format!("#line {line} {}\n", string(&file_name(at))))
+        Some(match position(at, line) {
+            Some((name, line)) => format!("#line {line} {}\n", string(&name)),
+            None => format!("{RESTORE}\n"),
+        })
     }
 
     /// The line, counted from 1, that `at` is on in its file, read from the
@@ -361,7 +364,8 @@ pub(crate) fn stamped(directive: &str, text: &str) -> String {
     let mut out = String::with_capacity(text.len() * 2);
     let mut after_directive = false;
     for line in text.lines() {
-        let is_directive = line.trim_start().starts_with("#line ");
+        let trimmed = line.trim_start();
+        let is_directive = trimmed.starts_with("#line ") || trimmed == RESTORE;
         if !is_directive && !after_directive {
             out.push_str(directive);
         }

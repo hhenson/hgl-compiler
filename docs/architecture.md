@@ -2463,3 +2463,5 @@ the debugger. Its console mirrors the results protocol, including each
 publication. The debugger owns process termination and may close stdin.
 Ordinary application runs keep their host stop pipe. HGL statements use the
 existing C++ `#line` mappings with absolute source paths in debug builds.
+With `--arg` or `--config`, breakpoints use the original file and line. A
+configuration inserted by the driver has only a generated C++ location.
