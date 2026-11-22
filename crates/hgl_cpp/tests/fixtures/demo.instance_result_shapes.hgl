@@ -1,0 +1,58 @@
+module demo.instance_result_shapes
+
+# GEN-5, GEN-7: the instance selects with its inputs. The selected list
+# extent governs the indexed, whole and iterated uses in the body.
+operator items_of<T, C>(value: T) -> C
+impl const fn items_of<T>(value: T) -> list<i64, 2> => [1, 2]
+impl const fn items_of(value: i64) -> list<i64, 3> => [value, value + 1, value + 2]
+
+operator extent_of<C>(items: C) -> i64
+impl const fn extent_of(items: list<i64, 2>) -> i64 => 2
+impl const fn extent_of(items: list<i64, 3>) -> i64 => 3
+
+const fn first_of<T>(value: T) -> i64 => items_of(value)[0]
+const fn first_two<T>(value: T) -> list<i64, 2> => items_of(value)
+const fn extent<T>(value: T) -> i64 {
+    let items = items_of(value)
+    return extent_of(items)
+}
+const fn digits<T>(value: T) -> i64 {
+    var total = 0
+    for item in items_of(value) { total = total * 10 + item }
+    return total
+}
+const fn scaled<T>(value: T) -> i64 {
+    let values = [for item in items_of(value): item * 10]
+    return extent_of(values) + values[0]
+}
+fn first_in_node<T>(value: T) -> i64 {
+    when { return items_of(value)[0] }
+}
+fn first_in_graph<T>(value: T) -> i64 => items_of(value)[0]
+
+test direct { assert items_of(5) == [5, 6, 7] }
+test indexed {
+    assert first_of(5) == 5
+    assert first_of("string") == 1
+}
+test whole {
+    assert extent(5) == 3
+    assert extent("string") == 2
+    assert first_two(5) == [1, 2]
+}
+test looped {
+    assert digits(5) == 567
+    assert digits("string") == 12
+}
+test built_list {
+    assert scaled(5) == 53
+    assert scaled("string") == 12
+}
+test node {
+    assert eval first_in_node(value: [5, 6]) == [5, 6]
+    assert eval first_in_node(value: ["s", "t"]) == [1, 1]
+}
+test graph {
+    assert eval first_in_graph(value: [5, 6]) == [5, 6]
+    assert eval first_in_graph(value: ["s", "t"]) == [1, 1]
+}

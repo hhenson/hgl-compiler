@@ -1786,19 +1786,19 @@ impl<'a> Typer<'a> {
                 given
             })
             .collect();
-        // ERR-3 checks the selected result. A tag test does not supply
-        // the provisional result type as the operator's expected place.
+        // GEN-7: select with the instance's inputs and the actual output
+        // request. The provisional candidate's result checked the generic
+        // body; it was never an output requested by the call.
         let place = selecting
             .place
             .as_ref()
             .or_else(|| {
-                if let Some(read) = &selecting.result_read {
-                    read.expected.as_ref().map(|(ty, _)| ty)
-                } else if selecting.tag_test.is_none() {
-                    selecting.result.as_ref()
-                } else {
-                    None
-                }
+                selecting
+                    .result_read
+                    .as_ref()?
+                    .expected
+                    .as_ref()
+                    .map(|(ty, _)| ty)
             })
             .map(in_place);
         let wanted = Wanted {
@@ -1891,13 +1891,11 @@ impl<'a> Typer<'a> {
             }
             return self.compared_with_null(value, Some(&scope));
         }
-        if let Some(test) = call.tag_test
-            && (self.check_tag_test(test.success, &value.ty, test.at)
-                || !test.keeps_result_type && matches!(value.ty, Type::Result { .. }))
-        {
+        if let Some(test) = call.tag_test {
+            self.check_tag_test(test.success, &value.ty, test.at);
             return value;
         }
-        if let Some(expected) = call.result.as_ref().map(in_place)
+        if let Some(expected) = call.place.as_ref().map(in_place)
             && expected != value.ty
         {
             return self.fit(
@@ -2216,23 +2214,24 @@ pub(crate) fn in_instance(signature: &Signature, map: &[(Location, &Argument)]) 
 /// each call so put, for the instance's arguments to be put in place in
 /// what it holds. A call that selects no one candidate is left with no
 /// callee; the analyser has reported it (`instances_hold`).
+/// Returns whether a call changed the result type used to check its uses.
 pub(crate) fn select_in_instance(
     program: &crate::program::Program,
     (module, declaration): (usize, usize),
     generics: &[Argument],
     body: &mut hir::Body,
     after: &dyn Fn(&mut Expr),
-) {
+) -> bool {
     let unit = &program.modules[module];
     let Some(calls) = unit
         .selecting
         .get(declaration)
         .filter(|calls| !calls.is_empty())
     else {
-        return;
+        return false;
     };
     let Some(Detail::Callable(declared)) = unit.details.get(declaration) else {
-        return;
+        return false;
     };
     let map: Vec<(Location, &Argument)> = declared
         .generics
@@ -2269,6 +2268,7 @@ pub(crate) fn select_in_instance(
     // value where a call reads it (EXPR-3).
     typer.use_instance_locals(body.locals.clone());
     let mut retagged = HashSet::new();
+    let mut result_changed = false;
     hir::walk_statements_mut(&mut body.statements, &mut |expression| {
         // A source read of the provisional result can be obsolete.
         // Replace it with the selected call in the actual place's form.
@@ -2321,7 +2321,9 @@ pub(crate) fn select_in_instance(
             at: expression.at,
             category: expression.category,
         };
-        *expression = typer.fit_selected_result(call, selected, |ty| substitute_within(ty, &map));
+        let selected = typer.fit_selected_result(call, selected, |ty| substitute_within(ty, &map));
+        result_changed |= call.result.is_some() && expression.ty != selected.ty;
+        *expression = selected;
         after(expression);
         if let Some(test) = call.tag_test
             && !test.keeps_result_type
@@ -2345,6 +2347,7 @@ pub(crate) fn select_in_instance(
         });
     }
     body.locals = typer.locals;
+    result_changed
 }
 
 /// One argument of an operator's call, before a candidate is selected.

@@ -119,6 +119,50 @@ fn first_instance(checked: &Checked, name: &str) -> (Signature, Body) {
         .expect("the callee has a body")
 }
 
+/// GEN-7: a selected result reaches inferred bindings and calls that
+/// use the binding's whole type.
+#[test]
+fn an_instance_uses_the_selected_candidates_result() {
+    let checked = module(concat!(
+        "operator items<T, C>(value: T) -> C\n",
+        "impl const fn items<T>(value: T) -> list<i64, 2> => [1, 2]\n",
+        "impl const fn items(value: i64) -> list<i64, 3> => [1, 2, 3]\n",
+        "operator count<C>(values: C) -> i64\n",
+        "impl const fn count(values: list<i64, 2>) -> i64 => 2\n",
+        "impl const fn count(values: list<i64, 3>) -> i64 => 3\n",
+        "const fn size<T>(value: T) -> i64 {\n",
+        "    let values = items(value)\n",
+        "    return count(values)\n",
+        "}\n",
+        "const fn concrete() -> i64 => size(5)\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    let (_, instance) = first_instance(&checked, "concrete");
+    assert_eq!(instance.locals[1].ty.to_string(), "list<i64, 3>");
+    assert_eq!(
+        called(&checked, &instance),
+        ["items(i64)", "count(list<i64, 3>)"]
+    );
+}
+
+/// GEN-7 and EXPR-7: when the instance chooses a set, its bracket read
+/// rejects where the body calls the operator and names the instance.
+#[test]
+fn an_instance_rejects_an_index_into_its_selected_set() {
+    let checked = module(concat!(
+        "operator items<T, C>(value: T) -> C\n",
+        "impl const fn items<T>(value: T) -> list<i64, 2> => [1, 2]\n",
+        "impl const fn items(value: bool) -> set<i64> => [3]\n",
+        "const fn first<T>(value: T) -> i64 => items(value)[0]\n",
+        "const fn concrete() -> i64 => first(true)\n",
+    ));
+    assert!(checked.rejected, "{}", checked.report);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/type.mismatch");
+    assert_eq!(checked.findings[0].rule, "EXPR-7");
+    assert!(checked.report.contains("first<bool>"), "{}", checked.report);
+}
+
 /// GEN-2: a call resolves each generic parameter of its callee, and
 /// the instance has what each stands for in place: in the signature, in
 /// the locals, and in each expression's type. GEN-16: an operation the
