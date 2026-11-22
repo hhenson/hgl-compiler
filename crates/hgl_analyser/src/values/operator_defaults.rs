@@ -224,6 +224,9 @@ fn check_declared_defaults(
     let Some(Detail::Callable(signature)) = unit.details.get(owner.1) else {
         return;
     };
+    if !signature.parameters.iter().any(dependent_default) {
+        return;
+    }
     let Some(defaults) = unit.defaults.get(owner.1) else {
         return;
     };
