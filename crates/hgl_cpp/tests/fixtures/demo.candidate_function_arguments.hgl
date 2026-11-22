@@ -150,8 +150,45 @@ fn unrequested_composed_result(x: i64) -> bool {
     return negative < 0 && positive > 5
 }
 
+fn generic_graph_apply<P, R>(f: fn(P) -> R, x: P) -> R => f(x)
+
+fn unrequested_generic_graph_result(x: i64) -> bool {
+    let value = generic_graph_apply(fn(n) => n * 10, x)
+    return value > 5
+}
+
 test unrequested_graph_callback_results {
     assert eval unrequested_composed_result(x: [1]) == [true]
+    assert eval unrequested_generic_graph_result(x: [1]) == [true]
+}
+
+# FN-17 and GEN-2: a plain generic function learns its output from the
+# same callback after a later argument gives the callback its input type.
+const fn generic_apply<P, R>(f: const fn(P) -> R, x: P) -> R => f(x)
+const fn identity<T>(x: T) -> T => x
+
+test unrequested_plain_function_results {
+    let negative = generic_apply(neg_, 3)
+    assert negative == -3
+    assert generic_apply(fn(x) => x * 10, 3) == 30
+    assert generic_apply(convert<f64>, 3) == 3.0
+    assert generic_apply(identity, 3) == 3
+}
+
+operator apply_result<P, R, C>(f: const fn(P) -> R, x: C) -> R
+impl const fn apply_result<P, R>(f: const fn(P) -> R, x: P) -> R => f(x)
+
+test a_callback_result_admits_widened_return_literals {
+    let ordinary = generic_apply(fn(x) {
+        if x > 0 { return 2.5 }
+        return 1
+    }, 1)
+    let operator_value = apply_result(fn(x) {
+        if x > 0 { return 1 }
+        return 2.5
+    }, 1)
+    assert ordinary == 2.5
+    assert operator_value == 1.0
 }
 
 # GEN-18: the failed law makes this call have no candidate even when

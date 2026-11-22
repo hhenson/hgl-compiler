@@ -239,6 +239,7 @@ analyser: partial
 - When a graph instance completes a call's parameter types, an anonymous callback takes the completed template in its lexical scope. Its synthesized capture inputs are separate from the written arguments (GEN-2).
 - Match a declared function or an operator's selected candidate, infer generic types in either direction, and accept explicit generic arguments on function and operator references. An operator reference uses the public signature, with the written arguments and the template together resolving its generic parameters. Static parameters may be called or passed onward. They hold no runtime value.
 - A named operator call reads a fixed callback against each candidate's function template. The other arguments can resolve its input types, its template sets an anonymous callback's phase, and the supplied function can resolve its result type (GEN-2, GEN-6).
+- An anonymous callback is read against the result type its template already knows, including one a later argument resolved (GEN-2).
 - Applies the proposed plain-parameter restriction to the fixed inputs. Keeps the remaining callback slots in declared order with their modes, defaults and pack shape.
 - A reflected operator callback selects from the resolved parameter types, including the dependent arguments. With no resolved parameter type, it reports `generic.unresolved` even for a lone candidate (FN-17).
 - A reflected anonymous parameter beyond the fixed template needs a written type. Arguments of a homogeneous callback pack can determine its generic element type.

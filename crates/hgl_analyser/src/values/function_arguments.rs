@@ -10,7 +10,7 @@ use super::candidates::{
 };
 use super::constants::generic_default;
 use super::dependent_packs::PackTypes;
-use super::fit::whole;
+use super::fit::{accepts_float, is_integer_literal, whole};
 use super::forwarded_packs::spread_operands;
 use super::inference::{ExplicitGenerics, infer, mentions, pack_bounds, type_pack};
 use crate::declared::{agree, names_parameter, substitute_within};
@@ -831,7 +831,14 @@ impl<'a> Typer<'a> {
                 }) = node
                 {
                     if let Some(earlier) = &mut inferred {
-                        earlier.ty = self.one_type(earlier, &mut value.clone());
+                        let mut value = value.clone();
+                        if is_integer_literal(&value) && accepts_float(&earlier.ty) {
+                            value = self.fit(value, &earlier.ty, "the function's result");
+                        } else if is_integer_literal(earlier) && accepts_float(&value.ty) {
+                            *earlier =
+                                self.fit(earlier.clone(), &value.ty, "the function's result");
+                        }
+                        earlier.ty = self.one_type(earlier, &mut value);
                     } else {
                         inferred = Some(value.clone());
                     }
