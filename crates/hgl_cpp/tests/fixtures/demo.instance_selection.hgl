@@ -146,6 +146,25 @@ fn inferred_list<T>(const value: T) -> i64 {
     return list_score(values)
 }
 
+# GEN-12: the earlier argument binds U after the condition settles.
+const fn first_of<U>(a: U, b: U) -> U => a
+
+fn earlier_argument<T>(const value: T) -> f64 {
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    let copied = first_of(chosen, 0)
+    return copied
+}
+
+# ERR-15: a nullable argument can determine the result's success type.
+const fn first_result<U>(a: U, b: U) -> result<U, error> => ok(a)
+const fn no_sample() -> f64? => null
+
+fn nullable_argument_result<T>(const value: T) -> bool {
+    let chosen = if live_helper(value) < 0 { 2.5 }
+    let copied: f64? = first_result(chosen, no_sample())
+    return copied == null
+}
+
 # EXPR-7 and ERR-12: projections carry the element type and read a
 # nullable base before indexing when settlement requires that read.
 fn indexed_elements<T>(const value: T) -> i64 {
@@ -510,6 +529,9 @@ test an_instance_settles_its_graph_conditions {
     assert raises("value.null") { eval contextual_choice(value: "s") }
     assert eval inferred_list(value: 3) == [2]
     assert eval inferred_list(value: "s") == [-1]
+    assert eval earlier_argument(value: 3) == [2.5]
+    assert eval earlier_argument(value: 0) == []
+    assert eval nullable_argument_result(value: "s") == [true]
     assert eval widened_list(value: "s") == [6.5]
     assert eval indexed_elements(value: 3) == [5]
     assert eval indexed_elements(value: "s") == [-2]
