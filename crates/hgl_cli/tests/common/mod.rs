@@ -65,23 +65,6 @@ pub fn write(directory: &Path, name: &str, text: &str) -> String {
     path.display().to_string()
 }
 
-/// Publishes a complete executable fixture at `path`. Opening the final
-/// path for writing can race with a process that executes it. Stage the
-/// bytes and permissions next to it, close the writer, then rename.
-#[cfg(unix)]
-pub fn publish_executable(
-    path: &Path,
-    mut bytes: impl std::io::Read,
-    permissions: fs::Permissions,
-) {
-    let parent = path.parent().unwrap();
-    fs::create_dir_all(parent).unwrap();
-    let mut staged = tempfile::NamedTempFile::new_in(parent).unwrap();
-    std::io::copy(&mut bytes, staged.as_file_mut()).unwrap();
-    staged.as_file().set_permissions(permissions).unwrap();
-    staged.into_temp_path().persist(path).unwrap();
-}
-
 /// A path as an argument.
 pub fn argument(path: &Path) -> String {
     path.display().to_string()

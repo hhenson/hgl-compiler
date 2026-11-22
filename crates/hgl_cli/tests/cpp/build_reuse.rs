@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use walkdir::WalkDir;
 
-use super::common::publish_executable;
+use super::executable::publish_executable;
 use super::{BACKTEST, CALC, TICKS, argument, scratch, sdk_named, text, write};
 
 const SOURCE: &str = "module demo.stamped\n\

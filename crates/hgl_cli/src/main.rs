@@ -43,6 +43,9 @@ mod check_json;
 mod cpp;
 mod doc;
 mod replace;
+#[cfg(all(test, unix))]
+#[path = "../tests/common/executable.rs"]
+mod test_executable;
 mod test_paths;
 
 use std::collections::HashMap;
