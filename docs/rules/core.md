@@ -830,6 +830,18 @@ transpiler: planned
 
 - #370.
 
+## OUT-1
+
+transpiler: planned
+
+- #434.
+
+## OUT-2
+
+transpiler: planned
+
+- #434.
+
 ## FMT-1
 
 analyser: planned
@@ -861,6 +873,28 @@ transpiler: planned
 - #434.
 
 ## FMT-6
+
+transpiler: planned
+
+- #434.
+
+## FMT-7
+
+transpiler: planned
+
+- #434.
+
+## FMT-8
+
+transpiler: planned
+
+- #434.
+
+## FMT-9
+
+analyser: planned
+
+- #434. The value-code rejections and marked argument behavior are proposed.
 
 transpiler: planned
 
@@ -903,6 +937,18 @@ transpiler: planned
 - #434.
 
 ## DBG-7
+
+transpiler: planned
+
+- #434.
+
+## DBG-8
+
+transpiler: planned
+
+- #434.
+
+## DBG-9
 
 transpiler: planned
 
