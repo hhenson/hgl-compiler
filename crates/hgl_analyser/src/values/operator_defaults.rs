@@ -117,10 +117,22 @@ impl Defaults {
 /// the selected configuration of a required call.
 pub(super) fn selects_configuration(program: &Program, unit: &Module, declaration: usize) -> bool {
     let has_default = |operator: (usize, usize)| {
-        matches!(program.modules[operator.0].details.get(operator.1),
-        Some(Detail::Callable(signature)) if signature.parameters.iter().any(|parameter| {
-            configuration_default(parameter) || dependent_default(parameter)
-        }))
+        let unit = &program.modules[operator.0];
+        let Some(Detail::Callable(signature)) = unit.details.get(operator.1) else {
+            return false;
+        };
+        signature.parameters.iter().any(configuration_default)
+            || unit.defaults.get(operator.1).is_some_and(|defaults| {
+                signature
+                    .parameters
+                    .iter()
+                    .zip(defaults)
+                    .any(|(parameter, default)| {
+                        default
+                            .as_ref()
+                            .is_some_and(|default| dependent_default(parameter, default))
+                    })
+            })
     };
     if unit.selecting.get(declaration).is_some_and(|calls| {
         calls
@@ -224,7 +236,11 @@ fn check_declared_defaults(
     let Some(Detail::Callable(signature)) = unit.details.get(owner.1) else {
         return;
     };
-    if !signature.parameters.iter().any(dependent_default) {
+    if !signature
+        .parameters
+        .iter()
+        .any(|parameter| parameter.has_default)
+    {
         return;
     }
     let Some(defaults) = unit.defaults.get(owner.1) else {
@@ -241,7 +257,7 @@ fn check_declared_defaults(
         let Some(default) = default else {
             continue;
         };
-        if !dependent_default(parameter)
+        if !dependent_default(parameter, default)
             || supplied(slot)
             || parameter.configuration
                 && program
@@ -355,6 +371,11 @@ impl Defaults {
         let mut reports = Diagnostics::new();
         let specialized =
             program.specialize_parameter_default(default, owner, generics, parameter, &mut reports);
+        if !reports.has_errors() && reads_generic_value(default) {
+            with_configuration_typer(program, owner, &mut reports, |typer| {
+                typer.check_default_evaluation(default.value.at, parameter, generics);
+            });
+        }
         for report in reports.as_slice() {
             if !diagnostics.as_slice().contains(report) {
                 diagnostics.emit(report.clone());
@@ -368,9 +389,18 @@ impl Defaults {
     }
 }
 
-/// A declared default whose expected type needs generic substitution.
-fn dependent_default(parameter: &Parameter) -> bool {
-    parameter.has_default && names_parameter(&parameter.ty)
+/// An omitted default can depend on generic arguments through its type
+/// or through a value read by the expression.
+fn dependent_default(parameter: &Parameter, default: &hir::DefaultExpr) -> bool {
+    names_parameter(&parameter.ty) || reads_generic_value(default)
+}
+
+fn reads_generic_value(default: &hir::DefaultExpr) -> bool {
+    let mut found = false;
+    default
+        .value
+        .walk(&mut |value| found |= matches!(value.kind, ExprKind::GenericValue { .. }));
+    found
 }
 
 /// A configuration parameter with a default of its own.

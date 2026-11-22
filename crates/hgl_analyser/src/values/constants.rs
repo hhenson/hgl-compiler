@@ -108,17 +108,21 @@ impl<'a> Typer<'a> {
                         .typed_in(self.file, &written, Some(expected))
                         .is_ok_and(|constant| constant.evaluation_failed())
                 {
-                    self.diagnostics.emit(local_error(
-                        Category::Type,
-                        codes::local::DEFAULT_CONSTANT_FAILURE,
-                        value.at,
-                        format!("evaluating the default of `{}` fails", parameter.name),
-                        "UNIT-8",
-                    ));
+                    self.report_failed_default(value.at, parameter);
                 }
                 Some(self.take_default(value))
             })
             .collect()
+    }
+
+    fn report_failed_default(&mut self, at: Location, parameter: &Parameter) {
+        self.diagnostics.emit(local_error(
+            Category::Type,
+            codes::local::DEFAULT_CONSTANT_FAILURE,
+            at,
+            format!("evaluating the default of `{}` fails", parameter.name),
+            "UNIT-8",
+        ));
     }
 
     /// A window of nullable values also accepts the delta of an arrival,
@@ -239,7 +243,7 @@ impl<'a> Typer<'a> {
                     _ => None,
                 })
         };
-        self.typed_in_scope(file, node, expected, &parameter)
+        self.typed_in_scope(file, node, expected, &parameter, &[])
     }
 
     fn typed_in_scope(
@@ -248,6 +252,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         expected: Option<&Type>,
         parameter: &dyn Fn(Location) -> Option<Type>,
+        arguments: &[(Location, &Argument)],
     ) -> Result<Typed, Fault> {
         let binding = |file: FileId, offset: u32| self.binding_at(file, offset);
         let scope = Scope {
@@ -255,9 +260,43 @@ impl<'a> Typer<'a> {
             file,
             binding: &binding,
             parameter,
+            arguments,
             constants: &self.constants,
         };
         crate::constant::typed(node, expected, &scope)
+    }
+
+    /// UNIT-8: a generic argument can make an omitted default's evaluation
+    /// fail, including an operand that a short-circuiting guard now reaches.
+    pub(super) fn check_default_evaluation(
+        &mut self,
+        at: Location,
+        parameter: &Parameter,
+        arguments: &[Argument],
+    ) {
+        let Some(written) = self.node_at(at) else {
+            return;
+        };
+        let generics = &self.signature.generics;
+        let map: Vec<_> = generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(arguments)
+            .collect();
+        let generic_type = |at: Location| {
+            let generic = generics.iter().find(|generic| generic.at == at)?;
+            match &generic.kind {
+                GenericKind::Value(ty) => Some(substitute_within(ty, &map)),
+                _ => None,
+            }
+        };
+        let expected = parameter_default_type(&parameter.ty, written_null(&written));
+        if self
+            .typed_in_scope(at.file, &written, Some(expected), &generic_type, &map)
+            .is_ok_and(|constant| constant.evaluation_failed())
+        {
+            self.report_failed_default(at, parameter);
+        }
     }
 
     /// What the compile-time constant `node`, written in `file`, comes
@@ -297,7 +336,7 @@ impl<'a> Typer<'a> {
             }
         };
         let expected = whole(expected).then_some(expected);
-        let read = self.typed_in_scope(file, node, expected, &parameter)?;
+        let read = self.typed_in_scope(file, node, expected, &parameter, &[])?;
         let value = crate::constant::fit(read, expected, self.program)?;
         Ok(value.substituted(
             &|at| match map.iter().find(|(declared, _)| *declared == at)?.1 {

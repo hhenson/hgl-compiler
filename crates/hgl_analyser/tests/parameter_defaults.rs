@@ -20,6 +20,38 @@ fn a_known_failure_in_a_default_is_rejected() {
     );
 }
 
+/// EXPR-6: a generic condition decides whether the right operand is
+/// evaluated when a concrete call uses the default.
+#[test]
+fn a_short_circuiting_default_is_checked_at_its_use() {
+    let defaults = concat!(
+        "const fn either<const Skip: bool>(value: bool = Skip || (1 // 0 == 0)) -> bool => value\n",
+        "const fn both<const Run: bool>(value: bool = Run && (1 // 0 == 0)) -> bool => value\n",
+        "const fn forward<const Skip: bool>() -> bool => either<Skip>()\n",
+    );
+    let good = module(&format!(
+        "{defaults}\
+         const fn skips() -> bool => either<true>() || both<false>()\n\
+         const fn supplied() -> bool => either<false>(true)\n\
+         const fn skips_forwarded() -> bool => forward<true>()\n",
+    ));
+    assert!(good.summary().is_empty(), "{}", good.report);
+    let bad = module(&format!(
+        "{defaults}\
+         const fn fails_and() -> bool => both<true>()\n\
+         const fn fails_forwarded() -> bool => forward<false>()\n",
+    ));
+    assert_eq!(
+        bad.summary(),
+        [
+            "m.hgl:2:49 local:type/default.constant_failure UNIT-8",
+            "m.hgl:3:46 local:type/default.constant_failure UNIT-8",
+        ],
+        "{}",
+        bad.report
+    );
+}
+
 /// UNIT-8: a constant of a window publishes an arrival (TYPE-11),
 /// and one of an atomic input publishes its whole payload (TYPE-9).
 #[test]
