@@ -227,6 +227,17 @@ impl Captures {
                 match &mut expression.kind {
                     ExprKind::Call { callee, .. } => remap_captures(callee),
                     ExprKind::StaticCallable(callee) => remap_captures(callee),
+                    ExprKind::PackEntry { pack, key } => {
+                        // Each runtime slot and its input local were added
+                        // together, so their indices are the same.
+                        if let Some(local) = slots.iter().position(|slot| {
+                            slot.parameter == *pack && slot.pack.as_ref() == Some(key)
+                        }) {
+                            expression.kind = ExprKind::Local(local);
+                        } else {
+                            unsupported.get_or_insert(expression.at);
+                        }
+                    }
                     ExprKind::Local(local)
                     | ExprKind::EndpointOf(local)
                     | ExprKind::BoundChild(local) => read(local),

@@ -342,7 +342,9 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
     match &value.kind {
         // A default and a constant are read with no local in scope
         // (UNIT-7, UNIT-13).
-        ExprKind::Local(local) | ExprKind::DeferredPresent(local) => {
+        ExprKind::Local(local)
+        | ExprKind::DeferredPresent(local)
+        | ExprKind::PackEntry { pack: local, .. } => {
             locals.get(*local).map_or(Value, |local| local.category)
         }
         ExprKind::StaticCallable(callee) => match &**callee {

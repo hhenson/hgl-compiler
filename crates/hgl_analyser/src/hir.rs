@@ -533,6 +533,14 @@ pub enum ExprKind {
     /// where the local is a `T?` that a test against null has proved is
     /// not null there (ERR-12).
     Local(LocalId),
+    /// One concrete entry of an argument pack (FN-19). Lowering maps
+    /// it to the runtime input created for that key.
+    PackEntry {
+        /// The local for the pack parameter in the unexpanded signature.
+        pack: LocalId,
+        /// The entry's original name or position.
+        key: PackKey,
+    },
     /// An immutable graph binding read where a null test proved its
     /// presence, before the instance has determined its ordinary type (ERR-12).
     DeferredPresent(LocalId),
@@ -1578,6 +1586,7 @@ impl Expr {
             | ExprKind::Constant { .. }
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
+            | ExprKind::PackEntry { .. }
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
@@ -1723,6 +1732,7 @@ impl Expr {
             | ExprKind::Constant { .. }
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
+            | ExprKind::PackEntry { .. }
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
