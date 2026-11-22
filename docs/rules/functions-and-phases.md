@@ -104,7 +104,7 @@ analyser: partial
 
 - Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration
 - Function and operator calls bind leftover positional and named arguments to their corresponding packs and check the known element type. The HIR keeps each argument's pack slot and position or source name.
-- The analyser still accepts duplicate pack declarations. It does not yet report the pinned `pack.duplicate` code.
+- A second positional pack or a second named pack in one declaration reports `pack.duplicate` at its parameter name. A declaration may have one of each kind.
 - Binding a pack declared for a function awaits #366.
 
 transpiler: partial
