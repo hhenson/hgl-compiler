@@ -125,6 +125,9 @@ impl<'a> Typer<'a> {
         name: &SyntaxToken,
         list: &SyntaxNode,
     ) -> (ExprKind, Type) {
+        if let Some(unread) = self.unread_pack_call(list) {
+            return unread;
+        }
         let at = Location::new(self.file, name.span());
         self.reject_configuration(name, list);
         let arguments = endpoint_arguments(list);

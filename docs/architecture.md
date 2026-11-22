@@ -2108,9 +2108,10 @@ platform's family, `emit` and `run`; and, given an
 SDK, the whole route, that a failed build runs no older executable,
 that `demo.values`, `demo.composites`, `demo.temporal`, `demo.windows`, `demo.references`, `demo.timing`, `demo.activity`, `demo.lifting`, `demo.control`, `demo.structs`, `demo.keyed`, `demo.lists` and `demo.nested` pass, where a failure is
 reported, applications run with their output, the store and a failure,
-and a run in real time stopped by an interrupt of `hgl` alone, with `cargo
-test -p hgl_cli --test cpp -- --ignored`. The Linux and macOS C++ jobs
-run it with `check_core.py` (below), and both again with
+and a run in real time stopped by an interrupt of `hgl` alone. Run the SDK
+suite with `scripts/check-cpp-sdk.sh 16 8` to share up to 16 native build
+jobs among eight concurrent cases. The Linux and macOS C++ jobs run the
+SDK suite and `check_core.py` (below), and both again with
 `HGL_CPP_FLAGS` naming the address and undefined-behaviour sanitizers:
 on macOS one after another, on Linux side by side on separate runners.
 The generated code compiles with `-Wall -Wextra -Werror`.
