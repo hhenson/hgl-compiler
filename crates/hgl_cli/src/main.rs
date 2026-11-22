@@ -235,6 +235,7 @@ struct BuildArgs {
     tests: bool,
 
     /// Write compile_commands.json for the generated C++ in the workspace.
+    /// Includes test entry units with --tests.
     #[arg(long)]
     compile_commands: bool,
 

@@ -2061,8 +2061,10 @@ core, the HGL compiler version and executable contents, the prepared
 toolchain and flags, and any application replacements. The inventory
 records whether the tests were built. `hgl run` and `hgl test` reuse the
 build when its key matches and its artifacts pass content verification.
-A rebuild clears the previous stamp and removes unverified build outputs
-before Ninja starts. A failed or interrupted build leaves no stamp.
+A rebuild atomically moves the previous stamp aside. A failed or interrupted
+build leaves no runnable stamp. Its predecessor's digests remain available
+to verify incremental outputs when the build is retried. Ninja receives the
+outputs that still match those digests and rebuilds unverified outputs.
 An ordinary build or run checks rejection owners as source. When a
 test build omitted those owners, its stamp covers test commands.
 

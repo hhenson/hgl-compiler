@@ -32,7 +32,7 @@ use plan::{Action, NativeTest, TestCase};
 use results::{Said, read_results};
 
 use sdk::{Description, Toolchain};
-use stamp::Stamp;
+use stamp::{PreviousBuild, Stamp};
 
 #[cfg(target_os = "linux")]
 pub(super) use build::native_build_child;
@@ -56,7 +56,7 @@ pub(super) fn write(files: &[hgl_cpp::File], directory: &Path) -> Result<(), Str
 /// The locked workspace and its selected native toolchain.
 pub(super) struct BuildSession {
     workspace: Workspace,
-    previous: Option<Stamp>,
+    previous: Option<PreviousBuild>,
     toolchain: Toolchain,
     toolchain_key: String,
     cache: PathBuf,
@@ -79,11 +79,11 @@ impl BuildSession {
     ) -> Result<Self, String> {
         let cache = build::cache()?;
         let workspace = Workspace::open(keep, roots, &cache, debug)?;
-        let previous = Stamp::read(&workspace);
+        let previous = PreviousBuild::read(&workspace);
         let mut toolchain = match Toolchain::find() {
             Ok(toolchain) => toolchain,
             Err(reason) => {
-                Stamp::clear(&workspace)?;
+                PreviousBuild::invalidate(&workspace, previous.as_ref())?;
                 return Err(reason);
             }
         };
@@ -135,15 +135,15 @@ impl BuildSession {
         }
         let description = self.toolchain.prepared(&self.cache, &self.toolchain_key)?;
         Some(BuiltProgram {
-            program: self.previous.take()?.program,
+            program: self.previous.take()?.stamp.program,
             description,
             reused: true,
         })
     }
 
-    /// Clears the stamp before checking or writing a new build.
+    /// Withdraws the runnable stamp before checking or writing a new build.
     pub(super) fn begin(&self) -> Result<(), String> {
-        Stamp::clear(&self.workspace)
+        PreviousBuild::invalidate(&self.workspace, self.previous.as_ref())
     }
 
     /// Exports compile commands from the manifest of this locked workspace.
@@ -172,7 +172,7 @@ impl BuildSession {
             output,
             program.tests.is_some(),
             self.jobs.as_deref(),
-            self.previous.as_ref(),
+            self.previous.as_ref().map(|previous| &previous.stamp),
         );
         interrupt.check()?;
         let artifacts = artifacts?;

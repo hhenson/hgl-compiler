@@ -14,6 +14,7 @@ use super::plan::{Action, Program};
 use crate::{LimitArgs, ProgramSources, Replacement};
 
 const FILE: &str = ".hgl-built.json";
+const PREVIOUS: &str = ".hgl-previous-build.json";
 const VERSION: u32 = 2;
 
 /// A successful build for one input key, with its recorded artifacts.
@@ -24,6 +25,52 @@ pub(super) struct Stamp {
     artifacts: Vec<Artifact>,
     /// The program's built applications and, where built, its tests.
     pub(super) program: Program,
+}
+
+/// The last successful build's digests. An invalidated stamp is kept
+/// only to verify incremental inputs and never permits direct reuse.
+pub(super) struct PreviousBuild {
+    /// The artifact inventory from the last successful build.
+    pub(super) stamp: Stamp,
+    active: bool,
+}
+
+impl PreviousBuild {
+    /// Finds the current stamp, or the previous one after a failed build.
+    pub(super) fn read(workspace: &Workspace) -> Option<Self> {
+        if let Some(stamp) = Stamp::read(workspace, FILE) {
+            return Some(Self {
+                stamp,
+                active: true,
+            });
+        }
+        Stamp::read(workspace, PREVIOUS).map(|stamp| Self {
+            stamp,
+            active: false,
+        })
+    }
+
+    /// Only a current stamp vouches for an executable that can run now.
+    pub(super) fn reusable(&self, workspace: &Workspace, key: &str, tests: bool) -> bool {
+        self.active && self.stamp.reusable(workspace, key, tests)
+    }
+
+    /// Atomically withdraws permission to run and keeps the digests. A
+    /// later failure with no active stamp leaves those digests alone.
+    pub(super) fn invalidate(workspace: &Workspace, previous: Option<&Self>) -> Result<(), String> {
+        let path = workspace.directory.join(FILE);
+        if !previous.is_some_and(|build| build.active) {
+            return remove(&path);
+        }
+        match fs::rename(&path, workspace.directory.join(PREVIOUS)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "{} could not be invalidated: {error}",
+                path.display()
+            )),
+        }
+    }
 }
 
 /// The relative path and BLAKE3 digest of a generated object or executable.
@@ -56,13 +103,13 @@ impl Artifact {
 }
 
 impl Stamp {
-    pub(super) fn read(workspace: &Workspace) -> Option<Self> {
-        let bytes = fs::read(workspace.directory.join(FILE)).ok()?;
+    fn read(workspace: &Workspace, name: &str) -> Option<Self> {
+        let bytes = fs::read(workspace.directory.join(name)).ok()?;
         let stamp: Stamp = serde_json::from_slice(&bytes).ok()?;
         (stamp.version == VERSION).then_some(stamp)
     }
 
-    pub(super) fn reusable(&self, workspace: &Workspace, key: &str, tests: bool) -> bool {
+    fn reusable(&self, workspace: &Workspace, key: &str, tests: bool) -> bool {
         if self.key != key
             || (tests && self.program.tests.is_none())
             // The test runner omits rejection owners (TST-13). An ordinary
@@ -116,11 +163,6 @@ impl Stamp {
             }
         }
         Ok(())
-    }
-
-    /// Removes a previous success before rebuilding.
-    pub(super) fn clear(workspace: &Workspace) -> Result<(), String> {
-        remove(&workspace.directory.join(FILE))
     }
 
     /// Reads the artifacts Ninja built or checked before publishing them.

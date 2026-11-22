@@ -41,6 +41,10 @@ if [ "$1" = -C ] && [ "$2" = "$HGL_TEST_BUILD_WORKSPACE" ] && [ "$3" != -t ]; th
         trap 'touch "$HGL_TEST_BUILD_TERM"; exit 130' TERM
     fi
     printf '%s\n' build >>"$HGL_TEST_BUILD_TRACE"
+    if [ -n "$HGL_TEST_BUILD_FAIL" ]; then
+        printf '%s\n' 'The test stopped Ninja before compiling.' >&2
+        exit 1
+    fi
     if [ -n "$HGL_TEST_BUILD_TERM" ]; then
         while [ ! -f "$HGL_TEST_BUILD_TERM.release" ]; do sleep 0.02; done
     fi
@@ -277,6 +281,112 @@ fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
     condition()
 }
 
+/// A miss must take away permission to run without forgetting which
+/// native artifacts a previous successful build produced.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn failed_or_incomplete_builds_keep_verified_incremental_outputs() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("build-retain-artifacts");
+    let source = write(&root, "src/stamped.hgl", SOURCE);
+    write(&root, "src/app.hgl", APP);
+    let ninja = NinjaTrace::new(&root);
+    let sources = argument(&root.join("src"));
+    let workspace = argument(&ninja.workspace);
+    let stamp = ninja.workspace.join(".hgl-built.json");
+    let build = ["build", &sources, "--out", &workspace, "--format", "json"];
+    success(ninja.hgl(&build).output().unwrap());
+    let description: Value = serde_json::from_slice(&fs::read(&stamp).unwrap()).unwrap();
+    let artifact_times = || {
+        description["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|artifact| {
+                let path = ninja.workspace.join(artifact["path"].as_str().unwrap());
+                fs::metadata(path).unwrap().modified().unwrap()
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected = artifact_times();
+    let recover = || {
+        assert!(!stamp.exists());
+        let calls = ninja.calls();
+        let recovered: Value =
+            serde_json::from_str(&success(ninja.hgl(&build).output().unwrap())).unwrap();
+        assert_eq!(recovered["reused"], false);
+        assert_eq!(artifact_times(), expected);
+        assert_eq!(ninja.calls(), calls + 1);
+        assert!(stamp.is_file());
+    };
+
+    fs::write(&source, SOURCE.replace("yield 1s: value", "yield 1s: true")).unwrap();
+    assert!(!ninja.hgl(&build).output().unwrap().status.success());
+    fs::write(&source, SOURCE).unwrap();
+    recover();
+
+    let invalid = ninja
+        .hgl(&["run", &sources, "--out", &workspace, "--arg", "value=true"])
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    recover();
+
+    // A different parser bound forces a build of the same generated C++,
+    // so Ninja's eventual decision can still be to compile nothing.
+    let failed = ninja
+        .hgl(&build)
+        .args(["--tree-depth-limit", "501"])
+        .env("HGL_TEST_BUILD_FAIL", "1")
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(text(&failed.stderr).contains("The test stopped Ninja before compiling."));
+    recover();
+
+    let calls = ninja.calls();
+    let building = ninja
+        .hgl(&build)
+        .args(["--tree-depth-limit", "501"])
+        .env("HGL_TEST_BUILD_DELAY", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    assert!(wait_until(|| ninja.calls() == calls + 1));
+    assert!(
+        Command::new("kill")
+            .args(["-INT", &building.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let interrupted = building.wait_with_output().unwrap();
+    assert_eq!(interrupted.status.code(), Some(2));
+    assert!(text(&interrupted.stderr).contains("build was interrupted"));
+    recover();
+
+    let calls = ninja.calls();
+    success(
+        ninja
+            .hgl(&[
+                "test",
+                &sources,
+                "--target",
+                "cpp",
+                "--out",
+                &workspace,
+                "--rejections-only",
+            ])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(ninja.calls(), calls);
+    recover();
+}
+
 /// Rebuilding in a workspace with a CLI that does not update the stamp
 /// must not vouch for the new native artifacts, even when sizes match.
 #[test]
@@ -315,6 +425,12 @@ fn run_and_test_repair_rewritten_workspace_artifacts() {
         let stamp = ninja.workspace.join(".hgl-built.json");
         let old_stamp = fs::read(&stamp).unwrap();
         let executable = format!("{executable}{}", std::env::consts::EXE_SUFFIX);
+        let reject = || {
+            fs::write(changed, "module\n").unwrap();
+            assert!(!ninja.hgl(&args).output().unwrap().status.success());
+            assert!(!stamp.exists());
+            fs::write(changed, original).unwrap();
+        };
 
         // Model an older driver writing the same generated paths and
         // invoking Ninja without replacing this command's stamp.
@@ -332,7 +448,7 @@ fn run_and_test_repair_rewritten_workspace_artifacts() {
                 .unwrap(),
         );
         assert_eq!(fs::read(&stamp).unwrap(), old_stamp);
-        fs::write(changed, original).unwrap();
+        reject();
         assert!(invoke().contains(expected));
         assert_eq!(ninja.calls(), 2);
 
@@ -341,6 +457,7 @@ fn run_and_test_repair_rewritten_workspace_artifacts() {
         broken[0] ^= u8::MAX;
         for (replacement, calls) in [(broken.as_slice(), 3), (b"foreign artifact".as_slice(), 4)] {
             fs::write(&path, replacement).unwrap();
+            reject();
             assert!(invoke().contains(expected));
             assert_eq!(ninja.calls(), calls);
         }
