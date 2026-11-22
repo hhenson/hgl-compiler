@@ -199,6 +199,12 @@ struct TestArgs {
     #[arg(long, value_enum)]
     target: Option<Target>,
 
+    /// Build the selected tests with native debug symbols. Print a JSON
+    /// launch plan for the modules without starting any test. Reuse DIR
+    /// on later calls.
+    #[arg(long, value_name = "DIR", requires = "target", conflicts_with = "keep")]
+    debug_build: Option<PathBuf>,
+
     /// Build the program in this directory, which keeps what the target
     /// wrote. With none, it is built in a directory under the cache
     /// for its source roots, which is kept for the next run.
@@ -1226,17 +1232,22 @@ fn print_problems(sources: &SourceMap, problems: &[Problem]) -> ExitCode {
     ExitCode::from(EXIT_REJECTED)
 }
 
-fn print_report(sources: &SourceMap, report: &Report) -> ExitCode {
-    // TST-14: invalid metadata and errors in the surviving source stop
-    // the run before any case.
-    if report.prevented() {
-        write_problems(sources, &report.problems);
-        if let Err(error) = render::to_stderr(sources, &report.surviving) {
-            eprintln!("hgl: cannot write diagnostics: {error}");
-            return ExitCode::from(EXIT_FAILED);
-        }
+/// Reports what stopped test preparation before any case (TST-14).
+fn print_test_prevention(sources: &SourceMap, report: &Report, summary: bool) -> ExitCode {
+    write_problems(sources, &report.problems);
+    if let Err(error) = render::to_stderr(sources, &report.surviving) {
+        eprintln!("hgl: cannot write diagnostics: {error}");
+        return ExitCode::from(EXIT_FAILED);
+    }
+    if summary {
         println!("no case was run");
-        return ExitCode::from(EXIT_REJECTED);
+    }
+    ExitCode::from(EXIT_REJECTED)
+}
+
+fn print_report(sources: &SourceMap, report: &Report) -> ExitCode {
+    if report.prevented() {
+        return print_test_prevention(sources, report, true);
     }
     let outcomes: Vec<_> = report
         .cases

@@ -6,8 +6,9 @@
 //!
 //! Each statement of the test is told to the runtime library's test
 //! host before it runs, `::hglrt::testing::statement()`, which takes the
-//! line it is called on, so that a failure names the statement that was
-//! running. A test's statements are written as a value function's are
+//! line it is called on. Ordinary builds record a generated line. Debugger
+//! builds give the marker and the statement the same HGL line. A test's
+//! statements are written as a value function's are
 //! (`statements`), and two are a test's own: `assert condition` is
 //! `::hglrt::testing::check(condition)` (TST-4), and `assert
 //! raises("code") { ... }` is `::hglrt::testing::raises("code", ...)`
@@ -31,6 +32,7 @@ use std::ops::Deref;
 
 use hgl_analyser::hir::{Cell, Expr, ExprKind, Stmt};
 use hgl_analyser::{Argument as GenericArgument, Type};
+use hgl_diagnostics::Location;
 use hgl_lower::calls::{DefaultValue, LeftOut, left_out, runtime_arguments};
 use hgl_lower::instances::{core_function, run_wiring, trace_payload};
 
@@ -57,20 +59,42 @@ impl Emitter<'_> {
         let mut scope = Scope::cold(self.program, body);
         scope.testing = true;
         let mut text = format!("void {}()\n{{\n", names::test_identifier(test, index));
+        if let Some(directive) = self.debug_test_position(test.at) {
+            text = super::stamped(&directive, &text);
+        }
         for statement in &body.statements {
-            // The line the statement starts on, counted from 0 in the
-            // piece's text.
-            let line = text.matches('\n').count();
-            self.piece
-                .statements
-                .push((line, statement_at(statement, &body.locals)));
             // ERR-1: preserve the source statement of a runtime failure.
+            let at = statement_at(statement, &body.locals);
+            let directive = self.debug_test_position(at);
+            let line = text.matches('\n').count() + usize::from(directive.is_some());
+            self.piece.statements.push((line, at));
             let marked = names::testing("statement");
-            text.push_str(&format!("{INDENT}{marked}();\n"));
+            let marker = format!("{INDENT}{marked}();\n");
+            if let Some(directive) = directive {
+                text.push_str(&super::stamped(&directive, &marker));
+            } else {
+                text.push_str(&marker);
+            }
             self.statement(&mut scope, statement, 1, &mut text);
         }
-        text.push_str("}\n");
+        let mut closing = test.at;
+        closing.span.end = test.syntax.text_range().end().into();
+        closing.span.start = closing.span.end.saturating_sub(1);
+        if let Some(directive) = self.debug_test_position(closing) {
+            text.push_str(&super::stamped(&directive, "}\n"));
+        } else {
+            text.push_str("}\n");
+        }
         self.piece.text = text;
+    }
+
+    /// A test's debugger position, preserving generated locations in ordinary builds.
+    fn debug_test_position(&mut self, at: Location) -> Option<String> {
+        if self.map_test_statements {
+            self.line_directive(at)
+        } else {
+            None
+        }
     }
 
     /// `value`, an `eval target(...)` (TST-5, TST-8; core's CEVAL-1): a

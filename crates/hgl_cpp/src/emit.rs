@@ -142,7 +142,7 @@ pub(crate) fn module(
     program: &Program,
     index: usize,
     provides: &dyn Fn(&str) -> bool,
-    position: Option<crate::SourcePosition>,
+    positions: crate::Positions<'_>,
     instances: &Instances,
     readers: &readers::Readers,
     diagnostics: &mut Diagnostics,
@@ -151,7 +151,8 @@ pub(crate) fn module(
         program,
         module: index,
         provides,
-        position,
+        position: positions.source,
+        map_test_statements: positions.tests,
         lines: Vec::new(),
         instances,
         readers,
@@ -203,6 +204,8 @@ struct Emitter<'a> {
     /// generated code then sets the HGL file and line of each statement
     /// with `#line` ([`Emitter::line_directive`]).
     position: Option<crate::SourcePosition<'a>>,
+    /// Whether the debugger needs an HGL position on each test statement.
+    map_test_statements: bool,
     /// Where each line starts in each file a directive was written for: a
     /// place in the file, by which it is told apart, and the offsets.
     lines: Vec<(Location, Vec<usize>)>,
