@@ -114,6 +114,10 @@ fn a_capability_type_can_be_listed_in_an_operator_type_membership() {
         "operator ordinary<C>(value: C)\n",
         "impl const fn ordinary<C>(value: C) requires C in {Scheduler} {}\n",
         "const fn helper<C>(value: C) requires C in {Alarm} {}\n",
+        "const ONE: i64 = 1\n",
+        "operator mixed<C>(value: C) requires C in {Alarm, 1}\n",
+        "operator named<C>(value: C) requires C in {ONE, Alarm}\n",
+        "operator constant<const N: i64>(value: i64) requires N in {Alarm}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -122,6 +126,10 @@ fn a_capability_type_can_be_listed_in_an_operator_type_membership() {
             "m.hgl:5:43 injectable/capability.as_value TIME-8",
             "m.hgl:7:52 injectable/capability.as_value TIME-8",
             "m.hgl:8:45 injectable/capability.as_value TIME-8",
+            "m.hgl:10:44 injectable/capability.as_value TIME-8",
+            "m.hgl:11:44 type/type.not_a_type UNIT-10",
+            "m.hgl:11:49 injectable/capability.as_value TIME-8",
+            "m.hgl:12:60 injectable/capability.as_value TIME-8",
         ]
     );
 }
