@@ -155,7 +155,11 @@ fn built(
     debug: bool,
 ) -> Result<(Workspace, Libraries, sdk::Hgraph), String> {
     let toolchain = if debug {
-        Toolchain::find_debug()?
+        let toolchain = Toolchain::find_debug()?;
+        // Said before the build, which may fail: standard output is the
+        // launch's description alone, which a debugger's integration reads.
+        eprintln!("hgl: {}", toolchain.hgraph().said());
+        toolchain
     } else {
         Toolchain::find()?
     };
@@ -182,13 +186,12 @@ fn built(
 
 /// Builds an isolated debug session. Its owner keeps the session directory
 /// until the debugger exits, so later builds cannot replace its symbols.
-/// Gives the launch's JSON description and hgraph's libraries it links.
 pub(super) fn debug_launch(
     output: &Output,
     application: &Application,
     directory: &Path,
     roots: &[PathBuf],
-) -> Result<(serde_json::Value, sdk::Hgraph), String> {
+) -> Result<serde_json::Value, String> {
     fs::create_dir_all(directory).map_err(|e| format!("{}: {e}", directory.display()))?;
     let session = tempfile::Builder::new()
         .prefix("session-")
@@ -219,7 +222,7 @@ pub(super) fn debug_launch(
         "hgraph": hgraph.json(),
     });
     let _directory = session.keep();
-    Ok((data, hgraph))
+    Ok(data)
 }
 
 /// Runs the executable of `application` built in `workspace`, with

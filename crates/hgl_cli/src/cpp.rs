@@ -520,10 +520,7 @@ pub(super) fn run(
     }
     if let Some(directory) = debug_build {
         return match application::debug_launch(&output, application, directory, roots) {
-            Ok((launch, hgraph)) => {
-                // Standard output is the description alone, which a
-                // debugger's integration reads.
-                eprintln!("hgl: {}", hgraph.said());
+            Ok(launch) => {
                 println!("{launch}");
                 ExitCode::SUCCESS
             }

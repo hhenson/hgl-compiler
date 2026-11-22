@@ -2024,10 +2024,25 @@ optimised ones otherwise (`choose` in `crates/hgl_cli/src/cpp/sdk.rs`):
 those `HGL_HGRAPH_DEBUG` names; else, where neither `HGL_HGRAPH_SDK` nor
 `HGL_HGRAPH_DEPS` is set, those in `../libexec/hgraph-debug` beside the
 resolved executable, where their `hgl-sdk.txt` names the hgraph tag
-`hgl` is built for or no tag. hgraph's installed headers do not depend
-on `NDEBUG`, so the debug build stands in for the optimised one. A debug
-build says on standard error which it links, and why where it links the
-optimised ones, and its JSON description says it too (below).
+`hgl` is built for. Either is taken only whole (`cpp/sdk/package.rs`):
+laid out as above; its SDK's `hgl-sdk.txt` saying `build-type=Debug`;
+and the CMake packages a build configures from, hgraph's, fmt's,
+spdlog's and simdjson's, each there with every library it imports there
+and whole (its headers parse, none of its sections runs past its end,
+read with the [`object`](https://crates.io/crates/object) crate).
+`HGL_HGRAPH_DEBUG` naming a directory that is not is an error that says
+what is wrong; a package beside `hgl` that is not is passed over, and the
+optimised libraries are linked, saying why. A configure against debug
+libraries looks for packages in the SDK and the dependency prefix alone
+(`CONFINED` in `sdk.rs`: not through `PATH`, the environment, the
+system's prefixes or a registry, and hgraph's package fetches none it
+misses), so that a program never links two copies of fmt, spdlog or
+simdjson. hgraph's installed headers do not depend on `NDEBUG`, so the
+debug build stands in for the optimised one. A debug build's runtime
+library is built as CMake's `Debug`, whichever libraries it links. A
+debug build says on standard error, before it builds, which it links,
+and why where it links the optimised ones, and its JSON description says
+it too (below).
 `HGL_HGRAPH_BUILD_TYPE=Debug scripts/provision-hgraph-sdk.sh TAG
 DIR/hgraph-sdk`, with `HGL_HGRAPH_SOURCE` naming a checkout of `TAG` for
 a debugger to read, makes a debug SDK for `HGL_HGRAPH_DEBUG` to name,
@@ -2036,7 +2051,7 @@ it.
 
 A toolchain is prepared once and kept under the cache in
 `toolchains/<hash>`, the hash of which build of hgraph's libraries it
-links, the SDK's and the dependencies' paths
+links and whether it is a debug build's, the SDK's and the dependencies' paths
 and the SDK's own files, the compiler, its family and version and what
 it reads from the environment (`MACOSX_DEPLOYMENT_TARGET` and `SDKROOT`
 on macOS), the linker, the flags and the runtime library's sources,
@@ -2448,6 +2463,7 @@ the job the way the design needs is dropped.
 | `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
 | `dirs` | `hgl_cli` | the user's cache directory, where the cpp target's builds are kept |
 | `which` | `hgl_cli` | the programs the cpp target builds with, found on the `PATH` |
+| `object` | `hgl_cli` | the headers of a shared library, ELF and Mach-O: that each of hgraph's libraries built for debugging is whole before a debug build links it |
 
 The cpp target's build driver runs programs, not crates: GCC 15 or
 later on Linux or Apple clang 21 or later on macOS, `ninja`, `cmake`
@@ -2495,9 +2511,9 @@ On success stdout is one JSON object with `version: 1`, absolute `executable`,
 inherit alongside the caller's environment), and `hgraph`: the libraries
 it links, `libraries` (`debug` or `optimised`, as "The build driver"
 above chooses them), and the absolute `sdk` and `dependencies` prefixes.
-Standard error says the same in a line, `hgl: a debug build, with
-hgraph's debug libraries in DIR, named by HGL_HGRAPH_DEBUG`, or for the
-optimised ones why no debug ones were taken. Start that exact command in
+Standard error says the same in a line before the build, `hgl: a debug
+build, with hgraph's debug libraries in DIR, named by HGL_HGRAPH_DEBUG`,
+or for the optimised ones why no debug ones were taken. Start that exact command in
 the debugger. Its console mirrors the results protocol. After the run
 returns it prints the recorded publications. The debugger owns process termination and may close stdin.
 Ordinary application runs keep their host stop pipe. HGL statements use the
