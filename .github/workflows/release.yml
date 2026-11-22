@@ -126,6 +126,8 @@ jobs:
           path: |
             target/release-bundles/hgl-${{ needs.reuse-build.outputs.version }}-macos-arm64.tar.gz
             target/release-bundles/hgl-${{ needs.reuse-build.outputs.version }}-macos-arm64.tar.gz.sha256
+            target/release-bundles/hgl-debug-${{ needs.reuse-build.outputs.version }}-macos-arm64.tar.gz
+            target/release-bundles/hgl-debug-${{ needs.reuse-build.outputs.version }}-macos-arm64.tar.gz.sha256
           if-no-files-found: error
           retention-days: 30
 
@@ -197,6 +199,27 @@ jobs:
           test "$("$hgl" --version)" = "hgl $version (hgraph $(cat HGRAPH_TAG))"
           "$hgl" check crates/hgl_cpp/tests/fixtures/demo.apps.hgl
 
+  # The hgl-debug archive as a user has it: unpacked into the release, a debug
+  # build links its libraries, and lldb finds the lines of the engine's
+  # frames in them and in the release's libraries (scripts/check-debug-release.sh).
+  verify-debug:
+    needs: bundle
+    runs-on: ${{ fromJSON(vars.HGL_SELF_HOSTED_MACOS == 'true' && '["self-hosted","macOS","ARM64","hgl-release"]' || '["macos-26"]') }}
+    steps:
+      - name: Report the macOS toolchain
+        run: *report-toolchain
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - *install-uv
+      - *managed-python
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.bundle.outputs.artifact-id }}
+          path: ${{ runner.temp }}/artifact
+      - shell: bash
+        run: scripts/check-debug-release.sh "$RUNNER_TEMP/artifact"
+
   bundle-linux:
     needs: reuse-build
     if: needs.reuse-build.outputs.linux-artifact-id == ''
@@ -225,6 +248,8 @@ jobs:
           path: |
             target/release-bundles/hgl-${{ needs.reuse-build.outputs.version }}-linux-x86_64.tar.gz
             target/release-bundles/hgl-${{ needs.reuse-build.outputs.version }}-linux-x86_64.tar.gz.sha256
+            target/release-bundles/hgl-debug-${{ needs.reuse-build.outputs.version }}-linux-x86_64.tar.gz
+            target/release-bundles/hgl-debug-${{ needs.reuse-build.outputs.version }}-linux-x86_64.tar.gz.sha256
           if-no-files-found: error
           retention-days: 30
 
@@ -270,6 +295,29 @@ jobs:
           printf '%s\n' "$app"
           grep -x 'ran demo.apps.backtest on cpp: 2 publications' <<<"$app"
 
+  # As verify-debug, on Linux with gdb, which also reads a core file.
+  verify-debug-linux:
+    needs: bundle-linux
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the Ubuntu C++ tools and gdb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc g++-15 cmake ninja-build gdb
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.bundle-linux.outputs.artifact-id }}
+          path: ${{ runner.temp }}/artifact
+      - shell: bash
+        env:
+          CXX: /usr/bin/g++-15
+        run: |
+          test "$(getconf GNU_LIBC_VERSION)" = 'glibc 2.43'
+          scripts/check-debug-release.sh "$RUNNER_TEMP/artifact"
+
   publish:
     if: >-
       !cancelled() &&
@@ -277,9 +325,13 @@ jobs:
       needs.reuse-build.result == 'success' &&
       (
         (needs.reuse-build.outputs.artifact-id != '' && needs.reuse-build.outputs.linux-artifact-id != '') ||
-        (needs.verify.result == 'success' && needs.hosted-check.result == 'success' && needs.verify-linux.result == 'success')
+        (
+          needs.verify.result == 'success' && needs.hosted-check.result == 'success' &&
+          needs.verify-linux.result == 'success' &&
+          needs.verify-debug.result == 'success' && needs.verify-debug-linux.result == 'success'
+        )
       )
-    needs: [reuse-build, bundle, verify, hosted-check, bundle-linux, verify-linux]
+    needs: [reuse-build, bundle, verify, hosted-check, verify-debug, bundle-linux, verify-linux, verify-debug-linux]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -302,10 +354,13 @@ jobs:
           cd "$RUNNER_TEMP/artifact"
           macos=hgl-$RELEASE_VERSION-macos-arm64.tar.gz
           linux=hgl-$RELEASE_VERSION-linux-x86_64.tar.gz
-          sha256sum -c "$macos.sha256" "$linux.sha256"
+          macos_debug=hgl-debug-$RELEASE_VERSION-macos-arm64.tar.gz
+          linux_debug=hgl-debug-$RELEASE_VERSION-linux-x86_64.tar.gz
+          sha256sum -c "$macos.sha256" "$linux.sha256" "$macos_debug.sha256" "$linux_debug.sha256"
           if [[ "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)" != "$RELEASE_COMMIT" ]]; then
             echo "Tag $RELEASE_TAG no longer points to the verified commit" >&2
             exit 1
           fi
           gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
-            "$macos" "$macos.sha256" "$linux" "$linux.sha256"
+            "$macos" "$macos.sha256" "$linux" "$linux.sha256" \
+            "$macos_debug" "$macos_debug.sha256" "$linux_debug" "$linux_debug.sha256"

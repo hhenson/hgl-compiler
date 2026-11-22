@@ -71,6 +71,7 @@
 set -euo pipefail
 
 source "$(dirname -- "${BASH_SOURCE[0]}")/hgraph-dependencies.sh"
+source "$(dirname -- "${BASH_SOURCE[0]}")/gather-dsyms.sh"
 
 # The dependency prefix made where there is none: what hgraph's build
 # without Arrow finds as packages (fmt 11 or later, spdlog 1.15 or later,
@@ -246,6 +247,12 @@ main() {
         -DCMAKE_DISABLE_FIND_PACKAGE_date=ON
     "$cmake" --build "$work/build" --parallel "$jobs"
     "$cmake" --install "$work/build"
+    # A library's debug information on macOS, which a Debug build has and a
+    # build with `-g` in CXXFLAGS, into a dSYM bundle beside it while the
+    # objects that hold it are here.
+    if [[ $platform == Darwin ]]; then
+        gather_dsyms "$dir/lib"
+    fi
 
     # date/tz can be built into the shared runtime and is not installed
     # separately. Keep its notice alongside hgraph's if it was fetched.

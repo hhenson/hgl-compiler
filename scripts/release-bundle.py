@@ -28,6 +28,14 @@ NATIVE_DIRECTORIES = (
     "libexec/hgraph-deps",
     *(f"licenses/{name}" for name in NATIVE_LIBRARIES),
 )
+# The hgl-debug archive's tree is the release's libexec, and a cache keeps it
+# under `debug`.
+DEBUG_DIRECTORY = "libexec"
+DEBUG_CACHE = "debug"
+# The release's libraries' symbol files, beside each library in the debug
+# tree, and where a debug build's libraries are.
+LINUX_SYMBOLS = ".debug"
+DEBUG_LIBRARIES = "libexec/hgraph-debug"
 NOTICE = re.compile(r"^(?:copying|license|notice|unlicense)", re.IGNORECASE)
 SYSTEM_LIBRARIES = ("/usr/lib/", "/System/Library/")
 SYSTEM_PATHS = tuple(map(Path, (
@@ -57,6 +65,7 @@ def native_cache_key():
     recipe = [
         "HGRAPH_TAG",
         "scripts/hgraph-dependencies.sh",
+        "scripts/gather-dsyms.sh",
         "scripts/provision-hgraph-sdk.sh",
         "scripts/package-release.sh",
         "scripts/release-bundle.py",
@@ -80,24 +89,35 @@ def native_cache_key():
     return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 
 
-def copy_native(source, destination):
-    """Keep SDK and dependency libraries, their relative links and notices together."""
+def copy_native(source, destination, debug=None):
+    """Keep SDK and dependency libraries, their relative links and notices together.
+
+    With `debug`, the hgl-debug tree the cache keeps under `debug` too."""
     for directory in NATIVE_DIRECTORIES:
         shutil.copytree(source / directory, destination / directory, symlinks=True)
+    if debug is not None:
+        shutil.copytree(source / DEBUG_CACHE / DEBUG_DIRECTORY, debug / DEBUG_DIRECTORY,
+                        symlinks=True, dirs_exist_ok=True)
 
 
-def save_native(bundle, cache):
-    """Publish the verified native tree atomically on the cache's filesystem."""
+def save_native(bundle, cache, debug=None):
+    """Publish the verified native tree atomically on the cache's filesystem.
+
+    With `debug`, the hgl-debug tree is kept under `debug` with it."""
     cache.parent.mkdir(parents=True, exist_ok=True)
+    kept = [*NATIVE_DIRECTORIES, *([f"{DEBUG_CACHE}/{DEBUG_DIRECTORY}"] if debug else [])]
     with tempfile.TemporaryDirectory(prefix=".hgl-native-", dir=cache.parent) as scratch:
         staged = Path(scratch) / "native"
         copy_native(bundle, staged)
+        if debug is not None:
+            shutil.copytree(debug / DEBUG_DIRECTORY, staged / DEBUG_CACHE / DEBUG_DIRECTORY,
+                            symlinks=True)
         try:
             staged.rename(cache)
         except OSError as error:
             # Another build can populate the same cache key first.
             if error.errno not in (errno.EEXIST, errno.ENOTEMPTY) or not all(
-                (cache / directory).is_dir() for directory in NATIVE_DIRECTORIES
+                (cache / directory).is_dir() for directory in kept
             ):
                 raise
 
@@ -213,6 +233,21 @@ def verify(bundle, forbidden, target):
     if not macos and names.intersection(LINUX_SYSTEM_LIBRARIES):
         raise ValueError("system C or C++ runtime bundled on Linux")
 
+    verify_paths(bundle, forbidden)
+    for binary in {bin_file, *(lib.resolve(strict=True) for lib in libraries)}:
+        if macos:
+            if command("lipo", "-archs", binary).strip() != "arm64":
+                raise ValueError(f"{binary.relative_to(bundle)} is not arm64")
+            verify_load_paths(bundle, binary, names)
+        else:
+            verify_elf(bundle, binary, names)
+    for library in {lib.resolve(strict=True) for lib in libraries}:
+        verify_split(bundle, library, macos)
+    print(f"Verified {bundle.name}")
+
+
+def verify_paths(bundle, forbidden):
+    """No file names a build path, and no link leaves the bundle."""
     prefixes = {
         str(candidate).encode()
         for path in forbidden
@@ -238,14 +273,125 @@ def verify(bundle, forbidden, target):
             if path.suffix in RELEASE_METADATA:
                 verify_metadata_paths(bundle, path, data)
 
-    for binary in {bin_file, *(lib.resolve(strict=True) for lib in libraries)}:
+
+def verify_split(bundle, library, macos):
+    """A release library keeps its function names and its build ID, and its
+    debug information is split out of it: on Linux it names its symbol file
+    by a debug link; on macOS it keeps no debug map."""
+    relative = library.relative_to(bundle)
+    if macos:
+        if "LC_UUID" not in command("otool", "-l", library):
+            raise ValueError(f"{relative} has no UUID")
+        if " OSO " in command("nm", "-ap", library):
+            raise ValueError(f"{relative} keeps a debug map")
+        return
+    sections = command("readelf", "--section-headers", "--wide", library)
+    names = set(re.findall(r"^\s*\[\s*\d+\]\s+(\S+)", sections, re.MULTILINE))
+    if any(name.startswith(".debug_") for name in names):
+        raise ValueError(f"{relative} keeps its debug information")
+    for needed in (".symtab", ".note.gnu.build-id", ".gnu_debuglink"):
+        if needed not in names:
+            raise ValueError(f"{relative} has no {needed}")
+    if debug_link(library) != f"{library.name}.debug":
+        raise ValueError(f"{relative} links no symbol file of its own name")
+
+
+def build_id(binary):
+    """The ELF build ID of `binary`, as `readelf` prints it."""
+    found = re.search(r"Build ID: ([0-9a-f]+)", command("readelf", "--notes", binary))
+    if not found:
+        raise ValueError(f"{binary} has no build ID")
+    return found.group(1)
+
+
+def debug_link(library):
+    """The file name an ELF library's `.gnu_debuglink` names: its first string."""
+    # The section ends in the symbol file's CRC, which is no text.
+    dump = subprocess.check_output(
+        ["readelf", "--string-dump=.gnu_debuglink", library]
+    ).decode(errors="replace")
+    found = re.search(r"^\s*\[\s*0\]\s+(\S+)$", dump, re.MULTILINE)
+    return found.group(1) if found else None
+
+
+def uuids(binary):
+    """The Mach-O UUIDs of `binary` or of a dSYM bundle, as `dwarfdump` prints them."""
+    return set(re.findall(r"UUID: ([0-9A-F-]+)", command("dwarfdump", "--uuid", binary)))
+
+
+def has_dsym(library, directory):
+    """Whether `directory` holds a dSYM bundle of `library`'s UUID."""
+    return any(uuids(library) & uuids(bundle) for bundle in directory.glob("*.dSYM"))
+
+
+def verify_debug(tree, release, forbidden, target):
+    """Check the hgl-debug tree: hgraph's libraries built for debugging, laid
+    out as the release's libexec is, with their licences, and the symbol file
+    of each of the release's libraries, matched to it by its build ID."""
+    tree = tree.resolve(strict=True)
+    release = release.resolve(strict=True)
+    macos = target == MACOS_TARGET
+    debug = tree / DEBUG_LIBRARIES
+    sdk = debug / "hgraph-sdk"
+    deps = debug / "hgraph-deps"
+    for path in [
+        sdk / "hgl-sdk.txt", sdk / "lib/cmake/hgraph/hgraphConfig.cmake",
+        sdk / "share/licenses/hgraph/LICENSE",
+        deps / "include/fmt", deps / "include/spdlog", deps / "include/simdjson.h",
+    ]:
+        if not path.exists():
+            raise ValueError(f"missing {path.relative_to(tree)}")
+    stamp = (sdk / "hgl-sdk.txt").read_text().splitlines()
+    if "build-type=Debug" not in stamp or "dependencies=../hgraph-deps" not in stamp:
+        raise ValueError("the debug SDK is not stamped as a Debug build against ../hgraph-deps")
+    for library in NATIVE_LIBRARIES:
+        notices = debug / "licenses" / library
+        if not any(file.is_file() and NOTICE.match(file.name) for file in notices.glob("*")):
+            raise ValueError(f"missing license notice for the debug {library}")
+    if sorted(p.name for p in deps.iterdir()) != ["include", "lib"]:
+        raise ValueError("unexpected debug dependency prefix contents")
+
+    # The libraries built for debugging: fmt and spdlog name theirs with a `d`.
+    suffix = "*.dylib" if macos else "*.so*"
+    libraries = [*sdk.glob(f"lib/{suffix}"), *deps.glob(f"lib/{suffix}")]
+    names = {lib.name for lib in libraries}
+    for prefix in ("libhgraph_runtime", "libhgraph_wiring", "libfmtd", "libspdlogd", "libsimdjson"):
+        if not any(name.startswith(prefix) for name in names):
+            raise ValueError(f"missing the debug {prefix} shared library")
+    for library in {lib.resolve(strict=True) for lib in libraries}:
+        relative = library.relative_to(tree)
         if macos:
-            if command("lipo", "-archs", binary).strip() != "arm64":
-                raise ValueError(f"{binary.relative_to(bundle)} is not arm64")
-            verify_load_paths(bundle, binary, names)
+            verify_load_paths(tree, library, names)
+            if not has_dsym(library, library.parent):
+                raise ValueError(f"{relative} has no dSYM of its UUID")
         else:
-            verify_elf(bundle, binary, names)
-    print(f"Verified {bundle.name}")
+            verify_elf(tree, library, names)
+            if ".debug_info" not in command("readelf", "--section-headers", "--wide", library):
+                raise ValueError(f"{relative} has no debug information")
+
+    # The release's libraries' symbol files, each where a debugger looks
+    # beside the library.
+    for directory in ("libexec/hgraph-sdk/lib", "libexec/hgraph-deps/lib"):
+        for library in (release / directory).iterdir():
+            if library.is_symlink() or not library.is_file() or not re.search(
+                r"\.dylib$" if macos else r"\.so(?:\.[0-9]+)*$", library.name
+            ):
+                continue
+            relative = library.relative_to(release)
+            if macos:
+                if not has_dsym(library, tree / directory):
+                    raise ValueError(f"no dSYM of {relative}'s UUID")
+                continue
+            link = debug_link(library)
+            symbols = tree / directory / LINUX_SYMBOLS / (link or "")
+            if link is None or not symbols.is_file():
+                raise ValueError(f"no symbol file for {relative}")
+            if build_id(symbols) != build_id(library):
+                raise ValueError(f"{symbols.relative_to(tree)} is not {relative}'s build")
+            if ".debug_info" not in command("readelf", "--section-headers", "--wide", symbols):
+                raise ValueError(f"{symbols.relative_to(tree)} has no debug information")
+    verify_paths(tree, forbidden)
+    print(f"Verified the debug tree of {tree.name}")
 
 
 def verify_metadata_paths(bundle, path, data):
@@ -308,6 +454,7 @@ def main():
         native = modes.add_parser(name)
         native.add_argument("source", type=Path)
         native.add_argument("destination", type=Path)
+        native.add_argument("--debug", type=Path)
     reuse = modes.add_parser("find-verified-run")
     reuse.add_argument("repository")
     reuse.add_argument("commit")
@@ -316,8 +463,13 @@ def main():
     licenses.add_argument("destination", type=Path)
     audit = modes.add_parser("verify")
     audit.add_argument("bundle", type=Path)
-    audit.add_argument("--forbid", type=Path, action="append", default=[])
-    for mode in (licenses, audit):
+    debug_audit = modes.add_parser("verify-debug")
+    debug_audit.add_argument("tree", type=Path)
+    debug_audit.add_argument("--release", type=Path,
+                             help="the release the tree is for; by default the tree, both unpacked in one")
+    for mode in (audit, debug_audit):
+        mode.add_argument("--forbid", type=Path, action="append", default=[])
+    for mode in (licenses, audit, debug_audit):
         mode.add_argument("--target", choices=[MACOS_TARGET, LINUX_TARGET], default=MACOS_TARGET)
     args = parser.parse_args()
     if args.mode == "version":
@@ -325,9 +477,9 @@ def main():
     elif args.mode == "native-key":
         print(native_cache_key())
     elif args.mode == "copy-native":
-        copy_native(args.source, args.destination)
+        copy_native(args.source, args.destination, args.debug)
     elif args.mode == "save-native":
-        save_native(args.source, args.destination)
+        save_native(args.source, args.destination, args.debug)
     elif args.mode == "find-verified-run":
         found = verified_run(args.repository, args.commit, args.current_run)
         if found:
@@ -335,6 +487,8 @@ def main():
             print(f"run-id={run}\nartifact-id={macos}\nlinux-artifact-id={linux}")
     elif args.mode == "licenses":
         rust_licenses(args.destination, args.target)
+    elif args.mode == "verify-debug":
+        verify_debug(args.tree, args.release or args.tree, args.forbid, args.target)
     else:
         verify(args.bundle, args.forbid, args.target)
 
