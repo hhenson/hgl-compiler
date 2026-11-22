@@ -118,7 +118,7 @@ analyser: partial
 - Each instance selects again for an operator call whose operand types use the enclosing declaration's generic parameters, including when a generic candidate admitted the body. The new selection uses the instance's operands and the operator binding at the call (GEN-5), including private operators, symbols, and calls in nodes and graphs.
 - Instance checks follow function references, calls inside anonymous functions, and calls that become known when a pack is forwarded (GEN-7, FN-17, FN-19).
 - An instance selects with the call's written or contextual output request. It rechecks uses when the selected result changes type, including inferred locals, calls, indexing and loops. A failed use reports its ordinary diagnostic in the body and names the instance (GEN-7).
-- A generic body's value parameter, including a fixed list's size `N` (GEN-13), is specified to be read as a constant, such as in `0..<N` or an index. #368 tracks ranges.
+- A generic body reads a fixed list's inferred size `N` as an `i64` constant (GEN-13, TYPE-10). The C++ target executes it in arithmetic, range bounds, subscripts and local initializers in value code, node handlers and graph composition.
 - Left: a requirement met by widening an argument, and checking misuse of a type or size parameter as a runtime value
 
 ## GEN-8
