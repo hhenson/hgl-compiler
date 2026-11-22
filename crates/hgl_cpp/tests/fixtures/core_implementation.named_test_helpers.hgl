@@ -1,0 +1,30 @@
+module core_implementation part named_test_helpers
+
+test first_helpers {
+    const fn adjust(value: i64) -> i64 => value + 1
+    fn adjust(value: i64) -> i64 {
+        when { return value + 2 }
+    }
+    const fn keep<T>(value: T) -> T => value
+
+    assert keep(adjust(1)) == 2
+    assert eval adjust(value: [1, _, 3]) == [3, _, 5]
+}
+
+test second_helpers {
+    const fn adjust(value: i64) -> i64 => value + 10
+    fn adjust(value: i64) -> i64 {
+        when { return value + 20 }
+    }
+    const fn keep<T>(value: T) -> T => value
+
+    assert keep(adjust(1)) == 11
+    assert eval adjust(value: [1, _, 3]) == [21, _, 23]
+}
+
+@timeout(5s)
+integration_test live_helper {
+    const fn adjust(value: i64) -> i64 => value + 100
+
+    assert adjust(1) == 101
+}
