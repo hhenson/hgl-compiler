@@ -1694,7 +1694,7 @@ fn comprehension_phases_run_on_the_sdk() {
     );
     assert!(
         stdout.contains("rejection cases: 2 passed, 0 failed")
-            && stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+            && stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

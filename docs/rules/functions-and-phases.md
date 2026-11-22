@@ -35,7 +35,8 @@ analyser: partial
 transpiler: partial
 
 - Emits calls in their analysed phase and wires supported ordinary values as constant
-  connections.
+  connections. A supported fixed-size list publishes its positions together at graph start
+  (TIME-7), whether written as a literal or made by a loop.
 - Left: A read of a connection outside an admitted phase, an ordinary call of a temporal
   function, unsupported connection expressions and constant connections of sets or
   dictionaries are reported.

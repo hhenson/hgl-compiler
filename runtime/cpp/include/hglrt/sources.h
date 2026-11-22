@@ -8,6 +8,7 @@
 // `yield`, and drives it under the timing SOURCE-2 and SOURCE-3 give.
 #pragma once
 
+#include <hglrt/endpoints.h>
 #include <hglrt/failure.h>
 #include <hglrt/scalar.h>
 #include <hglrt/temporal.h>
@@ -19,6 +20,7 @@
 #include <optional>
 #include <source_location>
 #include <span>
+#include <type_traits>
 #include <typeinfo>
 #include <utility>
 #include <variant>
@@ -27,15 +29,19 @@ namespace hglrt {
 
 // ---- Constants (FN-3) ----------------------------------------------------
 
-/// The node of a constant connection of `T`: it publishes its value once,
-/// in the first cycle of its run, and then nothing.
-template <class T>
+/// The node of a constant connection of `T` in its temporal `Schema`:
+/// it publishes its value once, in the first cycle of its run.
+template <class T, class Schema = hgraph::TS<T>>
 struct Constant {
     static constexpr auto name = "hgl.const";
     static constexpr bool schedule_on_start = true;
 
-    static void eval(hgraph::Scalar<"value", T> value, hgraph::Out<hgraph::TS<T>> out) {
-        out.set(value.value());
+    static void eval(hgraph::Scalar<"value", T> value, hgraph::Out<Schema> out) {
+        if constexpr (std::is_same_v<Schema, hgraph::TS<T>>) {
+            out.set(value.value());
+        } else {
+            publish_as_form(out, value.value(), std::source_location::current());
+        }
     }
 };
 
@@ -49,9 +55,10 @@ struct Constant {
 /// that one constant would publish the other's value. A constant publishes
 /// once, at the start: two of one value give each reader the same
 /// publication in the same cycle, and no reader can tell two nodes from one.
-template <class T>
-hgraph::Port<hgraph::TS<T>> constant(hgraph::Wiring& wiring, const T& value) {
-    using Signature = hgraph::StaticNodeSignature<Constant<T>>;
+template <class T, class Schema = hgraph::TS<T>>
+hgraph::Port<Schema> constant(hgraph::Wiring& wiring, const T& value) {
+    using Node = Constant<T, Schema>;
+    using Signature = hgraph::StaticNodeSignature<Node>;
     // The node's scalar configuration, as `hgraph::wire` makes it.
     hgraph::Value scalars{
         hgraph::value_type_for_wiring(Signature::scalar_schema(), wiring.realization_options())};
@@ -60,9 +67,9 @@ hgraph::Port<hgraph::TS<T>> constant(hgraph::Wiring& wiring, const T& value) {
         configured["value"].set(value);
     }
     hgraph::NodeBuilder builder;
-    builder.implementation<Constant<T>>();
-    return hgraph::Port<hgraph::TS<T>>{
-        wiring, wiring.add_unique_node(typeid(Constant<T>), std::move(builder),
+    builder.implementation<Node>();
+    return hgraph::Port<Schema>{
+        wiring, wiring.add_unique_node(typeid(Node), std::move(builder),
                                        std::span<const hgraph::WiringPortRef>{}, std::move(scalars))};
 }
 

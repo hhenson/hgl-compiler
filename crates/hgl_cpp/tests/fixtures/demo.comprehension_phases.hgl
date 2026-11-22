@@ -58,7 +58,7 @@ fn with_fixed_range(x: i64) -> i64 => scaled_fixed(x, [for i in 2..<4: i])
 fn with_empty_range(x: i64) -> i64 => scaled(x, [for i in 5..<2: i])
 
 test ordinary_ranges_supply_configuration {
-    assert eval scaled([1, 2], [for i in 2..<4: i]) == [6, 12]
+    assert eval scaled([1, 2], factors: [for i in 2..<4: i]) == [6, 12]
     assert eval with_ordinary_range([1, 2]) == [6, 12]
     assert eval with_fixed_range([1, 2]) == [6, 12]
     assert eval with_empty_range([1, 2]) == [1, 2]
@@ -105,3 +105,27 @@ test ordinary_entries_over_a_connection {
 
 # expect-error(phase, "connection.as_constant")
 fn list_connection_is_not_configuration(x: i64, values: list<i64, 2>) -> i64 => scaled_fixed(x, [for value in values: 3])
+
+# FN-3 and EXPR-17: an ordinary fixed list is wired as one constant
+# whether its elements are written out or collected over a range.
+fn range_constant() -> list<i64, 2> => [for i in 2..<4: i]
+fn literal_constant() -> list<i64, 2> => [2, 3]
+fn summed(xs: list<i64, 2>) -> i64 => xs[0] + xs[1]
+fn sum_range_constant() -> i64 => summed([for i in 2..<4: i])
+fn sum_literal_constant() -> i64 => summed([2, 3])
+fn spaced_constants() -> list<i64, 3> => [for i in 0..<3: i * 5]
+fn float_constants(x: i64) -> list<f64, 2> => [for i in 0..<2: 1]
+fn float_literals(x: i64) -> list<f64, 2> => [1, 1]
+
+test fixed_list_constants_supply_graph_results {
+    assert eval range_constant() == [[2, 3]]
+    assert eval literal_constant() == [[2, 3]]
+    assert eval spaced_constants() == [[0, 5, 10]]
+    assert eval float_constants([1, 2]) == [[1.0, 1.0]]
+    assert eval float_literals([1, 2]) == [[1.0, 1.0]]
+}
+
+test fixed_list_constants_supply_connections {
+    assert eval sum_range_constant() == [5]
+    assert eval sum_literal_constant() == [5]
+}

@@ -14,6 +14,7 @@
 //! | `values[i]`, a child named in a hook (TIME-1, END-8) | `::hglrt::child(view, i)`: an endpoint whether or not it is valid, given to `valid`, `modified`, `delta_value`, `last_modified`, `all_valid` |
 //! | `values[i]` read where it is checked when it runs (ERR-14) | `::hglrt::checked_whole(child)`, or `checked_whole_result` where its place takes a `result` |
 //! | `pair[0]`, a child of a connection of a graph (TIME-9) | `::hglrt::element_port(port, 0)` |
+//! | An ordinary fixed list wired as a constant (FN-3) | `::hglrt::constant<T, S>` publishes the positions in one cycle |
 //! | A cell of a trace of one (TST-5) | `::hglrt::testing::Cell<T>`, of a `Whole<T>` or of a delta |
 //!
 //! A part is read and published through its own form (TYPE-9): a scalar,
@@ -369,6 +370,20 @@ impl Family for Lists {
                 Some(format!("::hgraph::TSL<{child}, {size}>"))
             }
         }
+    }
+
+    // FN-3: a fixed list wired as a constant publishes its whole value
+    // once, through the list's own temporal shape (TIME-7).
+    fn constant(&self, emitter: &mut Emitter<'_>, ty: &Type, value: &str) -> Option<String> {
+        let Shape::Fixed(..) = shape(ty)? else {
+            return None;
+        };
+        let schema = self.schema(emitter, ty)?;
+        let written = super::types::cpp_type(emitter.program, ty)?;
+        Some(format!(
+            "::{}::constant<{written}, {schema}>({WIRING}, {value})",
+            runtime::NAMESPACE
+        ))
     }
 
     // TIME-1: "A read of a struct, a tuple or a fixed list whole ...
