@@ -2536,6 +2536,74 @@ fn rejects_non_enum() -> i64 => non_enum(1)"#,
     ));
 }
 
+/// CTRL-10 and TYPE-5: give a contextual block tail its inferred field
+/// type while keeping the already checked statements and source ranges.
+#[test]
+fn inferred_struct_fields_read_contextual_block_tails() {
+    let source = r#"operator predicate<T>(input: T) -> bool
+impl const fn predicate<T>(input: T) -> bool => true
+impl fn predicate(input: i64) -> bool { when { return input > 0 } }
+enum Side { buy, sell }
+struct Pair<U> {
+    first: U
+    second: U
+    seen: list<U>
+    optional: U?
+}
+fn through<T>(const input: T) -> Side {
+    let chosen = if predicate(input) { Side.buy }
+    let pair = Pair(first: chosen, second: {
+        let saved = 42
+        { .sell }
+    }, seen: { [] }, optional: { null })
+    return pair.second
+}
+fn admitted() -> Side => through(1)"#;
+    let checked = module(source);
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    let Stmt::Declare {
+        value: Some(pair), ..
+    } = &instance.statements[1]
+    else {
+        panic!("the graph declares the pair");
+    };
+    assert_eq!(pair.ty.to_string(), "Pair<Side>");
+    let ExprKind::Construct { arguments, .. } = &pair.kind else {
+        panic!("the fields belong to a constructor");
+    };
+    for (slot, ty, written, blocks) in [
+        (1, "Side", ".sell", 2),
+        (2, "list<Side>", "[]", 1),
+        (3, "Side?", "null", 1),
+    ] {
+        let mut tail = &arguments[slot].value;
+        for depth in 0..blocks {
+            assert_eq!(tail.ty.to_string(), ty);
+            let ExprKind::Block {
+                statements,
+                value: Some(value),
+                ..
+            } = &tail.kind
+            else {
+                panic!("the field and its nested block stay in the instance");
+            };
+            if slot == 1 && depth == 0 {
+                let [Stmt::Declare { local, .. }] = statements.as_slice() else {
+                    panic!("the outer block retains its preceding declaration");
+                };
+                assert_eq!(instance.locals[*local].name, "saved");
+            }
+            tail = value;
+        }
+        assert_eq!(tail.ty.to_string(), ty);
+        assert_eq!(
+            checked.sources.file(tail.at.file).slice(tail.at.span),
+            written
+        );
+    }
+}
+
 /// GEN-7 and CTRL-15: settled sequence types reach the iteration
 /// binding and its local reads, using the existing rules for shape.
 #[test]

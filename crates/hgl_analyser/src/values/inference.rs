@@ -9,8 +9,9 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::arguments::{Assigned, Slot, Takes};
 use super::candidates::typed_by_place;
 use super::constants::{constant_text, generic_default};
+use super::control::value_of_branch;
 use super::evals::{holds_trace, publications, trace_input_type, trace_pack_type};
-use super::expressions::{holds_block, takes_its_type};
+use super::expressions::{holds_block, takes_its_type, written_null};
 use super::fit::{not_null, open, whole};
 use super::forms::Taken;
 use super::{Fact, Typer};
@@ -595,7 +596,7 @@ impl<'a> Typer<'a> {
             // defaults still need their original source reading.
             source_contexts.extend(assigned.iter().filter_map(|field| {
                 let slot = field.slot?;
-                needs_argument_place(&field.value).then_some(patterns[slot])
+                field_needs_argument_place(&field.value).then_some(patterns[slot])
             }));
             source_contexts.extend(generics.iter().zip(defaults).filter_map(
                 |(generic, default)| match (&generic.kind, default) {
@@ -860,9 +861,11 @@ impl<'a> Typer<'a> {
                         .iter()
                         .filter(|at| mentions(pattern, &[**at]))
                         .peekable();
-                    needs_argument_place(node)
-                        && missing.peek().is_some()
-                        && missing.all(|at| late.contains(at))
+                    let needs_place = match takes {
+                        Takes::Parameters => needs_argument_place(node),
+                        Takes::Fields => field_needs_argument_place(node),
+                    };
+                    needs_place && missing.peek().is_some() && missing.all(|at| late.contains(at))
                 };
                 // A place whose type names a parameter nothing resolved
                 // is not known, and where the call is settled it never
@@ -1027,6 +1030,21 @@ fn needs_argument_place(node: &SyntaxNode) -> bool {
     let node = ungrouped(node.clone());
     takes_its_type(&node)
         || node.kind() == SyntaxKind::SequenceExpr && node.children().next().is_none()
+}
+
+/// CTRL-10: a constructor supplies a block's tail with its field type.
+/// Only the contextual leaves that field settlement can replay wait.
+fn field_needs_argument_place(node: &SyntaxNode) -> bool {
+    let mut tail = ungrouped(node.clone());
+    if tail.kind() != SyntaxKind::Block {
+        return needs_argument_place(&tail);
+    }
+    while let Some(value) = value_of_branch(&tail) {
+        tail = ungrouped(value);
+    }
+    written_null(&tail)
+        || tail.kind() == SyntaxKind::ImpliedMember
+        || (tail.kind() == SyntaxKind::SequenceExpr && tail.children().next().is_none())
 }
 
 /// Explicit arguments to ordinary generics and to the positional type
