@@ -10,6 +10,7 @@ use super::Typer;
 use super::fit::{not_null, open, whole};
 use super::forms::received_type;
 use super::inference::{fixed, placed};
+use super::results::captured_output;
 use crate::constant::Fault;
 use crate::declared::substitute_within;
 use crate::hir::{Expr, ExprKind, Value, ValueCategory};
@@ -46,7 +47,7 @@ impl<'a> Typer<'a> {
             ExprKind::Local(local) | ExprKind::DeferredPresent(local) => {
                 self.captures.get(local).cloned()
             }
-            ExprKind::Capture(call) => Some(self.captured_output(call)),
+            ExprKind::Capture(call) => Some(captured_output(program, call)),
             _ => None,
         };
         if let Some(output) = captured {

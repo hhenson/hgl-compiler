@@ -10,6 +10,7 @@ use super::Typer;
 use super::candidates::Given;
 use super::control::Outcome;
 use super::fit::open;
+use super::results::{captured_binding, captured_output};
 use crate::hir::{
     BinaryOperator, Body, ErrorPart, Expr, ExprKind, Hook, Local, Stmt, ValueCategory,
 };
@@ -390,13 +391,11 @@ impl<'a> Typer<'a> {
             self.aliases.insert(local, capability);
         }
         // ERR-7: "What it gives is bound with `let`".
-        if kind == LocalKind::Let
-            && let Some(Expr {
-                kind: ExprKind::Capture(call),
-                ..
-            }) = &value
+        if let Some(call) = value
+            .as_ref()
+            .and_then(|value| captured_binding(kind, value))
         {
-            let output = self.captured_output(call);
+            let output = captured_output(self.program, call);
             self.captures.insert(local, output);
         }
         // EXPR-3: "Initialization fixes a binding's value/connection

@@ -9,10 +9,33 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::calls::arguments_of;
 use super::fit::{not_null, nullable, open, whole};
 use super::{BOOL, CapturedOutput, Fact, Typer};
-use crate::hir::{Callee, ErrorPart, Expr, ExprKind, ValueCategory};
+use crate::hir::{ErrorPart, Expr, ExprKind, ValueCategory};
+use crate::program::{LocalKind, Program};
 use crate::syntax::{child, name_token, tokens};
 use crate::types::{Detail, Scalar, Type};
 use crate::{codes, error};
+
+/// ERR-7: a `let` initialized by a capture names its boundary.
+pub(super) fn captured_binding(kind: LocalKind, value: &Expr) -> Option<&Expr> {
+    match &value.kind {
+        ExprKind::Capture(call) if kind == LocalKind::Let => Some(call),
+        _ => None,
+    }
+}
+
+/// ERR-7: `.value` keeps the call's normal output, when it has one.
+pub(super) fn captured_output(program: &Program, call: &Expr) -> CapturedOutput {
+    let callable = match &call.kind {
+        ExprKind::Call { callee, .. } => callee.declaration(),
+        _ => None,
+    };
+    match callable
+        .and_then(|(module, declaration)| program.modules[module].details.get(declaration))
+    {
+        Some(Detail::Callable(signature)) if signature.result.is_none() => CapturedOutput::None,
+        _ => CapturedOutput::Of(call.ty.clone()),
+    }
+}
 
 /// ERR-4: the required message and the optional code of a new error.
 pub(super) fn error_fields() -> [(Type, &'static str); 2] {
@@ -589,33 +612,6 @@ impl<'a> Typer<'a> {
         let list = child(&self.syntax_of(call)?, SyntaxKind::ArgList)?;
         let (_, callable) = arguments_of(&list).into_iter().next()?;
         Some(name_token(&callable)?.text().to_owned())
-    }
-
-    /// What the `.value` of a capture of `call` is (ERR-7): "`.value`
-    /// retains the normal output type; outputless calls expose only
-    /// `.error`".
-    pub(super) fn captured_output(&self, call: &Expr) -> CapturedOutput {
-        let callee = match &call.kind {
-            ExprKind::Call {
-                callee:
-                    Callee::Function {
-                        module,
-                        declaration,
-                        ..
-                    }
-                    | Callee::Candidate {
-                        module,
-                        declaration,
-                        ..
-                    },
-                ..
-            } => self.program.modules[*module].details.get(*declaration),
-            _ => None,
-        };
-        match callee {
-            Some(Detail::Callable(signature)) if signature.result.is_none() => CapturedOutput::None,
-            _ => CapturedOutput::Of(call.ty.clone()),
-        }
     }
 
     /// `seen.value` or `seen.error` (ERR-7): "`.value` retains the

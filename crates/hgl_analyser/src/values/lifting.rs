@@ -2,15 +2,18 @@
 //! while the graph is built, and the places that take no connection
 //! (FN-3, FN-6, CTRL-14, EXPR-14). Part of the typing pass ([`super`]).
 
+use std::collections::HashMap;
+
 use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
 
-use super::Typer;
 use super::calls::pending_function_inference;
 use super::control::{bound_by_loop, iterates, iteration_types, no_else_type, while_connection};
 use super::expressions::sequence_element;
 use super::fit::{open, whole};
 use super::forms::received_type;
 use super::members::{index_result, indexed_payload};
+use super::results::{captured_binding, captured_output};
+use super::{CapturedOutput, Typer};
 use crate::hir::{
     Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Run, Stmt, Value, ValueCategory,
     walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
@@ -508,6 +511,7 @@ pub(super) fn record_with(
     use ValueCategory::{Connection, Unsettled};
     let Body { locals, statements } = body;
     let mut first = first_values(locals, statements);
+    let mut capture_types = HashMap::new();
     let mut settling = true;
     while settling {
         settling = false;
@@ -630,7 +634,9 @@ pub(super) fn record_with(
                         }
                         return;
                     }
-                    if let Some(ty) = settled_type(program, locals, value, typer.as_deref_mut()) {
+                    if let Some(ty) =
+                        settled_type(program, locals, &capture_types, value, typer.as_deref_mut())
+                    {
                         settling |= fill_type(&mut value.ty, ty);
                     }
                     return;
@@ -648,6 +654,18 @@ pub(super) fn record_with(
             }
             if composition && declares && !whole(&locals[local].ty) {
                 settling |= fill_type(&mut locals[local].ty, value.ty.clone());
+            }
+            // ERR-7: the boundary stays separate from its output. Keep
+            // the output only for the definite capture bindings source recognizes.
+            if composition
+                && declares
+                && let Some(call) = captured_binding(locals[local].kind, value)
+                && let CapturedOutput::Of(ty) = captured_output(program, call)
+                && whole(&ty)
+                && capture_types.get(&local) != Some(&ty)
+            {
+                capture_types.insert(local, ty);
+                settling = true;
             }
         });
         // A contextual symbol option can introduce locals in its block
@@ -743,6 +761,7 @@ fn fill_type(current: &mut Type, inferred: Type) -> bool {
 fn settled_type(
     program: &Program,
     locals: &[Local],
+    capture_types: &HashMap<LocalId, Type>,
     value: &mut Expr,
     typer: Option<&mut Typer<'_>>,
 ) -> Option<Type> {
@@ -791,6 +810,21 @@ fn settled_type(
             }
         }
         ExprKind::Local(local) => locals.get(*local)?.ty.clone(),
+        // ERR-7: capture already checked the field. The call's output
+        // may have settled after that read, directly or through a `let`.
+        ExprKind::Captured {
+            capture,
+            error: false,
+        } => match &capture.kind {
+            ExprKind::Local(local) | ExprKind::DeferredPresent(local) => {
+                capture_types.get(local)?.clone()
+            }
+            ExprKind::Capture(call) => match captured_output(program, call) {
+                CapturedOutput::Of(ty) => ty,
+                CapturedOutput::None => return None,
+            },
+            _ => return None,
+        },
         // The base may have acquired an element type after a conditional
         // inside a list or tuple settled. Keep the existing projection.
         ExprKind::Index { base, index } => {

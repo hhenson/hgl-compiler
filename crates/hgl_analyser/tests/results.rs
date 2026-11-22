@@ -7,7 +7,7 @@
 mod common;
 
 use common::{body, check, locals, module};
-use hgl_analyser::hir::{ExprKind, Stmt};
+use hgl_analyser::hir::{Callee, ExprKind, Stmt};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -968,4 +968,67 @@ fn a_graph_instance_checks_the_phase_of_a_deferred_capture() {
         checked.report
     );
     assert!(checked.report.contains("`helper` is ordinary work here"));
+}
+
+/// ERR-7: both projections keep their types when a graph instance
+/// resolves the first type argument of the temporal call under a capture.
+#[test]
+fn a_graph_instance_recovers_a_deferred_captures_output() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn echo<U>(value: U) -> U { when { return value } }\n",
+        "fn wrapper<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let seen = capture(echo, chosen)\n",
+        "    let failure = seen.error\n",
+        "    let copied = seen.value\n",
+        "    let direct = capture(echo, chosen).value\n",
+        "    let forwarded = copied\n",
+        "    return forwarded\n",
+        "}\n",
+        "fn admitted() -> i64 => wrapper(1)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let [
+        Stmt::Return {
+            value: Some(call), ..
+        },
+    ] = body(&checked, "admitted").statements.as_slice()
+    else {
+        panic!("return of the concrete call");
+    };
+    let ExprKind::Call {
+        callee:
+            Callee::Function {
+                module,
+                declaration,
+                generics,
+                requirements,
+                ..
+            },
+        ..
+    } = &call.kind
+    else {
+        panic!("concrete graph call");
+    };
+    let (_, instance) = checked
+        .program
+        .instance(*module, *declaration, generics, requirements)
+        .unwrap();
+    let typed: Vec<_> = instance.locals[2..]
+        .iter()
+        .map(|local| (local.name.as_str(), local.ty.to_string()))
+        .collect();
+    assert_eq!(
+        typed,
+        [
+            ("seen", "_".into()),
+            ("failure", "error".into()),
+            ("copied", "i64".into()),
+            ("direct", "i64".into()),
+            ("forwarded", "i64".into())
+        ]
+    );
 }
