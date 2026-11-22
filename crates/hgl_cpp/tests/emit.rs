@@ -1410,6 +1410,15 @@ fn a_statement_names_its_hgl_file_and_line() {
         .position(|line| line.contains("static const ::hgraph::Int value = 2;"))
         .unwrap();
     assert_eq!(lines[constant - 1], "#line 5 \"demo.apps.backtest.hgl\"");
+    for mapped in [constant, recorded, stored] {
+        assert_eq!(
+            lines[mapped + 1],
+            format!(
+                "#line {} \"modules/mod-demo-apps-backtest.cpp\"",
+                mapped + 3
+            )
+        );
+    }
 }
 
 /// A node a test writes ahead of itself, an eval's lifted call of a value

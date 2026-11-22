@@ -359,7 +359,8 @@ pub(crate) const RESTORE: &str = "// The lines of this file again, from here (#l
 /// statement writes is given the statement's line: what it needs run
 /// before it (`Scope::before`), the statement itself, and the lines of a
 /// block around the statements inside it. Each statement inside it has
-/// given its own lines its own line first, and keeps it.
+/// given its own lines its own line first, and keeps it. Restore the C++
+/// location before the next compiler-generated line.
 pub(crate) fn stamped(directive: &str, text: &str) -> String {
     let mut out = String::with_capacity(text.len() * 2);
     let mut after_directive = false;
@@ -372,6 +373,10 @@ pub(crate) fn stamped(directive: &str, text: &str) -> String {
         out.push_str(line);
         out.push('\n');
         after_directive = is_directive;
+    }
+    if !out.is_empty() {
+        out.push_str(RESTORE);
+        out.push('\n');
     }
     out
 }

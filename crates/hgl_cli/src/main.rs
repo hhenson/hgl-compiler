@@ -239,7 +239,8 @@ struct RunArgs {
     config: Vec<Replacement>,
 
     /// Build with native debug symbols and print a JSON launch description.
-    /// A fresh session directory under DIR holds the executable and its sources.
+    /// A fresh session directory under DIR holds the executable and generated C++.
+    /// Debug symbols refer to the original HGL application files.
     /// The application is started by the debugger.
     #[arg(long, value_name = "DIR", conflicts_with = "keep")]
     debug_build: Option<PathBuf>,

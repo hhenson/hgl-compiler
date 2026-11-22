@@ -2332,7 +2332,7 @@ fn builds_an_isolated_debug_application_without_running_it() {
         let report = hgl_in(
             &["run", &argument(&root), "--debug-build", &argument(&builds)],
             &[],
-            &[],
+            &["LD_LIBRARY_PATH"],
         );
         assert!(report.status.success(), "{}", text(&report.stderr));
         serde_json::from_slice::<serde_json::Value>(&report.stdout).unwrap()
@@ -2340,6 +2340,12 @@ fn builds_an_isolated_debug_application_without_running_it() {
     let launch = prepare();
     assert_eq!(launch["version"], 1);
     let executable = launch["executable"].as_str().unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        let directories = launch["environment"]["LD_LIBRARY_PATH"].as_str().unwrap();
+        assert!(std::env::split_paths(directories).all(|path| !path.as_os_str().is_empty()));
+        check_backtest_line_table(executable);
+    }
     let args = launch["arguments"]
         .as_array()
         .unwrap()
@@ -2369,6 +2375,63 @@ fn builds_an_isolated_debug_application_without_running_it() {
             .filter(|line| line.starts_with("published "))
             .count(),
         3
+    );
+}
+
+/// Inspect the native addresses a debugger can bind to (RUN-1). Line 18 is
+/// an assignment in count_of, which this application never wires.
+#[cfg(target_os = "linux")]
+fn check_backtest_line_table(executable: &str) {
+    let dump = Command::new("readelf")
+        .args(["--debug-dump=decodedline", executable])
+        .env("LC_ALL", "C")
+        .output()
+        .expect("GNU readelf reads the SDK executable");
+    assert!(dump.status.success(), "{}", text(&dump.stderr));
+    let table = text(&dump.stdout);
+    let count_line = TICKS
+        .lines()
+        .position(|line| line.trim() == "count += 1")
+        .unwrap()
+        + 1;
+    let mut count_addresses = Vec::new();
+    for (file, source) in [("ticks.hgl", TICKS), ("backtest.hgl", BACKTEST)] {
+        let end = source.lines().count();
+        let mut seen = false;
+        for row in table.lines() {
+            let mut fields = row.split_whitespace();
+            if fields.next() != Some(file) {
+                continue;
+            }
+            // A dash ends a DWARF line sequence and has no source line.
+            let number = fields.next().unwrap();
+            if number == "-" {
+                continue;
+            }
+            let line: usize = number.parse().unwrap();
+            seen = true;
+            assert!((1..=end).contains(&line), "{file} has {end} lines: {row}");
+            if file == "ticks.hgl" && line == count_line {
+                count_addresses.push(fields.next().unwrap());
+            }
+        }
+        assert!(seen, "no line entries for {file}");
+    }
+    assert!(!count_addresses.is_empty(), "no address for count += 1");
+    let symbols = Command::new("addr2line")
+        .args(["--functions", "--demangle", "--exe", executable])
+        .args(&count_addresses)
+        .output()
+        .expect("GNU addr2line reads the breakpoint addresses");
+    assert!(symbols.status.success(), "{}", text(&symbols.stderr));
+    let locations = text(&symbols.stdout);
+    let owners: Vec<_> = locations.lines().step_by(2).collect();
+    assert_eq!(owners.len(), count_addresses.len());
+    assert!(
+        owners
+            .iter()
+            .all(|name| name.contains("::count_of::impl_::eval(")),
+        "{locations}"
     );
 }
 

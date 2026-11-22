@@ -2459,9 +2459,11 @@ launch has its own subdirectory under DIR. The caller owns its lifetime.
 On success stdout is one JSON object with `version: 1`, absolute `executable`,
 `arguments` (an array), `workingDirectory`, and `environment` (overrides to
 inherit alongside the caller's environment). Start that exact command in
-the debugger. Its console mirrors the results protocol, including each
-publication. The debugger owns process termination and may close stdin.
+the debugger. Its console mirrors the results protocol. After the run
+returns it prints the recorded publications. The debugger owns process termination and may close stdin.
 Ordinary application runs keep their host stop pipe. HGL statements use the
-existing C++ `#line` mappings with absolute source paths in debug builds.
+existing C++ `#line` mappings with absolute application and module paths.
+After each mapped statement, generated code uses its own C++ file and line.
+Bundled core uses display names such as `<core>/core/core.hgl`.
 With `--arg` or `--config`, breakpoints use the original file and line. A
 configuration inserted by the driver has only a generated C++ location.

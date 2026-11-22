@@ -264,11 +264,14 @@ impl Emitter<'_> {
         let place = self.place_of(index);
         let comment = format!("// const {}: {ty} (UNIT-13), {place}\n", declaration.name);
         // The HGL file and line of the value, which a failure of it names.
-        let directive = self.line_directive(at).unwrap_or_default();
+        let init = format!("{INDENT}static const {written} value = {value};\n");
+        let init = match self.line_directive(at) {
+            Some(directive) => super::stamped(&directive, &init),
+            None => init,
+        };
         self.piece.declaration = format!("{comment}const {written}& {name}();\n");
-        self.piece.text = format!(
-            "{comment}const {written}& {name}()\n{{\n{directive}{INDENT}static const {written} value = {value};\n{INDENT}return value;\n}}\n"
-        );
+        self.piece.text =
+            format!("{comment}const {written}& {name}()\n{{\n{init}{INDENT}return value;\n}}\n");
     }
 }
 
