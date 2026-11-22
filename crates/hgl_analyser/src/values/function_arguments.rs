@@ -216,6 +216,7 @@ impl Typer<'_> {
             generics,
             type_packs: pack.into_iter().collect(),
             requirements,
+            contextual: Vec::new(),
         };
         Some((callee, actual))
     }

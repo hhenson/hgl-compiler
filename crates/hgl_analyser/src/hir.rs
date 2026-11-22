@@ -1051,6 +1051,31 @@ pub struct DeferredOperator {
     pub captured: bool,
 }
 
+/// A function argument waiting for a type its graph instance can infer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextualArgument {
+    /// Its index in the call's arguments, in written order.
+    pub position: usize,
+    /// The argument's source expression.
+    pub at: Location,
+    /// The local proofs in scope at this read (ERR-3, ERR-12, TIME-4).
+    pub facts: Vec<ArgumentFact>,
+}
+
+/// A fact about a binding, recorded by declaration location so it can be
+/// recovered if an instance inserts hidden parameters before its locals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgumentFact {
+    /// A nullable local is present (ERR-12).
+    Present(Location),
+    /// An input is valid (TIME-4).
+    Valid(Location),
+    /// The local is a success (ERR-3).
+    Success(Location),
+    /// The local is a failure (ERR-3).
+    Failure(Location),
+}
+
 /// What a call calls.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Callee {
@@ -1073,6 +1098,9 @@ pub enum Callee {
         /// `generics` in place: see [`Answer`]. Empty where `generics`
         /// is.
         requirements: Vec<Answer>,
+        /// Written arguments whose places still depend on graph instance
+        /// inference, by index and source location (GEN-2, EXPR-9, ERR-2).
+        contextual: Vec<ContextualArgument>,
     },
     /// The value candidate selected for a call of an operator (GEN-5).
     Candidate {

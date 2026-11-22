@@ -76,6 +76,10 @@ impl GraphDestinations {
                     callee: Callee::DeferredOperator(_),
                     ..
                 } => true,
+                ExprKind::Call {
+                    callee: Callee::Function { contextual, .. },
+                    ..
+                } => !contextual.is_empty(),
                 _ => false,
             };
         });

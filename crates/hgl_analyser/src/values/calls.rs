@@ -8,7 +8,6 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
-use super::Typer;
 use super::arguments::{Slot, Takes};
 use super::constants::generic_default;
 use super::evals::{trace_input_type, trace_pack_type};
@@ -20,6 +19,7 @@ use super::inference::{
 use super::lifting::fill_type;
 use super::node::RefRead;
 use super::sizes;
+use super::{Fact, Typer};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, ValueCategory};
 use crate::program::{Binding, DeclarationKind, OperatorRef, Program, Role};
@@ -739,6 +739,7 @@ impl<'a> Typer<'a> {
                 generics: Vec::new(),
                 type_packs: Vec::new(),
                 requirements,
+                contextual: Vec::new(),
             };
             let kind = ExprKind::Call {
                 callee,
@@ -814,6 +815,7 @@ impl<'a> Typer<'a> {
             mut found,
             unknown,
             defaulted,
+            contextual,
         } = self.infer_arguments(name, list, &places, found, Takes::Parameters);
         let mut inferred_packs = vec![None; generics.len()];
         // FN-8 and GEN-10: collect the individual types in capture order.
@@ -968,6 +970,11 @@ impl<'a> Typer<'a> {
                 })
                 .collect(),
             requirements,
+            contextual: if !faulty && self.diagnostics.len() == reported {
+                contextual
+            } else {
+                Vec::new()
+            },
         };
         let kind = ExprKind::Call {
             callee,
@@ -1042,6 +1049,7 @@ impl<'a> Typer<'a> {
                     generics,
                     type_packs,
                     requirements,
+                    contextual,
                 },
             arguments,
             ..
@@ -1077,7 +1085,13 @@ impl<'a> Typer<'a> {
         }
         let Some(mut supplied) = arguments
             .iter()
-            .map(|argument| Some((argument.parameter?, &argument.value)))
+            .enumerate()
+            .filter(|(position, _)| {
+                contextual
+                    .binary_search_by_key(position, |argument| argument.position)
+                    .is_err()
+            })
+            .map(|(_, argument)| Some((argument.parameter?, &argument.value)))
             .collect::<Option<Vec<_>>>()
         else {
             return false;
@@ -1145,6 +1159,22 @@ impl<'a> Typer<'a> {
         if !self.settle_type_packs(signature, arguments, &mut packs, listed) {
             return false;
         }
+        let Some(sources) = contextual
+            .iter()
+            .map(|argument| {
+                let node = self.node_at(argument.at)?;
+                // A positional argument and its expression can share a span.
+                let value = if node.kind() == SyntaxKind::Arg {
+                    node.children().next()?
+                } else {
+                    node
+                };
+                Some((argument, value))
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return false;
+        };
         if let Some((name, defaulted)) = defaults {
             for index in dependent {
                 found[index] = None;
@@ -1181,7 +1211,11 @@ impl<'a> Typer<'a> {
                 resolved.iter().map(Some),
             );
         }
-        for argument in arguments {
+        if !sources.is_empty() {
+            self.index_instance_locals();
+        }
+        let mut sources = sources.into_iter().peekable();
+        for (position, argument) in arguments.iter_mut().enumerate() {
             let parameter =
                 &signature.parameters[argument.parameter.expect("the call binds each argument")];
             // Graph destinations fit heterogeneous pack elements using
@@ -1190,6 +1224,50 @@ impl<'a> Typer<'a> {
                 continue;
             }
             let ty = placed(substitute_within(&parameter.ty, &map), &own);
+            if let Some((source, node)) = sources.next_if(|(source, _)| source.position == position)
+            {
+                if !self.may_reread() {
+                    continue;
+                }
+                // EXPR-9 and ERR-2: use the normal argument reader
+                // with its completed place, in written order (EXPR-2).
+                let slot = Slot {
+                    name: &parameter.name,
+                    configuration: parameter.configuration,
+                    ty,
+                    required: false,
+                    pack: parameter.pack,
+                    pack_bounds: parameter.pack_bounds,
+                    type_pack: None,
+                    listed,
+                };
+                let previous = std::mem::take(&mut self.present);
+                self.present
+                    .extend(source.facts.iter().filter_map(|fact| match fact {
+                        hir::ArgumentFact::Present(at) => {
+                            self.declared.get(at).copied().map(Fact::Present)
+                        }
+                        hir::ArgumentFact::Valid(at) => {
+                            self.declared.get(at).copied().map(Fact::Valid)
+                        }
+                        hir::ArgumentFact::Success(at) => {
+                            self.declared.get(at).copied().map(Fact::Success)
+                        }
+                        hir::ArgumentFact::Failure(at) => {
+                            self.declared.get(at).copied().map(Fact::Failure)
+                        }
+                    }));
+                argument.value = self
+                    .argument(
+                        argument.parameter,
+                        &node,
+                        Some((&slot, false)),
+                        Takes::Parameters,
+                    )
+                    .value;
+                self.present = previous;
+                continue;
+            }
             if !matches!(ty, Type::Function(_))
                 && !self.lifted_window(&ty, listed, &argument.value, Takes::Parameters)
                 && argument.value.ty != ty
@@ -1217,6 +1295,7 @@ impl<'a> Typer<'a> {
         });
         *generics = resolved;
         *type_packs = packs;
+        contextual.clear();
         self.finished_call(&call.kind, false);
         true
     }

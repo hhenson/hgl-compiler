@@ -2610,6 +2610,88 @@ fn graph_instances_complete_named_function_inference() {
     assert_eq!(generics.unwrap(), ["str", "i64", "9"]);
 }
 
+/// GEN-2, EXPR-9 and ERR-2: a contextual argument does not supply the
+/// missing type itself. Read it with the completed place and source facts.
+#[test]
+fn graph_instances_type_contextual_function_arguments() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn from_result<U>(value: U, fallback: result<U, error>) -> U => value\n",
+        "const fn from_list<U>(value: U, fallback: list<U>) -> U => value\n",
+        "fn wrapped<T>(const input: T, const known: result<i64, error>) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    if is_ok(known) {\n",
+        "        let guarded = from_result(fallback: ok(known.value), value: chosen)\n",
+        "        return guarded\n",
+        "    }\n",
+        "    let collected = from_list(chosen, [])\n",
+        "    return collected\n",
+        "}\n",
+        "fn wrong<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let copied = from_result(chosen, ok(\"bad\"))\n",
+        "    return copied\n",
+        "}\n",
+        "fn malformed<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let copied = from_result(chosen, ok(2, 3))\n",
+        "    return copied\n",
+        "}\n",
+        "fn explicit<T>(const input: T) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    return from_result<i64>(chosen, ok(\"bad\"))\n",
+        "}\n",
+        "fn admitted() -> i64 => wrapped(1, ok(2))\n",
+        "fn rejected() -> i64 => wrong(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:23:44 type/argument.unexpected ERR-2",
+            "m.hgl:28:40 type/type.mismatch EXPR-5",
+            "m.hgl:31:25 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    let mut calls = Vec::new();
+    walk_statements(&instance.statements, &mut |value| {
+        if let ExprKind::Call {
+            callee:
+                Callee::Function {
+                    generics,
+                    contextual,
+                    ..
+                },
+            arguments,
+            ..
+        } = &value.kind
+            && !generics.is_empty()
+        {
+            assert!(contextual.is_empty());
+            calls.push(
+                arguments
+                    .iter()
+                    .map(|argument| (argument.parameter, argument.value.ty.to_string()))
+                    .collect::<Vec<_>>(),
+            );
+        }
+    });
+    assert_eq!(
+        calls,
+        [
+            vec![
+                (Some(1), "result<i64, error>".into()),
+                (Some(0), "i64".into())
+            ],
+            vec![(Some(0), "i64".into()), (Some(1), "list<i64>".into())],
+        ]
+    );
+}
+
 /// FN-8, GEN-8 and GEN-10: late positional and named elements keep
 /// capture order, while the types written for a pack still decide it.
 #[test]

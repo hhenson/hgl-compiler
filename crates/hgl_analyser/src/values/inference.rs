@@ -4,9 +4,8 @@
 //! ([`super`]).
 
 use hgl_diagnostics::{Category, Location};
-use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::Typer;
 use super::arguments::{Assigned, Slot, Takes};
 use super::candidates::typed_by_place;
 use super::constants::{constant_text, generic_default};
@@ -14,10 +13,12 @@ use super::evals::{holds_trace, publications, trace_input_type, trace_pack_type}
 use super::expressions::{holds_block, takes_its_type};
 use super::fit::{not_null, open, whole};
 use super::forms::Taken;
+use super::{Fact, Typer};
 use crate::constant::Fault;
 use crate::declared::{names_one_of, names_parameter, substitute_within};
-use crate::hir::{self, Expr};
+use crate::hir::{self, Expr, ValueCategory};
 use crate::program::Declaration;
+use crate::syntax::ungrouped;
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, GenericKind, GenericParameter, Pack,
     Parameter, Signature, Type,
@@ -570,6 +571,7 @@ impl<'a> Typer<'a> {
         // The generic parameters an argument decided: what the call
         // writes, or its place expects, is not widened (GEN-2).
         let mut by_argument = vec![false; generics.len()];
+        let mut late = std::collections::HashSet::new();
         for position in order {
             let Assigned {
                 slot, value: node, ..
@@ -620,9 +622,23 @@ impl<'a> Typer<'a> {
             }
             // What the argument's type says: a parameter not yet found,
             // or a wider one for a parameter an argument decided.
-            let mut learn = |this: &Self, actual: &Type, found: &mut Vec<Option<Argument>>| {
+            let listed = slots[index].listed;
+            let mut learn = |this: &Self, value: &Expr, found: &mut Vec<Option<Argument>>| {
+                if this.graph
+                    && takes == Takes::Parameters
+                    && !whole(&value.ty)
+                    && this.category(value) == ValueCategory::Unsettled
+                {
+                    late.extend(
+                        unfound
+                            .iter()
+                            .copied()
+                            .filter(|at| mentions(pattern, &[*at])),
+                    );
+                }
+                let actual = this.inferred_from(listed, value, takes);
                 let actual =
-                    this.inference_input(pattern, actual, generics, found, *result_fallback);
+                    this.inference_input(pattern, &actual, generics, found, *result_fallback);
                 if let Some(generic) = widenable {
                     if let Some(Argument::Type(decided)) = &found[generic]
                         && this.widens(decided, actual)
@@ -655,7 +671,6 @@ impl<'a> Typer<'a> {
             };
             // TST-16: what a trace is where a `const fn` is given it
             // says what the parameter is, as any value's type does.
-            let listed = slots[index].listed;
             let as_given = |value: hir::Expr| {
                 if listed { publications(value) } else { value }
             };
@@ -663,16 +678,14 @@ impl<'a> Typer<'a> {
                 if self.may_reread() {
                     let mark = self.mark();
                     let value = as_given(self.expression(node, Some(read_as)));
-                    let says = self.inferred_from(listed, &value, takes);
-                    learn(self, &says, &mut found);
+                    learn(self, &value, &mut found);
                     self.take_back(mark, false);
                 }
                 continue;
             }
             let reported = self.diagnostics.len();
             let value = as_given(self.expression(node, Some(read_as)));
-            let says = self.inferred_from(listed, &value, takes);
-            learn(self, &says, &mut found);
+            learn(self, &value, &mut found);
             // A value with no whole type while nothing is known of its
             // place, `[1, "x"]`, has not been judged. Neither has one
             // that is read as the type of its place, a sequence or a
@@ -766,6 +779,7 @@ impl<'a> Typer<'a> {
             .filter(|(_, found)| found.is_none())
             .map(|(generic, _)| generic.at)
             .collect();
+        let mut contextual = Vec::new();
         let arguments: Vec<hir::Argument> = assigned
             .iter()
             .enumerate()
@@ -795,6 +809,20 @@ impl<'a> Typer<'a> {
                     (None, _) => resolved_type(pattern),
                 };
                 let slot = Slot { ty, ..slots[index] };
+                // EXPR-9 and ERR-2: an empty sequence or a form with no
+                // type of its own needs the slot another argument can
+                // settle in the graph instance (GEN-2).
+                let ungrouped = ungrouped(node.clone());
+                let needs_place = takes_its_type(&ungrouped)
+                    || ungrouped.kind() == SyntaxKind::SequenceExpr
+                        && ungrouped.children().next().is_none();
+                let depends_on_instance = !whole(&slot.ty)
+                    && needs_place
+                    && unfound.iter().any(|at| mentions(pattern, &[*at]))
+                    && unfound
+                        .iter()
+                        .filter(|at| mentions(pattern, &[**at]))
+                        .all(|at| late.contains(at));
                 // A place whose type names a parameter nothing resolved
                 // is not known, and where the call is settled it never
                 // will be. Its argument is then read as one of which
@@ -808,7 +836,29 @@ impl<'a> Typer<'a> {
                     && slot.type_pack.is_none()
                     && !(traced && pack.is_some())
                     && !takes_its_type(node)
+                    && !depends_on_instance
                     && mentions(patterns[index], &unfound);
+                let reported = self.diagnostics.len();
+                let facts = depends_on_instance.then(|| {
+                    self.present
+                        .iter()
+                        .filter_map(|fact| match fact {
+                            Fact::Present(local) => {
+                                Some(hir::ArgumentFact::Present(self.locals[*local].at))
+                            }
+                            Fact::Valid(local) => {
+                                Some(hir::ArgumentFact::Valid(self.locals[*local].at))
+                            }
+                            Fact::Success(local) => {
+                                Some(hir::ArgumentFact::Success(self.locals[*local].at))
+                            }
+                            Fact::Failure(local) => {
+                                Some(hir::ArgumentFact::Failure(self.locals[*local].at))
+                            }
+                            Fact::AllValid(_) | Fact::ChildValid(_) => None,
+                        })
+                        .collect()
+                });
                 let mut argument = match values[position].take() {
                     None if placeless => hir::Argument {
                         parameter: Some(index),
@@ -854,6 +904,16 @@ impl<'a> Typer<'a> {
                     None => self.argument(Some(index), node, Some((&slot, traced)), takes),
                 };
                 argument.pack = pack.as_ref().map(|(_, key)| key.clone());
+                if let Some(facts) = facts
+                    && !whole(&argument.value.ty)
+                    && self.diagnostics.len() == reported
+                {
+                    contextual.push(hir::ContextualArgument {
+                        position,
+                        at: self.at(node),
+                        facts,
+                    });
+                }
                 argument
             })
             .collect();
@@ -873,6 +933,7 @@ impl<'a> Typer<'a> {
             found,
             unknown,
             defaulted,
+            contextual,
         }
     }
 }
@@ -964,6 +1025,8 @@ pub(super) struct Inferred {
     /// The generic value parameters that took their defaults, by their
     /// positions among the generic parameters.
     pub(super) defaulted: Vec<usize>,
+    /// The context-dependent arguments still waiting on graph types.
+    pub(super) contextual: Vec<hir::ContextualArgument>,
 }
 
 /// The positions of a call's arguments in the order their places are
