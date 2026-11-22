@@ -245,13 +245,32 @@ impl ForwardingInstance {
     }
 }
 
+/// Include anonymous bodies, which have their own local tables and
+/// are separate from an ordinary HIR expression walk (FN-14).
+fn visit_anonymous_bodies(value: &Expr, visit: &mut dyn FnMut(&Expr)) {
+    visit(value);
+    let callee = match &value.kind {
+        ExprKind::Call { callee, .. } => callee,
+        ExprKind::StaticCallable(callee) => callee,
+        _ => return,
+    };
+    if let Callee::Anonymous(function) = callee {
+        walk_nested_calls(&function.body.statements, visit);
+    }
+}
+
+fn walk_nested_calls(statements: &[crate::hir::Stmt], visit: &mut dyn FnMut(&Expr)) {
+    crate::hir::walk_statements(statements, &mut |value| {
+        visit_anonymous_bodies(value, visit)
+    });
+}
+
 /// Check forwarded calls under the concrete shapes that reach them (FN-19).
 /// A forwarding error belongs to the call that supplies that pack shape.
 pub(super) fn check_instances(
     program: &crate::Program,
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
-    use crate::hir::walk_statements;
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = HashSet::new();
@@ -260,7 +279,7 @@ pub(super) fn check_instances(
         for (declaration, body) in unit.bodies.iter().enumerate() {
             let Some(body) = body else { continue };
             let owner = (module, declaration);
-            walk_statements(&body.statements, &mut |value| {
+            walk_nested_calls(&body.statements, &mut |value| {
                 if let ExprKind::Call { callee, .. } = &value.kind {
                     if matches!(callee, Callee::DeferredPackCall) {
                         forwarding.insert(owner);
@@ -298,13 +317,19 @@ pub(super) fn check_instances(
             .chain(unit.test_bodies.iter().flatten())
             .chain(&unit.store_body)
         {
-            walk_statements(&body.statements, &mut record);
+            walk_nested_calls(&body.statements, &mut record);
         }
         if let Some(run) = &unit.run_body {
-            run.call.walk(&mut record);
+            run.call
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
         }
         for constant in unit.constants.iter().flatten() {
-            constant.walk(&mut record);
+            constant.walk(&mut |value| visit_anonymous_bodies(value, &mut record));
+        }
+        for default in unit.defaults.iter().flatten().flatten() {
+            default
+                .value
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
         }
     }
     for (initial, at) in roots {
@@ -350,7 +375,7 @@ pub(super) fn check_instances(
                 }
             }
             if let Some((_, body)) = checked {
-                walk_statements(&body.statements, &mut |value| {
+                walk_nested_calls(&body.statements, &mut |value| {
                     if let Some(child) = ForwardingInstance::of(program, value)
                         && forwarding.contains(&child.declaration)
                     {

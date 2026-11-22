@@ -834,7 +834,7 @@ impl<'a> Typer<'a> {
     }
 
     /// A spread can give slots reflected from the selected callback (FN-19).
-    /// Names written explicitly still have to come from the template (FN-17).
+    /// Fixed slots take their names from the template (FN-17).
     fn call_forwarded_parameter(
         &mut self,
         name: &SyntaxToken,
@@ -842,28 +842,48 @@ impl<'a> Typer<'a> {
         target: Callee,
         template: &FunctionType,
     ) -> (ExprKind, Type) {
+        let names = |text: &str| {
+            template
+                .parameters
+                .iter()
+                .any(|input| input.name() == Some(text))
+        };
+        let unknown = |text: &str, at| {
+            error(
+                Category::Name,
+                codes::ARGUMENT_UNKNOWN,
+                at,
+                format!(
+                    "`{}` has no named parameter `{text}` in its function type",
+                    name.text()
+                ),
+                "FN-17",
+            )
+        };
         let before = self.diagnostics.len();
         for (_, given, _) in self.call_entries(list) {
             if let Some(given) = given
-                && !template
-                    .parameters
-                    .iter()
-                    .any(|input| input.name() == Some(given.text()))
+                && !names(given.text())
             {
-                self.diagnostics.emit(error(
-                    Category::Name,
-                    codes::ARGUMENT_UNKNOWN,
+                self.diagnostics.emit(unknown(
+                    given.text(),
                     Location::new(self.file, given.span()),
-                    format!(
-                        "`{}` has no named parameter `{}` in its function type",
-                        name.text(),
-                        given.text()
-                    ),
-                    "FN-17",
                 ));
             }
         }
         if self.diagnostics.len() != before {
+            return (ExprKind::Unread, Type::Unknown);
+        }
+        if template.named_pack.is_none()
+            && let Some((key, at)) = self
+                .forwarded_arguments(list)
+                .into_iter()
+                .find_map(|given| match given.key {
+                    crate::hir::PackKey::Name(key) if !names(&key) => Some((key, given.value.at)),
+                    _ => None,
+                })
+        {
+            self.diagnostics.emit(unknown(&key, at));
             return (ExprKind::Unread, Type::Unknown);
         }
         let program = self.program;
@@ -930,6 +950,7 @@ impl<'a> Typer<'a> {
             .collect();
         let packs = PackTypes::new(&signature.generics, target.type_packs());
         let project = |ty: &Type| packs.project(ty, &map).unwrap_or(Type::Unknown);
+        let mut fixed = template.parameters.iter();
         let slots: Vec<_> = signature
             .parameters
             .iter()
@@ -941,9 +962,16 @@ impl<'a> Typer<'a> {
                         .iter()
                         .find(|pack| pack.parameter == index)
                 });
+                let name = if !parameter.configuration
+                    && let Some(input) = fixed.next()
+                {
+                    input.name().unwrap_or("")
+                } else {
+                    &parameter.name
+                };
                 Slot {
                     configuration: parameter.configuration,
-                    name: &parameter.name,
+                    name,
                     ty: project(&parameter.ty),
                     required: parameter.var
                         || !parameter.has_default && !matches!(parameter.ty, Type::Nullable(_)),
