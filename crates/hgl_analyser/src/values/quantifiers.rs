@@ -12,7 +12,7 @@ use super::inference::infer;
 use crate::declared::{names_parameter, same_type};
 use crate::hir::{PackKey, TypePackArgument};
 use crate::program::{Declaration, Module};
-use crate::syntax::{child, has_token, name_token, tokens};
+use crate::syntax::{child, has_token, tokens};
 use crate::types::{Argument, Constant, ConstantValue, GenericParameter, Type};
 
 /// Resolve the single unknown generic of a positive equality or `any`.
@@ -43,9 +43,7 @@ pub(super) fn bind(
             let (Some(view), Some(body)) = (parts.next(), parts.next()) else {
                 continue;
             };
-            let Some(callee) =
-                child(&view, SyntaxKind::NameExpr).and_then(|name| name_token(&name))
-            else {
+            let Some((callee, pack_name)) = super::requirements::pack_view(view) else {
                 continue;
             };
             if unit
@@ -55,19 +53,6 @@ pub(super) fn bind(
             {
                 continue;
             }
-            if !matches!(callee.text(), "types" | "arg_keys") {
-                continue;
-            }
-            let Some(arguments) = child(&view, SyntaxKind::ArgList) else {
-                continue;
-            };
-            let Some(pack_name) = arguments
-                .descendants()
-                .find(|part| part.kind() == SyntaxKind::NameExpr)
-                .and_then(|name| name_token(&name))
-            else {
-                continue;
-            };
             let Some(parameter) = generics
                 .iter()
                 .position(|generic| generic.name == pack_name.text())

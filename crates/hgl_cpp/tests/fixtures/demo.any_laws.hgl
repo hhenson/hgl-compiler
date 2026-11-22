@@ -10,7 +10,7 @@ struct Chosen<T> {
     value: T? = null
 }
 const fn choose<U, ...Ts>(items: ...Ts) -> Chosen<U>
-    requires any T in types(Ts) { T == list<U> } => Chosen<U>(marker: 11)
+    requires any T in ((types((Ts)))) { T == list<U> } => Chosen<U>(marker: 11)
 const fn integer_choice(value: Chosen<i64>) -> i64 => value.marker
 
 # GEN-18 and RED-7: both laws are defaults of compile-time bool options.
@@ -113,6 +113,8 @@ const fn either_forward<V, const law: bool = associative(f)>(f: const fn(V, V) -
     requires law in {true, false} => either{law: law}(f, a, b)
 const fn negative_forward<V>(f: const fn(V, V) -> V, a: V, b: V) -> V
     requires !(associative(f)) => either(f, a, b)
+const fn negative_bool_forward<V, const enabled: bool>(f: const fn(V, V) -> V, a: V, b: V) -> V
+    requires !((enabled)) => either{law: enabled}(f, a, b)
 const fn difference(a: i64, b: i64) -> i64 => a - b
 
 /** GEN-3, GEN-7, GEN-18: the forwarded bool membership selects each branch. */
@@ -120,6 +122,7 @@ test explicit_bool_membership {
     assert either_forward(add_, 5, 2) == 7
     assert either_forward(difference, 5, 2) == -3
     assert negative_forward(difference, 5, 2) == -3
+    assert negative_bool_forward{enabled: false}(difference, 5, 2) == -3
 }
 
 # GEN-7/GEN-18 ruling: one law-dependent candidate needs a stated guarantee.
@@ -134,4 +137,10 @@ const fn missing_both_guarantees<V>(f: const fn(V, V) -> V, a: V, b: V) -> V => 
 test negative_guarantee_rejects_an_associative_function {
     # expect-error(constraint, "requires.unmet")
     assert negative_forward(add_, 5, 2) == 7
+}
+
+# GEN-3, GEN-15: nested grouping preserves the negative bool requirement.
+test negative_bool_guarantee_rejects_true {
+    # expect-error(constraint, "requires.unmet")
+    assert negative_bool_forward{enabled: true}(difference, 5, 2) == -3
 }
