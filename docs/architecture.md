@@ -2064,8 +2064,14 @@ prints says so. One of no form known, or too short to tell, is. `HGL_HGRAPH_DEBU
 is an error that says what is wrong; a package beside `hgl` that is not
 is passed over, and the optimised libraries are linked, saying why.
 hgraph's installed headers do not depend on `NDEBUG`, so the debug build
-stands in for the optimised one. A debug build's runtime library is
-built as CMake's `Debug`, whichever libraries it links. A debug build
+stands in for the optimised one. The runtime library and the
+description of a program are configured with the libraries' own build
+type, `Debug` for hgraph's debug libraries and `Release` for the
+optimised ones, which picks what a package imports where it imports a
+library of each configuration, so that a program links the build of fmt
+and spdlog hgraph's libraries were built against; the description takes
+none of the build type's flags. A debug build's runtime library is
+compiled with `-O0 -g` alone, whichever libraries it links. A debug build
 says on standard error, before it builds, which it links, and why where
 it links the optimised ones, and its JSON description says it too
 (below).

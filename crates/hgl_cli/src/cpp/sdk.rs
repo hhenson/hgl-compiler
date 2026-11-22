@@ -488,6 +488,19 @@ impl Toolchain {
         })
     }
 
+    /// CMake's build type of the runtime library and of the description of
+    /// a program, which picks the configuration of what a package imports
+    /// where it imports more than one: the libraries' own, `Debug` for
+    /// hgraph's libraries built for debugging and `Release` for the
+    /// optimised ones, so that a program links the build of fmt and spdlog
+    /// hgraph's libraries were built against.
+    fn build_type(&self) -> &'static str {
+        match self.hgraph.build {
+            Build::Debug => "Debug",
+            Build::Optimised => "Release",
+        }
+    }
+
     /// Ninja is needed on a build miss, after reuse has been considered.
     pub(super) fn ninja(&self) -> Result<&Path, String> {
         self.ninja.as_deref().ok_or_else(|| {
@@ -645,12 +658,22 @@ impl Toolchain {
             .arg("-B")
             .arg(&build)
             .args(self.configure_flags()?)
-            // A debug build's runtime library is built for debugging: a
-            // Release build's own `-O3 -DNDEBUG` would follow `-O0 -g`.
-            .arg(format!(
-                "-DCMAKE_BUILD_TYPE={}",
-                if self.debug { "Debug" } else { "Release" }
-            ))
+            .arg(format!("-DCMAKE_BUILD_TYPE={}", self.build_type()))
+            // A debug build's runtime library is built for debugging, with
+            // the toolchain's `-O0 -g` alone: a Release build's own `-O3
+            // -DNDEBUG` would follow them.
+            .args(
+                self.debug
+                    .then(|| {
+                        let configuration = self.build_type().to_uppercase();
+                        [
+                            format!("-DCMAKE_CXX_FLAGS_{configuration}="),
+                            format!("-DCMAKE_SHARED_LINKER_FLAGS_{configuration}="),
+                        ]
+                    })
+                    .into_iter()
+                    .flatten(),
+            )
             .arg(format!("-DCMAKE_INSTALL_PREFIX={}", installed.display()))
             // The library is installed in `lib` on every system, where the
             // description's program finds it.
@@ -697,6 +720,19 @@ impl Toolchain {
             .arg("-B")
             .arg(&build)
             .args(self.configure_flags()?)
+            // The runtime library's build type, so that where a package
+            // imports a library of each configuration the program links
+            // the one the runtime library does; and none of its flags, so
+            // that a generated unit is compiled with the toolchain's alone.
+            .arg(format!("-DCMAKE_BUILD_TYPE={}", self.build_type()))
+            .arg(format!(
+                "-DCMAKE_CXX_FLAGS_{}=",
+                self.build_type().to_uppercase()
+            ))
+            .arg(format!(
+                "-DCMAKE_EXE_LINKER_FLAGS_{}=",
+                self.build_type().to_uppercase()
+            ))
             .arg(format!("-DHGL_RUNTIME={}", runtime.display()));
         run("the description of a build against the SDK", &mut configure)?;
         let target = probe_target(&build.join(".cmake/api/v1/reply"))?;
@@ -1601,6 +1637,22 @@ mod tests {
         // A debug build that links the optimised libraries builds its
         // runtime library for debugging all the same.
         assert_ne!(ordinary, toolchain(&libexec, Build::Optimised, true).key());
+    }
+
+    #[test]
+    fn a_configure_takes_the_build_type_of_the_libraries_it_links() {
+        let libexec = Path::new("libexec");
+        assert_eq!(toolchain(libexec, Build::Debug, true).build_type(), "Debug");
+        // A debug build that links the optimised libraries picks what a
+        // package imports as they were built against.
+        assert_eq!(
+            toolchain(libexec, Build::Optimised, true).build_type(),
+            "Release"
+        );
+        assert_eq!(
+            toolchain(libexec, Build::Optimised, false).build_type(),
+            "Release"
+        );
     }
 
     #[test]
