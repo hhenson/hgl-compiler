@@ -145,7 +145,7 @@ optimiser: planned
 
 parser: partial
 
-- A cardinality after a pack parameter or a generic pack parameter. The `any` quantifier awaits #367.
+- A cardinality after a pack parameter or a generic pack parameter; `each` and `any` quantifiers. `any` remains a scalar type outside the quantifier form.
 
 analyser: partial
 
@@ -244,9 +244,9 @@ analyser: partial
 
 ## GEN-18
 
-parser: planned
+parser: done
 
-- #367 tracks law predicates and bare Boolean constraints.
+- Reads law-predicate calls and bare Boolean generic terms, including their negations and Boolean combinations.
 
 analyser: planned
 

@@ -3110,3 +3110,27 @@ fn an_error_at_the_end_of_the_file_points_at_the_end_of_the_file() {
         ["- 1:13: expected a type, found end of line"]
     );
 }
+
+#[test]
+fn any_quantifies_a_pack_and_remains_a_scalar_type_elsewhere() {
+    // GEN-10: only `any name in` starts the existential quantifier.
+    let tree = declarations("operator pick<...Ts>() requires any T in types(Ts) { T == i64 }");
+    assert!(tree.contains("ConstraintAny["), "{tree}");
+    let tree = declarations("operator pick<T>() requires T == any");
+    assert!(tree.contains("ScalarType[\"any\"]"), "{tree}");
+    rejected(
+        Entry::Declarations,
+        "operator pick<...Ts>() requires any T in types(Ts) {}",
+    );
+}
+
+#[test]
+fn bool_generic_terms_compose_with_law_predicates() {
+    // GEN-3, GEN-18: bare bool terms, negation, and law calls compose.
+    let tree = declarations(
+        "operator fold<const law: bool>(f: fn(i64, i64) -> i64) requires law && (!law || associative(f))",
+    );
+    assert!(tree.contains("ConstraintValue[\"law\"]"), "{tree}");
+    assert!(tree.contains("ConstraintCall["), "{tree}");
+    declarations("operator fold<T>(f: fn(T, T) -> T) requires commutative(f)");
+}

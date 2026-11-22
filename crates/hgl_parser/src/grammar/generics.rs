@@ -217,7 +217,8 @@ impl Parser<'_> {
     ///                 | "(", constraint_expression, ")"
     ///                 | constraint_relation
     ///                 | constraint_call
-    ///                 | "each", IDENTIFIER, "in", constraint_operand, "{", constraint_expression, "}" ;
+    ///                 | IDENTIFIER
+    ///                 | ( "each" | "any" ), IDENTIFIER, "in", constraint_operand, "{", constraint_expression, "}" ;
     /// constraint_relation = constraint_operand, ( "==" | "in" | "is" ), constraint_operand ;
     /// ```
     fn constraint_term(&mut self) {
@@ -229,14 +230,19 @@ impl Parser<'_> {
             self.bump();
             self.constraint_term();
             self.finish();
-        } else if self.at_word("each")
+        } else if (self.at_word("each") || self.at(KwAny))
             && self.nth(1) == Ident
             && self.nth_word(2, "in")
             && !self.cut_at(1)
             && !self.cut_at(2)
         {
-            // LEX-10: `each` and `in` are names with a meaning only here.
-            self.start(ConstraintEach);
+            // GEN-10: `any` is a quantifier only before a name and `in`;
+            // elsewhere it remains an ordinary scalar type.
+            self.start(if self.at(KwAny) {
+                ConstraintAny
+            } else {
+                ConstraintEach
+            });
             self.bump();
             self.bump();
             self.bump();
@@ -266,7 +272,12 @@ impl Parser<'_> {
             });
             self.finish();
         } else if self.at(Ident) {
-            self.constraint_call();
+            if matches!(self.nth(1), LParen | ColonColon) {
+                self.constraint_call();
+            } else {
+                // GEN-3: a bool generic value is itself a constraint term.
+                self.leaf(ConstraintValue);
+            }
         } else {
             self.expected("a constraint");
         }

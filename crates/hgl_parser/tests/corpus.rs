@@ -32,7 +32,6 @@ struct Pending {
 }
 
 const FUNCTIONS: &str = "hgl_spec/spec/language/functions-and-phases.md";
-const GENERICS: &str = "hgl_spec/spec/language/generics-and-operators.md";
 const MAPPING: &str = "hgl_core/spec/mapping.md";
 const DIAGNOSTICS: &str = "hgl_core/spec/diagnostics.md";
 
@@ -43,14 +42,9 @@ const PENDING: &[Pending] = &[
         reason: "LEX-29, EXPR-16, EXPR-17, FN-19 (#368)",
     },
     Pending {
-        file: GENERICS,
-        opening: "operator keyed<K, R, ...Ps, ...As>(",
-        reason: "GEN-10 and GEN-18 (#367)",
-    },
-    Pending {
         file: MAPPING,
         opening: "export enum Join { inner, outer, left }",
-        reason: "GEN-10 and GEN-18 (#367), EXPR-16, EXPR-17 and FN-19 (#368)",
+        reason: "EXPR-16, EXPR-17 and FN-19 (#368)",
     },
     Pending {
         file: "hgl_core/spec/formatting.md",
