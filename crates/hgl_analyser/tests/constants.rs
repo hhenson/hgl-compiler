@@ -49,7 +49,7 @@ fn a_constant_names_one_value_of_its_type() {
         .iter()
         .zip(&module.constants)
         .filter_map(|(declaration, value)| {
-            let value = value.as_ref()?;
+            let value = &value.as_ref()?.value;
             Some(format!("{}: {}", declaration.name, value.ty))
         })
         .collect();
