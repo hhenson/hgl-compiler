@@ -212,9 +212,11 @@ parser: done
 analyser: done
 
 - Types each entry in the iteration scope. A fixed result gets the range's constant length or its fixed iterable's extent, which must agree with the destination after selection.
+- In composition, ordinary entries over a range make an ordinary list that a `const` parameter can take. A connection in a range's entries or the use of a fixed-list connection as the iterable makes a fixed list connection.
 
 transpiler: partial
 
 - Builds growing and fixed ordinary lists. Composes a nonempty fixed list of connections over a range or a fixed input list.
+- Temporal conditionals and switches in an entry capture that pass's range binding or list child.
 - Cold constant initializers and field defaults keep their comprehension bindings. The target visits the source's extent and checks the count before constructing a fixed result.
 - The pinned hgraph SDK requires a positive extent for a fixed temporal list.

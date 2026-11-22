@@ -249,7 +249,9 @@ impl Emitter<'_> {
             )
         };
         let begin = std::mem::take(&mut scope.before).join("\n");
-        let entry = self.connection(scope, entry, element);
+        let entry = self.with_unrolled_bindings(&[binding], |emitter| {
+            emitter.comprehension_entry_port(scope, entry, element)
+        });
         let before_entry = std::mem::replace(&mut scope.before, saved).join("\n");
         scope.conditional -= 1;
         scope.acted = true;
@@ -257,6 +259,29 @@ impl Emitter<'_> {
         format!(
             "[&]() -> ::hgraph::Port<{schema}> {{\n{begin}\n::std::vector<::hgraph::WiringPortRef> {children};\n{children}.reserve({count});\n{header}\n{before_entry}\n{children}.push_back(({entry}).erased());\n}}\n{check}return {{&{WIRING}, ::hgraph::WiringPortRef::structural_source(::hgraph::schema_descriptor<{schema}>::ts_meta(), ::std::move({children}))}};\n}}()"
         )
+    }
+
+    /// Compose a list entry in its pass, including the statements of a
+    /// block whose tail gives the entry's connection (CTRL-10, EXPR-17).
+    fn comprehension_entry_port(
+        &mut self,
+        scope: &mut Scope,
+        mut entry: &Expr,
+        element: &Type,
+    ) -> String {
+        let mut body = String::new();
+        while let ExprKind::Block {
+            statements,
+            value: Some(tail),
+        } = &entry.kind
+        {
+            self.statements(scope, statements, 0, &mut body);
+            entry = tail;
+        }
+        if !body.is_empty() {
+            scope.before.push(body);
+        }
+        self.connection(scope, entry, element)
     }
 
     /// The endpoint of `child`, a child of a temporal input that is a
@@ -537,6 +562,7 @@ impl Family for Lists {
             binding,
             sequence,
             entry,
+            ..
         } = &value.kind
         {
             return Some(emitter.list_comprehension_port(
