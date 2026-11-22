@@ -180,6 +180,9 @@ pub mod codes {
     /// candidate of its operator declares as a generic value parameter
     /// (GEN-6).
     pub const IMPL_OPTION_KIND: &str = "impl.option_kind";
+    /// An earlier property clause of the operator names the same domain
+    /// (GEN-9).
+    pub const PROPERTY_DUPLICATE: &str = "property.duplicate";
     /// A candidate declares a fixed parameter in its operator's pack slot (GEN-6).
     pub const IMPL_PACK: &str = "impl.pack";
     /// A native implementation completes no declaration (NATIVE-2).

@@ -1,7 +1,8 @@
 //! The values a body reads as compile-time constants: the value a module
-//! constant is written with, the defaults of parameters and of fields, and
-//! a constant written where a generic value parameter takes one (UNIT-8,
-//! UNIT-13, GEN-8). Part of the typing pass ([`super`]); what a constant
+//! constant is written with, the defaults of parameters and of fields, the
+//! identity of an operator, and a constant written where a generic value
+//! parameter takes one (UNIT-8, UNIT-13, GEN-8, GEN-9).
+//! Part of the typing pass ([`super`]); what a constant
 //! comes to is worked out by [`crate::constant`].
 
 use hgl_diagnostics::{Category, Location};
@@ -17,13 +18,45 @@ use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{DefaultExpr, Expr, ExprKind, Value};
 use crate::program::{Declaration, Role};
 use crate::read::{default_of, parameters};
-use crate::syntax::{child, tokens};
+use crate::syntax::{child, name_token, tokens};
 use crate::types::{
     Argument, Constant, ConstantValue, GenericKind, GenericParameter, Parameter, StructType, Type,
 };
 use crate::{codes, error, local_error};
 
 impl<'a> Typer<'a> {
+    /// GEN-9: the identity is read independently against every concrete
+    /// domain named by its clause, allowing the usual EXPR-5 widening.
+    pub(super) fn property_identities(mut self) {
+        for clause in crate::laws::clauses(&self.declaration.syntax) {
+            for property in clause
+                .children()
+                .filter(|part| part.kind() == SyntaxKind::OperatorProperty)
+            {
+                if !name_token(&property).is_some_and(|name| name.text() == "identity") {
+                    continue;
+                }
+                let Some(identity) = property.children().next() else {
+                    continue;
+                };
+                for domain in crate::laws::domains(&clause) {
+                    let Some(&expected) = self.written.get(&(self.file, domain.span().start))
+                    else {
+                        continue;
+                    };
+                    if names_parameter(expected) || matches!(expected, Type::Unknown) {
+                        continue;
+                    }
+                    // Keep only the diagnostics from each read.
+                    let mark = self.mark();
+                    let value = self.expression(&identity, Some(expected));
+                    self.fit(value, expected, "the identity's domain");
+                    self.restore_read(mark, false);
+                }
+            }
+        }
+    }
+
     /// The value a constant is written with, read as a value of
     /// `expected`, the type it is written with (UNIT-13): "Its
     /// expression is a const expression (EXPR-5) checked against T ...
