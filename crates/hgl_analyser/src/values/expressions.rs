@@ -8,7 +8,9 @@ use hgl_diagnostics::Category;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::control::{Outcome, branch_is_null, branch_takes_its_type};
-use super::fit::{accepts_float, is_integer_literal, not_null, nullable, open, window_value};
+use super::fit::{
+    accepts_float, is_integer_literal, not_null, nullable, open, whole, window_value,
+};
 use super::node::RefRead;
 use super::{Fact, Typer, children};
 use crate::hir::{
@@ -460,7 +462,7 @@ impl<'a> Typer<'a> {
             Type::Nullable(inner) if present => inner.as_ref().clone(),
             ty => ty.clone(),
         };
-        let kind = if present && matches!(ty, Type::Unknown) && self.deferred_presence(local) {
+        let kind = if present && !whole(&ty) && self.deferred_presence(local) {
             ExprKind::DeferredPresent(local)
         } else {
             ExprKind::Local(local)

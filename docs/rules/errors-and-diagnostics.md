@@ -146,7 +146,7 @@ transpiler: done
 analyser: done
 
 - In a value function, a hook and a graph a direct test against null refines an immutable nullable parameter, `let` or loop binding to its payload's type: in the branch the test holds for, across `!` and the Boolean connectives, and after a branch that returns
-- A generic graph keeps the non-null proof if the binding later settles to an ordinary nullable value (GEN-7).
+- A generic graph keeps a non-null proof for an ordinary binding and fills incomplete payload types, including in reads that already record a possible null failure (GEN-7).
 - A nullable read in a place that expects its payload records a possible `value.null` failure and its phase. A written null still needs a nullable type (TYPE-14).
 
 transpiler: done

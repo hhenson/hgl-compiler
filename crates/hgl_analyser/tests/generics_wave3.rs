@@ -1822,6 +1822,75 @@ fn graph_instances_propagate_indexed_types_and_reads() {
     }
 }
 
+/// GEN-7 and ERR-12: incomplete payloads settle through both a proved
+/// non-null binding and a nullable read that can still fail.
+#[test]
+fn graph_instances_complete_nullable_payload_reads() {
+    let checked = module(
+        r#"operator predicate<T>(input: T) -> bool
+impl const fn predicate<T>(input: T) -> bool => true
+impl fn predicate(input: i64) -> bool { when { return input > 0 } }
+const fn maybe<U>(value: U) -> list<U>? => [value]
+
+fn guarded<T>(const input: T) -> list<i64?> {
+    let chosen = if predicate(input) { 1 }
+    let values = maybe(chosen)
+    if values != null {
+        let copied = values
+        return copied
+    }
+    return []
+}
+
+fn indexed<T>(const input: T) -> i64? {
+    let chosen = if predicate(input) { 1 }
+    let values = maybe(chosen)
+    let item = values[0]
+    return item
+}
+
+fn from_guarded() -> list<i64?> => guarded("s")
+fn from_index() -> i64? => indexed("s")"#,
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let source = body(&checked, "indexed");
+    let mut reads = 0;
+    walk_statements(&source.statements, &mut |expr| {
+        if matches!(expr.kind, ExprKind::NullRead { .. }) {
+            assert_eq!(expr.ty.to_string(), "list<_>");
+            reads += 1;
+        }
+    });
+    assert_eq!(reads, 1, "the source index already reads its nullable base");
+
+    for (name, consumer, expected) in [
+        ("from_index", "item", "i64?"),
+        ("from_guarded", "copied", "list<i64?>"),
+    ] {
+        let instance = instance_called_by(&checked, body(&checked, name));
+        let local = |name| {
+            instance
+                .locals
+                .iter()
+                .find(|local| local.name == name)
+                .unwrap()
+        };
+        assert_eq!(local("values").ty.to_string(), "list<i64?>?");
+        assert_eq!(local(consumer).ty.to_string(), expected, "{name}");
+        let mut reads = 0;
+        walk_statements(&instance.statements, &mut |expr| {
+            if let ExprKind::NullRead { value, raise, code } = &expr.kind {
+                assert_eq!(expr.ty.to_string(), "list<i64?>");
+                assert_eq!(value.ty.to_string(), "list<i64?>?");
+                assert_eq!(*raise, hgl_analyser::hir::Raise::Build);
+                assert_eq!(*code, "value.null");
+                reads += 1;
+            }
+        });
+        assert_eq!(reads, usize::from(name == "from_index"), "{name}");
+    }
+}
+
 /// GEN-7 and EXPR-7: a deferred base must satisfy the same bracket
 /// rules once the instance knows the collection it reads.
 #[test]

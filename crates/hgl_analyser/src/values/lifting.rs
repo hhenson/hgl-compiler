@@ -919,6 +919,12 @@ fn settled_type(
             }
         }
         ExprKind::Local(local) => locals.get(*local)?.ty.clone(),
+        // ERR-12: a read keeps the operand's payload type as it settles,
+        // with its original null failure still recorded on the read.
+        ExprKind::NullRead { value, .. } => match &value.ty {
+            Type::Nullable(payload) => (**payload).clone(),
+            _ => return None,
+        },
         // ERR-7: capture already checked the field. The call's output
         // may have settled after that read, directly or through a `let`.
         ExprKind::Captured {

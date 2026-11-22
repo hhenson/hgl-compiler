@@ -167,6 +167,28 @@ fn optional_elements<T>(const value: T) -> i64 {
     return values[0]
 }
 
+# ERR-12 and GEN-7: a nullable list payload keeps its inferred element
+# type through a non-null proof or a checked read before indexing.
+const fn maybe_list<U>(value: U, keep: bool) -> list<U>? {
+    if keep { return [value] }
+    return null
+}
+
+fn guarded_payload<T>(const value: T, const keep: bool) -> i64 {
+    let chosen = if live_helper(value) > 0 { 2 }
+    let values = maybe_list(chosen, keep)
+    if values == null { return 0 }
+    let copied = values
+    return list_score(copied)
+}
+
+fn indexed_payload<T>(const value: T, const keep: bool) -> i64 {
+    let chosen = if live_helper(value) > 0 { 2 }
+    let values = maybe_list(chosen, keep)
+    let item = values[0]
+    return chosen_or_skip(item)
+}
+
 # EXPR-5 and EXPR-9: the dictionary's typed entries read their values.
 fn dictionary_entries<T>(const value: T) -> i64 {
     let key = if positive(value) { "key" }
@@ -446,6 +468,10 @@ test an_instance_settles_its_graph_conditions {
     assert eval folded_tuple_index(value: "s") == ["selected"]
     assert eval optional_elements(value: 3) == [2]
     assert raises("value.null") { eval optional_elements(value: "s") }
+    assert eval guarded_payload(value: "s", keep: true) == [2]
+    assert eval guarded_payload(value: "s", keep: false) == [0]
+    assert eval indexed_payload(value: "s", keep: true) == [2]
+    assert raises("value.null") { eval indexed_payload(value: "s", keep: false) }
     assert eval dictionary_entries(value: 3) == [4]
     assert raises("value.null") { eval dictionary_entries(value: "s") }
     assert eval inferred_holder(value: "s") == [2]
