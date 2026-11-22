@@ -32,6 +32,7 @@ struct Pending {
 }
 
 const FUNCTIONS: &str = "hgl_spec/spec/language/functions-and-phases.md";
+const GENERICS: &str = "hgl_spec/spec/language/generics-and-operators.md";
 const MAPPING: &str = "hgl_core/spec/mapping.md";
 const DIAGNOSTICS: &str = "hgl_core/spec/diagnostics.md";
 
