@@ -29,7 +29,7 @@ use crate::constant::Fault;
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
-use crate::syntax::{child, tokens, ungrouped};
+use crate::syntax::{child, name_token, tokens, ungrouped};
 use crate::types::{
     Argument, Constant, ConstantValue, Detail, FunctionType, GenericKind, GenericParameter, Pack,
     Signature, Type,
@@ -66,6 +66,12 @@ struct Admissions<'s> {
     possible: Vec<(usize, Chosen<'s>)>,
     untold: bool,
     fits: bool,
+}
+
+#[derive(Default)]
+struct FunctionTrials<'a> {
+    prepared: Vec<(Candidate<'a>, Vec<Given>)>,
+    failed: Vec<Vec<Diagnostic>>,
 }
 
 impl<'s> Admissions<'s> {
@@ -114,6 +120,19 @@ impl<'a> Typer<'a> {
         given: &[Given],
         wanted: &Wanted,
     ) -> (Vec<Chosen<'a>>, bool) {
+        self.admitted_with_function_errors(operator, candidates, given, wanted)
+            .0
+    }
+
+    /// A named call can report what rejected its callback when the rest
+    /// of the call picks one candidate and no callback trial succeeds.
+    pub(super) fn admitted_with_function_errors(
+        &mut self,
+        operator: OperatorRef,
+        candidates: &[Candidate<'a>],
+        given: &[Given],
+        wanted: &Wanted,
+    ) -> ((Vec<Chosen<'a>>, bool), Vec<Diagnostic>) {
         let has_checked_children = given.iter().any(Given::reads_child);
         let has_results = given
             .iter()
@@ -143,7 +162,7 @@ impl<'a> Typer<'a> {
             for &form in forms {
                 let admitted = if let Some(trials) = &function_trials {
                     let mut admitted = Admissions::default();
-                    for (candidate, given) in trials {
+                    for (candidate, given) in &trials.prepared {
                         admitted.include(self.admitted_as(
                             operator,
                             std::slice::from_ref(candidate),
@@ -172,23 +191,47 @@ impl<'a> Typer<'a> {
                 let takes_types = admitted.fits;
                 let (selected, unknown) = self.rank_admitted(operator, given, widening, admitted);
                 if !selected.is_empty() || unknown && takes_types {
-                    return (selected, unknown);
+                    return ((selected, unknown), Vec::new());
                 }
                 untold |= unknown;
             }
             let takes_types = result_forms.fits;
             let (selected, unknown) = self.rank_admitted(operator, given, widening, result_forms);
             if !selected.is_empty() || unknown && takes_types {
-                return (selected, unknown);
+                return ((selected, unknown), Vec::new());
             }
             untold |= unknown;
             // GEN-5: at this precision, a type fit decides whether to
             // widen literals, even if the candidate's condition fails.
             if fits {
-                break;
+                return ((Vec::new(), untold), Vec::new());
             }
         }
-        (Vec::new(), untold)
+        let Some(mut trials) = function_trials else {
+            return ((Vec::new(), untold), Vec::new());
+        };
+        if trials.failed.is_empty()
+            && given
+                .iter()
+                .any(|given| given.by_function && whole(given.ty()))
+        {
+            // A known callback may have bound a type the ordinary
+            // arguments cannot take. Check what the ordinary inputs
+            // would ask of it, solely to report a mismatch (FN-17).
+            let mut operands = given.to_vec();
+            for operand in operands.iter_mut().filter(|given| given.by_function) {
+                operand.value.ty = Type::Unknown;
+            }
+            trials.failed = self
+                .function_trials(operator, candidates, &operands, wanted)
+                .failed;
+        }
+        let errors = if trials.failed.len() == 1 {
+            trials.failed.pop().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        ((Vec::new(), untold), errors)
     }
 
     /// Read each candidate's static arguments once, before ranking the
@@ -199,27 +242,34 @@ impl<'a> Typer<'a> {
         candidates: &[Candidate<'a>],
         given: &[Given],
         wanted: &Wanted,
-    ) -> Vec<(Candidate<'a>, Vec<Given>)> {
+    ) -> FunctionTrials<'a> {
         let program = self.program;
         let Some(Detail::Callable(public)) = program.modules[operator.module]
             .details
             .get(operator.declaration)
         else {
-            return Vec::new();
+            return FunctionTrials::default();
         };
-        candidates
-            .iter()
-            .filter_map(|&(module, declaration, signature)| {
-                let unit = &program.modules[module];
-                let slots = bound(signature, public, given, dependent_slot(unit, signature))?;
-                let arguments = self.candidate_functions(
-                    (module, &unit.declarations[declaration], signature),
-                    (given, &slots),
-                    wanted,
-                )?;
-                Some(((module, declaration, signature), arguments))
-            })
-            .collect()
+        let mut trials = FunctionTrials::default();
+        for &(module, declaration, signature) in candidates {
+            let unit = &program.modules[module];
+            let Some(slots) = bound(signature, public, given, dependent_slot(unit, signature))
+            else {
+                continue;
+            };
+            match self.candidate_functions(
+                (module, &unit.declarations[declaration], signature),
+                (given, &slots),
+                wanted,
+            ) {
+                Some(Ok(arguments)) => trials
+                    .prepared
+                    .push(((module, declaration, signature), arguments)),
+                Some(Err(errors)) => trials.failed.push(errors),
+                None => {}
+            }
+        }
+        trials
     }
 
     /// Find candidates and their best arrangements with these possible
@@ -1006,24 +1056,7 @@ impl<'a> Typer<'a> {
         widening: bool,
         converting: bool,
     ) -> Admits {
-        let result_fits = match (wanted.place, &signature.result) {
-            // An output requested in part, a `list<T, 3>` with `T` not
-            // said, is matched as far as it is known: `admits` compares
-            // what each type says and lets what is not said pass, and
-            // keeps a `T` a value of a `T?` (TYPE-14). GEN-5: "A
-            // candidate that gives `result<T, error>` meets a requested T
-            // or `T?` as one that gives T does, and its call takes the
-            // form the place expects (ERR-15)". A nullable result meets
-            // the requested payload under ERR-12 (hhenson/hgl_spec#182).
-            (Some(wanted), Some(result)) => {
-                self.admits(wanted, result)
-                    || matches!(result, Type::Nullable(_)) && self.taken(wanted, result).is_some()
-                    || matches!(result, Type::Result { error, .. } if **error == Type::Error)
-                        && self.taken(wanted, result).is_some()
-            }
-            (Some(_), None) => false,
-            (None, _) => true,
-        };
+        let result_fits = self.candidate_result_admits(wanted.place, signature.result.as_ref());
         // The operator's own requirement of its result.
         let among = match (&wanted.among, &signature.result) {
             (Some(among), Some(result)) => among.contains(result),
@@ -1056,25 +1089,7 @@ impl<'a> Typer<'a> {
             let Some(ty) = ty else {
                 return Admits::Misfit;
             };
-            let admitted = match (ty, given.ty()) {
-                (Type::Function(template), Type::Function(actual)) => {
-                    matches_template(template, actual)
-                }
-                (Type::Function(_), _) | (_, Type::Function(_)) => false,
-                _ if given.by_place => self.fits_place(&given.node, ty, widening),
-                _ => {
-                    self.admits(ty, given.ty())
-                        || converting
-                            && place.parameter().is_some()
-                            && given.explicit.is_none()
-                            && self.taken(ty, given.ty()).is_some()
-                        || widening
-                            && given.explicit.is_none()
-                            && is_integer_literal(&given.value)
-                            && accepts_float(ty)
-                }
-            };
-            if !admitted {
+            if !self.candidate_argument_admits(given, place, ty, (widening, converting)) {
                 return Admits::Misfit;
             }
         }
@@ -1283,6 +1298,50 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// GEN-5: compare the known parts of the requested output. A place
+    /// may take the output's payload (ERR-12, ERR-15).
+    fn candidate_result_admits(&self, expected: Option<&Type>, result: Option<&Type>) -> bool {
+        match (expected, result) {
+            (Some(expected), Some(result)) => {
+                self.admits(expected, result)
+                    || matches!(result, Type::Nullable(_)) && self.taken(expected, result).is_some()
+                    || matches!(result, Type::Result { error, .. } if **error == Type::Error)
+                        && self.taken(expected, result).is_some()
+            }
+            (Some(_), None) => false,
+            (None, _) => true,
+        }
+    }
+
+    /// Whether an argument fits its candidate slot at this precision
+    /// and with the operand's allowed read forms (GEN-5, FN-17, ERR-15).
+    fn candidate_argument_admits(
+        &mut self,
+        given: &Given,
+        place: Place,
+        ty: &Type,
+        (widening, converting): (bool, bool),
+    ) -> bool {
+        match (ty, given.ty()) {
+            (Type::Function(template), Type::Function(actual)) => {
+                matches_template(template, actual)
+            }
+            (Type::Function(_), _) | (_, Type::Function(_)) => false,
+            _ if given.by_place => self.fits_place(&given.node, ty, widening),
+            _ => {
+                self.admits(ty, given.ty())
+                    || converting
+                        && place.parameter().is_some()
+                        && given.explicit.is_none()
+                        && self.taken(ty, given.ty()).is_some()
+                    || widening
+                        && given.explicit.is_none()
+                        && is_integer_literal(&given.value)
+                        && accepts_float(ty)
+            }
+        }
+    }
+
     /// True when the expression at `node`, which is read as the type of
     /// its place, is a value of `ty`. It is read as one, and what that
     /// reading reports is taken back: the caller asks, and reports for
@@ -1306,40 +1365,31 @@ impl<'a> Typer<'a> {
     }
 
     /// GEN-6 and FN-17: resolve the candidate's function templates from
-    /// its other arguments, then try each static argument in its slot.
+    /// the known arguments, then try each static argument in its slot.
     fn candidate_functions(
         &mut self,
         (module, candidate, signature): (usize, &Declaration, &Signature),
         (given, bound): (&[Given], &[Place]),
         wanted: &Wanted,
-    ) -> Option<Vec<Given>> {
+    ) -> Option<Result<Vec<Given>, Vec<Diagnostic>>> {
         let functions = given
             .iter()
             .zip(bound)
             .enumerate()
             .filter(|(_, (given, _))| given.by_function);
-        let mut checking = given.to_vec();
-        for input in checking.iter_mut().filter(|given| given.by_function) {
-            input.value.ty = Type::Unknown;
-        }
-        let (mut found, _) = candidate_bindings(
+        // A function already known contributes its types in declaration
+        // order, before any later argument can decide them (GEN-2).
+        // An unresolved callback contributes only what the probe knows.
+        let (mut found, type_packs) = candidate_bindings(
             self,
             signature,
             (module, candidate),
-            (&checking, bound),
+            (given, bound),
             wanted,
             (&|earlier, later| self.widens(earlier, later), None),
             &mut |_| unreachable!("whole argument inference does not choose result reads"),
         )?;
         let generics = &signature.generics;
-        // A named function that the preliminary reading knows can fill
-        // in types that the ordinary arguments did not decide.
-        for (_, (given, slot)) in functions.clone() {
-            let parameter = signature.parameters.get(slot.parameter()?)?;
-            if matches!(given.ty(), Type::Function(_)) {
-                infer(&parameter.ty, given.ty(), generics, &mut found);
-            }
-        }
         for (generic, value) in generics.iter().zip(&mut found) {
             if value.is_none() && matches!(generic.kind, GenericKind::Value(_)) {
                 *value = self
@@ -1349,6 +1399,7 @@ impl<'a> Typer<'a> {
         }
         let unknown_type = Argument::Type(Type::Unknown);
         let unknown_value = Argument::Constant(super::inference::unsaid());
+        let mut checking = given.to_vec();
         for (position, (given, slot)) in functions {
             let parameter = signature.parameters.get(slot.parameter()?)?;
             let map: Vec<_> = generics
@@ -1374,15 +1425,44 @@ impl<'a> Typer<'a> {
                 return None;
             }
             let mark = self.mark();
+            let reported = self.diagnostics.len();
             let value =
                 self.operator_function_argument(&given.node, &template, &CallbackInputs::default());
+            let mut errors = self.diagnostics.as_slice()[reported..].to_vec();
             if !self.take_back(mark, false) {
-                return None;
+                let partial = in_instance(signature, &map);
+                if !self.candidate_result_admits(wanted.place, partial.result.as_ref())
+                    || !checking.iter().zip(bound).all(|(other, &slot)| {
+                        other.by_function
+                            || parameter_type(&partial, &type_packs, slot).is_none_or(|ty| {
+                                self.candidate_argument_admits(other, slot, ty, (true, true))
+                            })
+                    })
+                {
+                    return None;
+                }
+                // A bare operator with no matching function target is
+                // a nonmatch of the outer call (GEN-5). A named
+                // function's type or an anonymous body's own error is
+                // still reported against this candidate (FN-17).
+                let node = ungrouped(given.node.clone());
+                if node.kind() == SyntaxKind::NameExpr
+                    && self.local_of(&node).is_none()
+                    && let Some(name) = name_token(&node)
+                    && let Some((module, names)) = self.declarations(&name)
+                    && names.iter().any(|&index| {
+                        self.program.modules[module].declarations[index].kind
+                            == crate::program::DeclarationKind::Operator
+                    })
+                {
+                    errors.retain(|error| error.code.as_str() != codes::TYPE_MISMATCH);
+                }
+                return Some(Err(errors));
             }
             infer(&parameter.ty, &value.ty, generics, &mut found);
             checking[position].value = value;
         }
-        Some(checking)
+        Some(Ok(checking))
     }
 
     /// The constant a call's argument `node` comes to, as

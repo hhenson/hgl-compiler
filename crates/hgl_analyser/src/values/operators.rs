@@ -560,7 +560,8 @@ impl<'a> Typer<'a> {
             written: result_written,
             callback: None,
         };
-        let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
+        let ((mut selected, untold), function_errors) =
+            self.admitted_with_function_errors(operator, &candidates, &given, &wanted);
         // EXPR-12: "Resolve configuration that selects an expression's
         // source result type during source checking." An option a
         // candidate's condition reads is given here as no constant this
@@ -618,10 +619,10 @@ impl<'a> Typer<'a> {
             if selected.len() > 1 && expected.is_some_and(open) {
                 return (self.unselected(given, Form::Named), Type::Unknown);
             }
-            if selected.is_empty()
-                && let Some(context) = &context
-                && self.report_unresolved_functions(public, context, &given)
-            {
+            if selected.is_empty() && !function_errors.is_empty() {
+                for diagnostic in function_errors {
+                    self.diagnostics.emit(diagnostic);
+                }
                 return (self.unselected(given, Form::Named), Type::Unknown);
             }
             let diagnostic = self.no_one_candidate(
@@ -647,37 +648,6 @@ impl<'a> Typer<'a> {
             operator_generics,
             (Form::Named, at),
         )
-    }
-
-    /// Keep an FN-17 error in an argument when no candidate could give
-    /// that argument a settled function type.
-    fn report_unresolved_functions(
-        &mut self,
-        public: &Signature,
-        context: &[Option<Argument>],
-        given: &[Given],
-    ) -> bool {
-        let pending = given
-            .iter()
-            .filter(|given| given.by_function && !whole(given.ty()));
-        let unknown = Argument::Type(Type::Unknown);
-        let map: Vec<_> = public
-            .generics
-            .iter()
-            .zip(context)
-            .map(|(generic, value)| (generic.at, value.as_ref().unwrap_or(&unknown)))
-            .collect();
-        let reported = self.diagnostics.len();
-        for input in pending {
-            if let Some(pattern) = public_function(public, &input.key)
-                && let Type::Function(template) = substitute_within(pattern, &map)
-            {
-                let mark = self.mark();
-                self.operator_function_argument(&input.node, &template, &CallbackInputs::default());
-                self.restore_read(mark, false);
-            }
-        }
-        self.diagnostics.len() != reported
     }
 
     /// A contextual literal may contain a computation or a read whose type
@@ -984,7 +954,7 @@ impl<'a> Typer<'a> {
         let takes: Vec<String> = given
             .iter()
             .map(|given| {
-                let value = if given.by_place {
+                let value = if given.by_place || given.by_function {
                     given.node.text().to_string().trim().to_string()
                 } else {
                     given.ty().to_string()

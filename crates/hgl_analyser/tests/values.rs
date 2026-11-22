@@ -4647,6 +4647,33 @@ test no_zero { assert vr3(add_, [5, 2]) == 7 }
     assert!(!checked.rejected, "{}", checked.report);
 }
 
+/// GEN-5 and FN-17: a selected callback's body reports its own error.
+/// If the call ties, the diagnostic identifies the written callback.
+#[test]
+fn operator_callback_diagnostics_follow_the_candidate() {
+    let checked = module(
+        r#"operator select<L, R, C>(f: const fn(L, R) -> L, items: C) -> L
+impl const fn select(f: const fn(i64, i64) -> i64, items: list<i64>) -> i64 => f(items[0], items[1])
+impl const fn select(f: const fn(str, str) -> str, items: list<str>) -> str => f(items[0], items[1])
+test bad_body { assert select(fn(a, b) => a - b, ["x", "y"]) == "x" }
+
+operator pick<L, R>(f: const fn(L, R) -> L) -> str
+impl const fn pick(f: const fn(i64, i64) -> i64) -> str => "integer"
+impl const fn pick(f: const fn(f64, f64) -> f64) -> str => "floating point"
+test ambiguous { assert pick(add_) == "integer" }
+"#,
+    );
+    assert_eq!(checked.findings.len(), 2, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+    assert!(
+        checked.findings[0]
+            .message
+            .contains("`-` takes no `str` and `str`")
+    );
+    assert_eq!(checked.findings[1].code, "operator/operator.ambiguous");
+    assert!(checked.findings[1].message.contains("`add_`"));
+}
+
 /// FN-17: a template checks role, written names and plain parameter
 /// modes, and does not take an ordinary runtime value.
 #[test]

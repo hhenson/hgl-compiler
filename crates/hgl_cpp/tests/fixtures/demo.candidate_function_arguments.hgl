@@ -112,3 +112,79 @@ impl const fn with_reflection<V, ...Ps>(
 test fixed_callback_beside_a_reflected_callback {
     assert with_reflection(add_, [5, 2], diff) == 7
 }
+
+# GEN-2 and GEN-12: the callback binds V before the literal, including
+# when the call writes the literal's named argument first.
+operator apply<V>(f: const fn(V) -> V, x: V) -> V
+impl const fn apply<V>(f: const fn(V) -> V, x: V) -> V => f(x)
+
+const fn identity_f64(x: f64) -> f64 => x
+
+test callback_type_precedes_later_literals {
+    let positional = apply(identity_f64, 1)
+    let named = apply(x: 2, f: identity_f64)
+    assert positional == 1.0
+    assert named == 2.0
+}
+
+# FN-17: the list decides P, and the callback decides R even when
+# the call has no requested result type.
+operator map3<P, R, C, O>(f: fn(P) -> R, items: C) -> O
+impl const fn map3<P, R>(f: const fn(P) -> R, items: list<P, 3>) -> list<R, 3> =>
+    [f(items[0]), f(items[1]), f(items[2])]
+
+test unrequested_callback_results {
+    let xs: list<i64, 3> = [1, 2, 3]
+    let negatives = map3(neg_, xs)
+    assert negatives == [-1, -2, -3]
+    assert map3(fn(x) => x > 1, xs) == [false, true, true]
+    assert map3(convert<f64>, xs) == [1.0, 2.0, 3.0]
+}
+
+operator compose<P, R, C>(f: fn(P) -> R, x: C) -> R
+impl fn compose<P, R>(f: fn(P) -> R, x: P) -> R => f(x)
+
+fn unrequested_composed_result(x: i64) -> bool {
+    let negative = compose(neg_, x)
+    let positive = compose(fn(n) => n * 10, x)
+    return negative < 0 && positive > 5
+}
+
+test unrequested_graph_callback_results {
+    assert eval unrequested_composed_result(x: [1]) == [true]
+}
+
+# GEN-18: the failed law makes this call have no candidate even when
+# the public signature leaves the callback's generic inputs open.
+operator fold_reduce<L, R, C, const associative: bool = associative(f)>(
+    f: fn(L, R) -> L, items: C,
+) -> L
+impl const fn fold_reduce<V, const associative: bool = associative(f)>(
+    f: const fn(V, V) -> V, items: list<V>,
+) -> V requires associative => items[0]
+
+test no_law_in_an_open_public_template {
+    let xs: list<i64> = [4, 5]
+    # expect-error(operator, "operator.no_candidate")
+    assert fold_reduce(fn(a, b) => a - b, xs) == 4
+}
+
+test no_operator_target_for_the_candidate_inputs {
+    # expect-error(operator, "operator.no_candidate")
+    assert vr2(add_, [true, false], zero: null)
+}
+
+const fn first_string(a: str, b: str) -> str => a
+
+test a_named_function_must_match_the_candidate_inputs {
+    # expect-error(type, "type.mismatch")
+    assert vr2(first_string, [1, 2], zero: null) == 1
+}
+
+fn temporal_sum(a: i64, b: i64) -> i64 {
+    when { return a + b }
+}
+
+# FN-17: the only candidate reads the anonymous function as value code.
+# expect-error(function-kind, "call.role")
+fn an_anonymous_value_function_cannot_compose(items: list<i64>) -> i64 => fold2(fn(a, b) => temporal_sum(a, b), items)
