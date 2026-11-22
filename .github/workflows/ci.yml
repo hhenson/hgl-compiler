@@ -8,6 +8,14 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request's branch cancels the run of the one
+# before it, which no one waits on any more. A push to main is never
+# cancelled: each run there checks a commit of main and saves the
+# caches pull requests restore, so its group is its own run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: true
+
 # For every cargo command below. They change how long a build takes, not
 # what is built or what the tests check.
 env:
