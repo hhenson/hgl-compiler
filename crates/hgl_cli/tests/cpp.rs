@@ -656,20 +656,18 @@ fn a_failed_build_runs_no_older_executable() {
     assert!(!kept.join(".hgl-built.json").exists());
     let rows: Vec<&str> = stdout.lines().collect();
     assert_eq!(rows[0], "not run  executable  demo.calc::sums", "{stdout}");
-    assert_eq!(
-        rows[1], "    the build of its executable failed:",
+    assert!(
+        rows[1].contains("mod-demo-calc.o could not be removed"),
         "{stdout}"
     );
-    assert!(stdout.contains("FAILED: "), "{stdout}");
     assert!(
         stdout.ends_with("executable cases: 0 passed, 0 failed, 1 not run\n"),
         "{stdout}"
     );
 }
 
-/// Puts a directory in the place of the object at `path`: `ninja`
-/// takes the object for changed, and a compile can write no object
-/// there.
+/// Puts a directory in the place of the object at `path`, so the builder
+/// cannot clear the unverified object and proceed with a rebuild.
 fn block(path: &Path) {
     assert!(path.is_file(), "{} was built", path.display());
     fs::remove_file(path).unwrap();
