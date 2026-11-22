@@ -2033,6 +2033,19 @@ each library on the way; it is run with no variable, as
 `DYLD_LIBRARY_PATH` naming the dependency prefix would load
 conda-forge's libc++ in place of the system's.
 
+GCC can share a generated module's object between program workspaces
+using the same toolchain. Ninja tracks the precompiled header's includes
+and the driver keeps an immutable snapshot of each header version. The
+module's preprocessing writes its normal Ninja dependencies and expands
+its generated inputs using that snapshot. The object's key is the SHA-256
+digest of the exact preprocessed text, including its snapshot path, under
+the compiler and flags' toolchain directory. The cache records the
+built object's path and digest. A hit copies the object and checks its
+digest before installing it. A miss compiles the same preprocessed text
+and publishes a reference atomically. The normal compiler path also
+applies to Apple clang, compiler wrappers and flags outside the cache's
+supported set.
+
 A program is built in `programs/<hash>` of its source roots, or the
 directory `--keep` names, under a lock held until its last executable
 has ended. Each file the target writes, and `build.ninja`, is written

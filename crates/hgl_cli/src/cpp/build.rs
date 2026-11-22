@@ -115,7 +115,7 @@ pub(super) fn quoted(word: &str) -> String {
 }
 
 /// `text` as a value of a `ninja` variable: `$` is `ninja`'s escape.
-fn escaped(text: &str) -> String {
+pub(super) fn escaped(text: &str) -> String {
     text.replace('$', "$$")
 }
 
@@ -314,22 +314,38 @@ fn ninja_file(output: &Output, description: &Description) -> String {
         "ldflags = {}\n\n",
         escaped(&description.link.join(" "))
     ));
+    let module_compile = match &description.object_cache {
+        Some(cache) => format!(
+            "/bin/sh {} {} $pch $out $in $cxx $cflags",
+            escaped(&quoted(&format!("{cache}/compile.sh"))),
+            escaped(&quoted(cache)),
+        ),
+        None => {
+            "$cxx $cflags -Winvalid-pch -include $pch -MD -MF $out.d -c $in -o $out".to_string()
+        }
+    };
+    text.push_str(&format!(
+        "# A module's unit, with the precompiled header of the fixed include set.\n\
+         rule unit\n  command = {module_compile}\n  \
+         depfile = $out.d\n  deps = gcc\n  description = compile $in\n\n",
+    ));
     text.push_str(
-        "# A module's unit, with the precompiled header of the\n\
-         # fixed include set.\n\
-         rule unit\n  command = $cxx $cflags -Winvalid-pch -include $pch -MD -MF $out.d -c $in -o $out\n  \
-         depfile = $out.d\n  deps = gcc\n  description = compile $in\n\n\
-         # An entry unit, which includes the test host's light header alone, or\n\
+        "# An entry unit, which includes the test host's light header alone, or\n\
          # an application's host's, and is compiled with no precompiled header.\n\
          rule entry\n  command = $cxx $cflags -MD -MF $out.d -c $in -o $out\n  \
          depfile = $out.d\n  deps = gcc\n  description = compile $in\n\n\
          rule link\n  command = $cxx -o $out $in $ldflags\n  description = link $out\n\n",
     );
+    let shared_header = description
+        .object_cache
+        .as_ref()
+        .map(|_| format!(" | {}", ninja_path(&format!("{}.gch", description.header))));
     for unit in &output.units {
         text.push_str(&format!(
-            "build {}: unit {}\n",
+            "build {}: unit {}{}\n",
             ninja_path(&object(&unit.source)),
-            ninja_path(&unit.source)
+            ninja_path(&unit.source),
+            shared_header.as_deref().unwrap_or("")
         ));
     }
     for executable in &output.executables {
@@ -402,6 +418,86 @@ fn object(source: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{ninja_path, quoted};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_shared_object_requires_the_same_preprocessed_input() {
+        use std::fs;
+        use std::process::Command;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path();
+        let cache = path.join("objects");
+        let script = path.join("compile.sh");
+        let compiler = path.join("compiler.sh");
+        let calls = path.join("calls");
+        fs::create_dir(&cache).unwrap();
+        fs::write(&script, include_str!("cache_compile.sh")).unwrap();
+        // A stand-in compiler that records its compile phase and copies
+        // the source and local header into its preprocessed output.
+        fs::write(
+            &compiler,
+            r#"set -eu
+calls=$1
+shift
+mode=compile
+while [ "$#" -ne 0 ]; do
+    case $1 in
+        -E) mode=preprocess ;;
+        -o) output=$2; shift ;;
+        *.cpp|*.ii) source=$1 ;;
+    esac
+    shift
+done
+if [ "$mode" = preprocess ]; then
+    cat "$source" generated.h > "$output"
+else
+    printf 'compile\n' >> "$calls"
+    cp "$source" "$output"
+fi
+"#,
+        )
+        .unwrap();
+
+        let run = |name: &str, header: &str| {
+            let directory = path.join(name);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("unit.cpp"), "#include \"generated.h\"\n").unwrap();
+            fs::write(directory.join("generated.h"), header).unwrap();
+            let compile = Command::new("/bin/sh")
+                .current_dir(&directory)
+                .arg(&script)
+                .arg(&cache)
+                .args(["pch.h", "unit.o", "unit.cpp", "/bin/sh"])
+                .arg(&compiler)
+                .arg(&calls)
+                .output()
+                .unwrap();
+            assert!(
+                compile.status.success(),
+                "{}",
+                String::from_utf8_lossy(&compile.stderr)
+            );
+            fs::read(directory.join("unit.o")).unwrap()
+        };
+        let first = run("first", "inline constexpr int value = 1;\n");
+        let same = run("second", "inline constexpr int value = 1;\n");
+        assert_eq!(first, same);
+        assert_eq!(fs::read_to_string(&calls).unwrap().lines().count(), 1);
+        fs::write(path.join("second/unit.o"), "damaged object").unwrap();
+        let rebuilt = run("third", "inline constexpr int value = 1;\n");
+        assert_eq!(first, rebuilt);
+        assert_eq!(fs::read_to_string(&calls).unwrap().lines().count(), 2);
+
+        fs::remove_file(path.join("third/unit.o")).unwrap();
+        let missing = run("fourth", "inline constexpr int value = 1;\n");
+        assert_eq!(first, missing);
+        assert_eq!(fs::read_to_string(&calls).unwrap().lines().count(), 3);
+
+        let different = run("fourth", "inline constexpr int value = 2;\n");
+        assert_ne!(first, different);
+        assert_eq!(fs::read_to_string(&calls).unwrap().lines().count(), 4);
+    }
 
     #[test]
     fn a_word_is_quoted_only_where_it_needs_to_be() {

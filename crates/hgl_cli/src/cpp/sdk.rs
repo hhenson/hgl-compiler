@@ -30,7 +30,8 @@
 //!    order. That is the description every generated unit is compiled
 //!    with, written to `description.json`;
 //! 3. the runtime library's header, the fixed include set, is
-//!    precompiled with those flags.
+//!    precompiled with those flags. GCC module objects can be shared by
+//!    builds with the same preprocessed input and toolchain.
 
 use std::ffi::OsString;
 use std::fs;
@@ -40,7 +41,7 @@ use std::process::Command;
 
 use serde_json::Value;
 
-use super::build::{lock, quoted, write_if_changed};
+use super::build::{escaped, lock, quoted, write_if_changed};
 
 /// The variable that names hgraph's C++ SDK.
 pub(super) const SDK: &str = "HGL_HGRAPH_SDK";
@@ -57,7 +58,7 @@ const DESCRIPTION: &str = "description.json";
 
 /// A version of what is made for a toolchain: raised when what this
 /// driver makes changes, so that what an older `hgl` made is not used.
-const FORMAT: u32 = 4;
+const FORMAT: u32 = 5;
 
 /// The family of compilers a platform builds the cpp target with
 /// (`docs/cpp-target.md`): GCC on Linux, Apple clang on macOS. Each way
@@ -239,6 +240,8 @@ pub(super) struct Toolchain {
     lld: bool,
     /// What `HGL_CPP_FLAGS` adds.
     flags: Vec<String>,
+    /// True when this toolchain can share GCC objects.
+    cache_objects: bool,
 }
 
 /// How a generated unit is compiled and an executable linked, for one
@@ -258,6 +261,8 @@ pub(super) struct Description {
     /// The header every unit of a module is compiled with first, whose
     /// precompiled form is beside it.
     pub(super) header: String,
+    /// A directory for GCC's compiler script and the objects it shares.
+    pub(super) object_cache: Option<String>,
     /// The directories an executable's libraries are loaded from: the
     /// runtime library's, the SDK's and its dependencies'. An executable
     /// is run with them in the family's [`Family::library_variable`],
@@ -286,11 +291,23 @@ impl Toolchain {
             "`ninja` is not on the PATH: the cpp target builds with it (https://ninja-build.org)"
                 .to_string()
         })?;
-        let flags = std::env::var(FLAGS)
+        let flags: Vec<String> = std::env::var(FLAGS)
             .unwrap_or_default()
             .split_whitespace()
             .map(str::to_string)
             .collect();
+        let cache_objects = family == Family::Gcc
+            && gcc_driver(&compiler)
+            && flags.iter().all(|flag| cache_compile_flag(flag))
+            && [
+                "CPATH",
+                "CPLUS_INCLUDE_PATH",
+                "GCC_EXEC_PREFIX",
+                "COMPILER_PATH",
+            ]
+            .into_iter()
+            .all(|variable| std::env::var_os(variable).is_none_or(|value| value.is_empty()))
+            && which::which("sha256sum").is_ok();
         Ok(Toolchain {
             sdk,
             deps,
@@ -300,6 +317,7 @@ impl Toolchain {
             ninja,
             lld: family.links_with_lld() && which::which("ld.lld").is_ok(),
             flags,
+            cache_objects,
         })
     }
 
@@ -320,6 +338,27 @@ impl Toolchain {
         }
         self.lld.hash(&mut hash);
         self.flags.hash(&mut hash);
+        self.cache_objects.hash(&mut hash);
+        if self.cache_objects {
+            hash_file_change(&self.compiler, &mut hash);
+            for program in ["cc1plus", "as"] {
+                if let Ok(output) = Command::new(&self.compiler)
+                    .arg(format!("-print-prog-name={program}"))
+                    .output()
+                    && output.status.success()
+                    && let Ok(path) = which::which(String::from_utf8_lossy(&output.stdout).trim())
+                {
+                    hash_file_change(&path, &mut hash);
+                }
+            }
+            std::env::var_os("SOURCE_DATE_EPOCH").hash(&mut hash);
+            // Depfiles catch changed headers. Directory changes also
+            // cover includes that a newly added header would shadow.
+            for prefix in [&self.sdk, &self.deps] {
+                hash_directory(&prefix.join("include"), true, &mut hash);
+                hash_directory(&prefix.join("lib/cmake"), false, &mut hash);
+            }
+        }
         // The SDK's own files: one rebuilt in place is another SDK. A
         // shared library is `.so` on Linux, `.dylib` on macOS.
         let suffix = std::env::consts::DLL_SUFFIX;
@@ -356,8 +395,14 @@ impl Toolchain {
         let _held = lock(&directory)?;
         let described = directory.join(DESCRIPTION);
         if let Ok(text) = fs::read_to_string(&described)
-            && let Some(description) = read_description(&text)
+            && let Some(mut description) = read_description(&text)
         {
+            if description.object_cache.is_some() {
+                description.header = self
+                    .module_header(&directory, &description)?
+                    .display()
+                    .to_string();
+            }
             return Ok(description);
         }
         let cmake = which::which("cmake").map_err(|_| {
@@ -366,17 +411,29 @@ impl Toolchain {
                 .to_string()
         })?;
         let runtime = self.build_runtime(&cmake, &directory, jobs)?;
-        let mut description = self.describe(&cmake, &directory, &runtime)?;
-        description.header = self
-            .precompile(&directory, &description)?
-            .display()
-            .to_string();
+        let (mut description, cacheable_flags) = self.describe(&cmake, &directory, &runtime)?;
+        description.header = if self.cache_objects && cacheable_flags {
+            let objects = directory.join("objects");
+            fs::create_dir_all(&objects)
+                .map_err(|error| format!("{} could not be made: {error}", objects.display()))?;
+            write_if_changed(
+                &objects.join("compile.sh"),
+                include_str!("cache_compile.sh"),
+            )?;
+            description.object_cache = Some(objects.display().to_string());
+            self.module_header(&directory, &description)?
+        } else {
+            self.precompile(&directory, &description)?
+        }
+        .display()
+        .to_string();
         let json = serde_json::json!({
             "family": description.family.word(),
             "compiler": description.compiler,
             "compile": description.compile,
             "link": description.link,
             "header": description.header,
+            "object_cache": description.object_cache,
             "libraries": description.libraries,
         });
         write_if_changed(&described, &json.to_string())?;
@@ -465,7 +522,7 @@ impl Toolchain {
         cmake: &Path,
         directory: &Path,
         runtime: &Path,
-    ) -> Result<Description, String> {
+    ) -> Result<(Description, bool), String> {
         let source = directory.join("probe-source");
         let build = directory.join("probe-build");
         if build.exists() {
@@ -487,7 +544,8 @@ impl Toolchain {
             .arg(format!("-DHGL_RUNTIME={}", runtime.display()));
         run("the description of a build against the SDK", &mut configure)?;
         let target = probe_target(&build.join(".cmake/api/v1/reply"))?;
-        let mut description = description_of(&target, self.family, &self.compiler)?;
+        let (mut description, cacheable_flags) =
+            description_of(&target, self.family, &self.compiler)?;
         description.link.extend(self.family.link_flags(self.lld));
         description.libraries = [
             runtime.join("lib"),
@@ -497,7 +555,60 @@ impl Toolchain {
         .iter()
         .map(|directory| directory.display().to_string())
         .collect();
-        Ok(description)
+        Ok((description, cacheable_flags))
+    }
+
+    /// Refreshes the module PCH when a header it includes changes, and
+    /// returns a versioned path so concurrent builds see a whole PCH.
+    fn module_header(
+        &self,
+        directory: &Path,
+        description: &Description,
+    ) -> Result<PathBuf, String> {
+        let pch = directory.join("pch");
+        let header = pch.join("hgl_pch.h");
+        let include = format!("#include <{}>\n", hgl_cpp::runtime::HEADER);
+        write_if_changed(&header, &include)?;
+        let ninja = format!(
+            "ninja_required_version = 1.10\n\
+             cxx = {}\n\
+             cflags = {}\n\
+             rule pch\n  command = $cxx $cflags -x c++-header -MD -MF hgl_pch.d \
+             -MQ hgl_pch.h.gch $in -o hgl_pch.h.gch.tmp && \
+             sha256sum hgl_pch.h.gch.tmp > hgl_pch.sha.tmp && \
+             mv -f hgl_pch.h.gch.tmp hgl_pch.h.gch && mv -f hgl_pch.sha.tmp hgl_pch.sha\n  \
+             depfile = hgl_pch.d\n  deps = gcc\n\
+             build hgl_pch.h.gch | hgl_pch.sha: pch hgl_pch.h\n",
+            escaped(&description.compiler),
+            escaped(&description.compile.join(" ")),
+        );
+        write_if_changed(&pch.join("build.ninja"), &ninja)?;
+        run(
+            "the precompiled header",
+            Command::new(&self.ninja)
+                .arg("-C")
+                .arg(&pch)
+                .arg("hgl_pch.h.gch"),
+        )?;
+        let fingerprint = fs::read_to_string(pch.join("hgl_pch.sha")).map_err(|error| {
+            format!("the precompiled header's fingerprint could not be read: {error}")
+        })?;
+        let fingerprint = fingerprint
+            .split_whitespace()
+            .next()
+            .filter(|digest| {
+                digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+            .ok_or("the precompiled header's fingerprint is invalid")?;
+        let snapshot = pch.join(fingerprint);
+        let header = snapshot.join("hgl_pch.h");
+        write_if_changed(&header, &include)?;
+        let binary = header.with_extension("h.gch");
+        if !binary.is_file() {
+            fs::hard_link(pch.join("hgl_pch.h.gch"), &binary)
+                .map_err(|error| format!("the precompiled header could not be kept: {error}"))?;
+        }
+        Ok(header)
     }
 
     /// Precompiles the runtime library's header with `description`'s
@@ -530,6 +641,68 @@ impl Toolchain {
             Command::new("/bin/sh").arg("-c").arg(command),
         )?;
         Ok(header)
+    }
+}
+
+/// Accepts the GCC driver and leaves wrappers on their ordinary compile path.
+fn gcc_driver(path: &Path) -> bool {
+    let Ok(path) = path.canonicalize() else {
+        return false;
+    };
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    name.rsplit_once("g++").is_some_and(|(prefix, suffix)| {
+        (prefix.is_empty() || prefix.ends_with('-'))
+            && (suffix.is_empty()
+                || suffix.strip_prefix('-').is_some_and(|version| {
+                    !version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit())
+                }))
+    })
+}
+
+/// Options supported by the split preprocessing and compilation.
+fn cache_compile_flag(flag: &str) -> bool {
+    matches!(
+        flag,
+        "-std=c++23"
+            | "-Wall"
+            | "-Wextra"
+            | "-Wpedantic"
+            | "-Werror"
+            | "-fsanitize=address,undefined"
+            | "-fno-omit-frame-pointer"
+            | "-fno-sanitize-recover=undefined"
+    )
+}
+
+/// Hashes changes to a prefix tree. Include files themselves are tracked
+/// by the compiler's depfile, while CMake package files set the flags.
+fn hash_directory(directory: &Path, directories_only: bool, hash: &mut DefaultHasher) {
+    for entry in walkdir::WalkDir::new(directory)
+        .follow_links(true)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| !directories_only || entry.file_type().is_dir())
+    {
+        hash_file_change(entry.path(), hash);
+    }
+}
+
+/// Fingerprints the identity and change times of a compiler or include directory.
+fn hash_file_change(path: &Path, hash: &mut DefaultHasher) {
+    path.hash(hash);
+    if let Ok(metadata) = path.metadata() {
+        metadata.len().hash(hash);
+        metadata.modified().ok().hash(hash);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            metadata.ino().hash(hash);
+            metadata.ctime().hash(hash);
+            metadata.ctime_nsec().hash(hash);
+        }
     }
 }
 
@@ -740,7 +913,11 @@ fn probe_target(reply: &Path) -> Result<Value, String> {
 
 /// The description a file-API target gives: its one group of compile
 /// flags, defines and include directories, and its link's fragments.
-fn description_of(target: &Value, family: Family, compiler: &Path) -> Result<Description, String> {
+fn description_of(
+    target: &Value,
+    family: Family,
+    compiler: &Path,
+) -> Result<(Description, bool), String> {
     let missing = || "CMake's description of the build has no compile flags".to_string();
     let group = &target["compileGroups"][0];
     let mut compile: Vec<String> = Vec::new();
@@ -750,6 +927,9 @@ fn description_of(target: &Value, family: Family, compiler: &Path) -> Result<Des
     {
         compile.extend(fragment["fragment"].as_str().map(str::to_string));
     }
+    let cacheable_flags = compile
+        .iter()
+        .all(|fragment| fragment.split_ascii_whitespace().all(cache_compile_flag));
     for define in group["defines"].as_array().into_iter().flatten() {
         if let Some(define) = define["define"].as_str() {
             compile.push(quoted(&format!("-D{define}")));
@@ -773,14 +953,16 @@ fn description_of(target: &Value, family: Family, compiler: &Path) -> Result<Des
         .filter(|fragment| !fragment.is_empty())
         .map(str::to_string)
         .collect();
-    Ok(Description {
+    let description = Description {
         family,
         compiler: quoted(&compiler.display().to_string()),
         compile,
         link,
         header: String::new(),
+        object_cache: None,
         libraries: Vec::new(),
-    })
+    };
+    Ok((description, cacheable_flags))
 }
 
 /// A description as `prepare` wrote it, or `None` for text that is not
@@ -800,6 +982,7 @@ fn read_description(text: &str) -> Option<Description> {
         compile: strings(&json["compile"])?,
         link: strings(&json["link"])?,
         header: json["header"].as_str()?.to_string(),
+        object_cache: json["object_cache"].as_str().map(str::to_string),
         libraries: strings(&json["libraries"])?,
     })
 }
