@@ -15,6 +15,23 @@ use crate::syntax::{child, name_token, tokens};
 use crate::types::{Detail, Scalar, Type};
 use crate::{codes, error};
 
+/// The immutable name a tag or null test can prove. An inferred child
+/// binding keeps its identity through an endpoint read (ERR-3, ERR-12, ERR-14).
+pub(super) fn proof_binding(value: &Expr) -> Option<crate::hir::LocalId> {
+    match &value.kind {
+        ExprKind::BoundChild(local) => Some(*local),
+        ExprKind::CheckedChild {
+            read,
+            result: false,
+        } => match &read.kind {
+            ExprKind::BoundChild(local) => Some(*local),
+            _ => None,
+        },
+        ExprKind::PresentChild(read) => proof_binding(read),
+        _ => value.named_local(),
+    }
+}
+
 /// ERR-7: a `let` initialized by a capture names its boundary.
 pub(super) fn captured_binding(kind: LocalKind, value: &Expr) -> Option<&Expr> {
     match &value.kind {
@@ -69,6 +86,11 @@ impl<'a> Typer<'a> {
         list: &SyntaxNode,
         expected: Option<&Type>,
     ) -> Option<(ExprKind, Type)> {
+        if crate::RESULT_FORMS.contains(&name.text())
+            && let Some(unread) = self.unread_pack_call(list)
+        {
+            return Some(unread);
+        }
         Some(match name.text() {
             "ok" => self.tagged(true, name, list, expected),
             "err" => self.tagged(false, name, list, expected),
@@ -147,13 +169,7 @@ impl<'a> Typer<'a> {
     ) -> (ExprKind, Type) {
         let argument = self.one_argument(name, list, "ERR-2");
         // The result the place expects: of `result<T, E>?`, the result.
-        let sides = match not_null(expected) {
-            Some(result @ Type::Result { value, error }) if whole(result) => {
-                Some((result.clone(), (**value).clone(), (**error).clone()))
-            }
-            _ => None,
-        };
-        let Some((result, value, failure)) = sides else {
+        let Some(result @ Type::Result { value, error }) = not_null(expected) else {
             // A place whose type is not known has been reported, or is
             // for a later part: nothing is said of what it expects
             // (ERR-9).
@@ -178,17 +194,29 @@ impl<'a> Typer<'a> {
             }
             return (ExprKind::Unread, Type::Unknown);
         };
-        let Some(argument) = argument else {
-            return (ExprKind::Unread, result);
+        let complete = whole(result);
+        let ty = if complete {
+            result.clone()
+        } else {
+            Type::Unknown
         };
-        let (side, what) = tagged_side(success, &value, &failure);
-        let payload = self.expression(&argument, Some(side));
-        let payload = self.fit(payload, side, what);
+        let Some(argument) = argument else {
+            return (ExprKind::Unread, ty);
+        };
+        let (side, what) = tagged_side(success, value, error);
+        let payload = if complete {
+            let payload = self.expression(&argument, Some(side));
+            self.fit(payload, side, what)
+        } else {
+            // GEN-2 and ERR-2: keep the payload in the scope that read it
+            // when another constructor field can still settle this result.
+            self.expression(&argument, Some(&Type::Unknown))
+        };
         let kind = ExprKind::Tagged {
             success,
             payload: Box::new(payload),
         };
-        (kind, result)
+        (kind, ty)
     }
 
     /// `is_ok(value)` or `is_err(value)` (ERR-3): they "take one
@@ -204,7 +232,7 @@ impl<'a> Typer<'a> {
             return (ExprKind::Unread, BOOL);
         };
         let value = self.expression(&argument, None);
-        self.check_tag_test(success, &value);
+        self.check_tag_test(success, &value.ty, value.at);
         let kind = ExprKind::TagTest {
             success,
             value: Box::new(value),
@@ -212,26 +240,25 @@ impl<'a> Typer<'a> {
         (kind, BOOL)
     }
 
-    /// ERR-3: a tag test takes a result itself, before any implicit read.
-    pub(super) fn check_tag_test(&mut self, success: bool, value: &Expr) {
-        if !matches!(value.ty, Type::Result { .. }) && whole(&value.ty) && !open(&value.ty) {
+    /// ERR-3: report whether a tag test rejects before any implicit read.
+    pub(super) fn check_tag_test(&mut self, success: bool, ty: &Type, at: Location) -> bool {
+        let rejected = !matches!(ty, Type::Result { .. }) && whole(ty) && !open(ty);
+        if rejected {
             let name = if success { "is_ok" } else { "is_err" };
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::TYPE_MISMATCH,
-                value.at,
-                format!(
-                    "`{name}` tests a `result<T, E>`, and this is `{}`",
-                    value.ty
-                ),
+                at,
+                format!("`{name}` tests a `result<T, E>`, and this is `{ty}`"),
                 "ERR-3",
             ));
         }
+        rejected
     }
 
     /// The lexical fact a direct field projection needs on this binding.
     pub(super) fn payload_proven(&self, base: &Expr, name: &str) -> bool {
-        let fact = match (name, base.named_local()) {
+        let fact = match (name, proof_binding(base)) {
             ("value", Some(local)) => Fact::Success(local),
             ("error", Some(local)) => Fact::Failure(local),
             _ => return false,
@@ -268,16 +295,17 @@ impl<'a> Typer<'a> {
                 return (ExprKind::Unread, Type::Unknown);
             }
         };
+        let binding = proof_binding(&base);
         if !variant_proven {
             let (test, tag) = if success {
                 ("is_ok", "a success")
             } else {
                 ("is_err", "a failure")
             };
-            let message = match &base.kind {
-                ExprKind::Local(local) => format!(
+            let message = match binding {
+                Some(local) => format!(
                     "`.{}` is read where `{}` is {tag}, and nothing here proves it one",
-                    name, self.locals[*local].name
+                    name, self.locals[local].name
                 ),
                 _ => format!(
                     "`.{}` is read of a binding a guard has proved {tag}, and this is no \

@@ -10,7 +10,7 @@ use super::Typer;
 use super::fit::{not_null, open, whole};
 use super::forms::received_type;
 use super::inference::{fixed, placed};
-use super::results::captured_output;
+use super::results::{captured_output, proof_binding};
 use crate::constant::Fault;
 use crate::declared::substitute_within;
 use crate::hir::{Expr, ExprKind, Value, ValueCategory};
@@ -122,7 +122,7 @@ impl<'a> Typer<'a> {
                 Type::Result { value, error } if matches!(name, "value" | "error") => {
                     let sides = ((**value).clone(), (**error).clone());
                     // An implicit read cannot transfer a binding's fact.
-                    let variant_proven = variant_proven && matches!(base.kind, ExprKind::Local(_));
+                    let variant_proven = variant_proven && proof_binding(&base).is_some();
                     return self.payload(base, name, at, sides, variant_proven);
                 }
                 // ERR-15: "What a member or an index is read from ...

@@ -10,9 +10,11 @@ analyser: partial
 - A read in an anonymous function is held to the admission where the function is written (FN-14), the callee of a call among them, which is read as any expression is
 - An endpoint operation observes an invalid endpoint with no guard
 - A collection's child, an element, a field or an entry at any depth, is an endpoint (`ChildEndpoint`); its value or `delta_value` is read where `all_valid` of its collection or `valid` of the child holds, and at a constant index, a module's constant or a field one that is not is `payload.unguarded`; at an index known when it runs the read is `CheckedChild`, checked then
+- An inferred `let` holds a child endpoint. A hook's `var` reads its value at initialization (ERR-14).
 - A `return` to a `ref` result names an input or a child and reads no payload, so it needs no admission (FN-16)
 - Left: a function value kept in a `state` or a `cache`, which carries a read into a later evaluation, and which the rules give no type
 - A struct, a tuple or a fixed list read whole, an input or a child named when the program is compiled, `return quote`, `rows[0]`, is admitted only by its own `all_valid`, in a header or as a guard: `valid` of it, and `all_valid` of what holds it, do not admit it (`payload.unguarded`); a dictionary and an unsized list are read whole where `valid` holds, an `atomic<V>` as any value that publishes whole
+- A generic hook checks a whole read against the instance's input shape, including the `all_valid` guard for a fixed composite and the nullable form of a failing dictionary or unsized-list read (GEN-7, ERR-14).
 
 transpiler: partial
 

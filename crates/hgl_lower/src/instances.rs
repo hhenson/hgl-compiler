@@ -202,15 +202,19 @@ pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring>
         return None;
     };
     // A generic target's parameters as this call takes them (GEN-2).
+    let captures = Captures::of(program, callee, signature, arguments);
     let instance = if generics.is_empty() {
         None
     } else {
-        program.instance_with_functions(
-            *module,
-            *declaration,
+        program.instance_with_inputs(
+            (*module, *declaration),
             generics,
             requirements,
-            &functions_of(arguments),
+            hgl_analyser::InstanceInputs {
+                functions: &functions_of(arguments),
+                type_packs: callee.type_packs(),
+                pack_inputs: Some(&captures.inputs()),
+            },
         )
     };
     // Where the target's own types are known, its inputs and result are
@@ -219,7 +223,6 @@ pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring>
     let parameters = instance
         .as_ref()
         .map_or(&signature.parameters, |(taken, _)| &taken.parameters);
-    let captures = Captures::of(program, callee, signature, arguments);
     let inputs = runtime_arguments(arguments)
         .filter_map(|(position, argument)| {
             let parameter = parameters.get(argument.parameter?)?;
@@ -595,12 +598,15 @@ impl Instances {
                 continue;
             }
             *count += 1;
-            let Some((mut signature, mut body)) = program.instance_with_functions(
-                next.module,
-                next.declaration,
+            let Some((mut signature, mut body)) = program.instance_with_inputs(
+                (next.module, next.declaration),
                 &next.generics,
                 &next.requirements,
-                &next.functions,
+                hgl_analyser::InstanceInputs {
+                    functions: &next.functions,
+                    type_packs: &next.type_packs,
+                    pack_inputs: Some(&next.captures.inputs()),
+                },
             ) else {
                 continue;
             };

@@ -199,7 +199,8 @@ impl Copies {
             | ExprKind::Tagged { payload: inner, .. }
             | ExprKind::Raised { result: inner, .. }
             | ExprKind::OrNull { result: inner, .. }
-            | ExprKind::NullRead { value: inner, .. } => self.elsewhere(program, locals, inner),
+            | ExprKind::NullRead { value: inner, .. }
+            | ExprKind::PresentChild(inner) => self.elsewhere(program, locals, inner),
             ExprKind::Block { value, .. } => value
                 .as_ref()
                 .is_some_and(|last| self.elsewhere(program, locals, last)),
@@ -598,12 +599,14 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         | ExprKind::Raised { result: inner, .. }
         | ExprKind::OrNull { result: inner, .. }
         | ExprKind::NullRead { value: inner, .. }
+        | ExprKind::PresentChild(inner)
         | ExprKind::Capture(inner)
         | ExprKind::Captured { capture: inner, .. }
         | ExprKind::ChildEndpoint { child: inner, .. }
         | ExprKind::ChildEndpointOf(inner)
         | ExprKind::CheckedChild { read: inner, .. }
         | ExprKind::CheckedWindow(inner)
+        | ExprKind::CheckedWhole(inner)
         | ExprKind::CheckedDelta(inner)
         | ExprKind::Publications(inner) => into.push(inner),
         ExprKind::Binary { left, right, .. }
@@ -671,6 +674,8 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         | ExprKind::Constant { .. }
         | ExprKind::Endpoint { .. }
         | ExprKind::Local(_)
+        | ExprKind::PackEntry { .. }
+        | ExprKind::BoundChild(_)
         | ExprKind::DeferredPresent(_)
         | ExprKind::EndpointOf(_)
         | ExprKind::GenericValue { .. }

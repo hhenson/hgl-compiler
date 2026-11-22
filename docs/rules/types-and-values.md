@@ -65,7 +65,7 @@ analyser: partial
 analyser: partial
 
 - A construction in a value function names each field it gives, in any order, and gives every field that has no default and is not optional; a positional argument is rejected
-- Once an inferred graph construction has concrete field types, its implied enum fields and written empty collections use those types (GEN-2, TYPE-7, EXPR-9).
+- Once an inferred graph construction has concrete field types, its implied enum members, empty collections and null literals use those types, including in block tails (GEN-2, CTRL-10, TYPE-7, TYPE-14, EXPR-9).
 - Left: constructions elsewhere
 
 transpiler: partial
@@ -164,11 +164,12 @@ analyser: partial
 - Size kind and bounds (`rolling_window.size_kind`, `rolling_window.size_bounds`) of sizes read by the one reader (`constant`): literals, generic value parameters, constants of a module and constant expressions of those, a duration and an `i64` multiplied in either order among them; a size of a type other than `i64` or `duration` is of the wrong kind; an omitted minimum is the maximum in identity
 - `all_valid` takes a window (TIME-9), and a window's value read in a hook, of an input, of `out` or of a child of either, and given to a value function in composition, is a `list<V>` (FN-12, END-9); that list indexed is no child (TIME-9)
 - Read where the place takes a `result<list<V>, error>`, returned, bound or given, it is of that result (`CheckedWindow`, or `CheckedChild` where it is a child known when the program runs), as ERR-14 has it
-- Its delta is the V that arrived (TYPE-16), and of a nullable V the nullable's own delta, `delta<V>`, which its result takes as well (TIME-7), read before the window is all valid as after; a read of the delta of a window of a duration, an input's, a child's or `out`'s, whose place is not a `result` is `payload.unguarded`, and one of a window of a tick count is not
+- Its delta is the V that arrived (TYPE-16), and of a nullable V the nullable's own delta, `delta<V>`, which its result takes as well (TIME-7). A duration window's delta takes a result or nullable place and rejects a plain place (`payload.unguarded`); a tick-count window's delta can also take a plain place.
 - Core's `removed_value` is read where its place takes a `result<V, error>` (ERR-14); a read whose place is not a `result` is `payload.unguarded` for every window
 - A window's result takes a V and nothing else (TIME-7); its trace's cells are V (TST-5), a generic target's once its arguments are known
 - A size a generic value parameter gives is held to the same kind and bounds where the parameter is given, as TYPE-10's is (`values::sizes`): `Ticks<0>` for a `rolling_window<f64, N>` is `rolling_window.size_bounds`, and `Kinded<"x">` `rolling_window.size_kind`
-- Left: a size computed by a call; a size inside a generic body (GEN-7); the delta of a window of a duration that a generic parameter stands for, which is read in an instance
+- A generic hook applies the duration-window delta restriction when its instance supplies that input shape (GEN-7).
+- Left: a size computed by a call; a size inside a generic body (GEN-7)
 
 transpiler: partial
 

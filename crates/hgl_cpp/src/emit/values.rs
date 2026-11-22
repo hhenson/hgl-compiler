@@ -208,8 +208,15 @@ impl Emitter<'_> {
         let mut parameters = Vec::new();
         let mut defined = Vec::new();
         for parameter in &signature.parameters {
-            let ty = self.written_type(&parameter.ty, parameter.at)?;
-            let taken = parameter_type(self.program, &parameter.ty, parameter.var, &ty);
+            let taken = match &parameter.ty {
+                // FN-14, ERR-14: hidden captures hold the endpoint;
+                // the callable decides when to read it.
+                Type::Endpoint(payload) => self.bound_child_type(payload, parameter.at)?,
+                ty => {
+                    let written = self.written_type(ty, parameter.at)?;
+                    parameter_type(self.program, ty, parameter.var, &written)
+                }
+            };
             let parameter = format!("{taken} {}", identifier(&parameter.name));
             defined.push(format!("[[maybe_unused]] {parameter}"));
             parameters.push(parameter);
@@ -257,11 +264,14 @@ impl Emitter<'_> {
         let place = self.place_of(index);
         let comment = format!("// const {}: {ty} (UNIT-13), {place}\n", declaration.name);
         // The HGL file and line of the value, which a failure of it names.
-        let directive = self.line_directive(at).unwrap_or_default();
+        let init = format!("{INDENT}static const {written} value = {value};\n");
+        let init = match self.line_directive(at) {
+            Some(directive) => super::stamped(&directive, &init),
+            None => init,
+        };
         self.piece.declaration = format!("{comment}const {written}& {name}();\n");
-        self.piece.text = format!(
-            "{comment}const {written}& {name}()\n{{\n{directive}{INDENT}static const {written} value = {value};\n{INDENT}return value;\n}}\n"
-        );
+        self.piece.text =
+            format!("{comment}const {written}& {name}()\n{{\n{init}{INDENT}return value;\n}}\n");
     }
 }
 

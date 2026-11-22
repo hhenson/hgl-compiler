@@ -87,6 +87,7 @@ mod forms;
 pub mod hir;
 mod imports;
 mod instance;
+pub use instance::InstanceInputs;
 mod phases;
 mod program;
 mod read;
@@ -104,13 +105,14 @@ use hgl_source::{FileId, Span};
 
 pub use declared::substitute_within;
 pub use program::{
-    Binding, Decision, Declaration, DeclarationKind, Import, ImportKind, LocalKind, Module,
-    ModuleFile, NameUse, OperatorRef, Phase, PreludeName, Program, RUN_CONFIG, Role, Test,
+    Binding, Decision, Declaration, DeclarationKind, DependentPack, Import, ImportKind, LocalKind,
+    Module, ModuleFile, NameUse, OperatorRef, Phase, PreludeName, Program, RUN_CONFIG, Role, Test,
 };
 pub use types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, EnumMember, EnumOf, EnumType, Field,
-    FieldRef, FunctionType, GenericKind, GenericParameter, Member, MemberOf, NamedKind, Pack,
-    Parameter, Scalar, Signature, StructType, TraceStyle, Type, WrittenType,
+    FieldRef, FunctionParameter, FunctionType, GenericKind, GenericParameter, Member, MemberOf,
+    NamedKind, Pack, Parameter, ReflectedPack, Scalar, Signature, StructType, TraceStyle, Type,
+    WrittenType,
 };
 
 /// The most instances of one generic declaration that one call is
@@ -208,6 +210,8 @@ pub mod codes {
     pub const PACK_ORDER: &str = "pack.order";
     /// `...{Name}` names no type pack of its declaration (FN-8).
     pub const PACK_UNDECLARED: &str = "pack.undeclared";
+    /// A second positional pack or a second named pack in one declaration (FN-8).
+    pub const PACK_DUPLICATE: &str = "pack.duplicate";
     /// A native const implementation has a lifecycle hook (NATIVE-3).
     pub const NATIVE_CONST_HOOK: &str = "native.const_hook";
     /// A native implementation has `start;` or `stop;` and no `when;`
@@ -409,8 +413,8 @@ pub mod codes {
     pub const NULLABLE_KEY: &str = "nullable.key";
     /// A cardinality's upper bound is below its lower (GEN-10).
     pub const PACK_CARDINALITY: &str = "pack.cardinality";
-    /// A callable declares a second positional or named pack (FN-8).
-    pub const PACK_DUPLICATE: &str = "pack.duplicate";
+    /// A compile-time pack key names no member (GEN-17).
+    pub const PACK_NAME: &str = "pack.name";
     /// A struct's parent is not an abstract struct (TYPE-3).
     pub const STRUCT_PARENT: &str = "struct.parent";
     /// A struct lists one parent twice (TYPE-3).
@@ -524,6 +528,8 @@ pub mod codes {
     /// A sequence's entries give no type, and nothing is expected
     /// of it (EXPR-9).
     pub const SEQUENCE_CONTEXT: &str = "sequence.context_type";
+    /// Two entries of a written set are the same constant (EXPR-9).
+    pub const SET_DUPLICATE_MEMBER: &str = "set.duplicate_member";
     /// A call of an operator, by symbol or by name, that no candidate
     /// admits (GEN-5: "No match rejects"; OPS-1, OPS-2 for a symbol's
     /// operands).

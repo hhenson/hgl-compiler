@@ -9,21 +9,25 @@ use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::calls::arguments_of;
-use super::candidates::{Chosen, Given, Key, Settled, Wanted, typed_by_place};
+use super::candidates::{Chosen, Given, Key, Settled, Wanted, bound, typed_by_place};
 use super::constants::{constant_text, generic_default};
+use super::dependent_packs::{
+    PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
+};
 use super::fit::{open, whole};
+use super::function_arguments::CallbackInputs;
 use super::inference::{
-    ExplicitGenerics, bare_parameter, fixed, infer, infer_from_place, mentions, pack_bounds,
-    placed, unsaid,
+    ExplicitGenerics, bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed,
+    unsaid,
 };
 use super::lifting::contextual_type_is_pending;
 use super::{Candidate, Typer};
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
-use crate::program::{OperatorRef, Program, Role};
+use crate::program::{Declaration, DependentPack, OperatorRef, Program, Role};
 use crate::syntax::{has_token, name_token};
 use crate::types::{
-    Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, NamedKind, Pack,
+    Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, NamedKind, Pack, Scalar,
     Signature, Type,
 };
 use crate::{codes, error};
@@ -103,7 +107,13 @@ impl<'a> Typer<'a> {
             .collect();
         let own_generics: Vec<Location> =
             public.generics.iter().map(|generic| generic.at).collect();
-        let map: Vec<(Location, &Argument)> = fixed(&public.generics).zip(&explicit).collect();
+        let map: Vec<(Location, &Argument)> = public
+            .generics
+            .iter()
+            .zip(&explicit)
+            .filter(|(generic, _)| !matches!(generic.kind, GenericKind::Pack { .. }))
+            .map(|(generic, argument)| (generic.at, argument))
+            .collect();
         // GEN-13: a default the call takes is of its parameter's type
         // as the call resolves it. One that is not of the type as it is
         // declared is reported where it is declared, and is none of the
@@ -150,6 +160,7 @@ impl<'a> Typer<'a> {
                 .parameters
                 .iter()
                 .any(|parameter| parameter.configuration)
+                || reflects(&program.modules[operator.module], public)
             {
                 explicit
             } else {
@@ -215,6 +226,13 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         generics: Option<&CallArguments>,
     ) -> (ExprKind, Type) {
+        let result = match &self.program.modules[operator.module].details[operator.declaration] {
+            Detail::Callable(signature) => signature.result.as_ref(),
+            _ => None,
+        };
+        if let Some(call) = self.defer_pack_call(list, result, expected) {
+            return call;
+        }
         self.call_operator_with(name, list, operator, expected, generics, None)
     }
 
@@ -273,11 +291,21 @@ impl<'a> Typer<'a> {
         // against each candidate's own signature").
         let options = options_of(public, &candidates);
         let reported = self.diagnostics.len();
-        let written = self.operator_arguments(name, list, public, &options, pack.as_ref());
+        let unit = &program.modules[operator.module];
+        let dependent = dependent_slot(unit, public);
+        let dependent_pack =
+            dependent.map(|index| &unit.dependent_packs[&public.parameters[index].at]);
+        let signature = (
+            public,
+            &unit.declarations[operator.declaration],
+            dependent_pack,
+        );
+        let written =
+            self.operator_arguments(name, list, (public, dependent), &options, pack.as_ref());
         let named_generics = self.diagnostics.len() == reported
             && self.operator_generic_arguments(
                 public,
-                written.iter().map(|(key, node)| (key, node)),
+                written.iter().map(|(key, node, _)| (key, node)),
                 &mut explicit,
             );
         if replay.is_some() && named_generics {
@@ -306,7 +334,7 @@ impl<'a> Typer<'a> {
                 .filter_map(|(generic, given)| given.is_none().then_some(generic.at))
                 .collect();
             if !unknown.is_empty()
-                && written.iter().any(|(key, _)| {
+                && written.iter().any(|(key, _, _)| {
                     public_function(public, key).is_some_and(|ty| mentions(ty, &unknown))
                 })
             {
@@ -317,7 +345,7 @@ impl<'a> Typer<'a> {
                 // arguments are read in source order.
                 let mark = self.mark();
                 let probe = self.read_operator_arguments(
-                    public,
+                    signature,
                     written.iter().cloned(),
                     Some(&inferred),
                     pack.as_ref(),
@@ -329,7 +357,7 @@ impl<'a> Typer<'a> {
             context = Some(inferred);
         }
         let mut given = self.read_operator_arguments(
-            public,
+            signature,
             written,
             context.as_deref(),
             pack.as_ref(),
@@ -404,7 +432,7 @@ impl<'a> Typer<'a> {
         // `Typer::output_requested`.
         let supplied = public_inputs(public, &given);
         let Requested {
-            place: requested,
+            place: mut requested,
             among,
             generics: operator_generics,
             unfit,
@@ -417,6 +445,63 @@ impl<'a> Typer<'a> {
             let at = Location::new(self.file, name.span());
             self.diagnostics.emit(unfit.diagnostic(public, at));
             return (self.unselected(given, Form::Named), Type::Unknown);
+        }
+        if reflects(&program.modules[operator.module], public) {
+            let Some(placements) = bound(public, public, &given, dependent) else {
+                return (self.unselected(given, Form::Named), Type::Unknown);
+            };
+            let slots: Vec<_> = placements.iter().map(|place| place.parameter()).collect();
+            let reflected = operator_packs(
+                program,
+                (operator.module, public),
+                &operator_generics,
+                &given,
+                &slots,
+            );
+            let resolved = match reflected {
+                Ok(resolved) => resolved,
+                Err(fault) => {
+                    self.operator_pack_fault((name, list), &given, &fault);
+                    return (self.unselected(given, Form::Named), Type::Unknown);
+                }
+            };
+            for (index, pack) in resolved.callbacks {
+                specialize_named_pack(&mut given[index].value, Some(pack));
+            }
+            let at = Location::new(self.file, name.span());
+            let packs = PackTypes::new(&public.generics, &resolved.packs);
+            let map: Vec<_> = public
+                .generics
+                .iter()
+                .map(|generic| generic.at)
+                .zip(&operator_generics)
+                .collect();
+            if let Some(missing) = packs.written_member_fault(unit, operator.declaration, &map) {
+                self.pack_member_fault(at, &missing);
+                return (self.unselected(given, Form::Named), Type::Unknown);
+            }
+            let before = self.diagnostics.len();
+            self.pack_requires_met(
+                at,
+                (operator.module, operator.declaration),
+                &operator_generics,
+                &resolved.packs,
+            );
+            if self.diagnostics.len() != before {
+                return (self.unselected(given, Form::Named), Type::Unknown);
+            }
+            if let Some(result) = &public.result
+                && result.any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false)
+            {
+                match packs.project(result, &map) {
+                    Ok(ty) if whole(&ty) => requested = Some(ty),
+                    Ok(_) => {}
+                    Err(missing) => {
+                        self.pack_member_fault(at, &missing);
+                        return (self.unselected(given, Form::Named), Type::Unknown);
+                    }
+                }
+            }
         }
         // GEN-7: "A generic body is checked under its stated
         // requirements": what the enclosing declaration requires of its
@@ -641,8 +726,8 @@ impl<'a> Typer<'a> {
     /// take their context from the operator's public function template.
     fn read_operator_arguments(
         &mut self,
-        public: &Signature,
-        written: impl IntoIterator<Item = (Key, SyntaxNode)>,
+        (public, declared, dependent): (&Signature, &Declaration, Option<&DependentPack>),
+        written: impl IntoIterator<Item = (Key, SyntaxNode, Option<Expr>)>,
         context: Option<&[Option<Argument>]>,
         pack: Option<&hir::TypePackArgument>,
         replay: Option<ReplayedCall<'_>>,
@@ -650,7 +735,17 @@ impl<'a> Typer<'a> {
         let resolved: Vec<_> = context
             .unwrap_or_default()
             .iter()
-            .map(|value| value.clone().unwrap_or(Argument::Type(Type::Unknown)))
+            .zip(&public.generics)
+            .map(|(value, generic)| {
+                value
+                    .clone()
+                    .or_else(|| {
+                        dependent.filter(|pack| pack.without.contains(&generic.at))?;
+                        self.default_constant(declared, generic)
+                            .map(Argument::Constant)
+                    })
+                    .unwrap_or(Argument::Type(Type::Unknown))
+            })
             .collect();
         let map: Vec<_> = public
             .generics
@@ -663,10 +758,46 @@ impl<'a> Typer<'a> {
             .iter()
             .filter(|parameter| !parameter.configuration && parameter.pack.is_none())
             .count();
+        let written: Vec<_> = written.into_iter().collect();
+        // For FN-17 selection the dependent arguments supply type
+        // evidence even when written after the callback itself.
+        let mut dependent_values = Vec::new();
+        if context.is_some() && replay.is_none() && dependent.is_some() {
+            let positional_pack = public
+                .parameters
+                .iter()
+                .any(|p| p.pack == Some(Pack::Positional));
+            let mark = self.mark();
+            dependent_values.extend(written.iter().filter_map(|(key, node, ready)| {
+                let captured = match key {
+                    Key::Position(position) => *position >= fixed && !positional_pack,
+                    Key::ForwardedPosition(None) => !positional_pack,
+                    Key::Name(_) => key.public_parameter(public).is_none(),
+                    _ => false,
+                };
+                captured.then(|| match ready {
+                    Some(value) => Given {
+                        key: key.clone(),
+                        node: node.clone(),
+                        value: value.clone(),
+                        by_place: false,
+                        explicit: None,
+                        retried: false,
+                    },
+                    None => self.give(key.clone(), node.clone()),
+                })
+            }));
+            self.take_back(mark, false);
+        }
+        let supplied: Vec<_> = dependent_values
+            .iter()
+            .map(|given| (given.key.name(), &given.value))
+            .collect();
+        let excluded = dependent.map_or_else(Vec::new, |pack| pack_exclusions(pack, &map));
         written
             .into_iter()
             .enumerate()
-            .map(|(position, (key, node))| {
+            .map(|(position, (key, node, ready))| {
                 let explicit = match &key {
                     Key::Position(position) => position
                         .checked_sub(fixed)
@@ -683,12 +814,32 @@ impl<'a> Typer<'a> {
                         explicit: explicit.cloned(),
                         retried: by_place,
                     }
+                } else if let Some(value) = ready {
+                    Given {
+                        key,
+                        node,
+                        value,
+                        by_place: false,
+                        explicit: None,
+                        retried: false,
+                    }
                 } else if context.is_some()
                     && let Some(pattern) = public_function(public, &key)
                     && let Type::Function(template) = substitute_within(pattern, &map)
                 {
                     let reported = self.diagnostics.len();
-                    let value = self.function_argument(&node, &template);
+                    let inputs = if dependent.is_some_and(|pack| {
+                        key.public_parameter(public)
+                            .is_some_and(|index| public.parameters[index].at == pack.function)
+                    }) {
+                        CallbackInputs {
+                            supplied: Some(&supplied),
+                            excluded: &excluded,
+                        }
+                    } else {
+                        CallbackInputs::default()
+                    };
+                    let value = self.function_argument_with_inputs(&node, &template, &inputs);
                     if self.diagnostics.len() == reported && !whole(&value.ty) {
                         self.diagnostics.emit(error(
                             Category::Type,
@@ -1004,10 +1155,10 @@ impl<'a> Typer<'a> {
         &mut self,
         callee: &SyntaxToken,
         list: &SyntaxNode,
-        public: &Signature,
+        (public, dependent): (&Signature, Option<usize>),
         options: &OperatorOptions<'_>,
         written_pack: Option<&hir::TypePackArgument>,
-    ) -> Vec<(Key, SyntaxNode)> {
+    ) -> Vec<(Key, SyntaxNode, Option<Expr>)> {
         let mut named_seen = false;
         let mut position = 0;
         let mut names = HashSet::new();
@@ -1024,13 +1175,51 @@ impl<'a> Typer<'a> {
             .any(|parameter| parameter.pack == Some(Pack::Named));
         let mut positional = Vec::new();
         let mut named = Vec::new();
-        for (brace, name, value) in self.call_entries(list) {
+        let spreads = self.forwarded_arguments(list);
+        let explicit = self
+            .call_entries(list)
+            .into_iter()
+            .map(|(brace, name, node)| (brace, name, node, None));
+        let expanded = spreads
+            .into_iter()
+            .map(|entry| (false, None, entry.source, Some((entry.key, entry.value))));
+        for (brace, name, value, forwarded) in explicit.chain(expanded) {
             let at = name.as_ref().map_or_else(
                 || self.at(&value),
                 |name| Location::new(self.file, name.span()),
             );
-            let key = match name {
-                None => {
+            let key = match (&forwarded, name) {
+                (Some((hir::PackKey::Name(name), _)), _) => Key::Name(name.clone()),
+                (Some((hir::PackKey::Position(_), _)), _) => {
+                    let slot = public
+                        .parameters
+                        .iter()
+                        .enumerate()
+                        .find(|(index, parameter)| {
+                            !parameter.configuration
+                                && parameter.pack.is_none()
+                                && !filled.contains(index)
+                        })
+                        .map(|(index, _)| index);
+                    if slot.is_none() {
+                        if dependent.is_none()
+                            && options
+                                .positional_limit
+                                .is_some_and(|maximum| fixed + positional.len() >= maximum)
+                        {
+                            self.diagnostics.emit(error(
+                                Category::Type,
+                                codes::ARGUMENT_UNEXPECTED,
+                                at,
+                                format!("`{}` takes no positional argument here", callee.text()),
+                                "FN-19",
+                            ));
+                        }
+                        positional.push(at);
+                    }
+                    Key::ForwardedPosition(slot)
+                }
+                (_, None) => {
                     if named_seen {
                         self.diagnostics.emit(error(
                             Category::Type,
@@ -1044,7 +1233,8 @@ impl<'a> Typer<'a> {
                     }
                     // FN-18: a surplus positional argument cannot fill a
                     // configuration slot, even where it has no default.
-                    if !options.configuration.is_empty()
+                    if dependent.is_none()
+                        && !options.configuration.is_empty()
                         && options
                             .positional_limit
                             .is_some_and(|maximum| position >= maximum)
@@ -1063,19 +1253,28 @@ impl<'a> Typer<'a> {
                     position += 1;
                     Key::Position(position - 1)
                 }
-                Some(name) => {
+                (_, Some(name)) => {
                     // A named brace entry does not put the parentheses
                     // into their named-argument portion (EXPR-2, EXPR-10).
                     named_seen |= !brace;
-                    options.name_key(name.text(), brace)
+                    if !brace && dependent.is_some() {
+                        Key::Name(name.text().to_string())
+                    } else {
+                        options.name_key(name.text(), brace)
+                    }
                 }
             };
             let own = key.public_parameter(public);
             let mut duplicate = own.is_some_and(|index| !filled.insert(index));
             if let Some(text) = key.name() {
                 let known = own.is_some() || options.accepts_name(&key);
-                let captured =
-                    !known && has_named_pack && !(options.configuration.contains(text) && !brace);
+                let captured = !known
+                    && has_named_pack
+                    && if dependent.is_some() {
+                        !brace
+                    } else {
+                        !(options.configuration.contains(text) && !brace)
+                    };
                 if !known && !captured {
                     self.diagnostics.emit(error(
                         Category::Name,
@@ -1089,7 +1288,8 @@ impl<'a> Typer<'a> {
                         },
                     ));
                 } else {
-                    duplicate |= !names.insert(text.to_string());
+                    let callback_name = captured && dependent.is_some();
+                    duplicate |= !names.insert((callback_name, text.to_string()));
                     if captured && !duplicate {
                         named.push(at);
                     }
@@ -1108,11 +1308,25 @@ impl<'a> Typer<'a> {
                     "EXPR-2",
                 ));
             }
-            arguments.push((key, value));
+            arguments.push((key, value, forwarded.map(|(_, value)| value)));
         }
-        for parameter in &public.parameters {
+        for (index, parameter) in public.parameters.iter().enumerate() {
+            let combined: Vec<_>;
             let captured = match parameter.pack {
                 Some(Pack::Positional) => &positional,
+                Some(Pack::Named) if dependent == Some(index) => {
+                    let has_positional = public
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.pack == Some(Pack::Positional));
+                    combined = positional
+                        .iter()
+                        .filter(|_| !has_positional)
+                        .chain(&named)
+                        .copied()
+                        .collect();
+                    &combined
+                }
                 Some(Pack::Named) => &named,
                 None => continue,
             };
@@ -1151,7 +1365,16 @@ impl<'a> Typer<'a> {
                 _ => None,
             };
             let read = self.read_constant(node, expected);
-            if let Some(why) = Self::not_constant(&read) {
+            if let (Some(ty @ Type::Set(element)), Err(fault)) = (expected, &read)
+                && **element == Type::Scalar(Scalar::Str)
+                && let Some(report) = fault.report(
+                    self.at(node),
+                    &format!("the generic value parameter `{}`", generic.name),
+                    ty,
+                )
+            {
+                self.diagnostics.emit(report);
+            } else if let Some(why) = Self::not_constant(&read) {
                 let name = &generic.name;
                 self.diagnostics.emit(error(
                     Category::Type,

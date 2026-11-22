@@ -39,7 +39,7 @@ use hgl_diagnostics::{Diagnostics, Location};
 use crate::declared::substitute_within;
 use crate::hir::{
     AnonymousFunction, Answer, Body, Callee, ConfigurationRead, DefaultExpr, Expr, ExprKind,
-    ValueCategory, walk_statements, walk_statements_mut,
+    PackInput, TypePackArgument, Value, ValueCategory, walk_statements, walk_statements_mut,
 };
 use crate::program::{LocalKind, Phase, Program, Role};
 use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar, Signature, Type};
@@ -48,14 +48,34 @@ use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar,
 /// it stands for at one call.
 type Map<'a> = [(Location, &'a Argument)];
 
+use crate::values::PackTypes;
+
+/// The compile-time call inputs that specialize a declaration (FN-17, FN-19).
+#[derive(Default)]
+pub struct InstanceInputs<'a> {
+    /// Each function supplied at an original parameter slot.
+    pub functions: &'a [(usize, Callee)],
+    /// Generic type and reflected packs of the declaration.
+    pub type_packs: &'a [TypePackArgument],
+    /// Concrete entries held by the caller's packs, including an empty shape.
+    pub pack_inputs: Option<&'a [PackInput]>,
+}
+
 /// The enclosing declaration and the arguments common to its body and
 /// any anonymous bodies written inside it.
 struct InstanceArguments<'a> {
     declaration: (usize, usize),
     generics: &'a [Argument],
     types: &'a Map<'a>,
+    packs: &'a PackTypes<'a>,
     requirements: &'a [Answer],
     diagnostics: &'a RefCell<Diagnostics>,
+}
+
+impl InstanceArguments<'_> {
+    fn project(&self, ty: &Type) -> Type {
+        self.packs.project(ty, self.types).unwrap_or(Type::Unknown)
+    }
 }
 
 impl Program {
@@ -134,6 +154,7 @@ impl Program {
             declaration: operator,
             generics,
             types: &types,
+            packs: &PackTypes::new(&[], &[]),
             requirements: &requirements,
             diagnostics: &reports,
         };
@@ -198,27 +219,66 @@ impl Program {
         requirements: &[Answer],
         functions: &[(usize, Callee)],
     ) -> Option<(Signature, Body)> {
-        self.checked_instance(
+        self.instance_with_packs(
             (module, declaration),
             generics,
             requirements,
             functions,
+            &[],
+        )
+    }
+
+    /// Instantiate a declaration with its static function and type pack
+    /// arguments, including member types of reflected packs (GEN-17).
+    pub fn instance_with_packs(
+        &self,
+        declaration: (usize, usize),
+        generics: &[Argument],
+        requirements: &[Answer],
+        functions: &[(usize, Callee)],
+        packs: &[TypePackArgument],
+    ) -> Option<(Signature, Body)> {
+        self.instance_with_inputs(
+            declaration,
+            generics,
+            requirements,
+            InstanceInputs {
+                functions,
+                type_packs: packs,
+                ..InstanceInputs::default()
+            },
+        )
+    }
+
+    /// Instantiate a declaration with the inputs its caller supplies.
+    pub fn instance_with_inputs(
+        &self,
+        declaration: (usize, usize),
+        generics: &[Argument],
+        requirements: &[Answer],
+        inputs: InstanceInputs<'_>,
+    ) -> Option<(Signature, Body)> {
+        self.checked_instance(
+            declaration,
+            generics,
+            requirements,
+            inputs,
             &RefCell::new(Diagnostics::new()),
             &mut Diagnostics::new(),
         )
     }
 
     /// Instantiate a body and report any configuration that fails to fit
-    /// the selected candidate (FN-18, GEN-16). Collect new graph reports
+    /// the selected candidate (FN-18, GEN-16). Collect new body reports
     /// separately so the instance walk can point them at its caller (GEN-7).
     pub(crate) fn checked_instance(
         &self,
         (module, declaration): (usize, usize),
         generics: &[Argument],
         requirements: &[Answer],
-        functions: &[(usize, Callee)],
+        inputs: InstanceInputs<'_>,
         diagnostics: &RefCell<Diagnostics>,
-        graph_diagnostics: &mut Diagnostics,
+        body_diagnostics: &mut Diagnostics,
     ) -> Option<(Signature, Body)> {
         let declared = self.modules.get(module)?;
         let Some(Detail::Callable(signature)) = declared.details.get(declaration) else {
@@ -231,47 +291,66 @@ impl Program {
             .map(|generic| generic.at)
             .zip(generics)
             .collect();
+        let packs = PackTypes::new(&signature.generics, inputs.type_packs);
+        let project = |ty: &Type| packs.project(ty, &map).unwrap_or(Type::Unknown);
         let mut taken = Signature {
             generics: Vec::new(),
             parameters: signature
                 .parameters
                 .iter()
                 .map(|parameter| Parameter {
-                    ty: substitute_within(&parameter.ty, &map),
+                    ty: project(&parameter.ty),
                     ..parameter.clone()
                 })
                 .collect(),
-            result: signature
-                .result
-                .as_ref()
-                .map(|result| substitute_within(result, &map)),
+            result: signature.result.as_ref().map(project),
             reference: signature.reference,
         };
         let mut body = body.clone();
         let temporal = declared.declarations[declaration].kind.role() == Some(Role::Temporal);
-        let functions = hidden_captures(functions, &mut taken, &mut body, temporal);
+        let functions = hidden_captures(inputs.functions, &mut taken, &mut body, temporal);
         let arguments = InstanceArguments {
             declaration: (module, declaration),
             generics,
             types: &map,
+            packs: &packs,
             requirements,
             diagnostics,
         };
         let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
-        let recheck =
-            graph && (!declared.selecting[declaration].is_empty() || !requirements.is_empty());
+        let pending_forwards = inputs
+            .pack_inputs
+            .filter(|_| crate::values::has_forwarded_calls(&body));
+        let recheck_endpoints =
+            crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
+        if (recheck_endpoints || pending_forwards.is_some())
+            && let Some(reread) = crate::values::reread_instance_body(
+                self,
+                (module, declaration),
+                (&taken, &map),
+                (&functions, pending_forwards),
+                &project,
+                body_diagnostics,
+            )
+        {
+            body = reread;
+        }
+        let recheck = graph
+            && (!declared.selecting[declaration].is_empty()
+                || !requirements.is_empty()
+                || pending_forwards.is_some());
         let destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
         self.place_body(&mut body, &arguments, &functions);
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
-        // could not say of an operation it requires.
+        // could not say of an operation it requires or a pack it forwards.
         if let Some(destinations) = destinations {
             destinations.settle(
                 self,
                 (module, declaration),
                 (&taken, &map),
                 &mut body,
-                graph_diagnostics,
+                body_diagnostics,
                 &|expression| self.place(expression, &arguments, &functions),
             );
         } else {
@@ -291,7 +370,7 @@ impl Program {
         functions: &[(usize, Callee)],
     ) {
         for local in &mut body.locals {
-            local.ty = substitute_within(&local.ty, instance.types);
+            local.ty = instance.project(&local.ty);
         }
         walk_statements_mut(&mut body.statements, &mut |expression| {
             self.place(expression, instance, functions);
@@ -313,7 +392,7 @@ impl Program {
         instance: &InstanceArguments<'_>,
         functions: &[(usize, Callee)],
     ) {
-        expression.ty = substitute_within(&expression.ty, instance.types);
+        expression.ty = instance.project(&expression.ty);
         match &mut expression.kind {
             // GEN-13: a generic value parameter read as a value is the
             // constant the call gives it.
@@ -339,7 +418,29 @@ impl Program {
                 } else {
                     None
                 };
+                let callback = matches!(callee, Callee::Parameter { .. });
                 self.place_target(callee, instance, functions);
+                if callback
+                    && let Some((module, declaration)) = callee.declaration()
+                    && let Detail::Callable(signature) = &self.modules[module].details[declaration]
+                    && signature
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.configuration)
+                {
+                    // FN-18: template slots omit the callback's defaulted
+                    // configuration, which still occupies declaration slots.
+                    let ordinary = signature
+                        .parameters
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, parameter)| !parameter.configuration);
+                    for argument in arguments.iter_mut() {
+                        argument.parameter = argument
+                            .parameter
+                            .and_then(|index| ordinary.clone().nth(index).map(|(slot, _)| slot));
+                    }
+                }
                 if let Some(configuration) = required {
                     if let Callee::Required {
                         configuration: unresolved,
@@ -402,9 +503,7 @@ impl Program {
             .zip(generics)
             .collect();
         let context = context.map(|mut context| {
-            context.result = context
-                .result
-                .map(|ty| substitute_within(&ty, instance.types));
+            context.result = context.result.map(|ty| instance.project(&ty));
             context
         });
         for argument in arguments {
@@ -420,7 +519,7 @@ impl Program {
             // This walk visits the call before each argument. Its type
             // is specialized here, while the expression still records
             // whether it was written as a literal or a generic constant.
-            let actual = substitute_within(&argument.value.ty, instance.types);
+            let actual = instance.project(&argument.value.ty);
             let expected = substitute_within(&parameter.ty, &map);
             if actual != expected {
                 let mut value = argument.value.clone();
@@ -447,7 +546,7 @@ impl Program {
         if let Callee::Anonymous(function) = callee {
             let functions = inherited_functions(function, functions);
             let template = Type::Function(Box::new(function.template.clone()));
-            if let Type::Function(template) = substitute_within(&template, instance.types) {
+            if let Type::Function(template) = instance.project(&template) {
                 function.template = *template;
             }
             function
@@ -457,13 +556,20 @@ impl Program {
             crate::values::record(self, &mut function.body, !function.template.value);
         } else {
             place_callee(callee, instance.types, instance.requirements, functions);
+            if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } =
+                callee
+            {
+                for pack in type_packs {
+                    instance.packs.place_forwarded(pack);
+                }
+            }
         }
     }
 
     /// A constant a generic value parameter is given, `value` of type
     /// `ty`, as the expression that reads it, written at `at`: `None`
-    /// for one whose value is not held. A list and a tuple are each
-    /// element as its own expression.
+    /// for one whose value is not held. A list, string set and tuple
+    /// have each element as its own expression.
     pub(crate) fn constant(
         &self,
         value: &ConstantValue,
@@ -529,6 +635,22 @@ impl Program {
                     .map(|value| element(value, of))
                     .collect::<Option<Vec<Expr>>>()
                     .map(ExprKind::Sequence)
+            }
+            ConstantValue::StringSet(names) => {
+                let Type::Set(element) = of else {
+                    return None;
+                };
+                Some(ExprKind::Sequence(
+                    names
+                        .iter()
+                        .map(|name| Expr {
+                            kind: ExprKind::Literal(Value::Str(name.clone())),
+                            ty: (**element).clone(),
+                            at,
+                            category: ValueCategory::Unsettled,
+                        })
+                        .collect(),
+                ))
             }
             ConstantValue::Tuple(values) => {
                 let anys;
@@ -786,6 +908,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
         Callee::Parameter { .. }
         | Callee::Anonymous(_)
         | Callee::DeferredOperator(_)
+        | Callee::DeferredPackCall
         | Callee::DeferredValue
         | Callee::Unread => {}
     }

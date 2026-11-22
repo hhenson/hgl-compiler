@@ -133,10 +133,9 @@ fn delta_value_takes_its_form_from_its_place() {
     );
 }
 
-/// TYPE-11: "A read of the delta of a window of a duration whose place is
-/// not a `result` rejects (`payload.unguarded`): an arrival may be
-/// missing at its tick. One of a window of a tick count is not rejected:
-/// it ticks only at an arrival." Of an input, of a child and of `out`,
+/// TYPE-11: A duration window's delta takes a result or nullable place.
+/// A plain place rejects because an arrival may be missing at its tick.
+/// A tick-count window ticks only at an arrival. Of an input, of a child and of `out`,
 /// returned and bound; a window that may be left out is the window
 /// under its `?` (TYPE-14). A window's VALUE read is a checked read,
 /// where a `result` is taken, as before (`CheckedWindow`).
@@ -183,6 +182,80 @@ fn a_plain_read_of_the_delta_of_a_window_of_a_duration_rejects() {
         returned(&checked, "values").kind,
         ExprKind::CheckedWindow(_)
     ));
+}
+
+/// GEN-7, TIME-1 and TYPE-11: a generic hook applies the whole-read and
+/// duration-delta admission checks for the endpoint type supplied.
+#[test]
+fn a_generic_hook_checks_admission_of_its_concrete_endpoint_reads() {
+    let checked = module(
+        "fn duration_window(reading: i64) -> rolling_window<i64, 3us, 1us> {
+    when { return reading }
+}
+fn tick_window(reading: i64) -> rolling_window<i64, 3, 1> {
+    when { return reading }
+}
+fn plain_delta<T>(value: T) -> delta<T> {
+    when modified(value) {
+        let plain: delta<T> = delta_value(value)
+        return plain
+    }
+}
+fn bad_delta(reading: i64) -> i64 => plain_delta(duration_window(reading))
+fn good_delta(reading: i64) -> i64 => plain_delta(tick_window(reading))
+fn nullable_whole<T>(probe: i64, value: T) -> bool {
+    when modified(probe) && valid(value) {
+        let observed: T? = value
+        return observed == null
+    }
+}
+fn bad_whole(probe: i64, pair: tuple<i64, i64>) -> bool => nullable_whole(probe, pair)
+",
+    );
+    let summary = checked.summary();
+    assert_eq!(summary.len(), 2, "{}", checked.report);
+    for rule in ["TIME-1", "TYPE-11"] {
+        assert!(
+            summary
+                .iter()
+                .any(|row| row.ends_with(&format!("phase/payload.unguarded {rule}"))),
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// TYPE-11 and ERR-14: a duration window's delta in a nullable place
+/// gives null where the window ticks with no arrival.
+#[test]
+fn a_duration_window_delta_has_a_nullable_form() {
+    let checked = module(
+        "struct Book { prices: rolling_window<i64, 3s, 1s> }
+fn timed(readings: rolling_window<i64, 3s, 1s>) -> i64? {
+    when modified(readings) { return delta_value(readings) }
+}
+fn child(book: Book) -> i64? {
+    when {
+        let prices = book.prices
+        if !valid(prices) { return null }
+        return delta_value(prices)
+    }
+}",
+    );
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+    assert!(matches!(
+        &returned(&checked, "timed").kind,
+        ExprKind::OrNull { result, .. } if matches!(result.kind, ExprKind::CheckedDelta(_))
+    ));
+    let mut nullable_child = false;
+    walk_statement_nodes(&body(&checked, "child").statements, &mut |node| {
+        if let Node::Expression(value) = node
+            && let ExprKind::OrNull { result, .. } = &value.kind
+        {
+            nullable_child |= matches!(result.kind, ExprKind::CheckedDelta(_));
+        }
+    });
+    assert!(nullable_child);
 }
 
 /// TIME-9: "The operations on an endpoint are core's native value

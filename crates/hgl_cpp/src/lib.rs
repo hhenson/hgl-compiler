@@ -280,6 +280,20 @@ pub fn transpile(program: &Program, file_name: FileName, diagnostics: &mut Diagn
 /// written at (`emit`, `Emitter::line_directive`).
 pub type FileName<'a> = &'a dyn Fn(Location) -> String;
 
+/// Maps a checked location and its one-based line to the source the debugger
+/// should show. An inserted statement can have no original location.
+pub type SourcePosition<'a> = &'a dyn Fn(Location, usize) -> Option<(String, usize)>;
+
+/// Writes a program with source positions supplied by the driver, including
+/// mappings back to the original HGL file after command-line replacements.
+pub fn transpile_with_positions(
+    program: &Program,
+    position: SourcePosition,
+    diagnostics: &mut Diagnostics,
+) -> Output {
+    transpile_with(program, &runtime::provides, Some(position), diagnostics)
+}
+
 /// [`transpile`], for a runtime library that defines the native
 /// functions for which `provides` is true, each by the name it gives
 /// it: `add__i64_i64` for `add_(i64, i64)`. A call of a native it does
@@ -295,6 +309,21 @@ pub fn transpile_for(
     file_name: Option<FileName>,
     diagnostics: &mut Diagnostics,
 ) -> Output {
+    let position = |at, line| file_name.map(|name| (name(at), line));
+    transpile_with(
+        program,
+        provides,
+        file_name.map(|_| &position as SourcePosition),
+        diagnostics,
+    )
+}
+
+fn transpile_with(
+    program: &Program,
+    provides: &dyn Fn(&str) -> bool,
+    position: Option<SourcePosition>,
+    diagnostics: &mut Diagnostics,
+) -> Output {
     let core = program.core();
     // GEN-2: C++ values are typed, so every generic function is written
     // once for each set of generic arguments it is called with.
@@ -308,7 +337,7 @@ pub fn transpile_for(
                     program,
                     index,
                     provides,
-                    file_name,
+                    position,
                     &instances,
                     &readers,
                     &mut unwritten_in_core,
@@ -318,7 +347,7 @@ pub fn transpile_for(
                     program,
                     index,
                     provides,
-                    file_name,
+                    position,
                     &instances,
                     &readers,
                     diagnostics,

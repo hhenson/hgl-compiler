@@ -6,11 +6,13 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::Typer;
 use super::arguments::{Slot, Takes};
 use super::candidates::{
-    CallbackOption, CallbackOptionSource, CallbackRequest, Given, Wanted, in_instance,
+    CallbackOption, CallbackOptionSource, CallbackRequest, Given, Key, Wanted, in_instance,
 };
 use super::constants::generic_default;
+use super::dependent_packs::PackTypes;
 use super::fit::whole;
-use super::inference::{ExplicitGenerics, infer};
+use super::forwarded_packs::spread_operands;
+use super::inference::{ExplicitGenerics, infer, pack_bounds, type_pack};
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{
     AnonymousFunction, Callee, Expr, ExprKind, Form, TypePackArgument, ValueCategory,
@@ -18,16 +20,28 @@ use crate::hir::{
 use crate::program::{Declaration, OperatorRef, Role};
 use crate::syntax::{child, name_token, ungrouped};
 use crate::types::{
-    Argument, CallArguments, ConstantValue, Detail, FunctionType, GenericKind, Signature, Type,
+    Argument, CallArguments, ConstantValue, Detail, FunctionParameter, FunctionType, GenericKind,
+    Pack, Parameter, Signature, Type,
 };
 use crate::{codes, error, local_error};
 
 impl<'a> Typer<'a> {
     /// Read an argument the callee expects to be a function known at compile time.
     pub(super) fn function_argument(&mut self, node: &SyntaxNode, template: &FunctionType) -> Expr {
+        self.function_argument_with_inputs(node, template, &CallbackInputs::default())
+    }
+
+    /// FN-17: an operator named at a reflected template selects by the
+    /// resolved argument types, including those in the dependent pack.
+    pub(super) fn function_argument_with_inputs(
+        &mut self,
+        node: &SyntaxNode,
+        template: &FunctionType,
+        inputs: &CallbackInputs<'_>,
+    ) -> Expr {
         let at = self.at(node);
         let argument = ungrouped(node.clone());
-        let resolved = self.function_target(&argument, template);
+        let resolved = self.function_target(&argument, template, inputs);
         let (kind, ty) = resolved.map_or((ExprKind::Unread, Type::Unknown), |(callee, actual)| {
             if !matches_template(template, &actual) {
                 self.template_mismatch(at, template, &actual);
@@ -50,6 +64,7 @@ impl<'a> Typer<'a> {
         &mut self,
         node: &SyntaxNode,
         template: &FunctionType,
+        inputs: &CallbackInputs<'_>,
     ) -> Option<(Callee, FunctionType)> {
         if node.kind() == SyntaxKind::FnExpr {
             return self.anonymous_target(node, template);
@@ -81,7 +96,7 @@ impl<'a> Typer<'a> {
                             module,
                             declaration,
                         },
-                        template,
+                        (template, inputs),
                     );
                 }
                 let preferred = if template.value {
@@ -101,7 +116,12 @@ impl<'a> Typer<'a> {
                         Role::Value
                     })
                 }) {
-                    return self.declared_target(node, &name, (module, declaration), template);
+                    return self.declared_target(
+                        node,
+                        &name,
+                        (module, declaration),
+                        (template, inputs),
+                    );
                 }
             }
         }
@@ -120,7 +140,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         name: &SyntaxToken,
         (module, declaration): (usize, usize),
-        template: &FunctionType,
+        (template, inputs): (&FunctionType, &CallbackInputs<'_>),
     ) -> Option<(Callee, FunctionType)> {
         let program = self.program;
         let unit = &program.modules[module];
@@ -128,29 +148,59 @@ impl<'a> Typer<'a> {
             return None;
         };
         let declared = &unit.declarations[declaration];
-        if !plain_parameters(signature) {
+        if let Some(parameter) = missing_callback_configuration(signature, None) {
+            self.callback_configuration(node, parameter);
+            return None;
+        }
+        if !plain_inputs(signature, template) {
             self.marked_function(node, signature);
             return None;
         }
-        let ReferenceArguments { generics, pack, .. } =
-            self.reference_arguments(node, name, (declared, signature), template)?;
+        let given = inputs
+            .supplied
+            .map(|_| reflected_arguments(signature, template, node, self.at(node), inputs));
+        let ReferenceArguments {
+            generics,
+            type_packs,
+            ..
+        } = self.reference_arguments(
+            node,
+            name,
+            (declared, signature),
+            (template, given.as_deref()),
+        )?;
         let map = signature
             .generics
             .iter()
-            .map(|generic| generic.at)
             .zip(&generics)
+            .filter(|(generic, _)| !matches!(generic.kind, GenericKind::Pack { .. }))
+            .map(|(generic, argument)| (generic.at, argument))
             .collect::<Vec<_>>();
         let taken = in_instance(signature, &map);
         let actual = function_type(&taken, declared.kind.role() == Some(Role::Value));
-        if matches_template(template, &actual) && template.types().all(whole) {
-            self.requires_met(self.at(node), (module, declaration), &generics);
+        if matches_template(template, &actual) {
+            let target = (module, declaration);
+            let at = self.at(node);
+            if type_packs.is_empty() {
+                if template.types().all(whole) {
+                    self.requires_met(at, target, &generics);
+                }
+            } else if actual.types().all(whole)
+                && type_packs.iter().flat_map(|pack| &pack.types).all(whole)
+            {
+                self.pack_requires_met(at, target, &generics, &type_packs);
+            }
         }
-        let requirements = self.answers(module, declaration, &generics);
+        let requirements = if type_packs.is_empty() {
+            self.answers(module, declaration, &generics)
+        } else {
+            Vec::new()
+        };
         let callee = Callee::Function {
             module,
             declaration,
             generics,
-            type_packs: pack.into_iter().collect(),
+            type_packs,
             requirements,
             contextual: Vec::new(),
         };
@@ -162,15 +212,45 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         name: &SyntaxToken,
         operator: OperatorRef,
-        template: &FunctionType,
+        (template, inputs): (&FunctionType, &CallbackInputs<'_>),
     ) -> Option<(Callee, FunctionType)> {
-        // Bare references use the existing template-driven selector.
-        // With written arguments, the operator can also complete a
-        // template still open after the other arguments were read.
-        let explicit = if node.kind() == SyntaxKind::FunctionReference {
-            Some(self.operator_reference(node, name, operator, template)?)
+        let unit = &self.program.modules[operator.module];
+        let Detail::Callable(public) = &unit.details[operator.declaration] else {
+            return None;
+        };
+        if let Some(parameter) = missing_callback_configuration(public, None) {
+            self.callback_configuration(node, parameter);
+            return None;
+        }
+        let at = self.at(node);
+        let reflected = template.named_pack.is_some();
+        let mut given = if reflected {
+            reflected_arguments(public, template, node, at, inputs)
         } else {
-            if !template.types().all(whole) {
+            Vec::new()
+        };
+        if let Some(pack) = &template.named_pack
+            && !given.iter().any(|argument| whole(argument.ty()))
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::GENERIC_UNRESOLVED,
+                at,
+                format!(
+                    "the call leaves `{}` unresolved: no parameter type selects a candidate of `{}`",
+                    pack.name,
+                    name.text()
+                ),
+                "FN-17",
+            ));
+            return None;
+        }
+        // With written generics the operator can also complete a template
+        // still open after the enclosing call's other arguments were read.
+        let explicit = if node.kind() == SyntaxKind::FunctionReference {
+            Some(self.operator_reference(node, name, operator, (template, &given))?)
+        } else {
+            if !reflected && !template.types().all(whole) {
                 return None;
             }
             None
@@ -178,31 +258,24 @@ impl<'a> Typer<'a> {
         let request = explicit
             .as_ref()
             .map_or(template, |operator| &operator.signature);
+        if !reflected {
+            given.extend(
+                request
+                    .ordinary_parameters()
+                    .enumerate()
+                    .map(|(index, input)| callback_operand(index, node, at, input.ty().clone())),
+            );
+        }
         let graph = std::mem::replace(&mut self.graph, !template.value);
         let value_code = std::mem::replace(&mut self.value_code, false);
-        let candidates = self.value_candidates(operator);
-        let candidates: Vec<_> = candidates
+        let candidates: Vec<_> = self
+            .value_candidates(operator)
             .into_iter()
-            .filter(|(_, _, signature)| plain_parameters(signature))
-            .collect();
-        let at = self.at(node);
-        let given = request
-            .parameters
-            .iter()
-            .enumerate()
-            .map(|(index, (_, ty))| {
-                Given::read(
-                    index,
-                    node.clone(),
-                    Expr {
-                        kind: ExprKind::Unread,
-                        ty: ty.clone(),
-                        at,
-                        category: ValueCategory::Value,
-                    },
-                )
+            .filter(|(_, _, signature)| {
+                plain_inputs(signature, template)
+                    && missing_callback_configuration(signature, Some(public)).is_none()
             })
-            .collect::<Vec<_>>();
+            .collect();
         let mut requested_values = Vec::new();
         if let Some(explicit) = &explicit
             && let Detail::Callable(public) =
@@ -256,9 +329,10 @@ impl<'a> Typer<'a> {
                 .as_ref()
                 .and_then(|operator| operator.among.clone()),
             written: explicit.is_some(),
-            callback: explicit.as_ref().map(|_| CallbackRequest {
+            callback: (explicit.is_some() || reflected).then_some(CallbackRequest {
                 reference: request.reference,
                 values: &requested_values,
+                reflected: reflected.then_some(inputs.excluded),
             }),
         };
         let (mut matches, unknown) = self.admitted(operator, &candidates, &given, &wanted);
@@ -276,12 +350,16 @@ impl<'a> Typer<'a> {
                 .role()
                 == Some(Role::Value);
             let mut actual = function_type(taken, value);
-            if let Some(Detail::Callable(public)) = self.program.modules[operator.module]
-                .details
-                .get(operator.declaration)
+            for (parameter, position) in public
+                .parameters
+                .iter()
+                .zip(public.candidate_parameters(taken))
             {
-                for ((name, _), public) in actual.parameters.iter_mut().zip(&public.parameters) {
-                    *name = Some(public.name.clone());
+                if let Some(position) = position
+                    && let FunctionParameter::Declared(input) = &mut actual.parameters[position]
+                {
+                    input.name.clone_from(&parameter.name);
+                    input.has_default |= parameter.has_default;
                 }
             }
             let requirements = self.answers(module, declaration, &chosen.generics);
@@ -291,10 +369,33 @@ impl<'a> Typer<'a> {
                 module,
                 declaration,
                 generics: chosen.generics,
-                type_packs: Vec::new(),
+                type_packs: chosen.type_packs,
                 requirements,
             };
             return Some((callee, actual));
+        }
+        if reflected
+            && !public
+                .parameters
+                .iter()
+                .any(|parameter| parameter.pack == Some(Pack::Named))
+        {
+            let options = super::operators::options_of(public, &candidates);
+            for argument in &given {
+                if let Key::Name(unknown) = &argument.key
+                    && argument.key.public_parameter(public).is_none()
+                    && !options.accepts_name(&argument.key)
+                {
+                    self.diagnostics.emit(error(
+                        Category::Name,
+                        codes::ARGUMENT_UNKNOWN,
+                        argument.value.at,
+                        format!("`{}` has no parameter named `{unknown}`", name.text()),
+                        "EXPR-2",
+                    ));
+                    return None;
+                }
+            }
         }
         self.diagnostics.emit(error(
             Category::Type,
@@ -316,17 +417,21 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         name: &SyntaxToken,
         operator: OperatorRef,
-        template: &FunctionType,
+        (template, given): (&FunctionType, &[Given]),
     ) -> Option<OperatorReference> {
         let module = &self.program.modules[operator.module];
         let Detail::Callable(public) = &module.details[operator.declaration] else {
             return None;
         };
-        if !plain_parameters(public) {
+        if !plain_inputs(public, template) {
             self.marked_function(node, public);
             return None;
         }
-        if public.parameters.len() != template.parameters.len()
+        let ordinary = public
+            .parameters
+            .iter()
+            .filter(|input| !input.configuration);
+        if !takes_input_count(template, ordinary.count())
             || public.result.is_some() != template.result.is_some()
             || public.reference != template.reference
         {
@@ -342,7 +447,7 @@ impl<'a> Typer<'a> {
             node,
             name,
             (&module.declarations[operator.declaration], public),
-            template,
+            (template, Some(given)),
         )?;
         if generics
             .iter()
@@ -374,7 +479,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         name: &SyntaxToken,
         (declared, signature): (&Declaration, &Signature),
-        template: &FunctionType,
+        (template, given): (&FunctionType, Option<&[Given]>),
     ) -> Option<ReferenceArguments> {
         let written = self.reference_written(node, name);
         let ExplicitGenerics {
@@ -388,8 +493,34 @@ impl<'a> Typer<'a> {
         if let (Some(pattern), Some(actual)) = (&signature.result, &template.result) {
             infer(pattern, actual, &signature.generics, &mut found);
         }
-        for (pattern, (_, actual)) in signature.parameters.iter().zip(&template.parameters) {
-            infer(&pattern.ty, actual, &signature.generics, &mut found);
+        let ordinary = signature
+            .parameters
+            .iter()
+            .filter(|input| !input.configuration);
+        for (pattern, actual) in ordinary.zip(template.ordinary_parameters()) {
+            infer(&pattern.ty, actual.ty(), &signature.generics, &mut found);
+        }
+        for given in given.unwrap_or_default() {
+            let parameter = given
+                .key
+                .public_parameter(signature)
+                .map(|index| &signature.parameters[index])
+                .or_else(|| {
+                    // FN-8 and GEN-2: a homogeneous pack's entries each
+                    // supply evidence for its element type.
+                    let kind = match &given.key {
+                        Key::Position(_) => Pack::Positional,
+                        Key::Name(_) => Pack::Named,
+                        _ => return None,
+                    };
+                    signature.parameters.iter().find(|parameter| {
+                        parameter.pack == Some(kind)
+                            && type_pack(parameter, &signature.generics).is_none()
+                    })
+                });
+            if let Some(parameter) = parameter {
+                infer(&parameter.ty, given.ty(), &signature.generics, &mut found);
+            }
         }
         // GEN-2 and GEN-8: a generic value parameter nothing says
         // anything of takes the default declared by the callback.
@@ -433,13 +564,62 @@ impl<'a> Typer<'a> {
         if self.diagnostics.len() != reported {
             return None;
         }
+        let mut type_packs: Vec<_> = pack.into_iter().collect();
+        if template.named_pack.is_some() {
+            // FN-8, GEN-8: the callback's own supplied entries determine
+            // its type packs. A named pack with none supplied is empty.
+            for parameter in &signature.parameters {
+                let Some(index) = type_pack(parameter, &signature.generics) else {
+                    continue;
+                };
+                if type_packs.iter().any(|pack| pack.parameter == index) {
+                    continue;
+                }
+                let pack = match (parameter.pack, given) {
+                    (Some(Pack::Positional), Some(given)) => {
+                        let types = given
+                            .iter()
+                            .filter(|argument| {
+                                matches!(argument.key, Key::Position(_))
+                                    && argument.key.public_parameter(signature).is_none()
+                            })
+                            .map(|argument| argument.ty().clone())
+                            .collect();
+                        TypePackArgument::positional(index, types)
+                    }
+                    (Some(Pack::Named), given) => {
+                        let entries = given
+                            .unwrap_or_default()
+                            .iter()
+                            .filter_map(|argument| {
+                                let name = argument.key.name()?;
+                                argument.key.public_parameter(signature).is_none().then(|| {
+                                    (
+                                        crate::hir::PackKey::Name(name.to_string()),
+                                        argument.ty().clone(),
+                                    )
+                                })
+                            })
+                            .collect();
+                        TypePackArgument::keyed(index, entries)
+                    }
+                    _ => continue,
+                };
+                type_packs.push(pack);
+            }
+        }
+        type_packs.sort_by_key(|pack| pack.parameter);
+        for pack in &type_packs {
+            // The sequence is separate from the generic slot (GEN-8).
+            found[pack.parameter] = Some(Argument::Type(Type::Unknown));
+        }
         let Some(generics) = found.into_iter().collect::<Option<Vec<_>>>() else {
             self.unresolved_reference(node, name);
             return None;
         };
         Some(ReferenceArguments {
             generics,
-            pack,
+            type_packs,
             defaulted,
         })
     }
@@ -486,13 +666,27 @@ impl<'a> Typer<'a> {
         ));
     }
 
+    /// FN-18: a function type supplies no configuration.
+    fn callback_configuration(&mut self, node: &SyntaxNode, parameter: &Parameter) {
+        self.diagnostics.emit(error(
+            Category::Type,
+            codes::TYPE_MISMATCH,
+            self.at(node),
+            format!(
+                "the configuration parameter `{}` has no default",
+                parameter.name
+            ),
+            "FN-18",
+        ));
+    }
+
     /// FN-17's proposed template rule does not admit marked fixed inputs.
     fn marked_function(&mut self, node: &SyntaxNode, signature: &Signature) {
         self.diagnostics.emit(error(
             Category::Type,
             codes::TYPE_MISMATCH,
             self.at(node),
-            format!("a function type takes plain parameters, but `{signature}` has a marked parameter or pack"),
+            format!("a fixed input of the function type takes a plain parameter, but `{signature}` has a marked parameter or pack there"),
             "FN-17",
         ));
     }
@@ -503,22 +697,43 @@ impl<'a> Typer<'a> {
         template: &FunctionType,
     ) -> Option<(Callee, FunctionType)> {
         let mut parameters = self.anonymous_parameters(node);
-        if parameters.len() != template.parameters.len() {
+        if !takes_input_count(template, parameters.len()) {
+            let count = template.parameters.len();
+            let at_least = if template.named_pack.is_some() {
+                "at least "
+            } else {
+                ""
+            };
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::TYPE_MISMATCH,
                 self.at(node),
                 format!(
-                    "the function type takes {} inputs, and the anonymous function declares {}",
-                    template.parameters.len(),
+                    "the function type takes {at_least}{count} inputs, and the anonymous function declares {}",
                     parameters.len()
                 ),
                 "FN-17",
             ));
             return None;
         }
-        for ((_, written), (_, expected)) in parameters.iter_mut().zip(&template.parameters) {
-            written.get_or_insert_with(|| expected.clone());
+        for ((_, written), expected) in parameters.iter_mut().zip(&template.parameters) {
+            written.get_or_insert_with(|| expected.ty().clone());
+        }
+        // FN-17: a reflected pack gives no type to an unwritten
+        // anonymous input beyond the template's fixed parameters.
+        if let Some((name, _)) = parameters
+            .iter()
+            .skip(template.parameters.len())
+            .find(|(_, ty)| ty.is_none())
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::GENERIC_UNRESOLVED,
+                Location::new(self.file, name.span()),
+                format!("the function type gives no type to `{}`", name.text()),
+                "FN-17",
+            ));
+            return None;
         }
         let result = crate::syntax::child(node, SyntaxKind::ReturnType)
             .and_then(|written| self.anonymous_type(&written))
@@ -527,13 +742,12 @@ impl<'a> Typer<'a> {
             value: template.value,
             parameters: parameters
                 .iter()
-                .map(|(name, ty)| {
-                    (
-                        Some(name.text().to_string()),
-                        ty.clone().unwrap_or(Type::Unknown),
-                    )
+                .map(|(name, ty)| FunctionParameter::Fixed {
+                    name: Some(name.text().to_string()),
+                    ty: ty.clone().unwrap_or(Type::Unknown),
                 })
                 .collect(),
+            named_pack: None,
             result: result.clone(),
             reference: false,
         };
@@ -581,14 +795,22 @@ impl<'a> Typer<'a> {
             ));
             return self.unread_call(list);
         }
+        if let Some(call) = self.defer_pack_call(list, template.result.as_ref(), None) {
+            return call;
+        }
+        if spread_operands(list).next().is_some()
+            && let Some((_, target)) = self.pack_functions.iter().find(|(slot, _)| *slot == index)
+        {
+            return self.call_forwarded_parameter(name, list, target.clone(), template);
+        }
         let slots: Vec<_> = template
             .parameters
             .iter()
-            .map(|(name, ty)| Slot {
+            .map(|input| Slot {
                 configuration: false,
-                name: name.as_deref().unwrap_or(""),
-                ty: ty.clone(),
-                required: !matches!(ty, Type::Nullable(_)),
+                name: input.name().unwrap_or(""),
+                ty: input.ty().clone(),
+                required: !matches!(input.ty(), Type::Nullable(_)),
                 pack: None,
                 pack_bounds: (0, None),
                 type_pack: None,
@@ -609,6 +831,187 @@ impl<'a> Typer<'a> {
             },
             template.result.clone().unwrap_or(Type::Unknown),
         )
+    }
+
+    /// A spread can give slots reflected from the selected callback (FN-19).
+    /// Names written explicitly still have to come from the template (FN-17).
+    fn call_forwarded_parameter(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        target: Callee,
+        template: &FunctionType,
+    ) -> (ExprKind, Type) {
+        let before = self.diagnostics.len();
+        for (_, given, _) in self.call_entries(list) {
+            if let Some(given) = given
+                && !template
+                    .parameters
+                    .iter()
+                    .any(|input| input.name() == Some(given.text()))
+            {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::ARGUMENT_UNKNOWN,
+                    Location::new(self.file, given.span()),
+                    format!(
+                        "`{}` has no named parameter `{}` in its function type",
+                        name.text(),
+                        given.text()
+                    ),
+                    "FN-17",
+                ));
+            }
+        }
+        if self.diagnostics.len() != before {
+            return (ExprKind::Unread, Type::Unknown);
+        }
+        let program = self.program;
+        let (signature, value) = if let Some((module, declaration)) = target.declaration() {
+            let owner = &program.modules[module];
+            let Detail::Callable(declared) = &owner.details[declaration] else {
+                return self.unread_call(list);
+            };
+            let mut signature = declared.clone();
+            if let Callee::Candidate { operator, .. } = &target
+                && let Detail::Callable(public) = &program.modules[operator.0].details[operator.1]
+            {
+                for (source, index) in public
+                    .parameters
+                    .iter()
+                    .zip(public.candidate_parameters(declared))
+                {
+                    if let Some(index) = index {
+                        signature.parameters[index].name.clone_from(&source.name);
+                        signature.parameters[index].has_default |= source.has_default;
+                    }
+                }
+            }
+            (
+                signature,
+                owner.declarations[declaration].kind.role() == Some(Role::Value),
+            )
+        } else if let Callee::Anonymous(function) = &target {
+            let signature = Signature {
+                generics: Vec::new(),
+                parameters: function
+                    .template
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .map(|(index, input)| {
+                        let local = &function.body.locals[index];
+                        Parameter {
+                            name: local.name.clone(),
+                            at: local.at,
+                            ty: input.ty().clone(),
+                            configuration: false,
+                            constant: false,
+                            var: false,
+                            reference: false,
+                            pack: None,
+                            pack_bounds: (0, None),
+                            has_default: false,
+                        }
+                    })
+                    .collect(),
+                result: function.template.result.clone(),
+                reference: function.template.reference,
+            };
+            (signature, function.template.value)
+        } else {
+            return self.unread_call(list);
+        };
+        let map: Vec<_> = signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(target.generics())
+            .collect();
+        let packs = PackTypes::new(&signature.generics, target.type_packs());
+        let project = |ty: &Type| packs.project(ty, &map).unwrap_or(Type::Unknown);
+        let slots: Vec<_> = signature
+            .parameters
+            .iter()
+            .map(|parameter| {
+                let type_pack = type_pack(parameter, &signature.generics);
+                let written = type_pack.and_then(|index| {
+                    target
+                        .type_packs()
+                        .iter()
+                        .find(|pack| pack.parameter == index)
+                });
+                Slot {
+                    configuration: parameter.configuration,
+                    name: &parameter.name,
+                    ty: project(&parameter.ty),
+                    required: parameter.var
+                        || !parameter.has_default && !matches!(parameter.ty, Type::Nullable(_)),
+                    pack: parameter.pack,
+                    pack_bounds: pack_bounds(parameter, &signature.generics, written),
+                    type_pack,
+                    listed: value,
+                }
+            })
+            .collect();
+        let assigned = self.assign(name, list, &slots, Takes::Parameters, &[]);
+        let arguments = assigned
+            .into_iter()
+            .map(|argument| {
+                let slot = argument.slot.map(|index| {
+                    let slot = &slots[index];
+                    let packed = argument.pack.as_ref().and_then(|(position, key)| {
+                        let index = slot.type_pack?;
+                        let pack = target
+                            .type_packs()
+                            .iter()
+                            .find(|pack| pack.parameter == index)?;
+                        let index = pack
+                            .keys
+                            .iter()
+                            .position(|given| given == key)
+                            .unwrap_or(*position);
+                        pack.types.get(index)
+                    });
+                    Slot {
+                        ty: packed.cloned().unwrap_or_else(|| slot.ty.clone()),
+                        ..*slot
+                    }
+                });
+                let mut value = match argument.forwarded {
+                    Some((_, value)) => {
+                        let value = if let Some(slot) = &slot {
+                            self.fit_argument(value, slot, false, Takes::Parameters)
+                        } else {
+                            value
+                        };
+                        crate::hir::Argument {
+                            parameter: argument.slot,
+                            pack: None,
+                            value,
+                        }
+                    }
+                    None => self.argument(
+                        argument.slot,
+                        &argument.value,
+                        slot.as_ref().map(|slot| (slot, false)),
+                        Takes::Parameters,
+                    ),
+                };
+                value.pack = argument.pack.map(|(_, key)| key);
+                value
+            })
+            .collect();
+        let result = signature.result.as_ref().map_or(Type::Unknown, project);
+        let kind = ExprKind::Call {
+            callee: target,
+            arguments,
+            form: Form::Named,
+            braced: Vec::new(),
+            lifted: false,
+        };
+        self.finished_call(&kind, false);
+        (kind, result)
     }
 
     /// A static function's body is reached from a call or by passing the
@@ -636,14 +1039,130 @@ struct OperatorReference {
 /// Generic arguments from a function reference before candidate selection (FN-17).
 struct ReferenceArguments {
     generics: Vec<Argument>,
-    pack: Option<TypePackArgument>,
+    type_packs: Vec<TypePackArgument>,
     defaulted: Vec<usize>,
 }
 
-fn plain_parameters(signature: &Signature) -> bool {
-    signature.parameters.iter().all(|parameter| {
-        !parameter.var && !parameter.constant && !parameter.reference && parameter.pack.is_none()
-    })
+/// The arguments the enclosing call gives the callback's own parameters.
+#[derive(Default)]
+pub(super) struct CallbackInputs<'a> {
+    /// A dependent pack's entries in written order, including an empty pack.
+    pub(super) supplied: Option<&'a [(Option<&'a str>, &'a Expr)]>,
+    /// Parameters the enclosing declaration will give the callback (FN-8).
+    pub(super) excluded: &'a [&'a str],
+}
+
+fn reflected_arguments(
+    public: &Signature,
+    template: &FunctionType,
+    node: &SyntaxNode,
+    at: Location,
+    inputs: &CallbackInputs<'_>,
+) -> Vec<Given> {
+    let mut positions = public
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.configuration && parameter.pack.is_none())
+        .enumerate();
+    let fixed = positions.clone().count();
+    let mut remaining = positions
+        .by_ref()
+        .filter(|(_, parameter)| !inputs.excluded.contains(&parameter.name.as_str()));
+    let mut pack_position = fixed;
+    let mut given: Vec<_> = inputs
+        .supplied
+        .unwrap_or_default()
+        .iter()
+        .map(|(name, value)| {
+            let key = if let Some(name) = name {
+                Key::Name((*name).to_string())
+            } else if let Some((position, _)) = remaining.next() {
+                Key::Position(position)
+            } else {
+                let position = pack_position;
+                pack_position += 1;
+                Key::Position(position)
+            };
+            let mut argument = callback_operand(0, node, value.at, value.ty.clone());
+            argument.key = key;
+            argument
+        })
+        .collect();
+    // Fixed inputs specify their own types even where the enclosing
+    // declaration supplies them or the callback has a default (FN-17).
+    for (index, input) in template.ordinary_parameters().enumerate() {
+        if whole(input.ty())
+            && let Some(slot) = Key::Position(index).public_parameter(public)
+            && given
+                .iter()
+                .all(|given| given.key.public_parameter(public) != Some(slot))
+        {
+            given.push(callback_operand(index, node, at, input.ty().clone()));
+        }
+    }
+    given
+}
+
+fn callback_operand(position: usize, node: &SyntaxNode, at: Location, ty: Type) -> Given {
+    Given::read(
+        position,
+        node.clone(),
+        Expr {
+            kind: ExprKind::Unread,
+            ty,
+            at,
+            category: ValueCategory::Value,
+        },
+    )
+}
+
+/// FN-17: fixed inputs are plain. GEN-17 reflects the other inputs as
+/// they are, including their marks and packs.
+fn plain_inputs(signature: &Signature, template: &FunctionType) -> bool {
+    let fixed = if template.named_pack.is_some() {
+        template.parameters.len()
+    } else {
+        signature.parameters.len()
+    };
+    signature
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.configuration)
+        .take(fixed)
+        .all(plain_parameter)
+}
+
+/// A candidate can take its operator's configuration default (GEN-6).
+fn missing_callback_configuration<'a>(
+    signature: &'a Signature,
+    public: Option<&Signature>,
+) -> Option<&'a Parameter> {
+    signature
+        .parameters
+        .iter()
+        .enumerate()
+        .find(|(index, parameter)| {
+            parameter.configuration
+                && !parameter.has_default
+                && !public.is_some_and(|public| {
+                    public
+                        .parameters
+                        .iter()
+                        .zip(public.candidate_parameters(signature))
+                        .any(|(input, slot)| slot == Some(*index) && input.has_default)
+                })
+        })
+        .map(|(_, parameter)| parameter)
+}
+
+fn plain_parameter(parameter: &Parameter) -> bool {
+    !parameter.var && !parameter.constant && !parameter.reference && parameter.pack.is_none()
+}
+
+/// A reflected pack takes the remaining slots after the fixed prefix.
+fn takes_input_count(template: &FunctionType, count: usize) -> bool {
+    let fixed = template.parameters.len();
+    count == fixed || (template.named_pack.is_some() && count > fixed)
 }
 
 fn function_type(signature: &Signature, value: bool) -> FunctionType {
@@ -652,8 +1171,10 @@ fn function_type(signature: &Signature, value: bool) -> FunctionType {
         parameters: signature
             .parameters
             .iter()
-            .map(|parameter| (Some(parameter.name.clone()), parameter.ty.clone()))
+            .cloned()
+            .map(FunctionParameter::Declared)
             .collect(),
+        named_pack: None,
         result: signature.result.clone(),
         reference: signature.reference,
     }
@@ -663,12 +1184,18 @@ fn function_type(signature: &Signature, value: bool) -> FunctionType {
 pub(super) fn matches_template(expected: &FunctionType, actual: &FunctionType) -> bool {
     (!expected.value || actual.value)
         && expected.reference == actual.reference
-        && expected.parameters.len() == actual.parameters.len()
-        && expected.parameters.iter().zip(&actual.parameters).all(
-            |((name, ty), (actual_name, actual_ty))| {
-                (name.is_none() || name == actual_name) && agree(ty, actual_ty)
-            },
-        )
+        && takes_input_count(expected, actual.ordinary_parameters().count())
+        && (actual.named_pack.is_none() || expected.named_pack.is_some())
+        && expected
+            .ordinary_parameters()
+            .zip(actual.ordinary_parameters())
+            .all(|(expected, actual)| {
+                actual.declared().is_none_or(plain_parameter)
+                    && expected
+                        .name()
+                        .is_none_or(|name| Some(name) == actual.name())
+                    && agree(expected.ty(), actual.ty())
+            })
         && match (&expected.result, &actual.result) {
             (Some(expected), Some(actual)) => agree(expected, actual),
             (None, None) => true,

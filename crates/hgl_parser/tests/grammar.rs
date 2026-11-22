@@ -194,6 +194,7 @@ fn arrow{const by: i64 = 1}(x: i64) -> i64 => x + by
 
 const fn apply(f: const fn(value: i64) -> i64, x: i64) -> i64 => f(x)
 const fn via_generic(x: i64) -> i64 => apply(other::increase<i64>, x)
+const fn forward<...Args>(args: ...Args) => another(...args)
 
 export const limit: i64 = 2 * 5
 
@@ -207,6 +208,10 @@ export enum Side { buy, sell = 2 }
 
 operator add<T>(left: T, right: T) -> T
     properties<i64> { associative, commutative, identity = 0 }
+
+# FN-8 and GEN-17: a dependent call pack and a member type inside a constraint.
+operator pass<K, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+    requires each arg in arg_keys(As) { As[arg] == dict<K, Ps[arg]> }
 
 instantiate add<i64>, convert<_, f64>
 

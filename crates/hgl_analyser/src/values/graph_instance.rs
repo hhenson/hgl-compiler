@@ -10,16 +10,18 @@ use hgl_source::Span;
 
 use super::arguments::Takes;
 use super::control::{bound_by_loop, duplicate_switch_label, iterates};
-use super::fit::{open, whole};
+use super::fit::{not_null, open, whole};
 use super::inference::type_pack;
-use super::lifting::{assignment_category, record, record_with};
+use super::lifting::{
+    assignment_category, block_tail, contextual_tail_syntax, record, record_with,
+    resolve_contextual_tail,
+};
 use super::members::{index_collection, index_operand, indexed_payload};
 use super::results::{error_fields, tagged_side};
 use super::statements::{
     child_loop_return, child_loop_write, missing_return, place_assignment_category,
 };
 use super::{BOOL, Selected, Tables, Typer};
-use crate::declared::substitute_within;
 use crate::hir::{
     self, BinaryOperator, Body, Callee, Expr, ExprKind, IfInference, Local, LocalId, Node, NodeMut,
     Stmt, UnaryOperator, Value, ValueCategory,
@@ -425,7 +427,7 @@ impl GraphDestinations {
                 ..
             }) => {
                 if self.known(value) {
-                    typer.check_tag_test(*success, value);
+                    typer.check_tag_test(*success, &value.ty, value.at);
                 }
                 return;
             }
@@ -697,19 +699,10 @@ impl GraphDestinations {
             let value = &mut argument.value;
             let place = format!("the field `{}`", field.name);
             if completed
-                && !whole(&value.ty)
-                && let Some(node) = typer.syntax_of(value).map(ungrouped)
-                && match node.kind() {
-                    // TYPE-7 and EXPR-9: these leaves take their type
-                    // from the completed field. A source-resolved
-                    // leaf already has a whole type and stays intact.
-                    SyntaxKind::ImpliedMember => matches!(value.kind, ExprKind::Unread),
-                    SyntaxKind::SequenceExpr => node.children().next().is_none(),
-                    _ => matches!(value.kind, ExprKind::Literal(Value::Null)),
-                }
+                && let Some(read) = contextual_field_tail(typer, block_tail(value), expected)
             {
-                let read = typer.expression(&node, Some(expected));
-                *value = typer.fit(read, expected, &place);
+                let fitted = typer.fit(read, expected, &place);
+                resolve_contextual_tail(value, (fitted.kind, fitted.ty));
             } else if completed && whole(&value.ty) && value.ty != *expected {
                 // An earlier argument may decide a field's type only
                 // now, even when this sibling was already known.
@@ -749,17 +742,17 @@ impl GraphDestinations {
                 _ => return,
             };
             for argument in arguments {
-                let Some((name, ty)) = argument
+                let Some(input) = argument
                     .parameter
                     .and_then(|slot| template.parameters.get(slot))
                 else {
                     continue;
                 };
-                let place = name.as_ref().map_or_else(
+                let place = input.name().map_or_else(
                     || "the function parameter".to_owned(),
                     |name| format!("the parameter `{name}`"),
                 );
-                self.fit(typer, &mut argument.value, ty, &place, true);
+                self.fit(typer, &mut argument.value, input.ty(), &place, true);
             }
             return;
         };
@@ -774,6 +767,8 @@ impl GraphDestinations {
             .map(|generic| generic.at)
             .zip(callee.generics())
             .collect();
+        let packs =
+            super::dependent_packs::PackTypes::new(&signature.generics, callee.type_packs());
         let mut positions = HashMap::<usize, usize>::new();
         for argument in arguments {
             let Some(slot) = argument.parameter else {
@@ -796,7 +791,7 @@ impl GraphDestinations {
                 };
                 ty.clone()
             } else {
-                substitute_within(&parameter.ty, &map)
+                packs.project(&parameter.ty, &map).unwrap_or(Type::Unknown)
             };
             if self.known(&argument.value)
                 && !matches!(ty, Type::Function(_))
@@ -847,6 +842,47 @@ impl GraphReturnCheck {
         });
         !pending.is_empty()
     }
+}
+
+/// GEN-2 and CTRL-10: complete a field's contextual leaf without
+/// rereading statements that already have their own scope and flow.
+fn contextual_field_tail(typer: &mut Typer<'_>, tail: &Expr, expected: &Type) -> Option<Expr> {
+    if whole(&tail.ty) {
+        return None;
+    }
+    if let ExprKind::Tagged { success, payload } = &tail.kind
+        && let Some(result @ Type::Result { value, error }) = not_null(Some(expected))
+    {
+        // ERR-2: fit the original payload to its side. Only a contextual
+        // leaf can be read again, so its surrounding statements stay put.
+        let (side, place) = tagged_side(*success, value, error);
+        let mut value = (**payload).clone();
+        if let Some(read) = contextual_field_tail(typer, block_tail(&value), side) {
+            resolve_contextual_tail(&mut value, (read.kind, read.ty));
+        }
+        let payload = Box::new(typer.fit(value, side, place));
+        return Some(Expr {
+            at: tail.at,
+            ty: result.clone(),
+            kind: ExprKind::Tagged {
+                success: *success,
+                payload,
+            },
+            category: tail.category,
+        });
+    }
+    let node = ungrouped(contextual_tail_syntax(typer, tail)?);
+    // TYPE-7, TYPE-14 and EXPR-9: the leaves themselves are contextual.
+    let contextual = match node.kind() {
+        SyntaxKind::ImpliedMember => matches!(tail.kind, ExprKind::Unread),
+        SyntaxKind::SequenceExpr => node.children().next().is_none(),
+        _ => matches!(tail.kind, ExprKind::Literal(Value::Null)),
+    };
+    contextual.then(|| {
+        let mut read = typer.expression(&node, Some(expected));
+        read.at = tail.at;
+        read
+    })
 }
 
 /// CTRL-6: the cases cover every member when all the distinct

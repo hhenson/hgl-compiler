@@ -274,6 +274,46 @@ fn settled_contextual_fields<T>(const value: T) -> GraphSide {
     return values.second
 }
 
+# CTRL-10 and TYPE-5: the nullable field types the nested block tail,
+# and the statements before it still run once.
+struct ContextTail<U> {
+    first: U?
+    optional: U?
+}
+
+fn settled_contextual_field_tail<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 2 }
+    var calls = 0
+    let pair = ContextTail(first: chosen, optional: {
+        calls += 1
+        { null }
+    })
+    if calls != 1 { return 0 }
+    return pair.first
+}
+
+# GEN-2 and ERR-2: a result field keeps its payload's scope and
+# evaluates that payload once when an earlier field determines its type.
+struct TaggedField<U> {
+    first: U?
+    extra: result<U, str>
+}
+
+fn inferred_tagged_field<T>(const value: T) -> GraphSide {
+    let chosen = if live_helper(value) > 0 { GraphSide.left }
+    let supplied = GraphSide.right
+    var writes = 0
+    let pair = TaggedField(first: chosen, extra: ok({
+        writes += 1
+        let copy = supplied
+        copy
+    }))
+    if writes != 1 { return GraphSide.left }
+    let tagged = pair.extra
+    if is_ok(tagged) { return tagged.value }
+    return GraphSide.left
+}
+
 # CTRL-15: inferred list elements become the types of loop bindings.
 fn inferred_iteration<T>(const value: T) -> i64 {
     var total = 0
@@ -337,6 +377,34 @@ fn ordinary_tolerance<T>(const value: T, a: f64, b: f64) -> bool =>
 fn deferred_configured_division<T, const Policy: ZeroPolicy = .ieee>(const value: T) -> f64 {
     let x = if live_helper(value) > 0 { 2.5 }
     return x /{zero: Policy} 2
+}
+
+# GEN-2 and FN-17: the callback's type comes from the connection once
+# the graph instance selects the operator in the conditional.
+const fn shift_deferred<U>(a: U, f: const fn(U) -> U) -> U => f(a)
+
+fn deferred_callback_plain<T>(const value: T) -> f64 {
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    return shift_deferred(chosen, fn(x) => x + 1.0)
+}
+
+fn deferred_callback_captures<T>(const value: T) -> f64 {
+    let offset = 1.0
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    return shift_deferred(f: fn(x) => x + offset, a: chosen)
+}
+
+# ERR-3 and GEN-7: a tag-only use works with the selected result,
+# even when its success type differs from the generic candidate's.
+operator tagged_shape<T>(value: T) -> result<i64, error>
+impl const fn tagged_shape<T>(value: T) -> result<i64, error> => err(error(message: "generic"))
+impl const fn tagged_shape(value: i64) -> result<str, error> => ok("concrete")
+
+const fn tag_direct<T>(value: T) -> bool => is_ok(tagged_shape(value))
+
+const fn tag_binding<T>(value: T) -> bool {
+    let outcome = tagged_shape(value)
+    return is_ok(outcome)
 }
 
 # GEN-5: a named operator selects once its deferred argument settles.
@@ -593,6 +661,13 @@ test an_instance_settles_its_graph_conditions {
     assert eval ordered_fields(value: "s") == [2.5]
     assert eval contextual_fields(value: "s") == [2.5]
     assert eval settled_contextual_fields(value: "s") == [GraphSide.right]
+    assert eval settled_contextual_field_tail(value: "s") == [2]
+    assert eval inferred_tagged_field(value: "s") == [GraphSide.right]
+    assert eval deferred_callback_plain(value: 3) == [3.5]
+    assert eval deferred_callback_captures(value: 3) == [3.5]
+    assert eval deferred_callback_captures(value: 0) == []
+    assert tag_direct(3)
+    assert tag_binding(3)
     assert eval inferred_iteration(value: "s") == [2]
     assert eval sum_inferred_iteration(value: "s") == [5]
     assert eval deferred_member(value: "s") == [2]

@@ -180,7 +180,7 @@ pub(super) fn check_instance(
         callee,
         generics,
         requirements,
-        &[],
+        crate::instance::InstanceInputs::default(),
         &reports,
         graph_diagnostics,
     )?;

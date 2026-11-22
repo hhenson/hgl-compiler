@@ -20,35 +20,44 @@ impl Parser<'_> {
     ///
     /// The cursor is on the `{`.
     pub(crate) fn block(&mut self) {
+        self.block_with(|parser| parser.block_statements(Self::statement));
+    }
+
+    /// Reads a brace-delimited block with the given grammar for its contents.
+    pub(super) fn block_with(&mut self, contents: impl FnOnce(&mut Self)) {
         if !self.enter() {
             return;
         }
         self.start(Block);
         self.bump();
         // LEX-4: braces delimit a block; indentation means nothing.
-        // LEX-6: one statement to a line.
         self.nested(Context::BLOCK, |parser| {
-            // LEX-5: "`.member` (TYPE-7) begins no statement after
-            // another. Where no statement precedes it in its block it is
-            // an expression, and may be the block's value".
-            let mut first = true;
-            parser.lines(
-                "a statement",
-                "LEX-6",
-                |_| false,
-                |parser| {
-                    if first && parser.at(Dot) {
-                        parser.expr_stmt();
-                    } else {
-                        parser.statement();
-                    }
-                    first = false;
-                },
-            );
+            contents(parser);
             parser.close_brace();
         });
         self.finish();
         self.leave();
+    }
+
+    /// Reads the statements of a block one to a line (LEX-6).
+    pub(super) fn block_statements(&mut self, mut statement: impl FnMut(&mut Self)) {
+        // LEX-5: "`.member` (TYPE-7) begins no statement after
+        // another. Where no statement precedes it in its block it is
+        // an expression, and may be the block's value".
+        let mut first = true;
+        self.lines(
+            "a statement",
+            "LEX-6",
+            |_| false,
+            |parser| {
+                if first && parser.at(Dot) {
+                    parser.expr_stmt();
+                } else {
+                    statement(parser);
+                }
+                first = false;
+            },
+        );
     }
 
     /// A block that is the body of the declaration or statement before it.

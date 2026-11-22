@@ -15,9 +15,11 @@ use crate::hir::{
     EndpointOperation, Expr, ExprKind, Hook, LocalId, Node, Stmt, ValueCategory,
     walk_statement_nodes,
 };
-use crate::program::{DeclarationKind, Role};
+use crate::program::{DeclarationKind, Module, Phase, Role};
 use crate::syntax::{child, tokens, ungrouped};
-use crate::types::{Argument, CallArguments, ConstantValue, NamedKind, Scalar, Type};
+use crate::types::{
+    Argument, CallArguments, ConstantValue, Detail, NamedKind, Scalar, Signature, Type,
+};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -125,6 +127,9 @@ impl<'a> Typer<'a> {
         name: &SyntaxToken,
         list: &SyntaxNode,
     ) -> (ExprKind, Type) {
+        if let Some(unread) = self.unread_pack_call(list) {
+            return unread;
+        }
         let at = Location::new(self.file, name.span());
         self.reject_configuration(name, list);
         let arguments = endpoint_arguments(list);
@@ -608,21 +613,23 @@ impl<'a> Typer<'a> {
 }
 
 impl Typer<'_> {
-    /// Reports each read of what an endpoint published or lost in the
-    /// cycle, among a node's `statements`, whose place does not take a
-    /// `result` (ERR-14, TYPE-11). A window of a duration has no delta at
-    /// a tick where a value only leaves it, so `delta_value` of one is
-    /// read where a `result` is taken, `ok` of the delta or an `err`
-    /// coded `value.unset_read` (`ExprKind::CheckedDelta`): "A read of
-    /// the delta of a window of a duration whose place is not a `result`
-    /// rejects (`payload.unguarded`) ... One of a window of a tick count
-    /// is not rejected". Core's `removed_value` "rejects for every window
-    /// (`payload.unguarded`), since in most cycles no value leaves".
+    /// TYPE-11: a duration window's delta takes a result or nullable
+    /// place, because a tick where a value only leaves has no delta.
+    /// `removed_value` of any window takes only a result.
     pub(super) fn plain_cycle_reads(&mut self, statements: &[Stmt]) {
-        // The reads a `result` takes, by their address: the walk visits
-        // the `CheckedDelta` before the read it holds.
+        // The checked reads are identified by address. The walk visits
+        // the CheckedDelta of either admitted form before its read.
         let mut taken: Vec<*const Expr> = Vec::new();
-        let mut plain: Vec<(Location, String)> = Vec::new();
+        let mut reports = Vec::new();
+        let rejected = |at, message| {
+            error(
+                Category::Phase,
+                codes::PAYLOAD_UNGUARDED,
+                at,
+                message,
+                "TYPE-11",
+            )
+        };
         let program = self.program;
         walk_statement_nodes(statements, &mut |node| {
             let Node::Expression(value) = node else {
@@ -639,46 +646,39 @@ impl Typer<'_> {
                 ExprKind::Endpoint {
                     inputs: Some(inputs),
                     ..
-                } => inputs.first().map(|&input| self.locals[input].ty.clone()),
-                ExprKind::ChildEndpoint { child, .. } => Some(child.ty.clone()),
+                } => inputs.first().map(|&input| &self.locals[input].ty),
+                ExprKind::ChildEndpoint { child, .. } => Some(&child.ty),
                 // `removed_value`, of any window.
                 _ => {
-                    plain.push((
-                        value.at,
-                        "this is `removed_value`, which has no value in a cycle in which nothing \
-                         leaves the window, and its place takes no `result`"
-                            .to_string(),
-                    ));
+                    reports.push(
+                        rejected(
+                            value.at,
+                            "this is `removed_value`, which has no value in a cycle in which nothing \
+                             leaves the window, and its place takes no `result`"
+                                .to_string(),
+                        )
+                        .with_note("read it where a `result<V, error>` is taken (ERR-14)"),
+                    );
                     None
                 }
             };
             if let Some(of) = delta
                 && duration_window(of.omission_removed())
             {
-                plain.push((
-                    value.at,
-                    format!(
-                        "this is the `delta_value` of a `{of}`, a window of a duration, which \
-                         has no delta where a value only leaves it, and its place takes no \
-                         `result`"
-                    ),
-                ));
+                reports.push(
+                    rejected(
+                        value.at,
+                        format!(
+                            "this is the `delta_value` of a `{of}`, a window of a duration, which \
+                             has no delta where a value only leaves it"
+                        ),
+                    )
+                    .with_note("give it a nullable place or a `result<V, error>` place (ERR-14)"),
+                );
             }
         });
-        for (at, message) in plain {
-            self.diagnostics.emit(
-                error(
-                    Category::Phase,
-                    codes::PAYLOAD_UNGUARDED,
-                    at,
-                    message,
-                    "TYPE-11",
-                )
-                .with_note(
-                    "read it where a `result<V, error>` is taken: `ok` of the value, or an \
-                     `err` coded `value.unset_read` where there is none (ERR-14)",
-                ),
-            );
+        for report in reports {
+            self.diagnostics.emit(report);
         }
     }
 }
@@ -690,6 +690,72 @@ fn duration_window(ty: &Type) -> bool {
         ty,
         Type::RollingWindow { maximum, .. } if matches!(maximum.value, ConstantValue::Duration(_))
     )
+}
+
+/// Whether a generic node has a read whose admission or result form
+/// depends on an input's shape (GEN-7, TIME-1, ERR-14, TYPE-11). With
+/// the instance signature available, check only the affected shapes.
+pub(crate) fn node_endpoint_reads(
+    module: &Module,
+    declaration: usize,
+    concrete: Option<&Signature>,
+) -> bool {
+    if module.phases.get(declaration) != Some(&Some(Phase::Node)) {
+        return false;
+    }
+    let Some(Detail::Callable(signature)) = module.details.get(declaration) else {
+        return false;
+    };
+    if signature.generics.is_empty() {
+        return false;
+    }
+    let Some(Some(body)) = module.bodies.get(declaration) else {
+        return false;
+    };
+    let parameters: Vec<_> = signature
+        .generics
+        .iter()
+        .map(|generic| generic.at)
+        .collect();
+    let depends_on_shape = |local: LocalId, delta: bool| {
+        let Some(parameter) = signature.parameters.get(local) else {
+            return false;
+        };
+        if parameter.constant || parameter.reference {
+            return false;
+        }
+        let source = parameter.ty.omission_removed();
+        let unsettled = matches!(source, Type::Parameter { .. })
+            || delta
+                && matches!(source, Type::RollingWindow { maximum, .. }
+                    if maximum.value.names_one_of(&parameters));
+        unsettled
+            && concrete.is_none_or(|concrete| {
+                let ty = concrete.parameters[local].ty.omission_removed();
+                if delta {
+                    duration_window(ty)
+                } else {
+                    children::read_whole_all_valid(ty)
+                        || matches!(ty, Type::Dict { .. } | Type::List { size: None, .. })
+                }
+            })
+    };
+    let mut pending = false;
+    walk_statement_nodes(&body.statements, &mut |node| {
+        if !pending && let Node::Expression(value) = node {
+            pending = match &value.kind {
+                ExprKind::Local(local) => depends_on_shape(*local, false),
+                ExprKind::Endpoint {
+                    operation: EndpointOperation::DeltaValue,
+                    inputs: Some(inputs),
+                } => inputs
+                    .first()
+                    .is_some_and(|&local| depends_on_shape(local, true)),
+                _ => false,
+            };
+        }
+    });
+    pending
 }
 
 /// An argument of an endpoint operation or an `endpoint<T>` parameter as

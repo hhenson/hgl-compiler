@@ -405,6 +405,10 @@ impl Emitter<'_> {
                 let operand = self.expression(scope, operand);
                 self.nullable_payload(*raise, &operand, &value.ty, value.at)
             }
+            ExprKind::PresentChild(read) => {
+                let operand = self.expression(scope, read);
+                self.nullable_payload(Raise::Execution, &operand, &value.ty, value.at)
+            }
             ExprKind::Eval { .. } => self.missing(value.at, "an eval"),
             // TST-4: the harness's own comparison of two traces; what
             // either side lacks is reported first.

@@ -794,6 +794,99 @@ fn a_partial_dictionary_tuple_entry_reads_as_err_on_the_sdk() {
     );
 }
 
+/// END-8 and ERR-14: hold the selected key, read a partial composite in
+/// each form, and report the HGL place of a failing value read.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn endpoint_read_forms_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("endpoint-read-forms");
+    let fixture = include_str!("../../hgl_cpp/tests/fixtures/demo.endpoint_read_forms.hgl");
+    let file = write(&root, "src/demo.endpoint_read_forms.hgl", fixture);
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 1 failed, 0 not run\n"),
+        "{stdout}"
+    );
+    let line = fixture
+        .lines()
+        .position(|line| line.contains("# consuming read"))
+        .expect("the read to which the error points")
+        + 1;
+    assert!(
+        stdout.contains("FAILED   executable  demo.endpoint_read_forms::a_plain_child_failure_points_to_the_read\n")
+            && stdout.contains("value.unset_read")
+            && stdout.contains(&format!("raised at {file}:{line}")),
+        "{stdout}"
+    );
+}
+
+/// ERR-3 and ERR-14: observe validity separately from the tag of a bound
+/// result child, and use the matching success or error payload. ERR-12:
+/// a present nullable child refines only the alias named in the guard.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn bound_result_children_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("bound-result-children");
+    let file = write(
+        &root,
+        "demo.bound_result_children.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.bound_result_children.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// ERR-14 and GEN-7: a generic node's whole read takes the nullable form
+/// of the actual dictionary or unsized list.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn generic_endpoint_read_forms_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic-endpoint-read-forms");
+    let file = write(
+        &root,
+        "demo.generic_endpoint_read_forms.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.generic_endpoint_read_forms.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The temporal code of scalars on the SDK: a graph with lifted calls, a
 /// constant connection, nodes with state, handlers in order and
 /// capabilities, a source, and the evals of them (`demo.temporal`).
@@ -1094,6 +1187,38 @@ const CONFIGURED: &str = concat!(
     "}\n",
 );
 
+/// TST-1 and FN-4: a named test runs its own temporal and value
+/// helpers, including a role pair and names reused in another test.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn named_test_helpers_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("named-test-helpers");
+    let file = write(
+        &root,
+        "core_conformance.named_test_helpers.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/core_conformance.named_test_helpers.hgl"),
+    );
+    let output = hgl_in(
+        &["test", &file, "--target", "cpp", "--integration"],
+        &[],
+        &[],
+    );
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The integration test above passes on the SDK.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
@@ -1272,6 +1397,113 @@ fn pack_parameters_run_on_the_sdk() {
     );
 }
 
+fn dependent_pack_program(root: &Path) -> (String, String) {
+    let declarations = write(
+        root,
+        "demo.packdepends.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.packdepends.hgl"),
+    );
+    let tests = write(
+        root,
+        "demo.packdepends_tests.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.packdepends_tests.hgl"),
+    );
+    (declarations, tests)
+}
+
+/// FN-8 and GEN-17: the C++ instance accounts for both the static function
+/// and the supplied argument shape, even where the body reads neither.
+#[test]
+fn dependent_pack_instances_distinguish_callable_and_shape() {
+    let root = scratch("dependent-pack-instances");
+    let (declarations, tests) = dependent_pack_program(&root);
+    let out = root.join("out");
+    let output = hgl_in(
+        &[
+            "emit",
+            &declarations,
+            &tests,
+            "--target",
+            "cpp",
+            "--out",
+            &argument(&out),
+        ],
+        &[],
+        &[],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}{}",
+        text(&output.stdout),
+        text(&output.stderr)
+    );
+    let written = fs::read_to_string(out.join("modules/mod-demo-packdepends.cpp")).unwrap();
+    let instances: Vec<_> = written
+        .lines()
+        .filter(|line| {
+            line.trim_start().starts_with("// call_shape<") && line.contains("the instance")
+        })
+        .collect();
+    assert_eq!(instances.len(), 6, "{instances:?}");
+}
+
+/// FN-8 and GEN-17: bind the callback's arguments, exclusions and keys,
+/// and check constraints using its reflected parameter types.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn dependent_call_packs_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("dependent-packs");
+    let (declarations, tests) = dependent_pack_program(&root);
+    let output = hgl_in(
+        &["test", &declarations, &tests, "--target", "cpp"],
+        &[],
+        &[],
+    );
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 12 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// FN-19: value, operator and callback calls forward a pack; graph
+/// calls forward the individual connections.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn forwarded_packs_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("forwarded-packs");
+    let file = write(
+        &root,
+        "demo.forwarded_packs.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.forwarded_packs.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-17: named, operator and anonymous targets specialize value and
 /// temporal calls. Captured values and connections reach their bodies
 /// through a node hook, a graph and another static function parameter.
@@ -1301,7 +1533,35 @@ fn function_parameters_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// FN-17, FN-18 and GEN-17: reflected callbacks carry their generic
+/// arguments and defaults to the C++ target.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn reflected_pack_followups_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("reflected-pack-followups");
+    let file = write(
+        &root,
+        "demo.reflected_pack_followups.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.reflected_pack_followups.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2138,6 +2398,208 @@ fn names_a_platform_takes_are_built() {
         "{stdout}{}",
         text(&output.stderr)
     );
+}
+
+/// UNIT-14, RUN-1: preparing a debugger launch executes no user code. The
+/// described child can run with its debugger's closed stdin and reports each publication.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn builds_an_isolated_debug_application_without_running_it() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("debug application");
+    write(&root, "ticks.hgl", TICKS);
+    write(&root, "backtest.hgl", BACKTEST);
+    let builds = root.join("debug builds");
+    let prepare = || {
+        let report = hgl_in(
+            &["run", &argument(&root), "--debug-build", &argument(&builds)],
+            &[],
+            &["LD_LIBRARY_PATH"],
+        );
+        assert!(report.status.success(), "{}", text(&report.stderr));
+        serde_json::from_slice::<serde_json::Value>(&report.stdout).unwrap()
+    };
+    let launch = prepare();
+    assert_eq!(launch["version"], 1);
+    let executable = launch["executable"].as_str().unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        let directories = launch["environment"]["LD_LIBRARY_PATH"].as_str().unwrap();
+        assert!(std::env::split_paths(directories).all(|path| !path.as_os_str().is_empty()));
+        check_backtest_line_table(executable);
+    }
+    let args = launch["arguments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap());
+    let results = std::path::Path::new(launch["arguments"][0].as_str().unwrap());
+    assert!(!results.exists());
+    // A subsequent session cannot rebuild the executable a debugger is using.
+    assert_ne!(prepare()["executable"], executable);
+    let run = Command::new(executable)
+        .args(args)
+        .current_dir(launch["workingDirectory"].as_str().unwrap())
+        .envs(
+            launch["environment"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k, v.as_str().unwrap())),
+        )
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    assert_eq!(std::fs::read(results).unwrap(), run.stdout);
+    assert_eq!(
+        text(&run.stdout)
+            .lines()
+            .filter(|line| line.starts_with("published "))
+            .count(),
+        3
+    );
+}
+
+/// Inspect the native addresses a debugger can bind to (RUN-1). Line 18 is
+/// an assignment in count_of, which this application never wires.
+#[cfg(target_os = "linux")]
+fn check_backtest_line_table(executable: &str) {
+    let dump = Command::new("readelf")
+        .args(["--debug-dump=decodedline", executable])
+        .env("LC_ALL", "C")
+        .output()
+        .expect("GNU readelf reads the SDK executable");
+    assert!(dump.status.success(), "{}", text(&dump.stderr));
+    let table = text(&dump.stdout);
+    let count_line = TICKS
+        .lines()
+        .position(|line| line.trim() == "count += 1")
+        .unwrap()
+        + 1;
+    let mut count_addresses = Vec::new();
+    for (file, source) in [("ticks.hgl", TICKS), ("backtest.hgl", BACKTEST)] {
+        let end = source.lines().count();
+        let mut seen = false;
+        for row in table.lines() {
+            let mut fields = row.split_whitespace();
+            if fields.next() != Some(file) {
+                continue;
+            }
+            // A dash ends a DWARF line sequence and has no source line.
+            let number = fields.next().unwrap();
+            if number == "-" {
+                continue;
+            }
+            let line: usize = number.parse().unwrap();
+            seen = true;
+            assert!((1..=end).contains(&line), "{file} has {end} lines: {row}");
+            if file == "ticks.hgl" && line == count_line {
+                count_addresses.push(fields.next().unwrap());
+            }
+        }
+        assert!(seen, "no line entries for {file}");
+    }
+    assert!(!count_addresses.is_empty(), "no address for count += 1");
+    let symbols = Command::new("addr2line")
+        .args(["--functions", "--demangle", "--exe", executable])
+        .args(&count_addresses)
+        .output()
+        .expect("GNU addr2line reads the breakpoint addresses");
+    assert!(symbols.status.success(), "{}", text(&symbols.stderr));
+    let locations = text(&symbols.stdout);
+    let owners: Vec<_> = locations.lines().step_by(2).collect();
+    assert_eq!(owners.len(), count_addresses.len());
+    assert!(
+        owners
+            .iter()
+            .all(|name| name.contains("::count_of::impl_::eval(")),
+        "{locations}"
+    );
+}
+
+/// RUN-2, RUN-6: inserting a configuration or replacing a multiline one
+/// keeps the native bounds and entry call on the eval line the user sees.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn debug_overrides_keep_the_on_disk_eval_line() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("debug overrides");
+    write(&root, "ticks.hgl", TICKS);
+    for inject in ["", "inject run_config{\n    length: 2s\n}\n"] {
+        let app = format!(
+            "application demo.backtest\nuse demo.ticks::{{doubled}}\n{inject}eval doubled(values: [1, 2])\n"
+        );
+        let file = write(&root, "entry.hgl", &app);
+        let result = hgl_in(
+            &[
+                "run",
+                &argument(&root),
+                "--config",
+                "length=4s",
+                "--arg",
+                "values=[3]",
+                "--debug-build",
+                &argument(&root.join("builds")),
+            ],
+            &[],
+            &[],
+        );
+        assert!(result.status.success(), "{}", text(&result.stderr));
+        let manifest: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        let executable = std::path::Path::new(manifest["executable"].as_str().unwrap());
+        let build = executable.parent().unwrap().parent().unwrap();
+        let unit = fs::read_to_string(build.join("modules/mod-demo-backtest.cpp")).unwrap();
+        let eval_line = app.lines().count();
+        assert!(unit.contains(&format!("demo.backtest, line {eval_line}: `eval`")));
+        let directive = format!("#line {eval_line} {file:?}");
+        let preceding = |code: &str| {
+            unit.lines()
+                .zip(unit.lines().skip(1))
+                .find_map(|(before, line)| line.contains(code).then_some(before))
+                .unwrap()
+        };
+        assert_eq!(preceding("::Bounds bounds_ ="), directive);
+        assert_eq!(preceding("::record::"), directive);
+        let config = preceding("::RunConfig run_config =");
+        if inject.is_empty() {
+            assert!(
+                config.ends_with(r#""modules/mod-demo-backtest.cpp""#),
+                "{config}"
+            );
+        } else {
+            assert_eq!(config, format!("#line 3 {file:?}"));
+        }
+        assert_eq!(fs::read_to_string(file).unwrap(), app);
+    }
+}
+
+/// A rejected debug build has no launch description on stdout.
+#[test]
+fn a_rejected_debug_application_has_no_launch_description() {
+    let root = scratch("rejected debug build");
+    write(
+        &root,
+        "backtest.hgl",
+        "application demo.backtest\neval unknown()\n",
+    );
+    let report = hgl_in(
+        &[
+            "run",
+            &argument(&root),
+            "--debug-build",
+            &argument(&root.join("build")),
+        ],
+        &[],
+        &[],
+    );
+    assert!(!report.status.success());
+    assert!(report.stdout.is_empty());
+    assert!(text(&report.stderr).contains("unknown"));
+    assert!(!root.join("build").exists());
 }
 
 /// A valid application that cannot be built because no SDK is named

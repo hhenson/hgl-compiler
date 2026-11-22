@@ -72,6 +72,13 @@ pub(super) enum Child {
     Runtime,
 }
 
+/// The input and path captured by an inferred `let` (ERR-14). A path
+/// with a runtime index still has a known root.
+pub(super) struct ChildOrigin {
+    input: LocalId,
+    steps: Option<Vec<Step>>,
+}
+
 /// True where the temporal form of `ty` has children valid on their own
 /// (TIME-9): "a list, a tuple, a struct and a dictionary". An
 /// `atomic<V>` holds whole values, and has none (TYPE-9).
@@ -119,20 +126,26 @@ impl Typer<'_> {
     /// element, a field or an entry, through collections alone and at
     /// any depth. `None` for anything else, the input itself among them.
     pub(super) fn child_of(&self, value: &Expr) -> Option<Child> {
-        let (_, _, steps) = self.steps_of(value)?;
+        let ChildOrigin { input, steps } = self.child_origin(value)?;
         match steps {
-            Some(steps) if steps.is_empty() => None,
-            Some(steps) => {
-                let input = self.input_of(value)?;
-                Some(Child::Named(ChildPath { input, steps }))
-            }
+            Some(steps) => Some(Child::Named(ChildPath { input, steps })),
             None => Some(Child::Runtime),
         }
     }
 
+    /// The origin of an endpoint binding, if the initializer names a
+    /// child. A direct input is read as usual.
+    pub(super) fn child_origin(&self, value: &Expr) -> Option<ChildOrigin> {
+        let (input, _, steps) = self.steps_of(value)?;
+        if steps.as_ref().is_some_and(Vec::is_empty) {
+            return None;
+        }
+        Some(ChildOrigin { input, steps })
+    }
+
     /// The temporal input `value` is rooted at, through fields and
     /// indices.
-    fn input_of(&self, value: &Expr) -> Option<LocalId> {
+    pub(super) fn input_of(&self, value: &Expr) -> Option<LocalId> {
         self.steps_of(value).map(|(input, _, _)| input)
     }
 
@@ -148,6 +161,10 @@ impl Typer<'_> {
             {
                 Some((*local, value.at, Some(Vec::new())))
             }
+            ExprKind::BoundChild(local) => self
+                .bound_children
+                .get(local)
+                .map(|origin| (origin.input, value.at, origin.steps.clone())),
             ExprKind::Field { base, member }
                 if matches!(
                     base.ty,
@@ -191,6 +208,10 @@ impl Typer<'_> {
     fn reads_window(&self, value: &Expr) -> bool {
         let window = |ty: &Type| matches!(ty, Type::RollingWindow { .. });
         match &value.kind {
+            ExprKind::BoundChild(local) => matches!(
+                &self.locals[*local].ty,
+                Type::Endpoint(payload) if window(payload)
+            ),
             ExprKind::Field { base, member } => self
                 .program
                 .field_types(&base.ty)
@@ -230,10 +251,30 @@ impl Typer<'_> {
                         Type::RollingWindow { .. }
                     )
             }
-            ExprKind::Field { .. } | ExprKind::Index { .. } => {
+            ExprKind::Field { .. } | ExprKind::Index { .. } | ExprKind::BoundChild(_) => {
                 self.reads_window(value)
                     && (self.rooted_at_out(value)
                         || matches!(self.child_of(value), Some(Child::Named(_))))
+            }
+            _ => false,
+        }
+    }
+
+    /// A whole read admitted by TIME-1 whose contents can still have a
+    /// gap or a partial dictionary entry (ERR-14).
+    pub(super) fn checked_whole_read(&self, value: &Expr) -> bool {
+        let can_be_partial =
+            |ty: &Type| matches!(ty, Type::Dict { .. } | Type::List { size: None, .. });
+        if !self.reads_children() || !can_be_partial(&value.ty) {
+            return false;
+        }
+        match &value.kind {
+            ExprKind::Local(local) => {
+                (self.is_temporal_input(*local) || Some(*local) == self.out)
+                    && can_be_partial(self.locals[*local].ty.omission_removed())
+            }
+            ExprKind::Field { .. } | ExprKind::Index { .. } | ExprKind::BoundChild(_) => {
+                self.rooted_at_out(value) || matches!(self.child_of(value), Some(Child::Named(_)))
             }
             _ => false,
         }
@@ -340,7 +381,7 @@ impl Typer<'_> {
         let named = self
             .steps_of(&value)
             .is_some_and(|(_, at, _)| self.naming == Some(at));
-        if named {
+        if named || (self.binding_child == Some(value.at) && self.child_origin(&value).is_some()) {
             return value;
         }
         // FN-16: "A `ref` parameter and its children, `xs[i]` and
@@ -402,10 +443,11 @@ impl Typer<'_> {
     /// `all_valid(rows)`, one level deep, does not give").
     fn admit_child(&mut self, path: ChildPath, node: &SyntaxNode, at: Location, whole: bool) {
         let written = node.text().to_string();
-        let parent = node
-            .children()
-            .next()
-            .map_or_else(String::new, |base| base.text().to_string());
+        let parent = node.children().next();
+        let all_valid_parent = parent.as_ref().map_or_else(
+            || "`all_valid` of its parent".to_string(),
+            |base| format!("`all_valid({})`", base.text()),
+        );
         if whole {
             if self.present.contains(&Fact::AllValid(path.clone())) {
                 return;
@@ -422,7 +464,7 @@ impl Typer<'_> {
                     "TIME-1",
                 )
                 .with_note(format!(
-                    "`all_valid({written})` admits it; `all_valid({parent})` is one level deep, \
+                    "`all_valid({written})` admits it; {all_valid_parent} is one level deep, \
                      and `valid({written})` is true once any of its children is"
                 )),
             );
@@ -447,9 +489,19 @@ impl Typer<'_> {
                 ),
                 "TIME-1",
             )
-            .with_note(format!(
-                "`all_valid({parent})` admits every child, and `valid({written})` this one; \
-                 `valid({parent})` is true once any child is, and admits none"
+            .with_note(parent.map_or_else(
+                || {
+                    format!(
+                        "{all_valid_parent} admits every child, and `valid({written})` this one"
+                    )
+                },
+                |base| {
+                    format!(
+                        "{all_valid_parent} admits every child, and `valid({written})` this one; \
+                         `valid({})` is true once any child is, and admits none",
+                        base.text()
+                    )
+                },
             )),
         );
         // One report for one child on a path.
@@ -469,9 +521,6 @@ impl Typer<'_> {
     /// value is.
     pub(super) fn child_endpoint(&mut self, node: &SyntaxNode) -> Option<Option<Expr>> {
         let named = super::endpoint_argument(node);
-        if !matches!(named.kind(), SyntaxKind::IndexExpr | SyntaxKind::MemberExpr) {
-            return None;
-        }
         let mut root = named.clone();
         while matches!(
             root.kind(),
@@ -483,7 +532,10 @@ impl Typer<'_> {
             return None;
         }
         let local = self.local_of(&root)?;
-        if !self.is_temporal_input(local) {
+        let projection = matches!(named.kind(), SyntaxKind::IndexExpr | SyntaxKind::MemberExpr);
+        if !self.bound_children.contains_key(&local)
+            && !(projection && self.is_temporal_input(local))
+        {
             return None;
         }
         let before = self.naming.replace(self.at(&root));

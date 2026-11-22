@@ -73,8 +73,11 @@ mod constants;
 mod control;
 // A delta as a type of its own: its properties and its construction (TYPE-16).
 mod deltas;
+mod dependent_packs;
+pub(crate) use dependent_packs::PackTypes;
 // The endpoint operations and an `endpoint<T>` parameter's argument (TIME-9).
 mod endpoints;
+pub(crate) use endpoints::node_endpoint_reads;
 // A test's block, `assert`, `eval` and traces; a run statement and the store (TST-3, RUN-1).
 mod evals;
 // An expression, typed: literals, names, tuples and sequences (EXPR-3, EXPR-9).
@@ -83,6 +86,8 @@ mod expressions;
 mod fit;
 // The form a result takes from its place, and a `T?` read where a T is expected (ERR-12, ERR-15).
 mod forms;
+mod forwarded_packs;
+pub(crate) use forwarded_packs::has_forwarded_calls;
 mod function_arguments;
 // Fits destinations whose graph values become known only in an instance (GEN-7).
 mod graph_instance;
@@ -229,8 +234,12 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     None
                 }
             };
+            let mut calls = selecting.take();
+            if let Some(body) = &body {
+                candidates::record_tag_tests(body, &mut calls);
+            }
             bodies.push(body);
-            selected.push(selecting.take());
+            selected.push(calls);
             graph_return_checks.push(check_return);
         }
         // TST-3: "A test is a composition-phase block with assertions."
@@ -340,6 +349,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     operators::inherit_configuration_defaults(program);
     let default_calls = operator_defaults::check(program, diagnostics);
     requirements::instances_hold(program, default_calls, diagnostics);
+    forwarded_packs::check_instances(program, diagnostics);
     // TYPE-10, TYPE-11: the sizes each struct application written in a
     // type gives the struct's lists and windows.
     sizes::applied_sizes(program, diagnostics);
@@ -372,6 +382,89 @@ fn tables(
         .map(|call| ((call.at.file, call.at.span.start), call))
         .collect();
     (bindings, written, calls)
+}
+
+/// Check the lexical body with the concrete types of an instance
+/// (GEN-7). Endpoint admission and forwarded calls use the same local
+/// flow and written annotations as ordinary source checking.
+pub(crate) fn reread_instance_body(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    (signature, map): (&Signature, &[(Location, &crate::Argument)]),
+    (functions, pack_inputs): (&[(usize, hir::Callee)], Option<&[hir::PackInput]>),
+    project: &dyn Fn(&Type) -> Type,
+    diagnostics: &mut Diagnostics,
+) -> Option<hir::Body> {
+    let owner = &program.modules[module];
+    let declared = &owner.declarations[declaration];
+    let (bindings, mut written, mut calls) = tables(owner);
+    let span = declared.syntax.span();
+    let in_body =
+        |(file, start)| file == declared.at.file && (span.start..span.end).contains(&start);
+    let projected: Vec<_> = written
+        .iter()
+        .filter(|&(&at, _)| in_body(at))
+        .map(|(&at, ty)| (at, project(ty)))
+        .collect();
+    written.extend(projected.iter().map(|(at, ty)| (*at, ty)));
+    let projected_calls: Vec<_> = calls
+        .iter()
+        .filter(|&(&at, _)| in_body(at))
+        .map(|(&at, call)| {
+            let arguments = call
+                .arguments
+                .iter()
+                .map(|(at, argument)| {
+                    let argument = match argument {
+                        crate::Argument::Type(ty) => crate::Argument::Type(project(ty)),
+                        crate::Argument::Constant(_) => crate::instance::placed(argument, map),
+                    };
+                    (*at, argument)
+                })
+                .collect();
+            (
+                at,
+                CallArguments {
+                    at: call.at,
+                    arguments,
+                },
+            )
+        })
+        .collect();
+    calls.extend(projected_calls.iter().map(|(at, call)| (*at, call)));
+    let selecting = RefCell::new(Vec::new());
+    let reading = Signature {
+        generics: match &owner.details[declaration] {
+            Detail::Callable(declared) => candidates::in_instance(declared, map).generics,
+            _ => Vec::new(),
+        },
+        ..signature.clone()
+    };
+    let mut typer = Typer::new(
+        program,
+        owner,
+        declared,
+        &reading,
+        Tables {
+            bindings: &bindings,
+            written: &written,
+            calls: &calls,
+            selecting: &selecting,
+        },
+        diagnostics,
+    );
+    typer.instance = map
+        .iter()
+        .map(|(at, argument)| (*at, (*argument).clone()))
+        .collect();
+    typer.pack_inputs = pack_inputs.map(|inputs| inputs.to_vec());
+    typer.pack_functions = functions.to_vec();
+    match owner.phases[declaration] {
+        Some(Phase::Graph) => typer.graph().0,
+        Some(Phase::Node) if crate::phases::is_source(declared) => typer.source(),
+        Some(Phase::Node) => typer.node(),
+        _ => typer.body(),
+    }
 }
 
 /// The call an eval or a run statement takes (TST-5, RUN-1).
@@ -500,6 +593,12 @@ struct Typer<'a> {
     /// another name, and is held to the same rule, whether or not core
     /// has given the capability a type.
     aliases: HashMap<LocalId, LocalId>,
+    /// Where each inferred `let` holding a child endpoint comes from
+    /// (ERR-14). Known paths still require the same guards at a read.
+    bound_children: HashMap<LocalId, children::ChildOrigin>,
+    /// The inferred initializer where a child is being held, without a
+    /// payload read (ERR-14).
+    binding_child: Option<Location>,
     /// True while a named test's block is read (TST-3): there `assert`
     /// is a statement, and what the test may not hold is reported by the
     /// phase pass and not read.
@@ -575,6 +674,10 @@ struct Typer<'a> {
     /// ([`candidates::Selecting`]): where each is declared, with its
     /// argument. Empty otherwise.
     instance: Vec<(Location, crate::types::Argument)>,
+    /// Concrete entries of the enclosing instance's pack parameters.
+    pack_inputs: Option<Vec<hir::PackInput>>,
+    /// Compile-time callbacks available to forwarded calls.
+    pack_functions: Vec<(usize, hir::Callee)>,
     /// The generic value parameters of the declaration being read that
     /// its `requires` binds, each where it is declared with the constant
     /// it is bound to (GEN-3: "A positive conjunctive equality may bind
@@ -684,6 +787,8 @@ impl<'a> Typer<'a> {
             out: None,
             present: Vec::new(),
             aliases: HashMap::new(),
+            bound_children: HashMap::new(),
+            binding_child: None,
             testing: false,
             value_code: false,
             integration: false,
@@ -704,6 +809,8 @@ impl<'a> Typer<'a> {
             constants: Default::default(),
             selecting: tables.selecting,
             instance: Vec::new(),
+            pack_inputs: None,
+            pack_functions: Vec::new(),
             bound: Vec::new(),
             diagnostics,
         }
@@ -837,6 +944,7 @@ impl<'a> Typer<'a> {
             // What was noted of a local that is taken back goes with it:
             // its number is given to the next local declared.
             self.aliases.retain(|local, _| *local < mark.locals);
+            self.bound_children.retain(|local, _| *local < mark.locals);
             self.captures.retain(|local, _| *local < mark.locals);
         }
         self.present.truncate(mark.present);

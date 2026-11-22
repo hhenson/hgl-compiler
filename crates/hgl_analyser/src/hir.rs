@@ -533,6 +533,14 @@ pub enum ExprKind {
     /// where the local is a `T?` that a test against null has proved is
     /// not null there (ERR-12).
     Local(LocalId),
+    /// One concrete entry of an argument pack (FN-19). Lowering maps
+    /// it to the runtime input created for that key.
+    PackEntry {
+        /// The local for the pack parameter in the unexpanded signature.
+        pack: LocalId,
+        /// The entry's original name or position.
+        key: PackKey,
+    },
     /// An immutable graph binding read where a null test proved its
     /// presence, before the instance has determined its ordinary type (ERR-12).
     DeferredPresent(LocalId),
@@ -555,10 +563,15 @@ pub enum ExprKind {
         child: Box<Expr>,
     },
     /// The endpoint of a child of a temporal input, given to an
-    /// `endpoint<T>` parameter (TIME-9: "a child of one, `parts[1]`,
-    /// `quote.bid` or `parts[i]`"), named as in
-    /// [`ExprKind::ChildEndpoint`].
+    /// `endpoint<T>` parameter or retained by an inferred `let`
+    /// (TIME-9, ERR-14). It is named as in [`ExprKind::ChildEndpoint`].
     ChildEndpointOf(Box<Expr>),
+    /// The child endpoint held by an inferred `let` (ERR-14). This
+    /// names the endpoint selected when the binding was evaluated,
+    /// with its payload type. An endpoint operation uses it directly.
+    /// It also names a captured parent's endpoint when a value helper
+    /// binds a child of that parent (FN-14).
+    BoundChild(LocalId),
     /// A read of a collection's child that is checked when it runs
     /// (TIME-1, ERR-14): `parts[i]` in a hook, whose child is known only
     /// then. A child that is not valid fails the read with
@@ -568,7 +581,7 @@ pub enum ExprKind {
     /// result; otherwise it is of the child's T.
     CheckedChild {
         /// The read: an [`ExprKind::Index`] or [`ExprKind::Field`]
-        /// rooted at a temporal input.
+        /// rooted at a temporal input, or a [`ExprKind::BoundChild`].
         read: Box<Expr>,
         /// True where the place expects `result<T, error>`.
         result: bool,
@@ -582,6 +595,10 @@ pub enum ExprKind {
     /// an index known only when it runs is a
     /// [`ExprKind::CheckedChild`]. The expression is of the result.
     CheckedWindow(Box<Expr>),
+    /// An admitted read of a whole dictionary or unsized list into a
+    /// `result<T, error>` place (TIME-1, ERR-14). An incomplete valid
+    /// entry or a gap without a value gives `err(value.unset_read)`.
+    CheckedWhole(Box<Expr>),
     /// A read of what an endpoint published in the cycle, its
     /// `delta_value`, or of what a window lost in it, its
     /// `removed_value`, where its place expects `result<T, error>`, T
@@ -789,7 +806,8 @@ pub enum ExprKind {
         index: Box<Expr>,
     },
     /// `ok(value)` or `err(value)`: a result that owns the payload
-    /// (ERR-2). Its type is the result its place expects.
+    /// (ERR-2). Its type is the result its place expects. It can keep
+    /// its checked payload while an inferred constructor field settles.
     Tagged {
         /// True for `ok`, a success; false for `err`, a failure.
         success: bool,
@@ -873,6 +891,10 @@ pub enum ExprKind {
         /// The code of the failure a null gives: [`NULL_READ_CODE`].
         code: &'static str,
     },
+    /// A nullable bound child's payload on a path that proves this
+    /// alias is present (ERR-12). The inner read retains its endpoint
+    /// admission and failure checks (ERR-14, TIME-1).
+    PresentChild(Box<Expr>),
     /// `capture(callable, args...)`: a temporal error boundary around
     /// the call it holds (ERR-7).
     Capture(Box<Expr>),
@@ -1160,6 +1182,8 @@ pub enum Callee {
     Anonymous(Box<AnonymousFunction>),
     /// A named operator awaiting an argument type before selection (GEN-7).
     DeferredOperator(Box<DeferredOperator>),
+    /// A call waiting for the entries of its pack arguments (FN-19).
+    DeferredPackCall,
     /// A deferred operator call whose candidates are all value functions.
     DeferredValue,
     /// No callee: a name left for the prelude, a function that is
@@ -1190,6 +1214,7 @@ impl Callee {
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
             | Callee::DeferredOperator(_)
+            | Callee::DeferredPackCall
             | Callee::DeferredValue
             | Callee::Unread => None,
         }
@@ -1205,6 +1230,7 @@ impl Callee {
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
             | Callee::DeferredOperator(_)
+            | Callee::DeferredPackCall
             | Callee::DeferredValue
             | Callee::Unread => &[],
         }
@@ -1220,6 +1246,7 @@ impl Callee {
             | Callee::Parameter { .. }
             | Callee::Anonymous(_)
             | Callee::DeferredOperator(_)
+            | Callee::DeferredPackCall
             | Callee::DeferredValue
             | Callee::Unread => &[],
         }
@@ -1241,6 +1268,32 @@ pub struct AnonymousFunction {
     pub specialization: Vec<GenericArgument>,
 }
 
+impl AnonymousFunction {
+    /// The type of the captured input in this function's local table.
+    pub fn capture_type(&self, index: usize) -> &Type {
+        &self.body.locals[self.template.parameters.len() + index].ty
+    }
+
+    /// What a caller passes for this lexical capture (FN-14). A child
+    /// selected in the helper still needs its parent's endpoint (ERR-14).
+    pub fn capture_value(&self, index: usize, binding: &Local, at: Location) -> Expr {
+        let capture = self.captures[index];
+        let ty = self.capture_type(index);
+        let (kind, ty) =
+            if matches!(ty, Type::Endpoint(_)) && !matches!(binding.ty, Type::Endpoint(_)) {
+                (ExprKind::EndpointOf(capture), ty.clone())
+            } else {
+                (ExprKind::Local(capture), binding.ty.clone())
+            };
+        Expr {
+            kind,
+            ty,
+            at,
+            category: binding.category,
+        }
+    }
+}
+
 /// The ordered list of types that a call gives one generic type pack.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypePackArgument {
@@ -1251,6 +1304,55 @@ pub struct TypePackArgument {
     /// The graph's arguments still have to complete this inferred pack.
     /// A pack with written types is already fixed (GEN-8).
     pub infer_from_arguments: bool,
+    /// The enclosing type pack that supplies the rest of this reflected
+    /// parameter pack when the static function argument is known (GEN-17).
+    pub forwarded_from: Option<Location>,
+    /// Each type's name or position in the same order (GEN-17).
+    pub keys: Vec<PackKey>,
+}
+
+impl TypePackArgument {
+    /// A pack of types given in positional order (GEN-10).
+    pub(crate) fn positional(parameter: usize, types: Vec<Type>) -> Self {
+        let keys = (0..types.len()).map(PackKey::Position).collect();
+        Self {
+            parameter,
+            types,
+            infer_from_arguments: false,
+            forwarded_from: None,
+            keys,
+        }
+    }
+
+    /// A pack whose types are known with their names or positions (GEN-17).
+    pub(crate) fn keyed(parameter: usize, entries: Vec<(PackKey, Type)>) -> Self {
+        let (keys, types) = entries.into_iter().unzip();
+        Self {
+            parameter,
+            types,
+            infer_from_arguments: false,
+            forwarded_from: None,
+            keys,
+        }
+    }
+
+    /// The type named by a compile-time key (GEN-17).
+    pub(crate) fn member(&self, key: &crate::types::ConstantValue) -> Option<&Type> {
+        use crate::types::ConstantValue;
+
+        self.keys
+            .iter()
+            .zip(&self.types)
+            .find_map(|(entry, ty)| match (entry, key) {
+                (PackKey::Name(name), ConstantValue::Str(given)) if name == given => Some(ty),
+                (PackKey::Position(pos), ConstantValue::Int(given))
+                    if usize::try_from(*given) == Ok(*pos) =>
+                {
+                    Some(ty)
+                }
+                _ => None,
+            })
+    }
 }
 
 /// What answers a requirement a call's callee states (GEN-16).
@@ -1350,6 +1452,17 @@ pub enum PackKey {
     Position(usize),
     /// The supplied source name in a named pack.
     Name(String),
+}
+
+/// The type and key of one input of an instantiated pack parameter (FN-19).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PackInput {
+    /// The parameter slot before expansion.
+    pub parameter: usize,
+    /// The key in that parameter's pack.
+    pub key: PackKey,
+    /// The type of the entry after ordinary argument fitting.
+    pub ty: Type,
 }
 
 /// The value of a literal.
@@ -1495,6 +1608,8 @@ impl Expr {
             | ExprKind::Constant { .. }
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
+            | ExprKind::PackEntry { .. }
+            | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
             | ExprKind::GenericValue { .. }
@@ -1561,12 +1676,14 @@ impl Expr {
             | ExprKind::Raised { result: inner, .. }
             | ExprKind::OrNull { result: inner, .. }
             | ExprKind::NullRead { value: inner, .. }
+            | ExprKind::PresentChild(inner)
             | ExprKind::Capture(inner)
             | ExprKind::Captured { capture: inner, .. }
             | ExprKind::ChildEndpoint { child: inner, .. }
             | ExprKind::ChildEndpointOf(inner)
             | ExprKind::CheckedChild { read: inner, .. }
             | ExprKind::CheckedWindow(inner)
+            | ExprKind::CheckedWhole(inner)
             | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes(visit),
             ExprKind::Binary { left, right, .. }
@@ -1637,6 +1754,8 @@ impl Expr {
             | ExprKind::Constant { .. }
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
+            | ExprKind::PackEntry { .. }
+            | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
             | ExprKind::GenericValue { .. }
@@ -1703,12 +1822,14 @@ impl Expr {
             | ExprKind::Raised { result: inner, .. }
             | ExprKind::OrNull { result: inner, .. }
             | ExprKind::NullRead { value: inner, .. }
+            | ExprKind::PresentChild(inner)
             | ExprKind::Capture(inner)
             | ExprKind::Captured { capture: inner, .. }
             | ExprKind::ChildEndpoint { child: inner, .. }
             | ExprKind::ChildEndpointOf(inner)
             | ExprKind::CheckedChild { read: inner, .. }
             | ExprKind::CheckedWindow(inner)
+            | ExprKind::CheckedWhole(inner)
             | ExprKind::CheckedDelta(inner)
             | ExprKind::Publications(inner) => inner.walk_nodes_mut(visit),
             ExprKind::Binary { left, right, .. }

@@ -12,6 +12,7 @@ use super::fit::{
     accepts_float, is_integer_literal, not_null, nullable, open, whole, window_value,
 };
 use super::node::RefRead;
+use super::results::proof_binding;
 use super::{Fact, Typer, children};
 use crate::hir::{
     BinaryOperator, EndpointOperation, Expr, ExprKind, Hook, LocalId, UnaryOperator, Value,
@@ -36,7 +37,10 @@ impl<'a> Typer<'a> {
         self.expressing += 1;
         let value = self.expression_read(node, expected);
         self.expressing -= 1;
-        value
+        match expected {
+            Some(expected) => self.endpoint_read_form(value, expected),
+            None => value,
+        }
     }
 
     /// [`Typer::expression`], counted.
@@ -371,6 +375,34 @@ impl<'a> Typer<'a> {
             // One report for one `var`.
             self.assigned[local] = true;
         }
+        if self.bound_children.contains_key(&local)
+            && let Type::Endpoint(payload) = &self.locals[local].ty
+        {
+            let value = self.child_read(
+                node,
+                Expr {
+                    kind: ExprKind::BoundChild(local),
+                    ty: (**payload).clone(),
+                    at,
+                    category: ValueCategory::Unsettled,
+                },
+            );
+            // ERR-12 refines the value read by this alias. Where the
+            // alias names its endpoint, ERR-14 still takes the locator.
+            if self.naming != Some(at)
+                && self.binding_child != Some(at)
+                && self.present.contains(&Fact::Present(local))
+                && let Type::Nullable(inner) = &value.ty
+            {
+                return Expr {
+                    ty: (**inner).clone(),
+                    kind: ExprKind::PresentChild(Box::new(value)),
+                    at,
+                    category: ValueCategory::Unsettled,
+                };
+            }
+            return value;
+        }
         if self.is_temporal_input(local)
             && (self.hook.is_some() || self.initializing || self.caching)
         {
@@ -514,11 +546,14 @@ impl<'a> Typer<'a> {
                 LocalKind::Parameter | LocalKind::Let | LocalKind::Iteration
             )
         };
+        let payload = |local: LocalId| match &self.locals[local].ty {
+            Type::Endpoint(payload) if self.bound_children.contains_key(&local) => payload,
+            ty => ty,
+        };
         let refinable = |local: LocalId| {
             immutable(local)
-                && (matches!(self.locals[local].ty, Type::Nullable(_))
-                    || matches!(self.locals[local].ty, Type::Unknown)
-                        && self.deferred_presence(local))
+                && (matches!(payload(local), Type::Nullable(_))
+                    || matches!(payload(local), Type::Unknown) && self.deferred_presence(local))
         };
         // ERR-3: "In composition a test of a connection is an ordinary
         // lifted call (FN-6): it gives a connection of `bool` and no
@@ -532,7 +567,7 @@ impl<'a> Typer<'a> {
             let binding = &self.locals[local];
             let present = Fact::Present(local);
             let present = self.present.contains(&present) || known.contains(&present);
-            let ty = match &binding.ty {
+            let ty = match payload(local) {
                 Type::Nullable(inner) if present => inner,
                 ty => ty,
             };
@@ -755,6 +790,14 @@ impl<'a> Typer<'a> {
                     self.fit(value, element, "an element")
                 })
                 .collect();
+            // EXPR-9: a duplicate constant member of a string set is
+            // a source error, including in a generic value argument.
+            if matches!(expected, Type::Set(_) if *element == Type::Scalar(Scalar::Str))
+                && let Err(fault) = self.read_constant(node, Some(expected))
+                && let Some(report) = fault.set_duplicate_report()
+            {
+                self.diagnostics.emit(report);
+            }
             // TYPE-10: "Size participates in identity." A list of a
             // size that is known has that many entries.
             if let Type::List {
@@ -1045,7 +1088,7 @@ fn null_tests(condition: &Expr, proofs: &Proofs, assumed: &[Fact]) -> (Vec<Fact>
         // it is a success and where it does not a failure, and `is_err`
         // the reverse."
         ExprKind::TagTest { success, value } => {
-            let Some(local) = value.named_local().filter(|local| tagged(*local, assumed)) else {
+            let Some(local) = proof_binding(value).filter(|local| tagged(*local, assumed)) else {
                 return (Vec::new(), Vec::new());
             };
             let (success_where, failure_where) =
@@ -1069,12 +1112,12 @@ fn null_tests(condition: &Expr, proofs: &Proofs, assumed: &[Fact]) -> (Vec<Fact>
             right,
         } => match operator {
             BinaryOperator::Equal | BinaryOperator::NotEqual => {
-                let named = match (&left.kind, &right.kind) {
+                let tested = match (&left.kind, &right.kind) {
                     (_, ExprKind::Literal(Value::Null)) => left,
                     (ExprKind::Literal(Value::Null), _) => right,
                     _ => return (Vec::new(), Vec::new()),
                 };
-                let Some(local) = named.named_local().filter(|local| refinable(*local)) else {
+                let Some(local) = proof_binding(tested).filter(|local| refinable(*local)) else {
                     return (Vec::new(), Vec::new());
                 };
                 match operator {

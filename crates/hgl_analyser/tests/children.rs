@@ -8,7 +8,7 @@
 mod common;
 
 use common::{Checked, body, check};
-use hgl_analyser::hir::{Expr, ExprKind, Stmt};
+use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Stmt, walk_statements};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -148,6 +148,289 @@ fn a_child_known_when_it_runs_is_checked_then() {
         "{checked_at:?}"
     );
     assert_eq!(checked_at.ty.to_string(), "result<i64, error>");
+}
+
+/// ERR-14: an inferred `let` takes the endpoint and its uses are read
+/// separately. The index in the initializer is evaluated once. Even
+/// when it is reassigned, every use names the local's selected child.
+#[test]
+fn an_inferred_let_holds_a_child_until_its_use() {
+    let checked = module(
+        "fn probe(parts: list<i64, 2>, slot: i64) -> i64? {
+    when {
+        var index = slot
+        let entry = (parts[index])
+        index = 0
+        let seen = valid(entry)
+        let plain: i64 = entry
+        let checked: result<i64, error> = entry
+        return entry
+    }
+}",
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let Some(Stmt::Hook { body: hook, .. }) = body(&checked, "probe")
+        .statements
+        .iter()
+        .find(|statement| matches!(statement, Stmt::Hook { .. }))
+    else {
+        panic!("the node has a hook");
+    };
+    let [
+        Stmt::Declare { local: index, .. },
+        Stmt::Declare {
+            local: entry,
+            value: Some(binding),
+        },
+        Stmt::Assign { local: changed, .. },
+        Stmt::Declare {
+            value: Some(seen), ..
+        },
+        Stmt::Declare {
+            value: Some(plain), ..
+        },
+        Stmt::Declare {
+            value: Some(fallible),
+            ..
+        },
+        Stmt::Return {
+            value: Some(optional),
+            ..
+        },
+    ] = hook.as_slice()
+    else {
+        panic!("the hook declares and uses its endpoint local: {hook:?}");
+    };
+    assert_eq!(changed, index);
+    let ExprKind::ChildEndpointOf(child) = &binding.kind else {
+        panic!("the initializer holds an endpoint");
+    };
+    assert!(matches!(&child.kind, ExprKind::Index { index: read, .. }
+        if read.kind == ExprKind::Local(*index)));
+    assert!(
+        matches!(&seen.kind, ExprKind::ChildEndpoint { operation: EndpointOperation::Valid, child }
+        if child.kind == ExprKind::BoundChild(*entry))
+    );
+    let ExprKind::OrNull {
+        result: nullable, ..
+    } = &optional.kind
+    else {
+        panic!("the nullable use discards the error");
+    };
+    for (use_, result) in [(plain, false), (fallible, true), (nullable.as_ref(), true)] {
+        assert!(
+            matches!(&use_.kind, ExprKind::CheckedChild { read, result: checked }
+            if read.kind == ExprKind::BoundChild(*entry) && *checked == result)
+        );
+        assert!(use_.at.span.start > binding.at.span.end);
+    }
+}
+
+/// ERR-3, ERR-14 and TIME-1. A tag proof belongs to the bound child
+/// named in the guard. Its payload still reads the selected endpoint.
+#[test]
+fn a_bound_result_child_requires_its_own_tag_proof_and_validity() {
+    let checked = module(
+        "fn guarded_success(parts: list<result<i64, error>, 2>) -> i64 {
+    when all_valid(parts) {
+        let entry = parts[0]
+        if is_ok(entry) { return entry.value }
+        return 0
+    }
+}
+
+fn guarded_error(parts: list<result<i64, error>, 2>) -> str {
+    when {
+        let entry = parts[0]
+        if valid(entry) && is_err(entry) { return entry.error.message }
+        return \"none\"
+    }
+}
+
+fn unguarded(parts: list<result<i64, error>, 2>) -> i64 {
+    when all_valid(parts) {
+        let entry = parts[0]
+        return entry.value
+    }
+}
+
+fn different_binding(parts: list<result<i64, error>, 2>) -> i64 {
+    when all_valid(parts) {
+        let original = parts[0]
+        let entry = parts[0]
+        if is_ok(original) { return entry.value }
+        return 0
+    }
+}
+
+fn unchecked_tag(parts: list<result<i64, error>, 2>) -> bool {
+    when {
+        let entry = parts[0]
+        return is_ok(entry)
+    }
+}",
+    );
+    for (name, expected_success) in [("guarded_success", true), ("guarded_error", false)] {
+        let node = body(&checked, name);
+        let entry = node
+            .locals
+            .iter()
+            .position(|local| local.name == "entry")
+            .expect("the hook binds the selected endpoint");
+        assert_eq!(
+            node.locals[entry].ty.to_string(),
+            "endpoint<result<i64, error>>"
+        );
+        let mut reads = 0;
+        walk_statements(&node.statements, &mut |value| {
+            if let ExprKind::Payload { success, result } = &value.kind {
+                assert_eq!(*success, expected_success);
+                assert_eq!(result.kind, ExprKind::BoundChild(entry));
+                reads += 1;
+            }
+        });
+        assert_eq!(reads, 1);
+    }
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:21:22 type/result.required_variant ERR-3",
+            "m.hgl:29:43 type/result.required_variant ERR-3",
+            "m.hgl:37:22 phase/payload.unguarded TIME-1",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// ERR-12, ERR-14 and TIME-1: a direct null guard refines only the
+/// alias whose payload it tests, while admission is checked separately.
+#[test]
+fn a_bound_nullable_child_requires_its_own_null_proof_and_validity() {
+    let checked = module(
+        "fn guarded(parts: list<i64?, 2>) -> i64 {
+    when all_valid(parts) {
+        let entry = parts[0]
+        if entry != null { return entry }
+        return 0
+    }
+}
+
+fn guarded_runtime(parts: list<i64?, 2>, slot: i64) -> i64 {
+    when {
+        let entry = parts[slot]
+        if null == entry { return 0 }
+        if !valid(entry) { return 0 }
+        return entry
+    }
+}
+
+fn unchecked(parts: list<i64?, 2>) -> i64 {
+    when {
+        let entry = parts[0]
+        if entry != null { return entry }
+        return 0
+    }
+}
+
+fn unrefined(parts: list<i64?, 2>) -> i64 {
+    when all_valid(parts) {
+        let entry = parts[0]
+        return entry
+    }
+}
+
+fn different_binding(parts: list<i64?, 2>) -> i64 {
+    when all_valid(parts) {
+        let original = parts[0]
+        if original != null {
+            let entry = original
+            return entry
+        }
+        return 0
+    }
+}",
+    );
+    for (name, expected_proved, expected_checked) in [
+        ("guarded", 1, 0),
+        ("guarded_runtime", 1, 0),
+        ("unchecked", 1, 0),
+        ("unrefined", 0, 1),
+        ("different_binding", 0, 1),
+    ] {
+        let node = body(&checked, name);
+        let entry = node
+            .locals
+            .iter()
+            .position(|local| local.name == "entry")
+            .unwrap();
+        assert_eq!(node.locals[entry].ty.to_string(), "endpoint<i64?>");
+        let mut proved_reads = 0;
+        let mut null_reads = 0;
+        walk_statements(&node.statements, &mut |value| match &value.kind {
+            ExprKind::PresentChild(read) => {
+                assert_eq!(value.ty.to_string(), "i64");
+                assert_eq!(read.ty.to_string(), "i64?");
+                if name == "guarded_runtime" {
+                    assert!(
+                        matches!(&read.kind, ExprKind::CheckedChild { read, result: false }
+                        if read.kind == ExprKind::BoundChild(entry))
+                    );
+                } else {
+                    assert_eq!(read.kind, ExprKind::BoundChild(entry));
+                }
+                proved_reads += 1;
+            }
+            ExprKind::NullRead { .. } => null_reads += 1,
+            _ => {}
+        });
+        assert_eq!(proved_reads, expected_proved, "{name}: {}", checked.report);
+        assert_eq!(null_reads, expected_checked, "{name}: {}", checked.report);
+    }
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:22:12 phase/payload.unguarded TIME-1"],
+        "{}",
+        checked.report
+    );
+}
+
+/// TIME-1, TIME-4, ERR-14: reading a bound static child needs its
+/// guard at the use, and a guard of that same child can name the alias.
+/// An inferred `var` still needs the value at its initializer.
+#[test]
+fn a_child_alias_keeps_its_static_admission_rule() {
+    let checked = module(
+        "fn admitted(parts: list<i64, 2>) -> i64 {
+    when {
+        let entry = parts[0]
+        let alias = entry
+        if valid(alias) { return entry }
+        return 0
+    }
+}
+fn unguarded(parts: list<i64, 2>) -> i64 {
+    when {
+        let entry = parts[1]
+        return entry
+    }
+}
+fn mutable(parts: list<i64, 2>) -> i64 {
+    when {
+        var entry = parts[1]
+        return entry
+    }
+}",
+    );
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:16 phase/payload.unguarded TIME-1",
+            "m.hgl:18:21 phase/payload.unguarded TIME-1",
+        ],
+        "{}",
+        checked.report,
+    );
 }
 
 /// TIME-1: "A child of a collection (TIME-9), an element, a field or an

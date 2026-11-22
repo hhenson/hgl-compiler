@@ -1410,6 +1410,15 @@ fn a_statement_names_its_hgl_file_and_line() {
         .position(|line| line.contains("static const ::hgraph::Int value = 2;"))
         .unwrap();
     assert_eq!(lines[constant - 1], "#line 5 \"demo.apps.backtest.hgl\"");
+    for mapped in [constant, recorded, stored] {
+        assert_eq!(
+            lines[mapped + 1],
+            format!(
+                "#line {} \"modules/mod-demo-apps-backtest.cpp\"",
+                mapped + 3
+            )
+        );
+    }
 }
 
 /// A node a test writes ahead of itself, an eval's lifted call of a value
@@ -1682,9 +1691,8 @@ fn nested_forms_are_written() {
 
 /// A form made of others that the library does not read or publish as a
 /// part yet is reported by name, and nothing is miswritten: a list of
-/// sets, a dictionary of lists, a dictionary of structs, a tuple of a set,
-/// and a child of a list of tuples named in a hook, whose library `Child`
-/// is no view a tuple's own reads take.
+/// sets, a dictionary of lists, a dictionary of structs and a tuple of
+/// a set. A tuple child of a list is now read in a hook (TIME-1).
 #[test]
 fn nested_forms_not_written_yet_are_reported() {
     let emitted = emit(&[(
@@ -1718,9 +1726,6 @@ fn nested_forms_not_written_yet_are_reported() {
             "m.hgl:8:10 the cpp target does not write a temporal value of `dict<str, list<i64>>` yet",
             "m.hgl:11:11 the cpp target does not write a temporal value of `dict<str, Quote>` yet",
             "m.hgl:14:11 the cpp target does not write a temporal value of `tuple<set<i64>, i64>` yet",
-            "m.hgl:18:16 the cpp target does not write a child of a list of structs or tuples, named in a hook yet",
-            "m.hgl:18:39 the cpp target does not write a child of a list of structs or tuples, named in a hook yet",
-            "m.hgl:18:58 the cpp target does not write a child of a list of structs or tuples, named in a hook yet",
         ]
     );
 }
@@ -2448,6 +2453,66 @@ fn a_default_that_leaves_itself_out_is_reported() {
     let reported = "m.hgl:2:30 the cpp target does not write a default that leaves itself out yet";
     assert_eq!(emitted.reported, [reported]);
     assert_eq!(emitted.blocked("calls").as_deref(), Some(reported));
+}
+
+/// TST-1 and FN-4: value and temporal helpers may share a name inside a
+/// test, and a different test can have its own functions of those names.
+#[test]
+fn named_test_helpers_have_test_local_cpp_names() {
+    let emitted = emit_with(
+        &[(
+            "core_conformance.named_test_helpers.hgl",
+            include_str!("fixtures/core_conformance.named_test_helpers.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    let output = &emitted.output;
+    let tests: Vec<_> = output
+        .tests
+        .iter()
+        .map(|test| (test.identity(), test.integration, test.executable))
+        .collect();
+    assert_eq!(
+        tests,
+        [
+            ("core_conformance::first_helpers".to_owned(), false, Some(0)),
+            (
+                "core_conformance::second_helpers".to_owned(),
+                false,
+                Some(0)
+            ),
+            ("core_conformance::live_helper".to_owned(), true, Some(0)),
+        ]
+    );
+    let unit = &output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/mod-core_conformance.cpp")
+        .unwrap()
+        .text;
+    for owner in [0, 1, 2] {
+        let helper = format!("t_::helpers_0{owner}_");
+        assert!(unit.contains(&format!("namespace {helper}")), "{unit}");
+        assert!(
+            unit.contains(&format!("::hgl::core_conformance::m_::{helper}::adjust(")),
+            "{unit}"
+        );
+        if owner < 2 {
+            assert!(
+                unit.contains(&format!(
+                    "::hgl::core_conformance::m_::w_::{helper}::adjust("
+                )),
+                "{unit}"
+            );
+            assert!(
+                unit.contains(&format!(
+                    "::hgl::core_conformance::m_::{helper}::i_::keep::of_i64("
+                )),
+                "{unit}"
+            );
+        }
+    }
 }
 
 /// A unit holds every function of its module that is written, and is

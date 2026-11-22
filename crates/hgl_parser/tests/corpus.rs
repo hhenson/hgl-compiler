@@ -34,6 +34,7 @@ struct Pending {
 const FUNCTIONS: &str = "hgl_spec/spec/language/functions-and-phases.md";
 const GENERICS: &str = "hgl_spec/spec/language/generics-and-operators.md";
 const MAPPING: &str = "hgl_core/spec/mapping.md";
+const DIAGNOSTICS: &str = "hgl_core/spec/diagnostics.md";
 
 const PENDING: &[Pending] = &[
     Pending {
@@ -42,34 +43,24 @@ const PENDING: &[Pending] = &[
         reason: "LEX-29, EXPR-16, EXPR-17, FN-19 (#368)",
     },
     Pending {
-        file: FUNCTIONS,
-        opening: "module examples.function_parameters",
-        reason: "GEN-17 (#366)",
-    },
-    Pending {
-        file: GENERICS,
-        opening: "operator call_through<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R",
-        reason: "GEN-17 and FN-8 (#366)",
-    },
-    Pending {
         file: GENERICS,
         opening: "operator keyed<K, R, ...Ps, ...As>(",
-        reason: "GEN-17 and FN-8 (#366), GEN-10 and GEN-18 (#367)",
-    },
-    Pending {
-        file: GENERICS,
-        opening: r#"operator each_wanted<K, R, ...Ps, ...As, const key: str = "key">{"#,
-        reason: "GEN-17 and FN-8 (#366)",
-    },
-    Pending {
-        file: GENERICS,
-        opening: r#"operator each_slot<R, ...Ps, ...As, const key: str = "key", const index: str = "index">("#,
-        reason: "GEN-17 and FN-8 (#366)",
+        reason: "GEN-10 and GEN-18 (#367)",
     },
     Pending {
         file: MAPPING,
         opening: "export enum Join { inner, outer, left }",
-        reason: "GEN-17 and FN-8 (#366), GEN-10 and GEN-18 (#367), EXPR-16, EXPR-17 and FN-19 (#368)",
+        reason: "GEN-10 and GEN-18 (#367), EXPR-16, EXPR-17 and FN-19 (#368)",
+    },
+    Pending {
+        file: "hgl_core/spec/formatting.md",
+        opening: "export operator format<...As, ...Ks>(",
+        reason: "FMT-6 and FMT-8 graph candidate body (#434)",
+    },
+    Pending {
+        file: DIAGNOSTICS,
+        opening: "export operator debug_print<...As, ...Ks>(",
+        reason: "FN-19 pack spreading (#434)",
     },
 ];
 

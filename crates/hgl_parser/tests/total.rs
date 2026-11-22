@@ -16,6 +16,10 @@
 
 mod common;
 
+use std::ops::Range;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
+
 use common::{Outcome, corpus, run, run_within};
 use hgl_lexer::TokenKind;
 use hgl_parser::{Entry, Limits, SyntaxNode};
@@ -80,35 +84,62 @@ fn reports_nesting(outcome: &Outcome) -> bool {
         .any(|finding| finding.code == "syntax.nesting_limit" && !finding.catalogued)
 }
 
+/// Checks every token edit. Token ranges are grouped so several workers
+/// can share the work of checking a long sample.
+fn check_token_edits(check: impl Fn(&str, &Range<usize>) + Sync) -> usize {
+    let samples = corpus();
+    let inputs: Vec<_> = samples
+        .iter()
+        .map(|sample| (sample.text.as_str(), tokens_of(&sample.text)))
+        .collect();
+    let chunks: Vec<_> = inputs
+        .iter()
+        .flat_map(|(text, tokens)| tokens.chunks(32).map(|chunk| (*text, chunk)))
+        .collect();
+    let next = AtomicUsize::new(0);
+    // Each of the two corpus tests takes up to half of the available
+    // threads, capped at six for machines shared with builds.
+    let workers =
+        thread::available_parallelism().map_or(1, |threads| (usize::from(threads) / 2).clamp(1, 6));
+    let work = || {
+        let mut count = 0;
+        // The atomic cursor gives each chunk to one worker. The inputs
+        // themselves are shared read-only.
+        while let Some((text, tokens)) = chunks.get(next.fetch_add(1, Ordering::Relaxed)) {
+            for token in *tokens {
+                check(text, token);
+                count += 1;
+            }
+        }
+        count
+    };
+    thread::scope(|scope| {
+        let others: Vec<_> = (1..workers).map(|_| scope.spawn(work)).collect();
+        work()
+            + others
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .sum::<usize>()
+    })
+}
+
 #[test]
 fn every_prefix_of_the_corpus_parses() {
     // Source cut off after any token: in the middle of a list, a block, a
     // declaration.
-    let mut count = 0usize;
-    for sample in &corpus() {
-        for token in tokens_of(&sample.text) {
-            survives(&sample.text[..token.end]);
-            count += 1;
-        }
-    }
+    let count = check_token_edits(|text, token| {
+        survives(&text[..token.end]);
+    });
     println!("{count} prefixes");
 }
 
 #[test]
 fn the_corpus_parses_with_any_one_token_removed() {
     // A missing bracket, keyword or operator, one at a time.
-    let mut count = 0usize;
-    for sample in &corpus() {
-        for range in tokens_of(&sample.text) {
-            let without = format!(
-                "{}{}",
-                &sample.text[..range.start],
-                &sample.text[range.end..]
-            );
-            survives(&without);
-            count += 1;
-        }
-    }
+    let count = check_token_edits(|text, range| {
+        let without = format!("{}{}", &text[..range.start], &text[range.end..]);
+        survives(&without);
+    });
     println!("{count} removals");
 }
 
