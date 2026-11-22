@@ -1598,6 +1598,84 @@ fn graph_instances_propagate_inferred_list_types() {
     });
 }
 
+/// EXPR-5, EXPR-9 and GEN-7: an unsettled entry can change the element
+/// type of an inferred list, but does not change a contextual type.
+#[test]
+fn graph_instances_join_pending_list_elements() {
+    let checked = module(
+        r#"operator predicate<T>(input: T) -> bool
+impl const fn predicate<T>(input: T) -> bool => true
+impl fn predicate(input: i64) -> bool { when { return input > 0 } }
+
+fn recovered<T>(const input: T) -> f64 {
+    let chosen = if predicate(input) { 2.5 }
+    let forward = [1, chosen]
+    let reverse = [chosen, 1]
+    let copied = forward
+    let explicit: list<f64, 2> = [1, chosen]
+    let nullable = [1, chosen, null]
+    return 0.0
+}
+
+fn typed<T>(const input: T) -> f64 {
+    let chosen = if predicate(input) { 2.5 }
+    let initial = if predicate(input) { 1 }
+    var fixed: list<i64, 2> = [initial, 2]
+    fixed = [1, chosen]
+    return 0.0
+}
+
+fn nonliteral<T>(const input: T) -> f64 {
+    let chosen = if predicate(input) { 2.5 }
+    let first = 1
+    let rejected = [first, chosen]
+    return 0.0
+}
+
+fn accepted() -> f64 => recovered(1)
+fn wrong_type() -> f64 => typed(1)
+fn wrong_element() -> f64 => nonliteral(1)"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:32:27 type/type.mismatch EXPR-5",
+            "m.hgl:33:30 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    for (name, expected) in [
+        ("forward", "list<f64>"),
+        ("reverse", "list<f64>"),
+        ("copied", "list<f64>"),
+        ("explicit", "list<f64, 2>"),
+        ("nullable", "list<f64?>"),
+    ] {
+        let local = instance
+            .locals
+            .iter()
+            .find(|local| local.name == name)
+            .unwrap();
+        assert_eq!(local.ty.to_string(), expected, "{name}");
+    }
+    let mut lists = 0;
+    walk_statements(&instance.statements, &mut |expr| {
+        if let ExprKind::Sequence(entries) = &expr.kind {
+            for entry in entries {
+                let expected = match entry.kind {
+                    ExprKind::Literal(hgl_analyser::hir::Value::Null) => "f64?",
+                    _ => "f64",
+                };
+                assert_eq!(entry.ty.to_string(), expected);
+            }
+            lists += 1;
+        }
+    });
+    assert_eq!(lists, 4);
+}
+
 /// GEN-7, CTRL-12 and CTRL-15: the selected input determines what a
 /// deferred switch accepts as its selector and label types.
 #[test]

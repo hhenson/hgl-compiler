@@ -830,11 +830,17 @@ impl<'a> Typer<'a> {
             })
             .collect();
         let known: Vec<&Type> = read.iter().flatten().map(|entry| &entry.ty).collect();
+        let has_null = items.iter().any(branch_is_null);
+        // GEN-7, EXPR-9: an unfinished entry can change the sequence's
+        // inferred type, even when another entry supplies a type now.
+        // Leave a hole for the instance's join rather than fixing the
+        // types of this list and of every place that infers from it.
+        let pending = self.graph && !misplaced && known.iter().any(|ty| !whole(ty));
         // EXPR-9: "Entries of two types reject, and so do entries that
         // give no type: `[]`, `[null]`." Where what the place expects
         // is not known, neither is the sequence, and nothing is
         // reported.
-        let Some(of) = sequence_element(&known, items.iter().any(branch_is_null)) else {
+        let Some(of) = sequence_element(&known, has_null) else {
             if unexpected {
                 self.diagnostics.emit(error(
                     Category::Type,
@@ -855,10 +861,12 @@ impl<'a> Typer<'a> {
         // an `A` and a `B` that inherit from it. Such entries are not
         // judged here, and the sequence has no type. Where the place
         // is known and holds no sequence, the place reports it.
-        let disagree = read.iter().flatten().any(|entry| {
-            !(self.admits(&of, &entry.ty) || is_integer_literal(entry) && accepts_float(&of))
-        });
-        if !unexpected && disagree {
+        if !unexpected
+            && !pending
+            && read.iter().flatten().any(|entry| {
+                !(self.admits(&of, &entry.ty) || is_integer_literal(entry) && accepts_float(&of))
+            })
+        {
             let elements = items
                 .iter()
                 .enumerate()
@@ -877,11 +885,20 @@ impl<'a> Typer<'a> {
                     Some(entry) if !ordered => entry,
                     _ => self.expression(item, Some(&of)),
                 };
-                self.fit(entry, &of, "an element, as the first is,")
+                if pending {
+                    entry
+                } else {
+                    self.fit(entry, &of, "an element, as the first is,")
+                }
             })
             .collect();
+        let element = match (pending, has_null) {
+            (false, _) => of,
+            (true, false) => Type::Unknown,
+            (true, true) => Type::Nullable(Box::new(Type::Unknown)),
+        };
         let ty = Type::List {
-            element: Box::new(of),
+            element: Box::new(element),
             size: None,
         };
         (ExprKind::Sequence(elements), ty)
