@@ -400,11 +400,11 @@ fn yield_requires_a_source_body() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:13 local:phase/yield.outside_source SOURCE-1",
-            "m.hgl:7:13 local:phase/yield.outside_source SOURCE-1",
-            "m.hgl:12:17 local:phase/yield.outside_source SOURCE-1",
-            "m.hgl:17:13 local:phase/yield.outside_source SOURCE-1",
-            "m.hgl:20:5 local:phase/yield.outside_source FN-1",
+            "m.hgl:3:13 phase/yield.outside_source SOURCE-1",
+            "m.hgl:7:13 phase/yield.outside_source SOURCE-1",
+            "m.hgl:12:17 phase/yield.outside_source SOURCE-1",
+            "m.hgl:17:13 phase/yield.outside_source SOURCE-1",
+            "m.hgl:20:5 phase/yield.outside_source FN-1",
         ]
     );
 }

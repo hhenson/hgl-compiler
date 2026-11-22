@@ -26,7 +26,7 @@ use hgl_source::FileId;
 use crate::program::{Declaration, DeclarationKind, Phase, Program, RUN_CONFIG, Role};
 use crate::syntax::{child, tokens};
 use crate::types::Detail;
-use crate::{codes, error, local_error};
+use crate::{codes, error};
 
 /// Fills in [`crate::Module::phases`] for every module of the program.
 pub(crate) fn classify(program: &mut Program) {
@@ -193,9 +193,9 @@ fn yield_placement(
             continue;
         };
         if let Some((_, at)) = keyword(&node, file) {
-            diagnostics.emit(local_error(
+            diagnostics.emit(error(
                 Category::Phase,
-                codes::local::YIELD_OUTSIDE_SOURCE,
+                codes::YIELD_OUTSIDE_SOURCE,
                 at,
                 format!("`yield` belongs to a source, and this one is inside {context}"),
                 rule,

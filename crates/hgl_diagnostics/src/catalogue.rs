@@ -146,6 +146,10 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "sequence.context_type"),
     (Category::Type, "dict.duplicate_key"),
     (Category::Type, "set.duplicate_member"),
+    (Category::Type, "format.syntax"),
+    (Category::Type, "format.argument"),
+    (Category::Type, "format.unused"),
+    (Category::Type, "format.specifier"),
     (Category::Type, "enum.context_type"),
     (Category::Name, "binding.unassigned"),
     (Category::Name, "binding.immutable"),
@@ -199,6 +203,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "delta.overlap"),
     (Category::Phase, "test.statement_phase"),
     (Category::Phase, "yield.in_value"),
+    (Category::Phase, "yield.outside_source"),
 ];
 
 /// True when the catalogue has a row with this category and this code.

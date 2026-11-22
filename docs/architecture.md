@@ -1,8 +1,9 @@
 # Architecture
 
-Status: the lexer, the parser, the analyser, the test runner and the
-cpp transpiler are implemented, the last three in part:
-[rules.md](rules.md) says what each leaves. Everything marked *planned* is
+Status: the lexer, the parser, the analyser, the documentation stage,
+the test runner and the cpp transpiler are implemented. The analyser,
+test runner and cpp transpiler are partial. [rules.md](rules.md) says
+what each leaves. Everything marked *planned* is
 a plan, not a contract; it changes as stages are built. The target is
 designed in [cpp-target.md](cpp-target.md): C++ on hgraph's own layers.
 
@@ -16,6 +17,7 @@ tokens
 syntax tree ---------> formatter (planned) ---------> source text
     |  hgl_analyser
 analysed program ----> error reporting (`check`)
+    |            ----> hgl_doc ----> API model (`doc`)
     |  hgl_lower (in the optimiser's place)
 analysed program, and the facts every target decides the same way
     |  one transpiler per target (`hgl_cpp`)
@@ -40,8 +42,9 @@ Rules for every stage:
 | `hgl_lexer` | Source text to tokens; literal text to values | implemented |
 | `hgl_parser` | Tokens to a lossless syntax tree | implemented |
 | `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution, written types, and the typed bodies of value functions, nodes, sources, graphs and tests: see "Analyser" below |
+| `hgl_doc` | Analysed interfaces and their attached SDOC comments to the JSON API model | [documentation.md](documentation.md) |
 | `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases handed to a target to run |
-| `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test`, `hgl emit`, `hgl run` |
+| `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl doc`, `hgl test`, `hgl emit`, `hgl run` |
 | formatter | Syntax tree to source text | planned |
 | optimiser | Analysed program to analysed program | planned |
 | `hgl_lower` | Lowering, in the optimiser's place: the facts every target decides the same way, read from the analysed program | implemented for what the cpp target needs: see "Lowering" below |
@@ -1412,6 +1415,14 @@ A file may be given with a list of declarations to leave out, and the
 program is analysed as if they were not written. A test runner checks a
 rejection case that way (TST-13).
 
+## Documentation
+
+`hgl_doc` reads the analysed program's interfaces and the lossless trees
+it retains. The parser's SDOC layout reader is shared with the analyser's
+key checks. It uses CommonMark fence ranges to preserve literal text in
+comment and section contents. The result is the
+[JSON API model](documentation.md), a leaf of the pipeline (SDOC-6).
+
 ## Test runner
 
 `hgl test` runs the cases of a program (TST-12 to TST-15). The runner is
@@ -2392,11 +2403,13 @@ the job the way the design needs is dropped.
 | Crate | Used by | For |
 | --- | --- | --- |
 | `clap` | `hgl_cli` | command-line parsing and help text |
-| `serde_json` | `hgl_cli` | serialize machine-readable check diagnostics |
+| `serde` | `hgl_doc` | serialization of the documentation records |
+| `serde_json` | `hgl_cli`, `hgl_doc` | encode check diagnostics and API documentation as JSON |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
 | `ctrlc` | `hgl_cli` | taking an interrupt or a request to end while an application runs, to stop the run and still print its output |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
+| `pulldown-cmark` | `hgl_parser` | CommonMark fenced block ranges in documentation comments |
 | `tempfile` | `hgl_cli` | a file of a build written beside the one it replaces and renamed onto it, so that nothing reads half of it |
 | `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
 | `dirs` | `hgl_cli` | the user's cache directory, where the cpp target's builds are kept |

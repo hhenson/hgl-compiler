@@ -1,0 +1,7 @@
+/** A different module that implements a candidate. */
+module examples.other
+
+use examples.apidoc::{shifted}
+
+/** An externally declared duration candidate. */
+impl const fn shifted{offset: i64}(input: duration) -> duration => input
