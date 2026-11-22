@@ -231,7 +231,7 @@ It is built in passes:
 | Pass | What it settles | Rules | State |
 | --- | --- | --- | --- |
 | Modules | Files grouped into modules and parts by their `module` lines, and an application's file, headed `application name`, into a unit of its own | UNIT-1, UNIT-14 | done |
-| Declarations | Each module's declarations, test helpers and tests; its declaration scope and test scope; a name declared twice | UNIT-5, UNIT-12, FN-4, TST-1, TST-2, NATIVE-2 | done |
+| Declarations | Module declarations, shared test contexts and named tests; private declarations and candidates within each named test; duplicate bindings | UNIT-5, UNIT-12, FN-4, TST-1, TST-2, NATIVE-2 | done |
 | Imports | The module and the declarations each `use` names; cycles; the operator of each candidate, `impl fn` or `impl const fn`, native or not | UNIT-2, UNIT-3, GEN-4 | done |
 | Resolution | Every name in a signature, body, type and constraint, to the one binding in scope; a binding that takes a name already there; undecided generic applications | UNIT-5, UNIT-6, UNIT-7, UNIT-10, UNIT-12, FN-14, GEN-1, GEN-14, TST-2 | done |
 | Forms | What the grammar admits of a declaration and a rule does not: a pack with a default, const, or before a fixed parameter; a named pack of no type pack; the hooks of a native implementation | FN-8, NATIVE-3 | done |
@@ -511,11 +511,18 @@ execution code of the catalogue, as a string literal written out
 (TST-10, `catalogue::EXECUTION_CODES`); anything else is
 `test.raises_code`.
 
+The declarations before a named test's statements are checked with the
+test as their binding scope (TST-1). A call there sees the module's
+candidates and any candidate of the same operator declared in the test.
+When a generic call needs such a candidate as evidence (GEN-16), the
+call records it as an answer. Lowering distinguishes instances that
+have different test-local answers.
+
 A test's block is then read as value code (`Typer::test`, into
 `Module::test_bodies`), as an application's statements are (TST-3,
 UNIT-14): a test has a name and neither a parameter nor a result. It
 calls `const fn`s only, a temporal call there being `call.role`; an
-operator selects among all its candidates, a value one outranking a
+operator selects among its visible candidates, a value one outranking a
 temporal one of the same parameter types, and a temporal one selected is
 `call.role` too (GEN-5, the typer's `value_code`); nothing is lifted. The call
 an `eval` or a `run` takes is read as composition is. `assert` is a
@@ -941,7 +948,7 @@ The pass is built form by form. So far it reads:
 | `null` | TYPE-14 | The nullable type its place expects. Where the type expected has no `?`, or nothing gives it a type, it is rejected |
 | A name | UNIT-10, GEN-13, UNIT-13 | A parameter, a local, a constant of a module (`ExprKind::Constant`), or a generic value parameter, with its type |
 | A symbol | NUM-1, OPS-1, OPS-2, OPS-3, EXPR-10, GEN-5 | The call of the core operator it stands for, `add_` for `+`: its operands select one of that operator's value candidates, core's or a module's own, and the result is that candidate's. No candidate for the operands is a rejection. Configuration, `a /{zero: .error} b`, gives the call its named arguments. See "Symbols" below |
-| `&&`, `\|\|`, `!` | EXPR-6, OPS-5 | Read as they are written: their operands are bools, and the right operand of a connective is evaluated only where the left does not decide |
+| `&&`, `\|\|`, `!` | EXPR-6, OPS-5 | Bool operands. Value code and hooks short-circuit a connective. Composition selects the core operator, lifting when given connections |
 | A tuple, a sequence of values | EXPR-5, EXPR-9 | Their elements take the types an expected tuple, list or set gives. With none, a sequence is a list of the one type its values have: `f64` when its integer literals stand among `f64` values, and `T?` when a `null` stands among values of `T`. `[]` and `[null]` give no type, and are rejected |
 | A sequence of pairs, `[key: value]` | EXPR-9 | A dictionary where one is expected (`ExprKind::Pairs`): each key is read as the key type and each value as the value type, and no entries make an empty one. With nothing expected the pairs are `sequence.context_type`: syntax alone selects no dictionary |
 | A test against null | ERR-12, ERR-3 | `value == null` and `value != null` prove an immutable nullable parameter, `let` or loop binding is not null: in the branch the test holds for, in the right operand of `&&` or `\|\|` it guards, and from a branch that returns to the end of the block the `if` stands in. There the binding is read as its payload's type. A `var`, a saved bool and a test of anything else prove nothing |
@@ -1025,7 +1032,7 @@ Not read as calls:
 
 | Form | Why | What stands |
 | --- | --- | --- |
-| `&&`, `\|\|`, `!` | Their candidates take a pack, `all_(values: ...bool)`, and a connective does not evaluate its right operand where the left decides (EXPR-6) | The symbol as written, with bool operands |
+| `&&`, `\|\|`, `!` in value code and hooks | A connective evaluates its right operand only where the left does not decide (EXPR-6) | The symbol as written, with bool operands |
 | An operand that is nullable | "null presence checks ... have their own language rules" | The symbol as written; a comparison is a bool |
 | An operand of no known type | Nothing can be selected | The symbol as written |
 

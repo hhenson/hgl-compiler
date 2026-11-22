@@ -171,10 +171,11 @@ transpiler: done
 
 analyser: done
 
-- The Boolean connectives and `!` take bools in value functions, node hooks and graph composition.
+- Boolean forms take bools. Composition selects `and_`, `or_` or `not_`, and an unparenthesized chain of three or more operands selects `all_` or `any_` over the whole chain.
 
-The C++ target writes the connectives in value functions and node hooks. Boolean
-connectives on connections in graph composition are tracked in #492.
+transpiler: done
+
+- Value code and hooks preserve short-circuiting. Composed Boolean calls use ordinary lifting and give each connected operand its own input.
 
 ## OPS-6
 

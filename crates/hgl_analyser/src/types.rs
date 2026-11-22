@@ -679,7 +679,8 @@ pub struct EnumOf {
     /// The position of its module in `Program::modules`, and its own in
     /// that module's declarations: what it is (UNIT-4).
     pub declared: (usize, usize),
-    /// Its name with its module's path, `m::Mode`: what a key writes.
+    /// The enum's qualified name, including its test name where local
+    /// (TST-1): what a constant key writes.
     pub written: String,
 }
 

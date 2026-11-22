@@ -46,7 +46,9 @@ The [JSON Schema](documentation.schema.json) specifies the fields of
   A part gives the location and documentation of its module header.
 - `declarations` gives declarations in part and source order.
   `canonicalName` is `module.path::name`. A member appends `.member`;
-  a candidate has its operator's canonical name. Role, signature and
+  a module candidate has its operator's canonical name. A declaration
+  private to a named test includes the test's name, as in
+  `module.path::test_name::type_name`. Role, signature and
   source position distinguish declarations that share a canonical name.
   Members and candidates are nested under their owner. Candidates are
   ordered by the implementing module, part and source position.

@@ -45,11 +45,12 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use hgl_analyser::hir::{
-    Answer, Argument, Body, Callee, Expr, ExprKind, Run, Stmt, TypePackArgument, walk_statements,
+    Answer, Argument, Body, Callee, Expr, ExprKind, Local, Run, Stmt, TypePackArgument,
+    ValueCategory, walk_statements,
 };
 use hgl_analyser::{
-    Argument as GenericArgument, DeclarationKind, Detail, GenericKind, Program, Role, Signature,
-    Type,
+    Argument as GenericArgument, DeclarationKind, Detail, GenericKind, LocalKind, Pack, Program,
+    Role, Signature, Type,
 };
 use hgl_diagnostics::Location;
 
@@ -98,6 +99,60 @@ impl Instance {
         self.slots
             .as_ref()
             .map_or(index, |slots| slots[index].parameter)
+    }
+}
+
+/// Runtime slots for a native value call with a positional pack (FN-8).
+/// A native declaration has no HGL body to specialize.
+pub struct NativePack {
+    /// The concrete runtime parameters in call order.
+    pub signature: Signature,
+    slots: Vec<Slot>,
+}
+
+impl NativePack {
+    /// Expand a native value candidate taking only a positional pack.
+    pub fn of(program: &Program, callee: &Callee, arguments: &[Argument]) -> Option<Self> {
+        let (module, declaration) = callee.declaration()?;
+        let owner = &program.modules[module];
+        if !matches!(
+            owner.declarations[declaration].kind,
+            DeclarationKind::NativeCandidate(Role::Value, _)
+        ) {
+            return None;
+        }
+        let Detail::Callable(signature) = &owner.details[declaration] else {
+            return None;
+        };
+        let [parameter] = signature.parameters.as_slice() else {
+            return None;
+        };
+        if parameter.pack != Some(Pack::Positional) {
+            return None;
+        }
+
+        let captures = Captures::of(program, callee, signature, arguments);
+        let mut signature = signature.clone();
+        let mut body = Body {
+            locals: vec![Local {
+                at: parameter.at,
+                name: parameter.name.clone(),
+                kind: LocalKind::Parameter,
+                ty: parameter.ty.clone(),
+                category: ValueCategory::Value,
+            }],
+            statements: Vec::new(),
+        };
+        let (slots, _) = captures.expand(&mut signature, &mut body);
+        Some(Self {
+            signature,
+            slots: slots?,
+        })
+    }
+
+    /// The concrete slot of the supplied argument.
+    pub fn parameter(&self, argument: &Argument) -> Option<usize> {
+        self.slots.iter().position(|slot| slot.takes(argument))
     }
 }
 
@@ -418,6 +473,27 @@ fn function_key(program: &Program, target: &Callee) -> Option<String> {
     Some(format!("{declared:?}:{arguments:?}:{requirements:?}"))
 }
 
+/// An instance that uses a test's candidate has different evidence from
+/// the same call with another test's candidate or with the module's (TST-1).
+fn uses_test_candidate(program: &Program, answer: &Answer) -> bool {
+    match answer {
+        Answer::Candidate {
+            module,
+            declaration,
+            requirements,
+            ..
+        } => {
+            program.modules[*module].declarations[*declaration]
+                .test_owner
+                .is_some()
+                || requirements
+                    .iter()
+                    .any(|answer| uses_test_candidate(program, answer))
+        }
+        _ => false,
+    }
+}
+
 /// The generic arguments of a call of `declaration` of `module` as an
 /// instance's key. `None` where they are not whole: one of them names
 /// a generic parameter or is not known, or the call does not say what
@@ -429,6 +505,7 @@ fn key(
     type_packs: &[TypePackArgument],
     captures: &Captures,
     functions: &[(usize, Callee)],
+    requirements: &[Answer],
 ) -> Option<Vec<String>> {
     let Some(Detail::Callable(signature)) = program.modules.get(module)?.details.get(declaration)
     else {
@@ -452,6 +529,18 @@ fn key(
             "function[{slot}]:{}",
             function_key(program, target)?
         ));
+    }
+    if requirements
+        .iter()
+        .any(|answer| uses_test_candidate(program, answer))
+    {
+        key.push("test requirements".to_string());
+        key.extend(
+            requirements
+                .iter()
+                .map(|answer| answer_key(program, answer))
+                .collect::<Option<Vec<_>>>()?,
+        );
     }
     Some(key)
 }
@@ -581,6 +670,7 @@ impl Instances {
                 &next.type_packs,
                 &next.captures,
                 &next.functions,
+                &next.requirements,
             ) else {
                 continue;
             };
@@ -816,6 +906,7 @@ impl Instances {
             &[],
             &Captures::default(),
             &[],
+            &[],
         )?;
         self.declared(module, declaration)
             .iter()
@@ -835,6 +926,12 @@ impl Instances {
             return None;
         };
         let captures = Captures::of(program, callee, signature, arguments);
+        let requirements = match callee {
+            Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
+                requirements.as_slice()
+            }
+            _ => &[],
+        };
         let key = key(
             program,
             (module, declaration),
@@ -842,6 +939,7 @@ impl Instances {
             callee.type_packs(),
             &captures,
             &functions_of(arguments),
+            requirements,
         )?;
         self.declared(module, declaration)
             .iter()

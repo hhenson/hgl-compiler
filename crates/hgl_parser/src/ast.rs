@@ -481,14 +481,22 @@ impl NativeFnDecl {
 }
 
 impl TestDecl {
-    /// The named functions this test declares before its statements (TST-1).
-    pub fn helpers(&self) -> impl Iterator<Item = FnDecl> {
+    /// The private declarations before this test's statements (TST-1).
+    pub fn declarations(&self) -> impl Iterator<Item = Item> {
         self.syntax
             .children()
             .find(|node| node.kind() == SyntaxKind::Block)
             .into_iter()
             .flat_map(|body| body.children())
-            .filter_map(FnDecl::cast)
+            .filter_map(Item::cast)
+    }
+
+    /// The named functions this test declares before its statements (TST-1).
+    pub fn helpers(&self) -> impl Iterator<Item = FnDecl> {
+        self.declarations().filter_map(|item| match item {
+            Item::Function(function) => Some(function),
+            _ => None,
+        })
     }
 
     /// The test's name.

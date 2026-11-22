@@ -1078,9 +1078,10 @@ fn members(
 /// The enum declared as `declaration` of `module`, as a constant names it.
 fn enum_of(program: &Program, (module, declaration): (usize, usize)) -> EnumOf {
     let unit = &program.modules[module];
+    let declared = &unit.declarations[declaration];
     EnumOf {
         declared: (module, declaration),
-        written: format!("{}::{}", unit.path, unit.declarations[declaration].name),
+        written: unit.qualified_declaration_name(&declared.name, declared.test_owner),
     }
 }
 

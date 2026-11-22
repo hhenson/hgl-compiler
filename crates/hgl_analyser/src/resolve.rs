@@ -37,7 +37,6 @@ use crate::{INJECTABLES, RESULT_FORMS, codes, error};
 /// Resolves the names of every module, filling in [`Module::uses`] and
 /// [`Module::decisions`] and adding to [`Module::prelude_names`].
 pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
-    crate::declare::bind_test_helpers(program, diagnostics);
     for index in 0..program.modules.len() {
         // A module is made from at least one file.
         let Some(first) = program.modules[index].files.first() else {
@@ -458,7 +457,7 @@ impl Resolver<'_> {
         match node.kind() {
             SyntaxKind::Block => self.block(node),
             // A named test's helpers are walked with the module's declarations.
-            SyntaxKind::FnDecl => {}
+            kind if crate::syntax::is_test_declaration(kind) => {}
             SyntaxKind::LocalDecl | SyntaxKind::StateDecl | SyntaxKind::CacheDecl => {
                 self.local(node);
             }
@@ -780,7 +779,7 @@ impl Resolver<'_> {
             .iter()
             .find(|import| import.name == name);
         let declaration = self
-            .test_helpers(name)
+            .test_declarations(name)
             .and_then(|bound| bound.first())
             .map(|&index| &self.module.declarations[index])
             .or_else(|| {
@@ -884,12 +883,12 @@ impl Resolver<'_> {
         self.lookup(&name)
     }
 
-    /// Ordinary declaration identities for a helper name in this test (TST-1, FN-4).
-    fn test_helpers(&self, name: &str) -> Option<&[usize]> {
+    /// The declarations in this test's scope that bind a name (TST-1, FN-4).
+    fn test_declarations(&self, name: &str) -> Option<&[usize]> {
         self.module
             .tests
             .get(self.test_owner?)?
-            .helpers
+            .scope
             .get(name)
             .map(Vec::as_slice)
     }
@@ -969,7 +968,7 @@ impl Resolver<'_> {
             );
         }
 
-        if let Some(bound) = self.test_helpers(name) {
+        if let Some(bound) = self.test_declarations(name) {
             return self.used(
                 token,
                 Binding::Declarations {
