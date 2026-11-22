@@ -15,8 +15,8 @@ use super::members::{index_result, indexed_payload};
 use super::results::{captured_binding, captured_output};
 use super::{CapturedOutput, Typer};
 use crate::hir::{
-    Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Run, Stmt, Value, ValueCategory,
-    walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
+    Body, Callee, Expr, ExprKind, IfInference, Local, LocalId, Node, NodeMut, Run, Stmt, Value,
+    ValueCategory, walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
 };
 use crate::program::{DeclarationKind, Program, Role};
 use crate::types::{Argument, Detail, Type};
@@ -769,9 +769,19 @@ fn settled_type(
         ExprKind::If {
             then,
             otherwise: Some(otherwise),
-            join_branches: true,
+            inference: IfInference::Both,
             ..
         } if whole(&then.ty) && whole(&otherwise.ty) => typer?.one_type(then, otherwise),
+        ExprKind::If {
+            then,
+            inference: IfInference::Then,
+            ..
+        } => then.ty.clone(),
+        ExprKind::If {
+            otherwise: Some(otherwise),
+            inference: IfInference::Otherwise,
+            ..
+        } => otherwise.ty.clone(),
         ExprKind::If {
             condition,
             then,

@@ -20,8 +20,8 @@ use super::statements::{
 use super::{BOOL, Selected, Tables, Typer};
 use crate::declared::substitute_within;
 use crate::hir::{
-    self, BinaryOperator, Body, Callee, Expr, ExprKind, Local, LocalId, Node, NodeMut, Stmt,
-    UnaryOperator, Value, ValueCategory,
+    self, BinaryOperator, Body, Callee, Expr, ExprKind, IfInference, Local, LocalId, Node, NodeMut,
+    Stmt, UnaryOperator, Value, ValueCategory,
 };
 use crate::program::{Program, Role};
 use crate::types::{Argument, Detail, Signature, Type};
@@ -234,15 +234,19 @@ impl GraphDestinations {
                         condition,
                         then,
                         otherwise,
-                        join_branches,
+                        inference,
                     },
                 ty,
                 ..
             }) => {
                 self.fit_condition(typer, condition);
-                if !*join_branches && whole(ty) {
-                    self.fit_branch(typer, then, ty);
-                    if let Some(otherwise) = otherwise {
+                if whole(ty) {
+                    if matches!(inference, IfInference::None | IfInference::Then) {
+                        self.fit_branch(typer, then, ty);
+                    }
+                    if matches!(inference, IfInference::None | IfInference::Otherwise)
+                        && let Some(otherwise) = otherwise
+                    {
                         self.fit_branch(typer, otherwise, ty);
                     }
                 }

@@ -488,6 +488,21 @@ impl Expr {
     }
 }
 
+/// Which branches can supply the deferred type of an `if` with an
+/// `else` (CTRL-10, CTRL-13). A branch that returns supplies no value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IfInference {
+    /// No inference across two branches. The result may come from its
+    /// context, or may have no value or no `else`.
+    None,
+    /// The value takes the common type of both branches.
+    Both,
+    /// Only the `then` branch supplies a value. The other one returns.
+    Then,
+    /// Only the `else` branch supplies a value. The other one returns.
+    Otherwise,
+}
+
 /// What an expression is.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
@@ -595,9 +610,9 @@ pub enum ExprKind {
         then: Box<Expr>,
         /// What is done when it does not.
         otherwise: Option<Box<Expr>>,
-        /// Whether source typing needs the common type of two valued branches.
-        /// A dropped `if` never needs its branch types to agree (CTRL-10).
-        join_branches: bool,
+        /// Which branches supply the deferred type, as source flow
+        /// determined (CTRL-10, CTRL-13).
+        inference: IfInference,
     },
     /// A generic value parameter of the declaration: the `N` of
     /// `const fn width<const N: i64>() -> i64 => N`.

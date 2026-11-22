@@ -24,7 +24,8 @@
 //! piece is left out of the files.
 
 use hgl_analyser::hir::{
-    BinaryOperator, ErrorPart, Expr, ExprKind, Raise, Stmt, Tenor, UnaryOperator, Value,
+    BinaryOperator, ErrorPart, Expr, ExprKind, IfInference, Raise, Stmt, Tenor, UnaryOperator,
+    Value,
 };
 use hgl_analyser::{Scalar, Type};
 use hgl_diagnostics::Location;
@@ -803,7 +804,7 @@ fn returning(value: &Expr) -> Option<Vec<Stmt>> {
                     condition: condition.clone(),
                     then: branch(then)?,
                     otherwise: Some(branch(otherwise)?),
-                    join_branches: false,
+                    inference: IfInference::None,
                 },
                 ty: value.ty.clone(),
                 at: value.at,

@@ -11,7 +11,7 @@ use super::symbols::is_null;
 use super::{BOOL, Fact, Typer};
 use crate::constant::Fault;
 use crate::declared::agree;
-use crate::hir::{self, Expr, ExprKind, LocalId, Stmt, ValueCategory};
+use crate::hir::{self, Expr, ExprKind, IfInference, LocalId, Stmt, ValueCategory};
 use crate::program::{LocalKind, Program};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{ConstantValue, Detail, Scalar, Type};
@@ -516,17 +516,23 @@ impl<'a> Typer<'a> {
             Outcome::Value(ty) => ty.clone(),
             Outcome::Nothing | Outcome::Returns | Outcome::Null => Type::Unknown,
         };
-        let join_branches = used
-            && !told
-            && matches!(
-                (&then.outcome, other.as_ref().map(|other| &other.outcome)),
-                (Outcome::Value(_), Some(Outcome::Value(_)))
-            );
+        // CTRL-10: record the surviving branch from the same outcomes
+        // that decide the source's type. A dead tail is no branch value.
+        let inference = match (
+            used,
+            &then.outcome,
+            other.as_ref().map(|other| &other.outcome),
+        ) {
+            (true, Outcome::Value(_), Some(Outcome::Value(_))) if !told => IfInference::Both,
+            (true, Outcome::Value(_), Some(Outcome::Returns)) => IfInference::Then,
+            (true, Outcome::Returns, Some(Outcome::Value(_))) => IfInference::Otherwise,
+            _ => IfInference::None,
+        };
         let kind = ExprKind::If {
             condition: Box::new(condition),
             then: Box::new(then.value),
             otherwise: other.map(|other| Box::new(other.value)),
-            join_branches,
+            inference,
         };
         (
             Expr {

@@ -1308,6 +1308,81 @@ fn graph_instances_join_deferred_branches_only_when_consumed() {
     assert_eq!(returned.ty.to_string(), "i64?");
 }
 
+/// GEN-7, CTRL-13 and CTRL-10: a return supplies no branch value.
+/// The other branch supplies the type after selection, in either order.
+#[test]
+fn graph_instances_type_the_surviving_conditional_branch() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "fn from_then<T>(const input: T, const flag: bool) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let copied = if flag { chosen } else { return 0 }\n",
+        "    return copied\n",
+        "}\n",
+        "fn from_else<T>(const input: T, const flag: bool) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let copied = if flag {\n",
+        "        return 0\n",
+        "        if predicate(input) { \"discarded\" }\n",
+        "    } else { chosen }\n",
+        "    return copied\n",
+        "}\n",
+        "fn dropped<T>(const input: T, const flag: bool) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    if flag { chosen } else { return 0 }\n",
+        "    return 5\n",
+        "}\n",
+        "fn no_value<T>(const input: T, const flag: bool) -> i64 {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let copied = if flag { let held = chosen } else { return 0 }\n",
+        "    return 5\n",
+        "}\n",
+        "fn wrong<T>(const input: T, const flag: bool) -> str {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let copied: str = if flag { chosen } else { return \"\" }\n",
+        "    return copied\n",
+        "}\n",
+        "fn temporal_then() -> i64 => from_then(1, true)\n",
+        "fn temporal_else() -> i64 => from_else(1, false)\n",
+        "fn ordinary_then() -> i64 => from_then(\"s\", true)\n",
+        "fn dropped_value() -> i64 => dropped(1, true)\n",
+        "fn wrong_annotation() -> str => wrong(1, true)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:25:18 type/type.mismatch CTRL-10",
+            "m.hgl:37:33 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+    for (caller, expected) in [
+        ("temporal_then", "i64"),
+        ("temporal_else", "i64"),
+        ("ordinary_then", "i64?"),
+    ] {
+        let instance = instance_called_by(&checked, body(&checked, caller));
+        let copied = instance
+            .locals
+            .iter()
+            .find(|local| local.name == "copied")
+            .expect("the copied local");
+        assert_eq!(copied.ty.to_string(), expected, "{caller}");
+    }
+    let dropped = instance_called_by(&checked, body(&checked, "dropped_value"));
+    assert!(matches!(
+        &dropped.statements[1],
+        Stmt::Expr(Expr {
+            kind: ExprKind::If { .. },
+            ty: hgl_analyser::Type::Unknown,
+            ..
+        })
+    ));
+}
+
 /// GEN-7, EXPR-5 and EXPR-9: inferred list element types survive nested
 /// lists and local reads, and constrain both entries and destinations.
 #[test]

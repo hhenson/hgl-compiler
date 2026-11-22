@@ -125,6 +125,14 @@ fn joined_choice<T>(const value: T) -> i64 {
     return chosen_or_skip(chosen)
 }
 
+# CTRL-10 and CTRL-13: when one branch returns, the other gives the
+# local its type after candidate selection.
+fn surviving_choice<T>(const value: T, flag: bool) -> i64 {
+    let chosen = if live_helper(value) > 0 { 3 }
+    let copied = if flag { chosen } else { return 0 }
+    return copied
+}
+
 fn contextual_choice<T>(const value: T) -> i64 {
     let maybe = if positive(value) { 2 }
     return if true { maybe } else { 3 }
@@ -302,6 +310,7 @@ test an_instance_settles_its_graph_conditions {
     assert eval inferred_pair(value: "s") == [9]
     assert eval joined_choice(value: 3) == [2]
     assert eval joined_choice(value: "s") == [-1]
+    assert eval surviving_choice(value: 3, flag: [true, false, true]) == [3, 0, 3]
     assert eval contextual_choice(value: 3) == [2]
     assert raises("value.null") { eval contextual_choice(value: "s") }
     assert eval inferred_list(value: 3) == [2]
