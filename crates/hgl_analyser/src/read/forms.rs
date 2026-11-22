@@ -224,8 +224,8 @@ impl Reader<'_> {
         }
     }
 
-    /// TIME-8: "A capability type is written only as the type of a
-    /// parameter of a `const fn` or of a native value function."
+    /// TIME-8: A capability type may be a value function's parameter type
+    /// or a direct member of an operator declaration's type set (GEN-3).
     fn capability_position(&mut self, node: &SyntaxNode, ty: &Type) {
         if !self.program.is_capability_type(ty) {
             return;
@@ -233,7 +233,7 @@ impl Reader<'_> {
         let parameter = node
             .parent()
             .is_some_and(|parent| parent.kind() == SyntaxKind::Param);
-        if parameter && self.value_function {
+        if (parameter && self.value_function) || operator_type_member(node) {
             return;
         }
         self.diagnostics.emit(
@@ -243,7 +243,8 @@ impl Reader<'_> {
                 self.at(node.span()),
                 format!(
                     "`{ty}` is a capability's type, and is written only as the type of a \
-                     parameter of a `const fn` or of a native value function"
+                     parameter of a `const fn` or native value function, or as a type in an \
+                     operator declaration's membership"
                 ),
                 "TIME-8",
             )
@@ -689,6 +690,30 @@ impl Reader<'_> {
         }
         Type::delta(self.inner(node, Position::PLAIN))
     }
+}
+
+/// Whether the type is listed directly on the right of `in` in an
+/// operator declaration's `requires` (TIME-8, GEN-3).
+fn operator_type_member(node: &SyntaxNode) -> bool {
+    let Some(set) = node
+        .parent()
+        .filter(|parent| parent.kind() == SyntaxKind::ConstraintSet)
+    else {
+        return false;
+    };
+    let Some(relation) = set
+        .parent()
+        .filter(|parent| parent.kind() == SyntaxKind::ConstraintRelation)
+    else {
+        return false;
+    };
+    relation.children().nth(1).as_ref() == Some(&set)
+        && tokens(&relation).any(|token| token.kind() == SyntaxKind::Ident && token.text() == "in")
+        && relation
+            .ancestors()
+            .find(|ancestor| ancestor.kind() == SyntaxKind::RequiresClause)
+            .and_then(|clause| clause.parent())
+            .is_some_and(|declaration| declaration.kind() == SyntaxKind::OperatorDecl)
 }
 
 /// The two kinds a window's size may be (TYPE-11), and not known yet.
