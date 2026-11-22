@@ -2060,18 +2060,46 @@ each library on the way; it is run with no variable, as
 `DYLD_LIBRARY_PATH` naming the dependency prefix would load
 conda-forge's libc++ in place of the system's.
 
-A program is built in `programs/<hash>` of its source roots, or the
-directory `--keep` names, under a lock held until its last executable
-has ended. Each file the target writes, and `build.ninja`, is written
-only where it changed, and `ninja -k 0` builds the executables of the
-tests to run: one object for each module's unit, with the precompiled
-header, one for each entry unit, which includes the test host's light
-header (`hglrt/host.h`, nothing of hgraph's) and is compiled with no
-precompiled header, and one executable for each module, linked from its entry, its module's unit and each unit that
-one calls into, through those (a unit is linked whole). Where the
-build fails, an executable is run only where `ninja -n` says nothing is
-left to do for it, and the tests of every other are not run, with the
-failure: an older executable is never run in a newer one's place.
+A program's workspace is `programs/<hash>` under the cache, keyed by its
+source roots, or the directory named by `--out` or `--keep`. Both flags
+work on `hgl build`, `hgl run` and `hgl test`. The driver holds the workspace
+lock through the build and until its last executable ends. The program's
+Ninja process inherits the lock so that the next command waits if `hgl`
+dies. On Linux Ninja also gets a termination signal when `hgl` dies.
+On macOS an already started Ninja build can finish under the inherited lock.
+
+`hgl build ROOT...` checks the program, writes the generated files
+and builds its units and application executables. `--tests` builds a
+test executable for each module with tests. The command reports the
+workspace and artifacts. `--format json` reports a versioned object
+with `workspace`, `target`, `units`, `applications`, `tests` and
+`reused`.
+
+`hgl build --compile-commands` writes `compile_commands.json` in the
+workspace using `ninja -t compdb` for its module and entry rules.
+The version 1 JSON description includes its absolute path as
+`compileCommands` when requested. A reused build can restore the
+database without compiling. An unchanged database keeps its timestamp,
+and a command without the flag leaves it alone.
+
+After Ninja succeeds, the driver records a stamp with the BLAKE3 digest of
+each built object and executable. The key includes the source contents,
+core, the HGL compiler version and executable contents, the prepared
+toolchain and flags, and any application replacements. The inventory
+records whether the tests were built. `hgl run` and `hgl test` reuse the
+build when its key matches and its artifacts pass content verification.
+A rebuild atomically moves the previous stamp aside. A failed or interrupted
+build leaves no runnable stamp. Its predecessor's digests remain available
+to verify incremental outputs when the build is retried. Ninja receives the
+outputs that still match those digests and rebuilds unverified outputs.
+An ordinary build or run checks rejection owners as source. When a
+test build omitted those owners, its stamp covers test commands.
+
+The driver writes each generated file and `build.ninja` where its
+contents change. Ninja compiles each module unit with the precompiled
+header. A test entry uses the light host header (`hglrt/host.h`) and
+each executable links its entry, module unit and the units it calls
+into. A unit is linked whole.
 Executables run side by side. File stems replace each dot of a module
 or application path with a hyphen and mark folded uppercase letters
 with `+`. The `mod-`, `type-`, `test-` and `app-` prefixes
@@ -2080,12 +2108,9 @@ give `bin/test-tm-pricing-app` and `bin/test-tm-+pricing-+app`
 on macOS. Reports keep the original HGL paths.
 
 `hgl emit --target cpp --out DIR` writes the files. `hgl run --target
-cpp` runs an application (UNIT-14, "Running an application" above),
-with what it replaces read again: it builds the
-application's executable, `run/<application-stem>`, in the program's
-workspace (`--keep`'s directory, or the one under the cache), linked
-from its entry unit and the units its module's reaches, and runs it as
-`EXECUTABLE RESULTS` (`cpp/application.rs`). The entry unit, executable
+cpp` uses the application's executable, `run/<application-stem>`
+(UNIT-14). It runs it as `EXECUTABLE RESULTS` (`cpp/application.rs`).
+The entry unit, executable
 and run results share a stem such as `app-demo-pricing-app` for
 `demo.pricing.app`. The executable's host
 (`hglrt/application_host.h`) runs the run statement once and writes
@@ -2436,10 +2461,12 @@ the job the way the design needs is dropped.
 | Crate | Used by | For |
 | --- | --- | --- |
 | `clap` | `hgl_cli` | command-line parsing and help text |
-| `serde` | `hgl_doc` | serialization of the documentation records |
-| `serde_json` | `hgl_cli`, `hgl_doc` | encode check diagnostics and API documentation as JSON |
+| `serde` | `hgl_cli`, `hgl_doc`, `hgl_runner` | serialization of documentation and built test records |
+| `serde_json` | `hgl_cli`, `hgl_doc` | check diagnostics, API documentation and native build records as JSON |
+| `blake3` | `hgl_cli` | content fingerprints for native build reuse |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
-| `ctrlc` | `hgl_cli` | taking an interrupt or a request to end while an application runs, to stop the run and still print its output |
+| `ctrlc` | `hgl_cli` | waiting for an interrupted native build to finish, or passing a stop request to an application |
+| `nix` | `hgl_cli` on Linux | delivers a termination signal to Ninja if the build driver dies |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `pulldown-cmark` | `hgl_parser`, `hgl_doc` | CommonMark fenced block ranges and HTML rendering of documentation comments |
@@ -2486,14 +2513,20 @@ crate updates and workflow action updates weekly
 
 ### Native application debug launch
 
-`hgl run --application NAME --debug-build DIR ROOT...` builds the selected
-application with symbols and no optimization in its generated units. Each
-launch has its own subdirectory under DIR. The caller owns its lifetime.
+`hgl build --debug --application NAME --out DIR --format json ROOT...`
+builds native symbols with HGL source mappings and reports the selected
+application's launch. With an implicit workspace, the debug build uses
+`debug-programs/<hash>` under the cache. Its stamp includes the absolute
+HGL source paths used by the debugger.
 
-On success stdout is one JSON object with `version: 1`, absolute `executable`,
-`arguments` (an array), `workingDirectory`, and `environment` (overrides to
-inherit alongside the caller's environment). Start that exact command in
-the debugger. Its console mirrors the results protocol. After the run
+The build's version 1 JSON reports the launch as `debugLaunch`. The debugger
+starts its absolute `executable` with its `arguments`, `workingDirectory`
+and `environment` overrides. A client
+creates its own session directory to keep that image for the duration
+of the debug session. The legacy `hgl run --application NAME
+--debug-build DIR ROOT...` spelling creates a fresh session under DIR
+and reports the launch fields at the top level with `version: 1`. The debugger's
+console mirrors the results protocol. After the run
 returns it prints the recorded publications. The debugger owns process termination and may close stdin.
 Ordinary application runs keep their host stop pipe. HGL statements use the
 existing C++ `#line` mappings with absolute application and module paths.

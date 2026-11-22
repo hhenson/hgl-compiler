@@ -42,6 +42,7 @@ mod owner;
 use hgl_analyser::{ParsedFile, Program, analyse};
 use hgl_diagnostics::{Diagnostic, Diagnostics, Location, Severity};
 use hgl_source::{FileId, SourceMap, Span};
+use serde::{Deserialize, Serialize};
 
 pub use annotation::Expectation;
 use owner::{Owner, owner_of, owner_of_error, owners};
@@ -79,6 +80,30 @@ pub struct Selection {
     pub integration: bool,
 }
 
+impl Selection {
+    /// Whether a named test is selected (TST-14, TST-17).
+    pub fn selects(&self, test: &str, integration: bool) -> bool {
+        let named = self.tests.iter().any(|selector| matches(selector, test));
+        named || (self.tests.is_empty() && (!integration || self.integration))
+    }
+
+    /// Any selectors that name neither an executable nor a rejection test.
+    pub fn unknown(&self, names: &[&str]) -> Vec<Problem> {
+        self.tests
+            .iter()
+            .filter(|selector| !names.iter().any(|name| matches(selector, name)))
+            .map(|selector| Problem {
+                at: None,
+                message: format!("no test is named `{selector}` (TST-14)"),
+            })
+            .collect()
+    }
+}
+
+fn matches(selector: &str, test: &str) -> bool {
+    selector == test || test.rsplit("::").next() == Some(selector)
+}
+
 /// Something that stops a run before any case is checked (TST-14):
 /// invalid metadata, an annotation nothing can own, an unknown selector.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,7 +125,7 @@ impl Problem {
 }
 
 /// The two kinds of case (TST-15).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CaseKind {
     /// A named test, to be run.
     Executable,
@@ -137,8 +162,23 @@ pub struct Case {
     pub identity: String,
     /// Its kind.
     pub kind: CaseKind,
+    /// Whether this case can be selected by name and is an integration test.
+    /// Declaration- and import-owned cases are always selected.
+    pub selection: CaseSelection,
     /// What became of it.
     pub outcome: Outcome,
+}
+
+/// How a case is selected after discovery (TST-14, TST-17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CaseSelection {
+    /// A declaration- or import-owned rejection that always runs.
+    Always,
+    /// A named executable or rejection test.
+    Named {
+        /// Whether it must be asked for as an integration test.
+        integration: bool,
+    },
 }
 
 /// The result of a run.
@@ -193,6 +233,66 @@ pub fn run(
     selection: &Selection,
     executor: Option<&mut dyn Executor>,
 ) -> Report {
+    let PreparedRun {
+        mut report,
+        program,
+    } = prepare(sources, files, front_end, selection);
+    if let (Some(executor), Some(program)) = (executor, program) {
+        let chosen: Vec<_> = report
+            .cases
+            .iter_mut()
+            .filter(|case| case.kind == CaseKind::Executable)
+            .collect();
+        if !chosen.is_empty() {
+            let names: Vec<_> = chosen.iter().map(|case| case.identity.clone()).collect();
+            let mut outcomes = executor.execute(&program, &names).into_iter();
+            for case in chosen {
+                case.outcome = outcomes.next().unwrap_or_else(|| {
+                    Outcome::NotRun("the target gave it no outcome".to_string())
+                });
+            }
+        }
+    }
+    report
+}
+
+/// A checked test run before its executable cases are handed to a target.
+pub struct PreparedRun {
+    /// Rejection outcomes and the selected executable cases.
+    pub report: Report,
+    /// The surviving program, if it was accepted and the selection is valid.
+    pub program: Option<Program>,
+}
+
+/// Checks the surviving program and its selected rejections, and lists
+/// executable cases before running a target.
+pub fn prepare(
+    sources: &SourceMap,
+    files: &[ParsedFile],
+    front_end: &Diagnostics,
+    selection: &Selection,
+) -> PreparedRun {
+    prepare_cases(sources, files, front_end, selection, false)
+}
+
+/// Validates the requested names and prepares the complete test inventory
+/// so a native build can serve subsequent selections.
+pub fn prepare_all(
+    sources: &SourceMap,
+    files: &[ParsedFile],
+    front_end: &Diagnostics,
+    selection: &Selection,
+) -> PreparedRun {
+    prepare_cases(sources, files, front_end, selection, true)
+}
+
+fn prepare_cases(
+    sources: &SourceMap,
+    files: &[ParsedFile],
+    front_end: &Diagnostics,
+    selection: &Selection,
+    complete: bool,
+) -> PreparedRun {
     let mut report = Report::default();
 
     // 1. The annotations, and 2. what can own them.
@@ -313,40 +413,23 @@ pub fn run(
         .collect();
 
     // TST-14: "Unknown selectors reject."
-    let selects = |selector: &str, test: &str| {
-        // `module::name` in full, or the name after the `::`.
-        selector == test || test.rsplit("::").next() == Some(selector)
-    };
-    for selector in &selection.tests {
-        let known = executable
-            .iter()
-            .chain(&rejected_tests)
-            .any(|test| selects(selector, test));
-        if !known {
-            report.problems.push(Problem {
-                at: None,
-                message: format!("no test is named `{selector}` (TST-14)"),
-            });
-        }
-    }
-    let selected = |test: &str| {
-        let named = selection
-            .tests
-            .iter()
-            .any(|selector| selects(selector, test));
-        // An integration test is asked for by `integration`, or by its
-        // name.
-        if integration.iter().any(|found| found == test) && !selection.integration {
-            return named;
-        }
-        selection.tests.is_empty() || named
-    };
+    let names: Vec<_> = executable
+        .iter()
+        .chain(&rejected_tests)
+        .map(String::as_str)
+        .collect();
+    report.problems.extend(selection.unknown(&names));
+    let is_integration = |test: &str| integration.iter().any(|found| found == test);
+    let selected = |test: &str| complete || selection.selects(test, is_integration(test));
 
     // TST-14: "Invalid metadata, ambiguous boundaries, or surviving-source
     // errors prevent execution."
     if report.prevented() {
         report.surviving.sort_by_location();
-        return report;
+        return PreparedRun {
+            report,
+            program: None,
+        };
     }
 
     // 4. Each rejection case: its owner put back, alone (TST-13).
@@ -385,9 +468,16 @@ pub fn run(
                 None => true,
             }
         });
+        let selection = match candidate.test {
+            Some(_) => CaseSelection::Named {
+                integration: is_integration(&identity),
+            },
+            None => CaseSelection::Always,
+        };
         report.cases.push(Case {
             identity,
             kind: CaseKind::Rejection,
+            selection,
             outcome: if missing.is_empty() && unexpected.is_empty() {
                 Outcome::Passed
             } else {
@@ -399,32 +489,24 @@ pub fn run(
         });
     }
 
-    // The executable cases: run by the executor, or listed and not
-    // run. TST-14: "surviving-source errors prevent execution": a run
-    // that was stopped returned above, and reaches no executor.
-    if !selection.rejections_only {
-        let chosen: Vec<String> = executable
-            .into_iter()
-            .filter(|test| selected(test))
-            .collect();
-        let mut outcomes = match executor {
-            Some(executor) if !chosen.is_empty() => executor.execute(&program, &chosen),
-            Some(_) => Vec::new(),
-            None => vec![Outcome::NotRun(NO_TARGET.to_string()); chosen.len()],
-        }
-        .into_iter();
-        for test in chosen {
-            let outcome = outcomes
-                .next()
-                .unwrap_or_else(|| Outcome::NotRun("the target gave it no outcome".to_string()));
+    // The executable cases will be run by the target where one is named.
+    if complete || !selection.rejections_only {
+        for test in executable.into_iter().filter(|test| selected(test)) {
+            let selection = CaseSelection::Named {
+                integration: is_integration(&test),
+            };
             report.cases.push(Case {
                 identity: test,
                 kind: CaseKind::Executable,
-                outcome,
+                selection,
+                outcome: Outcome::NotRun(NO_TARGET.to_string()),
             });
         }
     }
-    report
+    PreparedRun {
+        report,
+        program: Some(program),
+    }
 }
 
 /// The errors among `diagnostics`. A warning does not reject source

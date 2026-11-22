@@ -8,6 +8,7 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+serde.workspace = true
 hgl_source.workspace = true
 hgl_diagnostics.workspace = true
 hgl_lexer.workspace = true
