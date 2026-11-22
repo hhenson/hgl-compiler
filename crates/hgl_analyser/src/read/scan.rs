@@ -78,6 +78,46 @@ impl Reader<'_> {
         }
     }
 
+    /// TIME-8 admits a capability type listed directly in the type set
+    /// of an operator declaration's membership (GEN-3).
+    pub(super) fn operator_type_member(&self, node: &SyntaxNode) -> bool {
+        let Some(set) = node
+            .parent()
+            .filter(|parent| parent.kind() == SyntaxKind::ConstraintSet)
+        else {
+            return false;
+        };
+        let Some(relation) = set
+            .parent()
+            .filter(|parent| parent.kind() == SyntaxKind::ConstraintRelation)
+        else {
+            return false;
+        };
+        let mut operands = relation.children();
+        let (Some(left), Some(right)) = (operands.next(), operands.next()) else {
+            return false;
+        };
+        right == set
+            && tokens(&relation)
+                .any(|token| token.kind() == SyntaxKind::Ident && token.text() == "in")
+            && relation
+                .ancestors()
+                .find(|ancestor| ancestor.kind() == SyntaxKind::RequiresClause)
+                .and_then(|clause| clause.parent())
+                .is_some_and(|declaration| declaration.kind() == SyntaxKind::OperatorDecl)
+            && self.constraint_type(&left)
+            && set.children().all(|member| self.constraint_type(&member))
+    }
+
+    /// Constraint operands share a parser form for type and value names.
+    fn constraint_type(&self, operand: &SyntaxNode) -> bool {
+        (is_type(operand.kind()) || self.indexed_pack(operand))
+            && !self.names_a_generic_value(operand)
+            && !self.names_a_constant(operand)
+            && !self.names_an_option(operand)
+            && !self.constraint_pack_key(operand)
+    }
+
     /// True when `node`, which the parser read as a type, names a const
     /// option that a constraint compares with constants.
     ///
@@ -246,28 +286,29 @@ impl Reader<'_> {
                 matches!(token.kind(), SyntaxKind::EqEq | SyntaxKind::BangEq)
                     || (token.kind() == SyntaxKind::Ident && token.text() == "in")
             });
-        // A generic value parameter of the declaration, by its kind.
-        let generic_value = |operand: &SyntaxNode| {
-            operand.kind() == SyntaxKind::NamedType
-                && name_token(operand).is_some_and(|name| {
-                    matches!(
-                        self.bindings.get(&(self.file, name.span().start)).copied(),
-                        Some(Binding::Local {
-                            at,
-                            kind: LocalKind::GenericParameter,
-                        }) if self.generics.iter().any(|generic| {
-                            generic.at == *at && Kind::of(&generic.kind) == Kind::Value
-                        })
-                    )
-                })
-        };
         compares
             && !others.is_empty()
             && others.iter().all(|other| {
                 !is_type(other.kind())
-                    || generic_value(other)
+                    || self.names_a_generic_value(other)
                     || self.names_an_option(other)
                     || self.names_a_constant(other)
+            })
+    }
+
+    /// A generic value parameter of the declaration, by its settled kind.
+    fn names_a_generic_value(&self, operand: &SyntaxNode) -> bool {
+        operand.kind() == SyntaxKind::NamedType
+            && name_token(operand).is_some_and(|name| {
+                matches!(
+                    self.bindings.get(&(self.file, name.span().start)).copied(),
+                    Some(Binding::Local {
+                        at,
+                        kind: LocalKind::GenericParameter,
+                    }) if self.generics.iter().any(|generic| {
+                        generic.at == *at && Kind::of(&generic.kind) == Kind::Value
+                    })
+                )
             })
     }
 
