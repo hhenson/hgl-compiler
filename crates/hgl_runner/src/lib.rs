@@ -263,6 +263,7 @@ pub fn run(
             .map(|parsed| ParsedFile {
                 file: parsed.file,
                 root: parsed.root.clone(),
+                // SDOC-9: reanalysis keeps examples except those belonging to omitted declarations.
                 examples: parsed.examples.clone(),
                 omit: owning
                     .iter()

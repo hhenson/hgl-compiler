@@ -65,9 +65,20 @@ docs: done
 
 ## SDOC-9
 
-parser, analyser, runner, docs: done
+parser: done
 
-- Fenced HGL in Examples is checked at its comment location and runs as a named test on the C++ target
+- An `hgl` fence in Examples is parsed as a named test at its source location
+
+analyser: done
+
+- Example tests use the containing module's ordinary named-test scope
+
+runner: done
+
+- Runnable examples are listed, selected and run through the named-test path on the C++ target
+
+docs: done
+
 - The JSON model and HTML mark runnable and shown HGL fences
 
 ## SDOC-10
