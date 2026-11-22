@@ -388,6 +388,19 @@ impl<'a> Typer<'a> {
                         assigned.push((*local, at, inside));
                     }
                 }
+                ExprKind::PackEntry { pack, .. } => {
+                    let declared = &self.locals[*pack];
+                    reports.push(
+                        error(
+                            Category::Name,
+                            codes::BINDING_IMMUTABLE,
+                            at,
+                            format!("an entry of the pack `{}` cannot be assigned, as {takes} is", declared.name),
+                            "FN-15",
+                        )
+                        .with_related(declared.at, "declared here"),
+                    );
+                }
                 ExprKind::Constant { .. } => reports.push(error(
                     Category::Name,
                     codes::BINDING_IMMUTABLE,

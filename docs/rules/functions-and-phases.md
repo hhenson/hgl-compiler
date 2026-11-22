@@ -278,10 +278,11 @@ parser: partial
 analyser: partial
 
 - Resolves spreads of parameter packs when the enclosing callable is instantiated. Written arguments bind first, then named entries, then positional entries fill the remaining parameter slots in order.
-- Checks function, operator and static callback arguments with the ordinary call diagnostics (EXPR-2).
+- Checks function, operator and static callback arguments with the ordinary call diagnostics (EXPR-2) and uses the names written by a callback template (FN-17).
+- Follows concrete calls in parameter and field defaults and anonymous bodies. Struct fields bind by name, and positional entries reject (TYPE-5). An enum constructor with a spread reports the argument during analysis (TYPE-7).
 
 transpiler: partial
 
-- Lowers each forwarded entry from its own pack input slot. The SDK cases exercise values, connections, operator selection and reflected callbacks.
+- Lowers each forwarded entry from its own pack input slot, using the analyser's concrete entry shape. The SDK cases exercise values, connections, operator selection, static callbacks, constructors and anonymous captures.
 
 Left: Pack indexing, pack comprehensions and pack bindings are tracked in #368.
