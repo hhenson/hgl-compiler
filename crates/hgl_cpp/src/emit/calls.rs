@@ -356,6 +356,36 @@ impl Emitter<'_> {
                 continue;
             }
             let value = self.expression(scope, &argument.value);
+            // TYPE-10: the ordinary unsized parameter takes the fixed
+            // list's entries. Read the array once, in argument order.
+            if let (
+                Type::List { size: None, .. },
+                Type::List {
+                    element,
+                    size: Some(_),
+                },
+            ) = (&parameter.ty, &argument.value.ty)
+            {
+                // A generic native declaration can still name its type
+                // parameter here. The fitted argument has its concrete element.
+                let list_type = Type::List {
+                    element: element.clone(),
+                    size: None,
+                };
+                let Some(ty) = self.named_type(&list_type) else {
+                    return self.missing(at, &format!("the type `{list_type}`"));
+                };
+                let list = format!(
+                    "[](const auto& entries) {{ return {ty}(entries.begin(), entries.end()); }}({value})"
+                );
+                written.push((
+                    index,
+                    list,
+                    self.may_fail_here(&argument.value),
+                    Held::Value(ty),
+                ));
+                continue;
+            }
             let Some(ty) = self.named_type(&argument.value.ty) else {
                 return self.missing(at, &format!("the type `{}`", argument.value.ty));
             };

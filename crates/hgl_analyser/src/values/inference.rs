@@ -11,7 +11,7 @@ use super::candidates::typed_by_place;
 use super::constants::{constant_text, generic_default};
 use super::control::value_of_branch;
 use super::dependent_packs::{PackTypes, dependent_slot};
-use super::evals::{holds_trace, publications, trace_input_type, trace_pack_type};
+use super::evals::{publications, trace_input_type, trace_pack_type};
 use super::expressions::{holds_block, takes_its_type, written_null};
 use super::fit::{not_null, open, whole};
 use super::forms::Taken;
@@ -1038,34 +1038,11 @@ impl<'a> Typer<'a> {
                             value,
                         }
                     }
-                    // A value that holds a trace is the place's to
-                    // report where the call is finished (TST-3), and is
-                    // not held to its type.
-                    Some(value) if !traced && holds_trace(&value.ty) => hir::Argument {
+                    Some(value) => hir::Argument {
                         parameter: Some(index),
                         pack: None,
-                        value,
+                        value: self.fit_prepared_argument(value, &slot, traced, takes),
                     },
-                    Some(value) if self.lifted_window(&slot.ty, slot.listed, &value, takes) => {
-                        hir::Argument {
-                            parameter: Some(index),
-                            pack: None,
-                            value,
-                        }
-                    }
-                    Some(value) => {
-                        let place = format!("the {} `{}`", takes.noun(), slot.name);
-                        let value = if takes == Takes::Parameters {
-                            self.fit_input(value, &slot.ty, &place)
-                        } else {
-                            self.fit(value, &slot.ty, &place)
-                        };
-                        hir::Argument {
-                            parameter: Some(index),
-                            pack: None,
-                            value,
-                        }
-                    }
                     None if traced && written_type.is_none() && slot.type_pack.is_some() => {
                         self.infer_trace_pack_argument(index, node, &slot)
                     }
