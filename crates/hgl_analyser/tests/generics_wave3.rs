@@ -1747,6 +1747,57 @@ fn wrong_element() -> f64 => nonliteral(1)"#,
     assert_eq!(lists, 5);
 }
 
+/// GEN-7, EXPR-9 and TYPE-7: an implied enum member takes the element
+/// type from a sibling that settles in the instance.
+#[test]
+fn graph_instances_resolve_implied_members_of_inferred_lists() {
+    let checked = module(
+        r#"operator predicate<T>(input: T) -> bool
+impl const fn predicate<T>(input: T) -> bool => true
+impl fn predicate(input: i64) -> bool { when { return input > 0 } }
+enum Side { buy, sell }
+
+fn values<T>(const input: T) -> i64 {
+    let chosen = if predicate(input) { Side.buy }
+    let observed = [chosen, .sell]
+    let reverse = [(.sell), chosen]
+    return 0
+}
+fn bad<T>(const input: T) -> i64 {
+    let chosen = if predicate(input) { Side.buy }
+    let observed = [chosen, .missing]
+    return 0
+}
+fn temporal() -> i64 => values(3)
+fn ordinary() -> i64 => values("s")
+fn invalid() -> i64 => bad(3)"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:20:24 name/member.unknown TYPE-7"],
+        "{}",
+        checked.report
+    );
+    for (name, element, category) in [
+        ("temporal", "Side", ValueCategory::Connection),
+        ("ordinary", "Side?", ValueCategory::Value),
+    ] {
+        let instance = instance_called_by(&checked, body(&checked, name));
+        let mut members = Vec::new();
+        walk_statements(&instance.statements, &mut |value| {
+            if let ExprKind::Sequence(entries) = &value.kind {
+                let expected = format!("list<{element}>");
+                assert_eq!(value.ty.to_string(), expected, "{name}");
+                assert_eq!(value.category, category, "{name}");
+                members.push(entries.iter().position(|entry| {
+                    matches!(entry.kind, ExprKind::EnumMember { member: 1, .. })
+                }));
+            }
+        });
+        assert_eq!(members, [Some(1), Some(0)]);
+    }
+}
+
 /// EXPR-3, EXPR-5 and GEN-7: a list literal assigned to an inferred
 /// variable takes the type established by its initializer.
 #[test]

@@ -558,7 +558,7 @@ impl<'a> Typer<'a> {
                 }
                 _ => false,
             };
-            pending = dependency || (replaying && contextual_type_is_pending(value));
+            pending = dependency || (replaying && contextual_type_is_pending(self, value));
         });
         pending
     }

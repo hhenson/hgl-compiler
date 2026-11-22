@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
+use hgl_parser::{SyntaxKind, SyntaxNode};
 
 use super::calls::pending_function_inference;
 use super::control::{bound_by_loop, iterates, iteration_types, no_else_type, while_connection};
@@ -857,17 +858,17 @@ pub(super) fn fill_type(current: &mut Type, inferred: Type) -> bool {
 /// True when a contextual operand's children have more type information
 /// than its stored type. Settlement visits the outer call before these
 /// children, so its replay must wait for the next type update.
-pub(super) fn contextual_type_is_pending(value: &Expr) -> bool {
+pub(super) fn contextual_type_is_pending(typer: &Typer<'_>, value: &Expr) -> bool {
     if whole(&value.ty) {
         return false;
     }
-    let Some(inferred) = contextual_type(value) else {
+    let Some(inferred) = contextual_type(value, Some(typer)) else {
         return false;
     };
     fill_type(&mut value.ty.clone(), inferred)
 }
 
-fn contextual_type(value: &Expr) -> Option<Type> {
+fn contextual_type(value: &Expr, typer: Option<&Typer<'_>>) -> Option<Type> {
     let inferred = match &value.kind {
         ExprKind::Block {
             value: Some(tail), ..
@@ -882,7 +883,10 @@ fn contextual_type(value: &Expr) -> Option<Type> {
             };
             let typed: Vec<&Type> = entries
                 .iter()
-                .filter(|entry| !matches!(entry.kind, ExprKind::Literal(Value::Null)))
+                .filter(|entry| {
+                    !matches!(entry.kind, ExprKind::Literal(Value::Null))
+                        && !typer.is_some_and(|typer| contextual_member(typer, entry).is_some())
+                })
                 .map(|entry| &entry.ty)
                 .collect();
             // Another unsettled entry could change even the first known
@@ -899,6 +903,18 @@ fn contextual_type(value: &Expr) -> Option<Type> {
         _ => return None,
     };
     Some(inferred)
+}
+
+/// TYPE-7: an unread `.member` takes its type from the list, so it
+/// cannot supply that type. Other unread expressions may still need
+/// to settle before the list has one type.
+fn contextual_member(typer: &Typer<'_>, entry: &Expr) -> Option<SyntaxNode> {
+    if !matches!(entry.kind, ExprKind::Unread) || whole(&entry.ty) {
+        return None;
+    }
+    typer
+        .syntax_of(entry)
+        .filter(|node| node.kind() == SyntaxKind::ImpliedMember)
 }
 
 /// CTRL-13: decide a no-else expression's type once its categories
@@ -938,9 +954,20 @@ fn settled_type(
             category(program, locals, condition),
             category(program, locals, then),
         ),
-        ExprKind::Block { .. } | ExprKind::Tuple(_) | ExprKind::Sequence(_) => {
-            contextual_type(value)?
+        ExprKind::Sequence(_) => {
+            let inferred = contextual_type(value, typer.as_deref())?;
+            if let (Some(typer), Type::List { element, .. }, ExprKind::Sequence(entries)) =
+                (typer, &inferred, &mut value.kind)
+            {
+                for entry in entries {
+                    if let Some(node) = contextual_member(typer, entry) {
+                        (entry.kind, entry.ty) = typer.implied_member(&node, Some(element));
+                    }
+                }
+            }
+            inferred
         }
+        ExprKind::Block { .. } | ExprKind::Tuple(_) => contextual_type(value, None)?,
         ExprKind::Local(local) => locals.get(*local)?.ty.clone(),
         // ERR-12: a read keeps the operand's payload type as it settles,
         // with its original null failure still recorded on the read.
