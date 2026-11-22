@@ -128,3 +128,12 @@ test dependent_arguments_are_ordered {
     # expect-error(type, "argument.order")
     assert invoke(labelled, key: "category", 3.0) == 42
 }
+
+# FN-17 and EXPR-2: an operator callback uses the public input name.
+operator choose<T>(item: T) -> i64
+impl const fn choose(value: f64) -> i64 => 1
+
+test candidate_input_name_is_not_public {
+    # expect-error(name, "argument.unknown")
+    assert invoke(choose, value: 2.0) == 42
+}

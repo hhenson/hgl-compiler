@@ -375,6 +375,29 @@ impl<'a> Typer<'a> {
             };
             return Some((callee, actual));
         }
+        if reflected
+            && !public
+                .parameters
+                .iter()
+                .any(|parameter| parameter.pack == Some(Pack::Named))
+        {
+            let options = super::operators::options_of(public, &candidates);
+            for argument in &given {
+                if let Key::Name(unknown) = &argument.key
+                    && argument.key.public_parameter(public).is_none()
+                    && !options.accepts_name(&argument.key)
+                {
+                    self.diagnostics.emit(error(
+                        Category::Name,
+                        codes::ARGUMENT_UNKNOWN,
+                        argument.value.at,
+                        format!("`{}` has no parameter named `{unknown}`", name.text()),
+                        "EXPR-2",
+                    ));
+                    return None;
+                }
+            }
+        }
         self.diagnostics.emit(error(
             Category::Type,
             codes::TYPE_MISMATCH,
