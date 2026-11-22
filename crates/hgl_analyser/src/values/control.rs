@@ -726,7 +726,7 @@ impl<'a> Typer<'a> {
 
     /// How many members the enum `ty` has; `None` for a type that is no
     /// enum.
-    fn enum_members(&self, ty: &Type) -> Option<usize> {
+    pub(super) fn enum_members(&self, ty: &Type) -> Option<usize> {
         let Type::Named {
             module,
             declaration,
@@ -906,6 +906,9 @@ impl<'a> Typer<'a> {
             .filter(|(label, _)| matches!(label, ConstantValue::Member(_)))
             .count();
         let exhaustive = default.is_some() || members.is_some_and(|count| covered == count);
+        let cases_return = !ends.is_empty() && ends.iter().all(|(_, returned)| *returned);
+        self.returning_switch =
+            (self.graph && open(&selector.ty) && default.is_none() && cases_return).then_some(at);
         let count = self.locals.len();
         if exhaustive && !ends.is_empty() {
             self.assigned = (0..count)
@@ -917,7 +920,7 @@ impl<'a> Typer<'a> {
                     })
                 })
                 .collect();
-            self.returned = ends.iter().all(|(_, returned)| *returned);
+            self.returned = cases_return;
         } else {
             self.assigned = restored(&before, count, false);
             self.returned = before_returned;

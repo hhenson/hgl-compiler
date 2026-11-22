@@ -93,6 +93,12 @@ fn connection_if<T>(const value: T) -> i64 {
     return chosen
 }
 
+# CTRL-14: a return in the newly temporal branch has a continuation.
+fn return_continuation<T>(const value: T) -> i64 {
+    if live_helper(value) > 0 { return 1 }
+    return 2
+}
+
 # ERR-12: if selection settles the condition as an ordinary value,
 # the graph's result reads the nullable value left by the conditional.
 fn required_choice<T>(const value: T) -> i64 {
@@ -288,6 +294,8 @@ test an_instance_settles_its_graph_conditions {
     assert eval wiring_if(value: "s") == [-1]
     assert eval connection_if(value: 3) == [1]
     assert eval connection_if(value: 0) == []
+    assert eval return_continuation(value: 3) == [1]
+    assert eval return_continuation(value: 0) == [2]
     assert eval required_choice(value: 3) == [2]
     assert raises("value.null") { eval required_choice(value: "s") }
     assert eval inferred_pair(value: 3) == [12]

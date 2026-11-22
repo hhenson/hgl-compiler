@@ -154,6 +154,7 @@ analyser: done
 - The same holds in the cases of a `switch` selected at runtime
 - After specialization, the analyser checks the assignment against the first value's category and against any enclosing branch now selected at runtime (GEN-7, `graph_instances_recheck_assignments`).
 - An instance applies the same temporal-branch restrictions to assignments through a call's `var` parameter (FN-15).
+- A valued return from a branch that becomes temporal in an instance requires a complete continuation (FN-7). A final switch whose cases all return can complete it when its enum coverage becomes known (CTRL-6).
 
 transpiler: partial
 

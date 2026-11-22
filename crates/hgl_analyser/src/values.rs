@@ -86,7 +86,7 @@ mod forms;
 mod function_arguments;
 // Fits destinations whose graph values become known only in an instance (GEN-7).
 mod graph_instance;
-pub(crate) use graph_instance::GraphDestinations;
+pub(crate) use graph_instance::{GraphDestinations, GraphReturnCheck};
 // What a call's generic parameters stand for (GEN-2, GEN-8, GEN-12).
 mod inference;
 // What a value is in a graph: a connection or an ordinary value (FN-3, FN-6).
@@ -168,7 +168,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         // The calls each body selects for each instance, by the
         // declaration whose body it is.
         let mut selected = Vec::with_capacity(module.declarations.len());
+        let mut graph_return_checks = Vec::with_capacity(module.declarations.len());
         for (position, declaration) in module.declarations.iter().enumerate() {
+            let mut check_return = None;
             let body = match (&declaration.kind, module.details.get(position)) {
                 // FN-1: a `const fn`. GEN-4: "an `impl const fn` a value
                 // candidate", whose body is a value function's.
@@ -201,7 +203,11 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     | DeclarationKind::Implementation(Role::Temporal, _),
                     Some(Detail::Callable(signature)),
                 ) if module.phases.get(position) == Some(&Some(Phase::Graph)) => {
-                    Typer::new(program, module, declaration, signature, found, diagnostics).graph()
+                    let (body, pending) =
+                        Typer::new(program, module, declaration, signature, found, diagnostics)
+                            .graph();
+                    check_return = pending;
+                    body
                 }
                 // A declaration with no body to read writes types too:
                 // a struct's fields, an operator's parameters, a
@@ -225,6 +231,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             };
             bodies.push(body);
             selected.push(selecting.take());
+            graph_return_checks.push(check_return);
         }
         // TST-3: "A test is a composition-phase block with assertions."
         // It is no declaration: it has a name, and neither a parameter
@@ -326,6 +333,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         program.modules[index].store_body = store_body;
         program.modules[index].defaults = defaults;
         program.modules[index].selecting = selected;
+        program.modules[index].graph_return_checks = graph_return_checks;
     }
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
@@ -465,6 +473,10 @@ struct Typer<'a> {
     /// runtime: the graph's result is then the continuation's where the
     /// branch is not selected, so every path returns (CTRL-14).
     must_return: bool,
+    /// The last switch read, if its selector's type is unknown and
+    /// every case returns. A trailing one may complete a graph once its
+    /// enum coverage is known (CTRL-6, CTRL-14).
+    returning_switch: Option<Location>,
     /// Inside a composition loop that makes one child for each member,
     /// how many locals there were where the outermost such loop began:
     /// a `var` before that is declared outside it (CTRL-15).
@@ -666,6 +678,7 @@ impl<'a> Typer<'a> {
             graph: false,
             temporal: None,
             must_return: false,
+            returning_switch: None,
             dynamic: None,
             hook: None,
             out: None,

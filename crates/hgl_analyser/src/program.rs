@@ -250,6 +250,10 @@ pub struct Module {
     /// each callee and retains its value phase where known.
     /// [`Program::instance`] selects the candidate.
     pub(crate) selecting: Vec<Vec<crate::values::Selecting>>,
+    /// For each declaration, whether source flow can reach the end of a
+    /// graph and no known temporal return already required a result on
+    /// that path (FN-7, CTRL-14).
+    pub(crate) graph_return_checks: Vec<Option<crate::values::GraphReturnCheck>>,
 }
 
 impl Module {

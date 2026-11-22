@@ -14,7 +14,9 @@ use super::inference::type_pack;
 use super::lifting::{assignment_category, record, record_with};
 use super::members::{index_collection, index_operand, indexed_payload};
 use super::results::{error_fields, tagged_side};
-use super::statements::{child_loop_return, child_loop_write, place_assignment_category};
+use super::statements::{
+    child_loop_return, child_loop_write, missing_return, place_assignment_category,
+};
 use super::{BOOL, Selected, Tables, Typer};
 use crate::declared::substitute_within;
 use crate::hir::{
@@ -169,7 +171,11 @@ impl GraphDestinations {
                 _ => {}
             });
         }
-        check_control(&mut typer, &body.statements);
+        check_control(
+            &mut typer,
+            &body.statements,
+            owner.graph_return_checks[declaration],
+        );
     }
 
     fn fit_destination(&self, typer: &mut Typer<'_>, node: NodeMut<'_>) {
@@ -669,6 +675,47 @@ impl GraphDestinations {
     }
 }
 
+/// A graph that may need a continuation check after selection, from
+/// the declaration's FN-7 and CTRL-14 return flow.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum GraphReturnCheck {
+    /// A path reaches the end of the body.
+    Fallthrough,
+    /// Every case of the final switch returns, with coverage still unknown.
+    TrailingSwitch,
+}
+
+impl GraphReturnCheck {
+    /// CTRL-6: all cases of a final switch with no default can still
+    /// supply the continuation when its enum coverage becomes known.
+    fn needs_continuation(self, typer: &Typer<'_>, statements: &[Stmt]) -> bool {
+        let (
+            Self::TrailingSwitch,
+            Some(Stmt::Switch {
+                selector, cases, ..
+            }),
+        ) = (self, statements.last())
+        else {
+            return true;
+        };
+        let Some(members) = typer.enum_members(&selector.ty) else {
+            return true;
+        };
+        let covered: HashSet<_> = cases
+            .iter()
+            .filter_map(|case| match case.value {
+                Some(hir::LabelValue::Member(member))
+                    if case.label.ty == selector.ty && member < members =>
+                {
+                    Some(member)
+                }
+                _ => None,
+            })
+            .collect();
+        covered.len() != members
+    }
+}
+
 /// The nearest runtime branch and child loop enclosing a typed node.
 /// The selectors and loop sequences are outside their own boundaries.
 #[derive(Default)]
@@ -680,7 +727,13 @@ struct Boundaries {
 /// CTRL-14 and CTRL-15: a deferred selector can move writes or returns
 /// into a runtime branch or a child graph. Recheck whole and nested
 /// assignments, including ordinary values written by FN-15 calls.
-fn check_control(typer: &mut Typer<'_>, statements: &[Stmt]) {
+fn check_control(
+    typer: &mut Typer<'_>,
+    statements: &[Stmt],
+    check_return: Option<GraphReturnCheck>,
+) {
+    let check_return =
+        check_return.is_some_and(|check| check.needs_continuation(typer, statements));
     let mut scopes = Boundaries::default();
     hir::walk_statement_nodes(statements, &mut |node| match node {
         Node::Expression(Expr {
@@ -722,6 +775,7 @@ fn check_control(typer: &mut Typer<'_>, statements: &[Stmt]) {
         }
         _ => {}
     });
+    let mut needs_continuation = false;
     hir::walk_statement_nodes(statements, &mut |node| {
         match node {
             Node::Expression(Expr { kind, at, .. }) => {
@@ -738,9 +792,11 @@ fn check_control(typer: &mut Typer<'_>, statements: &[Stmt]) {
                     }
                 }
             }
-            Node::Statement(Stmt::Return { at, .. }) => {
+            Node::Statement(Stmt::Return { value, at }) => {
                 if scopes.children.contains_key(at) {
                     typer.diagnostics.emit(child_loop_return(*at));
+                } else if check_return && value.is_some() && scopes.runtime.contains_key(at) {
+                    needs_continuation = true;
                 }
             }
             Node::Statement(Stmt::Assign {
@@ -771,6 +827,14 @@ fn check_control(typer: &mut Typer<'_>, statements: &[Stmt]) {
             _ => {}
         }
     });
+    if needs_continuation
+        && let Some(result) = &typer.signature.result
+        && !open(result)
+    {
+        let at = typer.declaration.at;
+        let name = format!("`{}`", typer.declaration.name);
+        typer.diagnostics.emit(missing_return(at, &name, result));
+    }
 }
 
 impl Boundaries {

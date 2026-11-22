@@ -10,6 +10,7 @@ use super::Typer;
 use super::candidates::Given;
 use super::control::Outcome;
 use super::fit::open;
+use super::graph_instance::GraphReturnCheck;
 use super::results::{captured_binding, captured_output};
 use crate::hir::{
     BinaryOperator, Body, ErrorPart, Expr, ExprKind, Hook, Local, Stmt, ValueCategory,
@@ -19,6 +20,17 @@ use crate::read::is_type;
 use crate::syntax::{child, tokens};
 use crate::types::{NamedKind, Type};
 use crate::{codes, error, local_error};
+
+/// FN-7: a function with a required result can reach its end with none.
+pub(super) fn missing_return(at: Location, name: &str, result: &Type) -> Diagnostic {
+    error(
+        Category::Type,
+        codes::RETURN_MISSING,
+        at,
+        format!("{name} declares a result of `{result}`, and can reach its end with no value"),
+        "FN-7",
+    )
+}
 
 impl<'a> Typer<'a> {
     /// The body, or `None` for a function with none written.
@@ -40,7 +52,7 @@ impl<'a> Typer<'a> {
     /// Read so far: locals, calls and symbols, and what is returned. A
     /// conditional and a loop in composition are for a later part
     /// (CTRL-1 to CTRL-8), and are not read.
-    pub(super) fn graph(mut self) -> Option<Body> {
+    pub(super) fn graph(mut self) -> (Option<Body>, Option<GraphReturnCheck>) {
         self.graph = true;
         for (local, parameter) in self.signature.parameters.iter().enumerate() {
             self.locals[local].category =
@@ -50,17 +62,41 @@ impl<'a> Typer<'a> {
                     ValueCategory::Connection
                 };
         }
-        self.body()
+        let body = self.function_body();
+        // CTRL-14: retain the source flow result for a graph where the
+        // continuation would be needed if a return becomes temporal.
+        let check_return = body
+            .as_ref()
+            .filter(|_| {
+                self.signature
+                    .result
+                    .as_ref()
+                    .is_some_and(|result| !open(result))
+                    && !self.returned
+                    && !self.unsure
+                    && !self.must_return
+            })
+            .map(|body| match body.statements.last() {
+                Some(Stmt::Switch { at, .. }) if self.returning_switch == Some(*at) => {
+                    GraphReturnCheck::TrailingSwitch
+                }
+                _ => GraphReturnCheck::Fallthrough,
+            });
+        (body, check_return)
     }
 
     pub(super) fn body(mut self) -> Option<Body> {
+        self.function_body()
+    }
+
+    fn function_body(&mut self) -> Option<Body> {
         let syntax = &self.declaration.syntax;
         let result = self.signature.result.clone();
         let at = self.declaration.at;
         let name = format!("`{}`", self.declaration.name);
         let statements = self.check_body(syntax, result.as_ref(), at, &name)?;
         Some(Body {
-            locals: self.locals,
+            locals: std::mem::take(&mut self.locals),
             statements,
         })
     }
@@ -97,15 +133,7 @@ impl<'a> Typer<'a> {
             && !self.unsure
             && (self.anonymous.is_some() || !self.graph || self.must_return)
         {
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::RETURN_MISSING,
-                at,
-                format!(
-                    "{name} declares a result of `{result}`, and can reach its end with no value"
-                ),
-                "FN-7",
-            ));
+            self.diagnostics.emit(missing_return(at, name, result));
         }
         Some(statements)
     }
