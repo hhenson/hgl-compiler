@@ -20,7 +20,7 @@
 use hgl_diagnostics::Category;
 
 use super::Typer;
-use super::fit::{open, whole};
+use super::fit::{checked_child_result, open, whole};
 use crate::hir::{ConfigurationRead, Expr, ExprKind, Hook, NULL_READ_CODE, Raise, ValueCategory};
 use crate::program::Role;
 use crate::types::Type;
@@ -191,7 +191,8 @@ impl<'a> Typer<'a> {
     /// T is not nullable, it expects the `T?`: `checked(value) == null`
     /// tests for a failure. Where T is nullable that place expects T, and
     /// takes the T form: the comparison is of a success's value, and a
-    /// failure is raised"); any other value as it is.
+    /// failure is raised"). A runtime-checked child offers the same
+    /// forms (ERR-14).
     pub(super) fn compared_with_null(
         &mut self,
         value: Expr,
@@ -200,6 +201,13 @@ impl<'a> Typer<'a> {
         if context.is_none() {
             self.record_result_read(&value, None);
         }
+        // A nullable child already represents the payload read. Keeping
+        // it here also lets a null guard refine the original bound child.
+        let value = if matches!(value.ty, Type::Nullable(_)) {
+            value
+        } else {
+            checked_child_result(&value).unwrap_or(value)
+        };
         match &value.ty {
             Type::Result {
                 value: success,

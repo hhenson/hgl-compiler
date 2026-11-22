@@ -3393,7 +3393,7 @@ fn a_symbol_is_the_call_of_the_operator_it_stands_for() {
     assert_eq!(
         call_of(&checked, value(2)),
         (
-            "eq_(lhs: i64, rhs: i64, abs: f64 = ..., rel: f64 = ...) -> bool".to_string(),
+            "eq_{abs: f64 = ..., rel: f64 = ...}(lhs: i64, rhs: i64) -> bool".to_string(),
             Form::Binary(BinaryOperator::Equal)
         )
     );
@@ -3790,7 +3790,7 @@ fn a_symbols_configuration_is_its_calls_named_arguments() {
         panic!("a call: {:?}", near.kind);
     };
     let places: Vec<Option<usize>> = arguments.iter().map(|given| given.parameter).collect();
-    assert_eq!(places, [Some(0), Some(2), Some(1)]);
+    assert_eq!(places, [Some(2), Some(0), Some(3)]);
     // What a generic value parameter is given is a constant of the
     // call, and no argument of it.
     let Stmt::Declare {
