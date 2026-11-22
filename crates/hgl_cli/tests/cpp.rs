@@ -1269,6 +1269,122 @@ fn named_test_helpers_run_on_the_sdk() {
     );
 }
 
+/// SDOC-9: examples run through the named-test C++ entry, and failures
+/// identify the assertion in the original comment.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn runnable_documentation_examples_use_the_named_test_runner() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("runnable-documentation-examples");
+    let source = include_str!("fixtures/doc_examples.hgl");
+    let file = write(&root, "examples.hgl", source);
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let listing = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{listing}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        listing.contains("FAILED   executable  demo.documentation_examples::Box#example-1"),
+        "{listing}"
+    );
+    let line = source
+        .lines()
+        .position(|line| line.contains("assert box.value"))
+        .unwrap()
+        + 1;
+    assert!(listing.contains(&format!("{file}:{line}:")), "{listing}");
+    assert!(
+        listing.ends_with("executable cases: 8 passed, 1 failed, 0 not run\n"),
+        "{listing}"
+    );
+}
+
+/// TST-14 and SDOC-9: giving Core's source makes its tests executable.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn explicitly_supplied_core_examples_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("explicit-core-documentation-examples");
+    let file = write(
+        &root,
+        "core.hgl",
+        concat!(
+            "/** Core.\n\nExamples:\n    ```hgl\n    assert true\n    ```\n*/\n",
+            "module core\n",
+            "test supplied { assert true }\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("passed   executable  core::[module]#example-1"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("passed   executable  core::supplied"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// SDOC-6: an invalid documentation example cannot affect a production run,
+/// including the second parse that applies its argument override.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn running_an_application_ignores_documentation_examples() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("application-with-documentation-example");
+    let example = "/** Example.\n\nExamples:\n    ```hgl\n    assert 1\n    ```\n*/\n";
+    let app = format!(
+        "application demo.app\n\n{example}fn echo(const value: i64) -> i64 {{\n    yield 1s: value\n}}\n\neval echo(value: 2)\n"
+    );
+    let file = write(&root, "app.hgl", &app);
+    let run = || {
+        hgl_in(
+            &["run", &file, "--target", "cpp", "--arg", "value=3"],
+            &[],
+            &[],
+        )
+    };
+    let with_example = run();
+    assert!(
+        with_example.status.success(),
+        "{}",
+        text(&with_example.stderr)
+    );
+    assert!(text(&with_example.stdout).contains("  3\n"));
+    write(
+        &root,
+        "app.hgl",
+        &app.replace(example, &"\n".repeat(example.lines().count())),
+    );
+    let without_example = run();
+    assert!(
+        without_example.status.success(),
+        "{}",
+        text(&without_example.stderr)
+    );
+    assert_eq!(with_example.stdout, without_example.stdout);
+}
+
 /// TST-1 and GEN-16: private declarations and operator candidates are
 /// compiled for their own test, including the evidence for date addition.
 #[test]
@@ -1554,6 +1670,33 @@ fn dependent_call_packs_run_on_the_sdk() {
     );
 }
 
+/// EXPR-16 and EXPR-17: range bounds, value construction and graph ports.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn ranges_and_list_comprehensions_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("ranges-and-comprehensions");
+    let file = write(
+        &root,
+        "demo.ranges.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.ranges.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 9 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-19: value, operator and callback calls forward a pack; graph
 /// calls forward the individual connections. Constructors, defaults and
 /// lexical captures retain the concrete shape (FN-8, FN-14, TYPE-5).
@@ -1613,6 +1756,34 @@ fn function_parameters_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// FN-17 and GEN-6: the selected candidate supplies the callback type and
+/// kind. GEN-18 still reads the law of the selected static argument.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn candidate_function_arguments_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("candidate-function-arguments");
+    let file = write(
+        &root,
+        "demo.candidate_function_arguments.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.candidate_function_arguments.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 13 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

@@ -9,7 +9,7 @@ use hgl_analyser::Program;
 use hgl_diagnostics::Location;
 use serde::Serialize;
 
-use crate::markdown::{Markup, Renderers, escaped, render};
+use crate::markdown::{Markup, Renderers, escaped, render, render_section};
 use crate::model::{Declaration, Documentation, Interface, Model, Module, Section, Source};
 use crate::{LinkContext, links};
 
@@ -356,7 +356,12 @@ impl<'a> Site<'a> {
                         )
                         .unwrap();
                     }
-                    render(output, &section.text, link);
+                    render_section(
+                        output,
+                        &section.text,
+                        section.heading.as_deref() == Some("Examples:"),
+                        link,
+                    );
                 }
             }
         }

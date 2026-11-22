@@ -38,7 +38,7 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) -> Vec<Mad
             run.call.walk(&mut visit);
         }
         for constant in module.constants.iter().flatten() {
-            constant.walk(&mut visit);
+            constant.value.walk(&mut visit);
         }
         for (defaults, declaration) in module.defaults.iter().zip(&module.declarations) {
             let span = declaration.syntax.span();

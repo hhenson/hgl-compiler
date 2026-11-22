@@ -22,7 +22,7 @@ use hgl_lower::pieces::{Found, Reach, Used, blocked};
 
 use crate::emit::{
     APPLICATION, Piece, RESTORE, Written, module_namespace, program_names, restore_after,
-    test_namespace,
+    test_identifier, test_namespace,
 };
 use crate::{
     Application, Executable, File, Output, Test, Unit, application_path, entry_path, header_name,
@@ -164,13 +164,12 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             })
             .map(|(piece, _)| piece)
             .collect();
-        // TST-2: a test gets its own executable entry. Core's tests
-        // are excluded from the program's test list.
+        // TST-2: each in-scope test gets its own executable entry.
         let tests: Vec<(usize, &Piece)> = module
             .tests
             .iter()
             .enumerate()
-            .filter(|(test, _)| Some(index) != core && blocks[index].tests[*test].is_none())
+            .filter(|(test, _)| blocks[index].tests[*test].is_none())
             .collect();
         // An application's run statement, where it is clear (UNIT-14).
         let application = module
@@ -302,9 +301,6 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
     let mut executables = Vec::new();
     let mut tests = Vec::new();
     for (index, module) in written.iter().enumerate() {
-        if Some(index) == core {
-            continue;
-        }
         let declared = &program.modules[index];
         let clear: Vec<(usize, &Piece)> = module
             .tests
@@ -666,16 +662,16 @@ fn entry(program: &Program, index: usize, clear: &[(usize, &Piece)]) -> String {
     let mut text = format!("{WRITTEN}\n#include <{}>\n", runtime::HOST_HEADER);
     text.push_str(&format!("\nnamespace {declared}\n{{\n"));
     for (test, _) in clear {
-        let name = crate::emit::identifier(&module.tests[*test].name);
+        let name = test_identifier(&module.tests[*test], *test);
         text.push_str(&format!("void {name}();\n"));
     }
     text.push_str(&format!("}}  // namespace {declared}\n"));
     text.push_str("\nnamespace\n{\n// Each test, by its identity, `module.path::name` (TST-15).\n");
     let registration = crate::emit::testing("Registration");
-    for (position, (test, _)) in clear.iter().enumerate() {
-        let test = &module.tests[*test];
+    for (position, (index, _)) in clear.iter().enumerate() {
+        let test = &module.tests[*index];
         let identity = crate::emit::string(&format!("{}::{}", module.path, test.name));
-        let name = crate::emit::identifier(&test.name);
+        let name = test_identifier(test, *index);
         text.push_str(&format!(
             "const {registration} test_{position}{{{identity}, &{tested}::{name}}};\n"
         ));

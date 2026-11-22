@@ -135,7 +135,18 @@
       "properties": {
         "text": { "type": "string" },
         "summary": { "type": "string" },
-        "sections": { "type": "array", "items": { "$ref": "#/$defs/section" } }
+        "sections": { "type": "array", "items": { "$ref": "#/$defs/section" } },
+        "examples": { "type": "array", "items": { "$ref": "#/$defs/example" } }
+      }
+    },
+    "example": {
+      "type": "object",
+      "required": ["code", "position", "runnable"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string" },
+        "position": { "type": ["integer", "null"], "minimum": 1 },
+        "runnable": { "type": "boolean" }
       }
     },
     "section": {

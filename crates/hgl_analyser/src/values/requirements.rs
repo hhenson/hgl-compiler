@@ -2055,7 +2055,7 @@ pub(super) fn instances_hold(
             made_by(&run.call, &mut given);
         }
         for constant in module.constants.iter().flatten() {
-            made_by(constant, &mut given);
+            made_by(&constant.value, &mut given);
         }
     }
     // The declarations whose calls reach a `requires` with what they

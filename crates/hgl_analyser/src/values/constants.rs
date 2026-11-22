@@ -29,7 +29,7 @@ impl<'a> Typer<'a> {
     /// expression is a const expression (EXPR-5) checked against T ...
     /// It reads no parameter, local, temporal value, or capability."
     /// The typer is made with no parameter, so none is in scope.
-    pub(super) fn constant(mut self, expected: &Type) -> Option<Expr> {
+    pub(super) fn constant(mut self, expected: &Type) -> Option<DefaultExpr> {
         let syntax = self.declaration.syntax.clone();
         // The expression is what follows the type: the one child that
         // is no type.
@@ -44,7 +44,8 @@ impl<'a> Typer<'a> {
         };
         let value = self.expression(&written, Some(expected));
         let place = format!("the constant `{}`", self.declaration.name);
-        Some(self.fit(value, expected, &place))
+        let value = self.fit(value, expected, &place);
+        Some(self.take_default(value))
     }
 
     /// The default of each parameter of the declaration (UNIT-8), read
@@ -387,7 +388,7 @@ impl<'a> Typer<'a> {
     /// been reported.
     pub(super) fn not_constant(read: &Result<ConstantValue, Fault>) -> Option<&'static str> {
         match read {
-            Err(Fault::NotConstant) => Some("it is known only when the program runs"),
+            Err(Fault::NotConstant) => Some("the compiler does not know its value here"),
             Ok(value) if !crate::constant::worked_out(value) => {
                 Some("this compiler does not work out its value")
             }

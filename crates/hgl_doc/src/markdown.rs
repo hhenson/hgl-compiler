@@ -38,6 +38,16 @@ impl Renderers {
 /// Appends a CommonMark fragment. The callback only returns destinations
 /// of declarations present in the generated site.
 pub(crate) fn render(output: &mut Markup, text: &str, link: impl Fn(&str) -> Option<String>) {
+    render_section(output, text, false, link);
+}
+
+/// HGL fences in a recognized Examples section can run as tests.
+pub(crate) fn render_section(
+    output: &mut Markup,
+    text: &str,
+    in_examples: bool,
+    link: impl Fn(&str) -> Option<String>,
+) {
     let mut source = Parser::new_ext(text, Options::ENABLE_TABLES).into_offset_iter();
     let mut events = Vec::new();
     while let Some((event, range)) = source.next() {
@@ -53,23 +63,34 @@ pub(crate) fn render(output: &mut Markup, text: &str, link: impl Fn(&str) -> Opt
                         _ => {}
                     }
                 }
-                let (language, marker, code) = match &*info {
+                let block = match &*info {
                     "math" => {
                         output.renderers.math = true;
-                        ("math", " data-renderer=\"math\"", escaped(&code))
+                        format!(
+                            "<pre><code data-renderer=\"math\" class=\"language-math\">{}</code></pre>\n",
+                            escaped(&code)
+                        )
                     }
                     "mermaid" => {
                         output.renderers.mermaid = true;
-                        ("mermaid", " data-renderer=\"mermaid\"", escaped(&code))
+                        format!(
+                            "<pre><code data-renderer=\"mermaid\" class=\"language-mermaid\">{}</code></pre>\n",
+                            escaped(&code)
+                        )
                     }
-                    _ => ("hgl", "", highlight(&code)),
+                    _ => {
+                        let (status, label) = if in_examples && info.as_ref() == "hgl" {
+                            ("runnable", "Runnable example")
+                        } else {
+                            ("shown", "Shown example")
+                        };
+                        format!(
+                            "<figure data-example=\"{status}\"><figcaption>{label}</figcaption>\n<pre><code class=\"language-hgl\">{}</code></pre></figure>\n",
+                            highlight(&code)
+                        )
+                    }
                 };
-                Event::Html(
-                    format!(
-                        "<pre><code{marker} class=\"language-{language}\">{code}</code></pre>\n"
-                    )
-                    .into(),
-                )
+                Event::Html(block.into())
             }
             Event::Start(Tag::HtmlBlock) => Event::Html("<pre class=\"authored-html\">".into()),
             Event::End(TagEnd::HtmlBlock) => Event::Html("</pre>\n".into()),

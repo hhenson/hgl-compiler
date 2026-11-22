@@ -970,14 +970,7 @@ mod tests {
             Limits::default(),
             &mut diagnostics,
         );
-        let program = analyse(
-            &[ParsedFile {
-                file,
-                root: tree.syntax(),
-                omit: Vec::new(),
-            }],
-            &mut diagnostics,
-        );
+        let program = analyse(&[ParsedFile::new(file, tree.syntax())], &mut diagnostics);
         assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");
         program
     }

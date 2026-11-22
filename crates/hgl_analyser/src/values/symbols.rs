@@ -760,6 +760,7 @@ impl<'a> Typer<'a> {
                     Some(value) => Given {
                         key,
                         by_place: typed_by_place(&node),
+                        by_function: false,
                         node,
                         value: value.clone(),
                         explicit: None,
@@ -867,6 +868,7 @@ impl<'a> Typer<'a> {
         Given {
             key: Key::Position(position),
             by_place,
+            by_function: false,
             value,
             explicit: None,
             retried,

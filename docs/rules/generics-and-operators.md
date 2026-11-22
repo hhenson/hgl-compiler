@@ -97,6 +97,7 @@ transpiler: done
 analyser: partial
 
 - In a value function a named call is matched against each value candidate's own signature
+- Each value or temporal candidate supplies the function type of a fixed callback, including its phase (FN-17).
 - An option that selects is a generic value parameter, given by name or by its default, and the candidate's `requires` is checked against its value; one that does not select is a parameter, by name or position
 - An option's name is one kind across an operator's candidates
 - A candidate declares its operator's configuration parameters. Named and symbolic calls bind those parameters in braces, and a candidate may use the operator's default (FN-18, EXPR-10).

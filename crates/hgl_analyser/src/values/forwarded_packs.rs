@@ -372,7 +372,9 @@ pub(super) fn check_instances(
                 .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
         }
         for constant in unit.constants.iter().flatten() {
-            constant.walk(&mut |value| visit_anonymous_bodies(value, &mut record));
+            constant
+                .value
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
         }
         for default in unit.defaults.iter().flatten().flatten() {
             default
