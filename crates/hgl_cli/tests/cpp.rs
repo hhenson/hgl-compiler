@@ -3615,3 +3615,31 @@ fn required_symbols_inherit_configuration_on_the_sdk() {
         "{stdout}"
     );
 }
+
+/// GEN-3, GEN-7, GEN-9, GEN-10 and GEN-18: existential binding and
+/// numeric operator laws are settled before the target builds a program.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn any_and_operator_laws_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("any_laws");
+    let file = write(
+        &root,
+        "demo.any_laws.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.any_laws.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}

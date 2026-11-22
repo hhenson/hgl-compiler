@@ -88,6 +88,7 @@ pub mod hir;
 mod imports;
 mod instance;
 pub use instance::InstanceInputs;
+mod laws;
 mod phases;
 mod program;
 mod read;
@@ -584,16 +585,19 @@ pub mod codes {
         /// A candidate does not declare one of its operator's configuration parameters (GEN-6).
         pub const IMPL_CONFIGURATION: &str = "impl.configuration";
 
+        /// A property clause names an unresolved generic domain (GEN-9).
+        pub const PROPERTY_DOMAIN: &str = "property.domain";
         /// A parameter default whose required constant evaluation fails (UNIT-8, ERR-9).
         pub const DEFAULT_CONSTANT_FAILURE: &str = "default.constant_failure";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 6] = [
+        pub const ALL: [&str; 7] = [
             READING_LIMIT,
             LOOP_CARRIED,
             FUNCTION_VALUE,
             PARAMETER_CONFIGURATION,
             IMPL_CONFIGURATION,
+            PROPERTY_DOMAIN,
             DEFAULT_CONSTANT_FAILURE,
         ];
     }
