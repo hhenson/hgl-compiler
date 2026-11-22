@@ -11,7 +11,9 @@ gather_dsyms() {
     local library name
     for library in "$1"/*.dylib; do
         [[ -f $library && ! -L $library ]] || continue
-        nm -ap "$library" | grep -q ' OSO ' || continue
+        # grep reads the whole listing: `grep -q` would end at the first
+        # match, and nm's broken pipe fail the test under pipefail.
+        nm -ap "$library" | grep ' OSO ' >/dev/null || continue
         name=$(otool -D "$library" | tail -n 1)
         name=${name##*/}
         [[ -e $1/$name ]] || name=${library##*/}
