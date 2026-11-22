@@ -163,3 +163,25 @@ test runtime_generic_entry {
     # expect-error(type, "generic.argument_constant")
     assert relay_generic(x: 2, k: 3) == 5
 }
+
+# GEN-17: the receiving pack includes the original named fixed inputs.
+const reflected_key: str = "value"
+const fn reflected_input(value: i64) -> i64 => value
+const fn differently_named_input(other: i64) -> i64 => other
+const fn two_reflected_inputs(value: i64, other: i64) -> i64 => value + other
+const fn one_reflected_input<...Ps{1}>(f: const fn(...{Ps}) -> i64) -> i64
+    requires reflected_key in arg_keys(Ps) => 51
+const fn reflect_all<...Ps>(f: const fn(i64, ...{Ps}) -> i64) -> i64 =>
+    one_reflected_input(f)
+const fn reflect_through<...Ps>(f: const fn(i64, ...{Ps}) -> i64) -> i64 => reflect_all(f)
+
+test fixed_input_counts_toward_receiving_bound {
+    # expect-error(type, "pack.cardinality")
+    assert reflect_all(two_reflected_inputs) == 51
+}
+
+test receiving_pack_uses_the_callback_name {
+    assert reflect_through(reflected_input) == 51
+    # expect-error(constraint, "requires.unmet")
+    assert reflect_through(differently_named_input) == 51
+}

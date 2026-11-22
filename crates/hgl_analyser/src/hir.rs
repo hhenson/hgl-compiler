@@ -1334,8 +1334,21 @@ pub struct TypePackArgument {
     /// The enclosing type pack that supplies the rest of this reflected
     /// parameter pack when the static function argument is known (GEN-17).
     pub forwarded_from: Option<Location>,
+    /// The fixed inputs left out of this reflection, kept for a receiver
+    /// whose function type divides the same inputs at another place (GEN-17).
+    pub reflected: Option<ReflectedInputs>,
     /// Each type's name or position in the same order (GEN-17).
     pub keys: Vec<PackKey>,
+}
+
+/// The prefix of a function's inputs covered by the fixed part of a template.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReflectedInputs {
+    /// How many fixed inputs the template specifies (GEN-17).
+    pub fixed: usize,
+    /// Each fixed input's original key and type. An unapplied template
+    /// can leave a name unknown until the static function is supplied.
+    pub prefix: Vec<(Option<PackKey>, Type)>,
 }
 
 impl TypePackArgument {
@@ -1347,6 +1360,7 @@ impl TypePackArgument {
             types,
             infer_from_arguments: false,
             forwarded_from: None,
+            reflected: None,
             keys,
         }
     }
@@ -1359,7 +1373,29 @@ impl TypePackArgument {
             types,
             infer_from_arguments: false,
             forwarded_from: None,
+            reflected: None,
             keys,
+        }
+    }
+
+    /// Types that also matter if this reflection is forwarded to another template.
+    pub(crate) fn types_with_prefix(&self) -> impl Iterator<Item = &Type> {
+        self.types.iter().chain(
+            self.reflected
+                .iter()
+                .flat_map(|inputs| inputs.prefix.iter().map(|(_, ty)| ty)),
+        )
+    }
+
+    /// Specialize the pack's member types and any fixed inputs it can forward.
+    pub(crate) fn place_types(&mut self, mut place: impl FnMut(&Type) -> Type) {
+        for ty in &mut self.types {
+            *ty = place(ty);
+        }
+        if let Some(inputs) = &mut self.reflected {
+            for (_, ty) in &mut inputs.prefix {
+                *ty = place(ty);
+            }
         }
     }
 

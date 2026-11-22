@@ -916,9 +916,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
     }
     if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } = callee {
         for pack in type_packs {
-            for ty in &mut pack.types {
-                *ty = substitute_within(ty, map);
-            }
+            pack.place_types(|ty| substitute_within(ty, map));
         }
     }
     if let Callee::Candidate {

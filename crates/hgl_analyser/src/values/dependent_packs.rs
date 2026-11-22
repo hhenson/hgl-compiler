@@ -11,7 +11,7 @@ use super::candidates::Given;
 use super::function_arguments::CallbackInputs;
 use super::inference::{pack_bounds, type_pack};
 use crate::declared::{substitute_with_members, weight};
-use crate::hir::{Callee, Expr, ExprKind, PackKey, TypePackArgument};
+use crate::hir::{Callee, Expr, ExprKind, PackKey, ReflectedInputs, TypePackArgument};
 use crate::syntax::child;
 use crate::types::{
     Argument as GenericArgument, Constant, ConstantValue, Detail, FunctionType, GenericParameter,
@@ -49,8 +49,23 @@ impl<'p> PackTypes<'p> {
             return;
         };
         if let Some((_, given)) = self.bindings.iter().find(|(at, _)| *at == source) {
-            pack.keys.extend(given.keys.iter().cloned());
-            pack.types.extend(given.types.iter().cloned());
+            if let (Some(receiving), Some(original)) = (&mut pack.reflected, &given.reflected) {
+                // The original fixed inputs and the reflected suffix are
+                // one sequence. GEN-17 takes the suffix left by this template.
+                let mut inputs = original.prefix.iter().cloned().chain(
+                    given
+                        .keys
+                        .iter()
+                        .cloned()
+                        .zip(given.types.iter().cloned())
+                        .map(|(key, ty)| (Some(key), ty)),
+                );
+                receiving.prefix = inputs.by_ref().take(receiving.fixed).collect();
+                (pack.keys, pack.types) = inputs.filter_map(|(key, ty)| Some((key?, ty))).unzip();
+            } else {
+                pack.keys.extend(given.keys.iter().cloned());
+                pack.types.extend(given.types.iter().cloned());
+            }
             pack.forwarded_from = given.forwarded_from;
         }
     }
@@ -268,7 +283,9 @@ pub(super) fn operator_packs(
                     },
                 });
             }
-            result.packs.push(TypePackArgument::keyed(index, reflected));
+            result
+                .packs
+                .push(reflected_argument(index, template, value, reflected));
         }
     }
     Ok(result)
@@ -406,7 +423,7 @@ impl Typer<'_> {
                     .position(|generic| generic.at == reflects.at)
             {
                 let bounds = reflected_bounds(reflects, &signature.generics[slot]);
-                let mut reflected = TypePackArgument::keyed(slot, reflected);
+                let mut reflected = reflected_argument(slot, &template, &callback, reflected);
                 if let Type::Function(actual) = &callback.ty {
                     reflected.forwarded_from = actual.named_pack.as_ref().map(|pack| pack.at);
                 }
@@ -713,6 +730,31 @@ pub(super) fn reflect(template: &FunctionType, callback: &Expr) -> Vec<(PackKey,
         })
         .filter_map(|input| Some((PackKey::Name(input.name()?.to_string()), input.ty().clone())))
         .collect()
+}
+
+/// Keep the original inputs excluded from a reflection for later forwarding.
+fn reflected_argument(
+    parameter: usize,
+    template: &FunctionType,
+    callback: &Expr,
+    entries: Vec<(PackKey, Type)>,
+) -> TypePackArgument {
+    let mut pack = TypePackArgument::keyed(parameter, entries);
+    if let Type::Function(actual) = &callback.ty {
+        let fixed = template.parameters.len();
+        let prefix = actual
+            .ordinary_parameters()
+            .take(fixed)
+            .map(|input| {
+                (
+                    input.name().map(|name| PackKey::Name(name.to_string())),
+                    input.ty().clone(),
+                )
+            })
+            .collect();
+        pack.reflected = Some(ReflectedInputs { fixed, prefix });
+    }
+    pack
 }
 
 /// Match the compile-time arguments of a dependent call (FN-8). Input

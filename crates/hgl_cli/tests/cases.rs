@@ -396,7 +396,7 @@ fn forwarded_packs_reject_invalid_arguments() {
         text(&output.stderr)
     );
     assert!(
-        stdout.contains("rejection cases: 24 passed, 0 failed"),
+        stdout.contains("rejection cases: 26 passed, 0 failed"),
         "{stdout}"
     );
 }

@@ -708,16 +708,11 @@ impl<'a> Typer<'a> {
                 .collect();
             let placed_packs: Vec<_> = type_packs
                 .iter()
-                .map(|pack| hir::TypePackArgument {
-                    parameter: pack.parameter,
-                    infer_from_arguments: false,
-                    forwarded_from: pack.forwarded_from,
-                    keys: pack.keys.clone(),
-                    types: pack
-                        .types
-                        .iter()
-                        .map(|ty| placed(substitute_within(ty, &given), &own))
-                        .collect(),
+                .cloned()
+                .map(|mut pack| {
+                    pack.infer_from_arguments = false;
+                    pack.place_types(|ty| placed(substitute_within(ty, &given), &own));
+                    pack
                 })
                 .collect();
             // ERR-9: "Failure during argument evaluation precedes later
@@ -2315,9 +2310,7 @@ pub(super) fn instances_hold(
                 let mut type_packs = call.type_packs.clone();
                 let forwarded = type_packs.iter().any(|pack| pack.forwarded_from.is_some());
                 for pack in &mut type_packs {
-                    for ty in &mut pack.types {
-                        *ty = placed(substitute_within(ty, &map), &declared);
-                    }
+                    pack.place_types(|ty| placed(substitute_within(ty, &map), &declared));
                     enclosing_packs.place_forwarded(pack);
                 }
                 calls.push(Resolved {
@@ -2593,10 +2586,19 @@ fn instance_key(
     let packs = type_packs
         .iter()
         .map(|pack| {
+            let reflected = pack.reflected.as_ref().map(|inputs| {
+                let prefix = inputs
+                    .prefix
+                    .iter()
+                    .map(|(key, ty)| (key, by_value(ty)))
+                    .collect::<Vec<_>>();
+                (inputs.fixed, prefix)
+            });
             (
                 pack.parameter,
                 &pack.keys,
                 pack.types.iter().map(by_value).collect::<Vec<_>>(),
+                reflected,
             )
         })
         .collect::<Vec<_>>();
@@ -2861,7 +2863,7 @@ fn passes_on(generics: &[Argument], declared: &[Location]) -> bool {
 fn packs_pass_on(packs: &[hir::TypePackArgument], declared: &[Location]) -> bool {
     packs
         .iter()
-        .flat_map(|pack| &pack.types)
+        .flat_map(hir::TypePackArgument::types_with_prefix)
         .any(|ty| mentions(ty, declared))
 }
 

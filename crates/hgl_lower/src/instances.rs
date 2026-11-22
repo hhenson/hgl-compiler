@@ -423,7 +423,18 @@ fn function_key(program: &Program, target: &Callee) -> Option<String> {
                     .iter()
                     .map(|ty| canonical(program, trace_payload(ty).as_ref().unwrap_or(ty)))
                     .collect::<Option<Vec<_>>>()?;
-                Some((pack.parameter, &pack.keys, types))
+                let prefix = pack
+                    .reflected
+                    .iter()
+                    .flat_map(|inputs| &inputs.prefix)
+                    .map(|(key, ty)| {
+                        Some((
+                            key,
+                            canonical(program, trace_payload(ty).as_ref().unwrap_or(ty))?,
+                        ))
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some((pack.parameter, &pack.keys, types, prefix))
             })
             .collect::<Option<Vec<_>>>()?;
         let pack_inputs = function

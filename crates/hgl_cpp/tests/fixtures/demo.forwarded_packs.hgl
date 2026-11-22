@@ -194,3 +194,17 @@ fn captured_connection<...A>(input: f64, values: ...A) -> f64 =>
 test forwarded_connection_capture {
     assert eval captured_connection([2.0], [3.0]) == [6.0]
 }
+
+# GEN-17: each receiver reflects the inputs left by its own fixed prefix.
+const reflected_key: str = "value"
+const fn reflected_input(value: i64) -> i64 => value
+const fn one_reflected_input<...Ps{1}>(f: const fn(...{Ps}) -> i64) -> i64
+    requires Ps[reflected_key] == i64 => 51
+const fn reflect_all<...Ps>(f: const fn(i64, ...{Ps}) -> i64) -> i64 =>
+    one_reflected_input(f)
+const fn reflect_through<...Ps>(f: const fn(i64, ...{Ps}) -> i64) -> i64 => reflect_all(f)
+
+test receiver_reflects_the_original_prefix {
+    assert reflect_all(reflected_input) == 51
+    assert reflect_through(reflected_input) == 51
+}
