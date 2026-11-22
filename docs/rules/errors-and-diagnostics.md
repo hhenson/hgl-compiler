@@ -176,7 +176,7 @@ analyser: done
   reads the child at initialization. A graph's `var` given a child denotes
   its connection (EXPR-4).
 - A runtime-checked child read, or an admitted whole read of a dictionary, an unsized list or a window, gives T, `result<T, error>`, or `T?` according to its place. The nullable form discards the error as ERR-15 does.
-- Comparing a runtime-checked child of a nonnullable type with `null` takes the nullable form. An operator candidate can keep the whole read result, including from a child bound in a generic hook (GEN-7, ERR-15).
+- Comparing a runtime-checked child with `null` takes the nullable form when its concrete type is nonnullable. If the child has a nullable type, the comparison reads its payload and an unset child still fails. An operator candidate can keep the whole read result, including from a child bound in a generic hook (GEN-7, ERR-15).
 - `delta_value` takes the same forms. TYPE-11 restricts a duration-window delta to a result or nullable place, and `removed_value` to a result place for every window.
 
 transpiler: partial

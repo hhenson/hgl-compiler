@@ -110,6 +110,30 @@ test child_null_checks_read_the_nullable_form {
         [(false, false, true, 3), (true, true, false, -1)]
 }
 
+# ERR-15 and GEN-7: a child whose instance type is nullable compares
+# its published payload with null. An unset endpoint still raises.
+fn generic_child_is_null<T>(parts: list<T, 2>, index: i64) -> bool {
+    when { return parts[index] == null }
+}
+
+fn compare_nullable_child(parts: list<i64?, 2>, index: i64) -> bool =>
+    generic_child_is_null(parts, index)
+
+fn publish_nullable_child(index: i64) -> list<i64?, 2> {
+    when { return delta<list<i64?, 2>>(updated: [index: delta<i64?>()]) }
+}
+
+fn compare_partial_nullable_child(index: i64, probe: i64) -> bool =>
+    generic_child_is_null(publish_nullable_child(index), probe)
+
+test generic_nullable_child_compares_the_payload {
+    assert eval compare_nullable_child(parts: [[null, 3], _], index: [0, 1]) == [true, false]
+}
+
+test generic_nullable_child_still_raises_if_unset {
+    assert eval compare_partial_nullable_child(index: [0], probe: [1]) == [true]
+}
+
 # ERR-15: a candidate that keeps the whole result wins over one that
 # takes the child's plain value, including in a generic hook (GEN-7).
 operator child_score<T>(value: T) -> i64

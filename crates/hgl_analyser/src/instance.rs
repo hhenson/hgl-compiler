@@ -343,6 +343,23 @@ impl Program {
         functions: &[(usize, Callee)],
     ) {
         expression.ty = instance.project(&expression.ty);
+        // ERR-14 and ERR-15: the generic child can look nonnullable
+        // before placement. A nullable child compares its own payload
+        // with null and still fails if the endpoint is unset.
+        if let ExprKind::OrNull {
+            result,
+            reader: false,
+        } = &expression.kind
+            && let ExprKind::CheckedChild { read, result: true } = &result.kind
+            && let Type::Result { value, .. } = instance.project(&result.ty)
+            && matches!(*value, Type::Nullable(_))
+        {
+            expression.ty = *value;
+            expression.kind = ExprKind::CheckedChild {
+                read: read.clone(),
+                result: false,
+            };
+        }
         match &mut expression.kind {
             // GEN-13: a generic value parameter read as a value is the
             // constant the call gives it.
