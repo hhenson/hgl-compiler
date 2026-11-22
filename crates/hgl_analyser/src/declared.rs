@@ -389,15 +389,20 @@ const APPLICATIONS: usize = 16;
 
 /// True when `ty` names a generic parameter, itself or inside it.
 pub(crate) fn names_parameter(ty: &Type) -> bool {
-    ty.any_part(&|part| matches!(part, Type::Parameter { .. }), &|_| false)
+    ty.any_part(
+        &|part| matches!(part, Type::Parameter { .. } | Type::PackMember { .. }),
+        &|_| false,
+    )
 }
 
 /// `ty` with each generic parameter in `map` replaced by the argument
 /// given for it. `map` pairs where a parameter is declared with its
 /// argument.
-fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
+type PackMember<'a> = dyn Fn(Location, &str, &Constant) -> Option<Type> + 'a;
+
+fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>) -> Type {
     // `Box::new` puts the substituted part where a `Box<Type>` points.
-    let part = |inner: &Type| Box::new(substitute(inner, map));
+    let part = |inner: &Type| Box::new(substitute(inner, map, member));
     // The constant given for the generic value parameter declared at
     // `at`, where `map` gives one.
     let given = |at: Location| {
@@ -437,6 +442,15 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
                 _ => None,
             })
             .unwrap_or_else(|| ty.clone()),
+        // GEN-17: a key can be supplied before the pack is known.
+        Type::PackMember { pack, name, key } => {
+            let key = constant(key);
+            member(*pack, name, &key).unwrap_or_else(|| Type::PackMember {
+                pack: *pack,
+                name: name.clone(),
+                key,
+            })
+        }
         Type::Named {
             name,
             module,
@@ -451,7 +465,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
             arguments: arguments
                 .iter()
                 .map(|argument| match argument {
-                    Argument::Type(argument) => Argument::Type(substitute(argument, map)),
+                    Argument::Type(argument) => Argument::Type(substitute(argument, map, member)),
                     Argument::Constant(argument) => Argument::Constant(constant(argument)),
                 })
                 .collect(),
@@ -459,7 +473,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
         Type::Tuple(elements) => Type::Tuple(
             elements
                 .iter()
-                .map(|element| substitute(element, map))
+                .map(|element| substitute(element, map, member))
                 .collect(),
         ),
         Type::List { element, size } => Type::List {
@@ -500,15 +514,19 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
         },
         Type::Function(function) => {
             let mut function = function.as_ref().clone();
-            for (_, ty) in &mut function.parameters {
-                *ty = substitute(ty, map);
+            for parameter in &mut function.parameters {
+                let ty = parameter.ty_mut();
+                *ty = substitute(ty, map, member);
             }
-            function.result = function.result.as_ref().map(|ty| substitute(ty, map));
+            function.result = function
+                .result
+                .as_ref()
+                .map(|ty| substitute(ty, map, member));
             Type::Function(Box::new(function))
         }
         // TYPE-16: "In a generic declaration it stays as written until
         // T is known", and is then what the table gives for that T.
-        Type::Delta(inner) => Type::delta(substitute(inner, map)),
+        Type::Delta(inner) => Type::delta(substitute(inner, map, member)),
         // TST-5: a tuple's trace cell names its T (`Type::trace_cell`),
         // which the tuple's delta formed again would not. A generic
         // target's parameter that is a tuple naming a parameter,
@@ -521,15 +539,15 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
         Type::Trace { cell, style } => {
             let cell = match &**cell {
                 Type::Delta(of) if matches!(**of, Type::Tuple(_)) => {
-                    Type::trace_cell(substitute(of, map))
+                    Type::trace_cell(substitute(of, map, member))
                 }
-                own if names_parameter(own) => match substitute(own, map) {
+                own if names_parameter(own) => match substitute(own, map, member) {
                     of @ (Type::Tuple(_) | Type::Atomic(_) | Type::RollingWindow { .. }) => {
                         Type::trace_cell(of)
                     }
                     other => other,
                 },
-                other => substitute(other, map),
+                other => substitute(other, map, member),
             };
             Type::Trace {
                 cell: Box::new(cell),
@@ -538,7 +556,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
         }
         // TYPE-14: "either a T or null". A `T?` whose T is given a
         // nullable type is that type.
-        Type::Nullable(inner) => match substitute(inner, map) {
+        Type::Nullable(inner) => match substitute(inner, map, member) {
             inner @ Type::Nullable(_) => inner,
             inner => Type::Nullable(Box::new(inner)),
         },
@@ -555,7 +573,13 @@ pub(crate) fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
         return false;
     }
     ty.any_part(
-        &|part| matches!(part, Type::Parameter { at, .. } if declared.contains(at)),
+        &|part| match part {
+            Type::Parameter { at, .. } => declared.contains(at),
+            Type::PackMember { pack, key, .. } => {
+                declared.contains(pack) || key.value.names_one_of(declared)
+            }
+            _ => false,
+        },
         &|_| false,
     )
 }
@@ -565,7 +589,7 @@ pub(crate) fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
 const WEIGHT: usize = 10_000;
 
 /// How much a type weighs: one for itself and for each type inside it.
-fn weight(ty: &Type) -> usize {
+pub(crate) fn weight(ty: &Type) -> usize {
     1 + match ty {
         Type::Named { arguments, .. } => arguments
             .iter()
@@ -589,12 +613,13 @@ fn weight(ty: &Type) -> usize {
             function
                 .parameters
                 .iter()
-                .map(|(_, ty)| weight(ty))
+                .map(|parameter| weight(parameter.ty()))
                 .sum::<usize>()
                 + function.result.as_ref().map_or(0, weight)
         }
         Type::Scalar(_)
         | Type::Parameter { .. }
+        | Type::PackMember { .. }
         | Type::Signal
         | Type::Error
         | Type::ErrorContext
@@ -611,6 +636,17 @@ fn weight(ty: &Type) -> usize {
 /// at every link. The weight is bounded before anything is built: no
 /// more than the type's own, times the heaviest argument's.
 pub fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
+    substitute_with_members(ty, map, &|_, _, _| None, 1)
+}
+
+/// Specialize a type that can also name the member of a known pack (GEN-17).
+/// `pack_weight` bounds the weight of any type supplied by the member lookup.
+pub(crate) fn substitute_with_members(
+    ty: &Type,
+    map: &[(Location, &Argument)],
+    member: &PackMember<'_>,
+    pack_weight: usize,
+) -> Type {
     let heaviest = map
         .iter()
         .map(|(_, argument)| match argument {
@@ -619,10 +655,10 @@ pub fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
         })
         .max()
         .unwrap_or(1);
-    if weight(ty).saturating_mul(heaviest) > WEIGHT {
+    if weight(ty).saturating_mul(heaviest.max(pack_weight)) > WEIGHT {
         return Type::Unknown;
     }
-    substitute(ty, map)
+    substitute(ty, map, member)
 }
 
 /// TYPE-4: "A field is optional when its type is nullable, `T?`, or an
@@ -1413,6 +1449,7 @@ impl Structs<'_> {
             Type::Function(_)
             | Type::Scalar(_)
             | Type::Parameter { .. }
+            | Type::PackMember { .. }
             | Type::Signal
             | Type::Error
             | Type::ErrorContext
@@ -2012,6 +2049,7 @@ fn grown(ty: &Type, in_group: &dyn Fn(Id) -> bool) -> Option<String> {
         Type::Function(_)
         | Type::Scalar(_)
         | Type::Parameter { .. }
+        | Type::PackMember { .. }
         | Type::Signal
         | Type::Error
         | Type::ErrorContext
@@ -2084,7 +2122,7 @@ fn opened(ty: &Type) -> Type {
     if map.is_empty() {
         return ty.clone();
     }
-    substitute(ty, &map)
+    substitute(ty, &map, &|_, _, _| None)
 }
 
 /// [`agree`], with `unknown` what two constants count as where whether

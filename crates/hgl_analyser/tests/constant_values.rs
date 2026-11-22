@@ -595,7 +595,7 @@ fn every_spelling_of_one_value_is_one_constant() {
 }
 
 /// GEN-13: a generic value parameter read as a value is, in an
-/// instance, the constant the call gives it, a list or a tuple among
+/// instance, the constant the call gives it, a list, a string set or a tuple among
 /// them: each element as the value it is of the element's type (EXPR-5:
 /// the `1` of a `tuple<f64, str>` is `1.0`).
 #[test]
@@ -605,6 +605,12 @@ fn a_composite_constant_is_its_elements_in_an_instance() {
         "const fn pair<const P: tuple<f64, str>>() -> tuple<f64, str> => P\n",
         "const fn listed() -> list<i64> => values<[1, 0x2]>()\n",
         "const fn paired() -> tuple<f64, str> => pair<(1, \"\\u{61}\")>()\n",
+        "const excluded: set<str> = [\"key\", \"index\"]\n",
+        "const fn names<const N: set<str> = [\"key\", \"index\"]>() -> set<str> => N\n",
+        "const fn by_default() -> set<str> => names()\n",
+        "const fn by_configuration() -> set<str> => names{N: [\"index\", \"key\"]}()\n",
+        "const fn by_name() -> set<str> => names{N: excluded}()\n",
+        "const fn empty() -> set<str> => names{N: []}()\n",
     ));
     assert_eq!(found(&checked), [""; 0], "{}", checked.report);
     let returned = |name: &str| -> ExprKind {
@@ -671,6 +677,53 @@ fn a_composite_constant_is_its_elements_in_an_instance() {
             ExprKind::Literal(Value::Float(1.0)),
             ExprKind::Literal(Value::Str("a".to_string()))
         ]
+    );
+    for name in ["by_default", "by_configuration", "by_name"] {
+        assert_eq!(
+            literals(returned(name)),
+            [
+                ExprKind::Literal(Value::Str("index".to_string())),
+                ExprKind::Literal(Value::Str("key".to_string())),
+            ]
+        );
+    }
+    assert!(literals(returned("empty")).is_empty());
+}
+
+/// GEN-8 and UNIT-13: the same members in different written orders
+/// give one constant, hence one type (TYPE-3).
+#[test]
+fn a_string_set_is_identified_by_its_members() {
+    let checked = module(concat!(
+        "struct Tagged<const N: set<str>> { marker: i64 }\n",
+        "const fn same(names: Tagged<[\"key\", \"index\"]>) -> Tagged<[\"index\", \"key\"]> => names\n",
+        "const fn different(names: Tagged<[\"key\", \"index\"]>) -> Tagged<[\"key\"]> => names\n",
+    ));
+    assert_eq!(found(&checked), ["4 type.mismatch"], "{}", checked.report);
+}
+
+/// EXPR-9: repeated constant strings reject at the later member,
+/// including in a default or an explicit operator configuration.
+#[test]
+fn a_string_set_rejects_repeated_constant_members() {
+    let checked = module(concat!(
+        "operator choose<const N: set<str> = [\"default\"]>() -> i64\n",
+        "impl const fn choose<const N: set<str>>() -> i64 => 11\n",
+        "const fn duplicate_override() -> i64 => choose{N: [\"key\", \"\\u{6b}ey\"]}()\n",
+        "const fn duplicate_fallback<const N: set<str> = [\"key\", \"key\"]>() -> i64 => 0\n",
+        "const repeated: set<str> = [\"key\", \"key\"]\n",
+        "const fn literal_with_runtime(name: str) -> set<str> => [\"key\", name, \"key\"]\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:59 type/set.duplicate_member EXPR-9",
+            "m.hgl:5:57 type/set.duplicate_member EXPR-9",
+            "m.hgl:6:36 type/set.duplicate_member EXPR-9",
+            "m.hgl:7:71 type/set.duplicate_member EXPR-9",
+        ],
+        "{}",
+        checked.report
     );
 }
 

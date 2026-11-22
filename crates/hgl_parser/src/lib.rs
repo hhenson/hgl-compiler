@@ -44,6 +44,10 @@
 //! * **A bare name as a generic argument**, as in `list<T, N>`, is read as
 //!   a type. Whether it names a type or a constant is the analyser's to
 //!   say.
+//! * **`Ps[arg]` as a generic argument or constraint operand (GEN-17)**
+//!   uses the index expression tree. The analyser can read it as a type
+//!   when `Ps` is a type pack. A required type, such as the second type
+//!   in `dict<K, Ps[arg]>`, uses [`SyntaxKind::PackMemberType`].
 //!
 //! Rules about meaning are not checked here either: this stage accepts
 //! `fn f(a: ...T = 1)` because it has the form of a parameter, and the

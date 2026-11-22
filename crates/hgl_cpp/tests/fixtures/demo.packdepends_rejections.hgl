@@ -1,0 +1,88 @@
+module demo.packdepends_rejections
+
+use demo.packdepends::{call_shape, choose, membership, scaled}
+
+const fn required_scale(price: f64, factor: f64) -> f64 => price * factor
+
+# FN-8: the callback's matching rules still require a nondefaulted input.
+test missing_required_parameter {
+    # expect-error(type, "argument.missing")
+    assert call_shape(required_scale, 2.0) == 11
+}
+
+test unknown_callback_parameter {
+    # expect-error(name, "argument.unknown")
+    assert call_shape(scaled, price: 2.0, rate: 3.0) == 11
+}
+
+# GEN-17: the type of the argument is held in As, and the equality tests it.
+test argument_type_fails_equality {
+    # expect-error(constraint, "requires.unmet")
+    assert call_shape(scaled, "label", factor: 3.0) == 11
+}
+
+test argument_type_fails_membership {
+    let prices: dict<i64, f64> = [1: 2.0]
+    # expect-error(constraint, "requires.unmet")
+    assert membership<str>(scaled, prices, factor: 3.0) == 25
+}
+
+# FN-8: the second named pack is ambiguous even if the first has a callback.
+# expect-error(type, "pack.duplicate")
+operator duplicate<...Ps, ...As, ...Bs>(f: const fn(...{Ps}) -> f64, first: ...{As for f}, second: ...{Bs})
+
+# GEN-10: an omitted default is no argument towards the pack's cardinality.
+const fn need_two<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}{2}) -> i64 => 31
+
+test too_few_given_arguments {
+    # expect-error(type, "pack.cardinality")
+    assert need_two(scaled, 2.0) == 31
+}
+
+const fn inspect<...Ps>(f: const fn(...{Ps}) -> f64) -> i64 => 1
+
+operator alone(item: f64) -> f64
+impl const fn alone(value: f64) -> f64 => value
+
+# FN-17: a result type cannot select a reflected callback, even when the
+# operator has exactly one candidate.
+test no_parameter_type_for_lone_candidate {
+    # expect-error(type, "generic.unresolved")
+    assert inspect(alone) == 1
+}
+
+test no_parameter_type_for_multiple_candidates {
+    # expect-error(type, "generic.unresolved")
+    assert inspect(choose) == 1
+}
+
+const missing_key: str = "absent"
+
+const fn missing_local_type<...Ps>(f: const fn(...{Ps}) -> f64) -> i64 {
+    let values: list<Ps[missing_key]> = []
+    return 1
+}
+
+test a_pack_member_in_a_local_type_needs_a_key {
+    # expect-error(type, "pack.name")
+    assert missing_local_type(scaled) == 1
+}
+
+const fn keyed_value<T, ...Ps, const key: T>(
+    f: const fn(...{Ps}) -> f64,
+    given: Ps[key],
+) -> i64 => 1
+
+test a_generic_key_resolves_to_a_string_or_position {
+    # expect-error(type, "type.mismatch")
+    assert keyed_value(scaled, 2.0, key: true) == 1
+}
+
+const fn constrained_callback<T, ...Items>(item: T, rest: ...Items) -> f64
+    requires T == str
+    => 1.0
+
+test a_callback_with_a_pack_must_meet_its_requirements {
+    # expect-error(constraint, "requires.unmet")
+    assert call_shape(constrained_callback, 1) == 11
+}

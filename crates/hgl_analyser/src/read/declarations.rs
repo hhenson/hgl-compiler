@@ -10,8 +10,8 @@ use hgl_source::FileId;
 use crate::program::{Binding, Declaration, DeclarationKind, LocalKind, Program, Role};
 use crate::syntax::{child, has_token, name_token, tokens};
 use crate::types::{
-    Detail, Field, FunctionType, GenericKind, GenericParameter, Pack, Parameter, Signature,
-    StructType, Type,
+    Detail, Field, FunctionParameter, FunctionType, GenericKind, GenericParameter, Pack, Parameter,
+    Signature, StructType, Type,
 };
 use crate::{codes, error};
 
@@ -165,7 +165,7 @@ fn generic_form(parameter: &SyntaxNode) -> Option<(SyntaxToken, Form)> {
 /// The fewest and the most a pack holds (GEN-10): `{n}` is exactly n,
 /// `{n:*}` n or more, `{n:m}` from n to m, and no cardinality any
 /// number.
-fn cardinality(node: Option<SyntaxNode>) -> (u64, Option<u64>) {
+pub(super) fn cardinality(node: Option<SyntaxNode>) -> (u64, Option<u64>) {
     let Some(node) = node else {
         return (0, None);
     };
@@ -310,11 +310,19 @@ impl Reader<'_> {
     /// function.
     fn signature(&mut self, node: &SyntaxNode) -> Signature {
         let mut parameters = Vec::new();
+        let mut dependent = Vec::new();
         for parameter in crate::read::parameters(node) {
             let Some(name) = names_before_colon(&parameter).pop() else {
                 continue;
             };
             let named_pack = child(&parameter, SyntaxKind::PackType);
+            let at = self.at(name.span());
+            if let Some(clause) = named_pack
+                .as_ref()
+                .and_then(|pack| child(pack, SyntaxKind::PackFor))
+            {
+                dependent.push((at, clause));
+            }
             let pack = if named_pack.is_some() {
                 Some(Pack::Named)
             } else if has_token(&parameter, SyntaxKind::Ellipsis) {
@@ -336,7 +344,7 @@ impl Reader<'_> {
 
             parameters.push(Parameter {
                 name: name.text().to_string(),
-                at: self.at(name.span()),
+                at,
                 configuration: is_configuration_parameter(&parameter),
                 constant,
                 var: has_token(&parameter, SyntaxKind::KwVar),
@@ -347,6 +355,11 @@ impl Reader<'_> {
                 pack_bounds: cardinality(child(&parameter, SyntaxKind::Cardinality)),
                 has_default,
             });
+        }
+        for (at, clause) in dependent {
+            if let Some(pack) = self.dependent_pack(&clause, &parameters) {
+                self.dependent_packs.insert(at, pack);
+            }
         }
         let written = child(node, SyntaxKind::ReturnType);
         let result = written
@@ -372,21 +385,30 @@ impl Reader<'_> {
         } else {
             Position::INPUT
         };
-        let parameters = child(template, SyntaxKind::ParamList)
+        let mut parameters = Vec::new();
+        let mut named_pack = None;
+        let inputs = child(template, SyntaxKind::ParamList)
             .into_iter()
             .flat_map(|list| list.children())
-            .filter(|input| input.kind() == SyntaxKind::FunctionTypeParam)
-            .map(|input| {
-                let name = names_before_colon(&input)
-                    .pop()
-                    .map(|name| name.text().to_string());
-                let ty = type_child(&input).map_or(Type::Unknown, |written| {
-                    let ty = self.type_(&written, position);
-                    self.record(written.span(), ty)
-                });
-                (name, ty)
-            })
-            .collect();
+            .filter(|input| input.kind() == SyntaxKind::FunctionTypeParam);
+        for input in inputs {
+            if let Some(pack) = child(&input, SyntaxKind::PackType)
+                && child(&pack, SyntaxKind::PackFor).is_none()
+            {
+                if let Some(reflected) = self.reflected_pack(&input, &pack) {
+                    named_pack.get_or_insert(reflected);
+                }
+                continue;
+            }
+            let name = names_before_colon(&input)
+                .pop()
+                .map(|name| name.text().to_string());
+            let ty = type_child(&input).map_or(Type::Unknown, |written| {
+                let ty = self.type_(&written, position);
+                self.record(written.span(), ty)
+            });
+            parameters.push(FunctionParameter::Fixed { name, ty });
+        }
         let annotation = child(template, SyntaxKind::ReturnType);
         let result = annotation.as_ref().and_then(type_child).map(|written| {
             let position = if value {
@@ -401,6 +423,7 @@ impl Reader<'_> {
         Type::Function(Box::new(FunctionType {
             value,
             parameters,
+            named_pack,
             result,
             reference,
         }))
