@@ -347,6 +347,19 @@ fn deferred_enum_constructor<T>(const value: T) -> GraphSide {
     return GraphSide(chosen)
 }
 
+# EXPR-9 and TYPE-7: the settled sibling supplies the implied member's type.
+const fn observes_right(values: list<GraphSide?>) -> bool {
+    let member = values[1]
+    if member == null { return false }
+    return member == GraphSide.right
+}
+
+fn deferred_list_member<T>(const value: T) -> bool {
+    let chosen = if live_helper(value) > 0 { GraphSide.left }
+    let values = [chosen, .right]
+    return observes_right(values)
+}
+
 # GEN-2: the selected instance settles the argument and the result of
 # the generic value function, including the inferred local receiving it.
 const fn deferred_identity<U>(input: U) -> U => input
@@ -515,6 +528,7 @@ test an_instance_settles_its_graph_conditions {
     assert eval deferred_member(value: "s") == [2]
     assert eval deferred_member(value: 3) == [3]
     assert eval deferred_enum_constructor(value: "s") == [GraphSide.left]
+    assert eval deferred_list_member(value: "s") == [true]
     assert eval deferred_generic_result(value: 3) == [1]
     assert eval deferred_contextual_list(value: 3) == [12]
     assert eval deferred_contextual_result(value: 3) == [2]
