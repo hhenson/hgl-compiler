@@ -1051,6 +1051,7 @@ impl<'a> Typer<'a> {
         // GEN-3 and GEN-10: the callee's `requires` holds with what was
         // resolved, including the separate sequence in each type pack.
         // Not where something else was reported of the call (ERR-9).
+        let mut readable = true;
         if judged
             && unresolved.is_empty()
             && type_packs.iter().all(|pack| !pack.infer_from_arguments)
@@ -1068,9 +1069,10 @@ impl<'a> Typer<'a> {
             ) {
                 // GEN-18 handled the condition with its function identity.
             } else if first_pack.is_none() {
-                self.requires_met(at, (module, declaration), &resolved);
+                readable = self.requires_met(at, (module, declaration), &resolved);
             } else {
-                self.pack_requires_met(at, (module, declaration), &resolved, &type_packs);
+                readable =
+                    self.pack_requires_met(at, (module, declaration), &resolved, &type_packs);
             }
         }
         // Named operator requirements over pack members still need to
@@ -1080,17 +1082,23 @@ impl<'a> Typer<'a> {
         } else {
             Vec::new()
         };
-        let callee = Callee::Function {
-            module,
-            declaration,
-            generics: resolved,
-            type_packs,
-            requirements,
-            contextual: if !faulty && self.diagnostics.len() == reported {
-                contextual
-            } else {
-                Vec::new()
-            },
+        let callee = if readable {
+            Callee::Function {
+                module,
+                declaration,
+                generics: resolved,
+                type_packs,
+                requirements,
+                contextual: if !faulty && self.diagnostics.len() == reported {
+                    contextual
+                } else {
+                    Vec::new()
+                },
+            }
+        } else {
+            // Preserve the result type. The target cannot write a call
+            // whose reflected member requirement is still untold (GEN-7).
+            Callee::Unread
         };
         let kind = ExprKind::Call {
             callee,

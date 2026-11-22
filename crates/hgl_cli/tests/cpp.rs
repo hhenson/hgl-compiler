@@ -1930,9 +1930,43 @@ fn written_pack_member_types_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 4 passed, 0 failed\nexecutable cases: 4 passed, 0 failed, 0 not run\n"
+            "rejection cases: 6 passed, 0 failed\nexecutable cases: 5 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
+    );
+}
+
+/// GEN-10 and GEN-17: an existential proof cannot tell the type of an
+/// arbitrary key. Analysis leaves it untold and C++ reports the call.
+#[test]
+fn an_unproved_reflected_type_declines_cpp_emission() {
+    let root = scratch("unproved-reflected-type");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const key: str = \"item\"\n",
+            "const fn shape(item: str, other: i64) -> i64 => other\n",
+            "const fn exact<T>(value: T) -> T requires T == i64 => value\n",
+            "const fn choose<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key]\n",
+            "    requires any arg in arg_keys(Ps) { Ps[arg] == i64 } => exact<Ps[key]>(item)\n",
+            "test chosen_member { assert choose(shape, \"text\") == \"text\" }\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
+    let out = root.join("out");
+    let emitted = hgl_in(
+        &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
+        &[],
+        &[],
+    );
+    let stderr = text(&emitted.stderr);
+    assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("error[build/target.unsupported]"),
+        "{stderr}"
     );
 }
 

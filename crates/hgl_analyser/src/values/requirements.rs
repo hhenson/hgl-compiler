@@ -481,21 +481,22 @@ impl<'a> Typer<'a> {
     /// its arguments." Nothing is reported where it cannot be told
     /// ([`requires_holds`]). A named operator requirement is told for a
     /// generic parameter of the declaration being read too: it holds
-    /// where that declaration states it (GEN-7).
+    /// where that declaration states it (GEN-7). `false` leaves a call
+    /// using unsupported pack-member evidence for the target to decline.
     pub(super) fn requires_met(
         &mut self,
         at: Location,
         callee: (usize, usize),
         generics: &[Argument],
-    ) {
+    ) -> bool {
         let Some((condition, held, unvalued)) = self.requires_told(callee, generics) else {
-            return;
+            return true;
         };
         // A construction that writes its generic arguments,
         // `Sized<str>(value: "x")`, writes a type, of which the same
         // has been reported ([`applications`]).
         if self.unmet_reported(at) {
-            return;
+            return true;
         }
         let program = self.program;
         let own: Vec<Location> = self
@@ -517,46 +518,44 @@ impl<'a> Typer<'a> {
             // generic arguments a call of it gives" (hhenson/hgl_spec#144:
             // so is a call in it of another generic function).
             None if function && passes_on(generics, &own) => {
-                if let Some(report) =
-                    self.unmet_under_stated(at, callee, (generics, &[]), &condition)
-                {
-                    self.diagnostics.emit(report);
-                }
+                return self.check_stated_requirements(at, callee, (generics, &[]), &condition);
             }
             None if unvalued && !passes_on(generics, &own) => self
                 .diagnostics
                 .emit(untold(program, callee, at, &condition)),
             _ => {}
         }
+        true
     }
 
     /// GEN-3 and GEN-10: a function that receives resolved type packs
     /// must have a requirement known to hold for those types. Report
-    /// both a false condition and a form this pass cannot judge.
+    /// both a false condition and a form this pass cannot judge. An
+    /// unsupported stated member fact returns `false` as `requires_met` does.
     pub(super) fn pack_requires_met(
         &mut self,
         at: Location,
         callee: (usize, usize),
         generics: &[Argument],
         type_packs: &[hir::TypePackArgument],
-    ) {
+    ) -> bool {
         if type_packs.iter().any(|pack| pack.forwarded_from.is_some()) {
             // GEN-17: a function parameter's reflected shape is supplied
             // by the caller of the enclosing declaration.
-            return;
+            return true;
         }
         let member_fault = std::cell::RefCell::new(None);
         let Some((condition, held, unvalued)) =
             self.requires_told_with_packs(callee, generics, type_packs, Some(&member_fault))
         else {
-            return;
+            return true;
         };
         if let Some(fault) = member_fault.into_inner() {
             self.pack_member_fault(at, &fault);
-            return;
+            return true;
         }
         if self.unmet_reported(at) {
-            return;
+            return true;
         }
         let program = self.program;
         let own: Vec<_> = self
@@ -566,15 +565,15 @@ impl<'a> Typer<'a> {
             .map(|generic| generic.at)
             .collect();
         let report = match held {
-            Some(true) => return,
+            Some(true) => return true,
             Some(false) => unmet(program, callee, at, &condition),
             None if passes_on(generics, &own) || packs_pass_on(type_packs, &own) => {
-                if let Some(report) =
-                    self.unmet_under_stated(at, callee, (generics, type_packs), &condition)
-                {
-                    self.diagnostics.emit(report);
-                }
-                return;
+                return self.check_stated_requirements(
+                    at,
+                    callee,
+                    (generics, type_packs),
+                    &condition,
+                );
             }
             None if unvalued => untold(program, callee, at, &condition),
             None => untold_with_reason(
@@ -586,6 +585,7 @@ impl<'a> Typer<'a> {
             ),
         };
         self.diagnostics.emit(report);
+        true
     }
 
     /// GEN-10, ERR-9: an existential known to be false rejects the call
@@ -670,13 +670,13 @@ impl<'a> Typer<'a> {
     /// `requires Y == 1.0` one of `one_only` under `requires X == 1.0`
     /// holds. A named operator requirement the callee states is answered
     /// by the body's own (GEN-16).
-    fn unmet_under_stated(
+    fn check_stated_requirements(
         &mut self,
         at: Location,
         callee: (usize, usize),
         (generics, type_packs): (&[Argument], &[hir::TypePackArgument]),
         condition: &SyntaxNode,
-    ) -> Option<hgl_diagnostics::Diagnostic> {
+    ) -> bool {
         let program = self.program;
         let own: Vec<Location> = self
             .signature
@@ -684,11 +684,19 @@ impl<'a> Typer<'a> {
             .iter()
             .map(|generic| generic.at)
             .collect();
-        let stated_members = self
-            .stated_pack_members()
+        let stated_members = self.stated_pack_members();
+        // Existing checks still report unmet ordinary generic requirements.
+        // A proof needed only for a reflected type can remain untold.
+        let unread_packs =
+            if ordinary_arguments_pass_on(generics, &own) || packs_pass_on(type_packs, &own) {
+                HashSet::new()
+            } else {
+                self.unread_stated_packs(&stated_members)
+            };
+        let stated_members = stated_members
             .into_iter()
-            .filter(|(pack, _, _)| {
-                passes_on(generics, &[*pack]) || packs_pass_on(type_packs, &[*pack])
+            .filter(|member| {
+                passes_on(generics, &[member.pack]) || packs_pass_on(type_packs, &[member.pack])
             })
             .collect::<Vec<_>>();
         let memberships: Vec<(Location, Vec<Argument>)> = self
@@ -698,9 +706,11 @@ impl<'a> Typer<'a> {
                 let parameter = &[*parameter];
                 passes_on(generics, parameter)
                     || packs_pass_on(type_packs, parameter)
-                    || stated_members
-                        .iter()
-                        .any(|(_, key, ty)| key.names_one_of(parameter) || mentions(ty, parameter))
+                    || stated_members.iter().any(|member| {
+                        let key_depends = matches!(&member.key, StatedPackKey::One(key)
+                            if key.names_one_of(parameter));
+                        key_depends || mentions(&member.ty, parameter)
+                    })
             })
             .collect();
         let mut combinations = super::candidates::combinations(&memberships);
@@ -710,6 +720,7 @@ impl<'a> Typer<'a> {
         let bound = self.bound.clone();
         let name = &program.modules[callee.0].declarations[callee.1].name;
         let body = &self.declaration.name;
+        let mut readable = true;
         for combination in combinations.iter().take(crate::INSTANCES + 1) {
             let given: Vec<(Location, &Argument)> = bound
                 .iter()
@@ -724,23 +735,42 @@ impl<'a> Typer<'a> {
             };
             let projected_members = stated_members
                 .iter()
-                .map(|(pack, key, ty)| {
-                    (
-                        *pack,
-                        key.substituted(&constant_at),
-                        substitute_within(ty, &given),
-                    )
+                .map(|member| StatedPackMember {
+                    pack: member.pack,
+                    site: member.site,
+                    key: match &member.key {
+                        StatedPackKey::One(key) => {
+                            StatedPackKey::One(key.substituted(&constant_at))
+                        }
+                        StatedPackKey::Every(key) => StatedPackKey::Every(*key),
+                    },
+                    ty: substitute_within(&member.ty, &given),
                 })
                 .collect::<Vec<_>>();
             let member_weight = projected_members
                 .iter()
-                .map(|(_, _, ty)| weight(ty))
+                .map(|member| weight(&member.ty))
                 .max()
                 .unwrap_or(1);
+            let unread = std::cell::Cell::new(false);
             let member_type = |pack, _: &str, key: &Constant| {
-                projected_members.iter().find_map(|(declared, stated, ty)| {
-                    (*declared == pack && stated.same(&key.value) == Some(true)).then(|| ty.clone())
-                })
+                let found = projected_members
+                    .iter()
+                    .filter(|member| member.pack == pack)
+                    .find_map(|member| match &member.key {
+                        StatedPackKey::One(stated) if stated.same(&key.value) == Some(true) => {
+                            Some(member.ty.clone())
+                        }
+                        StatedPackKey::Every(bound) => Some(substitute_within(
+                            &member.ty,
+                            &[(*bound, &Argument::Constant(key.clone()))],
+                        )),
+                        StatedPackKey::One(_) => None,
+                    });
+                if found.is_none() && unread_packs.contains(&pack) {
+                    unread.set(true);
+                }
+                found
             };
             let project = |ty: &Type| {
                 placed(
@@ -776,7 +806,7 @@ impl<'a> Typer<'a> {
                 at,
             };
             if let Some(report) = argument_fails(program, &made, &given, &own) {
-                return Some(if combination.is_empty() {
+                self.diagnostics.emit(if combination.is_empty() {
                     report
                 } else {
                     report.with_note(format!(
@@ -784,11 +814,16 @@ impl<'a> Typer<'a> {
                         self.members_named(combination).join(" and ")
                     ))
                 });
+                return true;
             }
             let held = self
                 .requires_told_with_packs(callee, &placed_generics, &placed_packs, None)
                 .map(|(_, held, _)| held);
             if held == Some(Some(true)) {
+                continue;
+            }
+            if held == Some(None) && unread.get() {
+                readable = false;
                 continue;
             }
             let members = self.members_named(combination);
@@ -814,7 +849,7 @@ impl<'a> Typer<'a> {
             };
             let declared_in = &program.modules[callee.0];
             let declared = &declared_in.declarations[callee.1];
-            return Some(
+            self.diagnostics.emit(
                 error(
                     Category::Constraint,
                     codes::REQUIRES_UNMET,
@@ -832,43 +867,130 @@ impl<'a> Typer<'a> {
                          makes this hold"
                 )),
             );
+            return true;
         }
-        None
+        readable
     }
 
-    /// GEN-3 and GEN-17: a positive equality can state the type of one
-    /// reflected member. Its key and type may name generic parameters.
-    fn stated_pack_members(&self) -> Vec<(Location, ConstantValue, Type)> {
+    /// A positive equality states one GEN-17 member's type. An `each`
+    /// over the same pack's keys can state a type for every member (GEN-10).
+    fn stated_pack_members(&self) -> Vec<StatedPackMember> {
         let Some(condition) = child(&self.declaration.syntax, SyntaxKind::RequiresClause)
             .and_then(|clause| clause.children().next())
         else {
             return Vec::new();
         };
-        let mut relations = Vec::new();
-        conjoined_relations(&condition, &mut relations);
-        relations
-            .into_iter()
-            .filter(|relation| has_token(relation, SyntaxKind::EqEq))
-            .filter_map(|relation| {
-                let mut operands = relation.children();
-                let left = self
-                    .written
-                    .get(&(self.file, operands.next()?.span().start))?;
-                let right = self
-                    .written
-                    .get(&(self.file, operands.next()?.span().start))?;
-                let (pack, key, given) = match (*left, *right) {
-                    (Type::PackMember { pack, key, .. }, given)
-                    | (given, Type::PackMember { pack, key, .. })
-                        if whole(given) =>
-                    {
-                        (pack, key, given)
-                    }
-                    _ => return None,
+        let mut terms = Vec::new();
+        conjoined_terms(
+            &condition,
+            &|kind| {
+                matches!(
+                    kind,
+                    SyntaxKind::ConstraintRelation | SyntaxKind::ConstraintEach
+                )
+            },
+            &mut terms,
+        );
+        let mut members = Vec::new();
+        for term in terms {
+            if term.kind() == SyntaxKind::ConstraintRelation {
+                members.extend(self.stated_member_equality(&term));
+                continue;
+            }
+            // An existential `any` never proves an arbitrary member's type.
+            let Some(bound) = tokens(&term)
+                .filter(|token| token.kind() == SyntaxKind::Ident)
+                .nth(1)
+            else {
+                continue;
+            };
+            let mut parts = term.children();
+            let (Some((view, name)), Some(body)) = (parts.next().and_then(pack_view), parts.next())
+            else {
+                continue;
+            };
+            let Some(pack) = self
+                .signature
+                .generics
+                .iter()
+                .find(|generic| generic.name == name.text())
+            else {
+                continue;
+            };
+            if view.text() != "arg_keys" {
+                continue;
+            }
+            let bound = Location::new(self.file, bound.span());
+            let mut relations = Vec::new();
+            conjoined_relations(&body, &mut relations);
+            for relation in relations {
+                let Some(mut member) = self.stated_member_equality(&relation) else {
+                    continue;
                 };
-                Some((*pack, key.value.clone(), given.clone()))
-            })
-            .collect()
+                if member.pack == pack.at
+                    && matches!(member.key, StatedPackKey::One(ConstantValue::Parameter { at, .. }) if at == bound)
+                {
+                    member.key = StatedPackKey::Every(bound);
+                    members.push(member);
+                }
+            }
+        }
+        members
+    }
+
+    /// The member and type asserted equal in one GEN-3 relation.
+    fn stated_member_equality(&self, relation: &SyntaxNode) -> Option<StatedPackMember> {
+        if !has_token(relation, SyntaxKind::EqEq) {
+            return None;
+        }
+        let mut operands = relation.children();
+        let left_at = operands.next()?.span().start;
+        let right_at = operands.next()?.span().start;
+        let left = self.written.get(&(self.file, left_at))?;
+        let right = self.written.get(&(self.file, right_at))?;
+        let (pack, key, given, site) = match (*left, *right) {
+            (Type::PackMember { pack, key, .. }, given) if whole(given) => {
+                (pack, key, given, left_at)
+            }
+            (given, Type::PackMember { pack, key, .. }) if whole(given) => {
+                (pack, key, given, right_at)
+            }
+            _ => return None,
+        };
+        Some(StatedPackMember {
+            pack: *pack,
+            site,
+            key: StatedPackKey::One(key.value.clone()),
+            ty: given.clone(),
+        })
+    }
+
+    /// Packs named by a stated member expression for which we read no
+    /// positive equality, such as an existential `any` or a membership.
+    fn unread_stated_packs(&self, members: &[StatedPackMember]) -> HashSet<Location> {
+        let Some(clause) = child(&self.declaration.syntax, SyntaxKind::RequiresClause) else {
+            return HashSet::new();
+        };
+        let unread = RefCell::new(HashSet::new());
+        for node in clause.descendants() {
+            let site = node.span().start;
+            if members.iter().any(|member| member.site == site) {
+                continue;
+            }
+            if let Some(ty) = self.written.get(&(self.file, site)) {
+                // `any_part` visits the members nested inside a type too.
+                ty.any_part(
+                    &|part| {
+                        if let Type::PackMember { pack, .. } = part {
+                            unread.borrow_mut().insert(*pack);
+                        }
+                        false
+                    },
+                    &|_| false,
+                );
+            }
+        }
+        unread.into_inner()
     }
 
     /// Reports a `requires` that does not hold, or is not told for a
@@ -1896,19 +2018,46 @@ fn required_calls(node: &SyntaxNode, calls: &mut Vec<SyntaxNode>) {
     }
 }
 
-/// The relations of a condition that hold wherever the condition does:
-/// the condition itself, and each side of an `&&` (GEN-15).
+/// A reflected member type stated by a positive requirement (GEN-17).
+struct StatedPackMember {
+    pack: Location,
+    site: u32,
+    key: StatedPackKey,
+    ty: Type,
+}
+
+/// One declared key, or the key parameter of a universal requirement.
+enum StatedPackKey {
+    One(ConstantValue),
+    Every(Location),
+}
+
+/// The relations of a condition that hold wherever the condition does
+/// (GEN-15).
 fn conjoined_relations(node: &SyntaxNode, relations: &mut Vec<SyntaxNode>) {
+    conjoined_terms(
+        node,
+        &|kind| kind == SyntaxKind::ConstraintRelation,
+        relations,
+    );
+}
+
+/// Select terms only from the condition itself and the sides of `&&`.
+fn conjoined_terms(
+    node: &SyntaxNode,
+    take: &dyn Fn(SyntaxKind) -> bool,
+    terms: &mut Vec<SyntaxNode>,
+) {
     match node.kind() {
-        SyntaxKind::ConstraintRelation => relations.push(node.clone()),
+        kind if take(kind) => terms.push(node.clone()),
         SyntaxKind::ConstraintParen => {
             if let Some(inner) = node.children().next() {
-                conjoined_relations(&inner, relations);
+                conjoined_terms(&inner, take, terms);
             }
         }
         SyntaxKind::ConstraintBinary if has_token(node, SyntaxKind::AmpAmp) => {
             for side in node.children() {
-                conjoined_relations(&side, relations);
+                conjoined_terms(&side, take, terms);
             }
         }
         _ => {}
@@ -2938,6 +3087,18 @@ fn passes_on(generics: &[Argument], declared: &[Location]) -> bool {
             Argument::Constant(constant) => constant.value.names_one_of(declared),
             Argument::Type(ty) => mentions(ty, declared),
         })
+}
+
+/// A generic argument whose declaration-time requirement check can
+/// follow it without knowing a reflected member type (GEN-7, GEN-17).
+fn ordinary_arguments_pass_on(generics: &[Argument], declared: &[Location]) -> bool {
+    generics.iter().any(|argument| match argument {
+        Argument::Constant(constant) => constant.value.names_one_of(declared),
+        Argument::Type(ty) => ty.any_part(
+            &|part| matches!(part, Type::Parameter { at, .. } if declared.contains(at)),
+            &|constant| constant.value.names_one_of(declared),
+        ),
+    })
 }
 
 /// An inferred pack can pass on a type of the enclosing generic body too.

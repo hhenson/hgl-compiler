@@ -96,3 +96,24 @@ test stated_member_types_use_bound_values {
 # GEN-8: a caller can override a default, so it proves no requirement in the body.
 # expect-error(constraint, "requires.unmet")
 const fn unconstrained_default<const N: i64 = 2, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] requires Ps[item_key] == list<i64, N> => exact_list<Ps[item_key]>(item)
+
+# GEN-10 and GEN-17: an equality over each key proves the type at any known key.
+const fn every_integer<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires each key in arg_keys(Ps) { i64 == Ps[key] } => exact<Ps[item_key]>(item)
+
+const fn every_sized<const N: i64, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires N == 2 && each key in arg_keys(Ps) { Ps[key] == list<i64, N> } => exact_list<Ps[item_key]>(item)
+
+test each_proves_the_member_type {
+    assert every_integer(num, 11) == 11
+    assert every_sized<2>(pair, [3, 4]) == [3, 4]
+}
+
+test a_nonmatching_member_rejects_the_universal_requirement {
+    # expect-error(constraint, "requires.unmet")
+    assert every_integer(words, "value") == "value"
+}
+
+# A known false requirement still rejects in the presence of an existential.
+# expect-error(constraint, "requires.unmet")
+const fn known_false<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] requires Ps[item_key] == str && any key in arg_keys(Ps) { Ps[key] == i64 } => exact<Ps[item_key]>(item)
