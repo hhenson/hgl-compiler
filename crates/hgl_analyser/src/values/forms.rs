@@ -192,16 +192,23 @@ impl<'a> Typer<'a> {
     /// tests for a failure. Where T is nullable that place expects T, and
     /// takes the T form: the comparison is of a success's value, and a
     /// failure is raised"); any other value as it is.
-    pub(super) fn compared_with_null(&mut self, value: Expr) -> Expr {
+    pub(super) fn compared_with_null(
+        &mut self,
+        value: Expr,
+        context: Option<&ConfigurationRead>,
+    ) -> Expr {
+        if context.is_none() {
+            self.record_result_read(&value, None);
+        }
         match &value.ty {
             Type::Result {
                 value: success,
                 error,
             } if whole(&value.ty) && !open(success) => {
                 if matches!(**success, Type::Nullable(_)) || **error != Type::Error {
-                    self.take(value, Taken::Value)
+                    self.take_with(value, Taken::Value, context)
                 } else {
-                    self.take(value, Taken::Nullable)
+                    self.take_with(value, Taken::Nullable, context)
                 }
             }
             _ => value,

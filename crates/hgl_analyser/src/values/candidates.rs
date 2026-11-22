@@ -1127,15 +1127,13 @@ impl<'a> Typer<'a> {
             graph: self.graph,
             scope: None,
             result: None,
+            result_read: None,
         };
         if admits_without_membership {
             if let Some(chosen) = provisional {
                 // GEN-7: surrounding expressions and inferred locals have
                 // already been checked using this candidate's result.
                 record.result = chosen.taken.result.clone();
-                if record.place.is_none() {
-                    record.place.clone_from(&record.result);
-                }
                 chosen.selecting = Some(Box::new(record));
             }
             return Settled::Elsewhere;
@@ -1321,7 +1319,17 @@ impl<'a> Typer<'a> {
                 given
             })
             .collect();
-        let place = selecting.place.as_ref().map(in_place);
+        let place = selecting
+            .place
+            .as_ref()
+            .or_else(|| {
+                if let Some(read) = &selecting.result_read {
+                    read.expected.as_ref().map(|(ty, _)| ty)
+                } else {
+                    selecting.result.as_ref()
+                }
+            })
+            .map(in_place);
         let wanted = Wanted {
             place: place.as_ref(),
             among: selecting
@@ -1360,6 +1368,65 @@ impl<'a> Typer<'a> {
             (&given, &wanted),
             (!candidates.is_empty(), &selected),
         ))
+    }
+
+    /// ERR-12 and ERR-15: the nullable destination or null comparison
+    /// that will read the eventually selected result.
+    pub(super) fn record_result_read(&self, value: &Expr, expected: Option<(&Type, &str)>) {
+        if self.instance.is_empty()
+            && matches!(
+                value.kind,
+                ExprKind::Call {
+                    callee: Callee::Unread | Callee::DeferredValue,
+                    ..
+                }
+            )
+            && let Some(call) = self
+                .selecting
+                .borrow_mut()
+                .iter_mut()
+                .rfind(|call| call.at == value.at)
+            && call.result.is_some()
+        {
+            call.result_read = Some(InstanceResultRead {
+                expected: expected.map(|(ty, what)| (ty.clone(), what.to_owned())),
+                scope: hir::ConfigurationRead {
+                    raise: self.raise_here(),
+                    result: self.result_type().cloned(),
+                    anonymous: self.anonymous.is_some(),
+                },
+            });
+        }
+    }
+
+    /// Apply the same place check where an instance is judged and
+    /// where its body is built (GEN-7, ERR-12, ERR-15).
+    pub(super) fn fit_selected_result(
+        &mut self,
+        call: &Selecting,
+        value: Expr,
+        in_place: impl Fn(&Type) -> Type,
+    ) -> Expr {
+        if let Some(read) = &call.result_read {
+            let scope = hir::ConfigurationRead {
+                result: read.scope.result.as_ref().map(&in_place),
+                ..read.scope
+            };
+            if let Some((ty, what)) = &read.expected {
+                return self.fit_with(value, &in_place(ty), what, Some(&scope));
+            }
+            return self.compared_with_null(value, Some(&scope));
+        }
+        if let Some(expected) = call.result.as_ref().map(in_place)
+            && expected != value.ty
+        {
+            return self.fit(
+                value,
+                &expected,
+                "the operator call's result in this instance",
+            );
+        }
+        value
     }
 }
 
@@ -1519,6 +1586,16 @@ pub(crate) struct Selecting {
     pub(crate) scope: Option<std::sync::Arc<[hir::Local]>>,
     /// The result type used to check the body when a candidate admitted it.
     pub(super) result: Option<Type>,
+    /// A place that takes the selected candidate's result in its own form.
+    result_read: Option<InstanceResultRead>,
+}
+
+/// The source place of a provisional call, including its failure scope.
+#[derive(Debug, Clone)]
+struct InstanceResultRead {
+    /// The nullable type and its destination, or a comparison with null.
+    expected: Option<(Type, String)>,
+    scope: hir::ConfigurationRead,
 }
 
 /// `signature`, a generic declaration's, as one instance of it reads its
@@ -1616,18 +1693,31 @@ pub(crate) fn select_in_instance(
     // value where a call reads it (EXPR-3).
     typer.use_instance_locals(body.locals.clone());
     hir::walk_statements_mut(&mut body.statements, &mut |expression| {
+        // A source read of the provisional result can be obsolete.
+        // Replace it with the selected call in the actual place's form.
+        let source_read = match &expression.kind {
+            ExprKind::OrNull { result, .. } | ExprKind::Raised { result, .. } => {
+                Some(result.as_ref())
+            }
+            ExprKind::NullRead { value, .. } => Some(value.as_ref()),
+            _ => None,
+        };
+        let source = source_read.unwrap_or(expression);
         let ExprKind::Call {
             callee: Callee::Unread | Callee::DeferredValue,
             arguments,
             ..
-        } = &expression.kind
+        } = &source.kind
         else {
             return;
         };
         // The last put at the place: the reading of it that stands.
-        let Some(call) = calls.iter().rfind(|call| call.at == expression.at) else {
+        let Some(call) = calls.iter().rfind(|call| call.at == source.at) else {
             return;
         };
+        if source_read.is_some() && (source.at != expression.at || call.result_read.is_none()) {
+            return;
+        }
         let values: Vec<Expr> = arguments
             .iter()
             .map(|argument| argument.value.clone())
@@ -1654,15 +1744,7 @@ pub(crate) fn select_in_instance(
             at: expression.at,
             category: expression.category,
         };
-        *expression = if call.result.is_some() && selected.ty != expression.ty {
-            typer.fit(
-                selected,
-                &expression.ty,
-                "the operator call's result in this instance",
-            )
-        } else {
-            selected
-        };
+        *expression = typer.fit_selected_result(call, selected, |ty| substitute_within(ty, &map));
         after(expression);
     });
     body.locals = typer.locals;

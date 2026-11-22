@@ -123,6 +123,55 @@ fn instance_called_by(checked: &Checked, caller: &Body) -> Body {
         .1
 }
 
+/// GEN-7, ERR-12 and ERR-15: the selected output is read by the
+/// destination, including a null comparison, in its actual form.
+#[test]
+fn an_instance_reads_the_selected_result_in_its_source_place() {
+    let checked = module(
+        r#"operator find<T>(value: T) -> i64
+impl const fn find<T>(value: T) -> i64 => 5
+impl const fn find(value: i64) -> i64? => null
+operator check<T>(value: T) -> i64
+impl const fn check<T>(value: T) -> i64 => 5
+impl const fn check(value: i64) -> result<i64, error> => err(error(message: "checked"))
+operator parse<T>(value: T) -> result<i64, error>
+impl const fn parse<T>(value: T) -> result<i64, error> => err(error(message: "generic"))
+impl const fn parse(value: i64) -> i64 => value
+
+const fn keep<T>(v: T) -> i64? => find(v)
+const fn compare<T>(v: T) -> bool => check(v) == null
+const fn optional<T>(v: T) -> i64? => parse(v)
+const fn keep_instance() -> i64? => keep(1)
+const fn compare_instance() -> bool => compare(1)
+const fn optional_instance() -> i64? => optional(1)"#,
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    for (name, expected) in [("keep_instance", "i64?"), ("optional_instance", "i64")] {
+        let instance = instance_called_by(&checked, body(&checked, name));
+        let Some(Stmt::Return {
+            value: Some(value), ..
+        }) = instance.statements.last()
+        else {
+            panic!("the instance returns a value");
+        };
+        assert_eq!(value.ty.to_string(), expected);
+        assert!(matches!(value.kind, ExprKind::Call { .. }));
+    }
+    let instance = instance_called_by(&checked, body(&checked, "compare_instance"));
+    let Some(Stmt::Return {
+        value: Some(comparison),
+        ..
+    }) = instance.statements.last()
+    else {
+        panic!("the instance returns the comparison");
+    };
+    let ExprKind::Binary { left, .. } = &comparison.kind else {
+        panic!("the return is a comparison");
+    };
+    assert_eq!(left.ty.to_string(), "i64?");
+    assert!(matches!(left.kind, ExprKind::OrNull { .. }));
+}
+
 /// GEN-7: "A generic body is checked under its stated requirements;
 /// choosing a specialization does not authorize unrelated operations."
 /// GEN-3: "under negation/disjunction it only tests already-resolved

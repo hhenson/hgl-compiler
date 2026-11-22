@@ -589,13 +589,13 @@ impl<'a> Typer<'a> {
     /// candidates take one"); beside a result, itself, as `==` of two
     /// results takes them whole (ERR-2).
     pub(super) fn operand_form(&mut self, value: Expr, other: &Type, null_beside: bool) -> Expr {
-        if !matches!(value.ty, Type::Result { .. }) {
-            return value;
-        }
         if null_beside {
-            return self.compared_with_null(value);
+            return self.compared_with_null(value, None);
         }
-        if matches!(other, Type::Result { .. }) || open(other) {
+        if !matches!(value.ty, Type::Result { .. })
+            || matches!(other, Type::Result { .. })
+            || open(other)
+        {
             return value;
         }
         self.received(value, |_| false)

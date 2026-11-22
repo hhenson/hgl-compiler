@@ -2211,21 +2211,16 @@ pub(super) fn instances_hold(
                                 Vec::new(),
                                 (call.form, call.name),
                             );
-                            if let Some(result) = &call.result {
-                                let expected = placed(substitute_within(result, &map), &declared);
-                                if expected != ty {
-                                    typer.fit(
-                                        Expr {
-                                            kind,
-                                            ty,
-                                            at: call.at,
-                                            category: ValueCategory::Unsettled,
-                                        },
-                                        &expected,
-                                        "the operator call's result in this instance",
-                                    );
-                                }
-                            }
+                            typer.fit_selected_result(
+                                call,
+                                Expr {
+                                    kind,
+                                    ty,
+                                    at: call.at,
+                                    category: ValueCategory::Unsettled,
+                                },
+                                |ty| placed(substitute_within(ty, &map), &declared),
+                            );
                             let reports = typer.diagnostics.as_slice()[mark..].to_vec();
                             typer.diagnostics.truncate(mark);
                             let fails = !reports.is_empty();
