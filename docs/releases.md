@@ -94,14 +94,18 @@ prompt: `DevToolsSecurity -status` says developer mode is enabled
 _developer`). Without both, `process launch` waits for an administrator's
 password in a dialog no one sees, and the job ends at its 30-minute
 limit. The debugged programs are this repository's own, signed ad hoc
-without the hardened runtime, so nothing else is needed. Run **Release
-bundles** by hand to rehearse these steps without publishing.
+without the hardened runtime, so nothing else is needed. Dispatch
+**Release bundles** on a branch to rehearse these steps. If the self-hosted
+release runner is enabled, the dispatch also runs `cpp-macos` after the
+macOS verification jobs. Publishing requires a version tag push.
 
 Push the bare workspace version as a tag, such as `0.1.0`. The tag run
-checks the version and publishes the four archives and their checksums
-from the successful `main` run for that commit. If there is no run with
-both verified artifacts available, the tag run builds and verifies both
-bundles before publishing.
+checks the version and publishes the four archives and their checksums.
+It reuses artifacts from a push to `main` for the same commit once all
+five release verifiers pass in the attempt that produced both live
+artifacts. Publication depends on those verifiers and can proceed while
+`cpp-macos` is pending or after it fails. If no run has both verified
+artifacts available, the tag run builds and verifies both bundles.
 
 ## Update the Homebrew tap
 

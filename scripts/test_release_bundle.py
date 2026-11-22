@@ -3,6 +3,7 @@
 import importlib.util
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -66,6 +67,18 @@ class VerifiedRunTests(unittest.TestCase):
             job["conclusion"] = "success"
         self.jobs.pop()
         self.assertIsNone(self.verified_run())
+
+    def test_verifiers_match_publish_dependencies(self):
+        workflow = Path(__file__).resolve().parent.parent / ".github/workflows/release.yml"
+        publish = workflow.read_text().partition("\n  publish:\n")[2]
+        needs = re.search(r"^    needs: \[([^\]\n]+)\]$", publish, re.MULTILINE)
+        self.assertIsNotNone(needs, "expected a flow-style list under jobs.publish.needs")
+        dependencies = {job.strip() for job in needs[1].split(",")}
+
+        self.assertEqual(
+            dependencies - {"reuse-build", "bundle", "bundle-linux"},
+            release_bundle.RELEASE_VERIFIERS,
+        )
 
     def test_artifact_must_be_live_from_the_verified_attempt(self):
         artifact = self.artifacts[1]
