@@ -166,8 +166,9 @@ pub struct Module {
     /// later of two", so what is reported does not depend on the order
     /// the files were given in; it changes no meaning (UNIT-1).
     pub files: Vec<ModuleFile>,
-    /// Every declaration of the module, test helpers included, in file
-    /// order and then source order.
+    /// Module declarations in file and source order, including those of unnamed
+    /// test contexts. A suffix holds named tests' helpers, in test and source order,
+    /// so that adding one cannot change existing module declaration identities (TST-2).
     pub declarations: Vec<Declaration>,
     /// The named tests, in file order and then source order.
     pub tests: Vec<Test>,

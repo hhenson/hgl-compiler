@@ -254,3 +254,41 @@ integration_test configured {
     assert_eq!(config, local);
     assert_eq!(module.declarations[called(call)].test_owner, Some(0));
 }
+
+/// A named-test helper cannot change the identities of later module declarations
+/// or of shared helpers from an unnamed test context (TST-1, TST-2).
+#[test]
+fn named_helpers_leave_existing_declaration_indices_in_place() {
+    let interface = "module m\noperator project(value: i64) -> i64\n";
+    let implementation = r#"impl const fn project(value: i64) -> i64 => value
+test {
+    const fn shared(value: i64) -> i64 => project(value)
+}
+const fn ordinary(value: i64) -> i64 => project(value)
+"#;
+    let test = r#"test added {
+    const fn first() -> i64 => shared(2)
+    const fn second() -> i64 => first()
+    assert second() == 2
+}
+"#;
+    let original = check(&[("m.hgl", &format!("{interface}{implementation}"))]);
+    let changed = check(&[("m.hgl", &format!("{interface}{test}{implementation}"))]);
+    assert_eq!(original.summary(), NONE, "{}", original.report);
+    assert_eq!(changed.summary(), NONE, "{}", changed.report);
+    let before = &original.program.module("m").unwrap().declarations;
+    let after = &changed.program.module("m").unwrap().declarations;
+    for (first, second) in before.iter().zip(after) {
+        assert_eq!(first.name, second.name);
+        assert_eq!(first.kind, second.kind);
+        assert_eq!(first.test_only, second.test_only);
+        assert_eq!(second.test_owner, None);
+    }
+    assert_eq!(
+        after[before.len()..]
+            .iter()
+            .map(|decl| (decl.name.as_str(), decl.test_owner))
+            .collect::<Vec<_>>(),
+        [("first", Some(0)), ("second", Some(0))]
+    );
+}

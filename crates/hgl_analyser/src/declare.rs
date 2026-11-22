@@ -25,6 +25,7 @@ use crate::{codes, error};
 pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut Diagnostics) {
     let mut walk = Walk {
         declarations: Vec::new(),
+        test_helpers: Vec::new(),
         tests: Vec::new(),
         instantiations: Vec::new(),
         application: module.application,
@@ -108,6 +109,7 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
         }
     }
     module.declarations = walk.declarations;
+    module.declarations.extend(walk.test_helpers);
     module.tests = walk.tests;
     module.instantiations = walk.instantiations;
     bind_declarations(module, diagnostics);
@@ -229,6 +231,8 @@ fn read_import(import: &UseDecl, file: FileId, imports: &mut Vec<Import>) {
 /// Walks a module's items and lists its declarations and tests.
 struct Walk<'a> {
     declarations: Vec<Declaration>,
+    /// Kept after ordinary declarations so a test cannot change their identities (TST-2).
+    test_helpers: Vec<Declaration>,
     tests: Vec<Test>,
     instantiations: Vec<(usize, SyntaxNode)>,
     /// True when the unit walked is an application (UNIT-14).
@@ -351,7 +355,7 @@ impl Walk<'_> {
                         } else {
                             Role::Temporal
                         };
-                        self.declarations.push(Declaration {
+                        self.test_helpers.push(Declaration {
                             name: name.text().to_string(),
                             at: Location::new(file, name.span()),
                             kind: DeclarationKind::Function(role),
