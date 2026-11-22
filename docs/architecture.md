@@ -1506,10 +1506,9 @@ gives it one made of the cpp target and its build driver; without
 
 An integration test is left out of a run (TST-17): it is no case of the
 run, and is not listed. `--integration` asks for them all, and `--test`
-with its name asks for that one. A rejection case an integration test
-owns runs nothing, and is checked as any other is. `--integration-only`
-selects integration tests and their rejection cases. It excludes
-standalone rejection cases and cannot be combined with `--integration`.
+with its name asks for that one. `--integration-only` selects integration
+tests and their rejection cases. It excludes standalone rejection cases
+and cannot be combined with `--integration`.
 
 Repeat `--test-path PATH` to select cases in several files or directories.
 A directory includes its subdirectories. Each path must exist within the

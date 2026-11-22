@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{argument, hgl, hgl_with, scratch, text, write};
+use common::{argument, hgl, scratch, text, write};
 
 /// A program of rejection cases that pass, with one test to run.
 const PASSING: &str = concat!(
@@ -350,10 +350,7 @@ fn integration_only_filters_owners_and_combines_with_test_path() {
         text(&defaults.stderr)
     );
     assert!(printed.contains("ordinary_rejection\n"), "{printed}");
-    assert!(
-        printed.contains("passed   rejection   modes.chosen::integrated_rejection\n"),
-        "{printed}"
-    );
+    assert!(!printed.contains("integrated_rejection\n"), "{printed}");
 
     let all = hgl(&["test", &root, "--integration-only"]);
     let printed = text(&all.stdout);
@@ -400,45 +397,6 @@ fn integration_only_filters_owners_and_combines_with_test_path() {
     let conflict = hgl(&["test", &root, "--integration", "--integration-only"]);
     assert_eq!(conflict.status.code(), Some(2));
     assert!(text(&conflict.stderr).contains("--integration-only"));
-}
-
-/// TST-13, TST-17: the integration test's annotated rejection is checked
-/// without running the test. A wrong expectation still fails a normal run.
-#[test]
-fn ordinary_cpp_runs_check_integration_rejections() {
-    let root = scratch("ordinary_integration_rejection");
-    let source = write(
-        &root,
-        "src/m.hgl",
-        concat!(
-            "module m\n",
-            "integration_test wrong {\n",
-            "    # expect-error(type, \"type.mismatch\")\n",
-            "    assert true\n",
-            "}\n",
-        ),
-    );
-    let cache = argument(&root.join("cache"));
-    let source_root = argument(&root.join("src"));
-    for options in [
-        &[][..],
-        &["--rejections-only"][..],
-        &["--test-path", source.as_str()][..],
-    ] {
-        let mut arguments = vec!["test", &source_root, "--target", "cpp"];
-        arguments.extend_from_slice(options);
-        let output = hgl_with(&arguments, &[("HGL_NATIVE_CACHE", &cache)]);
-        let printed = text(&output.stdout);
-        assert_eq!(output.status.code(), Some(1), "{printed}");
-        assert!(
-            printed.starts_with("FAILED   rejection   m::wrong\n"),
-            "{printed}"
-        );
-        assert!(
-            printed.contains("executable cases: none selected\n"),
-            "{printed}"
-        );
-    }
 }
 
 /// TST-15: a valid path with no selected cases succeeds. Invalid paths
