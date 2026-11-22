@@ -71,6 +71,7 @@ analyser: partial
 
 - The Boolean connectives and `!` take bools, reading a fallible or nullable operand where a bool is expected (ERR-12, ERR-15).
 - Composition selects core's Boolean operators, with unparenthesized chains selecting `all_` or `any_` over their operands. A graph instance selects after any deferred operands settle (FN-6, GEN-7, OPS-5).
+- A nullable guard triggers a scalar graph connective's flow reread only when a later operand refers to the guarded binding.
 - A compile-time constant short-circuits (`constant`): the right operand of `false &&` and `true ||` is not needed where it is a parameter, a constant held by its name, or one whose evaluation fails, which is then no failure (`const NO: bool = false && (1 // 0 == 0)` is `false`); one of no type is held to a `bool` still
 - Left: a guard precedes the payload read it protects
 

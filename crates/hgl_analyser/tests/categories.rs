@@ -121,6 +121,29 @@ fn nested_scalar_boolean_forms_fit_the_reading_budget() {
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
 }
 
+/// EXPR-6: a nullable guard does not make a nested scalar operand
+/// depend on it when that operand uses different bindings.
+#[test]
+fn nested_nullable_guards_fit_the_reading_budget() {
+    let parameters = (0..24)
+        .map(|index| format!("const a{index}: i64?"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    for mixed in [false, true] {
+        let expression = (0..24).rev().fold("true".to_string(), |inside, index| {
+            if mixed && index % 2 == 1 {
+                format!("(a{index} == null || {inside})")
+            } else {
+                format!("(a{index} != null && {inside})")
+            }
+        });
+        let checked = module(&format!(
+            "fn nested({parameters}) -> bool => {expression}\n"
+        ));
+        assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    }
+}
+
 /// FN-6: a value helper "with temporal arguments in composition is
 /// lifted ... All-scalar calls execute directly and invent no source
 /// timing". A temporal function's call is the node or the graph itself,
