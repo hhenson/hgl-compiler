@@ -9,10 +9,10 @@ use hgl_diagnostics::{Category, Code, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
-use super::candidates::{AtInstance, Given, Key, Wanted};
+use super::candidates::{AtInstance, Given, Wanted};
 use super::fit::{open, whole};
 use super::inference::{fixed, mentions, placed, unsaid};
-use super::operators::{Requested, from_place, unreadable};
+use super::operators::{Requested, from_place, has_generic_configuration_default, unreadable};
 use super::{REQUIRING, Typer};
 use crate::declared::{names_parameter, same_type, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
@@ -791,6 +791,18 @@ impl<'a> Typer<'a> {
         declaration: usize,
         generics: &[Argument],
     ) -> Vec<hir::Answer> {
+        self.answers_for_default(module, declaration, generics, &[])
+    }
+
+    /// Also report a requirement known to fail where an inherited default
+    /// actually uses it. A symbolic application can leave an answer unread.
+    pub(super) fn answers_for_default(
+        &mut self,
+        module: usize,
+        declaration: usize,
+        generics: &[Argument],
+        uses: &[(usize, Location)],
+    ) -> Vec<hir::Answer> {
         let program = self.program;
         let declared_in = &program.modules[module];
         let declared = &declared_in.declarations[declaration];
@@ -800,10 +812,11 @@ impl<'a> Typer<'a> {
         let Some(clause) = child(&declared.syntax, SyntaxKind::RequiresClause) else {
             return Vec::new();
         };
+        let Some(condition) = clause.children().next() else {
+            return Vec::new();
+        };
         let mut calls = Vec::new();
-        if let Some(condition) = clause.children().next() {
-            required_calls(&condition, &mut calls);
-        }
+        required_calls(&condition, &mut calls);
         if calls.is_empty() {
             return Vec::new();
         }
@@ -813,8 +826,12 @@ impl<'a> Typer<'a> {
         let file = declared_in.files[declared.file].file;
         let read =
             self.requirements_read(declared, &signature.generics, (module, generics), &calls);
+        let report_unmet = !uses.is_empty()
+            && generics.len() == signature.generics.len()
+            && generics.iter().all(resolved_default_argument);
         read.into_iter()
-            .map(|read| {
+            .enumerate()
+            .map(|(index, read)| {
                 let Some((operator, operands, result)) = read else {
                     return hir::Answer::Unread;
                 };
@@ -835,6 +852,19 @@ impl<'a> Typer<'a> {
                             generics,
                             requirements,
                         }
+                    }
+                    Some(Answered::Unmet) if report_unmet => {
+                        for &(_, at) in uses.iter().filter(|(used, _)| *used == index) {
+                            if !self.unmet_reported(at) {
+                                self.diagnostics.emit(unmet(
+                                    program,
+                                    (module, declaration),
+                                    at,
+                                    &condition,
+                                ));
+                            }
+                        }
+                        hir::Answer::Unread
                     }
                     Some(Answered::Unmet) | None => hir::Answer::Unread,
                 }
@@ -899,13 +929,12 @@ impl<'a> Typer<'a> {
         // arguments.
         let mut found: Vec<Option<Argument>> = vec![None; public.generics.len()];
         from_place(public, result, &mut found);
-        let supplied: Vec<Option<&Type>> = (0..public.parameters.len())
-            .map(|index| operands.get(index).map(|(_, ty)| ty))
-            .collect();
+        let supplied = requirement_inputs(public, operands.iter().map(|(_, ty)| ty));
         let Requested {
             place: requested,
             among,
             unfit,
+            ..
         } = self.output_requested(operator, public, found, &supplied, false);
         // GEN-13: a default the call would take is not of its
         // parameter's type as these types resolve it. The call would be
@@ -1024,9 +1053,7 @@ impl<'a> Typer<'a> {
         };
         let mut found: Vec<Option<Argument>> = vec![None; public.generics.len()];
         from_place(public, arrow, &mut found);
-        let supplied: Vec<Option<&Type>> = (0..public.parameters.len())
-            .map(|index| requirement.operands.get(index))
-            .collect();
+        let supplied = requirement_inputs(public, &requirement.operands);
         let Requested { place, unfit, .. } =
             self.output_requested(operator, public, found, &supplied, false);
         if unfit.is_some() {
@@ -1153,26 +1180,23 @@ impl<'a> Typer<'a> {
         // parameter's name (GEN-4). A name the operator does not
         // declare is an option of a candidate, which no requirement
         // speaks for.
-        let mut places = Vec::with_capacity(given.len());
+        let mut places: Vec<RequiredPlace> = Vec::with_capacity(given.len());
         for argument in given {
             // One read as the type of its place whose first reading
             // stands was reported itself: the call is not judged here.
             if argument.by_place && !argument.retried {
                 return None;
             }
-            let place = match &argument.key {
-                Key::Position(position) => *position,
-                Key::Name(name) => public
-                    .parameters
+            let parameter = argument.key.public_parameter(public)?;
+            // A requirement names ordinary operands (GEN-16). Their
+            // positions skip the configuration slots from FN-18.
+            let operand = (!public.parameters[parameter].configuration).then(|| {
+                public.parameters[..parameter]
                     .iter()
-                    .position(|parameter| parameter.name == *name)?,
-            };
-            // The operands a requirement is supplied with stand in the
-            // operator's first places, each given once.
-            if place >= given.len() || places.contains(&place) {
-                return None;
-            }
-            places.push(place);
+                    .filter(|parameter| !parameter.configuration)
+                    .count()
+            });
+            places.push(RequiredPlace { operand, parameter });
         }
         // Past the function's bound no argument is tried, and the call
         // is left to be not judged where its candidates are read.
@@ -1183,9 +1207,18 @@ impl<'a> Typer<'a> {
         let wanted = expected.filter(|expected| !open(expected));
         let mut first: Option<Required> = None;
         // The argument given to each place, in the operator's order.
-        let mut ordered: Vec<&Given> = given.to_vec();
-        for (argument, &place) in given.iter().zip(&places) {
-            ordered[place] = argument;
+        let mut ordered: Vec<_> = given
+            .iter()
+            .zip(&places)
+            .filter_map(|(&argument, place)| Some((place.operand?, argument)))
+            .collect();
+        ordered.sort_unstable_by_key(|&(operand, _)| operand);
+        if ordered
+            .iter()
+            .enumerate()
+            .any(|(index, &(operand, _))| index != operand)
+        {
+            return None;
         }
         for requirement in self.requirements() {
             // One that names a generic parameter of the declaration,
@@ -1238,22 +1271,26 @@ impl<'a> Typer<'a> {
                     .collect();
                 let map: Vec<(Location, &Argument)> =
                     fixed(&public.generics).zip(&explicit).collect();
-                let agrees = public.parameters.iter().zip(&requirement.operands).all(
-                    |(parameter, operand)| {
+                let agrees = public
+                    .parameters
+                    .iter()
+                    .filter(|parameter| !parameter.configuration)
+                    .zip(&requirement.operands)
+                    .all(|(parameter, operand)| {
                         self.admits(&substitute_within(&parameter.ty, &map), operand)
-                    },
-                ) && match (&public.result, &requirement.result) {
-                    (Some(declared), Some(result)) => {
-                        self.admits(&substitute_within(declared, &map), result)
-                    }
-                    _ => true,
-                };
+                    })
+                    && match (&public.result, &requirement.result) {
+                        (Some(declared), Some(result)) => {
+                            self.admits(&substitute_within(declared, &map), result)
+                        }
+                        _ => true,
+                    };
                 if !agrees {
                     continue;
                 }
             }
             let mut supplied = true;
-            for (operand, argument) in requirement.operands.iter().zip(&ordered) {
+            for (operand, &(_, argument)) in requirement.operands.iter().zip(&ordered) {
                 supplied &= if argument.retried {
                     // Read again as the type supplied; what the trial
                     // reports is taken back.
@@ -1306,7 +1343,8 @@ impl<'a> Typer<'a> {
         operator: OperatorRef,
         required: Required,
         given: Vec<Given>,
-        form: Form,
+        mut operator_generics: Vec<Argument>,
+        (form, at): (Form, Location),
     ) -> (ExprKind, Type) {
         let Required {
             index,
@@ -1314,28 +1352,72 @@ impl<'a> Typer<'a> {
             operands,
             places,
         } = required;
-        // The operator's own parameters, in the order it declares them
-        // (GEN-4).
-        let parameters = match self.program.modules[operator.module]
-            .details
-            .get(operator.declaration)
-        {
-            Some(Detail::Callable(public)) => public.parameters.len(),
-            _ => 0,
+        let public = match &self.program.modules[operator.module].details[operator.declaration] {
+            Detail::Callable(public) => public,
+            _ => unreachable!("a requirement names an operator signature"),
         };
+        let implicit_configuration =
+            operator_generics.is_empty() && has_generic_configuration_default(public);
+        if implicit_configuration || !operator_generics.is_empty() {
+            // The requirement supplies the ordinary operand types. A
+            // brace entry is checked against those types (FN-18), so it
+            // cannot redefine the generic type of an ordinary operand.
+            let mut inferred = vec![None; public.generics.len()];
+            from_place(public, result.as_ref(), &mut inferred);
+            let supplied = requirement_inputs(public, &operands);
+            if implicit_configuration {
+                // A symbol has no written generic arguments. Resolve defaults
+                // in the public signature with the requirement's operand types.
+                let requested = self.output_requested(operator, public, inferred, &supplied, false);
+                if let Some(unfit) = requested.unfit {
+                    self.diagnostics.emit(unfit.diagnostic(public, at));
+                    return (self.unselected(given, form), Type::Unknown);
+                }
+                operator_generics = requested.generics;
+            } else {
+                self.infer_operator_inputs(public, &mut inferred, &supplied);
+                for (argument, found) in operator_generics.iter_mut().zip(inferred) {
+                    if let Some(found) = found {
+                        *argument = found;
+                    }
+                }
+            }
+        }
+        let map: Vec<_> = fixed(&public.generics).zip(&operator_generics).collect();
+        let configuration = places.iter().any(|place| place.operand.is_none()).then(|| {
+            Box::new(hir::ConfigurationRead {
+                raise: self.raise_here(),
+                result: self.result_type().cloned(),
+                anonymous: self.anonymous.is_some(),
+            })
+        });
         let arguments = given
             .into_iter()
             .zip(places)
             .map(|(given, place)| {
-                let value = if given.retried {
-                    let operand = &operands[place];
-                    let value = self.expression(&given.node, Some(operand));
-                    self.fit(value, operand, "the operand its requirement supplies")
-                } else {
-                    given.value
+                let value = match place.operand {
+                    Some(operand) if given.retried => self.argument_value(
+                        given,
+                        &operands[operand],
+                        "the operand its requirement supplies",
+                    ),
+                    Some(_) => given.value,
+                    None => {
+                        let configuration = &public.parameters[place.parameter];
+                        let ty = substitute_within(&configuration.ty, &map);
+                        // Check the public place now. The candidate's
+                        // place chooses its own form once it is known.
+                        let value = self.argument_read(given, &ty);
+                        self.fit(
+                            value.clone(),
+                            &ty,
+                            &format!("configuration parameter `{}`", configuration.name),
+                        );
+                        value
+                    }
                 };
                 hir::Argument {
-                    parameter: (place < parameters).then_some(place),
+                    parameter: Some(place.parameter),
                     pack: None,
                     value,
                 }
@@ -1345,6 +1427,8 @@ impl<'a> Typer<'a> {
             callee: Callee::Required {
                 operator: (operator.module, operator.declaration),
                 requirement: index,
+                operator_generics,
+                configuration,
             },
             arguments,
             form,
@@ -1352,6 +1436,26 @@ impl<'a> Typer<'a> {
         };
         (kind, result.unwrap_or(Type::Unknown))
     }
+}
+
+/// GEN-16 names ordinary operand types. Output inference takes a slot
+/// for every declared parameter, including FN-18 configuration slots.
+fn requirement_inputs<'a>(
+    signature: &Signature,
+    operands: impl IntoIterator<Item = &'a Type>,
+) -> Vec<Option<&'a Type>> {
+    let mut operands = operands.into_iter();
+    signature
+        .parameters
+        .iter()
+        .map(|parameter| {
+            if parameter.configuration {
+                None
+            } else {
+                operands.next()
+            }
+        })
+        .collect()
 }
 
 /// A requirement as it is read at a call ([`Typer::requirements_read`]):
@@ -1404,9 +1508,17 @@ pub(super) struct Required {
     result: Option<Type>,
     /// The types it is supplied with, in the operator's order.
     operands: Vec<Type>,
-    /// The place among them each argument of the call is given to, in
-    /// the order the call writes them.
-    places: Vec<usize>,
+    /// Each argument's two positions, in written argument order.
+    places: Vec<RequiredPlace>,
+}
+
+#[derive(Clone)]
+struct RequiredPlace {
+    /// Position among the requirement's ordinary operands (GEN-16).
+    /// A configuration argument has no operand position (FN-18).
+    operand: Option<usize>,
+    /// Index in the public signature, including configuration (FN-18).
+    parameter: usize,
 }
 
 /// The constraint calls of a condition that hold wherever the condition
@@ -1482,7 +1594,7 @@ fn result_sets(node: &SyntaxNode, name: &str, sets: &mut Vec<SyntaxNode>) {
 /// A call, in a typed body, of a function or a struct with generic
 /// parameters: what it calls, what it gives those parameters, and where
 /// it is written.
-struct Made {
+pub(super) struct Made {
     callee: (usize, usize),
     generics: Vec<Argument>,
     /// What answers each requirement the callee states at this call
@@ -1573,7 +1685,11 @@ fn nesting<'t>(ty: &'t Type) -> usize {
 /// argument, through calls at any depth, and is reported at that call.
 /// Not told is never taken to hold: one still not told for a constant
 /// this compiler does not work out is reported too.
-pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
+pub(super) fn instances_hold(
+    program: &Program,
+    mut given: Vec<Made>,
+    diagnostics: &mut Diagnostics,
+) {
     // The generic parameters of `(module, declaration)`, by where each
     // is declared.
     let own = |(module, declaration): (usize, usize)| -> Vec<Location> {
@@ -1587,10 +1703,10 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
     // declaration it is the body of; and what every body makes that
     // gives every argument.
     let mut passed: HashMap<(usize, usize), Vec<Made>> = HashMap::new();
-    let mut given: Vec<Made> = Vec::new();
     // The declarations whose body gives a callee a generic argument it
     // works out from its own generic parameters.
     let mut computing: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+    let mut configured = std::collections::HashSet::new();
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let mut made = Vec::new();
@@ -1604,7 +1720,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 .flatten()
                 .flatten()
             {
-                made_by(default, &mut made);
+                made_by(&default.value, &mut made);
             }
             // A struct a type written in it applies, a field's or a
             // parameter's (GEN-3: "an application of a struct whose
@@ -1620,6 +1736,11 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 }
             }
             let declared = own((index, position));
+            if !declared.is_empty()
+                && super::operator_defaults::selects_configuration(program, module, position)
+            {
+                configured.insert((index, position));
+            }
             for call in made {
                 // ERR-9: a generic argument the body works out from its
                 // own parameters, `times<(M * 2)>`, may fail where an
@@ -1673,6 +1794,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
         })
         .chain(passed.keys().copied())
         .chain(computing)
+        .chain(configured.iter().copied())
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -1744,13 +1866,24 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 past_the_limit(&from, made.callee, program, diagnostics);
                 break;
             }
+            let mut defaults = Vec::new();
+            if configured.contains(&made.callee) {
+                super::operator_defaults::check_instance(
+                    program,
+                    made.callee,
+                    &made.generics,
+                    &made.answers,
+                    &mut defaults,
+                    diagnostics,
+                );
+            }
             let inner = passed.get(&made.callee).map_or(&[][..], Vec::as_slice);
             let selecting = program.modules.get(made.callee.0).map_or(&[][..], |unit| {
                 unit.selecting
                     .get(made.callee.1)
                     .map_or(&[][..], Vec::as_slice)
             });
-            if inner.is_empty() && selecting.is_empty() {
+            if inner.is_empty() && selecting.is_empty() && defaults.is_empty() {
                 continue;
             }
             let declared = own(made.callee);
@@ -1759,7 +1892,15 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             // What each call of the instance calls, with what it gives
             // the callee's generic parameters and what answers the
             // callee's requirements there, and where it is written.
-            let mut calls: Vec<Resolved> = Vec::new();
+            let mut calls: Vec<Resolved> = defaults
+                .into_iter()
+                .map(|call| Resolved {
+                    callee: call.callee,
+                    generics: call.generics,
+                    answers: call.answers,
+                    at: call.at,
+                })
+                .collect();
             for call in inner {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with
@@ -1947,7 +2088,13 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                             // is selected (`Typer::called`): a `var`
                             // parameter's place among them (FN-15).
                             let mark = typer.diagnostics.len();
-                            typer.called(call.operator, *chosen, given, (call.form, call.name));
+                            typer.called(
+                                call.operator,
+                                *chosen,
+                                given,
+                                Vec::new(),
+                                (call.form, call.name),
+                            );
                             let reports = typer.diagnostics.as_slice()[mark..].to_vec();
                             typer.diagnostics.truncate(mark);
                             let fails = !reports.is_empty();
@@ -2330,6 +2477,31 @@ fn made_by(expression: &Expr, made: &mut Vec<Made>) {
     expression.walk(&mut |expression| made_at(expression, made));
 }
 
+/// The calls an omitted, specialized default makes with resolved arguments
+/// and evidence. Follow these as ordinary instances, including helper bodies
+/// that can themselves omit an inherited default (GEN-16, UNIT-8).
+pub(super) fn concrete_default_calls(expression: &Expr, made: &mut Vec<Made>) {
+    fn concrete(answer: &hir::Answer) -> bool {
+        match answer {
+            hir::Answer::Candidate {
+                generics,
+                requirements,
+                ..
+            } => {
+                generics.iter().all(resolved_default_argument) && requirements.iter().all(concrete)
+            }
+            hir::Answer::Stated(_) | hir::Answer::Unread => false,
+        }
+    }
+    let mut calls = Vec::new();
+    made_by(expression, &mut calls);
+    made.extend(calls.into_iter().filter(|call| {
+        call.required.is_none()
+            && call.generics.iter().all(resolved_default_argument)
+            && call.answers.iter().all(concrete)
+    }));
+}
+
 /// The call `expression` is, where it is one of a function, an
 /// operator's candidate or a struct it gives generic arguments.
 fn made_at(expression: &Expr, made: &mut Vec<Made>) {
@@ -2458,6 +2630,32 @@ pub(super) struct Condition<'c> {
     /// name, or one not worked out. Such a constant is not taken as
     /// known, so a `requires` not told for it is not taken to hold.
     pub(super) unvalued: &'c std::cell::Cell<bool>,
+}
+
+/// A concrete application names no type or value parameter and uses
+/// only known constant values, including those nested inside its types.
+fn resolved_default_argument(argument: &Argument) -> bool {
+    fn known(value: &ConstantValue) -> bool {
+        match value {
+            ConstantValue::Member(member) => member.of.is_some(),
+            ConstantValue::List(values) | ConstantValue::Tuple(values) => values.iter().all(known),
+            ConstantValue::Parameter { .. }
+            | ConstantValue::Named { .. }
+            | ConstantValue::Constructed { .. }
+            | ConstantValue::Unary(..)
+            | ConstantValue::Binary(..)
+            | ConstantValue::Unevaluated
+            | ConstantValue::Unknown => false,
+            _ => true,
+        }
+    }
+    match argument {
+        Argument::Type(ty) => !ty.any_part(
+            &|part| matches!(part, Type::Parameter { .. } | Type::Unknown),
+            &|constant| !known(&constant.value),
+        ),
+        Argument::Constant(constant) => known(&constant.value),
+    }
 }
 
 /// True where `value` is, or holds, a constant this compiler does not

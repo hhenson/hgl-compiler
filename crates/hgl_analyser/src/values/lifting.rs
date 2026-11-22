@@ -6,7 +6,7 @@ use hgl_diagnostics::{Category, Location};
 
 use super::Typer;
 use crate::hir::{
-    Body, Callee, Expr, ExprKind, Form, Local, LocalId, Node, Run, Stmt, ValueCategory,
+    Body, Callee, Expr, ExprKind, Local, LocalId, Node, Run, Stmt, ValueCategory,
     walk_statement_nodes, walk_statements_mut,
 };
 use crate::program::{DeclarationKind, Program, Role};
@@ -156,22 +156,17 @@ impl<'a> Typer<'a> {
     /// TIME-2: "Composition describes a typed graph without reading
     /// live payloads." So the entry is given what is known where the
     /// graph is built (`connection.as_constant`).
-    pub(super) fn configuration_input(&mut self, form: Form, option: &str, value: &Expr) {
+    pub(super) fn configuration_input(&mut self, operator: &str, option: &str, value: &Expr) {
         if self.category(value) != ValueCategory::Connection {
             return;
         }
-        let symbol = match form {
-            Form::Binary(operator) => operator.symbol(),
-            Form::Unary(operator) => operator.symbol(),
-            Form::Named => return,
-        };
         self.diagnostics.emit(
             error(
                 Category::Phase,
                 codes::CONNECTION_AS_CONSTANT,
                 value.at,
                 format!(
-                    "`{option}` configures `{symbol}`, which binds it where the graph is built, \
+                    "`{option}` configures `{operator}`, which binds it where the graph is built, \
                      and this is a connection"
                 ),
                 "EXPR-14",
@@ -534,9 +529,8 @@ fn formed_in_composition(program: &Program, locals: &[Local], value: &mut Expr) 
     }
 }
 
-/// [`record`] for an expression that stands in no body: a constant's
-/// value (UNIT-13) or a default (UNIT-7). Each is read with no local
-/// in scope, and neither composes a graph.
+/// [`record`] for a module constant's expression (UNIT-13). It has
+/// no enclosing body and does not compose a graph.
 pub(crate) fn record_value(program: &Program, value: &mut Expr) {
     value.walk_mut(&mut |inner| recorded(program, &[], false, inner));
 }

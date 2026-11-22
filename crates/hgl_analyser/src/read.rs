@@ -529,11 +529,24 @@ pub(crate) fn is_const(parameter: &SyntaxNode) -> bool {
 /// The parameters a function, an operator or a native function
 /// declares, as written.
 pub(crate) fn parameters(declaration: &SyntaxNode) -> Vec<SyntaxNode> {
-    child(declaration, SyntaxKind::ParamList)
-        .into_iter()
+    declaration
+        .children()
+        .filter(|list| {
+            matches!(
+                list.kind(),
+                SyntaxKind::ConfigParamList | SyntaxKind::ParamList
+            )
+        })
         .flat_map(|list| list.children())
         .filter(|parameter| parameter.kind() == SyntaxKind::Param)
         .collect()
+}
+
+/// FN-18: a parameter declared in the braces before the parentheses.
+fn is_configuration_parameter(parameter: &SyntaxNode) -> bool {
+    parameter
+        .parent()
+        .is_some_and(|list| list.kind() == SyntaxKind::ConfigParamList)
 }
 
 /// What a generic parameter is written as.
@@ -725,11 +738,7 @@ impl Reader<'_> {
     /// function.
     fn signature(&mut self, node: &SyntaxNode) -> Signature {
         let mut parameters = Vec::new();
-        let written = child(node, SyntaxKind::ParamList)
-            .into_iter()
-            .flat_map(|list| list.children())
-            .filter(|parameter| parameter.kind() == SyntaxKind::Param);
-        for parameter in written {
+        for parameter in crate::read::parameters(node) {
             let Some(name) = names_before_colon(&parameter).pop() else {
                 continue;
             };
@@ -756,6 +765,7 @@ impl Reader<'_> {
             parameters.push(Parameter {
                 name: name.text().to_string(),
                 at: self.at(name.span()),
+                configuration: is_configuration_parameter(&parameter),
                 constant,
                 var: has_token(&parameter, SyntaxKind::KwVar),
                 // FN-16: "`ref low: f64` ... The mark is a mode".
@@ -989,13 +999,19 @@ impl Reader<'_> {
         }) else {
             return false;
         };
-        let marked = parameters(&declaration).iter().any(|parameter| {
-            is_const(parameter)
-                && names_before_colon(parameter)
-                    .last()
-                    .is_some_and(|declared| declared.span().start == at.span.start)
-        });
-        if marked {
+        let Some(parameter) = parameters(&declaration).into_iter().find(|parameter| {
+            names_before_colon(parameter)
+                .last()
+                .is_some_and(|declared| declared.span().start == at.span.start)
+        }) else {
+            return false;
+        };
+        // FN-18: a configuration parameter, including a `const` one,
+        // is only read by the body. Requirements read generic values.
+        if is_configuration_parameter(&parameter) {
+            return false;
+        }
+        if is_const(&parameter) {
             return true;
         }
         // A value candidate. GEN-6: "Every parameter of a value
@@ -1014,7 +1030,7 @@ impl Reader<'_> {
                 .is_some_and(|declared| declared.text() == name.text())
         });
         match declared {
-            Some(parameter) => is_const(&parameter),
+            Some(parameter) => !is_configuration_parameter(&parameter) && is_const(&parameter),
             None => true,
         }
     }

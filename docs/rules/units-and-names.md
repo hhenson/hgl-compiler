@@ -55,7 +55,7 @@ analyser: done
 
 analyser: partial
 
-- A default reads no parameter of its declaration and no field of its struct
+- A default reads no parameter of its declaration and no field of its struct. Its own block bindings stay in scope when the default is specialized.
 - Left: the closure an imported default keeps; defaults that read a function's laws (#367).
 
 ## UNIT-8
@@ -63,17 +63,18 @@ analyser: partial
 analyser: partial
 
 - Any parameter but a pack may have a default; a pack's is rejected under FN-8
-- A parameter that may be omitted follows every one that may not, and a value function's call may omit one written `T?`
+- A parameter that may be omitted follows every one that may not within the parentheses. Configuration parameters in braces can stand in any order. A value function's call may omit a parameter written `T?`.
 - A default is read as a value of its parameter's type (`type.mismatch`) and kept for the stages after, `Module::defaults`
-- Configuration parameter ordering awaits #363, and law predicates in defaults await #367.
+- Law predicates in defaults await #367.
 - Left: that a default is a required constant; the default of a window, an atomic or a reference, which is held to no type; a default whose parameter's type names a generic parameter
 
 transpiler: partial
 
 - Binds omitted defaults or null after explicit arguments. Wires an omitted temporal
   default as a constant or leaves an optional input silent.
-- Left: defaults that run statements, propagate a failure, recursively leave
-  themselves out or have unsupported types. A graph call leaving out a nullable
+- An inherited operator configuration default can run a block in its own lexical scope.
+- Left: statement blocks in other defaults and defaults that propagate a failure,
+  recursively leave themselves out or have unsupported types. A graph call leaving out a nullable
   temporal input is reported (#399), as is a fallible default of a lifted nullable
   argument.
 

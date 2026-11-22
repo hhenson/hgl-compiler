@@ -400,13 +400,54 @@ impl<'a> Typer<'a> {
             .collect()
     }
 
+    /// Entries of a call, in written order (EXPR-2, EXPR-10). The flag
+    /// says whether the name is in the braces.
+    pub(super) fn call_entries(
+        &self,
+        list: &SyntaxNode,
+    ) -> Vec<(bool, Option<SyntaxToken>, SyntaxNode)> {
+        Self::configuration_entries(list)
+            .map(|(name, value)| (true, Some(name), value))
+            .chain(
+                self.call_arguments(list)
+                    .into_iter()
+                    .map(|(name, value)| (false, name, value)),
+            )
+            .collect()
+    }
+
+    /// The names and expressions in a call's configuration (EXPR-10).
+    fn configuration_entries(list: &SyntaxNode) -> impl Iterator<Item = (SyntaxToken, SyntaxNode)> {
+        list.parent()
+            .and_then(|call| child(&call, SyntaxKind::OperatorConfig))
+            .into_iter()
+            .flat_map(|braces| braces.children())
+            .filter(|entry| entry.kind() == SyntaxKind::ConfigArg)
+            .filter_map(|entry| Some((tokens(&entry).next()?, entry.children().next()?)))
+    }
+
+    /// EXPR-10 retains the rules of intrinsic forms. Where a form has
+    /// no named parameter, no brace entry can bind to it.
+    pub(super) fn reject_configuration(&mut self, form: &SyntaxToken, list: &SyntaxNode) {
+        for (name, value) in Self::configuration_entries(list) {
+            self.diagnostics.emit(error(
+                Category::Name,
+                codes::ARGUMENT_UNKNOWN,
+                Location::new(self.file, name.span()),
+                format!("`{}` has no parameter `{}`", form.text(), name.text()),
+                "EXPR-10",
+            ));
+            self.expression(&value, Some(&Type::Unknown));
+        }
+    }
+
     /// A call this pass does not read: its arguments are read for what
     /// they report themselves, with nothing expected of them.
     pub(super) fn unread_call(&mut self, list: &SyntaxNode) -> (ExprKind, Type) {
         let arguments = self
-            .call_arguments(list)
+            .call_entries(list)
             .into_iter()
-            .map(|(_, value)| hir::Argument {
+            .map(|(_, _, value)| hir::Argument {
                 parameter: None,
                 pack: None,
                 value: self.expression(&value, Some(&Type::Unknown)),
@@ -490,10 +531,11 @@ impl<'a> Typer<'a> {
             && self.designates(input)
         {
             // The child as it is written.
-            let written = arguments_of(list)
+            let written = self
+                .call_entries(list)
                 .into_iter()
                 .next()
-                .map(|(_, value)| super::endpoint_argument(&value).text().to_string());
+                .map(|(_, _, value)| super::endpoint_argument(&value).text().to_string());
             self.ref_read(
                 input,
                 written.as_deref(),
@@ -626,6 +668,7 @@ impl<'a> Typer<'a> {
                 .iter()
                 .map(|parameter| Slot {
                     name: &parameter.name,
+                    configuration: parameter.configuration,
                     ty: taken(parameter, known(&parameter.ty)),
                     required: required(parameter),
                     pack: parameter.pack,
@@ -678,7 +721,7 @@ impl<'a> Typer<'a> {
             .collect();
         let callee = &program.modules[module].declarations[declaration];
         let reported = self.diagnostics.len();
-        let named = self.named_generics(list, generics, &mut found);
+        let named = self.named_generics(list, signature, &mut found);
 
         // The requested output: `let names: list<str> = repeat(3)` says
         // what the `T` of `repeat<T>(count: i64) -> list<T>` is.
@@ -696,6 +739,7 @@ impl<'a> Typer<'a> {
             .iter()
             .map(|parameter| Slot {
                 name: &parameter.name,
+                configuration: parameter.configuration,
                 ty: Type::Unknown,
                 required: required(parameter),
                 pack: parameter.pack,

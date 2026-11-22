@@ -190,7 +190,7 @@ export const fn scale<T, ...Rest, const N: i64>(
     return value
 }
 
-fn arrow(x: i64) -> i64 => x + 1
+fn arrow{const by: i64 = 1}(x: i64) -> i64 => x + by
 
 const fn apply(f: const fn(value: i64) -> i64, x: i64) -> i64 => f(x)
 const fn via_generic(x: i64) -> i64 => apply(other::increase<i64>, x)
@@ -230,7 +230,7 @@ test {
 }
 
 test everything {
-    assert eval arrow(x: [1, _]) == [2, _]
+    assert eval arrow{by: 1}(x: [1, _]) == [2, _]
     assert raises("value.missing_key") { lookup(key) }
 }
 

@@ -1,0 +1,180 @@
+module demo.operator_configuration
+
+# FN-18, GEN-6, UNIT-8: the operator owns its configuration
+# defaults even when the candidate's brace order differs.
+const offset_default: i64 = 9
+operator combine{offset: i64 = offset_default, by: i64}(value: i64) -> i64
+impl const fn combine{by: i64, extra: i64 = 2, offset: i64}(argument: i64) -> i64 =>
+    offset * 100 + by * 10 + argument + extra
+
+# UNIT-7: the inherited default reads the operator's generic arguments
+# and its defining scope. The candidate has no generic arguments of its own.
+operator with_generic<const amount: i64 = 2>{offset: i64 = amount + offset_default}() -> i64
+impl const fn with_generic{offset: i64}() -> i64 => offset
+
+const fn forwarded<const amount: i64>() -> i64 => with_generic<amount>()
+
+const fn offset_from<const amount: i64>() -> i64 => amount + offset_default
+
+operator with_helper<const amount: i64 = 2>{offset: i64 = offset_from<amount>()}() -> i64
+impl const fn with_helper{offset: i64}() -> i64 => offset
+
+operator add_config<const amount: i64>{const offset: i64 = amount}(value: i64) -> i64
+impl fn add_config{const offset: i64}(value: i64) -> i64 {
+    when { return value + offset }
+}
+
+fn with_temporal_default(value: i64) -> i64 => add_config<4>(value)
+
+# GEN-16: an inherited default calls an operation required by the
+# operator itself, with the operator's concrete type argument.
+operator make_default<T>() -> T
+impl const fn make_default() -> i64 => 28
+operator with_required_default<T>{value: T = make_default<T>()}(input: T) -> T
+    requires make_default() -> T
+impl const fn with_required_default{value: i64}(input: i64) -> i64 => value
+
+test a_configuration_default_reads_the_operators_generics {
+    assert with_generic() == 11
+    assert with_generic<7>() == 16
+    assert with_generic{amount: 8}() == 17
+    assert forwarded<4>() == 13
+    assert with_helper<3>() == 12
+    assert eval with_temporal_default(value: [1, 2]) == [5, 6]
+    assert with_required_default(1) == 28
+}
+
+# GEN-16 requires the ordinary operand. FN-18 configuration occupies
+# distinct slots, and a candidate may have an extra defaulted option.
+operator pick<T, const mode: i64 = 0>{flag: bool = false}(value: T) -> T
+impl const fn pick{extra: i64 = 100, flag: bool}(value: i64) -> i64 =>
+    if flag { 0 } else { value + extra }
+impl const fn pick{flag: bool}(value: bool) -> bool => if flag { false } else { value }
+
+const fn required_pick<T>(value: T) -> T requires pick(T) -> T => pick(value)
+const fn required_named_pick<T>(value: T) -> T requires pick(T) -> T => pick<T>(value: value)
+const fn required_option_pick<T>(value: T) -> T requires pick(T) -> T => pick{mode: 0}(value)
+const fn required_configured_pick<T>(value: T) -> T requires pick(T) -> T =>
+    pick{flag: true}(value)
+
+# EXPR-5: the instance gives the selected candidate an f64 literal.
+operator wide_config<T>{offset: i64 = 0}(value: T) -> f64
+impl const fn wide_config{offset: f64}(value: bool) -> f64 => offset
+const fn required_wide_config<T>(value: T) -> f64 requires wide_config(T) -> f64 =>
+    wide_config{offset: 3}(value)
+
+test a_required_operator_keeps_ordinary_argument_slots {
+    assert required_option_pick(5) == 105
+    assert required_option_pick(true) == true
+    assert required_pick(7) == 107
+    assert required_named_pick(true)
+    assert required_configured_pick(7) == 0
+    assert required_configured_pick(true) == false
+    assert required_wide_config(true) == 3.0
+}
+
+struct Digit { value: i64 }
+
+# A candidate-only configuration option takes a separate brace entry.
+impl const fn add_{shift: i64}(lhs: Digit, rhs: Digit) -> i64 =>
+    shift * 100 + lhs.value * 10 + rhs.value
+
+test named_operator_configuration {
+    assert combine{by: 3}(4) == 936
+    assert combine{offset: 1, by: 2, extra: 3}(value: 4) == 127
+
+    var order = 0
+    let total = combine{
+        offset: {
+            order += 1
+            order
+        },
+        by: {
+            order += 1
+            order
+        },
+    }({
+        order += 1
+        order
+    })
+    assert total == 125
+    assert order == 3
+}
+
+test symbol_configuration {
+    var order = 0
+    let total = {
+        order += 1
+        Digit(value: order)
+    } +{shift: {
+        order += 1
+        order
+    }} {
+        order += 1
+        Digit(value: order)
+    }
+    assert total == 213
+    assert order == 3
+}
+
+# GEN-16, UNIT-8: specializing the outer omitted default selects a
+# candidate whose own inherited default supplies its value.
+operator inner_default<T>{value: T = 41}() -> T
+impl const fn inner_default{value: i64}() -> i64 => value
+operator nested_default<T>{value: T = inner_default<T>()}(input: T) -> T
+    requires inner_default() -> T
+impl const fn nested_default{value: i64}(input: i64) -> i64 => value
+
+# GEN-7: the operator's membership authorizes selection when the
+# inherited default's type is made concrete.
+operator inner_member<T>() -> T
+impl const fn inner_member() -> i64 => 42
+impl const fn inner_member() -> bool => true
+operator member_default<T>{value: T = inner_member<T>()}(input: T) -> T
+    requires T in {i64, bool}
+impl const fn member_default{value: i64}(input: i64) -> i64 => value
+impl const fn member_default{value: bool}(input: bool) -> bool => value
+
+test specialized_inherited_defaults {
+    assert nested_default(0) == 41
+    assert member_default(0) == 42
+    assert member_default(false)
+}
+
+# UNIT-7 and CTRL-10: each default has its own block-local scope.
+operator local_member<T>(input: i64) -> T
+impl const fn local_member(input: i64) -> i64 => input
+impl const fn local_member(input: i64) -> bool => input > 0
+operator local_defaults<T>{
+    left: T = {
+        let saved = 20
+        local_member<T>(saved)
+    },
+    right: T = {
+        let saved = 22
+        local_member<T>(saved)
+    }
+}(input: T) -> T requires T in {i64, bool}
+impl const fn local_defaults{left: i64, right: i64}(input: i64) -> i64 => left + right
+impl const fn local_defaults{left: bool, right: bool}(input: bool) -> bool => left && right
+
+# GEN-16: the operator's default forwards evidence to a generic helper.
+const fn default_helper<T>() -> T requires inner_default() -> T => inner_default<T>()
+operator forwarded_default<T>{value: T = default_helper<T>()}(input: T) -> T
+    requires inner_default() -> T
+impl const fn forwarded_default{value: i64}(input: i64) -> i64 => value
+
+fn lifted_defaults(input: i64) -> i64 => local_defaults(input)
+
+# Cold block locals belong to the default even while a node hook is written.
+fn hook_defaults(input: i64) -> i64 {
+    when { return local_defaults(input) }
+}
+
+test inherited_defaults_keep_locals_and_forward_evidence {
+    assert local_defaults(0) == 42
+    assert local_defaults(false)
+    assert forwarded_default(0) == 41
+    assert eval lifted_defaults(input: [1, 2]) == [42, 42]
+    assert eval hook_defaults(input: [1, 2]) == [42, 42]
+}
