@@ -19,10 +19,9 @@
 //!
 //! What is made for a toolchain is kept under the cache, in a directory
 //! named by a hash of everything it depends on: which build of hgraph's
-//! libraries it links, the SDK's and the
-//! dependencies' paths and the SDK's own files, the compiler, its family
-//! and version and what it reads from the environment, the linker, the
-//! flags, and the runtime library's sources.
+//! libraries it links, the SDK's headers and libraries, the dependency
+//! libraries, the compiler's file, build banner and environment, the
+//! selected fast linker's version, the flags, and the runtime sources.
 //! It is made once, under a lock, by CMake:
 //!
 //! 1. the runtime library's project (`runtime/cpp`, carried by `hgl`)
@@ -43,6 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
+use walkdir::WalkDir;
 
 use super::build::{lock, quoted, write_if_changed};
 use super::stamp::file_digest;
@@ -401,11 +401,12 @@ pub(super) struct Toolchain {
     family: Family,
     /// Its version, as [`Family::identify`] gives it.
     version: String,
+    /// The version line printed by the compiler's verbose probe.
+    banner: Option<String>,
     /// `ninja`.
     ninja: Option<PathBuf>,
-    /// True where the family links with `ld.lld` and it is on the
-    /// `PATH`, and links are made with it.
-    lld: bool,
+    /// The selected `ld.lld`'s version, empty if it reports none.
+    lld: Option<String>,
     /// What `HGL_CPP_FLAGS` adds, and for a debug build `-O0 -g`.
     flags: Vec<String>,
     /// True for a debug build: generated units and the runtime library
@@ -469,8 +470,15 @@ impl Toolchain {
     /// tools found as the environment says.
     fn with(hgraph: Hgraph) -> Result<Toolchain, String> {
         let family = Family::of_platform();
-        let (compiler, version) = compiler(family)?;
+        let (compiler, version, banner) = compiler(family)?;
         let ninja = which::which("ninja").ok();
+        let lld = if family.links_with_lld() {
+            which::which("ld.lld")
+                .ok()
+                .map(|path| linker_version(&path))
+        } else {
+            None
+        };
         let flags = std::env::var(FLAGS)
             .unwrap_or_default()
             .split_whitespace()
@@ -481,8 +489,9 @@ impl Toolchain {
             compiler,
             family,
             version,
+            banner,
             ninja,
-            lld: family.links_with_lld() && which::which("ld.lld").is_ok(),
+            lld,
             flags,
             debug: false,
         })
@@ -537,6 +546,8 @@ impl Toolchain {
         }
         self.family.hash(&mut hash);
         self.version.hash(&mut hash);
+        self.banner.hash(&mut hash);
+        hash_file(&self.compiler, &mut hash);
         for variable in self.family.environment() {
             std::env::var_os(variable).hash(&mut hash);
         }
@@ -551,9 +562,18 @@ impl Toolchain {
             format!("lib/libhgraph_runtime{suffix}"),
             format!("lib/libhgraph_wiring{suffix}"),
         ] {
-            let digest = file_digest(&self.hgraph.sdk.join(file)).ok();
-            digest.as_ref().map(blake3::Hash::as_bytes).hash(&mut hash);
+            hash_file(&self.hgraph.sdk.join(file), &mut hash);
         }
+        hash_files(
+            WalkDir::new(self.hgraph.sdk.join("include")),
+            |_| true,
+            &mut hash,
+        );
+        hash_files(
+            WalkDir::new(self.hgraph.deps.join("lib")).max_depth(1),
+            dependency_library,
+            &mut hash,
+        );
         hgl_cpp::runtime::FILES.hash(&mut hash);
         format!("{:016x}", hash.finish())
     }
@@ -754,7 +774,9 @@ impl Toolchain {
             .map_err(|reason| self.incomplete(reason))?;
         let target = probe_target(&build.join(".cmake/api/v1/reply"))?;
         let mut description = description_of(&target, self.family, &self.compiler)?;
-        description.link.extend(self.family.link_flags(self.lld));
+        description
+            .link
+            .extend(self.family.link_flags(self.lld.is_some()));
         description.libraries = [
             runtime.join("lib"),
             self.hgraph.sdk.join("lib"),
@@ -1007,10 +1029,83 @@ fn prefix(
     fs::canonicalize(&path).map_err(|error| format!("{variable} names {}: {error}", path.display()))
 }
 
+/// Add the bytes of this file to the toolchain identity, following links.
+fn hash_file(path: &Path, hash: &mut DefaultHasher) {
+    let digest = file_digest(path).ok();
+    digest.as_ref().map(blake3::Hash::as_bytes).hash(hash);
+}
+
+/// Include each selected file's name as well as its contents, in a fixed order.
+fn hash_files(files: WalkDir, keep: impl Fn(&Path) -> bool, hash: &mut DefaultHasher) {
+    for entry in files
+        .follow_links(true)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if entry.file_type().is_file() && keep(entry.path()) {
+            entry.path().hash(hash);
+            hash_file(entry.path(), hash);
+        }
+    }
+}
+
+/// The dependency prefix can hold other packages too. Include the libraries
+/// hgraph links, including debug builds and versioned library names.
+fn dependency_library(path: &Path) -> bool {
+    let Some((name, suffix)) = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.split_once('.'))
+    else {
+        return false;
+    };
+    matches!(
+        name,
+        "libfmt" | "libfmtd" | "libspdlog" | "libspdlogd" | "libsimdjson"
+    ) && (matches!(suffix, "so" | "dylib" | "a")
+        || suffix.starts_with("so.")
+        || suffix.ends_with(".dylib"))
+}
+
+/// The stable version line from the preprocessor's verbose output. The
+/// macros establish the compiler family even when a wrapper omits its banner.
+fn probe_compiler(driver: &Path) -> Option<(Family, String, Option<String>)> {
+    let output = Command::new(driver)
+        .args(["-dM", "-E", "-v", "-x", "c++", "/dev/null"])
+        .env("LC_ALL", "C")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let (family, version) = Family::identify(&String::from_utf8_lossy(&output.stdout))?;
+    let prefix = match family {
+        Family::Gcc => "gcc version ",
+        Family::AppleClang => "Apple clang version ",
+    };
+    let banner = String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with(prefix))
+        .map(str::to_owned);
+    Some((family, version, banner))
+}
+
+/// An absent version leaves the linker's selection unchanged.
+fn linker_version(linker: &Path) -> String {
+    Command::new(linker)
+        .arg("--version")
+        .env("LC_ALL", "C")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .unwrap_or_default()
+}
+
 /// The compiler `CXX` names, or the first of `family`'s candidates on
-/// the `PATH`, with its version; or why there is none of the family at
-/// its oldest version or later.
-fn compiler(family: Family) -> Result<(PathBuf, String), String> {
+/// the `PATH`, with its version and build banner; or why there is none
+/// of the family at its oldest version or later.
+fn compiler(family: Family) -> Result<(PathBuf, String, Option<String>), String> {
     let named = std::env::var_os("CXX").filter(|named| !named.is_empty());
     let candidates: Vec<PathBuf> = match &named {
         Some(named) => vec![which::which(named).map_err(|_| {
@@ -1027,30 +1122,22 @@ fn compiler(family: Family) -> Result<(PathBuf, String), String> {
     };
     let mut seen = Vec::new();
     for candidate in candidates {
-        // The macros it defines say which compiler it is, whatever its
-        // name: `g++` is Apple clang on macOS.
-        let found = Command::new(&candidate)
-            .args(["-dM", "-E", "-x", "c++", "/dev/null"])
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .and_then(|output| Family::identify(&String::from_utf8_lossy(&output.stdout)));
         let major = |version: &str| {
             version
                 .split('.')
                 .next()
                 .and_then(|major| major.parse::<u32>().ok())
         };
-        match found {
+        match probe_compiler(&candidate) {
             // The path as found, and not where a link leads: a wrapper
             // such as `ccache` linked as `g++` knows the compiler by it.
-            Some((of, version))
+            Some((of, version, banner))
                 if of == family
                     && major(&version).is_some_and(|major| major >= family.oldest()) =>
             {
-                return Ok((candidate, version));
+                return Ok((candidate, version, banner));
             }
-            Some((of, version)) => {
+            Some((of, version, _)) => {
                 seen.push(format!("{} ({} {version})", candidate.display(), of.name()))
             }
             None => seen.push(format!(
@@ -1648,8 +1735,9 @@ mod tests {
             compiler: PathBuf::from("g++"),
             family: Family::Gcc,
             version: "15.2.0".to_string(),
+            banner: None,
             ninja: Some(PathBuf::from("ninja")),
-            lld: false,
+            lld: None,
             flags: Vec::new(),
             debug,
         }
@@ -1665,6 +1753,122 @@ mod tests {
         // A debug build that links the optimised libraries builds its
         // runtime library for debugging all the same.
         assert_ne!(ordinary, toolchain(&libexec, Build::Optimised, true).key());
+    }
+
+    #[cfg(unix)]
+    fn executable(path: &Path, script: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::write(path, script).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_compilers_build_banner_is_probed_with_its_macros_and_keys_the_toolchain() {
+        let bundle = release(None);
+        let root = bundle.path();
+        let mut toolchain = toolchain(&root.join("libexec"), Build::Optimised, false);
+        toolchain.compiler = root.join("g++");
+        executable(
+            &toolchain.compiler,
+            "#!/bin/sh\n\
+             cd \"$(dirname \"$0\")\" || exit 2\n\
+             [ \"$1\" = -dM ] && [ \"$2\" = -E ] && [ \"$3\" = -v ] || exit 3\n\
+             echo probe >> invocations\n\
+             cat defines\n\
+             cat banner >&2\n",
+        );
+        fs::write(root.join("defines"), GCC).unwrap();
+        fs::write(root.join("banner"), "gcc version 15.2.0 (Test build 1)\n").unwrap();
+        let (family, version, banner) = super::probe_compiler(&toolchain.compiler).unwrap();
+        assert_eq!(family, Family::Gcc);
+        assert_eq!(version, toolchain.version);
+        toolchain.banner = banner;
+        let original = toolchain.key();
+
+        let (_, same_version, same_banner) = super::probe_compiler(&toolchain.compiler).unwrap();
+        assert_eq!(same_version, toolchain.version);
+        assert_eq!(same_banner, toolchain.banner);
+        assert_eq!(original, toolchain.key());
+
+        fs::write(root.join("banner"), "gcc version 15.2.0 (Test build 2)\n").unwrap();
+        let (_, same_version, new_banner) = super::probe_compiler(&toolchain.compiler).unwrap();
+        assert_eq!(same_version, toolchain.version);
+        toolchain.banner = new_banner;
+        assert_ne!(original, toolchain.key());
+        assert_eq!(
+            fs::read_to_string(root.join("invocations")).unwrap(),
+            "probe\n".repeat(3)
+        );
+    }
+
+    #[test]
+    fn replacing_the_compiler_driver_in_place_changes_the_toolchain_key() {
+        let bundle = release(None);
+        let root = bundle.path();
+        let mut toolchain = toolchain(&root.join("libexec"), Build::Optimised, false);
+        toolchain.compiler = root.join("g++");
+        fs::write(&toolchain.compiler, "original compiler").unwrap();
+        let original = toolchain.key();
+
+        fs::write(&toolchain.compiler, "replacement compiler").unwrap();
+        assert_ne!(original, toolchain.key());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_selected_lld_version_changes_the_toolchain_key() {
+        let bundle = release(None);
+        let root = bundle.path();
+        let mut toolchain = toolchain(&root.join("libexec"), Build::Optimised, false);
+        let linker = root.join("ld.lld");
+        executable(
+            &linker,
+            "#!/bin/sh\n\
+             [ \"$1\" = --version ] || exit 2\n\
+             cat \"$(dirname \"$0\")/version\"\n",
+        );
+        fs::write(root.join("version"), "LLD 21.0.0\n").unwrap();
+        toolchain.lld = Some(super::linker_version(&linker));
+        let original = toolchain.key();
+        assert_eq!(original, toolchain.key());
+
+        fs::write(root.join("version"), "LLD 21.0.1\n").unwrap();
+        toolchain.lld = Some(super::linker_version(&linker));
+        assert_ne!(original, toolchain.key());
+    }
+
+    #[test]
+    fn replacing_a_dependency_library_in_place_changes_the_toolchain_key() {
+        let bundle = release(None);
+        let libexec = bundle.path().join("libexec");
+        let toolchain = toolchain(&libexec, Build::Optimised, false);
+        for name in ["libfmt.so.12", "libspdlogd.1.17.dylib", "libsimdjson.a"] {
+            let library = toolchain.hgraph.deps.join("lib").join(name);
+            fs::write(&library, "original library").unwrap();
+            let original = toolchain.key();
+            assert_eq!(original, toolchain.key());
+
+            fs::write(&library, "replacement library").unwrap();
+            assert_ne!(original, toolchain.key(), "{name}");
+        }
+    }
+
+    #[test]
+    fn editing_an_sdk_header_in_place_changes_the_toolchain_key() {
+        let bundle = release(None);
+        let libexec = bundle.path().join("libexec");
+        let toolchain = toolchain(&libexec, Build::Optimised, false);
+        let headers = toolchain.hgraph.sdk.join("include/hgraph/types");
+        fs::create_dir_all(&headers).unwrap();
+        let header = headers.join("version.h");
+        fs::write(&header, "#define SDK_VERSION 1").unwrap();
+        let original = toolchain.key();
+        assert_eq!(original, toolchain.key());
+
+        fs::write(&header, "#define SDK_VERSION 2").unwrap();
+        assert_ne!(original, toolchain.key());
     }
 
     #[test]

@@ -2126,11 +2126,12 @@ it.
 
 A toolchain is prepared once and kept under the cache in
 `toolchains/<hash>`, the hash of which build of hgraph's libraries it
-links and whether it is a debug build's, the SDK's and the dependencies' paths
-and the SDK's own files, the compiler, its family and version and what
-it reads from the environment (`MACOSX_DEPLOYMENT_TARGET` and `SDKROOT`
-on macOS), the linker, the flags and the runtime library's sources,
-under a lock: the runtime
+links and whether it is a debug build's, the SDK's headers and libraries,
+and the dependency libraries. It also includes the compiler's contents,
+family and version, the build banner from the same predefined-macro probe,
+the selected `ld.lld` version, the flags, the runtime library's sources,
+and the compiler's environment (`MACOSX_DEPLOYMENT_TARGET` and `SDKROOT`
+on macOS). Under a lock, the runtime
 library is configured, built and installed with CMake; a small CMake
 project of the driver's own, a program linked with it, is configured,
 and CMake's file API describes how CMake compiles and links it, which
