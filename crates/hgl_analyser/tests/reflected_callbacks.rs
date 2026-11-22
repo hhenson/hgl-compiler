@@ -199,7 +199,9 @@ fn dependent_arguments_resolve_a_bare_generic_callback() {
 ) -> i64
     requires R == f64 && each arg in arg_keys(As) { As[arg] == Ps[arg] }
     => 1
-const fn generic<T, ...Ts>(item: T, rest: ...Ts) -> f64 => 1.0
+const fn generic<T, ...Ts>(item: T, rest: ...Ts) -> f64
+    requires T == str && each item_type in types(Ts) { item_type == i64 }
+    => 1.0
 const fn chosen() -> i64 => inspect(generic, "item", 4)
 const fn empty() -> i64 => inspect(generic, item: "item")"#,
     );

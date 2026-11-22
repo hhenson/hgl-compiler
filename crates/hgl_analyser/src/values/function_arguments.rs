@@ -172,11 +172,18 @@ impl<'a> Typer<'a> {
             .collect::<Vec<_>>();
         let taken = in_instance(signature, &map);
         let actual = function_type(&taken, declared.kind.role() == Some(Role::Value));
-        if type_packs.is_empty()
-            && matches_template(template, &actual)
-            && template.types().all(whole)
-        {
-            self.requires_met(self.at(node), (module, declaration), &generics);
+        if matches_template(template, &actual) {
+            let target = (module, declaration);
+            let at = self.at(node);
+            if type_packs.is_empty() {
+                if template.types().all(whole) {
+                    self.requires_met(at, target, &generics);
+                }
+            } else if actual.types().all(whole)
+                && type_packs.iter().flat_map(|pack| &pack.types).all(whole)
+            {
+                self.pack_requires_met(at, target, &generics, &type_packs);
+            }
         }
         let requirements = if type_packs.is_empty() {
             self.answers(module, declaration, &generics)
