@@ -469,3 +469,35 @@ fn a_rejected_program_writes_diagnostics_instead_of_a_model() {
     assert!(output.stdout.is_empty());
     assert!(!out.exists());
 }
+
+/// TST-1 and SDOC-10: a test's candidate is private to that test, and
+/// the type identity in private documentation includes its owner.
+#[test]
+fn test_local_declarations_are_not_part_of_an_operators_public_interface() {
+    let file = fixture("test_local_declarations.hgl");
+    let public: Value = serde_json::from_slice(&document(&[&file])).unwrap();
+    let exported = module(&public, "demo.test_local_declarations");
+    let candidates = declaration(exported, "classify")["candidates"]
+        .as_array()
+        .unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(exported["declarations"].as_array().unwrap().len(), 1);
+
+    let private: Value = serde_json::from_slice(&document(&[&file, "--private"])).unwrap();
+    let decls = module(&private, "demo.test_local_declarations")["declarations"]
+        .as_array()
+        .unwrap();
+    let names = decls
+        .iter()
+        .filter(|decl| decl["kind"] == "struct" && decl["name"] == "Closed")
+        .map(|decl| decl["canonicalName"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        [
+            "demo.test_local_declarations::with_a_type::Closed",
+            "demo.test_local_declarations::independent_types_and_operator::Closed",
+            "demo.test_local_declarations::local_calendar::Closed",
+        ]
+    );
+}

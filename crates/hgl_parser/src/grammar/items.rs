@@ -437,7 +437,7 @@ impl Parser<'_> {
             return;
         }
 
-        if test_helper && matches!(self.current(), KwExport | KwImpl) {
+        if test_helper && self.at(KwExport) {
             self.error(
                 "a test helper must be a private `fn` or `const fn`",
                 "TST-1",
@@ -1154,30 +1154,36 @@ impl Parser<'_> {
         self.finish();
     }
 
-    /// TST-1: a named test starts with its helper functions, before any
-    /// statements. Each helper declaration is followed by a line break.
+    /// TST-1: a named test starts with private declarations, each followed
+    /// by a line break. The block's statements follow that prefix.
     fn test_block_contents(&mut self) {
-        while self.at_test_helper() {
+        while let Some(item) = self.test_declaration_kind() {
             self.begin_entry();
             let errors = self.errors;
-            self.function_decl(true);
+            self.test_declaration(item);
             if self.errors != errors {
                 self.skip_line(false);
             } else if !self.at_line_start() {
-                self.expected_rule("a line break after a test helper", "TST-1");
+                let expected = if item == Item::Function {
+                    "a line break after a test helper"
+                } else {
+                    "a line break after a test declaration"
+                };
+                self.expected_rule(expected, "TST-1");
             }
         }
         self.block_statements(|parser| {
-            if parser.at_test_helper() {
-                parser.error(
-                    "a test helper must precede the test's statements",
-                    "TST-1",
-                    None,
-                );
+            if let Some(item) = parser.test_declaration_kind() {
+                let message = if item == Item::Function {
+                    "a test helper must precede the test's statements"
+                } else {
+                    "a declaration must precede the test's statements"
+                };
+                parser.error(message, "TST-1", None);
                 // Read the whole misplaced declaration for recovery, so
                 // its body braces cannot close the test's block.
                 parser.start(Error);
-                parser.function_decl(true);
+                parser.item(item);
                 parser.finish();
             } else {
                 parser.statement();
@@ -1185,17 +1191,56 @@ impl Parser<'_> {
         });
     }
 
+    /// Finds a test declaration without confusing a function expression
+    /// with a named function or an operator call with a declaration.
+    fn test_declaration_kind(&self) -> Option<Item> {
+        match self.item_kind()? {
+            Item::Function if self.at_named_test_function() => Some(Item::Function),
+            item @ (Item::Constant
+            | Item::Struct
+            | Item::Enum
+            | Item::Operator
+            | Item::Use
+            | Item::NativeType
+            | Item::NativeFunction) => Some(item),
+            _ => None,
+        }
+    }
+
     /// A named function or an attached warning annotation. A named
     /// function has a name where an anonymous one's parameters begin.
-    fn at_test_helper(&self) -> bool {
+    fn at_named_test_function(&self) -> bool {
         if self.at(At) && self.nth_word(1, "suppress_warning") {
             return true;
         }
-        // Recognize forbidden modifiers too, to diagnose them on a
-        // declaration while recovering its body as a unit.
-        let visibility = usize::from(matches!(self.current(), KwExport | KwImpl));
-        let modifier = visibility + usize::from(self.nth_word(visibility, "const"));
+        let visibility = usize::from(self.at(KwExport));
+        let role = visibility + usize::from(self.nth(visibility) == KwImpl);
+        let modifier = role + usize::from(self.nth_word(role, "const"));
         self.nth(modifier) == KwFn && self.nth(modifier + 1) == Ident
+    }
+
+    /// TST-1: candidates use ordinary function syntax. Imports and
+    /// native declarations are read only for error recovery.
+    fn test_declaration(&mut self, item: Item) {
+        match item {
+            Item::Function => self.function_decl(true),
+            Item::Use | Item::NativeType | Item::NativeFunction => {
+                self.error(
+                    "a named test admits no imports or native declarations",
+                    "TST-1",
+                    None,
+                );
+                self.start(Error);
+                self.item(item);
+                self.finish();
+            }
+            _ => {
+                if self.at(KwExport) {
+                    self.error("a test declaration cannot be exported", "TST-1", None);
+                }
+                self.item(item);
+            }
+        }
     }
 
     /// `timeout_annotation = "@", "timeout", "(", TEMPORAL_LITERAL, ")" ;`

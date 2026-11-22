@@ -247,9 +247,10 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         // nor a result, so it is read as a graph of that name with an
         // empty signature.
         let mut test_bodies = Vec::with_capacity(module.tests.len());
-        for test in &module.tests {
-            let stand_in =
+        for (owner, test) in module.tests.iter().enumerate() {
+            let mut stand_in =
                 Declaration::stand_in(&test.name, test.at, test.file, &test.syntax, true);
+            stand_in.test_owner = Some(owner);
             let body = Typer::new(program, module, &stand_in, &empty, found, diagnostics)
                 .test(test.integration);
             test_bodies.push(body);
