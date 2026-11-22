@@ -282,7 +282,7 @@ impl Program {
     }
 
     /// Instantiate a body and report any configuration that fails to fit
-    /// the selected candidate (FN-18, GEN-16). Collect new graph reports
+    /// the selected candidate (FN-18, GEN-16). Collect new body reports
     /// separately so the instance walk can point them at its caller (GEN-7).
     pub(crate) fn checked_instance(
         &self,
@@ -291,7 +291,7 @@ impl Program {
         requirements: &[Answer],
         inputs: InstanceInputs<'_>,
         diagnostics: &RefCell<Diagnostics>,
-        graph_diagnostics: &mut Diagnostics,
+        body_diagnostics: &mut Diagnostics,
     ) -> Option<(Signature, Body)> {
         let declared = self.modules.get(module)?;
         let Some(Detail::Callable(signature)) = declared.details.get(declaration) else {
@@ -334,13 +334,16 @@ impl Program {
         let pending_forwards = inputs
             .pack_inputs
             .filter(|_| crate::values::has_forwarded_calls(&body));
-        if let Some(pack_inputs) = pending_forwards
-            && let Some(reread) = crate::values::resolve_forwarded_calls(
+        let recheck_endpoints =
+            crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
+        if (recheck_endpoints || pending_forwards.is_some())
+            && let Some(reread) = crate::values::reread_instance_body(
                 self,
                 (module, declaration),
                 (&taken, &map),
-                (&functions, pack_inputs),
-                graph_diagnostics,
+                (&functions, pending_forwards),
+                &project,
+                body_diagnostics,
             )
         {
             body = reread;
@@ -360,7 +363,7 @@ impl Program {
                 (module, declaration),
                 (&taken, &map),
                 &mut body,
-                graph_diagnostics,
+                body_diagnostics,
                 &|expression| self.place(expression, &arguments, &functions),
             );
         } else {
@@ -428,7 +431,29 @@ impl Program {
                 } else {
                     None
                 };
+                let callback = matches!(callee, Callee::Parameter { .. });
                 self.place_target(callee, instance, functions);
+                if callback
+                    && let Some((module, declaration)) = callee.declaration()
+                    && let Detail::Callable(signature) = &self.modules[module].details[declaration]
+                    && signature
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.configuration)
+                {
+                    // FN-18: template slots omit the callback's defaulted
+                    // configuration, which still occupies declaration slots.
+                    let ordinary = signature
+                        .parameters
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, parameter)| !parameter.configuration);
+                    for argument in arguments.iter_mut() {
+                        argument.parameter = argument
+                            .parameter
+                            .and_then(|index| ordinary.clone().nth(index).map(|(slot, _)| slot));
+                    }
+                }
                 if let Some(configuration) = required {
                     if let Callee::Required {
                         configuration: unresolved,
@@ -544,6 +569,13 @@ impl Program {
             crate::values::record(self, &mut function.body, !function.template.value);
         } else {
             place_callee(callee, instance.types, instance.requirements, functions);
+            if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } =
+                callee
+            {
+                for pack in type_packs {
+                    instance.packs.place_forwarded(pack);
+                }
+            }
         }
     }
 
