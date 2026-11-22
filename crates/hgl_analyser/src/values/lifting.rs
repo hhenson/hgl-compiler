@@ -771,7 +771,30 @@ fn fill_type(current: &mut Type, inferred: Type) -> bool {
             *current = inferred;
             true
         }
-        (Type::Nullable(current), Type::Nullable(inferred)) => fill_type(current, *inferred),
+        (Type::Nullable(current), Type::Nullable(inferred))
+        | (Type::Set(current), Type::Set(inferred)) => fill_type(current, *inferred),
+        (
+            Type::Result { value, error },
+            Type::Result {
+                value: inferred_value,
+                error: inferred_error,
+            },
+        ) => {
+            let value_changed = fill_type(value, *inferred_value);
+            let error_changed = fill_type(error, *inferred_error);
+            value_changed || error_changed
+        }
+        (
+            Type::Dict { key, value },
+            Type::Dict {
+                key: inferred_key,
+                value: inferred_value,
+            },
+        ) => {
+            let key_changed = fill_type(key, *inferred_key);
+            let value_changed = fill_type(value, *inferred_value);
+            key_changed || value_changed
+        }
         (
             Type::List {
                 element: current,

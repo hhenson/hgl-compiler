@@ -303,6 +303,42 @@ fn deferred_generic_result<T>(const value: T) -> i64 {
     return copied
 }
 
+# ERR-2: the local keeps its inferred result's type at both consumers.
+const fn boxed_result<U>(value: U) -> result<U, error> => ok(value)
+
+const fn boxed_payload(outcome: result<i64, error>) -> i64 {
+    if is_ok(outcome) { return outcome.value }
+    return -1
+}
+
+fn deferred_result_data<T>(const value: T) -> result<i64, error> {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let copied = boxed_result(chosen)
+    return copied
+}
+
+fn deferred_result_payload<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let copied = boxed_result(chosen)
+    return boxed_payload(copied)
+}
+
+# GEN-2: the output of a generic function can also settle a collection local.
+const fn singleton_dictionary<U>(value: U) -> dict<str, U> => ["key": value]
+const fn singleton_set<U>(value: U) -> set<U> => [value]
+
+fn deferred_dictionary_data<T>(const value: T) -> dict<str, i64> {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let copied = singleton_dictionary(chosen)
+    return copied
+}
+
+fn deferred_set_data<T>(const value: T) -> set<i64> {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let copied = singleton_set(chosen)
+    return copied
+}
+
 # ERR-7: the named temporal call's inferred output survives the capture.
 fn captured_echo<U>(value: U) -> U { when { return value } }
 
@@ -368,6 +404,10 @@ test an_instance_settles_its_graph_conditions {
     assert eval deferred_member(value: 3) == [3]
     assert eval deferred_enum_constructor(value: "s") == [GraphSide.left]
     assert eval deferred_generic_result(value: 3) == [1]
+    assert eval deferred_result_data(value: 3) == [ok(1)]
+    assert eval deferred_result_payload(value: 3) == [1]
+    assert eval deferred_dictionary_data(value: 3) == [["key": 1]]
+    assert eval deferred_set_data(value: 3) == [[1]]
     assert eval deferred_captured_output(value: 3) == [1]
     assert eval deferred_generic_default(value: 3) == [1.0]
     assert eval selected_case(value: 3) == [4]

@@ -2552,6 +2552,37 @@ fn graph_instances_complete_named_function_inference() {
     assert_eq!(generics.unwrap(), ["str", "i64", "9"]);
 }
 
+/// ERR-2 and GEN-2: inferred result bindings carry the types of both
+/// the success and the error after the generic argument types settle.
+#[test]
+fn graph_instances_propagate_settled_result_sides() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn boxed<U, E>(value: U, failure: E) -> result<U, E> => ok(value)\n",
+        "fn wrapper<T>(const input: T) -> result<i64, str> {\n",
+        "    let chosen = if predicate(input) { 1 }\n",
+        "    let failure = if predicate(input) { \"bad\" }\n",
+        "    let outcome = boxed(chosen, failure)\n",
+        "    let copied = outcome\n",
+        "    return copied\n",
+        "}\n",
+        "fn admitted() -> result<i64, str> => wrapper(1)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    assert_eq!(instance.locals[3].ty.to_string(), "result<i64, str>");
+    assert_eq!(instance.locals[4].ty, instance.locals[3].ty);
+    let Some(Stmt::Return {
+        value: Some(value), ..
+    }) = instance.statements.last()
+    else {
+        panic!("the graph returns the copied result");
+    };
+    assert_eq!(value.ty, instance.locals[3].ty);
+}
+
 /// GEN-13: a default that depends on the inferred type is read once a
 /// graph instance supplies that type.
 #[test]
