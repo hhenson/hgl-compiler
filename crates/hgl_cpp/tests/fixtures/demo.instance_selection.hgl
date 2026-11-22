@@ -239,6 +239,26 @@ fn inferred_holder<T>(const value: T) -> i64 {
     return chosen_or_skip(values[0])
 }
 
+# GEN-2 and TYPE-5: a deferred first written field decides the pair's
+# type, including when that field is declared second.
+struct OrderedPair<U> {
+    a: U
+    b: U
+    seen: list<U>?
+}
+
+fn ordered_fields<T>(const value: T) -> f64 {
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    let pair = OrderedPair(b: chosen, a: 0)
+    return pair.b
+}
+
+fn contextual_fields<T>(const value: T) -> f64 {
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    let pair = OrderedPair(b: chosen, a: 0.0, seen: [])
+    return pair.b
+}
+
 # CTRL-15: inferred list elements become the types of loop bindings.
 fn inferred_iteration<T>(const value: T) -> i64 {
     var total = 0
@@ -545,6 +565,8 @@ test an_instance_settles_its_graph_conditions {
     assert eval dictionary_entries(value: 3) == [4]
     assert raises("value.null") { eval dictionary_entries(value: "s") }
     assert eval inferred_holder(value: "s") == [2]
+    assert eval ordered_fields(value: "s") == [2.5]
+    assert eval contextual_fields(value: "s") == [2.5]
     assert eval inferred_iteration(value: "s") == [2]
     assert eval sum_inferred_iteration(value: "s") == [5]
     assert eval deferred_member(value: "s") == [2]
