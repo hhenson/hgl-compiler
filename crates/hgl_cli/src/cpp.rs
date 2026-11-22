@@ -76,7 +76,13 @@ impl BuildSession {
     ) -> Result<Self, String> {
         let cache = build::cache()?;
         let workspace = Workspace::open(keep, roots, &cache, debug)?;
-        let mut toolchain = Toolchain::find()?;
+        let mut toolchain = match Toolchain::find() {
+            Ok(toolchain) => toolchain,
+            Err(reason) => {
+                Stamp::clear(&workspace)?;
+                return Err(reason);
+            }
+        };
         if debug {
             toolchain.enable_debug();
         }
@@ -100,14 +106,18 @@ impl BuildSession {
         limits: LimitArgs,
         replacements: &Replacements<'_>,
     ) -> Result<String, String> {
-        stamp::key(
+        let key = stamp::key(
             sources,
             limits,
             &self.toolchain_key,
             &self.cache,
             self.debug,
             replacements,
-        )
+        );
+        if key.is_err() {
+            self.begin()?;
+        }
+        key
     }
 
     pub(super) fn reused(&self, key: &str, tests: bool) -> Option<BuiltProgram> {
@@ -132,6 +142,7 @@ impl BuildSession {
         output: &Output,
         program: &plan::Program,
     ) -> Result<Description, String> {
+        let ninja = self.toolchain.ninja()?;
         let interrupt = build::Interrupt::watch();
         let description =
             self.toolchain
@@ -139,7 +150,7 @@ impl BuildSession {
         interrupt.check()?;
         self.workspace.write(output, &description)?;
         let artifacts = self.workspace.build_program(
-            &self.toolchain.ninja,
+            ninja,
             output,
             program.tests.is_some(),
             self.jobs.as_deref(),

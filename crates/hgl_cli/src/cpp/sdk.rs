@@ -234,7 +234,7 @@ pub(super) struct Toolchain {
     /// Its version, as [`Family::identify`] gives it.
     version: String,
     /// `ninja`.
-    pub(super) ninja: PathBuf,
+    ninja: Option<PathBuf>,
     /// True where the family links with `ld.lld` and it is on the
     /// `PATH`, and links are made with it.
     lld: bool,
@@ -289,10 +289,7 @@ impl Toolchain {
         )?;
         let family = Family::of_platform();
         let (compiler, version) = compiler(family)?;
-        let ninja = which::which("ninja").map_err(|_| {
-            "`ninja` is not on the PATH: the cpp target builds with it (https://ninja-build.org)"
-                .to_string()
-        })?;
+        let ninja = which::which("ninja").ok();
         let flags = std::env::var(FLAGS)
             .unwrap_or_default()
             .split_whitespace()
@@ -307,6 +304,14 @@ impl Toolchain {
             ninja,
             lld: family.links_with_lld() && which::which("ld.lld").is_ok(),
             flags,
+        })
+    }
+
+    /// Ninja is needed on a build miss, after reuse has been considered.
+    pub(super) fn ninja(&self) -> Result<&Path, String> {
+        self.ninja.as_deref().ok_or_else(|| {
+            "`ninja` is not on the PATH: the cpp target builds with it (https://ninja-build.org)"
+                .to_string()
         })
     }
 
@@ -402,11 +407,11 @@ impl Toolchain {
     }
 
     /// The flags every CMake configure of this toolchain is given.
-    fn configure_flags(&self) -> Vec<String> {
-        vec![
+    fn configure_flags(&self) -> Result<Vec<String>, String> {
+        Ok(vec![
             "-G".to_string(),
             "Ninja".to_string(),
-            format!("-DCMAKE_MAKE_PROGRAM={}", self.ninja.display()),
+            format!("-DCMAKE_MAKE_PROGRAM={}", self.ninja()?.display()),
             format!("-DCMAKE_CXX_COMPILER={}", self.compiler.display()),
             // The flags are these and no others: CMake would otherwise
             // take `CXXFLAGS` and `LDFLAGS` from the environment, which
@@ -416,7 +421,7 @@ impl Toolchain {
             "-DCMAKE_SHARED_LINKER_FLAGS=".to_string(),
             format!("-D{SDK}={}", self.sdk.display()),
             format!("-D{DEPS}={}", self.deps.display()),
-        ]
+        ])
     }
 
     /// Writes out the runtime library's sources under `directory`, and
@@ -454,7 +459,7 @@ impl Toolchain {
             .arg(&source)
             .arg("-B")
             .arg(&build)
-            .args(self.configure_flags())
+            .args(self.configure_flags()?)
             .arg("-DCMAKE_BUILD_TYPE=Release")
             .arg(format!("-DCMAKE_INSTALL_PREFIX={}", installed.display()))
             // The library is installed in `lib` on every system, where the
@@ -501,7 +506,7 @@ impl Toolchain {
             .arg(&source)
             .arg("-B")
             .arg(&build)
-            .args(self.configure_flags())
+            .args(self.configure_flags()?)
             .arg(format!("-DHGL_RUNTIME={}", runtime.display()));
         run("the description of a build against the SDK", &mut configure)?;
         let target = probe_target(&build.join(".cmake/api/v1/reply"))?;
