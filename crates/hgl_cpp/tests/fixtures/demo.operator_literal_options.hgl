@@ -158,6 +158,8 @@ impl const fn overridden_default(value: i64) -> i64 => value
 test option_literal_forms_and_public_inference {
     assert required_plain(3, true)
     assert required_option(3, true)
+    assert forwarded_plain(3, true) == 0.5
+    assert forwarded_option(3, true) == 0.5
     assert mixed_binding(3)
     assert result_literal(3) == 1.0
     assert result_variable(3, true) == 1.0
@@ -277,12 +279,10 @@ const fn mixed_binding(value: i64) -> bool => mixed_plain(value, 1) && mixed_opt
 
 # GEN-16: the requirement and the value call share option/no-option parity.
 const fn required_plain<T>(value: T, flag: bool) -> bool
-    requires fixed_plain(T, bool) {
-    let ignored = fixed_plain(value, flag)
-    return true
-}
+    requires fixed_plain(T, bool) => true
 const fn required_option<T>(value: T, flag: bool) -> bool
-    requires fixed_option(T, bool) {
-    let ignored = fixed_option(value, flag)
-    return true
-}
+    requires fixed_option(T, bool) => true
+const fn forwarded_plain<T>(value: T, flag: bool) -> f64
+    requires fixed_plain(T, bool) -> f64 => fixed_plain(value, flag)
+const fn forwarded_option<T>(value: T, flag: bool) -> f64
+    requires fixed_option(T, bool) -> f64 => fixed_option(value, flag)
