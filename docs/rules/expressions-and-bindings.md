@@ -116,6 +116,7 @@ analyser: partial
 
 - A sequence of values is a list or a set by the type expected, and with none a list of its values' one type, nullable when a `null` is among them; entries of two types, and entries that give no type, rejected
 - Pairs are a dictionary where one is expected, each key and value read as its type; with nothing expected they are `sequence.context_type`
+- A named function's empty sequence argument takes the parameter type when another argument supplies the missing type in a graph instance (GEN-2, GEN-7).
 - Left: `_`; pairs as a timed trace; ordering and uniqueness
 
 transpiler: partial
