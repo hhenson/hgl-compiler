@@ -405,6 +405,31 @@ fn an_anonymous_function_uses_only_what_fn_14_admits() {
     );
 }
 
+/// FN-14: an enclosing `var` parameter names a place. A `let` of that
+/// parameter can be captured as the value read when the `let` was bound.
+#[test]
+fn an_anonymous_function_captures_the_snapshot_of_a_var_parameter() {
+    let checked = module(concat!(
+        "const fn direct(var count: i64) -> i64 => (fn() -> i64 => count)()\n",
+        "operator choose(value: i64) -> i64\n",
+        "impl const fn choose(var value: i64) -> i64 => (fn() -> i64 => value)()\n",
+        "const fn snapshot(var count: i64) -> i64 {\n",
+        "    let saved = count\n",
+        "    count += 1\n",
+        "    return (fn() -> i64 => saved)()\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:59 name/name.captured FN-14",
+            "m.hgl:4:64 name/name.captured FN-14",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 // ---- TST-1 and TST-2: the test scope ----
 
 /// TST-1: "A named test sees module-private declarations", and the
