@@ -571,6 +571,22 @@ impl<'a> Typer<'a> {
         // The generic parameters an argument decided: what the call
         // writes, or its place expects, is not widened (GEN-2).
         let mut by_argument = vec![false; generics.len()];
+        // A written value argument or a static function template is
+        // checked against its type during the source pass.
+        let source_contexts: Vec<_> = generics
+            .iter()
+            .zip(&found)
+            .filter_map(|(generic, value)| match (&generic.kind, value) {
+                (GenericKind::Value(ty), Some(_)) => Some(ty),
+                _ => None,
+            })
+            .chain(
+                patterns
+                    .iter()
+                    .copied()
+                    .filter(|ty| matches!(ty, Type::Function(_))),
+            )
+            .collect();
         let mut late = std::collections::HashSet::new();
         for position in order {
             let Assigned {
@@ -624,19 +640,11 @@ impl<'a> Typer<'a> {
             // or a wider one for a parameter an argument decided.
             let listed = slots[index].listed;
             let mut learn = |this: &Self, value: &Expr, found: &mut Vec<Option<Argument>>| {
-                if this.graph
+                let unsettled = this.graph
                     && this.hook.is_none()
                     && takes == Takes::Parameters
                     && !whole(&value.ty)
-                    && this.category(value) == ValueCategory::Unsettled
-                {
-                    late.extend(
-                        unfound
-                            .iter()
-                            .copied()
-                            .filter(|at| mentions(pattern, &[*at])),
-                    );
-                }
+                    && this.category(value) == ValueCategory::Unsettled;
                 let actual = this.inferred_from(listed, value, takes);
                 let actual =
                     this.inference_input(pattern, &actual, generics, found, *result_fallback);
@@ -650,8 +658,23 @@ impl<'a> Typer<'a> {
                 }
                 let before: Vec<bool> = found.iter().map(Option::is_some).collect();
                 infer(pattern, actual, generics, found);
-                for (generic, was) in before.into_iter().enumerate() {
-                    by_argument[generic] |= !was && found[generic].is_some();
+                for (index, was) in before.into_iter().enumerate() {
+                    if was {
+                        continue;
+                    }
+                    let generic = &generics[index];
+                    if late.contains(&generic.at)
+                        && generic.kind == GenericKind::Type
+                        && !source_contexts.iter().any(|ty| mentions(ty, &[generic.at]))
+                    {
+                        // GEN-12: the earlier unresolved argument gets
+                        // the first opportunity to bind this parameter.
+                        found[index] = None;
+                    }
+                    if unsettled && found[index].is_none() && mentions(pattern, &[generic.at]) {
+                        late.insert(generic.at);
+                    }
+                    by_argument[index] |= found[index].is_some();
                 }
             };
             // Nothing is expected of the value while its place is not

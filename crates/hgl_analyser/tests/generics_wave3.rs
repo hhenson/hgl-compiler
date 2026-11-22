@@ -3634,3 +3634,110 @@ fn graph_instances_read_results_for_null_comparisons() {
         assert_eq!(result_read.ty.to_string(), "i64?");
     }
 }
+
+/// GEN-12 and EXPR-5: when the first parameter's argument has not
+/// settled, a later literal cannot fix the generic type ahead of it.
+#[test]
+fn graph_instances_bind_generics_in_declared_argument_order() {
+    let checked = module(
+        r#"operator predicate<T>(input: T) -> bool
+impl const fn predicate<T>(input: T) -> bool => true
+impl fn predicate(input: i64) -> bool { when { return input > 0 } }
+const fn first<U>(a: U, b: U) -> U => a
+const fn with_default<U, const fallback: U = 0>(a: U, b: U) -> U => a
+
+fn through<T>(const input: T) -> i64 {
+    let chosen = if predicate(input) { 2.5 }
+    let copied = first(chosen, 0)
+    let named = first(b: 0, a: chosen)
+    let written = first<f64>(chosen, 0)
+    let expected: f64 = first(chosen, 0)
+    let defaulted = with_default(chosen, 0)
+    return 0
+}
+
+fn opposite<T>(const input: T) -> i64 {
+    let chosen = if predicate(input) { 2.5 }
+    let rejected = first(0, chosen)
+    return 0
+}
+
+fn fixed<T>(const input: T) -> i64 {
+    let chosen = if predicate(input) { 2.5 }
+    let rejected = first<i64>(chosen, 0)
+    return 0
+}
+
+fn required_output<T>(const input: T) -> i64 {
+    let chosen = if predicate(input) { 2.5 }
+    let rejected: i64 = first(chosen, 0)
+    return 0
+}
+
+fn admitted() -> i64 => through(1)
+fn reversed() -> i64 => opposite(1)
+fn explicitly_fixed() -> i64 => fixed(1)
+fn output_fixed() -> i64 => required_output(1)"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:37:25 type/type.mismatch EXPR-5",
+            "m.hgl:38:33 type/type.mismatch EXPR-5",
+            "m.hgl:39:29 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report,
+    );
+    let instance = instance_called_by(&checked, body(&checked, "admitted"));
+    let locals = ["copied", "named", "written", "expected", "defaulted"];
+    let mut checked_locals = 0;
+    for statement in &instance.statements {
+        let Stmt::Declare {
+            local,
+            value: Some(value),
+        } = statement
+        else {
+            continue;
+        };
+        let local = &instance.locals[*local];
+        if !locals.contains(&local.name.as_str()) {
+            continue;
+        }
+        assert_eq!(local.ty.to_string(), "f64", "{}", local.name);
+        let ExprKind::Call {
+            callee: Callee::Function { generics, .. },
+            arguments,
+            ..
+        } = &value.kind
+        else {
+            panic!("{} calls a value helper", local.name);
+        };
+        assert!(
+            matches!(&generics[0], Argument::Type(ty) if ty.to_string() == "f64"),
+            "{}",
+            local.name
+        );
+        let positions: Vec<_> = arguments.iter().map(|arg| arg.parameter).collect();
+        let expected = if local.name == "named" {
+            [Some(1), Some(0)]
+        } else {
+            [Some(0), Some(1)]
+        };
+        assert_eq!(positions, expected);
+        let literal = arguments
+            .iter()
+            .find(|arg| arg.parameter == Some(1))
+            .unwrap();
+        assert_eq!(literal.value.ty.to_string(), "f64");
+        if matches!(local.name.as_str(), "copied" | "named" | "defaulted") {
+            assert!(matches!(literal.value.kind, ExprKind::Widen(_)));
+        }
+        if local.name == "defaulted" {
+            assert!(matches!(&generics[1], Argument::Constant(constant)
+                if matches!(constant.value, ConstantValue::Float(0.0))));
+        }
+        checked_locals += 1;
+    }
+    assert_eq!(checked_locals, locals.len());
+}

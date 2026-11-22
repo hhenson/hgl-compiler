@@ -174,6 +174,7 @@ analyser: partial
 
 - Among the candidates a named call admits in a value function, each of the operator's parameters is compared with the other candidate's part for part: a concrete type or a structure over a bare variable in the same place; a candidate as specific everywhere and more in one place outranks
 - A candidate's generics are bound in declared parameter order
+- A named function call preserves declared parameter order when an earlier graph argument settles in an instance (GEN-7).
 - A `ref` mark adds no priority: candidates are compared by their types, which hold none (FN-16)
 - Left: a repeated variable counting once; temporal bodies
 
