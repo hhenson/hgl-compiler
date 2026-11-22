@@ -1198,8 +1198,8 @@ fn named_test_helpers_run_on_the_sdk() {
     let root = scratch("named-test-helpers");
     let file = write(
         &root,
-        "core_implementation.named_test_helpers.hgl",
-        include_str!("../../hgl_cpp/tests/fixtures/core_implementation.named_test_helpers.hgl"),
+        "core_conformance.named_test_helpers.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/core_conformance.named_test_helpers.hgl"),
     );
     let output = hgl_in(
         &["test", &file, "--target", "cpp", "--integration"],
@@ -2370,6 +2370,208 @@ fn names_a_platform_takes_are_built() {
         "{stdout}{}",
         text(&output.stderr)
     );
+}
+
+/// UNIT-14, RUN-1: preparing a debugger launch executes no user code. The
+/// described child can run with its debugger's closed stdin and reports each publication.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn builds_an_isolated_debug_application_without_running_it() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("debug application");
+    write(&root, "ticks.hgl", TICKS);
+    write(&root, "backtest.hgl", BACKTEST);
+    let builds = root.join("debug builds");
+    let prepare = || {
+        let report = hgl_in(
+            &["run", &argument(&root), "--debug-build", &argument(&builds)],
+            &[],
+            &["LD_LIBRARY_PATH"],
+        );
+        assert!(report.status.success(), "{}", text(&report.stderr));
+        serde_json::from_slice::<serde_json::Value>(&report.stdout).unwrap()
+    };
+    let launch = prepare();
+    assert_eq!(launch["version"], 1);
+    let executable = launch["executable"].as_str().unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        let directories = launch["environment"]["LD_LIBRARY_PATH"].as_str().unwrap();
+        assert!(std::env::split_paths(directories).all(|path| !path.as_os_str().is_empty()));
+        check_backtest_line_table(executable);
+    }
+    let args = launch["arguments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap());
+    let results = std::path::Path::new(launch["arguments"][0].as_str().unwrap());
+    assert!(!results.exists());
+    // A subsequent session cannot rebuild the executable a debugger is using.
+    assert_ne!(prepare()["executable"], executable);
+    let run = Command::new(executable)
+        .args(args)
+        .current_dir(launch["workingDirectory"].as_str().unwrap())
+        .envs(
+            launch["environment"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k, v.as_str().unwrap())),
+        )
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    assert_eq!(std::fs::read(results).unwrap(), run.stdout);
+    assert_eq!(
+        text(&run.stdout)
+            .lines()
+            .filter(|line| line.starts_with("published "))
+            .count(),
+        3
+    );
+}
+
+/// Inspect the native addresses a debugger can bind to (RUN-1). Line 18 is
+/// an assignment in count_of, which this application never wires.
+#[cfg(target_os = "linux")]
+fn check_backtest_line_table(executable: &str) {
+    let dump = Command::new("readelf")
+        .args(["--debug-dump=decodedline", executable])
+        .env("LC_ALL", "C")
+        .output()
+        .expect("GNU readelf reads the SDK executable");
+    assert!(dump.status.success(), "{}", text(&dump.stderr));
+    let table = text(&dump.stdout);
+    let count_line = TICKS
+        .lines()
+        .position(|line| line.trim() == "count += 1")
+        .unwrap()
+        + 1;
+    let mut count_addresses = Vec::new();
+    for (file, source) in [("ticks.hgl", TICKS), ("backtest.hgl", BACKTEST)] {
+        let end = source.lines().count();
+        let mut seen = false;
+        for row in table.lines() {
+            let mut fields = row.split_whitespace();
+            if fields.next() != Some(file) {
+                continue;
+            }
+            // A dash ends a DWARF line sequence and has no source line.
+            let number = fields.next().unwrap();
+            if number == "-" {
+                continue;
+            }
+            let line: usize = number.parse().unwrap();
+            seen = true;
+            assert!((1..=end).contains(&line), "{file} has {end} lines: {row}");
+            if file == "ticks.hgl" && line == count_line {
+                count_addresses.push(fields.next().unwrap());
+            }
+        }
+        assert!(seen, "no line entries for {file}");
+    }
+    assert!(!count_addresses.is_empty(), "no address for count += 1");
+    let symbols = Command::new("addr2line")
+        .args(["--functions", "--demangle", "--exe", executable])
+        .args(&count_addresses)
+        .output()
+        .expect("GNU addr2line reads the breakpoint addresses");
+    assert!(symbols.status.success(), "{}", text(&symbols.stderr));
+    let locations = text(&symbols.stdout);
+    let owners: Vec<_> = locations.lines().step_by(2).collect();
+    assert_eq!(owners.len(), count_addresses.len());
+    assert!(
+        owners
+            .iter()
+            .all(|name| name.contains("::count_of::impl_::eval(")),
+        "{locations}"
+    );
+}
+
+/// RUN-2, RUN-6: inserting a configuration or replacing a multiline one
+/// keeps the native bounds and entry call on the eval line the user sees.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn debug_overrides_keep_the_on_disk_eval_line() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("debug overrides");
+    write(&root, "ticks.hgl", TICKS);
+    for inject in ["", "inject run_config{\n    length: 2s\n}\n"] {
+        let app = format!(
+            "application demo.backtest\nuse demo.ticks::{{doubled}}\n{inject}eval doubled(values: [1, 2])\n"
+        );
+        let file = write(&root, "entry.hgl", &app);
+        let result = hgl_in(
+            &[
+                "run",
+                &argument(&root),
+                "--config",
+                "length=4s",
+                "--arg",
+                "values=[3]",
+                "--debug-build",
+                &argument(&root.join("builds")),
+            ],
+            &[],
+            &[],
+        );
+        assert!(result.status.success(), "{}", text(&result.stderr));
+        let manifest: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        let executable = std::path::Path::new(manifest["executable"].as_str().unwrap());
+        let build = executable.parent().unwrap().parent().unwrap();
+        let unit = fs::read_to_string(build.join("modules/mod-demo-backtest.cpp")).unwrap();
+        let eval_line = app.lines().count();
+        assert!(unit.contains(&format!("demo.backtest, line {eval_line}: `eval`")));
+        let directive = format!("#line {eval_line} {file:?}");
+        let preceding = |code: &str| {
+            unit.lines()
+                .zip(unit.lines().skip(1))
+                .find_map(|(before, line)| line.contains(code).then_some(before))
+                .unwrap()
+        };
+        assert_eq!(preceding("::Bounds bounds_ ="), directive);
+        assert_eq!(preceding("::record::"), directive);
+        let config = preceding("::RunConfig run_config =");
+        if inject.is_empty() {
+            assert!(
+                config.ends_with(r#""modules/mod-demo-backtest.cpp""#),
+                "{config}"
+            );
+        } else {
+            assert_eq!(config, format!("#line 3 {file:?}"));
+        }
+        assert_eq!(fs::read_to_string(file).unwrap(), app);
+    }
+}
+
+/// A rejected debug build has no launch description on stdout.
+#[test]
+fn a_rejected_debug_application_has_no_launch_description() {
+    let root = scratch("rejected debug build");
+    write(
+        &root,
+        "backtest.hgl",
+        "application demo.backtest\neval unknown()\n",
+    );
+    let report = hgl_in(
+        &[
+            "run",
+            &argument(&root),
+            "--debug-build",
+            &argument(&root.join("build")),
+        ],
+        &[],
+        &[],
+    );
+    assert!(!report.status.success());
+    assert!(report.stdout.is_empty());
+    assert!(text(&report.stderr).contains("unknown"));
+    assert!(!root.join("build").exists());
 }
 
 /// A valid application that cannot be built because no SDK is named

@@ -1,4 +1,4 @@
-module core_implementation part named_test_helpers
+module core_conformance part named_test_helpers
 
 test first_helpers {
     const fn adjust(value: i64) -> i64 => value + 1

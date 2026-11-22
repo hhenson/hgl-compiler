@@ -2101,9 +2101,10 @@ platform's family, `emit` and `run`; and, given an
 SDK, the whole route, that a failed build runs no older executable,
 that `demo.values`, `demo.composites`, `demo.temporal`, `demo.windows`, `demo.references`, `demo.timing`, `demo.activity`, `demo.lifting`, `demo.control`, `demo.structs`, `demo.keyed`, `demo.lists` and `demo.nested` pass, where a failure is
 reported, applications run with their output, the store and a failure,
-and a run in real time stopped by an interrupt of `hgl` alone, with `cargo
-test -p hgl_cli --test cpp -- --ignored`. The Linux and macOS C++ jobs
-run it with `check_core.py` (below), and both again with
+and a run in real time stopped by an interrupt of `hgl` alone. Run the SDK
+suite with `scripts/check-cpp-sdk.sh 16 8` to share up to 16 native build
+jobs among eight concurrent cases. The Linux and macOS C++ jobs run the
+SDK suite and `check_core.py` (below), and both again with
 `HGL_CPP_FLAGS` naming the address and undefined-behaviour sanitizers:
 on macOS one after another, on Linux side by side on separate runners.
 The generated code compiles with `-Wall -Wextra -Werror`.
@@ -2114,7 +2115,7 @@ listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml).
 The list covers the remaining nullable store put case. Build `hgl` and run
 `check_core.py`, which runs the pinned core's `tests/conformance`
-and `tests/implementation` on the target, including integration tests:
+and `tests/core_conformance` on the target, including integration tests:
 
 ```sh
 cargo build --locked --bin hgl
@@ -2452,3 +2453,21 @@ Hand-written where no tool fits:
 and lint with the same release. Dependabot proposes the next Rust release,
 crate updates and workflow action updates weekly
 (`.github/dependabot.yml`). No minimum supported Rust version is declared.
+
+### Native application debug launch
+
+`hgl run --application NAME --debug-build DIR ROOT...` builds the selected
+application with symbols and no optimization in its generated units. Each
+launch has its own subdirectory under DIR. The caller owns its lifetime.
+
+On success stdout is one JSON object with `version: 1`, absolute `executable`,
+`arguments` (an array), `workingDirectory`, and `environment` (overrides to
+inherit alongside the caller's environment). Start that exact command in
+the debugger. Its console mirrors the results protocol. After the run
+returns it prints the recorded publications. The debugger owns process termination and may close stdin.
+Ordinary application runs keep their host stop pipe. HGL statements use the
+existing C++ `#line` mappings with absolute application and module paths.
+After each mapped statement, generated code uses its own C++ file and line.
+Bundled core uses display names such as `<core>/core/core.hgl`.
+With `--arg` or `--config`, breakpoints use the original file and line. A
+configuration inserted by the driver has only a generated C++ location.
