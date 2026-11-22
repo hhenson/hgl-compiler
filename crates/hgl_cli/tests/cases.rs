@@ -377,6 +377,30 @@ fn dependent_call_packs_reject_invalid_arguments() {
     );
 }
 
+/// FN-19: concrete pack keys use the ordinary call diagnostics and
+/// an operand must name a pack.
+#[test]
+fn forwarded_packs_reject_invalid_arguments() {
+    let root = scratch("forwarded-pack-rejections");
+    let file = write(
+        &root,
+        "demo.forwarded_packs_rejections.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.forwarded_packs_rejections.hgl"),
+    );
+    let output = hgl(&["test", &file, "--rejections-only"]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 9 passed, 0 failed"),
+        "{stdout}"
+    );
+}
+
 /// GEN-17: a member lookup of a name missing from the bound pack reports
 /// the catalogue code.
 #[test]

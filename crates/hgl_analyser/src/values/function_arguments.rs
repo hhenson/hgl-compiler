@@ -9,8 +9,10 @@ use super::candidates::{
     CallbackOption, CallbackOptionSource, CallbackRequest, Given, Key, Wanted, in_instance,
 };
 use super::constants::generic_default;
+use super::dependent_packs::PackTypes;
 use super::fit::whole;
-use super::inference::{ExplicitGenerics, infer, type_pack};
+use super::forwarded_packs::spread_operands;
+use super::inference::{ExplicitGenerics, infer, pack_bounds, type_pack};
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{
     AnonymousFunction, Callee, Expr, ExprKind, Form, TypePackArgument, ValueCategory,
@@ -710,6 +712,14 @@ impl<'a> Typer<'a> {
             ));
             return self.unread_call(list);
         }
+        if let Some(call) = self.defer_pack_call(list, template.result.as_ref(), None) {
+            return call;
+        }
+        if spread_operands(list).next().is_some()
+            && let Some((_, target)) = self.pack_functions.iter().find(|(slot, _)| *slot == index)
+        {
+            return self.call_forwarded_parameter(name, list, target.clone(), template);
+        }
         let slots: Vec<_> = template
             .parameters
             .iter()
@@ -738,6 +748,187 @@ impl<'a> Typer<'a> {
             },
             template.result.clone().unwrap_or(Type::Unknown),
         )
+    }
+
+    /// A spread can give slots reflected from the selected callback (FN-19).
+    /// Names written explicitly still have to come from the template (FN-17).
+    fn call_forwarded_parameter(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        target: Callee,
+        template: &FunctionType,
+    ) -> (ExprKind, Type) {
+        let before = self.diagnostics.len();
+        for (_, given, _) in self.call_entries(list) {
+            if let Some(given) = given
+                && !template
+                    .parameters
+                    .iter()
+                    .any(|input| input.name() == Some(given.text()))
+            {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::ARGUMENT_UNKNOWN,
+                    Location::new(self.file, given.span()),
+                    format!(
+                        "`{}` has no named parameter `{}` in its function type",
+                        name.text(),
+                        given.text()
+                    ),
+                    "FN-17",
+                ));
+            }
+        }
+        if self.diagnostics.len() != before {
+            return (ExprKind::Unread, Type::Unknown);
+        }
+        let program = self.program;
+        let (signature, value) = if let Some((module, declaration)) = target.declaration() {
+            let owner = &program.modules[module];
+            let Detail::Callable(declared) = &owner.details[declaration] else {
+                return self.unread_call(list);
+            };
+            let mut signature = declared.clone();
+            if let Callee::Candidate { operator, .. } = &target
+                && let Detail::Callable(public) = &program.modules[operator.0].details[operator.1]
+            {
+                for (source, index) in public
+                    .parameters
+                    .iter()
+                    .zip(public.candidate_parameters(declared))
+                {
+                    if let Some(index) = index {
+                        signature.parameters[index].name.clone_from(&source.name);
+                        signature.parameters[index].has_default |= source.has_default;
+                    }
+                }
+            }
+            (
+                signature,
+                owner.declarations[declaration].kind.role() == Some(Role::Value),
+            )
+        } else if let Callee::Anonymous(function) = &target {
+            let signature = Signature {
+                generics: Vec::new(),
+                parameters: function
+                    .template
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .map(|(index, input)| {
+                        let local = &function.body.locals[index];
+                        Parameter {
+                            name: local.name.clone(),
+                            at: local.at,
+                            ty: input.ty().clone(),
+                            configuration: false,
+                            constant: false,
+                            var: false,
+                            reference: false,
+                            pack: None,
+                            pack_bounds: (0, None),
+                            has_default: false,
+                        }
+                    })
+                    .collect(),
+                result: function.template.result.clone(),
+                reference: function.template.reference,
+            };
+            (signature, function.template.value)
+        } else {
+            return self.unread_call(list);
+        };
+        let map: Vec<_> = signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(target.generics())
+            .collect();
+        let packs = PackTypes::new(&signature.generics, target.type_packs());
+        let project = |ty: &Type| packs.project(ty, &map).unwrap_or(Type::Unknown);
+        let slots: Vec<_> = signature
+            .parameters
+            .iter()
+            .map(|parameter| {
+                let type_pack = type_pack(parameter, &signature.generics);
+                let written = type_pack.and_then(|index| {
+                    target
+                        .type_packs()
+                        .iter()
+                        .find(|pack| pack.parameter == index)
+                });
+                Slot {
+                    configuration: parameter.configuration,
+                    name: &parameter.name,
+                    ty: project(&parameter.ty),
+                    required: parameter.var
+                        || !parameter.has_default && !matches!(parameter.ty, Type::Nullable(_)),
+                    pack: parameter.pack,
+                    pack_bounds: pack_bounds(parameter, &signature.generics, written),
+                    type_pack,
+                    listed: value,
+                }
+            })
+            .collect();
+        let assigned = self.assign(name, list, &slots, Takes::Parameters, &[]);
+        let arguments = assigned
+            .into_iter()
+            .map(|argument| {
+                let slot = argument.slot.map(|index| {
+                    let slot = &slots[index];
+                    let packed = argument.pack.as_ref().and_then(|(position, key)| {
+                        let index = slot.type_pack?;
+                        let pack = target
+                            .type_packs()
+                            .iter()
+                            .find(|pack| pack.parameter == index)?;
+                        let index = pack
+                            .keys
+                            .iter()
+                            .position(|given| given == key)
+                            .unwrap_or(*position);
+                        pack.types.get(index)
+                    });
+                    Slot {
+                        ty: packed.cloned().unwrap_or_else(|| slot.ty.clone()),
+                        ..*slot
+                    }
+                });
+                let mut value = match argument.forwarded {
+                    Some((_, value)) => {
+                        let value = if let Some(slot) = &slot {
+                            self.fit_argument(value, slot, false, Takes::Parameters)
+                        } else {
+                            value
+                        };
+                        crate::hir::Argument {
+                            parameter: argument.slot,
+                            pack: None,
+                            value,
+                        }
+                    }
+                    None => self.argument(
+                        argument.slot,
+                        &argument.value,
+                        slot.as_ref().map(|slot| (slot, false)),
+                        Takes::Parameters,
+                    ),
+                };
+                value.pack = argument.pack.map(|(_, key)| key);
+                value
+            })
+            .collect();
+        let result = signature.result.as_ref().map_or(Type::Unknown, project);
+        let kind = ExprKind::Call {
+            callee: target,
+            arguments,
+            form: Form::Named,
+            braced: Vec::new(),
+            lifted: false,
+        };
+        self.finished_call(&kind, false);
+        (kind, result)
     }
 
     /// A static function's body is reached from a call or by passing the

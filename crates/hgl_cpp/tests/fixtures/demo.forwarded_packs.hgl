@@ -1,0 +1,118 @@
+module demo.forwarded_packs
+
+const fn receive(a: i64, b: i64, c: i64) -> i64 => a * 100 + b * 10 + c
+
+const fn relay<...Args, ...Fields>(values: ...Args, fields: ...{Fields}) -> i64 =>
+    receive(...values, b: 2, ...fields)
+
+test forwards {
+    assert relay(1, c: 3) == 123
+    assert relay(3, a: 1) == 123
+}
+
+operator pick<T>(value: T) -> i64
+impl const fn pick(value: str) -> i64 => 4
+impl const fn pick(value: i64) -> i64 => 5
+const fn relay_operator<...Args>(operands: ...Args) -> i64 => pick(...operands)
+
+test forward_operator {
+    assert relay_operator("str") == 4
+    assert relay_operator(2) == 5
+}
+
+const fn relay_callback<R, ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R, operands: ...{As for f},
+) -> R requires each key in arg_keys(As) { As[key] == Ps[key] }
+    => f(...operands)
+
+const fn callback_target(price: f64, weight: f64 = 2.0) -> f64 => price * weight
+
+test forward_callback {
+    assert relay_callback(callback_target, 3.0) == 6.0
+    assert relay_callback(callback_target, 3.0, weight: 4.0) == 12.0
+}
+
+operator render<...Args, ...Fields>(format: str, values: ...Args, fields: ...{Fields}) -> i64
+impl const fn render<...Args, ...Fields>(format: str, values: ...Args, fields: ...{Fields}) -> i64 => 42
+
+const fn forward_both<...Args, ...Fields>(format: str, values: ...Args, fields: ...{Fields}) -> i64 =>
+    render(format, ...values, ...fields)
+
+test forward_empty_and_mixed_operator_packs {
+    assert forward_both("empty") == 42
+    assert forward_both("mixed", 3, key: 4) == 42
+}
+
+const fn multiply(price: f64, factor: f64) -> f64 => price * factor
+fn graph_relay<...Args>(args: ...Args) -> f64 => multiply(...args)
+
+test forward_connections {
+    assert eval graph_relay([2.0], [3.0]) == [6.0]
+}
+
+const fn generic_id<T>(value: T) -> T => value
+const fn nested_relay<...Args>(values: ...Args) -> i64 =>
+    generic_id(receive(...values))
+
+const fn relay_again<...Args>(values: ...Args) -> i64 =>
+    nested_relay(...values)
+
+test forward_nested {
+    assert relay_again(1, 2, 3) == 123
+}
+
+const fn needs_value(value: i64) -> result<i64, i64> => ok(value)
+const fn tag_relay<...Args>(values: ...Args) -> bool =>
+    is_ok(needs_value(...values))
+
+test forward_tag_result {
+    assert tag_relay(1)
+}
+
+operator match_arg<T>(value: T) -> f64
+impl const fn match_arg(value: str) -> f64 => 1.0
+impl const fn match_arg(value: f64) -> f64 => value
+
+operator with_callback<...Ps, ...As>(
+    f: const fn(...{Ps}) -> f64, fixed: str, fields: ...{As for f},
+) -> i64 requires each key in arg_keys(As) { As[key] == Ps[key] }
+
+impl const fn with_callback<...Ps, ...As>(
+    f: const fn(...{Ps}) -> f64, fixed: str, fields: ...{As for f},
+) -> i64 requires each key in arg_keys(As) { As[key] == Ps[key] } => 77
+
+const fn relay_dependent_operator<...Args>(values: ...Args) -> i64 =>
+    with_callback(match_arg, ...values)
+
+test forward_dependent_operator {
+    assert relay_dependent_operator("fixed", 3.0) == 77
+}
+
+const fn local_inference<...Args>(values: ...Args) -> i64 {
+    let item = generic_id(...values)
+    return item + 1
+}
+
+test forward_local_inference {
+    assert local_inference(2) == 3
+}
+
+fn graph_context<...Args>(values: ...Args) -> i64 {
+    let item = generic_id(...values)
+    return item + 1
+}
+
+test forward_graph_inference {
+    assert eval graph_context([2]) == [3]
+}
+
+fn node_context<...Args>(values: ...Args) -> i64 {
+    when {
+        let item = generic_id(...values)
+        return item + 1
+    }
+}
+
+test forward_hook_inference {
+    assert eval node_context([2, 3]) == [3, 4]
+}
