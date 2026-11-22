@@ -105,7 +105,7 @@ analyser: partial
 - Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration
 - Function and operator calls bind leftover positional and named arguments to their corresponding packs and check the known element type. The HIR keeps each argument's pack slot and position or source name.
 - A second positional pack or a second named pack in one declaration reports `pack.duplicate` at its parameter name. A declaration may have one of each kind.
-- Binding a pack declared for a function awaits #366.
+- A dependent call matches the supplied arguments to the selected callback, excluding the parameters named by `without`. A defaulted parameter is reflected and contributes no argument unless supplied.
 
 transpiler: partial
 
@@ -237,13 +237,13 @@ analyser: partial
 
 - Check the fixed template's phase, input names and input and result types. A value target may lift in a temporal template. An anonymous body's phase comes from the accepting template (FN-7).
 - Match a declared function or an operator's selected candidate, infer generic types in either direction, and accept explicit generic arguments on function and operator references. An operator reference uses the public signature, with the written arguments and the template together resolving its generic parameters. Static parameters may be called or passed onward. They hold no runtime value.
-- The proposed restriction to plain fixed parameters is enforced. Parameter reflection and packs declared for a function await #366.
+- Applies the proposed plain-parameter restriction to the fixed inputs. Keeps the remaining callback slots in declared order with their modes, defaults and pack shape. Function and operator calls bind the reflected pack once they have a static target.
 - A call through a function parameter gives arguments by position or by a name written in its template (FN-17).
 
 transpiler: partial
 
 - A static target specializes the called body. The C++ target emits ordinary value helpers and composed graph calls; anonymous functions carry their permitted lexical captures as inputs.
-- Function templates with reflected packs await #366. The C++ target does not yet write `valid` on a temporal input captured by a value callback (#397).
+- The C++ target specializes reflected templates by the static callback and the dependent argument shape. It does not yet write `valid` on a temporal input captured by a value callback (#397).
 
 ## FN-18
 

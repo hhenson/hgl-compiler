@@ -124,6 +124,7 @@ analyser: partial
 - A call's generic arguments, all or the first of them, for a value function and for the output requested of an operator's candidates; a call that leaves a parameter unresolved rejected
 - A generic value parameter given by name or after the callee's name, and one a type gives, read as a value of the parameter's type (EXPR-5, `type.mismatch`): a literal, an enum member however it is written (TYPE-7), a constant, a generic value parameter in scope, and a constant expression of those, of numbers, durations, tenors, strings, bools, lists and tuples (`constant`); one that is no compile-time constant, and one whose value this compiler does not work out, is `generic.argument_constant`
 - An operator's generics are resolved from what the call writes, then its place, then its arguments, then a default, and the output so requested is matched as far as it is known
+- A known `set<str>` supplies a generic value from a declaration default, a call's configuration, or a named constant (FN-8). Its members give it one canonical identity in any written order (UNIT-13).
 - A call that writes a positional type pack supplies its whole type sequence. An unwritten positional or named pack infers each type from its own argument or eval trace. A graph instance completes its deferred inferred types in capture order (GEN-7, GEN-10). An unresolved type rejects, or a sequence that requires context gives `sequence.context_type` (EXPR-9).
 - One a generic body works out from its own generic parameters is worked out for each instance, and where its evaluation fails there (NUM-2: an `i64` out of range; a division of two `i64` by zero) or is not worked out, the call that makes the instance is `generic.argument_constant` (ERR-9)
 - Two generic value arguments are one where they are the same constant (`ConstantValue::same`), which for an `f64` is not `==`: `Scaled<-0.0>` is not `Scaled<0.0>`, and any two NaNs are one constant (UNIT-13, GEN-13); hgraph writes each as an instance of its own. A comparison of a NaN constant is the language's: false, but `!=` (NUM-5)
@@ -236,9 +237,11 @@ parser: partial
 - Reads a function type's named pack and `arg_keys` and member types in requirements. `Ps[arg]` has a type form, with an index tree in positions that also allow values.
 - Left: pack key membership in a body, alongside pack values and unrolled loops (#368).
 
-analyser: planned
+analyser: partial
 
-- Compile-time keys, member lookup and `pack.name` await #366.
+- Reflects the selected callback's fixed suffix and its supplied positional and named pack entries. A dependent pack keeps the callback parameter keys and the types written at the call.
+- Evaluates `each` over `arg_keys`, key comparison and membership, and keyed type projection. A missing member of a known pack reports `pack.name`.
+- Left: selecting an operator callback where the template reflects all operands (#366); explicit generic arguments on an operator reference (#442).
 
 ## GEN-18
 

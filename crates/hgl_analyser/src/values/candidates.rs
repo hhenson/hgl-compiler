@@ -12,6 +12,9 @@ use hgl_source::FileId;
 use super::Typer;
 use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
+use super::dependent_packs::{
+    PackTypes, dependent_slot, operator_packs, reflects, specialize_named_pack,
+};
 use super::expressions::takes_its_type;
 use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, not_null, whole};
 use super::function_arguments::matches_template;
@@ -190,7 +193,12 @@ impl<'a> Typer<'a> {
         for &(module, declaration, signature) in candidates {
             let declared_in = &program.modules[module];
             let candidate = &declared_in.declarations[declaration];
-            let Some(bound) = bound(signature, public, given) else {
+            let Some(bound) = bound(
+                signature,
+                public,
+                given,
+                dependent_slot(declared_in, signature),
+            ) else {
                 continue;
             };
             // FN-17: a static argument takes a declared function slot.
@@ -309,7 +317,7 @@ impl<'a> Typer<'a> {
                 let widens = |decided: &Type, later: &Type| self.widens(decided, later);
                 let defaults =
                     |generic: &GenericParameter| self.default_constant(candidate, generic);
-                let Some((taken, generics, type_packs, defaulted)) = instance(
+                let Some((mut taken, generics, mut type_packs, defaulted)) = instance(
                     self,
                     signature,
                     (given, &bound),
@@ -323,6 +331,46 @@ impl<'a> Typer<'a> {
                 ) else {
                     continue;
                 };
+                let mut callbacks = Vec::new();
+                if reflects(declared_in, signature) {
+                    let slots: Vec<_> = bound.iter().map(|place| place.parameter()).collect();
+                    let Ok(resolved) =
+                        operator_packs(program, (module, signature), &generics, given, &slots)
+                    else {
+                        continue;
+                    };
+                    callbacks = resolved.callbacks;
+                    for pack in resolved.packs {
+                        type_packs.retain(|current| current.parameter != pack.parameter);
+                        type_packs.push(pack);
+                    }
+                    type_packs.sort_by_key(|pack| pack.parameter);
+                    let types = PackTypes::new(&signature.generics, &type_packs);
+                    let map: Vec<_> = signature
+                        .generics
+                        .iter()
+                        .map(|generic| generic.at)
+                        .zip(&generics)
+                        .collect();
+                    let project = |ty: &Type| types.project(ty, &map).unwrap_or(Type::Unknown);
+                    let resolved = taken.to_mut();
+                    for (parameter, original) in
+                        resolved.parameters.iter_mut().zip(&signature.parameters)
+                    {
+                        if original
+                            .ty
+                            .any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false)
+                        {
+                            parameter.ty = project(&original.ty);
+                        }
+                    }
+                    if let Some(result) = &signature.result
+                        && result
+                            .any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false)
+                    {
+                        resolved.result = Some(project(result));
+                    }
+                }
                 // FN-17: a function reference supplies a signature.
                 // Contextual operand or result reads do not make it fit.
                 if let Some(callback) = &wanted.callback
@@ -365,7 +413,7 @@ impl<'a> Typer<'a> {
                 let admits = self.admits_call(
                     (candidate, &taken),
                     (operator_declaration, public),
-                    (module, &generics, &type_packs),
+                    ((module, declaration), &generics, &type_packs),
                     (given, &bound, wanted),
                     widening,
                     converting,
@@ -394,6 +442,8 @@ impl<'a> Typer<'a> {
                     taken,
                     generics,
                     type_packs,
+                    bound: bound.clone(),
+                    callbacks,
                     ambiguous_reads: false,
                     selecting: None,
                 };
@@ -473,7 +523,7 @@ impl<'a> Typer<'a> {
             })
         });
         if widening && selected.len() > 1 {
-            Self::prefer_widened(&mut selected, public, given);
+            Self::prefer_widened(&mut selected, given);
         }
         // GEN-5: in composition "a temporal candidate outranks a value
         // candidate of the same parameter types, as composition chooses
@@ -527,22 +577,20 @@ impl<'a> Typer<'a> {
     /// `selected` is the tied candidates, and is left as it is where
     /// they differ in anything else, or no one of them widens every
     /// literal.
-    fn prefer_widened(selected: &mut Vec<Chosen<'a>>, public: &Signature, given: &[Given]) {
+    fn prefer_widened(selected: &mut Vec<Chosen<'a>>, given: &[Given]) {
         // The type each candidate has for each argument, in the order
         // the arguments are given; `None` for one given to a generic
         // value parameter.
-        let places = |chosen: &Chosen| -> Option<Vec<Option<Type>>> {
-            let bound = bound(&chosen.taken, public, given)?;
-            Some(
-                bound
+        let taken: Vec<Vec<_>> = selected
+            .iter()
+            .map(|chosen| {
+                chosen
+                    .bound
                     .iter()
                     .map(|&place| parameter_type(&chosen.taken, &chosen.type_packs, place).cloned())
-                    .collect(),
-            )
-        };
-        let Some(taken) = selected.iter().map(places).collect::<Option<Vec<_>>>() else {
-            return;
-        };
+                    .collect()
+            })
+            .collect();
         let literal: Vec<bool> = given
             .iter()
             .map(|given| {
@@ -602,6 +650,8 @@ impl<'a> Typer<'a> {
             taken,
             generics,
             type_packs,
+            bound,
+            callbacks,
             mut selecting,
             ..
         } = chosen;
@@ -658,13 +708,6 @@ impl<'a> Typer<'a> {
             };
             return (kind, Type::Unknown);
         }
-        let bound = match program.modules[operator.module]
-            .details
-            .get(operator.declaration)
-        {
-            Some(Detail::Callable(public)) => bound(signature, public, &given).unwrap_or_default(),
-            _ => Vec::new(),
-        };
         // FN-15: a `var` parameter "is always given: it has no default,
         // and is not left out where its type is written `T?`". The mark
         // takes no part in selecting the candidate, which admits a call
@@ -706,23 +749,31 @@ impl<'a> Typer<'a> {
                 let place = format!("the parameter `{}`", parameter.name);
                 let from_braces = given.key.braced();
                 let pack = match bound {
-                    Place::Pack(_, position) => Some(match &given.key {
-                        Key::Position(_) => hir::PackKey::Position(position),
-                        Key::Name(name)
-                        | Key::Brace(name)
-                        | Key::Configuration(name)
-                        | Key::Generic(name) => hir::PackKey::Name(name.clone()),
-                    }),
+                    Place::Pack(_, position) => type_pack(parameter, &signature.generics)
+                        .and_then(|generic| {
+                            type_packs.iter().find(|pack| pack.parameter == generic)
+                        })
+                        .and_then(|pack| pack.keys.get(position))
+                        .cloned()
+                        .or_else(|| {
+                            Some(match given.key.name() {
+                                None => hir::PackKey::Position(position),
+                                Some(name) => hir::PackKey::Name(name.to_string()),
+                            })
+                        }),
                     _ => None,
                 };
                 let ty = parameter_type(signature, &type_packs, bound).unwrap_or(&Type::Unknown);
                 // FN-17: the template was checked at candidate admission.
                 let static_callable = matches!(given.value.kind, ExprKind::StaticCallable(_));
-                let input = if given.retried && !static_callable {
+                let mut input = if given.retried && !static_callable {
                     self.expression(&given.node, Some(ty))
                 } else {
                     given.value
                 };
+                if let Some((_, pack)) = callbacks.iter().find(|(index, _)| *index == position) {
+                    specialize_named_pack(&mut input, Some(pack.clone()));
+                }
                 if let Some(selecting) = &mut selecting {
                     selecting.arguments[position].value = input.clone();
                 }
@@ -826,7 +877,11 @@ impl<'a> Typer<'a> {
         &mut self,
         (candidate, signature): (&Declaration, &Signature),
         (operator, public): (&Declaration, &Signature),
-        (module, generics, type_packs): (usize, &[Argument], &[hir::TypePackArgument]),
+        ((module, declaration), generics, type_packs): (
+            (usize, usize),
+            &[Argument],
+            &[hir::TypePackArgument],
+        ),
         (given, bound, wanted): (&[Given], &[Place], &Wanted),
         widening: bool,
         converting: bool,
@@ -933,6 +988,23 @@ impl<'a> Typer<'a> {
         let Some(condition) = clause.children().next() else {
             return Admits::Yes;
         };
+        if !type_packs.is_empty()
+            && condition.descendants().any(|node| {
+                matches!(
+                    node.kind(),
+                    SyntaxKind::ConstraintEach | SyntaxKind::PackMemberType
+                )
+            })
+        {
+            return match self
+                .requires_told_with_packs((module, declaration), generics, type_packs, None)
+                .and_then(|(_, held, _)| held)
+            {
+                Some(true) => Admits::Yes,
+                Some(false) => Admits::No,
+                None => Admits::Unknown,
+            };
+        }
         // GEN-16: "a named operator requirement tests callability with
         // the supplied types." Each one the condition states is tested
         // here, before the rest of the condition is read.
@@ -1435,11 +1507,11 @@ impl<'a> Typer<'a> {
             if let Some(diagnostic) = self.ambiguous_result_reads(&chosen, selecting.name) {
                 return AtInstance::Rejected(diagnostic);
             }
-            if built && let Some(bound) = bound(&chosen.taken, public, &given) {
+            if built {
                 // Keep an already typed expression where it still fits its
                 // place. Its HIR can contain local declarations and nested
                 // calls that the instance walk specializes in turn.
-                for (given, place) in given.iter_mut().zip(bound) {
+                for (given, &place) in given.iter_mut().zip(&chosen.bound) {
                     given.retried = given.by_place
                         && parameter_type(&chosen.taken, &chosen.type_packs, place)
                             .is_some_and(|ty| ty != given.ty() || !whole(given.ty()));
@@ -2084,7 +2156,7 @@ impl CallbackRequest<'_> {
 
 /// What an argument of a call is given to in a candidate.
 #[derive(Clone, Copy, PartialEq)]
-enum Place {
+pub(super) enum Place {
     /// The parameter at this position of the candidate's.
     Parameter(usize),
     /// The parameter and position in a pack (FN-8, GEN-10).
@@ -2099,7 +2171,7 @@ enum Place {
 
 impl Place {
     /// The fixed or packed value parameter this argument is given to.
-    fn parameter(self) -> Option<usize> {
+    pub(super) fn parameter(self) -> Option<usize> {
         match self {
             Self::Parameter(index) | Self::Pack(index, _) => Some(index),
             Self::Generic(_) | Self::OperatorGeneric => None,
@@ -2139,7 +2211,12 @@ fn parameter_type<'a>(
 /// name is given to the parameter in its position. GEN-8: "A name binds
 /// the callee's generic value parameter of that name, or else its
 /// parameter of that name."
-fn bound(signature: &Signature, public: &Signature, given: &[Given]) -> Option<Vec<Place>> {
+pub(super) fn bound(
+    signature: &Signature,
+    public: &Signature,
+    given: &[Given],
+    dependent: Option<usize>,
+) -> Option<Vec<Place>> {
     let mapping: Vec<_> = public
         .candidate_parameters(signature)
         .collect::<Option<_>>()?;
@@ -2167,7 +2244,7 @@ fn bound(signature: &Signature, public: &Signature, given: &[Given]) -> Option<V
             Key::Position(position) => match positional.get(*position) {
                 Some(&index) => Place::Parameter(index),
                 None => {
-                    let index = positional_pack?;
+                    let index = positional_pack.or(dependent)?;
                     Place::Pack(index, captured[index])
                 }
             },
@@ -2251,6 +2328,10 @@ pub(super) struct Chosen<'s> {
     pub(super) generics: Vec<Argument>,
     /// The ordered types of each heterogeneous pack (GEN-10).
     type_packs: Vec<hir::TypePackArgument>,
+    /// Candidate slots in written argument order.
+    bound: Vec<Place>,
+    /// The concrete named pack of a static callback, when it has one.
+    callbacks: Vec<(usize, hir::TypePackArgument)>,
     /// Equally preferred choices of which operands to read (ERR-15).
     pub(super) ambiguous_reads: bool,
     /// The call to select again after its generic operand types are known (GEN-7).
@@ -2363,21 +2444,36 @@ fn instance<'s>(
     let mut by_argument = vec![false; generics.len()];
     let mut type_packs = Vec::new();
     for (index, parameter) in signature.parameters.iter().enumerate() {
+        if let Type::Function(template) = &parameter.ty
+            && let Some(reflects) = &template.named_pack
+            && let Some(slot) = generics
+                .iter()
+                .position(|generic| generic.at == reflects.at)
+        {
+            found[slot] = Some(Argument::Type(Type::Unknown));
+        }
         let arguments = given
             .iter()
             .zip(bound)
             .filter_map(|(given, place)| (place.parameter() == Some(index)).then_some(given));
         if let Some(generic) = type_pack(parameter, generics) {
-            let types: Vec<Type> = arguments.map(Given::ty).cloned().collect();
-            if !types.iter().all(whole) {
+            let entries: Vec<_> = arguments
+                .enumerate()
+                .map(|(position, given)| {
+                    let key = given
+                        .key
+                        .name()
+                        .map_or(hir::PackKey::Position(position), |name| {
+                            hir::PackKey::Name(name.to_string())
+                        });
+                    (key, given.ty().clone())
+                })
+                .collect();
+            if !entries.iter().all(|(_, ty)| whole(ty)) {
                 return None;
             }
             found[generic] = Some(Argument::Type(Type::Unknown));
-            type_packs.push(hir::TypePackArgument {
-                parameter: generic,
-                types,
-                infer_from_arguments: false,
-            });
+            type_packs.push(hir::TypePackArgument::keyed(generic, entries));
             continue;
         }
         for given in arguments {

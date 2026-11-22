@@ -39,7 +39,7 @@ use hgl_diagnostics::{Diagnostics, Location};
 use crate::declared::substitute_within;
 use crate::hir::{
     AnonymousFunction, Answer, Body, Callee, ConfigurationRead, DefaultExpr, Expr, ExprKind,
-    ValueCategory, walk_statements, walk_statements_mut,
+    TypePackArgument, Value, ValueCategory, walk_statements, walk_statements_mut,
 };
 use crate::program::{LocalKind, Phase, Program, Role};
 use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar, Signature, Type};
@@ -48,14 +48,23 @@ use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar,
 /// it stands for at one call.
 type Map<'a> = [(Location, &'a Argument)];
 
+use crate::values::PackTypes;
+
 /// The enclosing declaration and the arguments common to its body and
 /// any anonymous bodies written inside it.
 struct InstanceArguments<'a> {
     declaration: (usize, usize),
     generics: &'a [Argument],
     types: &'a Map<'a>,
+    packs: &'a PackTypes<'a>,
     requirements: &'a [Answer],
     diagnostics: &'a RefCell<Diagnostics>,
+}
+
+impl InstanceArguments<'_> {
+    fn project(&self, ty: &Type) -> Type {
+        self.packs.project(ty, self.types).unwrap_or(Type::Unknown)
+    }
 }
 
 impl Program {
@@ -134,6 +143,7 @@ impl Program {
             declaration: operator,
             generics,
             types: &types,
+            packs: &PackTypes::new(&[], &[]),
             requirements: &requirements,
             diagnostics: &reports,
         };
@@ -198,11 +208,31 @@ impl Program {
         requirements: &[Answer],
         functions: &[(usize, Callee)],
     ) -> Option<(Signature, Body)> {
-        self.checked_instance(
+        self.instance_with_packs(
             (module, declaration),
             generics,
             requirements,
             functions,
+            &[],
+        )
+    }
+
+    /// Instantiate a declaration with its static function and type pack
+    /// arguments, including member types of reflected packs (GEN-17).
+    pub fn instance_with_packs(
+        &self,
+        declaration: (usize, usize),
+        generics: &[Argument],
+        requirements: &[Answer],
+        functions: &[(usize, Callee)],
+        packs: &[TypePackArgument],
+    ) -> Option<(Signature, Body)> {
+        self.checked_instance(
+            declaration,
+            generics,
+            requirements,
+            functions,
+            packs,
             &RefCell::new(Diagnostics::new()),
             &mut Diagnostics::new(),
         )
@@ -217,6 +247,7 @@ impl Program {
         generics: &[Argument],
         requirements: &[Answer],
         functions: &[(usize, Callee)],
+        packs: &[TypePackArgument],
         diagnostics: &RefCell<Diagnostics>,
         graph_diagnostics: &mut Diagnostics,
     ) -> Option<(Signature, Body)> {
@@ -231,20 +262,19 @@ impl Program {
             .map(|generic| generic.at)
             .zip(generics)
             .collect();
+        let packs = PackTypes::new(&signature.generics, packs);
+        let project = |ty| packs.project(ty, &map).unwrap_or(Type::Unknown);
         let mut taken = Signature {
             generics: Vec::new(),
             parameters: signature
                 .parameters
                 .iter()
                 .map(|parameter| Parameter {
-                    ty: substitute_within(&parameter.ty, &map),
+                    ty: project(&parameter.ty),
                     ..parameter.clone()
                 })
                 .collect(),
-            result: signature
-                .result
-                .as_ref()
-                .map(|result| substitute_within(result, &map)),
+            result: signature.result.as_ref().map(project),
             reference: signature.reference,
         };
         let mut body = body.clone();
@@ -254,6 +284,7 @@ impl Program {
             declaration: (module, declaration),
             generics,
             types: &map,
+            packs: &packs,
             requirements,
             diagnostics,
         };
@@ -291,7 +322,7 @@ impl Program {
         functions: &[(usize, Callee)],
     ) {
         for local in &mut body.locals {
-            local.ty = substitute_within(&local.ty, instance.types);
+            local.ty = instance.project(&local.ty);
         }
         walk_statements_mut(&mut body.statements, &mut |expression| {
             self.place(expression, instance, functions);
@@ -313,7 +344,7 @@ impl Program {
         instance: &InstanceArguments<'_>,
         functions: &[(usize, Callee)],
     ) {
-        expression.ty = substitute_within(&expression.ty, instance.types);
+        expression.ty = instance.project(&expression.ty);
         match &mut expression.kind {
             // GEN-13: a generic value parameter read as a value is the
             // constant the call gives it.
@@ -402,9 +433,7 @@ impl Program {
             .zip(generics)
             .collect();
         let context = context.map(|mut context| {
-            context.result = context
-                .result
-                .map(|ty| substitute_within(&ty, instance.types));
+            context.result = context.result.map(|ty| instance.project(&ty));
             context
         });
         for argument in arguments {
@@ -420,7 +449,7 @@ impl Program {
             // This walk visits the call before each argument. Its type
             // is specialized here, while the expression still records
             // whether it was written as a literal or a generic constant.
-            let actual = substitute_within(&argument.value.ty, instance.types);
+            let actual = instance.project(&argument.value.ty);
             let expected = substitute_within(&parameter.ty, &map);
             if actual != expected {
                 let mut value = argument.value.clone();
@@ -447,7 +476,7 @@ impl Program {
         if let Callee::Anonymous(function) = callee {
             let functions = inherited_functions(function, functions);
             let template = Type::Function(Box::new(function.template.clone()));
-            if let Type::Function(template) = substitute_within(&template, instance.types) {
+            if let Type::Function(template) = instance.project(&template) {
                 function.template = *template;
             }
             function
@@ -462,8 +491,8 @@ impl Program {
 
     /// A constant a generic value parameter is given, `value` of type
     /// `ty`, as the expression that reads it, written at `at`: `None`
-    /// for one whose value is not held. A list and a tuple are each
-    /// element as its own expression.
+    /// for one whose value is not held. A list, string set and tuple
+    /// have each element as its own expression.
     pub(crate) fn constant(
         &self,
         value: &ConstantValue,
@@ -529,6 +558,22 @@ impl Program {
                     .map(|value| element(value, of))
                     .collect::<Option<Vec<Expr>>>()
                     .map(ExprKind::Sequence)
+            }
+            ConstantValue::StringSet(names) => {
+                let Type::Set(element) = of else {
+                    return None;
+                };
+                Some(ExprKind::Sequence(
+                    names
+                        .iter()
+                        .map(|name| Expr {
+                            kind: ExprKind::Literal(Value::Str(name.clone())),
+                            ty: (**element).clone(),
+                            at,
+                            category: ValueCategory::Unsettled,
+                        })
+                        .collect(),
+                ))
             }
             ConstantValue::Tuple(values) => {
                 let anys;

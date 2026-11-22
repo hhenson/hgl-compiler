@@ -10,7 +10,7 @@ use super::candidates::{
 };
 use super::constants::generic_default;
 use super::fit::whole;
-use super::inference::{ExplicitGenerics, infer};
+use super::inference::{ExplicitGenerics, infer, type_pack};
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{
     AnonymousFunction, Callee, Expr, ExprKind, Form, TypePackArgument, ValueCategory,
@@ -18,7 +18,8 @@ use crate::hir::{
 use crate::program::{Declaration, OperatorRef, Role};
 use crate::syntax::{child, name_token, ungrouped};
 use crate::types::{
-    Argument, CallArguments, ConstantValue, Detail, FunctionType, GenericKind, Signature, Type,
+    Argument, CallArguments, ConstantValue, Detail, FunctionParameter, FunctionType, GenericKind,
+    Pack, Parameter, Signature, Type,
 };
 use crate::{codes, error, local_error};
 
@@ -128,29 +129,40 @@ impl<'a> Typer<'a> {
             return None;
         };
         let declared = &unit.declarations[declaration];
-        if !plain_parameters(signature) {
+        if !plain_inputs(signature, template) {
             self.marked_function(node, signature);
             return None;
         }
-        let ReferenceArguments { generics, pack, .. } =
-            self.reference_arguments(node, name, (declared, signature), template)?;
+        let ReferenceArguments {
+            generics,
+            pack,
+            empty_named_pack,
+            ..
+        } = self.reference_arguments(node, name, (declared, signature), template)?;
         let map = signature
             .generics
             .iter()
-            .map(|generic| generic.at)
             .zip(&generics)
+            .filter(|(generic, _)| !matches!(generic.kind, GenericKind::Pack { .. }))
+            .map(|(generic, argument)| (generic.at, argument))
             .collect::<Vec<_>>();
         let taken = in_instance(signature, &map);
         let actual = function_type(&taken, declared.kind.role() == Some(Role::Value));
-        if matches_template(template, &actual) && template.types().all(whole) {
+        if pack.is_none() && matches_template(template, &actual) && template.types().all(whole) {
             self.requires_met(self.at(node), (module, declaration), &generics);
         }
-        let requirements = self.answers(module, declaration, &generics);
+        let requirements = if pack.is_none() {
+            self.answers(module, declaration, &generics)
+        } else {
+            Vec::new()
+        };
+        let mut type_packs: Vec<_> = pack.into_iter().chain(empty_named_pack).collect();
+        type_packs.sort_by_key(|pack| pack.parameter);
         let callee = Callee::Function {
             module,
             declaration,
             generics,
-            type_packs: pack.into_iter().collect(),
+            type_packs,
             requirements,
             contextual: Vec::new(),
         };
@@ -183,20 +195,20 @@ impl<'a> Typer<'a> {
         let candidates = self.value_candidates(operator);
         let candidates: Vec<_> = candidates
             .into_iter()
-            .filter(|(_, _, signature)| plain_parameters(signature))
+            .filter(|(_, _, signature)| signature.parameters.iter().all(plain_parameter))
             .collect();
         let at = self.at(node);
         let given = request
             .parameters
             .iter()
             .enumerate()
-            .map(|(index, (_, ty))| {
+            .map(|(index, input)| {
                 Given::read(
                     index,
                     node.clone(),
                     Expr {
                         kind: ExprKind::Unread,
-                        ty: ty.clone(),
+                        ty: input.ty().clone(),
                         at,
                         category: ValueCategory::Value,
                     },
@@ -280,8 +292,10 @@ impl<'a> Typer<'a> {
                 .details
                 .get(operator.declaration)
             {
-                for ((name, _), public) in actual.parameters.iter_mut().zip(&public.parameters) {
-                    *name = Some(public.name.clone());
+                for (input, public) in actual.parameters.iter_mut().zip(&public.parameters) {
+                    if let FunctionParameter::Declared(parameter) = input {
+                        parameter.name.clone_from(&public.name);
+                    }
                 }
             }
             let requirements = self.answers(module, declaration, &chosen.generics);
@@ -388,8 +402,8 @@ impl<'a> Typer<'a> {
         if let (Some(pattern), Some(actual)) = (&signature.result, &template.result) {
             infer(pattern, actual, &signature.generics, &mut found);
         }
-        for (pattern, (_, actual)) in signature.parameters.iter().zip(&template.parameters) {
-            infer(&pattern.ty, actual, &signature.generics, &mut found);
+        for (pattern, actual) in signature.parameters.iter().zip(&template.parameters) {
+            infer(&pattern.ty, actual.ty(), &signature.generics, &mut found);
         }
         // GEN-2 and GEN-8: a generic value parameter nothing says
         // anything of takes the default declared by the callback.
@@ -433,6 +447,25 @@ impl<'a> Typer<'a> {
         if self.diagnostics.len() != reported {
             return None;
         }
+        // GEN-8: explicitly written positional pack types live on the
+        // target as a sequence, with no single argument at its generic slot.
+        if let Some(pack) = &pack {
+            found[pack.parameter] = Some(Argument::Type(Type::Unknown));
+        }
+        // FN-8: an unapplied callback's own named pack contributes no
+        // entries to a reflected template. Its shape is still declared.
+        let empty_named_pack = template.named_pack.as_ref().and_then(|_| {
+            let named = signature
+                .parameters
+                .iter()
+                .find(|parameter| parameter.pack == Some(Pack::Named))?;
+            let index = type_pack(named, &signature.generics)?;
+            if pack.as_ref().is_some_and(|given| given.parameter == index) {
+                return None;
+            }
+            found[index] = Some(Argument::Type(Type::Unknown));
+            Some(TypePackArgument::positional(index, Vec::new()))
+        });
         let Some(generics) = found.into_iter().collect::<Option<Vec<_>>>() else {
             self.unresolved_reference(node, name);
             return None;
@@ -440,6 +473,7 @@ impl<'a> Typer<'a> {
         Some(ReferenceArguments {
             generics,
             pack,
+            empty_named_pack,
             defaulted,
         })
     }
@@ -492,7 +526,7 @@ impl<'a> Typer<'a> {
             Category::Type,
             codes::TYPE_MISMATCH,
             self.at(node),
-            format!("a function type takes plain parameters, but `{signature}` has a marked parameter or pack"),
+            format!("a fixed input of the function type takes a plain parameter, but `{signature}` has a marked parameter or pack there"),
             "FN-17",
         ));
     }
@@ -503,22 +537,27 @@ impl<'a> Typer<'a> {
         template: &FunctionType,
     ) -> Option<(Callee, FunctionType)> {
         let mut parameters = self.anonymous_parameters(node);
-        if parameters.len() != template.parameters.len() {
+        if !takes_input_count(template, parameters.len()) {
+            let count = template.parameters.len();
+            let at_least = if template.named_pack.is_some() {
+                "at least "
+            } else {
+                ""
+            };
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::TYPE_MISMATCH,
                 self.at(node),
                 format!(
-                    "the function type takes {} inputs, and the anonymous function declares {}",
-                    template.parameters.len(),
+                    "the function type takes {at_least}{count} inputs, and the anonymous function declares {}",
                     parameters.len()
                 ),
                 "FN-17",
             ));
             return None;
         }
-        for ((_, written), (_, expected)) in parameters.iter_mut().zip(&template.parameters) {
-            written.get_or_insert_with(|| expected.clone());
+        for ((_, written), expected) in parameters.iter_mut().zip(&template.parameters) {
+            written.get_or_insert_with(|| expected.ty().clone());
         }
         let result = crate::syntax::child(node, SyntaxKind::ReturnType)
             .and_then(|written| self.anonymous_type(&written))
@@ -527,13 +566,12 @@ impl<'a> Typer<'a> {
             value: template.value,
             parameters: parameters
                 .iter()
-                .map(|(name, ty)| {
-                    (
-                        Some(name.text().to_string()),
-                        ty.clone().unwrap_or(Type::Unknown),
-                    )
+                .map(|(name, ty)| FunctionParameter::Fixed {
+                    name: Some(name.text().to_string()),
+                    ty: ty.clone().unwrap_or(Type::Unknown),
                 })
                 .collect(),
+            named_pack: None,
             result: result.clone(),
             reference: false,
         };
@@ -584,11 +622,11 @@ impl<'a> Typer<'a> {
         let slots: Vec<_> = template
             .parameters
             .iter()
-            .map(|(name, ty)| Slot {
+            .map(|input| Slot {
                 configuration: false,
-                name: name.as_deref().unwrap_or(""),
-                ty: ty.clone(),
-                required: !matches!(ty, Type::Nullable(_)),
+                name: input.name().unwrap_or(""),
+                ty: input.ty().clone(),
+                required: !matches!(input.ty(), Type::Nullable(_)),
                 pack: None,
                 pack_bounds: (0, None),
                 type_pack: None,
@@ -637,13 +675,33 @@ struct OperatorReference {
 struct ReferenceArguments {
     generics: Vec<Argument>,
     pack: Option<TypePackArgument>,
+    empty_named_pack: Option<TypePackArgument>,
     defaulted: Vec<usize>,
 }
 
 fn plain_parameters(signature: &Signature) -> bool {
-    signature.parameters.iter().all(|parameter| {
-        !parameter.var && !parameter.constant && !parameter.reference && parameter.pack.is_none()
-    })
+    signature.parameters.iter().all(plain_parameter)
+}
+
+/// FN-17: fixed inputs are plain. GEN-17 reflects the other inputs as
+/// they are, including their marks and packs.
+fn plain_inputs(signature: &Signature, template: &FunctionType) -> bool {
+    let fixed = if template.named_pack.is_some() {
+        template.parameters.len()
+    } else {
+        signature.parameters.len()
+    };
+    signature.parameters.iter().take(fixed).all(plain_parameter)
+}
+
+fn plain_parameter(parameter: &Parameter) -> bool {
+    !parameter.var && !parameter.constant && !parameter.reference && parameter.pack.is_none()
+}
+
+/// A reflected pack takes the remaining slots after the fixed prefix.
+fn takes_input_count(template: &FunctionType, count: usize) -> bool {
+    let fixed = template.parameters.len();
+    count == fixed || (template.named_pack.is_some() && count > fixed)
 }
 
 fn function_type(signature: &Signature, value: bool) -> FunctionType {
@@ -652,8 +710,10 @@ fn function_type(signature: &Signature, value: bool) -> FunctionType {
         parameters: signature
             .parameters
             .iter()
-            .map(|parameter| (Some(parameter.name.clone()), parameter.ty.clone()))
+            .cloned()
+            .map(FunctionParameter::Declared)
             .collect(),
+        named_pack: None,
         result: signature.result.clone(),
         reference: signature.reference,
     }
@@ -663,12 +723,19 @@ fn function_type(signature: &Signature, value: bool) -> FunctionType {
 pub(super) fn matches_template(expected: &FunctionType, actual: &FunctionType) -> bool {
     (!expected.value || actual.value)
         && expected.reference == actual.reference
-        && expected.parameters.len() == actual.parameters.len()
-        && expected.parameters.iter().zip(&actual.parameters).all(
-            |((name, ty), (actual_name, actual_ty))| {
-                (name.is_none() || name == actual_name) && agree(ty, actual_ty)
-            },
-        )
+        && takes_input_count(expected, actual.parameters.len())
+        && (actual.named_pack.is_none() || expected.named_pack.is_some())
+        && expected
+            .parameters
+            .iter()
+            .zip(&actual.parameters)
+            .all(|(expected, actual)| {
+                actual.declared().is_none_or(plain_parameter)
+                    && expected
+                        .name()
+                        .is_none_or(|name| Some(name) == actual.name())
+                    && agree(expected.ty(), actual.ty())
+            })
         && match (&expected.result, &actual.result) {
             (Some(expected), Some(actual)) => agree(expected, actual),
             (None, None) => true,

@@ -749,17 +749,17 @@ impl GraphDestinations {
                 _ => return,
             };
             for argument in arguments {
-                let Some((name, ty)) = argument
+                let Some(input) = argument
                     .parameter
                     .and_then(|slot| template.parameters.get(slot))
                 else {
                     continue;
                 };
-                let place = name.as_ref().map_or_else(
+                let place = input.name().map_or_else(
                     || "the function parameter".to_owned(),
                     |name| format!("the parameter `{name}`"),
                 );
-                self.fit(typer, &mut argument.value, ty, &place, true);
+                self.fit(typer, &mut argument.value, input.ty(), &place, true);
             }
             return;
         };

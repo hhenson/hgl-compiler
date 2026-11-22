@@ -181,6 +181,7 @@ pub(super) fn check_instance(
         generics,
         requirements,
         &[],
+        &[],
         &reports,
         graph_diagnostics,
     )?;
