@@ -1238,7 +1238,14 @@ impl<'a> Typer<'a> {
             let stated = self.requirements().into_iter().find(|requirement| {
                 requirement.operator == operator
                     && requirement.operands.iter().eq(types.iter().copied())
-                    && self.asked_by(requirement) == Some(asked.clone())
+                    && match (self.asked_by(requirement), &asked) {
+                        // GEN-8, GEN-16: a result-shape request can leave
+                        // its element type open. A stated concrete arrow
+                        // meets those known parts; a different size does not.
+                        (Some(Some(stated)), Some(asked)) => self.admits(asked, &stated),
+                        (Some(None), None) => true,
+                        _ => false,
+                    }
             });
             if let Some(stated) = stated {
                 return Some(Answered::Stated(stated.index));
@@ -1584,7 +1591,22 @@ impl<'a> Typer<'a> {
             // one whose arrow gives what the call's place expects is
             // the call: under `convert(T) -> i64 && convert(T) -> f64`
             // a place that expects an `f64` takes the second.
-            let gives = match (wanted, requirement.result.as_ref().or(asks.as_ref())) {
+            // GEN-4: a required call keeps the known public result's
+            // complete type. That metadata is separate from the partial
+            // output request used above to match this requirement.
+            let result = requirement.result.clone().or_else(|| {
+                asks.as_ref()?;
+                let supplied = requirement_inputs(public, &requirement.operands);
+                self.inferred_output(
+                    operator,
+                    public,
+                    vec![None; public.generics.len()],
+                    &supplied,
+                )
+                .place
+                .or(asks)
+            });
+            let gives = match (wanted, result.as_ref()) {
                 (Some(wanted), Some(result)) => self.admits(wanted, result),
                 _ => true,
             };
@@ -1592,7 +1614,7 @@ impl<'a> Typer<'a> {
             // states none what the operator's defaults make its result.
             let required = Required {
                 index: requirement.index,
-                result: requirement.result.or(asks),
+                result,
                 operands: requirement.operands,
                 places: places.clone(),
             };
@@ -1642,7 +1664,7 @@ impl<'a> Typer<'a> {
             if implicit_configuration {
                 // A symbol has no written generic arguments. Resolve defaults
                 // in the public signature with the requirement's operand types.
-                let requested = self.output_requested(operator, public, inferred, &supplied, false);
+                let requested = self.inferred_output(operator, public, inferred, &supplied);
                 if let Some(unfit) = requested.unfit {
                     self.diagnostics.emit(unfit.diagnostic(public, at));
                     return (self.unselected(given, form), Type::Unknown);

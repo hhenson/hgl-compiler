@@ -370,3 +370,30 @@ fn a_typed_input_keeps_its_binding_beside_a_contextual_argument() {
         }
     }
 }
+
+#[test]
+fn requirements_and_value_calls_share_option_independent_output_requests() {
+    // GEN-16: a requirement holds where its named call is admitted.
+    // An arrow is a result constraint; an unrelated option adds none.
+    for option in ["", ", const on: bool = true"] {
+        for arrow in ["", " -> f64", " -> i64"] {
+            let source = format!(
+                "module m\noperator fixed<T{option}>(value: T, flag: bool) -> T\nimpl const fn fixed(value: i64, flag: bool) -> f64 => 0.5\nconst fn through<T>(value: T, flag: bool) -> bool requires fixed(T, bool){arrow} {{ let ignored = fixed(value, flag)\nreturn true }}\ntest observed {{ assert through(3, true) }}\n"
+            );
+            let checked = check(&[("m.hgl", &source)]);
+            if arrow == " -> i64" {
+                assert!(checked.rejected, "{option}/{arrow}: {}", checked.report);
+                assert!(
+                    checked
+                        .findings
+                        .iter()
+                        .any(|f| f.code == "constraint/requires.unmet"),
+                    "{}",
+                    checked.report
+                );
+            } else {
+                assert!(!checked.rejected, "{option}/{arrow}: {}", checked.report);
+            }
+        }
+    }
+}

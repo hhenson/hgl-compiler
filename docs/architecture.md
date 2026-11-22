@@ -1343,8 +1343,10 @@ pack checks (GEN-17). For every value call,
 expected type arguments together with inferred or defaulted generic values.
 An unrelated option cannot promote preliminary argument types to an output
 request and change the way candidates read literals (GEN-5, GEN-6).
-Typed values still constrain candidate inputs; type-based requirements keep
-their fixed input types.
+Typed values and a requirement's supplied types still constrain candidate
+inputs. GEN-16 callability uses the same requested result as a value call,
+with the requirement's arrow as its expected result. Required-call
+result and configuration metadata separately retain complete supplied operand types.
 
 Inherited configuration defaults have separate call metadata: argument-derived
 types stay open until `Typer::called` completes them from fitted arguments

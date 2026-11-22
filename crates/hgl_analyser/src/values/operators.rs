@@ -67,7 +67,7 @@ impl<'a> Typer<'a> {
         supplied: &[Option<&Type>],
         said: bool,
     ) -> Requested {
-        self.request_output(operator, public, found, supplied, said, false)
+        self.request_output(operator, public, found, supplied, said, true)
     }
 
     /// GEN-5, GEN-6, GEN-8: an option contributes its generic value to
@@ -82,7 +82,20 @@ impl<'a> Typer<'a> {
         said: bool,
     ) -> Requested {
         let supplied = public_inputs(public, given);
-        self.request_output(operator, public, found, &supplied, said, true)
+        self.output_requested(operator, public, found, &supplied, said)
+    }
+
+    /// GEN-4, UNIT-8: a required call's result and configuration metadata
+    /// retain the complete inferred public types. This is not a request
+    /// that constrains candidate selection or tests callability (GEN-16).
+    pub(super) fn inferred_output(
+        &self,
+        operator: OperatorRef,
+        public: &Signature,
+        found: Vec<Option<Argument>>,
+        supplied: &[Option<&Type>],
+    ) -> Requested {
+        self.request_output(operator, public, found, supplied, false, false)
     }
 
     fn request_output(
