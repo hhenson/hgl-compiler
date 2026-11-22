@@ -39,6 +39,27 @@ pub(crate) fn name_token(node: &SyntaxNode) -> Option<SyntaxToken> {
     }
 }
 
+/// The function name and the exclusion names written in `for f without key` (FN-8).
+pub(crate) fn pack_for_names(
+    node: &SyntaxNode,
+) -> Option<(SyntaxToken, impl Iterator<Item = SyntaxToken>)> {
+    let mut names = tokens(node).filter(|token| token.kind() == SyntaxKind::Ident);
+    let function = names.next()?;
+    // The next identifier is the contextual `without`, when present.
+    Some((function, names.skip(1)))
+}
+
+/// The call of the pack key form `arg_keys(Ps)`, before checking its argument (GEN-17).
+pub(crate) fn is_arg_keys_call(node: &SyntaxNode) -> bool {
+    node.kind() == SyntaxKind::CallExpr
+        && node.children().next().is_some_and(|callee| {
+            callee.kind() == SyntaxKind::NameExpr
+                && tokens(&callee)
+                    .next()
+                    .is_some_and(|name| name.text() == "arg_keys")
+        })
+}
+
 /// What `node` is with the parentheses around it taken off. EXPR-1:
 /// "parentheses group", so `((a))` is `a`.
 pub(crate) fn ungrouped(mut node: SyntaxNode) -> SyntaxNode {
@@ -49,6 +70,14 @@ pub(crate) fn ungrouped(mut node: SyntaxNode) -> SyntaxNode {
         }
     }
     node
+}
+
+/// The statements of a test's block. Leading helper declarations have their own bodies.
+pub(crate) fn test_statements(test: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> {
+    child(test, SyntaxKind::Block)
+        .into_iter()
+        .flat_map(|block| block.children())
+        .filter(|node| node.kind() != SyntaxKind::FnDecl)
 }
 
 /// True when the `inject` `node` stands among the first statements of
@@ -62,7 +91,10 @@ pub(crate) fn leads_its_test(node: &SyntaxNode) -> bool {
     });
     let mut before = node.prev_sibling();
     while let Some(statement) = before {
-        if statement.kind() != SyntaxKind::InjectDecl {
+        if !matches!(
+            statement.kind(),
+            SyntaxKind::InjectDecl | SyntaxKind::FnDecl
+        ) {
             return false;
         }
         before = statement.prev_sibling();
