@@ -234,6 +234,15 @@ fn deferred_generic_result<T>(const value: T) -> i64 {
     return copied
 }
 
+# GEN-13: the default's literal takes the type settled for the call.
+const fn deferred_fallback<U, const Fallback: U = 1>(input: U) -> U => Fallback
+
+fn deferred_generic_default<T>(const value: T) -> f64 {
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    let copied = deferred_fallback(chosen)
+    return copied
+}
+
 # CTRL-15: a deferred selector and its label settle to i64.
 fn selected_case<T>(const value: T) -> i64 {
     let key = if live_helper(value) > 0 { 1 }
@@ -271,6 +280,7 @@ test an_instance_settles_its_graph_conditions {
     assert eval deferred_member(value: 3) == [3]
     assert eval deferred_enum_constructor(value: "s") == [GraphSide.left]
     assert eval deferred_generic_result(value: 3) == [1]
+    assert eval deferred_generic_default(value: 3) == [1.0]
     assert eval selected_case(value: 3) == [4]
     assert eval value_phase_choice(value: 3) == [1]
     assert eval value_phase_choice(value: "s") == [-1]

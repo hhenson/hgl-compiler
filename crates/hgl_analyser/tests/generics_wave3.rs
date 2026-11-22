@@ -9,7 +9,7 @@ mod common;
 
 use common::{Checked, body, module};
 use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Stmt, ValueCategory, walk_statements};
-use hgl_analyser::{Argument, Detail};
+use hgl_analyser::{Argument, ConstantValue, Detail};
 
 /// No findings.
 const NONE: [&str; 0] = [];
@@ -2272,6 +2272,52 @@ fn graph_instances_complete_named_function_inference() {
         }
     });
     assert_eq!(generics.unwrap(), ["str", "i64", "9"]);
+}
+
+/// GEN-13: a default that depends on the inferred type is read once a
+/// graph instance supplies that type.
+#[test]
+fn graph_instances_check_dependent_function_defaults() {
+    let checked = module(concat!(
+        "operator predicate<T>(input: T) -> bool\n",
+        "impl const fn predicate<T>(input: T) -> bool => true\n",
+        "impl fn predicate(input: i64) -> bool { when { return input > 0 } }\n",
+        "const fn choose<U, const Fallback: U = 1>(value: U) -> U => Fallback\n",
+        "fn real<T>(const input: T) -> f64 {\n",
+        "    let chosen = if predicate(input) { 2.5 }\n",
+        "    let copied = choose(chosen)\n",
+        "    return copied\n",
+        "}\n",
+        "fn wrong<T>(const input: T) -> bool {\n",
+        "    let chosen = if predicate(input) { true }\n",
+        "    let copied = choose(chosen)\n",
+        "    return copied\n",
+        "}\n",
+        "fn accepted() -> f64 => real(3)\n",
+        "fn rejected() -> bool => wrong(3)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:17:26 type/type.mismatch GEN-13"],
+        "{}",
+        checked.report
+    );
+    assert!(checked.report.contains("leaves `Fallback` to its default"));
+    let instance = instance_called_by(&checked, body(&checked, "accepted"));
+    let mut found = false;
+    walk_statements(&instance.statements, &mut |value| {
+        if let ExprKind::Call {
+            callee: Callee::Function { generics, .. },
+            ..
+        } = &value.kind
+            && let [Argument::Type(ty), Argument::Constant(fallback)] = generics.as_slice()
+        {
+            assert_eq!(ty.to_string(), "f64");
+            assert!(matches!(fallback.value, ConstantValue::Float(1.0)));
+            found = true;
+        }
+    });
+    assert!(found);
 }
 
 /// GEN-3 and GEN-13: a call completed in a graph instance must follow

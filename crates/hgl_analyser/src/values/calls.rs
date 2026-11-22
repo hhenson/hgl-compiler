@@ -10,6 +10,7 @@ use hgl_source::{FileId, Span};
 
 use super::Typer;
 use super::arguments::{Slot, Takes};
+use super::constants::generic_default;
 use super::evals::{trace_input_type, trace_pack_type};
 use super::fit::{not_null, open, whole};
 use super::inference::{
@@ -1076,6 +1077,30 @@ impl<'a> Typer<'a> {
             .zip(&found)
             .filter_map(|(generic, found)| found.is_none().then_some(generic.at))
             .collect();
+        // GEN-13: a dependent value needs a contextual reading once its
+        // type settles. Recover only defaults whose omission is proven.
+        let dependent: Vec<_> = signature
+            .generics
+            .iter()
+            .enumerate()
+            .filter_map(|(index, generic)| {
+                matches!(&generic.kind, GenericKind::Value(ty) if mentions(ty, &unfound))
+                    .then_some(index)
+            })
+            .collect();
+        let defaults = if dependent.is_empty() {
+            None
+        } else {
+            let Some((name, defaulted)) =
+                self.omitted_function_defaults(call.at, (*module, *declaration), signature)
+            else {
+                return false;
+            };
+            if !dependent.iter().all(|index| defaulted.contains(index)) {
+                return false;
+            }
+            Some((name, defaulted))
+        };
         for (slot, value) in supplied {
             let Some(parameter) = signature.parameters.get(slot) else {
                 return false;
@@ -1096,6 +1121,26 @@ impl<'a> Typer<'a> {
                 .zip(&found)
                 .filter_map(|(generic, found)| found.is_none().then_some(generic.at))
                 .collect();
+        }
+        if found.iter().any(Option::is_none) {
+            return false;
+        }
+        if let Some((name, defaulted)) = defaults {
+            for index in dependent {
+                found[index] = None;
+            }
+            let before = self.diagnostics.len();
+            self.generic_values(
+                &name,
+                declared,
+                &signature.generics,
+                (&[], &defaulted),
+                &mut found,
+            );
+            if self.diagnostics.len() != before {
+                call.kind = ExprKind::Unread;
+                return true;
+            }
         }
         let Some(resolved) = found.into_iter().collect::<Option<Vec<_>>>() else {
             return false;
@@ -1146,6 +1191,48 @@ impl<'a> Typer<'a> {
         *generics = resolved;
         self.finished_call(&call.kind, false);
         true
+    }
+
+    /// Defaults omitted from the original named call (GEN-8). A written
+    /// generic option would need its own source to be read in context.
+    fn omitted_function_defaults(
+        &self,
+        at: Location,
+        (module, declaration): (usize, usize),
+        signature: &Signature,
+    ) -> Option<(SyntaxToken, Vec<usize>)> {
+        let call = self.node_at(at)?;
+        let callee = call.children().next()?;
+        if call.kind() != SyntaxKind::CallExpr
+            || callee.kind() != SyntaxKind::NameExpr
+            || child(&callee, SyntaxKind::GenericArgs).is_some()
+        {
+            return None;
+        }
+        let name = name_token(&callee)?;
+        if !matches!(self.binding_at(at.file, name.span().start), Some(Binding::Declarations {
+            module: bound_module,
+            declarations,
+        }) if *bound_module == module && declarations.contains(&declaration))
+        {
+            return None;
+        }
+        let list = child(&call, SyntaxKind::ArgList)?;
+        let entries = self.call_entries(&list);
+        let declared = &self.program.modules[module].declarations[declaration];
+        let mut defaulted = Vec::new();
+        for (index, generic) in signature.generics.iter().enumerate() {
+            if matches!(generic.kind, GenericKind::Value(_))
+                && generic_default(&declared.syntax, generic).is_some()
+                && !entries.iter().any(|(_, name, _)| {
+                    name.as_ref()
+                        .is_some_and(|name| name.text() == generic.name)
+                })
+            {
+                defaulted.push(index);
+            }
+        }
+        Some((name, defaulted))
     }
 
     /// The member an enum's construction from `argument` names, where
