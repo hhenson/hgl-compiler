@@ -36,11 +36,15 @@ struct Constant {
     static constexpr auto name = "hgl.const";
     static constexpr bool schedule_on_start = true;
 
-    static void eval(hgraph::Scalar<"value", T> value, hgraph::Out<Schema> out) {
-        if constexpr (std::is_same_v<Schema, hgraph::TS<T>>) {
+    static constexpr bool atomic = std::is_same_v<Schema, hgraph::TS<T>>;
+    // A fixed list is stored whole in a configuration (FN-1).
+    using Storage = std::conditional_t<atomic, T, configured<T>>;
+
+    static void eval(hgraph::Scalar<"value", Storage> value, hgraph::Out<Schema> out) {
+        if constexpr (atomic) {
             out.set(value.value());
         } else {
-            publish_as_form(out, value.value(), std::source_location::current());
+            publish_as_form(out, value.value().held, std::source_location::current());
         }
     }
 };
@@ -63,14 +67,18 @@ hgraph::Port<Schema> constant(hgraph::Wiring& wiring, const T& value) {
     hgraph::Value scalars{
         hgraph::value_type_for_wiring(Signature::scalar_schema(), wiring.realization_options())};
     {
-        auto configured = scalars.as_bundle().begin_mutation();
-        configured["value"].set(value);
+        auto fields = scalars.as_bundle().begin_mutation();
+        if constexpr (Node::atomic) {
+            fields["value"].set(value);
+        } else {
+            fields["value"].set(typename Node::Storage{value});
+        }
     }
     hgraph::NodeBuilder builder;
     builder.implementation<Node>();
-    return hgraph::Port<Schema>{
-        wiring, wiring.add_unique_node(typeid(Node), std::move(builder),
-                                       std::span<const hgraph::WiringPortRef>{}, std::move(scalars))};
+    return hgraph::Port<Schema>{wiring, wiring.add_unique_node(typeid(Node), std::move(builder),
+                                                               std::span<const hgraph::WiringPortRef>{},
+                                                               std::move(scalars))};
 }
 
 // ---- Sources (SOURCE-1 to SOURCE-4) --------------------------------------

@@ -4,7 +4,7 @@
 //! independent of the candidate selected to implement its call. Nothing here
 //! proves a law or authorizes an optimizer to regroup arithmetic.
 
-use hgl_diagnostics::Location;
+use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
@@ -12,7 +12,8 @@ use crate::declared::{names_parameter, same_type};
 use crate::hir::Callee;
 use crate::program::{Module, Program};
 use crate::syntax::{child, name_token, tokens, ungrouped};
-use crate::types::{FunctionType, Signature, Type};
+use crate::types::{ConstantValue, FunctionType, Signature, Type};
+use crate::{codes, error, local_error};
 
 /// The two law predicates defined by GEN-18.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -200,11 +201,7 @@ pub(crate) fn holds(
     let module = &program.modules[operator.0];
     let declaration = &module.declarations[operator.1];
     let file = module.files[declaration.file].file;
-    for clause in declaration
-        .syntax
-        .children()
-        .filter(|part| part.kind() == SyntaxKind::OperatorProperties)
-    {
+    for clause in clauses(&declaration.syntax) {
         if !clause
             .children()
             .filter(|part| part.kind() == SyntaxKind::OperatorProperty)
@@ -212,16 +209,11 @@ pub(crate) fn holds(
         {
             continue;
         }
-        for domain in clause
-            .children()
-            .filter(|part| crate::read::is_type(part.kind()))
-        {
+        for domain in domains(&clause) {
             let Some(domain) = module
                 .written
                 .iter()
-                .find(|written| {
-                    written.at.file == file && written.at.span == hgl_parser::HasSpan::span(&domain)
-                })
+                .find(|written| written.at == Location::new(file, domain.span()))
                 .map(|written| &written.ty)
             else {
                 continue;
@@ -302,34 +294,67 @@ pub(crate) fn stated(
     )
 }
 
-/// GEN-9: property domains are concrete ordinary value types. The
-/// written-type pass already enforces the ordinary-value restriction.
-pub(crate) fn check_domains(program: &Program, diagnostics: &mut hgl_diagnostics::Diagnostics) {
-    use hgl_parser::HasSpan;
+/// The GEN-9 property clauses written on an operator.
+pub(crate) fn clauses(declaration: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> {
+    declaration
+        .children()
+        .filter(|node| node.kind() == SyntaxKind::OperatorProperties)
+}
+
+/// Each domain a GEN-9 property clause names, in source order.
+pub(crate) fn domains(clause: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> {
+    clause
+        .children()
+        .filter(|node| crate::read::is_type(node.kind()))
+}
+
+/// GEN-9: property domains are concrete ordinary value types, and a
+/// later clause cannot name the same domain. The written-type pass
+/// already enforces the ordinary-value restriction.
+pub(crate) fn check_domains(program: &Program, diagnostics: &mut Diagnostics) {
     for module in &program.modules {
         for declaration in &module.declarations {
-            for clause in declaration
-                .syntax
-                .children()
-                .filter(|node| node.kind() == SyntaxKind::OperatorProperties)
-            {
-                for domain in clause
-                    .children()
-                    .filter(|node| crate::read::is_type(node.kind()))
-                {
-                    if module.written.iter().any(|written| {
-                        written.at.file == declaration.at.file
-                            && written.at.span.start == domain.span().start
-                            && names_parameter(&written.ty)
-                    }) {
-                        diagnostics.emit(crate::local_error(
-                            hgl_diagnostics::Category::Type,
-                            crate::codes::local::PROPERTY_DOMAIN,
-                            hgl_diagnostics::Location::new(declaration.at.file, domain.span()),
+            let mut seen: Vec<&Type> = Vec::new();
+            for clause in clauses(&declaration.syntax) {
+                let earlier = seen.len();
+                for domain in domains(&clause) {
+                    let at = Location::new(declaration.at.file, domain.span());
+                    let Some(ty) = module
+                        .written
+                        .iter()
+                        .find(|written| written.at == at)
+                        .map(|written| &written.ty)
+                    else {
+                        continue;
+                    };
+                    if names_parameter(ty) {
+                        diagnostics.emit(local_error(
+                            Category::Type,
+                            codes::local::PROPERTY_DOMAIN,
+                            at,
                             "an operator property domain must be a concrete type".to_string(),
                             "GEN-9",
                         ));
+                        continue;
                     }
+                    if ty.any_part(&|part| matches!(part, Type::Unknown), &|constant| {
+                        matches!(constant.value, ConstantValue::Unknown)
+                    }) {
+                        continue;
+                    }
+                    if seen[..earlier]
+                        .iter()
+                        .any(|previous| same_type(previous, ty) == Some(true))
+                    {
+                        diagnostics.emit(error(
+                            Category::Operator,
+                            codes::PROPERTY_DUPLICATE,
+                            at,
+                            format!("an earlier property clause already names `{ty}`"),
+                            "GEN-9",
+                        ));
+                    }
+                    seen.push(ty);
                 }
             }
         }

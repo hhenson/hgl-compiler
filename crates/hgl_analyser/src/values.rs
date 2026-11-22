@@ -235,7 +235,11 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                         }
                         _ => &empty,
                     };
-                    Typer::new(program, module, declaration, signature, found, diagnostics);
+                    let typer =
+                        Typer::new(program, module, declaration, signature, found, diagnostics);
+                    if declaration.kind == DeclarationKind::Operator {
+                        typer.property_identities();
+                    }
                     None
                 }
             };
