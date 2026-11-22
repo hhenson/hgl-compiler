@@ -72,6 +72,11 @@ const PENDING_MODULES: &[(&str, &str, &str)] = &[
         "FMT-1 to FMT-6 (#434)",
     ),
     (
+        "hgl_core/spec/output.md",
+        "examples.output",
+        "OUT-1, OUT-2 and FMT-1 (#434)",
+    ),
+    (
         "hgl_core/spec/mapping.md",
         "examples.mapping",
         "MAP-1 and RED-1 (#369, #370)",
