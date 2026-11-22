@@ -9,6 +9,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
 use super::Typer;
+use super::expressions::written_null;
 use super::fit::{not_null, whole};
 use super::inference::placed;
 use crate::constant::{Fault, Scope, Typed};
@@ -20,7 +21,7 @@ use crate::syntax::{child, tokens};
 use crate::types::{
     Argument, Constant, ConstantValue, GenericKind, GenericParameter, StructType, Type,
 };
-use crate::{codes, error};
+use crate::{codes, error, local_error};
 
 impl<'a> Typer<'a> {
     /// The value a constant is written with, read as a value of
@@ -51,10 +52,8 @@ impl<'a> Typer<'a> {
     /// none.
     ///
     /// A default is cold and reads no formal argument (UNIT-7), so it
-    /// is read apart from the body. A type naming a generic parameter has a
-    /// type only a call gives, and its default is not held to one;
-    /// neither is the default of a temporal shape that is no ordinary
-    /// value type.
+    /// is read apart from the body. A generic parameter's default is
+    /// checked again when an omitted argument gives it a concrete type.
     pub(super) fn defaults(mut self) -> Vec<Option<DefaultExpr>> {
         self.locals.clear();
         self.declared.clear();
@@ -69,18 +68,14 @@ impl<'a> Typer<'a> {
                     return None;
                 }
                 let written = default_at(&syntax, parameter)?;
-                // "An omitted temporal argument is wired as a constant
-                // of its default, so the default is a value a constant
-                // of the parameter's type can publish." What that is
-                // for a window or an atomic is not settled
-                // here: `window: rolling_window<f64, 5> = []` is read, and
-                // held to no type.
-                let expected = if shaped(&parameter.ty) || names_parameter(&parameter.ty) {
-                    Type::Unknown
+                let reported = self.diagnostics.len();
+                let expected = parameter_default_type(&parameter.ty, written_null(&written));
+                let expected = if names_parameter(expected) {
+                    &Type::Unknown
                 } else {
-                    parameter.ty.clone()
+                    expected
                 };
-                let value = self.expression(&written, Some(&expected));
+                let value = self.expression(&written, Some(expected));
                 let place = format!("the parameter `{}`", parameter.name);
                 // TYPE-12: "A `signal` input takes no default but
                 // `null`": it has no payload a constant could supply.
@@ -95,7 +90,23 @@ impl<'a> Typer<'a> {
                     ));
                     return Some(self.take_default(value));
                 }
-                let value = self.fit(value, &expected, &place);
+                let value = self.fit(value, expected, &place);
+                // ERR-9: reject a failure this reader can establish.
+                // Calls the constant reader cannot evaluate are still
+                // checked by the ordinary expression reader.
+                if self.diagnostics.len() == reported
+                    && self
+                        .typed_in(self.file, &written, Some(expected))
+                        .is_ok_and(|constant| constant.evaluation_failed())
+                {
+                    self.diagnostics.emit(local_error(
+                        Category::Type,
+                        codes::local::DEFAULT_CONSTANT_FAILURE,
+                        value.at,
+                        format!("evaluating the default of `{}` fails", parameter.name),
+                        "UNIT-8",
+                    ));
+                }
                 Some(self.take_default(value))
             })
             .collect()
@@ -350,6 +361,19 @@ pub(super) fn default_at(
             .any(|token| token.span().start == parameter.at.span.start)
     })?;
     default_of(&written)
+}
+
+/// UNIT-8: a temporal input's default is the ordinary value its
+/// constant can publish. A window takes one arrival (TYPE-11); an
+/// atomic takes its whole payload (TYPE-9). Written null marks omission.
+pub(super) fn parameter_default_type(ty: &Type, null: bool) -> &Type {
+    match ty.omission_removed() {
+        Type::RollingWindow { value, .. } | Type::Atomic(value) if !null => value,
+        Type::RollingWindow { .. } | Type::Atomic(_) | Type::Signal | Type::Endpoint(_) => {
+            &Type::Unknown
+        }
+        _ => ty,
+    }
 }
 
 /// True for a type that is a temporal shape and no ordinary value

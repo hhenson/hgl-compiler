@@ -164,6 +164,11 @@ impl Typed {
         self.ty.as_ref()
     }
 
+    /// True for a known evaluation failure (ERR-9).
+    pub(crate) fn evaluation_failed(&self) -> bool {
+        self.failed
+    }
+
     /// A constant that already has the type of its declaring place.
     pub(crate) fn of(value: ConstantValue, ty: Option<Type>) -> Typed {
         Typed {
