@@ -177,7 +177,7 @@ fn check_declarations_against_imports(module: &Module, diagnostics: &mut Diagnos
         }
     }
     for declaration in &module.declarations {
-        if !declaration.kind.binds_name() {
+        if declaration.test_owner.is_some() || !declaration.kind.binds_name() {
             continue;
         }
         let Some(&import) = imported.get(declaration.name.as_str()) else {
@@ -219,7 +219,7 @@ fn check_names_against_prelude(program: &Program, index: usize, diagnostics: &mu
     };
     let module = &program.modules[index];
     for declaration in &module.declarations {
-        if !declaration.kind.binds_name() {
+        if declaration.test_owner.is_some() || !declaration.kind.binds_name() {
             continue;
         }
         if let Some(bound) = prelude(&declaration.name) {

@@ -1159,6 +1159,38 @@ const CONFIGURED: &str = concat!(
     "}\n",
 );
 
+/// TST-1 and FN-4: a named test runs its own temporal and value
+/// helpers, including a role pair and names reused in another test.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn named_test_helpers_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("named-test-helpers");
+    let file = write(
+        &root,
+        "core_implementation.named_test_helpers.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/core_implementation.named_test_helpers.hgl"),
+    );
+    let output = hgl_in(
+        &["test", &file, "--target", "cpp", "--integration"],
+        &[],
+        &[],
+    );
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The integration test above passes on the SDK.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]

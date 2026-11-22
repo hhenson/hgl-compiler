@@ -15,7 +15,7 @@ use crate::hir::{
     self, BinaryOperator, Body, Expr, ExprKind, Hook, LocalId, Run, Stmt, Value, ValueCategory,
 };
 use crate::program::{DeclarationKind, LocalKind, RUN_CONFIG, Role, StoreStatement};
-use crate::syntax::{child, name_token, tokens, ungrouped};
+use crate::syntax::{child, name_token, test_statements, tokens, ungrouped};
 use crate::types::{ConstantValue, Detail, NamedKind, Scalar, TraceStyle, Type};
 use crate::{codes, error};
 
@@ -56,13 +56,12 @@ impl<'a> Typer<'a> {
     /// integration test "may inject `run_config`, before its other
     /// statements ... Its value code may read `run_config` then".
     pub(super) fn test(mut self, integration: bool) -> Option<Body> {
-        let block = child(&self.declaration.syntax, SyntaxKind::Block)?;
+        child(&self.declaration.syntax, SyntaxKind::Block)?;
         self.graph = false;
         self.testing = true;
         self.value_code = true;
         self.integration = integration;
-        let statements = block
-            .children()
+        let statements = test_statements(&self.declaration.syntax)
             .map(|statement| self.statement(&statement))
             .collect();
         Some(Body {
@@ -450,7 +449,8 @@ impl<'a> Typer<'a> {
                         Category::Type,
                         codes::EVAL_TARGET,
                         self.at(&target),
-                        "an eval's call is of a function of a module, and this is none".to_string(),
+                        "an eval takes a call of a module function or a helper of this test"
+                            .to_string(),
                         "TST-5",
                     )
                     .with_note("an operator is evaluated through a function that calls it"),
@@ -650,7 +650,7 @@ impl<'a> Typer<'a> {
     }
 
     /// The function `name` stands for where it is evaluated or run: a
-    /// function of a module, native or not. FN-4: "Composition and eval
+    /// module function or a helper of the test. FN-4: "Composition and eval
     /// choose the temporal definition if one exists".
     fn evaluated(&self, name: &SyntaxToken) -> Option<(usize, usize)> {
         let (module, declarations) = self.declarations(name)?;
