@@ -15,7 +15,7 @@ use super::inference::placed;
 use crate::constant::{Fault, Scope, Typed};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{DefaultExpr, Expr, ExprKind, Value};
-use crate::program::Declaration;
+use crate::program::{Declaration, Role};
 use crate::read::{default_of, parameters};
 use crate::syntax::{child, tokens};
 use crate::types::{
@@ -69,7 +69,15 @@ impl<'a> Typer<'a> {
                 }
                 let written = default_at(&syntax, parameter)?;
                 let reported = self.diagnostics.len();
-                let expected = parameter_default_type(&parameter.ty, written_null(&written));
+                // FN-1 has already rejected a temporal shape in a
+                // value declaration or a `const` parameter.
+                let invalid_shape = shaped(&parameter.ty)
+                    && (parameter.constant || self.declaration.kind.role() == Some(Role::Value));
+                let expected = if invalid_shape {
+                    &Type::Unknown
+                } else {
+                    parameter_default_type(&parameter.ty, written_null(&written))
+                };
                 let expected = if names_parameter(expected) {
                     &Type::Unknown
                 } else {
@@ -94,7 +102,8 @@ impl<'a> Typer<'a> {
                 // ERR-9: reject a failure this reader can establish.
                 // Calls the constant reader cannot evaluate are still
                 // checked by the ordinary expression reader.
-                if self.diagnostics.len() == reported
+                if !invalid_shape
+                    && self.diagnostics.len() == reported
                     && self
                         .typed_in(self.file, &written, Some(expected))
                         .is_ok_and(|constant| constant.evaluation_failed())

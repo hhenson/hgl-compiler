@@ -1185,7 +1185,8 @@ fn any_parameter_but_a_pack_may_have_a_default() {
         "const fn value(first: f64, second: f64 = 2.0) -> f64 => first\n",
         "fn configured(first: f64, const second: f64 = 2.0) -> f64 {}\n",
         "native const fn native_value(first: f64 = 1.0) -> f64\n",
-        "fn temporal(first: f64, second: f64 = 2.0, window: rolling_window<f64, 5> = []) -> f64 {}\n",
+        // UNIT-8, TYPE-11: the constant publishes one arrival.
+        "fn temporal(first: f64, second: f64 = 2.0, window: rolling_window<f64, 5> = 1.0) -> f64 {}\n",
         "native fn native_temporal(first: f64 = 1.0) -> f64\n",
         "native fn completed(first: f64) -> f64\n",
         "native fn completed(first: f64 = 1.0) -> f64 { when; }\n",
