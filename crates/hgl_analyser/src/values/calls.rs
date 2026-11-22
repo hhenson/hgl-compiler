@@ -828,7 +828,7 @@ impl<'a> Typer<'a> {
                 found.is_none()
                     && pack
                         .as_ref()
-                        .is_none_or(|types| evaluating && types.iter().any(|ty| !whole(ty)))
+                        .is_none_or(|types| types.iter().any(|ty| !whole(ty)))
             })
             .map(|((generic, _), _)| generic)
             .filter(|generic| {
@@ -938,13 +938,28 @@ impl<'a> Typer<'a> {
             (&own, &resolved),
             self.diagnostics,
         );
-        // GEN-3: the callee's `requires` holds with what was resolved.
+        let type_packs: Vec<_> = inferred_packs
+            .into_iter()
+            .enumerate()
+            .filter_map(|(parameter, types)| {
+                Some(hir::TypePackArgument {
+                    parameter,
+                    types: types?,
+                })
+            })
+            .collect();
+        // GEN-3 and GEN-10: the callee's `requires` holds with what was
+        // resolved, including the separate sequence in each type pack.
         // Not where something else was reported of the call (ERR-9).
-        if first_pack.is_none() && judged && unresolved.is_empty() {
-            self.requires_met(at, (module, declaration), &resolved);
+        if judged && unresolved.is_empty() {
+            if first_pack.is_none() {
+                self.requires_met(at, (module, declaration), &resolved);
+            } else {
+                self.pack_requires_met(at, (module, declaration), &resolved, &type_packs);
+            }
         }
-        // Pack reflection in requirements needs the separate sequence
-        // of types recorded on this call (GEN-10).
+        // Named operator requirements over pack members still need to
+        // be resolved with the quantifier's binding (GEN-10, GEN-16).
         let requirements = if first_pack.is_none() {
             self.answers(module, declaration, &resolved)
         } else {
@@ -954,16 +969,7 @@ impl<'a> Typer<'a> {
             module,
             declaration,
             generics: resolved,
-            type_packs: inferred_packs
-                .into_iter()
-                .enumerate()
-                .filter_map(|(parameter, types)| {
-                    Some(hir::TypePackArgument {
-                        parameter,
-                        types: types?,
-                    })
-                })
-                .collect(),
+            type_packs,
             requirements,
         };
         let kind = ExprKind::Call {
