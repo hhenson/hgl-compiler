@@ -1,5 +1,5 @@
 // Unit tests of core's native conversions (conversions.h), against core's
-// conversion cases (`tests/implementation/conversions.hgl`) and the edges of
+// conversion cases (`tests/core_conformance/conversions.hgl`) and the edges of
 // each rule of OPS-6 to OPS-8.
 #include <hglrt/conversions.h>
 

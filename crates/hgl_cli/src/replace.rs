@@ -355,9 +355,29 @@ pub(crate) fn inferred_generics(
     ))
 }
 
-/// The text of the application `path` of `program` with its run
-/// statement's arguments and configuration replaced, and the file the
-/// text is of. `generics` is what [`inferred_generics`] gave, where the
+/// Byte ranges of replacement text, in rewritten and original source order.
+#[derive(Default)]
+pub(crate) struct SourceEdits(Vec<(std::ops::Range<usize>, Span)>);
+
+impl SourceEdits {
+    /// Translate a rewritten byte offset to the original file. A replacement
+    /// points at the value it replaced. An insertion has no on-disk location.
+    pub(crate) fn original_offset(&self, offset: u32) -> Option<u32> {
+        let byte = offset as usize;
+        let preceding = self.0.partition_point(|(range, _)| range.start <= byte);
+        let Some((range, original)) = self.0[..preceding].last() else {
+            return Some(offset);
+        };
+        if byte < range.end {
+            return (!original.is_empty()).then_some(original.start);
+        }
+        Some(original.end + (byte - range.end) as u32)
+    }
+}
+
+/// The application file, its text with the supplied arguments and configuration,
+/// and the edits that map it back to the original source.
+/// `generics` is what [`inferred_generics`] gave, where the
 /// entry's generic arguments are to be written too. On failure, the
 /// message to print: a name the entry or the configuration has not, a
 /// name given twice, or a value that is not one expression.
@@ -371,7 +391,7 @@ pub(crate) fn replaced(
     config: &[Replacement],
     generics: Option<&(u32, String)>,
     limits: Limits,
-) -> Result<(FileId, String), String> {
+) -> Result<(FileId, String, SourceEdits), String> {
     let unread = || format!("the run statement of `{path}` could not be read for a replacement");
     for replacements in [arguments, config] {
         for (position, replacement) in replacements.iter().enumerate() {
@@ -452,14 +472,21 @@ pub(crate) fn replaced(
         changes.push(configuration_change(module, run.at.span.start, config)?);
     }
 
-    // The changes are made from the last to the first, so that each is
-    // at the place the text was read with.
+    // Splice from the original text, recording the extent of each replacement.
     changes.sort_by_key(|(span, _)| std::cmp::Reverse((span.start, span.end)));
-    let mut text = sources.file(file).text().to_string();
-    for (span, with) in changes {
-        text.replace_range(span.range(), &with);
+    let original = sources.file(file).text();
+    let mut text = String::with_capacity(original.len());
+    let mut edits = SourceEdits::default();
+    let mut from = 0;
+    for (span, with) in changes.into_iter().rev() {
+        text.push_str(&original[from..span.start as usize]);
+        let start = text.len();
+        text.push_str(&with);
+        edits.0.push((start..text.len(), span));
+        from = span.end as usize;
     }
-    Ok((file, text))
+    text.push_str(&original[from..]);
+    Ok((file, text, edits))
 }
 
 /// The fields of core's `RunConfig`, the type of the capability
@@ -654,7 +681,7 @@ mod tests {
             inferred_generics(&files, &program, "demo.app").as_ref(),
             Limits::DEFAULT,
         )
-        .map(|(_, text)| text.lines().skip(3).collect::<Vec<_>>().join(" / "))
+        .map(|(_, text, _)| text.lines().skip(3).collect::<Vec<_>>().join(" / "))
     }
 
     /// RUN-2: "replace an argument of its entry": the value the

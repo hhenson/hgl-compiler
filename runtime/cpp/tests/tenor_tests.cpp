@@ -1,5 +1,5 @@
 // Unit tests of core's native tenor operations (tenors.h), against core's
-// tenor cases (`tests/implementation/tenors.hgl`) and the edges of TEN-1 to
+// tenor cases (`tests/core_conformance/tenors.hgl`) and the edges of TEN-1 to
 // TEN-9. Core's calendar candidates (`hgl/core/calendar.hgl`), which are
 // HGL over these natives, are written out below as the compiler is to write
 // them, so that business days are counted on calendars as core declares
