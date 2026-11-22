@@ -20,6 +20,27 @@ test forward_operator {
     assert relay_operator(2) == 5
 }
 
+# GEN-6 and GEN-8: a written constant supplies a generic option. Ordinary
+# forwarded arguments can still use the callee's default option.
+operator configured_operator<T>(value: T) -> i64
+impl const fn configured_operator<const mode: i64 = 1>(value: i64) -> i64 =>
+    value + mode * 100
+const fn relay_operator_option<...F>(values: ...{F}) -> i64 =>
+    configured_operator(...values)
+
+const fn takes_k(k: i64 = 0) -> i64 => k * 10
+const fn configured_with_pack<const k: i64 = 1, ...F>(x: i64, rest: ...{F}) -> i64 =>
+    x + k * 100 + takes_k(...rest)
+const fn relay_configured_pack<...F>(values: ...{F}) -> i64 =>
+    configured_with_pack(...values)
+
+test generic_options_and_defaults {
+    assert configured_operator(value: 2, mode: 3) == 302
+    assert configured_with_pack(x: 2, k: 3) == 302
+    assert relay_operator_option(value: 2) == 102
+    assert relay_configured_pack(x: 2) == 102
+}
+
 const fn relay_callback<R, ...Ps, ...As>(
     f: const fn(...{Ps}) -> R, operands: ...{As for f},
 ) -> R requires each key in arg_keys(As) { As[key] == Ps[key] }

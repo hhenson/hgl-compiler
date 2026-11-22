@@ -524,11 +524,10 @@ impl<'a> Typer<'a> {
                     // generic value parameters, then ordinary ones.
                     // FN-18: the parentheses of a declaration with
                     // a dependent pack supply that callback's arguments.
-                    if !configuration
-                        && forwarded.is_none()
-                        && (brace || dependent.is_none())
-                        && aside.contains(&text)
-                    {
+                    if !configuration && (brace || dependent.is_none()) && aside.contains(&text) {
+                        if forwarded.is_some() {
+                            self.report_forwarded_generic_value(callee, text, name_at);
+                        }
                         continue;
                     }
                     let found = found.filter(|_| {
@@ -569,16 +568,6 @@ impl<'a> Typer<'a> {
                             } else {
                                 named_pack
                             }
-                        }
-                        None if forwarded.is_some() && !configuration && aside.contains(&text) => {
-                            self.diagnostics.emit(error(
-                                Category::Type,
-                                codes::GENERIC_ARGUMENT_CONSTANT,
-                                name_at,
-                                format!("a forwarded pack entry is a runtime value, but the generic value parameter `{text}` of `{}` needs a compile-time constant", callee.text()),
-                                "GEN-8",
-                            ));
-                            None
                         }
                         None => {
                             self.diagnostics.emit(error(
@@ -647,6 +636,26 @@ impl<'a> Typer<'a> {
             );
         }
         arguments
+    }
+
+    /// GEN-8 and FN-19: an ordinary pack entry is a runtime value,
+    /// including when its original argument was a literal.
+    pub(super) fn report_forwarded_generic_value(
+        &mut self,
+        callee: &SyntaxToken,
+        name: &str,
+        at: Location,
+    ) {
+        self.diagnostics.emit(error(
+            Category::Type,
+            codes::GENERIC_ARGUMENT_CONSTANT,
+            at,
+            format!(
+                "a forwarded pack entry is a runtime value, but the generic value parameter `{name}` of `{}` needs a compile-time constant",
+                callee.text()
+            ),
+            "GEN-8",
+        ));
     }
 
     /// GEN-10 and the owner's decision on #336: blame the first excess

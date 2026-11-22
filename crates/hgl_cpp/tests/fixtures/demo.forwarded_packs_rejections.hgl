@@ -164,6 +164,31 @@ test runtime_generic_entry {
     assert relay_generic(x: 2, k: 3) == 5
 }
 
+# GEN-8: a generic value name binds before the callee's named pack.
+const fn takes_k(k: i64 = 0) -> i64 => k * 10
+const fn configured_with_pack<const k: i64 = 1, ...F>(x: i64, rest: ...{F}) -> i64 =>
+    x + k * 100 + takes_k(...rest)
+const fn relay_configured_pack<...F>(values: ...{F}) -> i64 =>
+    configured_with_pack(...values)
+
+test runtime_generic_entry_before_capture {
+    # expect-error(type, "generic.argument_constant")
+    assert relay_configured_pack(x: 2, k: 3) == 302
+}
+
+# GEN-6 and GEN-8: a candidate's selecting option has the same name
+# binding when the entry comes from a pack.
+operator configured_operator<T>(value: T) -> i64
+impl const fn configured_operator<const mode: i64 = 1>(value: i64) -> i64 =>
+    value + mode * 100
+const fn relay_operator_option<...F>(values: ...{F}) -> i64 =>
+    configured_operator(...values)
+
+test runtime_candidate_option_entry {
+    # expect-error(type, "generic.argument_constant")
+    assert relay_operator_option(value: 2, mode: 3) == 302
+}
+
 # GEN-17: the receiving pack includes the original named fixed inputs.
 const reflected_key: str = "value"
 const fn reflected_input(value: i64) -> i64 => value
