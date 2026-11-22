@@ -50,7 +50,9 @@
 //! `if` whose value is used and whose branches return or assign a `var`
 //! declared before it.
 
-use hgl_analyser::hir::{Case, Expr, ExprKind, Node, Stmt, ValueCategory, walk_statement_nodes};
+use hgl_analyser::hir::{
+    Case, Expr, ExprKind, IfInference, Node, Stmt, ValueCategory, walk_statement_nodes,
+};
 use hgl_analyser::{Detail, LocalKind, Phase, Program, Type};
 use hgl_diagnostics::Location;
 use hgl_lower::calls::{LeftOut, left_out};
@@ -244,6 +246,7 @@ impl Family for Control {
             condition,
             then,
             otherwise,
+            ..
         } = &value.kind
         else {
             return None;
@@ -346,6 +349,7 @@ impl Emitter<'_> {
                         condition,
                         then,
                         otherwise,
+                        ..
                     },
                 at,
                 ..
@@ -448,6 +452,7 @@ impl Emitter<'_> {
                                 condition,
                                 then,
                                 otherwise,
+                                ..
                             },
                         at,
                         ..
@@ -482,6 +487,7 @@ impl Emitter<'_> {
                             condition,
                             then,
                             otherwise,
+                            ..
                         },
                     ..
                 },
@@ -507,6 +513,7 @@ impl Emitter<'_> {
                         condition: condition.clone(),
                         then: block(then),
                         otherwise: Some(block(other)),
+                        inference: IfInference::None,
                     },
                     ..whole.clone()
                 });

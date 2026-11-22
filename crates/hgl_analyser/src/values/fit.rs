@@ -43,6 +43,9 @@ impl<'a> Typer<'a> {
         what: &str,
         context: Option<&ConfigurationRead>,
     ) -> Expr {
+        if context.is_none() && matches!(expected, Type::Nullable(_)) {
+            self.record_result_read(&value, Some((expected, what)));
+        }
         // ERR-14: "A read of a collection's child that is checked when
         // it runs (TIME-1), `parts[i]`, takes its form from its place
         // (EXPR-5). Where the place expects `result<T, error>`, T the

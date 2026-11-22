@@ -7,11 +7,13 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
-use super::fit::{not_null, open};
+use super::fit::{not_null, open, whole};
+use super::forms::received_type;
 use super::inference::{fixed, placed};
+use super::results::captured_output;
 use crate::constant::Fault;
 use crate::declared::substitute_within;
-use crate::hir::ExprKind;
+use crate::hir::{Expr, ExprKind, Value, ValueCategory};
 use crate::program::DeclarationKind;
 use crate::syntax::{name_token, tokens};
 use crate::types::{Argument, ConstantValue, Detail, NamedKind, Scalar, Type};
@@ -39,25 +41,89 @@ impl<'a> Typer<'a> {
         {
             return self.enum_member(&name, module, declaration);
         }
-        let mut base = self.expression(&base, None);
+        let base = self.expression(&base, None);
         // ERR-7: a capture is "read through two connections".
         let captured = match &base.kind {
-            ExprKind::Local(local) => self.captures.get(local).cloned(),
-            ExprKind::Capture(call) => Some(self.captured_output(call)),
+            ExprKind::Local(local) | ExprKind::DeferredPresent(local) => {
+                self.captures.get(local).cloned()
+            }
+            ExprKind::Capture(call) => Some(captured_output(program, call)),
             _ => None,
         };
         if let Some(output) = captured {
             return self.captured(base, &name, output);
         }
+        let at = Location::new(self.file, name.span());
+        let variant_proven = self.payload_proven(&base, name.text());
+        if self.graph
+            && !matches!(base.kind, ExprKind::Unread)
+            && not_null(Some(&base.ty)).is_some_and(|ty| match ty {
+                Type::Unknown => true,
+                // ERR-3: a lexical guard proves a variant only when the
+                // result settles to an ordinary value.
+                Type::Result { .. } if matches!(name.text(), "value" | "error") => {
+                    variant_proven && self.category(&base) == ValueCategory::Unsettled
+                }
+                // ERR-15 cannot take an implicit success until its type settles.
+                Type::Result { .. } => !whole(ty),
+                _ => false,
+            })
+        {
+            return (
+                ExprKind::DeferredMember {
+                    base: Box::new(base),
+                    name: name.text().to_owned(),
+                    at,
+                    variant_proven,
+                },
+                Type::Unknown,
+            );
+        }
+        self.member_value(base, name.text(), at, variant_proven)
+    }
+
+    /// Replay a projection when its input becomes concrete. A saved
+    /// ERR-3 guard can prove a variant only of an ordinary result.
+    pub(super) fn settle_member(
+        &mut self,
+        base: &Expr,
+        name: &str,
+        at: Location,
+        mut variant_proven: bool,
+    ) -> Option<(ExprKind, Type)> {
+        if !whole(&base.ty) {
+            return None;
+        }
+        if variant_proven && matches!(base.ty, Type::Result { .. }) {
+            match self.category(base) {
+                ValueCategory::Unsettled => return None,
+                ValueCategory::Connection => variant_proven = false,
+                ValueCategory::Value => {}
+            }
+        }
+        Some(self.member_value(base.clone(), name, at, variant_proven))
+    }
+
+    /// Resolve a member against a known value, retaining its implicit reads.
+    fn member_value(
+        &mut self,
+        mut base: Expr,
+        name: &str,
+        at: Location,
+        variant_proven: bool,
+    ) -> (ExprKind, Type) {
+        let program = self.program;
         // What the member is read from, in the form that place takes it:
         // each form taken is read again for its member.
         loop {
             match &base.ty {
                 // ERR-3: `.value` and `.error` "read from a result ...
                 // are the result's own".
-                Type::Result { value, error } if matches!(name.text(), "value" | "error") => {
+                Type::Result { value, error } if matches!(name, "value" | "error") => {
                     let sides = ((**value).clone(), (**error).clone());
-                    return self.payload(base, &name, sides);
+                    // An implicit read cannot transfer a binding's fact.
+                    let variant_proven = variant_proven && matches!(base.kind, ExprKind::Local(_));
+                    return self.payload(base, name, at, sides, variant_proven);
                 }
                 // ERR-15: "What a member or an index is read from ...
                 // expect[s] the T too": `checked(quote).bid` is the bid of
@@ -70,8 +136,8 @@ impl<'a> Typer<'a> {
                     base = read;
                 }
                 // ERR-4: a part of an error, and of its context.
-                Type::Error => return self.error_part(base, &name),
-                Type::ErrorContext => return self.context_part(base, &name),
+                Type::Error => return self.error_part(base, name, at),
+                Type::ErrorContext => return self.context_part(base, name, at),
                 // ERR-12: "A `T?` value given where a T is expected is
                 // read as its value": a member of a nullable's payload
                 // reads it, where no test against null has proved it a
@@ -84,7 +150,7 @@ impl<'a> Typer<'a> {
                 // `removed`, each a `set<K>`".
                 Type::Delta(of) => {
                     let of = of.clone();
-                    return self.delta_property(base, &name, &of);
+                    return self.delta_property(base, name, at, &of);
                 }
                 _ => break,
             }
@@ -115,13 +181,13 @@ impl<'a> Typer<'a> {
             let Some(member) = native
                 .properties
                 .iter()
-                .position(|property| property.name == name.text())
+                .position(|property| property.name == name)
             else {
                 self.diagnostics.emit(error(
                     Category::Name,
                     codes::MEMBER_UNKNOWN,
-                    Location::new(self.file, name.span()),
-                    format!("`{}` has no property `{}`", base.ty, name.text()),
+                    at,
+                    format!("`{}` has no property `{name}`", base.ty),
                     "NATIVE-6",
                 ));
                 return (ExprKind::Unread, Type::Unknown);
@@ -136,16 +202,12 @@ impl<'a> Typer<'a> {
         let Some(Detail::Struct(read)) = program.modules[*module].details.get(*declaration) else {
             return (ExprKind::Unread, Type::Unknown);
         };
-        let Some(member) = read
-            .members
-            .iter()
-            .position(|member| member.name == name.text())
-        else {
+        let Some(member) = read.members.iter().position(|member| member.name == name) else {
             self.diagnostics.emit(error(
                 Category::Name,
                 codes::MEMBER_UNKNOWN,
-                Location::new(self.file, name.span()),
-                format!("`{}` has no field `{}`", base.ty, name.text()),
+                at,
+                format!("`{}` has no field `{name}`", base.ty),
                 "EXPR-7",
             ));
             return (ExprKind::Unread, Type::Unknown);
@@ -157,7 +219,19 @@ impl<'a> Typer<'a> {
         let ty = substitute_within(&read.members[member].ty, &map);
         let own: Vec<Location> = read.generics.iter().map(|generic| generic.at).collect();
         let ty = placed(ty, &own);
-        let ty = if atomic { Type::atomic(ty) } else { ty };
+        let ty = if atomic {
+            // TYPE-9: an inferred field may become a scalar. Where
+            // even its shape is open, wait to decide whether it is atomic.
+            match &ty {
+                Type::Unknown => Type::Unknown,
+                Type::Nullable(payload) | Type::Delta(payload) if **payload == Type::Unknown => {
+                    Type::Unknown
+                }
+                _ => Type::atomic(ty),
+            }
+        } else {
+            ty
+        };
         let kind = ExprKind::Field {
             base: Box::new(base),
             member,
@@ -268,91 +342,23 @@ impl<'a> Typer<'a> {
         let base = self.expression(&base, None);
         // ERR-15, ERR-12: what an index is read from expects the T: a
         // result's, and a nullable list's, tuple's or dictionary's.
-        let base = self.received(base, |payload| {
-            matches!(
-                payload,
-                Type::List { .. } | Type::Tuple(_) | Type::Dict { .. }
-            )
-        });
+        let base = self.received(base, index_collection);
+        self.check_index_base(&base.ty, base.at);
         let (index, ty) = match &base.ty {
-            Type::List { element, .. } => {
-                let integer = Type::Scalar(Scalar::I64);
-                let index = self.expression(&index, Some(&integer));
-                (
-                    self.fit(index, &integer, "the index of a list"),
-                    (**element).clone(),
-                )
+            Type::List { .. } | Type::Dict { .. } => {
+                let (expected, place) =
+                    index_operand(&base.ty).expect("a list or dictionary index");
+                let index = self.expression(&index, Some(expected));
+                let ty = index_result(&base.ty, None)
+                    .cloned()
+                    .unwrap_or(Type::Unknown);
+                (self.fit(index, expected, place), ty)
             }
-            // EXPR-7: "A tuple's index is a constant within its length:
-            // it selects the element's type."
-            Type::Tuple(elements) => {
-                let integer = Type::Scalar(Scalar::I64);
-                // UNIT-13: an index that names a constant of a module is
-                // that constant's value: the index is read as every
-                // constant is (`crate::constant`).
-                let found = self.read_constant(&index, Some(&integer));
-                let index = self.expression(&index, Some(&integer));
-                // EXPR-7: "by an `i64` index". An index of another type,
-                // `pair[0 / 1]` or `pair[0 == 0]`, is reported as that,
-                // and is not evaluated.
-                let is_integer = self.admits(&integer, &index.ty);
-                let index = self.fit(index, &integer, "the index of a tuple");
-                let element = match found {
-                    _ if !is_integer => Some(&Type::Unknown),
-                    Ok(ConstantValue::Int(value)) => usize::try_from(value)
-                        .ok()
-                        .and_then(|position| elements.get(position)),
-                    // No compile-time constant: a local, a parameter, a
-                    // call.
-                    Err(Fault::NotConstant) => None,
-                    // A constant whose value is not known here, a
-                    // generic value parameter's or one this pass does
-                    // not work out, or one reported: the element's type
-                    // is then not known, and nothing is reported of it.
-                    _ => Some(&Type::Unknown),
-                };
-                let ty = match element {
-                    Some(element) => element.clone(),
-                    None => {
-                        self.diagnostics.emit(error(
-                            Category::Type,
-                            codes::TUPLE_INDEX,
-                            index.at,
-                            format!(
-                                "a tuple's index is a constant, here one of 0 to {}: it \
-                                 selects the element's type",
-                                elements.len().saturating_sub(1)
-                            ),
-                            "EXPR-7",
-                        ));
-                        Type::Unknown
-                    }
-                };
-                (index, ty)
-            }
-            Type::Dict { key, value } => {
-                let index = self.expression(&index, Some(key));
-                (
-                    self.fit(index, key, "the key of the dictionary"),
-                    (**value).clone(),
-                )
-            }
-            // EXPR-7: "Brackets read an element of a list or a tuple by
-            // an `i64` index, and the value a dictionary has for a
-            // key." EXPR-3: "A set has no place to assign."
-            Type::Set(_) => {
-                self.diagnostics.emit(error(
-                    Category::Type,
-                    codes::TYPE_MISMATCH,
-                    base.at,
-                    format!(
-                        "this is `{}`, and a set has no element at an index: brackets read a \
-                         list, a tuple, or a dictionary",
-                        base.ty
-                    ),
-                    "EXPR-7",
-                ));
-                (self.expression(&index, Some(&Type::Unknown)), Type::Unknown)
+            Type::Tuple(_) => {
+                let (integer, place) = index_operand(&base.ty).expect("a tuple index");
+                let mut value = self.expression(&index, Some(integer));
+                let ty = self.tuple_index(&base.ty, &mut value, Some(&index), true);
+                (self.fit(value, integer, place), ty)
             }
             _ => (self.expression(&index, Some(&Type::Unknown)), Type::Unknown),
         };
@@ -361,6 +367,111 @@ impl<'a> Typer<'a> {
             index: Box::new(index),
         };
         (kind, ty)
+    }
+
+    /// EXPR-7: brackets read a list, tuple or dictionary. A set has no
+    /// element at an index, and no indexed place to assign (EXPR-3).
+    pub(super) fn check_index_base(&mut self, ty: &Type, at: Location) {
+        if matches!(ty, Type::Set(_)) {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                at,
+                format!(
+                    "this is `{ty}`, and a set has no element at an index: brackets read a \
+                     list, a tuple, or a dictionary"
+                ),
+                "EXPR-7",
+            ));
+        }
+    }
+
+    /// EXPR-7: a tuple index is a constant within its length. Read it
+    /// as UNIT-13 reads other constants and retain the folded position.
+    /// Type settlement can recover the type without reporting until
+    /// the instance checks its destinations.
+    pub(super) fn tuple_index(
+        &mut self,
+        base: &Type,
+        index: &mut Expr,
+        written: Option<&SyntaxNode>,
+        report: bool,
+    ) -> Type {
+        let Type::Tuple(elements) = base else {
+            return Type::Unknown;
+        };
+        let (integer, _) = index_operand(base).expect("a tuple index");
+        // A wrong index type is reported by the normal fit.
+        if !self.admits(integer, &index.ty) {
+            return Type::Unknown;
+        }
+        let found = match index.kind {
+            ExprKind::Literal(Value::Int(position)) => Ok(ConstantValue::Int(position)),
+            _ => written
+                .cloned()
+                .or_else(|| self.syntax_of(index))
+                .map_or(Err(Fault::Reported), |node| {
+                    self.read_constant(&node, Some(integer))
+                }),
+        };
+        match found {
+            Ok(ConstantValue::Int(position)) => {
+                if let Some(ty) = index_result(base, Some(position)) {
+                    index.kind = ExprKind::Literal(Value::Int(position));
+                    index.ty = integer.clone();
+                    return ty.clone();
+                }
+            }
+            Err(Fault::NotConstant) => {}
+            // A value not known yet, a failed constant or a reported
+            // fault does not establish the type of the element.
+            _ => return Type::Unknown,
+        }
+        if report {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TUPLE_INDEX,
+                index.at,
+                format!(
+                    "a tuple's index is a constant, here one of 0 to {}: it selects the element's type",
+                    elements.len().saturating_sub(1)
+                ),
+                "EXPR-7",
+            ));
+        }
+        Type::Unknown
+    }
+}
+
+/// EXPR-7: the collection kinds read by brackets, including through a `T?`.
+pub(super) fn index_collection(ty: &Type) -> bool {
+    matches!(ty, Type::List { .. } | Type::Tuple(_) | Type::Dict { .. })
+}
+
+/// ERR-12 and ERR-15: the type an index sees after the same implicit
+/// reads as `Typer::received`. Settlement uses it before inserting reads.
+pub(super) fn indexed_payload(ty: &Type) -> &Type {
+    received_type(ty, index_collection)
+}
+
+/// EXPR-7: what type a bracket index must have for each collection.
+pub(super) fn index_operand(ty: &Type) -> Option<(&Type, &'static str)> {
+    const INTEGER: &Type = &Type::Scalar(Scalar::I64);
+    match ty {
+        Type::List { .. } => Some((INTEGER, "the index of a list")),
+        Type::Tuple(_) => Some((INTEGER, "the index of a tuple")),
+        Type::Dict { key, .. } => Some((key, "the key of the dictionary")),
+        _ => None,
+    }
+}
+
+/// EXPR-7: the result of indexing an already selected collection type.
+pub(super) fn index_result(ty: &Type, position: Option<i64>) -> Option<&Type> {
+    match ty {
+        Type::List { element, .. } => Some(element),
+        Type::Dict { value, .. } => Some(value),
+        Type::Tuple(elements) => elements.get(usize::try_from(position?).ok()?),
+        _ => None,
     }
 }
 

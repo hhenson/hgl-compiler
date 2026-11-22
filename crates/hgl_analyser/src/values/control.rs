@@ -2,7 +2,7 @@
 //! `while`, `for` and `switch`, and what is assigned on each path
 //! (CTRL-5, CTRL-10 to CTRL-15). Part of the typing pass ([`super`]).
 
-use hgl_diagnostics::{Category, Location};
+use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::expressions::takes_its_type;
@@ -11,11 +11,39 @@ use super::symbols::is_null;
 use super::{BOOL, Fact, Typer};
 use crate::constant::Fault;
 use crate::declared::agree;
-use crate::hir::{self, Expr, ExprKind, LocalId, Stmt, ValueCategory};
+use crate::hir::{self, Expr, ExprKind, IfInference, LocalId, Stmt, ValueCategory};
 use crate::program::{LocalKind, Program};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{ConstantValue, Detail, Scalar, Type};
 use crate::{codes, error};
+
+/// CTRL-13: a graph's no-else `if` has its branch's type where it is a
+/// connection and a nullable branch type where it is an ordinary value.
+/// A deferred category leaves the type open until instance selection.
+pub(super) fn no_else_type(ty: Type, condition: ValueCategory, branch: ValueCategory) -> Type {
+    use ValueCategory::{Connection, Unsettled, Value};
+    match (condition, branch) {
+        (Connection, _) | (_, Connection) => ty,
+        (Value, Value) => nullable(ty),
+        (Unsettled, _) | (_, Unsettled) => Type::Unknown,
+    }
+}
+
+/// CTRL-15 and FN-3: a graph tests its `while` condition when it is
+/// built, so the condition cannot be a connection.
+pub(super) fn while_connection(condition: &Expr, category: ValueCategory) -> Option<Diagnostic> {
+    (category == ValueCategory::Connection).then(|| {
+        error(
+            Category::Phase,
+            codes::CONNECTION_AS_CONSTANT,
+            condition.at,
+            "the condition of a `while` is tested while the graph is built, and this is \
+             a connection"
+                .to_string(),
+            "FN-3",
+        )
+    })
+}
 
 /// What a `for` binds, and whether it makes one child for each member,
 /// by what it loops over (CTRL-15).
@@ -28,7 +56,11 @@ use crate::{codes, error};
 /// (CTRL-7): `item` is a connection of `T` for a list and an ordinary
 /// `T`, the member itself, for a set; `key` is an ordinary `K` and
 /// `value` a connection of `V` for a dictionary."
-fn bound_by_loop(over: ValueCategory, ty: &Type, names: usize) -> (Vec<ValueCategory>, bool) {
+pub(super) fn bound_by_loop(
+    over: ValueCategory,
+    ty: &Type,
+    names: usize,
+) -> (Vec<ValueCategory>, bool) {
     use ValueCategory::{Connection, Unsettled, Value};
     match (over, ty) {
         (Connection, Type::List { size, .. }) => {
@@ -43,6 +75,20 @@ fn bound_by_loop(over: ValueCategory, ty: &Type, names: usize) -> (Vec<ValueCate
         // What is looped over is not settled: neither is what is bound.
         (Unsettled, _) => (vec![Unsettled; names], false),
         _ => (vec![Value; names], false),
+    }
+}
+
+/// CTRL-12 and CTRL-15: a `for` reads these collection types.
+pub(super) fn iterates(ty: &Type) -> bool {
+    matches!(ty, Type::List { .. } | Type::Set(_) | Type::Dict { .. })
+}
+
+/// The types of the loop bindings in order, for the supported shape.
+pub(super) fn iteration_types(ty: &Type, names: usize) -> Option<Vec<&Type>> {
+    match (ty, names) {
+        (Type::List { element, .. } | Type::Set(element), 1) => Some(vec![element]),
+        (Type::Dict { key, value }, 2) => Some(vec![key, value]),
+        _ => None,
     }
 }
 
@@ -216,6 +262,11 @@ impl<'a> Typer<'a> {
     /// condition takes the `bool?` and then reads it.
     pub(super) fn condition(&mut self, node: &SyntaxNode) -> Expr {
         let value = self.expression(node, Some(&BOOL));
+        self.fit_condition(value)
+    }
+
+    /// Checks the condition's type and takes the reads required by CTRL-13.
+    pub(super) fn fit_condition(&mut self, value: Expr) -> Expr {
         if let Some(taken) = self.taken(&BOOL, &value.ty) {
             return self.take(value, taken);
         }
@@ -395,6 +446,28 @@ impl<'a> Typer<'a> {
             }
         }
 
+        // CTRL-14: a final conditional can supply a continuation only
+        // through both arms. Reuse each arm's ordinary flow result;
+        // any arm still waiting for a switch must prove its coverage.
+        if self.graph {
+            self.returning_tails.remove(&at);
+            if !self.returned
+                && let Some(other) = &other
+            {
+                let covered = |branch: &Branch| {
+                    if branch.returned {
+                        Some(&[][..])
+                    } else {
+                        self.returning_expression(&branch.value)
+                    }
+                };
+                if let (Some(then), Some(other)) = (covered(&then), covered(other)) {
+                    let switches = then.iter().chain(other).copied().collect();
+                    self.returning_tails.insert(at, switches);
+                }
+            }
+        }
+
         let outcome = match (
             then.outcome.clone(),
             other.as_ref().map(|other| other.outcome.clone()),
@@ -424,16 +497,7 @@ impl<'a> Typer<'a> {
             // condition is. Otherwise, where the condition or the
             // branch is not settled, neither is the type.
             (Outcome::Value(ty), None) if self.graph => {
-                use ValueCategory::{Connection, Unsettled, Value};
-                match (selects, self.category(&then.value)) {
-                    // A connection of `T` either way: selected at
-                    // runtime, or composed where the condition holds.
-                    (Connection, _) | (Value | Unsettled, Connection) => Outcome::Value(ty),
-                    (Value, Value) => Outcome::Value(nullable(ty)),
-                    (Unsettled, Value | Unsettled) | (Value, Unsettled) => {
-                        Outcome::Value(Type::Unknown)
-                    }
-                }
+                Outcome::Value(no_else_type(ty, selects, self.category(&then.value)))
             }
             // "With no `else` it is as if its `else` were null: its
             // value is a `T?`".
@@ -452,10 +516,23 @@ impl<'a> Typer<'a> {
             Outcome::Value(ty) => ty.clone(),
             Outcome::Nothing | Outcome::Returns | Outcome::Null => Type::Unknown,
         };
+        // CTRL-10: record the surviving branch from the same outcomes
+        // that decide the source's type. A dead tail is no branch value.
+        let inference = match (
+            used,
+            &then.outcome,
+            other.as_ref().map(|other| &other.outcome),
+        ) {
+            (true, Outcome::Value(_), Some(Outcome::Value(_))) if !told => IfInference::Both,
+            (true, Outcome::Value(_), Some(Outcome::Returns)) => IfInference::Then,
+            (true, Outcome::Returns, Some(Outcome::Value(_))) => IfInference::Otherwise,
+            _ => IfInference::None,
+        };
         let kind = ExprKind::If {
             condition: Box::new(condition),
             then: Box::new(then.value),
             otherwise: other.map(|other| Box::new(other.value)),
+            inference,
         };
         (
             Expr {
@@ -472,7 +549,7 @@ impl<'a> Typer<'a> {
     /// expected of them: the type of both; the wider of a `T` and a
     /// `T?`; an `f64` for an integer literal and an `f64`, the literal
     /// widened (EXPR-5). Two types are reported at the second branch.
-    fn one_type(&mut self, then: &mut Expr, other: &mut Expr) -> Type {
+    pub(super) fn one_type(&mut self, then: &mut Expr, other: &mut Expr) -> Type {
         let (first, second) = (then.ty.clone(), other.ty.clone());
         if open(&first) || open(&second) {
             return Type::Unknown;
@@ -565,19 +642,11 @@ impl<'a> Typer<'a> {
         // CTRL-15: "The condition of a `while` is an ordinary `bool`,
         // tested while the graph is built: a connection there rejects
         // (FN-3)".
-        if let Some(condition) = &condition
-            && self.graph
-            && self.category(condition) == ValueCategory::Connection
+        if self.graph
+            && let Some(condition) = &condition
+            && let Some(report) = while_connection(condition, self.category(condition))
         {
-            self.diagnostics.emit(error(
-                Category::Phase,
-                codes::CONNECTION_AS_CONSTANT,
-                condition.at,
-                "the condition of a `while` is tested while the graph is built, and this is \
-                 a connection"
-                    .to_string(),
-                "FN-3",
-            ));
+            self.diagnostics.emit(report);
         }
         // ERR-12: the body is reached only where the condition holds,
         // so what it proves is not null is not null there.
@@ -620,32 +689,8 @@ impl<'a> Typer<'a> {
         // ERR-15: "what a `for` iterates ... expect[s] the T", and CTRL-12:
         // "a nullable list, set, or dictionary there is read, and a null
         // fails the read (ERR-12)".
-        let sequence = self.received(sequence, |payload| {
-            matches!(
-                payload,
-                Type::List { .. } | Type::Set(_) | Type::Dict { .. }
-            )
-        });
-        let types: Vec<Type> = match (&sequence.ty, names.len()) {
-            (ty, count) if open(ty) => vec![Type::Unknown; count],
-            (Type::List { element, .. } | Type::Set(element), 1) => vec![(**element).clone()],
-            (Type::Dict { key, value }, 2) => vec![(**key).clone(), (**value).clone()],
-            (ty, count) => {
-                let takes = if count == 1 {
-                    "`for` with one name loops over a list or a set"
-                } else {
-                    "`for` with two names loops over a dictionary"
-                };
-                self.diagnostics.emit(error(
-                    Category::Type,
-                    codes::TYPE_MISMATCH,
-                    sequence.at,
-                    format!("this is `{ty}`, and {takes}"),
-                    self.loop_rule(),
-                ));
-                vec![Type::Unknown; count]
-            }
-        };
+        let sequence = self.received(sequence, iterates);
+        let types = self.loop_bindings(&sequence, names.len());
         // CTRL-15: what the loop binds, and whether it makes one child
         // for each member.
         let over = if self.graph {
@@ -684,9 +729,32 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// The source check for a `for` sequence and its binding types.
+    pub(super) fn loop_bindings(&mut self, sequence: &Expr, count: usize) -> Vec<Type> {
+        let ty = &sequence.ty;
+        if let Some(types) = iteration_types(ty, count) {
+            return types.into_iter().cloned().collect();
+        }
+        if !open(ty) {
+            let takes = if count == 1 {
+                "`for` with one name loops over a list or a set"
+            } else {
+                "`for` with two names loops over a dictionary"
+            };
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                sequence.at,
+                format!("this is `{ty}`, and {takes}"),
+                self.loop_rule(),
+            ));
+        }
+        vec![Type::Unknown; count]
+    }
+
     /// How many members the enum `ty` has; `None` for a type that is no
     /// enum.
-    fn enum_members(&self, ty: &Type) -> Option<usize> {
+    pub(super) fn enum_members(&self, ty: &Type) -> Option<usize> {
         let Type::Named {
             module,
             declaration,
@@ -699,6 +767,31 @@ impl<'a> Typer<'a> {
             Some(Detail::Enum(read)) => Some(read.members.len()),
             _ => None,
         }
+    }
+
+    /// CTRL-12 and CTRL-15: the selector chooses the type of every label.
+    pub(super) fn switch_type(&mut self, selector: &Expr) -> (Type, Option<usize>) {
+        let members = self.enum_members(&selector.ty);
+        if open(&selector.ty)
+            || members.is_some()
+            || matches!(
+                selector.ty,
+                Type::Scalar(Scalar::Bool | Scalar::I64 | Scalar::Str)
+            )
+        {
+            return (selector.ty.clone(), members);
+        }
+        self.diagnostics.emit(error(
+            Category::Type,
+            codes::TYPE_MISMATCH,
+            selector.at,
+            format!(
+                "this is `{}`, and a `switch` selects on a `bool`, `i64`, `str` or enum value",
+                selector.ty
+            ),
+            self.loop_rule(),
+        ));
+        (Type::Unknown, None)
     }
 
     /// CTRL-12: "A `switch` there selects on a `bool`, `i64`, `str`, or
@@ -728,32 +821,7 @@ impl<'a> Typer<'a> {
         if self.graph && self.category(&selector) == ValueCategory::Connection {
             self.temporal = Some(self.locals.len());
         }
-        let members = self.enum_members(&selector.ty);
-        let selects = open(&selector.ty)
-            || members.is_some()
-            || matches!(
-                selector.ty,
-                Type::Scalar(Scalar::Bool | Scalar::I64 | Scalar::Str)
-            );
-        if !selects {
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::TYPE_MISMATCH,
-                selector.at,
-                format!(
-                    "this is `{}`, and a `switch` selects on a `bool`, `i64`, `str` or enum \
-                     value",
-                    selector.ty
-                ),
-                self.loop_rule(),
-            ));
-        }
-        // What a label is expected to be.
-        let of = if selects {
-            selector.ty.clone()
-        } else {
-            Type::Unknown
-        };
+        let (of, members) = self.switch_type(&selector);
         let before = self.assigned.clone();
         let before_returned = self.returned;
         // What is assigned at the end of each case, and whether it has
@@ -812,9 +880,10 @@ impl<'a> Typer<'a> {
                         ));
                     }
                     let constant = read.ok();
+                    let case_type = if of == Type::Unknown { &label.ty } else { &of };
                     let value = constant
                         .as_ref()
-                        .and_then(|constant| self::label(self.program, constant, &of));
+                        .and_then(|constant| self::label(self.program, constant, case_type));
                     if let Some(constant) = constant {
                         match seen
                             .iter()
@@ -823,16 +892,9 @@ impl<'a> Typer<'a> {
                             // program runs (`ConstantValue::equals`).
                             .find(|(other, _)| other.equals(&constant) == Some(true))
                         {
-                            Some((_, first)) => self.diagnostics.emit(
-                                error(
-                                    Category::Type,
-                                    codes::SWITCH_DUPLICATE_LABEL,
-                                    label.at,
-                                    "this label has the value of an earlier one".to_string(),
-                                    "CTRL-6",
-                                )
-                                .with_related(*first, "first here"),
-                            ),
+                            Some((_, first)) => self
+                                .diagnostics
+                                .emit(duplicate_switch_label(label.at, *first)),
                             None => seen.push((constant, label.at)),
                         }
                     }
@@ -865,6 +927,14 @@ impl<'a> Typer<'a> {
             .filter(|(label, _)| matches!(label, ConstantValue::Member(_)))
             .count();
         let exhaustive = default.is_some() || members.is_some_and(|count| covered == count);
+        let cases_return = !ends.is_empty() && ends.iter().all(|(_, returned)| *returned);
+        if self.graph {
+            if open(&selector.ty) && default.is_none() && cases_return {
+                self.returning_tails.insert(at, vec![at]);
+            } else {
+                self.returning_tails.remove(&at);
+            }
+        }
         let count = self.locals.len();
         if exhaustive && !ends.is_empty() {
             self.assigned = (0..count)
@@ -876,7 +946,7 @@ impl<'a> Typer<'a> {
                     })
                 })
                 .collect();
-            self.returned = ends.iter().all(|(_, returned)| *returned);
+            self.returned = cases_return;
         } else {
             self.assigned = restored(&before, count, false);
             self.returned = before_returned;
@@ -887,6 +957,26 @@ impl<'a> Typer<'a> {
             cases,
             default,
             at,
+        }
+    }
+
+    /// The proof of a graph's continuation goes through its tail only.
+    pub(super) fn returning_statement(&self, tail: Option<&Stmt>) -> Option<&[Location]> {
+        match tail? {
+            Stmt::Expr(value) => self.returning_expression(value),
+            Stmt::Switch { at, .. } => self.returning_tails.get(at).map(Vec::as_slice),
+            _ => None,
+        }
+    }
+
+    fn returning_expression(&self, tail: &Expr) -> Option<&[Location]> {
+        if let ExprKind::Block { statements, value } = &tail.kind {
+            match value {
+                Some(value) => self.returning_expression(value),
+                None => self.returning_statement(statements.last()),
+            }
+        } else {
+            self.returning_tails.get(&tail.at).map(Vec::as_slice)
         }
     }
 }
@@ -988,6 +1078,18 @@ fn widened_block(branch: &Expr) -> Option<Expr> {
         at: branch.at,
         category: ValueCategory::Unsettled,
     })
+}
+
+/// CTRL-6: a later switch label repeats the first label's resolved value.
+pub(super) fn duplicate_switch_label(label: Location, first: Location) -> Diagnostic {
+    error(
+        Category::Type,
+        codes::SWITCH_DUPLICATE_LABEL,
+        label,
+        "this label has the value of an earlier one".to_string(),
+        "CTRL-6",
+    )
+    .with_related(first, "first here")
 }
 
 /// A constant as the stages after the analyser hold a `switch` label's

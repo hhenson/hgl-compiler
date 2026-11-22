@@ -1,0 +1,884 @@
+module demo.instance_selection
+
+use demo.instance_selection_library::{from_other_module}
+
+# GEN-5, GEN-7: an admitted instance selects its most-specific candidate.
+export operator helper<T>(value: T) -> i64
+impl const fn helper<T>(value: T) -> i64 => 5
+impl const fn helper(value: i64) -> i64 => 1
+
+const fn wraps<T>(value: T) -> i64 => helper(value)
+const fn wraps_required<T>(value: T) -> i64 requires helper(T) -> i64 => helper(value)
+const fn direct(value: i64) -> i64 => helper(value)
+
+test direct_call { assert direct(3) == 1 }
+
+test instance {
+    assert wraps(3) == 1
+    assert wraps("s") == 5
+}
+
+test instance_with_requirement {
+    assert wraps_required(3) == 1
+    assert wraps_required("s") == 5
+}
+
+# The exported generic retains the operator looked up in its module (GEN-7).
+test instance_across_modules {
+    assert from_other_module(3) == 2
+    assert from_other_module("s") == 6
+}
+
+fn in_node<T>(value: T) -> i64 {
+    when { return helper(value) }
+}
+
+fn in_graph<T>(value: T) -> i64 => helper(value)
+
+test instance_in_a_node {
+    assert eval in_node(value: [3, 4]) == [1, 1]
+    assert eval in_node(value: ["s", "t"]) == [5, 5]
+}
+
+test instance_in_a_graph {
+    assert eval in_graph(value: [3, 4]) == [1, 1]
+    assert eval in_graph(value: ["s", "t"]) == [5, 5]
+}
+
+# GEN-5 and FN-6: the selected temporal candidate makes a connection,
+# even when its input was an ordinary value during composition.
+operator live_helper<T>(value: T) -> i64
+impl const fn live_helper<T>(value: T) -> i64 => 5
+impl fn live_helper(value: i64) -> i64 {
+    when { return value }
+}
+
+fn through_graph<T>(const value: T) -> i64 {
+    let classified = live_helper(value)
+    return classified + 1
+}
+
+test instance_selects_temporal {
+    assert eval through_graph(value: 3) == [4]
+    assert eval through_graph(value: "s") == [6]
+}
+
+# GEN-7, FN-3 and CTRL-15: the ordinary instance can test a graph loop.
+fn loop_scalar<T>(const value: T) -> i64 {
+    var visits = 0
+    while live_helper(value) > visits { visits += 1 }
+    return visits
+}
+
+operator positive<T>(value: T) -> bool
+impl const fn positive<T>(value: T) -> bool => false
+impl const fn positive(value: i64) -> bool => value > 0
+
+const fn chosen_or_skip(value: i64?) -> i64 {
+    if value == null { return -1 }
+    return value
+}
+
+# CTRL-13: an ordinary no-else result is nullable. Feed it to a value
+# helper so the graph returns an ordinary i64 as a constant connection.
+fn wiring_if<T>(const value: T) -> i64 {
+    let chosen = if positive(value) { 1 }
+    return chosen_or_skip(chosen)
+}
+
+# CTRL-13: a no-else result with a connection condition is an i64
+# connection and stays silent while the condition is false.
+fn connection_if<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    return chosen
+}
+
+# CTRL-14: a return in the newly temporal branch has a continuation.
+fn return_continuation<T>(const value: T) -> i64 {
+    if live_helper(value) > 0 { return 1 }
+    return 2
+}
+
+# ERR-12: if selection settles the condition as an ordinary value,
+# the graph's result reads the nullable value left by the conditional.
+fn required_choice<T>(const value: T) -> i64 {
+    let chosen = if positive(value) { 2 }
+    return chosen
+}
+
+# CTRL-13 and EXPR-5: both the inferred tuple and the local that reads
+# it carry the settled nullable type to the parameter of a value helper.
+const fn pair_score(value: tuple<i64?, i64>) -> i64 =>
+    chosen_or_skip(value[0]) + value[1]
+
+fn inferred_pair<T>(const value: T) -> i64 {
+    let pair = (if positive(value) { 2 }, 10)
+    let saved = { pair }
+    return pair_score(saved)
+}
+
+# CTRL-13 and ERR-12: the inferred branch join preserves the nullable
+# type. A branch with a contextual i64 result reads the same nullable.
+fn joined_choice<T>(const value: T) -> i64 {
+    let maybe = if positive(value) { 2 }
+    let chosen = if true { maybe } else { 3 }
+    return chosen_or_skip(chosen)
+}
+
+# CTRL-10 and CTRL-13: when one branch returns, the other gives the
+# local its type after candidate selection.
+fn surviving_choice<T>(const value: T, flag: bool) -> i64 {
+    let chosen = if live_helper(value) > 0 { 3 }
+    let copied = if flag { chosen } else { return 0 }
+    return copied
+}
+
+fn contextual_choice<T>(const value: T) -> i64 {
+    let maybe = if positive(value) { 2 }
+    return if true { maybe } else { 3 }
+}
+
+# EXPR-9 and GEN-7: the inferred list holds the settled nullable type.
+const fn list_score(values: list<i64?>) -> i64 => chosen_or_skip(values[0])
+
+fn inferred_list<T>(const value: T) -> i64 {
+    let values = [if positive(value) { 2 }]
+    return list_score(values)
+}
+
+# GEN-12: the earlier argument binds U after the condition settles.
+const fn first_of<U>(a: U, b: U) -> U => a
+
+fn earlier_argument<T>(const value: T) -> f64 {
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    let copied = first_of(chosen, 0)
+    return copied
+}
+
+# ERR-15: a nullable argument can determine the result's success type.
+const fn first_result<U>(a: U, b: U) -> result<U, error> => ok(a)
+const fn no_sample() -> f64? => null
+
+fn nullable_argument_result<T>(const value: T) -> bool {
+    let chosen = if live_helper(value) < 0 { 2.5 }
+    let copied: f64? = first_result(chosen, no_sample())
+    return copied == null
+}
+
+# EXPR-7 and ERR-12: projections carry the element type and read a
+# nullable base before indexing when settlement requires that read.
+fn indexed_elements<T>(const value: T) -> i64 {
+    let values = [if positive(value) { 2 }]
+    let pair = (if positive(value) { 3 }, 0)
+    let item = values[0]
+    return chosen_or_skip(item) + chosen_or_skip(pair[0])
+}
+
+# EXPR-7: once the base is a tuple, the index is a constant position.
+fn folded_tuple_index<T>(const value: T) -> str {
+    let values = if live_helper(value) > 0 { (1, "selected") }
+    let item = values[1 + 0]
+    return item
+}
+
+fn optional_elements<T>(const value: T) -> i64 {
+    let values = if positive(value) { [2] }
+    return values[0]
+}
+
+# EXPR-5, EXPR-9 and GEN-7: an inferred list's late f64 element
+# widens the integer literal whichever one was written first.
+fn widened_list<T>(const value: T) -> f64 {
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    if chosen == null { return 0.0 }
+    let forward = [1, chosen]
+    let reverse = [chosen, 1]
+    let copied = forward
+    var reassigned = [1, chosen]
+    reassigned = [3, 4]
+    return copied[0] + reverse[0] + reassigned[0]
+}
+
+# ERR-12 and GEN-7: a nullable list payload keeps its inferred element
+# type through a non-null proof or a checked read before indexing.
+const fn maybe_list<U>(value: U, keep: bool) -> list<U>? {
+    if keep { return [value] }
+    return null
+}
+
+fn guarded_payload<T>(const value: T, const keep: bool) -> i64 {
+    let chosen = if live_helper(value) > 0 { 2 }
+    let values = maybe_list(chosen, keep)
+    if values == null { return 0 }
+    let copied = values
+    return list_score(copied)
+}
+
+fn indexed_payload<T>(const value: T, const keep: bool) -> i64 {
+    let chosen = if live_helper(value) > 0 { 2 }
+    let values = maybe_list(chosen, keep)
+    let item = values[0]
+    return chosen_or_skip(item)
+}
+
+# EXPR-5 and EXPR-9: the dictionary's typed entries read their values.
+fn dictionary_entries<T>(const value: T) -> i64 {
+    let key = if positive(value) { "key" }
+    let entry = if positive(value) { 4 }
+    let values: dict<str, i64> = [key: entry]
+    return values["key"]
+}
+
+# GEN-2 and EXPR-7: a settled field completes an inferred constructor
+# type and stays concrete when the field is read.
+struct Holder<T> { value: T }
+
+fn inferred_holder<T>(const value: T) -> i64 {
+    let held = Holder(value: [if live_helper(value) > 0 { 2 }])
+    let values = held.value
+    return chosen_or_skip(values[0])
+}
+
+# GEN-2 and TYPE-5: a deferred first written field decides the pair's
+# type, including when that field is declared second.
+struct OrderedPair<U> {
+    a: U
+    b: U
+    seen: list<U>?
+}
+
+fn ordered_fields<T>(const value: T) -> f64 {
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    let pair = OrderedPair(b: chosen, a: 0)
+    return pair.b
+}
+
+fn contextual_fields<T>(const value: T) -> f64 {
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    let pair = OrderedPair(b: chosen, a: 0.0, seen: [])
+    return pair.b
+}
+
+# TYPE-7 and EXPR-9: settled field types give these leaves their context.
+struct ContextPair<U> {
+    first: U
+    second: U
+    seen: list<U>
+    tags: set<U>
+    entries: dict<str, U>
+}
+
+fn settled_contextual_fields<T>(const value: T) -> GraphSide {
+    let chosen = if live_helper(value) > 0 { GraphSide.left }
+    let values = ContextPair(first: chosen, second: .right, seen: [], tags: [], entries: [])
+    return values.second
+}
+
+# CTRL-15: inferred list elements become the types of loop bindings.
+fn inferred_iteration<T>(const value: T) -> i64 {
+    var total = 0
+    for item in [if live_helper(value) > 0 { 2 }] {
+        let copied = item
+        total = chosen_or_skip(copied)
+    }
+    return total
+}
+
+# GEN-5 and CTRL-15: settle the loop binding before selecting the symbol.
+fn sum_inferred_iteration<T>(const value: T) -> i64 {
+    var total = 0
+    for item in (if live_helper(value) > 0 { [2, 3] }) {
+        total = total + item
+    }
+    return total
+}
+
+# EXPR-7: a member can be selected once the condition and branch settle.
+struct Item { value: i64 }
+
+operator item_of<T>(input: T) -> Item
+impl const fn item_of<T>(input: T) -> Item => Item(value: 2)
+impl fn item_of(input: i64) -> Item { when { return Item(value: input) } }
+
+fn deferred_member<T>(const value: T) -> i64 {
+    let held = if live_helper(value) > 0 { item_of(value) }
+    return held.value
+}
+
+# GEN-5 and NUM-1: unary minus selects once the temporal operand has a type.
+fn deferred_negation<T>(const value: T) -> i64 {
+    let x = if live_helper(value) > 0 { 1 }
+    let y = -x
+    return y
+}
+
+# EXPR-10: candidate options also survive a deferred unary or binary operand.
+impl const fn neg_(value: i64, twice: bool) -> i64 => if twice { 0 - 2 * value } else { 0 - value }
+
+fn deferred_configured_negation<T>(const value: T) -> i64 {
+    let x = if live_helper(value) > 0 { 2 }
+    return -{twice: true} x
+}
+
+fn deferred_configured_comparison<T>(const value: T) -> bool {
+    let x = if live_helper(value) > 0 { 2.5 }
+    return x =={rel: 0.0, abs: 0.1} 2.55
+}
+
+# EXPR-14: the specialized scalar option is evaluated while wiring.
+operator tolerance<T>(value: T) -> f64
+impl const fn tolerance<T>(value: T) -> f64 => 0.1
+impl fn tolerance(value: i64) -> f64 { when { return 0.2 } }
+
+fn ordinary_tolerance<T>(const value: T, a: f64, b: f64) -> bool =>
+    a =={abs: tolerance(value)} b
+
+# GEN-8: a named generic option can forward an instance constant.
+fn deferred_configured_division<T, const Policy: ZeroPolicy = .ieee>(const value: T) -> f64 {
+    let x = if live_helper(value) > 0 { 2.5 }
+    return x /{zero: Policy} 2
+}
+
+# GEN-5: a named operator selects once its deferred argument settles.
+fn deferred_named_add<T>(const value: T) -> i64 {
+    let x = if live_helper(value) > 0 { 1 }
+    return add_(x, 1)
+}
+
+# GEN-8: the call retains its requested result and configured argument.
+operator shifted<T, R>(value: T) -> R
+impl const fn shifted(value: i64, amount: i64) -> i64 => value + amount
+impl const fn shifted(value: i64, amount: i64) -> f64 => value + amount + 0.5
+
+fn deferred_named_option<T>(const value: T) -> f64 {
+    let x = if live_helper(value) > 0 { 1 }
+    let copied = shifted<i64, f64>{amount: 5}(value: x)
+    return copied
+}
+
+# GEN-16: the source result chooses the stated operation answered by this instance.
+operator shaped<A, R>(value: A) -> R
+impl const fn shaped(value: i64) -> i64 => value + 1
+impl const fn shaped(value: i64) -> f64 => value + 0.5
+
+fn deferred_named_required<I, A, B>(const value: I) -> B requires shaped(i64) -> A && shaped(i64) -> B {
+    let x = if live_helper(value) > 0 { 1 }
+    return shaped(x)
+}
+
+test an_instance_selects_unary_minus {
+    assert eval deferred_negation(value: 3) == [-1]
+    assert eval deferred_negation(value: 0) == []
+    assert eval deferred_configured_negation(value: 3) == [-4]
+}
+
+# GEN-7: the named operator waits for the tuple's deferred component.
+operator count_settled_pair<U>(value: tuple<U, i64>) -> i64
+impl const fn count_settled_pair<U>(value: tuple<U, i64>) -> i64 => 17
+
+fn deferred_nested_named_operator<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    return count_settled_pair((chosen, 0))
+}
+
+# GEN-7: an incomplete entry in a block's tuple settles before the
+# named operator supplies the type of its contextual null.
+operator count_settled_block<U>(value: tuple<U, i64?>) -> i64
+impl const fn count_settled_block<U>(value: tuple<U, i64?>) -> i64 => 19
+
+fn deferred_nested_named_block<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    return count_settled_block({ (chosen, null) })
+}
+
+# TYPE-7: an ordinary instance settles and narrows the operand of a
+# constructor whose enum was already known in the generic body.
+enum GraphSide { left, right }
+
+fn deferred_enum_constructor<T>(const value: T) -> GraphSide {
+    let chosen = if live_helper(value) > 0 { 0 }
+    if chosen == null { return GraphSide.right }
+    return GraphSide(chosen)
+}
+
+# EXPR-9 and TYPE-7: the settled sibling supplies the implied member's type.
+const fn observes_right(values: list<GraphSide?>) -> bool {
+    let member = values[1]
+    if member == null { return false }
+    return member == GraphSide.right
+}
+
+fn deferred_list_member<T>(const value: T) -> bool {
+    let chosen = if live_helper(value) > 0 { GraphSide.left }
+    let values = [chosen, .right]
+    return observes_right(values)
+}
+
+# EXPR-9 and TYPE-14: null takes the settled list element type through a block.
+const fn observes_null(values: list<i64?>) -> bool =>
+    values[0] != null && values[1] == null
+
+fn deferred_list_null<T>(const value: T) -> bool {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let values = [chosen, { null }]
+    return observes_null(values)
+}
+
+# GEN-2: the selected instance settles the argument and the result of
+# the generic value function, including the inferred local receiving it.
+const fn deferred_identity<U>(input: U) -> U => input
+
+fn deferred_generic_result<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let copied = deferred_identity(chosen)
+    return copied
+}
+
+# GEN-2, GEN-12 and EXPR-9: the first argument fixes the element type
+# of the later list literal, including one with no entries.
+const fn first_fallback<U>(input: U, fallback: list<U>) -> U {
+    for item in fallback { return item }
+    return input
+}
+
+fn deferred_contextual_list<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let from_input = first_fallback(chosen, [])
+    let from_list = first_fallback(chosen, [2])
+    return from_input * 10 + from_list
+}
+
+# ERR-2: the generic result gives ok its success and error types.
+const fn preferred_result<U>(input: U, preferred: result<U, error>) -> U {
+    if is_ok(preferred) { return preferred.value }
+    return input
+}
+
+fn deferred_contextual_result<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    return preferred_result(chosen, ok(2))
+}
+
+# ERR-2: the local keeps its inferred result's type at both consumers.
+const fn boxed_result<U>(value: U) -> result<U, error> => ok(value)
+
+const fn boxed_payload(outcome: result<i64, error>) -> i64 {
+    if is_ok(outcome) { return outcome.value }
+    return -1
+}
+
+fn deferred_result_data<T>(const value: T) -> result<i64, error> {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let copied = boxed_result(chosen)
+    return copied
+}
+
+fn deferred_result_payload<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let copied = boxed_result(chosen)
+    return boxed_payload(copied)
+}
+
+# GEN-2: the output of a generic function can also settle a collection local.
+const fn singleton_dictionary<U>(value: U) -> dict<str, U> => ["key": value]
+const fn singleton_set<U>(value: U) -> set<U> => [value]
+
+fn deferred_dictionary_data<T>(const value: T) -> dict<str, i64> {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let copied = singleton_dictionary(chosen)
+    return copied
+}
+
+fn deferred_set_data<T>(const value: T) -> set<i64> {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let copied = singleton_set(chosen)
+    return copied
+}
+
+# ERR-7: the named temporal call's inferred output survives the capture.
+fn captured_echo<U>(value: U) -> U { when { return value } }
+
+fn deferred_captured_output<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let seen = capture(captured_echo, chosen)
+    let copied = seen.value
+    return copied
+}
+
+# GEN-13: the default's literal takes the type settled for the call.
+const fn deferred_fallback<U, const Fallback: U = 1>(input: U) -> U => Fallback
+
+fn deferred_generic_default<T>(const value: T) -> f64 {
+    let chosen = if live_helper(value) > 0 { 2.5 }
+    let copied = deferred_fallback(chosen)
+    return copied
+}
+
+# FN-8 and GEN-10: each instance gets the settled types of its captured arguments.
+const fn deferred_pack<...Ts>(items: ...Ts) -> i64
+    requires each T in types(Ts) { T in {i64, bool} } => 1
+const fn deferred_named_pack<...Fields>(items: ...{Fields}) -> i64 => 2
+const fn deferred_fixed_pack<U, ...Ts>(head: U, items: ...Ts) -> U => head
+
+fn deferred_pack_result<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let positional = deferred_pack(chosen, true)
+    let named = deferred_named_pack(flag: true, number: chosen)
+    let explicit = deferred_pack<i64, bool>(chosen, true)
+    let fixed = deferred_fixed_pack(chosen, 5.0)
+    return positional + named + explicit + fixed
+}
+
+# CTRL-15: a deferred selector and its label settle to i64.
+fn selected_case<T>(const value: T) -> i64 {
+    let key = if live_helper(value) > 0 { 1 }
+    switch key { case 1: return 4 }
+    return 5
+}
+
+# TYPE-7 and CTRL-6: the settled enum supplies the implied label's type.
+fn selected_enum_case<T>(const value: T, const left: bool) -> i64 {
+    let side = if left { GraphSide.left } else { GraphSide.right }
+    let key = if live_helper(value) > 0 { side }
+    switch key {
+        case .left: return 6
+        case GraphSide.right: return 7
+    }
+    return 8
+}
+
+test an_instance_settles_its_graph_conditions {
+    assert eval deferred_configured_comparison(value: 3) == [true]
+    assert eval ordinary_tolerance(value: "s", a: [2.5, 2.5], b: [2.55, 2.7]) == [true, false]
+    assert eval deferred_configured_division(value: 3) == [1.25]
+    assert eval deferred_named_add(value: 3) == [2]
+    assert eval deferred_nested_named_operator(value: "s") == [17]
+    assert eval deferred_nested_named_block(value: "s") == [19]
+    assert eval deferred_named_option(value: 3) == [6.5]
+    assert eval deferred_named_required<i64, i64, f64>(value: 3) == [1.5]
+    assert eval loop_scalar(value: "s") == [5]
+    assert eval wiring_if(value: 3) == [1]
+    assert eval wiring_if(value: "s") == [-1]
+    assert eval connection_if(value: 3) == [1]
+    assert eval connection_if(value: 0) == []
+    assert eval return_continuation(value: 3) == [1]
+    assert eval return_continuation(value: 0) == [2]
+    assert eval required_choice(value: 3) == [2]
+    assert raises("value.null") { eval required_choice(value: "s") }
+    assert eval inferred_pair(value: 3) == [12]
+    assert eval inferred_pair(value: "s") == [9]
+    assert eval joined_choice(value: 3) == [2]
+    assert eval joined_choice(value: "s") == [-1]
+    assert eval surviving_choice(value: 3, flag: [true, false, true]) == [3, 0, 3]
+    assert eval contextual_choice(value: 3) == [2]
+    assert raises("value.null") { eval contextual_choice(value: "s") }
+    assert eval inferred_list(value: 3) == [2]
+    assert eval inferred_list(value: "s") == [-1]
+    assert eval earlier_argument(value: 3) == [2.5]
+    assert eval earlier_argument(value: 0) == []
+    assert eval nullable_argument_result(value: "s") == [true]
+    assert eval widened_list(value: "s") == [6.5]
+    assert eval indexed_elements(value: 3) == [5]
+    assert eval indexed_elements(value: "s") == [-2]
+    assert eval folded_tuple_index(value: "s") == ["selected"]
+    assert eval optional_elements(value: 3) == [2]
+    assert raises("value.null") { eval optional_elements(value: "s") }
+    assert eval guarded_payload(value: "s", keep: true) == [2]
+    assert eval guarded_payload(value: "s", keep: false) == [0]
+    assert eval indexed_payload(value: "s", keep: true) == [2]
+    assert raises("value.null") { eval indexed_payload(value: "s", keep: false) }
+    assert eval dictionary_entries(value: 3) == [4]
+    assert raises("value.null") { eval dictionary_entries(value: "s") }
+    assert eval inferred_holder(value: "s") == [2]
+    assert eval ordered_fields(value: "s") == [2.5]
+    assert eval contextual_fields(value: "s") == [2.5]
+    assert eval settled_contextual_fields(value: "s") == [GraphSide.right]
+    assert eval inferred_iteration(value: "s") == [2]
+    assert eval sum_inferred_iteration(value: "s") == [5]
+    assert eval deferred_member(value: "s") == [2]
+    assert eval deferred_member(value: 3) == [3]
+    assert eval deferred_enum_constructor(value: "s") == [GraphSide.left]
+    assert eval deferred_list_member(value: "s") == [true]
+    assert eval deferred_list_null(value: "s") == [true]
+    assert eval deferred_generic_result(value: 3) == [1]
+    assert eval deferred_contextual_list(value: 3) == [12]
+    assert eval deferred_contextual_result(value: 3) == [2]
+    assert eval deferred_result_data(value: 3) == [ok(1)]
+    assert eval deferred_result_payload(value: 3) == [1]
+    assert eval deferred_dictionary_data(value: 3) == [["key": 1]]
+    assert eval deferred_set_data(value: 3) == [[1]]
+    assert eval deferred_captured_output(value: 3) == [1]
+    assert eval deferred_generic_default(value: 3) == [1.0]
+    assert eval deferred_pack_result(value: 3) == [5]
+    assert eval selected_case(value: 3) == [4]
+    assert eval selected_enum_case(value: 3, left: true) == [6]
+    assert eval selected_enum_case(value: 3, left: false) == [7]
+    assert eval value_phase_choice(value: 3) == [1]
+    assert eval value_phase_choice(value: "s") == [-1]
+}
+
+struct Counter { count: i64 }
+
+impl const fn add_<T>(counter: Counter, increment: T) -> i64 => counter.count + 100
+impl const fn add_(counter: Counter, increment: i64) -> i64 => counter.count + increment
+
+const fn through_symbol<T>(counter: Counter, increment: T) -> i64 => counter + increment
+
+test instance_with_a_symbol {
+    assert through_symbol(Counter(count: 3), 2) == 5
+    assert through_symbol(Counter(count: 3), "s") == 103
+}
+
+# GEN-7: a contextual list still depends on the type of its local element.
+operator list_helper<T>(values: list<T>) -> i64
+impl const fn list_helper<T>(values: list<T>) -> i64 => 5
+impl const fn list_helper(values: list<i64>) -> i64 => 1
+
+const fn through_list<T>(value: T) -> i64 => list_helper([value])
+
+test instance_with_a_contextual_operand {
+    assert through_list(3) == 1
+    assert through_list("s") == 5
+}
+
+# ERR-15, GEN-7: the instance can select a candidate that takes the whole
+# result even when the candidate that admitted the body needed a read.
+operator classify<T>(value: T) -> i64
+impl const fn classify<T>(value: list<T>) -> i64 => 5
+impl const fn classify(value: result<list<i64>, str>) -> i64 => 1
+
+const fn through_result<T>(value: result<list<T>, str>) -> result<i64, str> => ok(classify(value))
+
+test instance_uses_whole_result {
+    let failed: result<list<i64>, str> = err("failure")
+    let passed: result<list<str>, str> = ok(["s"])
+    let one: result<i64, str> = ok(1)
+    let five: result<i64, str> = ok(5)
+    assert through_result(failed) == one
+    assert through_result(passed) == five
+}
+
+# GEN-7: an inferred local retains the type established by the body.
+operator get_value<T, O>(value: T) -> O
+impl const fn get_value<T>(value: T) -> i64 => 5
+impl const fn get_value(value: i64) -> str => "other output"
+
+const fn into_inferred_local<T>(value: T) -> i64 {
+    let answer = get_value(value)
+    return answer
+}
+
+test instance_preserves_the_inferred_result_type {
+    assert into_inferred_local(3) == 5
+    assert get_value(3) == "other output"
+}
+
+# FN-6, GEN-7: a value-only operator keeps its phase while its candidate
+# is selected for the instance. The conditional's i64? types the helper.
+operator value_predicate<T>(value: T) -> bool
+impl const fn value_predicate<T>(value: T) -> bool => true
+impl const fn value_predicate(value: str) -> bool => false
+
+const fn graph_identity<T>(value: T) -> T => value
+
+fn value_phase_choice<T>(const value: T) -> i64 {
+    let chosen = if value_predicate(value) { 1 }
+    return chosen_or_skip(graph_identity(chosen))
+}
+
+# EXPR-6 and ERR-12: a present false is still false, and the right
+# operand of either connective is read only when needed.
+fn deferred_not<T>(const value: T) -> bool {
+    let flag = if live_helper(value) > 0 { false }
+    return !flag
+}
+
+fn deferred_logic<T>(const value: T) -> bool {
+    let flag = if live_helper(value) > 0 { false }
+    return (flag && true) || (flag || false)
+}
+
+fn deferred_short_circuit<T>(const value: T) -> bool {
+    let missing = if live_helper(value) < 0 { false }
+    return (false && missing) || (true || missing)
+}
+
+const fn score_result(outcome: result<i64, str>) -> i64 {
+    if is_ok(outcome) { return outcome.value }
+    if outcome.error == "problem" { return 7 }
+    return 0
+}
+
+# ERR-2 and ERR-12: each tag reads the nullable payload for its side.
+fn deferred_payload<T>(const value: T, const success: bool, const ready: bool) -> i64 {
+    let chosen = if live_helper(value) > 0 && ready { 2 }
+    let message = if live_helper(value) > 0 && ready { "problem" }
+    let outcome: result<i64, str> = if success { ok(chosen) } else { err(message) }
+    return score_result(outcome)
+}
+
+test deferred_boolean_and_result_forms {
+    assert eval deferred_not(value: "s") == [true]
+    assert eval deferred_logic(value: "s") == [false]
+    assert eval deferred_short_circuit(value: "s") == [true]
+    assert eval deferred_payload(value: "s", success: true, ready: true) == [2]
+    assert eval deferred_payload(value: "s", success: false, ready: true) == [7]
+    assert raises("value.null") { eval deferred_payload(value: "s", success: true, ready: false) }
+    assert raises("value.null") { eval deferred_payload(value: "s", success: false, ready: false) }
+}
+
+# ERR-3 and ERR-4: the tag test sees the constructed result. The error
+# needs a present message even though the code may be absent.
+fn deferred_error<T>(const value: T, const ready: bool, const coded: bool) -> i64 {
+    let message = if live_helper(value) > 0 && ready { "problem" }
+    let code = if live_helper(value) > 0 && coded { "custom" }
+    let failure = error(message: message, code: code)
+    let outcome: result<i64, error> = err(failure)
+    if is_ok(outcome) || failure.message != "problem" { return 0 }
+    if failure.code == null { return 1 }
+    return 2
+}
+
+test deferred_error_fields {
+    assert eval deferred_error(value: "s", ready: true, coded: false) == [1]
+    assert eval deferred_error(value: "s", ready: true, coded: true) == [2]
+    assert raises("value.null") { eval deferred_error(value: "s", ready: false, coded: true) }
+}
+
+# ERR-3: the ordinary result's lexical tag fact applies after its
+# type settles, on the taken branch and after a terminating branch.
+const fn projection_sample(const passed: bool) -> result<i64, error> {
+    if passed { return ok(7) }
+    return err(error(message: "problem"))
+}
+
+fn deferred_result_projection<T>(const value: T, const passed: bool) -> i64 {
+    let samples = if live_helper(value) > 0 { [projection_sample(passed)] }
+    let chosen = samples[0]
+    if is_ok(chosen) { return chosen.value }
+    if chosen.error.message == "problem" { return 8 }
+    return 0
+}
+
+# ERR-15: an ordinary result takes its nullable form when compared to
+# null, on either side, even if its type settles only in the instance.
+fn deferred_result_is_null<T>(const value: T, const passed: bool) -> bool {
+    let samples = if live_helper(value) > 0 { [projection_sample(passed)] }
+    let chosen = samples[0]
+    return chosen == null
+}
+
+fn deferred_result_is_present<T>(const value: T, const passed: bool) -> bool {
+    let samples = if live_helper(value) > 0 { [projection_sample(passed)] }
+    let chosen = samples[0]
+    return (null) != chosen
+}
+
+# ERR-15: a member takes a result's inferred success type.
+struct ResultText { text: str }
+
+const fn boxed_text<U>(value: U) -> result<U, error> => ok(value)
+
+fn deferred_result_member<T>(const value: T) -> str {
+    let chosen = if live_helper(value) > 0 { ResultText(text: "projected") }
+    let outcome = boxed_text(chosen)
+    return outcome.text
+}
+
+# ERR-3 and GEN-7: the result is known before its category is selected.
+operator known_result<T>(input: T) -> result<i64, error>
+impl const fn known_result<T>(input: T) -> result<i64, error> => ok(9)
+impl fn known_result(input: i64) -> result<i64, error> { when { return ok(input) } }
+
+fn deferred_result_category<T>(const input: T) -> i64 {
+    let outcome = known_result(input)
+    if is_ok(outcome) { return outcome.value }
+    return 0
+}
+
+test deferred_result_variants {
+    assert eval deferred_result_category(input: "s") == [9]
+    assert eval deferred_result_member(value: "s") == ["projected"]
+    assert eval deferred_result_projection(value: "s", passed: true) == [7]
+    assert eval deferred_result_projection(value: "s", passed: false) == [8]
+    assert eval deferred_result_is_null(value: "s", passed: true) == [false]
+    assert eval deferred_result_is_null(value: "s", passed: false) == [true]
+    assert eval deferred_result_is_present(value: "s", passed: true) == [true]
+    assert eval deferred_result_is_present(value: "s", passed: false) == [false]
+}
+
+# ERR-12 and ERR-3: the null branch refines the same ordinary binding
+# before its tag is tested, even when its type settles in the instance.
+fn deferred_nullable_projection<T>(const value: T, const ready: bool, const passed: bool) -> i64 {
+    let chosen = if live_helper(value) > 0 && ready { projection_sample(passed) }
+    if chosen == null { return 0 }
+    if is_ok(chosen) { return chosen.value }
+    if chosen.error.message == "problem" { return 8 }
+    return 0
+}
+
+test deferred_nullable_variants {
+    assert eval deferred_nullable_projection(value: "s", ready: true, passed: true) == [7]
+    assert eval deferred_nullable_projection(value: "s", ready: true, passed: false) == [8]
+    assert eval deferred_nullable_projection(value: "s", ready: false, passed: true) == [0]
+}
+
+# TYPE-16: a named delta property can take a string or an optional
+# string whose type became known only in the instance.
+struct DeltaText {
+    count: i64
+    text: str
+}
+
+fn deferred_delta_properties<T>(const value: T, const ready: bool) -> str {
+    let texts = if live_helper(value) > 0 { ["known"] }
+    let plain = delta<DeltaText>(text: texts[0])
+    let chosen = if live_helper(value) > 0 && ready { "ready" }
+    let change = delta<DeltaText>(text: chosen, count: 2)
+    if plain.text != "known" || change.count != 2 { return "wrong slots" }
+    if change.text == null { return "absent" }
+    return change.text
+}
+
+# TYPE-16: the known collection type reaches a local holding its delta.
+const fn change_list_size<U>(value: U) -> delta<list<U>> =>
+    delta<list<U>>(size_modified: 1)
+
+fn deferred_list_delta<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let changed = change_list_size(chosen)
+    let copied = changed
+    return chosen_or_skip(copied.size_modified)
+}
+
+# TYPE-16: project the updated entries from a settled ordinary delta.
+const fn update_delta_entries<U>(value: U) -> delta<dict<str, list<U>>> =>
+    delta<dict<str, list<U>>>(updated: ["key": delta<list<U>>(size_modified: 1)])
+
+fn deferred_dictionary_delta<T>(const value: T) -> i64 {
+    let chosen = if live_helper(value) > 0 { 1 }
+    let changed = update_delta_entries(chosen)
+    let updated = changed.updated
+    let entry = updated["key"]
+    return chosen_or_skip(entry.size_modified)
+}
+
+test deferred_delta_properties_fit {
+    assert eval deferred_delta_properties(value: "s", ready: true) == ["ready"]
+    assert eval deferred_delta_properties(value: "s", ready: false) == ["absent"]
+    assert eval deferred_list_delta(value: "s") == [1]
+    assert eval deferred_dictionary_delta(value: "s") == [1]
+}
+
+# FN-9 and GEN-7: the value candidate can supply the graph's store
+# while the graph is built, including through a local alias.
+fn deferred_store_value<T>(const value: T) -> i64 {
+    inject global_state
+    let store = global_state
+    put(store, "selected_value", live_helper(value))
+    return get<i64>(store, "selected_value")
+}
+
+test a_store_argument_can_settle_to_an_ordinary_value {
+    assert eval deferred_store_value(value: "s") == [5]
+}

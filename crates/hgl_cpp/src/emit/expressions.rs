@@ -24,7 +24,8 @@
 //! piece is left out of the files.
 
 use hgl_analyser::hir::{
-    BinaryOperator, ErrorPart, Expr, ExprKind, Raise, Stmt, Tenor, UnaryOperator, Value,
+    BinaryOperator, ErrorPart, Expr, ExprKind, IfInference, Raise, Stmt, Tenor, UnaryOperator,
+    Value,
 };
 use hgl_analyser::{Scalar, Type};
 use hgl_diagnostics::Location;
@@ -291,6 +292,7 @@ impl Emitter<'_> {
                 condition,
                 then,
                 otherwise,
+                ..
             } if plain(then) && otherwise.as_deref().is_none_or(plain) => {
                 let Some(ty) = self.written_type(&value.ty, value.at) else {
                     return "0".to_string();
@@ -784,6 +786,7 @@ fn returning(value: &Expr) -> Option<Vec<Stmt>> {
             condition,
             then,
             otherwise: Some(otherwise),
+            ..
         } => {
             let branch = |branch: &Expr| -> Option<Box<Expr>> {
                 Some(Box::new(Expr {
@@ -801,6 +804,7 @@ fn returning(value: &Expr) -> Option<Vec<Stmt>> {
                     condition: condition.clone(),
                     then: branch(then)?,
                     otherwise: Some(branch(otherwise)?),
+                    inference: IfInference::None,
                 },
                 ty: value.ty.clone(),
                 at: value.at,

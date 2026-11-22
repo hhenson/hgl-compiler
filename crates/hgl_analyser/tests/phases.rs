@@ -88,6 +88,53 @@ fn a_graph_injects_the_store_and_sets_it_where_it_is_built() {
     );
 }
 
+/// FN-9 and GEN-7: a graph's store still takes ordinary values after
+/// each instance selects the operations that supply its arguments.
+#[test]
+fn graph_instances_recheck_store_arguments() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "operator helper<T>(input: T) -> i64\n",
+            "impl const fn helper<T>(input: T) -> i64 => 5\n",
+            "impl fn helper(input: i64) -> i64 { when { return input } }\n",
+            "fn write<T>(const input: T) -> i64 {\n",
+            "    inject global_state\n",
+            "    put(global_state, \"direct\", helper(input))\n",
+            "    return 7\n",
+            "}\n",
+            "fn write_aliased<T>(const input: T) -> i64 {\n",
+            "    inject global_state\n",
+            "    let store = global_state\n",
+            "    let given = helper(input)\n",
+            "    put(store, \"alias\", given)\n",
+            "    return 7\n",
+            "}\n",
+            "fn already_rejected<T>(const input: T, given: i64) -> i64 {\n",
+            "    inject global_state\n",
+            "    put(global_state, \"known\", given)\n",
+            "    return helper(input)\n",
+            "}\n",
+            "fn temporal() -> i64 => write(1)\n",
+            "fn aliased_temporal() -> i64 => write_aliased(1)\n",
+            "fn ordinary() -> i64 => write(\"s\")\n",
+            "fn aliased_ordinary() -> i64 => write_aliased(\"s\")\n",
+            "fn check_once() -> i64 => already_rejected(\"s\", 1)\n",
+        ),
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:19:32 phase/connection.as_constant FN-9",
+            "m.hgl:22:25 phase/connection.as_constant FN-9",
+            "m.hgl:23:33 phase/connection.as_constant FN-9",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// FN-2: "An ordinary temporal body with no node-only construct
 /// describes composition: the function is a graph. `state`, `cache`,
 /// `start`, `when`, `stop`, `yield`, or an `inject` of any capability

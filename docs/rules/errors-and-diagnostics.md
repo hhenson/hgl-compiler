@@ -18,7 +18,7 @@ transpiler: done
 analyser: partial
 
 - `ok(value)` and `err(value)` take one value by position and no generic argument (`generic.argument_count`), and both types from the complete `result<T, E>` the place expects, a nullable one included; with none it is `result.context_type`
-- The payload is read as its side's type
+- The payload is read as its side's type. This includes a named function argument whose result parameter type is completed by another argument in the graph instance (GEN-2, GEN-7).
 - Left: a result expected through a generic parameter still being inferred; equality
 
 transpiler: done
@@ -35,10 +35,11 @@ transpiler: done
 
 analyser: partial
 
-- `is_ok` and `is_err` take one result by position and give a `bool`
+- `is_ok` and `is_err` take one result by position and give a `bool`. A graph instance checks the argument when its type first settles (GEN-7).
 - A direct guard on an immutable result binding proves its tag: in the branch it holds for, across `!` and the Boolean connectives, and after a branch that returns
 - `binding.value` and `binding.error` need the matching fact (`result.required_variant`), and have the T and the E
-- In a graph a test of a connection gives no fact
+- In a graph a test of a connection gives no fact. A deferred projection checks its
+  saved lexical fact against the settled category of the result (GEN-7).
 - Left: a fact carried through a `switch` or a loop
 
 ## ERR-4
@@ -46,6 +47,7 @@ analyser: partial
 analyser: done
 
 - `error(message: text, code: optional_code)`: each by its name, `message` a `str` and required, `code` a `str?`; `.message` is a `str` and `.code` a `str?`
+- A graph instance refits newly known `message` and `code` values, including any required read of the message (GEN-7, ERR-12).
 - `.context` is an `error context?`, a type of this compiler's, whose `.node` and `.phase` are a `str` and `.evaluation_time` a `datetime`, read under ERR-12 and never assigned (`binding.immutable`)
 
 transpiler: partial
@@ -144,6 +146,7 @@ transpiler: done
 analyser: done
 
 - In a value function, a hook and a graph a direct test against null refines an immutable nullable parameter, `let` or loop binding to its payload's type: in the branch the test holds for, across `!` and the Boolean connectives, and after a branch that returns
+- A generic graph keeps a non-null proof for an ordinary binding and fills incomplete payload types, including in reads that already record a possible null failure (GEN-7).
 - A nullable read in a place that expects its payload records a possible `value.null` failure and its phase. A written null still needs a nullable type (TYPE-14).
 
 transpiler: done
@@ -183,7 +186,7 @@ analyser: partial
 
 - A call or held result keeps its tag in a result place, gives its success or raises in a T place, and gives its success or null in a `T?` place. An unannotated `let` keeps the result. A nullable success type is itself the T form.
 - A `result<U?, error>` given where a U is expected raises its original error on failure and reads the success under ERR-12. The owner confirmed the two reads while the specification update was in review. [Compiler issue #345](https://github.com/hhenson/hgl-compiler/issues/345#issuecomment-7060418814)
-- In composition the analyser records whether a conversion belongs to the call's node or to a reader of a held connection.
+- In composition the analyser records whether a conversion belongs to the call's node or to a reader of a held connection. A field projection waits for an incomplete result type, then takes the success before reading the field (GEN-7, EXPR-7).
 - A candidate keeps operands whole where possible. Equal minimum arrangements of result reads are `operator.ambiguous`. [Compiler issue #356](https://github.com/hhenson/hgl-compiler/issues/356)
 
 transpiler: done

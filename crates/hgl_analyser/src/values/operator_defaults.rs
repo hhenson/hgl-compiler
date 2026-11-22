@@ -16,7 +16,7 @@ use super::{Tables, Typer, lifting};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Body, Callee, ConfigurationRead, Expr, ExprKind, Value};
 use crate::program::{Module, Program};
-use crate::types::{Argument, Detail, Parameter, Type};
+use crate::types::{Argument, Detail, Parameter, Signature, Type};
 use crate::{codes, error};
 
 /// Visit the selected calls once the declaration pass has read every default.
@@ -173,12 +173,17 @@ pub(super) fn check_instance(
     requirements: &[hir::Answer],
     made: &mut Vec<Made>,
     diagnostics: &mut Diagnostics,
-) {
+    graph_diagnostics: &mut Diagnostics,
+) -> Option<(Signature, Body)> {
     let reports = RefCell::new(Diagnostics::new());
-    let Some((_, body)) = program.checked_instance(callee, generics, requirements, &[], &reports)
-    else {
-        return;
-    };
+    let (signature, body) = program.checked_instance(
+        callee,
+        generics,
+        requirements,
+        &[],
+        &reports,
+        graph_diagnostics,
+    )?;
     let mut reports = reports.into_inner();
     hir::walk_statements(&body.statements, &mut |value| {
         check_expression(program, value, made, &mut reports)
@@ -188,6 +193,7 @@ pub(super) fn check_instance(
             diagnostics.emit(report.clone());
         }
     }
+    Some((signature, body))
 }
 
 /// UNIT-8: check only the inherited defaults that this selected call uses.

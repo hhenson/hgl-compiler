@@ -216,6 +216,7 @@ impl Typer<'_> {
             generics,
             type_packs: pack.into_iter().collect(),
             requirements,
+            contextual: Vec::new(),
         };
         Some((callee, actual))
     }
@@ -428,6 +429,7 @@ impl Typer<'_> {
                 },
                 arguments,
                 form: Form::Named,
+                braced: Vec::new(),
                 lifted: false,
             },
             template.result.clone().unwrap_or(Type::Unknown),
