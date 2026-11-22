@@ -171,6 +171,48 @@ test child_operator_calls_keep_the_result {
         [103, -100]
 }
 
+# ERR-15 and GEN-5: a checked child competes as its payload where the
+# operator's candidates ask for an ordinary value.
+operator plain_child_score<T>(value: T) -> i64
+impl const fn plain_child_score<T>(value: T) -> i64 => 0
+impl const fn plain_child_score(value: i64) -> i64 => 1
+impl const fn plain_child_score(value: str) -> i64 => 2
+
+fn score_plain_children<T>(parts: list<T, 2>, index: i64) -> i64 {
+    when all_valid(parts) {
+        let entry = parts[index]
+        return plain_child_score(entry) * 10 + plain_child_score(parts[index])
+    }
+}
+
+fn observe_plain_child_scores(index: i64, reading: i64, probe: i64) -> i64 =>
+    score_plain_children(publish_scalar_child(index, reading), probe)
+
+test child_operator_calls_select_the_plain_value_candidate {
+    assert eval observe_plain_child_scores(index: [0, 1], reading: [3, 4], probe: [0, 1]) == [_, 11]
+}
+
+# ERR-14 and ERR-15: comparing ordinary children consumes each value.
+fn equal_children(parts: list<i64, 2>, left: i64, right: i64) -> bool {
+    when {
+        let first = parts[left]
+        let second = parts[right]
+        return first == second
+    }
+}
+
+fn observe_child_equality(index: i64, reading: i64, left: i64, right: i64) -> bool =>
+    equal_children(publish_scalar_child(index, reading), left, right)
+
+test child_equality_raises_for_an_unset_operand {
+    assert eval observe_child_equality(
+        index: [0, 1], reading: [3, 3], left: [0, 0], right: [0, 1],
+    ) == [true, true]
+    assert raises("value.unset_read") {
+        eval observe_child_equality(index: [0], reading: [3], left: [0], right: [1])
+    }
+}
+
 fn plain_scalar_child(parts: list<i64, 2>, index: i64) -> i64 {
     when {
         let entry = parts[index]
