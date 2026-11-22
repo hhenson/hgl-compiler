@@ -30,6 +30,7 @@ fn a_temporal_default_is_checked_against_what_it_publishes() {
         "fn window_arrival(value: rolling_window<i64, 5> = 1) {}\n",
         "fn atomic_payload(value: atomic<list<i64>> = []) {}\n",
         "fn silent_window(value: rolling_window<i64, 5>? = null) {}\n",
+        "fn null_arrival(value: rolling_window<i64?, 5> = delta<i64?>()) {}\n",
     ));
     assert_eq!(
         checked.summary(),

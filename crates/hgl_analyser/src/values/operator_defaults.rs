@@ -429,7 +429,7 @@ pub(crate) fn fit_operator_default(
     }
     let place = format!("the default of `{}`", parameter.name);
     let mut value = with_configuration_typer(program, operator, diagnostics, |typer| {
-        typer.fit(value, expected, &place)
+        typer.fit_parameter_default(value, parameter, expected, &place)
     });
     lifting::record_value(program, &mut value);
     value

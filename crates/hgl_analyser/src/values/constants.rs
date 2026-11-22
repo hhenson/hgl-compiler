@@ -19,7 +19,7 @@ use crate::program::{Declaration, Role};
 use crate::read::{default_of, parameters};
 use crate::syntax::{child, tokens};
 use crate::types::{
-    Argument, Constant, ConstantValue, GenericKind, GenericParameter, StructType, Type,
+    Argument, Constant, ConstantValue, GenericKind, GenericParameter, Parameter, StructType, Type,
 };
 use crate::{codes, error, local_error};
 
@@ -98,7 +98,7 @@ impl<'a> Typer<'a> {
                     ));
                     return Some(self.take_default(value));
                 }
-                let value = self.fit(value, expected, &place);
+                let value = self.fit_parameter_default(value, parameter, expected, &place);
                 // ERR-9: reject a failure this reader can establish.
                 // Calls the constant reader cannot evaluate are still
                 // checked by the ordinary expression reader.
@@ -119,6 +119,26 @@ impl<'a> Typer<'a> {
                 Some(self.take_default(value))
             })
             .collect()
+    }
+
+    /// A window of nullable values also accepts the delta of an arrival,
+    /// including a published null (TIME-7, TYPE-11).
+    pub(super) fn fit_parameter_default(
+        &mut self,
+        value: Expr,
+        parameter: &Parameter,
+        expected: &Type,
+        place: &str,
+    ) -> Expr {
+        let ty = parameter.ty.omission_removed();
+        if let Type::RollingWindow { value: arrival, .. } = ty
+            && matches!(arrival.as_ref(), Type::Nullable(_))
+            && !self.admits(expected, &value.ty)
+            && self.admits(&Type::delta(ty.clone()), &value.ty)
+        {
+            return value;
+        }
+        self.fit(value, expected, place)
     }
 
     /// The default of each field the struct writes, read as a value of
