@@ -2048,6 +2048,13 @@ workspace and artifacts. `--format json` reports a versioned object
 with `workspace`, `target`, `units`, `applications`, `tests` and
 `reused`.
 
+`hgl build --compile-commands` writes `compile_commands.json` in the
+workspace using `ninja -t compdb` for its module and entry rules.
+The version 1 JSON description includes its absolute path as
+`compileCommands` when requested. A reused build can restore the
+database without compiling. An unchanged database keeps its timestamp,
+and a command without the flag leaves it alone.
+
 After Ninja succeeds, the driver records a stamp with the BLAKE3 digest of
 each built object and executable. The key includes the source contents,
 core, the HGL compiler version and executable contents, the prepared

@@ -3,12 +3,14 @@
 
 use std::ffi::OsString;
 use std::fs::{self, File, FileTimes};
+use std::io::Read as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
+use walkdir::WalkDir;
 
 use super::{BACKTEST, CALC, TICKS, argument, scratch, sdk_named, text, write};
 
@@ -34,7 +36,7 @@ impl NinjaTrace {
             root,
             "bin/ninja",
             r#"#!/bin/sh
-if [ "$1" = -C ] && [ "$2" = "$HGL_TEST_BUILD_WORKSPACE" ]; then
+if [ "$1" = -C ] && [ "$2" = "$HGL_TEST_BUILD_WORKSPACE" ] && [ "$3" != -t ]; then
     if [ -n "$HGL_TEST_BUILD_TERM" ]; then
         trap 'touch "$HGL_TEST_BUILD_TERM"; exit 130' TERM
     fi
@@ -81,6 +83,180 @@ exec "$HGL_TEST_REAL_NINJA" "$@"
             .lines()
             .count()
     }
+}
+
+/// The compilation database comes from the exact workspace Ninja rules,
+/// can be restored on a hit, and preserves a reader's complete snapshot.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn writes_ninjas_compilation_database_without_rebuilding() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("compile-commands");
+    write(&root, "src/stamped.hgl", SOURCE);
+    write(&root, "src/app.hgl", APP);
+    let mut ninja = NinjaTrace::new(&root);
+    ninja.workspace = root.join("workspace with spaces");
+    let sources = argument(&root.join("src"));
+    let workspace = argument(&ninja.workspace);
+    let path = ninja.workspace.join("compile_commands.json");
+    let cache = root.join("native-cache");
+    let trace = root.join("compiler.log");
+    let compiler = write(
+        &root,
+        "bin/compiler",
+        r#"#!/bin/sh
+if [ "$1" = -dM ] && [ "$2" = -E ]; then
+    printf '%s\n' identify >>"$HGL_TEST_CXX_TRACE"
+else
+    printf '%s\n' compile >>"$HGL_TEST_CXX_TRACE"
+fi
+exec "$HGL_TEST_REAL_CXX" "$@"
+"#,
+    );
+    fs::set_permissions(&compiler, fs::Permissions::from_mode(0o755)).unwrap();
+    let real = std::env::var_os("CXX").unwrap_or_else(|| {
+        if cfg!(target_os = "macos") {
+            "clang++"
+        } else {
+            "g++-15"
+        }
+        .into()
+    });
+    let real = which::which(real).expect("the SDK uses a C++ compiler");
+    let build = |options: &[&str]| -> Value {
+        let output = ninja
+            .hgl(&[
+                "build", &sources, "--out", &workspace, "--tests", "--format", "json",
+            ])
+            .args(options)
+            .env("CXX", &compiler)
+            .env("HGL_TEST_CXX_TRACE", &trace)
+            .env("HGL_TEST_REAL_CXX", &real)
+            .env("HGL_NATIVE_CACHE", &cache)
+            .output()
+            .unwrap();
+        serde_json::from_str(&success(output)).unwrap()
+    };
+    let first = build(&["--compile-commands"]);
+    assert_eq!(first["compileCommands"], argument(&path));
+    assert_eq!(first["reused"], false);
+    let original = ninja_database(&ninja, &path);
+    let entries: Vec<Value> = serde_json::from_str(&original).unwrap();
+    let files: Vec<_> = entries
+        .iter()
+        .map(|entry| entry["file"].as_str().unwrap())
+        .collect();
+    assert!(files.contains(&"modules/mod-demo-stamped.cpp"));
+    assert!(files.contains(&"applications/app-demo-app.cpp"));
+    assert!(files.contains(&"tests/test-demo-stamped.cpp"));
+    assert_eq!(entries.len(), first["units"].as_array().unwrap().len() + 2);
+
+    let known_time = std::time::UNIX_EPOCH + Duration::from_secs(1234567);
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(known_time)
+        .unwrap();
+    assert_eq!(build(&["--compile-commands"])["reused"], true);
+    assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), known_time);
+    assert!(build(&[]).get("compileCommands").is_none());
+    assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), known_time);
+
+    let artifacts = native_times(&ninja.workspace);
+    let libraries = native_times(&cache);
+    fs::remove_file(&path).unwrap();
+    assert_eq!(build(&[])["reused"], true);
+    assert!(!path.exists());
+    fs::write(&trace, "").unwrap();
+    assert_eq!(build(&["--compile-commands"])["reused"], true);
+    assert_eq!(fs::read_to_string(&trace).unwrap(), "identify\n");
+    assert_eq!(ninja.calls(), 1);
+    assert_eq!(ninja_database(&ninja, &path), original);
+    assert_eq!(native_times(&cache), libraries);
+    // The file restored on the hit is the only workspace file newly written.
+    assert_eq!(native_times(&ninja.workspace), artifacts);
+
+    let mut reader = File::open(&path).unwrap();
+    write(
+        &root,
+        "src/extra.hgl",
+        "module demo.extra\nexport fn next(value: i64) -> i64 => value + 1\n",
+    );
+    assert_eq!(build(&["--compile-commands"])["reused"], false);
+    let changed = ninja_database(&ninja, &path);
+    assert_ne!(changed, original);
+    assert!(changed.contains("modules/mod-demo-extra.cpp"));
+    let mut snapshot = String::new();
+    reader.read_to_string(&mut snapshot).unwrap();
+    assert_eq!(snapshot, original);
+
+    let output = ninja
+        .hgl(&[
+            "build",
+            &sources,
+            "--debug",
+            "--compile-commands",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let launched: Value = serde_json::from_str(&success(output)).unwrap();
+    let debug = PathBuf::from(launched["workspace"].as_str().unwrap());
+    assert!(debug.parent().unwrap().ends_with("debug-programs"));
+    let debug_path = debug.join("compile_commands.json");
+    assert_eq!(launched["compileCommands"], argument(&debug_path));
+    let debug_database = ninja_database(&ninja, &debug_path);
+    let entries: Vec<Value> = serde_json::from_str(&debug_database).unwrap();
+    assert_eq!(
+        entries.len(),
+        launched["units"].as_array().unwrap().len() + 1
+    );
+    assert!(entries.iter().all(|entry| {
+        entry["command"]
+            .as_str()
+            .unwrap()
+            .split_whitespace()
+            .any(|word| word == "-g")
+    }));
+    assert!(!debug_database.contains("tests/test-demo-stamped.cpp"));
+}
+
+fn ninja_database(ninja: &NinjaTrace, path: &Path) -> String {
+    let workspace = path.parent().unwrap();
+    let expected = success(
+        Command::new(&ninja.native)
+            .arg("-C")
+            .arg(workspace)
+            .args(["-t", "compdb", "unit", "entry"])
+            .output()
+            .unwrap(),
+    );
+    let actual = fs::read_to_string(path).unwrap();
+    assert_eq!(actual, expected);
+    let entries: Vec<Value> = serde_json::from_str(&actual).unwrap();
+    assert!(!entries.is_empty());
+    for entry in entries {
+        assert_eq!(entry["directory"], argument(workspace));
+    }
+    actual
+}
+
+fn native_times(root: &Path) -> std::collections::BTreeMap<PathBuf, std::time::SystemTime> {
+    WalkDir::new(root)
+        .into_iter()
+        .map(Result::unwrap)
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() != "compile_commands.json")
+        .map(|entry| {
+            (
+                entry.path().to_owned(),
+                entry.metadata().unwrap().modified().unwrap(),
+            )
+        })
+        .collect()
 }
 
 fn success(output: Output) -> String {

@@ -234,6 +234,10 @@ struct BuildArgs {
     #[arg(long)]
     tests: bool,
 
+    /// Write compile_commands.json for the generated C++ in the workspace.
+    #[arg(long)]
+    compile_commands: bool,
+
     /// The build workspace, or the program's workspace under the cache.
     #[arg(long, visible_alias = "keep", value_name = "DIR")]
     out: Option<PathBuf>,

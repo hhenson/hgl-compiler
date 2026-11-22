@@ -27,6 +27,7 @@ pub(super) struct BuildRequest<'a> {
     keep: Option<&'a Path>,
     debug: bool,
     tests: bool,
+    compile_commands: bool,
     running: bool,
     limits: LimitArgs,
     replacements: Replacements<'a>,
@@ -46,6 +47,7 @@ impl<'a> BuildRequest<'a> {
             keep: arguments.keep.as_deref(),
             debug: false,
             tests: true,
+            compile_commands: false,
             running: false,
             limits: arguments.limits,
             replacements: Replacements {
@@ -73,7 +75,9 @@ impl<'a> BuildRequest<'a> {
         });
         let session = match session {
             Ok((mut session, key)) => {
-                if let Some(built) = session.reused(&key, self.tests) {
+                if (!self.compile_commands || session.workspace.manifest().is_file())
+                    && let Some(built) = session.reused(&key, self.tests)
+                {
                     return Ok(BuildStart::Hit(session, built));
                 }
                 session.begin().map(|()| (session, key))
@@ -240,6 +244,7 @@ pub(crate) fn run(arguments: &RunArgs) -> ExitCode {
         keep: arguments.keep.as_deref(),
         debug: arguments.debug_build.is_some(),
         tests: false,
+        compile_commands: false,
         running: true,
         limits: arguments.limits,
         replacements: Replacements {
@@ -331,6 +336,7 @@ pub(crate) fn build(arguments: &BuildArgs) -> ExitCode {
         keep: arguments.out.as_deref(),
         debug: arguments.debug,
         tests: arguments.tests,
+        compile_commands: arguments.compile_commands,
         running: false,
         limits: arguments.limits,
         replacements: Replacements {
@@ -357,6 +363,14 @@ pub(crate) fn build(arguments: &BuildArgs) -> ExitCode {
             return status;
         }
     }
+    let compile_commands = if arguments.compile_commands {
+        match session.compile_commands() {
+            Ok(path) => Some(path),
+            Err(reason) => return build_error(reason),
+        }
+    } else {
+        None
+    };
     match arguments.format {
         BuildFormat::Text => {
             let action = if built.reused { "reused" } else { "built" };
@@ -377,7 +391,12 @@ pub(crate) fn build(arguments: &BuildArgs) -> ExitCode {
                 session.workspace.directory.display(),
             );
         }
-        BuildFormat::Json => match build_description(&session.workspace, &built, arguments) {
+        BuildFormat::Json => match build_description(
+            &session.workspace,
+            &built,
+            arguments,
+            compile_commands.as_deref(),
+        ) {
             Ok(description) => println!("{description}"),
             Err(reason) => return build_error(reason),
         },
@@ -401,6 +420,7 @@ fn build_description(
     workspace: &Workspace,
     built: &BuiltProgram,
     arguments: &BuildArgs,
+    compile_commands: Option<&Path>,
 ) -> Result<serde_json::Value, String> {
     let directory = workspace
         .directory
@@ -431,6 +451,9 @@ fn build_description(
         "applications": applications,
         "tests": tests,
     });
+    if let Some(path) = compile_commands {
+        description["compileCommands"] = serde_json::json!(path);
+    }
     let debug_app =
         arguments
             .application

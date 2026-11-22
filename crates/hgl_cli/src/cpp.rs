@@ -146,6 +146,11 @@ impl BuildSession {
         Stamp::clear(&self.workspace)
     }
 
+    /// Exports compile commands from the manifest of this locked workspace.
+    fn compile_commands(&self) -> Result<PathBuf, String> {
+        self.workspace.compile_commands(self.toolchain.ninja()?)
+    }
+
     /// Writes the program and publishes its stamp after Ninja succeeds.
     fn finish_build(
         &self,
@@ -160,7 +165,8 @@ impl BuildSession {
             self.toolchain
                 .prepare(&self.cache, &self.toolchain_key, self.jobs.as_deref())?;
         interrupt.check()?;
-        self.workspace.write(output, &description)?;
+        self.workspace
+            .write(output, &description, program.tests.is_some())?;
         let artifacts = self.workspace.build_program(
             ninja,
             output,

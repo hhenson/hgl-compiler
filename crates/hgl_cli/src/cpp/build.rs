@@ -232,7 +232,12 @@ impl Workspace {
 
     /// Writes what the target wrote, `output`, and the `build.ninja`
     /// that builds it with `description`, each where it changed.
-    pub(super) fn write(&self, output: &Output, description: &Description) -> Result<(), String> {
+    pub(super) fn write(
+        &self,
+        output: &Output,
+        description: &Description,
+        tests: bool,
+    ) -> Result<(), String> {
         for file in &output.files {
             let path = file
                 .path
@@ -240,10 +245,37 @@ impl Workspace {
                 .fold(self.directory.clone(), |path, part| path.join(part));
             write_if_changed(&path, &file.text)?;
         }
-        write_if_changed(
-            &self.directory.join("build.ninja"),
-            &ninja_file(output, description),
-        )
+        write_if_changed(&self.manifest(), &ninja_file(output, description, tests))
+    }
+
+    /// The manifest Ninja uses for this workspace.
+    pub(super) fn manifest(&self) -> PathBuf {
+        self.directory.join("build.ninja")
+    }
+
+    /// Exports Ninja's compile rules for modules and entry units without
+    /// building anything. An unchanged database keeps its time.
+    pub(super) fn compile_commands(&self, ninja: &Path) -> Result<PathBuf, String> {
+        let commands = Command::new(ninja)
+            .arg("-C")
+            .arg(&self.directory)
+            .args(["-t", "compdb", "unit", "entry"])
+            .output()
+            .map_err(|error| {
+                format!("could not start Ninja for the compilation database: {error}")
+            })?;
+        if !commands.status.success() {
+            let stderr = String::from_utf8_lossy(&commands.stderr);
+            return Err(format!(
+                "Ninja could not describe the compile commands:\n{}",
+                last_lines(&stderr, 20)
+            ));
+        }
+        let database = String::from_utf8(commands.stdout)
+            .map_err(|error| format!("Ninja's compilation database is not UTF-8: {error}"))?;
+        let path = self.directory.join("compile_commands.json");
+        write_if_changed(&path, &database)?;
+        Ok(path)
     }
 
     /// Compiles the program's units, then links its applications and,
@@ -380,7 +412,7 @@ pub(crate) fn native_build_child(
 }
 
 /// The `build.ninja` of `output`, built with `description`.
-fn ninja_file(output: &Output, description: &Description) -> String {
+fn ninja_file(output: &Output, description: &Description, tests: bool) -> String {
     let mut text = String::from(
         "# Written by hgl: the build of a program written by the cpp target.\n\
          # It is written again whenever it changes.\n\
@@ -417,7 +449,7 @@ fn ninja_file(output: &Output, description: &Description) -> String {
             ninja_path(&unit.source)
         ));
     }
-    for executable in &output.executables {
+    for executable in output.executables.iter().filter(|_| tests) {
         text.push_str(&format!(
             "build {}: entry {}\n",
             ninja_path(&object(&executable.source)),
