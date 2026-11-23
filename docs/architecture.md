@@ -135,7 +135,7 @@ that began with it would have no effect. `\` before a line break joins the
 two lines whatever the next one begins with (LEX-26): the lexer makes the
 `\` and its line break one token, and the parser sees no line break there. A comment that holds a
 line break counts as one (LEX-21), and a line that holds only a comment is
-a line. A body's opening brace stays with its header.
+a line. A body's opening brace may follow its header across one line break.
 
 An opening bracket touches what it applies to (LEX-27; owner decisions,
 2026-11-14): the `(` of a call or a parameter list, the `[` of an index,

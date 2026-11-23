@@ -381,22 +381,126 @@ fn two_line_breaks_always_separate() {
 }
 
 #[test]
-fn a_bodys_opening_brace_stays_with_its_header() {
-    // LEX-5: "A body's opening brace stays with its header."
-    let message = "a body's opening brace stays on its header's line";
-    for (entry, text, at) in [
-        (Entry::Statements, "when ready\n{ step() }", "2:1"),
-        (Entry::Statements, "if a\n{ b }", "2:1"),
-        (Entry::Declarations, "fn f()\n{\n}", "2:1"),
-        (Entry::Declarations, "struct S\n{\n}", "2:1"),
-        (Entry::Declarations, "test t\n{\n}", "2:1"),
+fn a_bodys_opening_brace_can_follow_its_header_by_one_line() {
+    // LEX-5: a body's brace continues its incomplete header.
+    for (text, plain) in [
+        ("fn f()\n{}", "fn f() {}"),
+        (
+            "const fn f() -> i64\n{ return 1 }",
+            "const fn f() -> i64 { return 1 }",
+        ),
+        (
+            "impl const fn f(a: i64) -> i64\n{ return a }",
+            "impl const fn f(a: i64) -> i64 { return a }",
+        ),
+        ("native fn f()\n{ when; }", "native fn f() { when; }"),
+        (
+            "native type S\n{ value: i64 }",
+            "native type S { value: i64 }",
+        ),
+        ("struct S\n{ value: i64 }", "struct S { value: i64 }"),
+        ("enum E\n{ a, b }", "enum E { a, b }"),
+        ("test t\n{ assert true }", "test t { assert true }"),
+        (
+            "integration_test t\n{ assert true }",
+            "integration_test t { assert true }",
+        ),
+        (
+            "const fn f<T>(a: T) -> T\nrequires T in {i64, f64}\n{ return a }",
+            "const fn f<T>(a: T) -> T requires T in {i64, f64} { return a }",
+        ),
+        (
+            "fn f(\n    a: i64,\n    b: i64,\n) -> i64\n{ return a }",
+            "fn f(a: i64, b: i64,) -> i64 { return a }",
+        ),
     ] {
-        assert_eq!(rejected(entry, text), [format!("LEX-5 {at}: {message}")]);
+        same_tree(Entry::Declarations, text, plain);
     }
-    // The body is parsed all the same, so one mistake is one report.
-    let outcome = run(Entry::Statements, "when ready\n{ step() }\nother()");
-    assert_eq!(outcome.rules(), ["LEX-5"]);
-    assert!(!outcome.has_error_node());
+    for (text, plain) in [
+        ("when ready\n{ step() }", "when ready { step() }"),
+        ("when\n{ step() }", "when { step() }"),
+        ("start\n{ step() }", "start { step() }"),
+        ("stop\n{ step() }", "stop { step() }"),
+        (
+            "if ready\n{ step() }\nelse if again\n{ retry() }\nelse\n{ finish() }",
+            "if ready { step() } else if again { retry() } else { finish() }",
+        ),
+        (
+            "for item in items\n{ step(item) }",
+            "for item in items { step(item) }",
+        ),
+        ("while ready\n{ step() }", "while ready { step() }"),
+        (
+            "switch value\n{\ncase 1:\n{ step() }\ndefault:\n{ finish() }\n}",
+            "switch value {\ncase 1: { step() }\ndefault: { finish() }\n}",
+        ),
+        (
+            "let f = fn(a: i64) -> i64\n{ return a }",
+            "let f = fn(a: i64) -> i64 { return a }",
+        ),
+    ] {
+        same_tree(Entry::Statements, text, plain);
+    }
+}
+
+#[test]
+fn two_line_breaks_separate_a_body_from_its_header() {
+    let message =
+        "LEX-5 3:1: two or more line breaks separate a body's opening brace from its header";
+    for (entry, text) in [
+        (Entry::Declarations, "fn f()\n\n{}"),
+        (Entry::Declarations, "native fn f()\n\n{ when; }"),
+        (
+            Entry::Declarations,
+            "test t\n# Separate line\n{ assert true }",
+        ),
+        (Entry::Declarations, "fn f() /* first\nsecond */\n{}"),
+        (Entry::Statements, "if ready\n\n{ step() }"),
+        (Entry::Statements, "switch value\n\n{ default: step() }"),
+        (Entry::Statements, "let f = fn()\n\n{ step() }"),
+    ] {
+        assert_eq!(rejected(entry, text), [message]);
+    }
+}
+
+#[test]
+fn a_brace_after_a_complete_statement_begins_its_own_block() {
+    // LEX-5: a statement that can end before `{` ends at the line break.
+    for text in ["return x", "call(x)", "x = y"] {
+        assert_eq!(
+            statements(&format!("{text}\n{{ step() }}")),
+            format!("{} {}", statements(text), statements("{ step() }"))
+        );
+    }
+}
+
+#[test]
+fn a_next_line_if_body_preserves_the_condition_brace_rules() {
+    // CTRL-9: the first brace outside parentheses opens the body.
+    same_tree(
+        Entry::Statements,
+        "if ready\n{ step() }",
+        "if ready { step() }",
+    );
+    same_tree(
+        Entry::Statements,
+        "if ({ ready })\n{ step() }",
+        "if ({ ready }) { step() }",
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "if ready == { other }\n{ step() }"),
+        ["CTRL-9 1:13: expected an expression, found `{`"]
+    );
+    same_tree(
+        Entry::Statements,
+        "if (Record(value: { true }).value)\n{ step() }",
+        "if (Record(value: { true }).value) { step() }",
+    );
+    assert!(
+        rejected(Entry::Statements, "if Record\n{ value: true }\n{ step() }")
+            .iter()
+            .any(|message| message.contains("found `:`"))
+    );
 }
 
 #[test]
