@@ -135,7 +135,7 @@ that began with it would have no effect. `\` before a line break joins the
 two lines whatever the next one begins with (LEX-26): the lexer makes the
 `\` and its line break one token, and the parser sees no line break there. A comment that holds a
 line break counts as one (LEX-21), and a line that holds only a comment is
-a line. A body's opening brace stays with its header.
+a line. A body's opening brace may follow its header across one line break.
 
 An opening bracket touches what it applies to (LEX-27; owner decisions,
 2026-11-14): the `(` of a call or a parameter list, the `[` of an index,
@@ -597,7 +597,7 @@ capability.
 | --- | --- | --- |
 | `inject run_config` in a function, in a test that is no integration test, or after an integration test's other statements (the phase pass) | RUN-6 | `inject.position` |
 | Braces after any capability but `run_config` | RUN-6 | `inject.configuration` |
-| A key of the global store written out, used with two types in one program (`store_keys`, once every body is typed); a `get` of `T` beside a key of `T?` is not judged, awaiting hhenson/hgl_spec#165 | TIME-8 | `store.key_type` |
+| A key of the global store written out, used with two types in one program (`store_keys`, once every body is typed) | TIME-8 | `store.key_type` |
 
 ### Integration tests
 
@@ -1332,13 +1332,25 @@ So `requires window(T) -> list<T, 5>` neither is the body's bare
 `window(value)`, which asks for the default, nor meets a candidate's
 `requires window(T)`.
 
-A requirement and a call ask the candidates through one function,
-`Typer::output_requested`: what the place expects, the types supplied
+Named requirements and calls written in generic bodies keep the
+complete request through `Typer::output_requested`: what the place
+expects, the types supplied
 in the operator's parameter order with an abstract struct widening what
 an earlier one decided (GEN-2), the operator's defaults, each of its
 parameter's type as resolved (GEN-13), and the operator's own
-requirement of its result. So a requirement holds exactly where the
-call it names would select one candidate.
+requirement of its result.
+
+Outside a generic body, a value call uses
+`Typer::argument_output_requested`: its result request keeps written and
+contextual types, generic value options and types fixed by typed inputs,
+while literal-derived types remain open for candidate-local fitting (GEN-5, GEN-6, GEN-8).
+The complete public inference still checks dependent defaults (GEN-13),
+result membership and reflected packs. Separate call metadata lets
+`Typer::called` resolve inherited configuration defaults from the fitted
+arguments (UNIT-8): fitting to `f64?` yields the `f64` payload type.
+Named requirements and calls written in generic bodies keep the existing
+complete request; this change neither rereads an instance nor changes
+the held GEN-7 result/literal behavior.
 
 Where two requirements name one operator with the same types and
 different results, the call is the one that gives what its place

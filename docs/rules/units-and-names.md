@@ -70,15 +70,18 @@ analyser: partial
 - A bool generic law default is evaluated from the static function supplied at the call; an explicit bool value overrides it (GEN-18).
 - A default on a `ref` parameter is checked against the type after its mode (FN-16).
 - Known required-constant failures reject at the parameter or field default (ERR-9). A window default is checked as an arrival and an atomic default as its whole payload (TYPE-9, TYPE-11).
-- Required-constant failures in parameter and field defaults use `constant.failure`; the catalogue row remains proposed (ERR-9).
+- Required-constant failures in parameter and field defaults use `constant.failure` (ERR-9).
 - Omitted parameter defaults are checked against the concrete parameter type after generic selection, including in a call made by a generic body.
+- A field or parameter default that needs itself through omitted arguments reports `default.cycle` at its expression and names the dependency path through checked calls and concrete forwarded packs.
+- The default and constant dependency checks follow the written branches (UNIT-13).
+- Left: cyclic dependencies reached only by invoking a callable parameter (FN-17, #635).
 
 transpiler: partial
 
 - Binds omitted defaults or null after explicit arguments. A literal null default is held as the selected nullable parameter type, including when its declaration names a generic. Wires an omitted temporal
   default as a constant or leaves an optional input silent.
 - A callable default, including an inherited operator configuration default, can run a block in its own lexical scope.
-- Left: blocks with statements in field defaults, and nonempty field defaults whose type depends on a generic struct argument. A graph call leaving out a nullable temporal input is reported (#399). The target also reports a recursively omitted default and retains a defensive report for defaults whose emitted evaluation needs failure-handling statements.
+- Left: blocks with statements in field defaults, and nonempty field defaults whose type depends on a generic struct argument. A graph call leaving out a nullable temporal input is reported (#399). The target retains defensive reports for recursively omitted defaults and defaults whose emitted evaluation needs failure-handling statements.
 
 ## UNIT-9
 
@@ -95,6 +98,7 @@ analyser: partial
 - Every name in a signature, body, type and constraint resolved to its one binding, and one that nothing binds is `name.unknown`
 - Clock properties resolve on the capability, and `types(Ts)` supplies the selections in an `each` constraint (GEN-10).
 - An unqualified call of `scheduled()` retains the wake selector's meaning when a binding has the same name (TIME-9).
+- A function named `scheduled` reports `name.reserved` at the declaration. Reserving the name for other declaration kinds remains proposed.
 
 ## UNIT-11
 

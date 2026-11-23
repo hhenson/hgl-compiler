@@ -22,7 +22,8 @@ analyser: partial
 - A graph instance fills unresolved inferred struct type arguments from settled fields in written order and checks the concrete application (GEN-3, GEN-7). An earlier unsettled field can defer a later field's binding. Explicit and expected type arguments and types needed to read a contextual field or generic default keep their source treatment.
 - A graph instance can infer a named function's type arguments from settled operands and use the resulting parameter types to read context-dependent arguments (EXPR-9, ERR-2).
 - A nullable type the call writes for an operator's result that is a type parameter is given whole to a generic candidate whose result is one: `get<i64?>(...)` gives core's candidate an `i64?`
-- A nullable place leaves a bare result parameter for the inputs to decide. A fallible dictionary read resolves its success type from the dictionary. A store read can infer it from its place (CAP-6).
+- A nullable place leaves a bare result parameter for the inputs, a written type, or a solvable equality to decide (GEN-3, GEN-8). A fallible dictionary read resolves its success type from the dictionary. A plain value place can decide a store read's success type (CAP-6, ERR-15).
+- A nullable temporal result preserves an unresolved bare call result when checking a publication. A call whose declared result has a delta shape can still take the publication's delta context (TIME-7).
 - A plain result place can resolve the success type of a fallible generic call and let a bare parameter read the success of a result argument (ERR-15).
 - A generic value parameter takes its default where nothing else says what it is: a function's and a candidate's at a call, a struct's where it is named bare or constructed, an operator's in the output requested
 - Left: packs; solvable equalities; temporal bodies
@@ -97,6 +98,7 @@ transpiler: done
 analyser: partial
 
 - In a value function a named call is matched against each value candidate's own signature
+- Outside a generic body, literals in named and symbolic operator calls are fitted independently by each candidate, with or without a selecting option. A typed argument still fixes its generic in a requested result; another literal argument does not erase that type. Public generic defaults, result requirements and reflected-pack checks keep their complete inference; inherited configuration defaults use the fitted input type (GEN-2, GEN-8, GEN-13, UNIT-8). Calls written in generic bodies retain the existing output request pending the GEN-7 result/literal work.
 - Each value or temporal candidate supplies the function type of a fixed callback, including its phase (FN-17).
 - An option that selects is a generic value parameter, given by name or by its default, and the candidate's `requires` is checked against its value; one that does not select is a parameter, by name or position
 - An option's name is one kind across an operator's candidates
@@ -142,7 +144,7 @@ analyser: partial
 analyser: done
 
 - Property domains are ordinary concrete value types. A generic domain rejects with local `property.domain`.
-- Each domain in a clause gets its laws and expects its own identity type (EXPR-5). A later clause naming an earlier domain rejects at that domain with the proposed `property.duplicate` code. The proposed checks for repeated domains or properties within one clause are pending.
+- Each domain in a clause gets its laws and expects its own identity type (EXPR-5). A repeated domain in one or more clauses, or a repeated property in one clause, rejects at the later domain or property (`property.duplicate`).
 - Law queries read the public operator's metadata for the concrete operand type; an ordinary or anonymous function declares no guarantee. Metadata performs no arithmetic transformation.
 
 optimiser: planned

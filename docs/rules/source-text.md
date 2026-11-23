@@ -31,6 +31,8 @@ parser: done
 parser: done
 
 - A line break is ignored in a list, in an incomplete statement, and before a token that cannot begin one; two or more always separate
+- A body's opening brace may follow its incomplete header across one line break. A brace after a complete statement begins a separate statement.
+- A statement beginning with `switch` and an `assert raises(...)` both take their opening brace on the header's line or the next.
 
 ## LEX-6
 
@@ -66,6 +68,7 @@ parser: partial
 
 - Contextual names take their meaning by position; `str(value)` is a conversion and `error(...)` a constructor
 - `run` is a hard reserved word, as `eval` is, and names nothing. The contextual `without` awaits #366.
+- `switch` and `raises` are hard reserved words and remain member names under LEX-9. `case` and `default` remain contextual.
 
 ## LEX-11
 

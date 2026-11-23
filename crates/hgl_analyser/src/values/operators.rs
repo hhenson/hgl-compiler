@@ -14,7 +14,7 @@ use super::constants::{constant_text, generic_default};
 use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
 };
-use super::fit::{open, whole};
+use super::fit::{negated, open, whole};
 use super::function_arguments::CallbackInputs;
 use super::inference::{
     ExplicitGenerics, bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed,
@@ -56,18 +56,69 @@ impl<'a> Typer<'a> {
     /// inherits from widens the parameter to that struct". GEN-4: the
     /// operator's own requirement of its result.
     ///
-    /// A call by name and the test of a named operator requirement
-    /// (GEN-16) both ask through here, so a requirement holds as the
-    /// call it names would select.
+    /// Named operator requirements (GEN-16) and calls written in generic
+    /// bodies retain complete input-derived result requests here. Value
+    /// calls outside generic bodies use `argument_output_requested`.
     pub(super) fn output_requested(
+        &self,
+        operator: OperatorRef,
+        public: &Signature,
+        found: Vec<Option<Argument>>,
+        supplied: &[Option<&Type>],
+        said: bool,
+    ) -> Requested {
+        self.request_output(operator, public, found, supplied, said, None)
+    }
+
+    /// GEN-5, GEN-6, GEN-8: outside a generic body, an option contributes
+    /// its generic value without promoting literal-derived type arguments
+    /// into result constraints. Every candidate still checks every input.
+    pub(super) fn argument_output_requested(
+        &self,
+        operator: OperatorRef,
+        public: &Signature,
+        found: Vec<Option<Argument>>,
+        given: &[Given],
+        said: bool,
+    ) -> Requested {
+        let supplied = public_inputs(public, given);
+        // GEN-2: a typed argument still decides its generic. Only literal,
+        // contextual and callback readings wait for the candidate; an
+        // unrelated literal flag cannot erase another argument's type.
+        // Generic bodies and their concrete rereads retain the full request.
+        let requested = self.signature.generics.is_empty().then(|| {
+            let mut requested = found.clone();
+            let mut fixed = supplied.clone();
+            for argument in given {
+                if argument.explicit.is_none()
+                    && (argument.by_place || argument.by_function || literal_input(&argument.value))
+                    && let Some(index) = argument.key.public_parameter(public)
+                {
+                    fixed[index] = None;
+                }
+            }
+            self.infer_operator_inputs(public, &mut requested, &fixed);
+            requested
+        });
+        self.request_output(operator, public, found, &supplied, said, requested)
+    }
+
+    fn request_output(
         &self,
         operator: OperatorRef,
         public: &Signature,
         mut found: Vec<Option<Argument>>,
         supplied: &[Option<&Type>],
         said: bool,
+        requested_types: Option<Vec<Option<Argument>>>,
     ) -> Requested {
         let program = self.program;
+        // GEN-5, GEN-6, GEN-8: a generic value default is a request for
+        // that value, not for every input-derived type. Public checks below
+        // still use every argument. Written types and the expected place
+        // constrain a value call's result independently of input spelling.
+        let value_call = requested_types.is_some();
+        let requested_types = requested_types.unwrap_or_else(|| found.clone());
         self.infer_operator_inputs(public, &mut found, supplied);
         let operator_declaration =
             &program.modules[operator.module].declarations[operator.declaration];
@@ -130,6 +181,7 @@ impl<'a> Typer<'a> {
                     place: None,
                     among: None,
                     generics: Vec::new(),
+                    call_generics: Vec::new(),
                     unfit: Some(Unfit {
                         generic: index,
                         described,
@@ -140,12 +192,31 @@ impl<'a> Typer<'a> {
         }
         // The output requested, as far as it is known: a `list<T, 3>`
         // with `T` not yet said is a list of three of anything.
+        let output_arguments: Vec<_> = public
+            .generics
+            .iter()
+            .zip(&explicit)
+            .zip(requested_types)
+            .map(|((generic, inferred), requested)| match generic.kind {
+                GenericKind::Plain | GenericKind::Type if value_call => {
+                    requested.unwrap_or(Argument::Type(Type::Unknown))
+                }
+                _ => inferred.clone(),
+            })
+            .collect();
+        let output_map: Vec<_> = public
+            .generics
+            .iter()
+            .zip(&output_arguments)
+            .filter(|(generic, _)| !matches!(generic.kind, GenericKind::Pack { .. }))
+            .map(|(generic, argument)| (generic.at, argument))
+            .collect();
         let place: Option<Type> = asked
             .then(|| {
                 public
                     .result
                     .as_ref()
-                    .map(|result| placed(substitute_within(result, &map), &own_generics))
+                    .map(|result| placed(substitute_within(result, &output_map), &own_generics))
                     .filter(|requested| !matches!(requested, Type::Unknown))
             })
             .flatten();
@@ -163,6 +234,16 @@ impl<'a> Typer<'a> {
                 || reflects(&program.modules[operator.module], public)
             {
                 explicit
+            } else {
+                Vec::new()
+            },
+            call_generics: if public
+                .parameters
+                .iter()
+                .any(|parameter| parameter.configuration)
+                || reflects(&program.modules[operator.module], public)
+            {
+                output_arguments
             } else {
                 Vec::new()
             },
@@ -437,13 +518,13 @@ impl<'a> Typer<'a> {
         // Then its arguments, in the order the operator declares its
         // parameters (GEN-12), and its defaults: see
         // `Typer::output_requested`.
-        let supplied = public_inputs(public, &given);
         let Requested {
             place: mut requested,
             among,
             generics: operator_generics,
+            call_generics,
             unfit,
-        } = self.output_requested(operator, public, found, &supplied, said);
+        } = self.argument_output_requested(operator, public, found, &given, said);
         // GEN-13: a default the call takes is of its parameter's type
         // as the call resolves it: the `2` of
         // `operator choose<T, const fallback: T = 2>` is no `str`. One
@@ -510,6 +591,10 @@ impl<'a> Typer<'a> {
                 }
             }
         }
+        // Public constraints and pack checks above use the original
+        // inference. Only configuration defaults use the fitted argument
+        // types completed by `called` (UNIT-8, GEN-6).
+        let operator_generics = call_generics;
         // GEN-7: "A generic body is checked under its stated
         // requirements": what the enclosing declaration requires of its
         // generic parameters is callable in its body. The requirement
@@ -543,12 +628,10 @@ impl<'a> Typer<'a> {
         // for the operator's result that is a type parameter and nothing
         // more: the `i64?` of `get<i64?>(global_state, key)` for core's
         // `operator get<V, S, K>(store: S, key: K) -> V` (GEN-8).
+        let result_parameter = bare_result_parameter(public);
         let result_written = requested.is_some()
-            && bare_parameter(
-                public.result.as_ref().unwrap_or(&Type::Unknown),
-                &public.generics,
-            )
-            .is_some_and(|index| matches!(explicit[index], Some(Argument::Type(_))));
+            && result_parameter
+                .is_some_and(|index| matches!(explicit[index], Some(Argument::Type(_))));
         // GEN-5: "the requested output before inputs". EXPR-5: an
         // integer literal is an `f64` where one is expected; it selects
         // as the `i64` it is where a candidate takes one.
@@ -610,6 +693,18 @@ impl<'a> Typer<'a> {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
         let at = Location::new(self.file, name.span());
+        let nullable_place = match wanted.place {
+            Some(Type::Nullable(payload)) if !wanted.written && self.designating != Some(at) => {
+                Some(payload.as_ref())
+            }
+            _ => None,
+        };
+        if selected.is_empty() && function_errors.is_empty() && nullable_place.is_some() {
+            // A nonfallible bare candidate may have no place-based
+            // binding even for admission. Try the payload only to
+            // diagnose an otherwise valid call.
+            selected.extend(self.nullable_result_candidate(operator, &candidates, &given, &wanted));
+        }
         if selected.len() != 1 {
             // GEN-5: "the requested output before inputs". Where what
             // the place expects is not known, it may be what tells tied
@@ -641,13 +736,106 @@ impl<'a> Typer<'a> {
             self.diagnostics.emit(diagnostic);
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
-        self.called(
+        let unresolved = nullable_place
+            .filter(|_| chosen.nullable_result_fallback)
+            .map(|payload| {
+                self.unresolved_operator_result(
+                    (name.text(), at),
+                    public,
+                    &given,
+                    explicit,
+                    result_parameter,
+                    payload,
+                )
+            });
+        self.called_with_result_diagnostic(
             operator,
             chosen,
             given,
             operator_generics,
             (Form::Named, at),
+            unresolved,
         )
+    }
+
+    /// A diagnostic trial runs the selected call's own checks first.
+    /// Its provisional type creates neither a store key use nor an
+    /// instance when the result remains unresolved.
+    pub(super) fn called_with_result_diagnostic(
+        &mut self,
+        operator: OperatorRef,
+        chosen: Chosen,
+        given: Vec<Given>,
+        operator_generics: Vec<Argument>,
+        form: (Form, Location),
+        unresolved: Option<Diagnostic>,
+    ) -> (ExprKind, Type) {
+        let reported = self.diagnostics.len();
+        let (mut kind, ty) = self.called(operator, chosen, given, operator_generics, form);
+        if let Some(diagnostic) = unresolved
+            && let ExprKind::Call { callee, .. } = &mut kind
+        {
+            if self.diagnostics.len() == reported && !open(&ty) {
+                self.diagnostics.emit(diagnostic);
+            }
+            *callee = Callee::Unread;
+            return (kind, Type::Unknown);
+        }
+        (kind, ty)
+    }
+
+    /// The result parameter and its written position belong to the
+    /// public operator, even when the candidate calls it another name.
+    pub(super) fn unresolved_operator_result(
+        &self,
+        (name, at): (&str, Location),
+        public: &Signature,
+        given: &[Given],
+        mut found: Vec<Option<Argument>>,
+        parameter: Option<usize>,
+        payload: &Type,
+    ) -> Diagnostic {
+        let Some(index) = parameter else {
+            return error(
+                Category::Type,
+                codes::GENERIC_UNRESOLVED,
+                at,
+                format!(
+                    "this call of `{name}` leaves its result type unresolved in a nullable place"
+                ),
+                "GEN-8",
+            );
+        };
+        let parameter = &public.generics[index].name;
+        let diagnostic = error(
+            Category::Type,
+            codes::GENERIC_UNRESOLVED,
+            at,
+            format!("this call of `{name}` leaves `{parameter}` unresolved in a nullable place"),
+            "GEN-8",
+        );
+        self.infer_operator_inputs(public, &mut found, &public_inputs(public, given));
+        let prefix: Option<Vec<_>> = found[..index]
+            .iter()
+            .map(|argument| match argument.as_ref()? {
+                Argument::Type(ty) if !whole(ty) => None,
+                Argument::Constant(value) if matches!(value.value, ConstantValue::Unknown) => None,
+                argument => Some(argument.to_string()),
+            })
+            .collect();
+        let Some(mut arguments) = prefix else {
+            return diagnostic.with_note(format!(
+                "write `{parameter}` as generic argument {} of `{name}`",
+                index + 1
+            ));
+        };
+        arguments.push(payload.to_string());
+        let plain = arguments.join(", ");
+        arguments[index] = Type::Nullable(Box::new(payload.clone())).to_string();
+        let optional = arguments.join(", ");
+        diagnostic.with_note(format!(
+            "write the type argument, `{name}<{optional}>(...)` or `{name}<{plain}>(...)`"
+        ))
     }
 
     /// A contextual literal may contain a computation or a read whose type
@@ -1553,6 +1741,12 @@ pub(super) fn public_inputs<'a>(public: &Signature, given: &'a [Given]) -> Vec<O
     inputs
 }
 
+/// A literal's preliminary type is not a requested output (GEN-5).
+/// Parentheses leave no HIR node; a minus retains its literal operand.
+fn literal_input(value: &Expr) -> bool {
+    matches!(value.kind, ExprKind::Literal(_)) || negated(value).is_some_and(literal_input)
+}
+
 /// The note on a call in a generic body that no candidate is known to
 /// admit: whether one does depends on a generic parameter of the body,
 /// which its `requires` does not settle (GEN-7).
@@ -1663,8 +1857,11 @@ pub(super) struct Requested {
     pub(super) place: Option<Type>,
     /// The types the operator's own requirement admits for its result.
     pub(super) among: Option<Vec<Type>>,
-    /// The operator's resolved generic arguments, for any configuration defaults.
+    /// Complete public inference, used by reflected pack constraints.
     pub(super) generics: Vec<Argument>,
+    /// Arguments for inherited configuration defaults: an argument-derived
+    /// type stays open until the candidate fits its source expression.
+    pub(super) call_generics: Vec<Argument>,
     /// A default the call takes that is not of its parameter's type as
     /// the call resolves it (GEN-13). Nothing is then requested.
     pub(super) unfit: Option<Unfit>,
@@ -1725,6 +1922,15 @@ pub(super) fn from_place(
     {
         let _ = infer_from_place(result, expected, false, &public.generics, found);
     }
+}
+
+/// The public generic named by a bare result or bare fallible success.
+pub(super) fn bare_result_parameter(public: &Signature) -> Option<usize> {
+    let result = match public.result.as_ref()? {
+        Type::Result { value, error } if **error == Type::Error => value.as_ref(),
+        other => other,
+    };
+    bare_parameter(result, &public.generics)
 }
 
 /// True when the call cannot bind the public or candidate pack slots.

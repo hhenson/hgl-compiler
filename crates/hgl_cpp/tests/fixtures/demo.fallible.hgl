@@ -294,7 +294,7 @@ fn store_forms(value: i64) -> bool {
         let found = get<i64>(global_state, "present")
         let missing = get<i64>(global_state, "missing")
         let present: i64 = get(global_state, "present")
-        let nullable: i64? = get(global_state, "missing")
+        let nullable: i64? = get<i64>(global_state, "missing")
         if is_ok(found) {
             return found.value == value && is_err(missing) && present == value && nullable == null
         }
@@ -302,6 +302,18 @@ fn store_forms(value: i64) -> bool {
     }
 }
 
+fn nullable_store_publication(value: i64) -> i64? {
+    inject global_state
+    when { return get<i64>(global_state, "absent publication") }
+}
+
+fn typed_delta_publication(value: i64) -> i64? {
+    when { return delta<i64?>(value: value) }
+}
+
 test store_result_forms {
     assert eval store_forms(value: [7, 0]) == [true, true]
+    assert eval nullable_store_publication(value: [7]) == [null]
+    assert eval typed_delta_publication(value: [7]) == [delta<i64?>(value: 7)]
+    assert eval nullable_store_publication(value: [7]) == [local_checked(-1)]
 }
