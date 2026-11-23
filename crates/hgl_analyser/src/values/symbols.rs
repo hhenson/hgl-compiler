@@ -20,7 +20,7 @@ use crate::hir::{
     Argument, BinaryOperator, Callee, DeferredOperator, DeferredOption, Expr, ExprKind, Form,
     UnaryOperator, Value, ValueCategory,
 };
-use crate::program::{DeclarationKind, OperatorRef};
+use crate::program::{Binding, DeclarationKind, OperatorRef};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{Detail, Scalar, Signature, Type};
 use crate::{codes, error};
@@ -383,15 +383,7 @@ impl<'a> Typer<'a> {
             && (self.diagnostics.len() != reported
                 || !self.assigned.starts_with(&mark.assigned)
                 || self.returned != mark.returned
-                || given[..given.len() - 1].iter().any(|given| {
-                    let (when_true, when_false) = self.null_tests(&given.value);
-                    let facts = if operator == BinaryOperator::And {
-                        when_true
-                    } else {
-                        when_false
-                    };
-                    facts.iter().any(|fact| !self.present.contains(fact))
-                }))
+                || self.guards_refine_later_operands(operator, &given))
             && self.may_reread()
         {
             // Only reread when short-circuit flow can change the typing
@@ -440,6 +432,45 @@ impl<'a> Typer<'a> {
             );
         }
         self.call_logic(form, identity, at, given)
+    }
+
+    /// EXPR-6: a new presence fact can affect an operand only if it
+    /// refers to the guarded binding. Other new facts retain the
+    /// existing short-circuit reread.
+    fn guards_refine_later_operands(&self, operator: BinaryOperator, operands: &[Given]) -> bool {
+        let Some((_, guards)) = operands.split_last() else {
+            return false;
+        };
+        guards.iter().enumerate().any(|(position, guard)| {
+            let (when_true, when_false) = self.null_tests(&guard.value);
+            let facts = if operator == BinaryOperator::And {
+                when_true
+            } else {
+                when_false
+            };
+            facts.iter().any(|fact| {
+                if self.present.contains(fact) {
+                    return false;
+                }
+                let super::Fact::Present(local) = fact else {
+                    return true;
+                };
+                let declaration = self.locals[*local].at;
+                operands[position + 1..].iter().any(|operand| {
+                    operand
+                        .node
+                        .descendants_with_tokens()
+                        .filter_map(|part| part.into_token())
+                        .filter(|token| token.kind() == SyntaxKind::Ident)
+                        .any(|token| {
+                            matches!(
+                                self.bindings.get(&(self.file, token.span().start)),
+                                Some(Binding::Local { at, .. }) if *at == declaration
+                            )
+                        })
+                })
+            })
+        })
     }
 
     /// Select an already-read Boolean form once its operands have types.
