@@ -127,6 +127,7 @@ transpiler: partial
 
 - Writes list, set and dictionary literals, and sequence-of-pairs where a timed trace is
   expected.
+- A fixed list literal of connections wires each entry in order to its own list position.
 - Left: Reports dictionary keys that might coincide and sequence types without a
   constructor. Constant duplicate dictionary key rejection is pending (TYPE-1).
 
