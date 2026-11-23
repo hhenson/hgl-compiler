@@ -17,6 +17,8 @@ mod debug_tests;
 #[cfg(unix)]
 #[path = "common/executable.rs"]
 mod executable;
+#[path = "cpp/formatting.rs"]
+mod formatting;
 
 use std::fs;
 use std::path::Path;
