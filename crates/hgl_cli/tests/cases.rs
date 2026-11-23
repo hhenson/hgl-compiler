@@ -87,6 +87,39 @@ fn a_test_that_cannot_be_run_is_not_a_success() {
     );
 }
 
+/// GEN-7 and TST-13: the making call owns its instance rejection.
+#[test]
+fn an_instance_rejection_matches_its_making_call_annotation() {
+    let root = scratch("instance_rejection");
+    write(
+        &root,
+        "cases.hgl",
+        r#"module examples.instance_rejection
+operator choose<A, B>(left: A, right: B) -> i64
+impl const fn choose<A, B>(left: A, right: B) -> i64 => 3
+impl const fn choose<A>(left: A, right: i64) -> i64 => 1
+impl const fn choose<B>(left: i64, right: B) -> i64 => 2
+
+const fn wrapper<A, B>(left: A, right: B) -> i64 => choose(left, right)
+
+test rejection {
+    # expect-error(operator, "operator.ambiguous")
+    assert wrapper(1, 1) == 1
+}
+"#,
+    );
+    let output = hgl(&["test", &argument(&root), "--rejections-only"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout));
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "passed   rejection   examples.instance_rejection::rejection\n",
+            "rejection cases: 1 passed, 0 failed\n",
+            "executable cases: none selected\n",
+        )
+    );
+}
+
 /// TST-13: a case fails when its errors and annotations do not match one
 /// to one, and the output says which. TST-14: "A rejection mismatch fails
 /// that case while other valid cases continue."

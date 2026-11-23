@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use hgl_diagnostics::{Category, Code, Diagnostics, Location};
+use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
@@ -21,7 +21,9 @@ use crate::declared::{
     names_parameter, same_type, substitute_with_members, substitute_within, weight,
 };
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
-use crate::program::{Binding, Declaration, DeclarationKind, OperatorRef, Phase, Program, Role};
+use crate::program::{
+    Binding, Declaration, DeclarationKind, LocalKind, OperatorRef, Phase, Program, Role,
+};
 use crate::read::is_type;
 use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
 use crate::types::{
@@ -497,7 +499,7 @@ impl<'a> Typer<'a> {
         // A construction that writes its generic arguments,
         // `Sized<str>(value: "x")`, writes a type, of which the same
         // has been reported ([`applications`]).
-        if self.unmet_reported(at) {
+        if unmet_reported(self.diagnostics, at) {
             return true;
         }
         let program = self.program;
@@ -556,7 +558,7 @@ impl<'a> Typer<'a> {
             self.pack_member_fault(at, &fault);
             return true;
         }
-        if self.unmet_reported(at) {
+        if unmet_reported(self.diagnostics, at) {
             return true;
         }
         let program = self.program;
@@ -629,7 +631,7 @@ impl<'a> Typer<'a> {
         else {
             return false;
         };
-        if !self.unmet_reported(at) {
+        if !unmet_reported(self.diagnostics, at) {
             self.diagnostics
                 .emit(unmet(self.program, callee, at, &condition));
         }
@@ -808,6 +810,7 @@ impl<'a> Typer<'a> {
                 answers: Vec::new(),
                 required: None,
                 at,
+                via: None,
             };
             if let Some(report) = argument_fails(program, &made, &given, &own) {
                 self.diagnostics.emit(if combination.is_empty() {
@@ -1014,7 +1017,7 @@ impl<'a> Typer<'a> {
         let Some((condition, held, unvalued)) = self.requires_told(callee, generics) else {
             return;
         };
-        if self.unmet_reported(at) {
+        if unmet_reported(self.diagnostics, at) {
             return;
         }
         let program = self.program;
@@ -1031,15 +1034,6 @@ impl<'a> Typer<'a> {
                  function it calls"
             ),
         ));
-    }
-
-    /// True where a `requires.unmet` has been reported at `at` already.
-    fn unmet_reported(&self, at: Location) -> bool {
-        self.diagnostics.as_slice().iter().any(|earlier| {
-            earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
-                && earlier.primary.file == at.file
-                && earlier.primary.span.start == at.span.start
-        })
     }
 
     /// Whether the `requires` of `callee` holds with `generics` for its
@@ -1079,7 +1073,7 @@ impl<'a> Typer<'a> {
         else {
             return true;
         };
-        if self.unmet_reported(at) {
+        if unmet_reported(self.diagnostics, at) {
             return true;
         }
         if held == Some(false) {
@@ -1339,7 +1333,7 @@ impl<'a> Typer<'a> {
                     }
                     Some(Answered::Unmet) if report_unmet => {
                         for &(_, at) in uses.iter().filter(|(used, _)| *used == index) {
-                            if !self.unmet_reported(at) {
+                            if !unmet_reported(self.diagnostics, at) {
                                 self.diagnostics.emit(unmet(
                                     program,
                                     (module, declaration),
@@ -2120,6 +2114,8 @@ pub(super) struct Made {
     /// `generics` and `answers` say nothing then.
     required: Option<usize>,
     at: Location,
+    /// A concrete forwarding path that exposed this call to the walk.
+    via: Option<Box<[MakingCall]>>,
 }
 
 /// How many instances one call is followed to ([`crate::INSTANCES`]). A
@@ -2203,6 +2199,7 @@ fn nesting<'t>(ty: &'t Type) -> usize {
 pub(super) fn instances_hold(
     program: &Program,
     mut given: Vec<Made>,
+    source: &IndependentSourceBodies,
     diagnostics: &mut Diagnostics,
 ) {
     // The generic parameters of `(module, declaration)`, by where each
@@ -2218,17 +2215,25 @@ pub(super) fn instances_hold(
     // declaration it is the body of; and what every body makes that
     // gives every argument.
     let mut passed: HashMap<(usize, usize), Vec<Made>> = HashMap::new();
+    let mut independent_roots: HashMap<_, HashSet<_>> = HashMap::new();
     // The declarations whose body gives a callee a generic argument it
     // works out from its own generic parameters.
     let mut computing: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
     let mut configured = std::collections::HashSet::new();
     let mut endpoint_reads = std::collections::HashSet::new();
+    let mut dependent_indices = std::collections::HashSet::new();
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let mut made = Vec::new();
             if let Some(Some(body)) = module.bodies.get(position) {
-                made_in(&body.statements, &mut made);
+                made_in(body, &mut made);
             }
+            let body_calls = made.len();
+            let independent = source.body((index, position)).map(|body| {
+                let mut calls = Vec::new();
+                made_in(body, &mut calls);
+                calls.iter().map(source_call_key).collect::<HashSet<_>>()
+            });
             for default in module
                 .defaults
                 .get(position)
@@ -2260,7 +2265,16 @@ pub(super) fn instances_hold(
             if super::node_endpoint_reads(module, position, None) {
                 endpoint_reads.insert((index, position));
             }
-            for call in made {
+            if !declared.is_empty()
+                && module
+                    .bodies
+                    .get(position)
+                    .and_then(Option::as_ref)
+                    .is_some_and(super::has_dependent_index)
+            {
+                dependent_indices.insert((index, position));
+            }
+            for (call_index, call) in made.into_iter().enumerate() {
                 // ERR-9: a generic argument the body works out from its
                 // own parameters, `times<(M * 2)>`, may fail where an
                 // instance gives them: each is followed.
@@ -2271,7 +2285,12 @@ pub(super) fn instances_hold(
                 {
                     computing.insert((index, position));
                 }
+                let needs_instance = call_index < body_calls
+                    && independent
+                        .as_ref()
+                        .is_some_and(|calls| !calls.contains(&source_call_key(&call)));
                 if call.required.is_some()
+                    || needs_instance
                     || passes_on(&call.generics, &declared)
                     || call
                         .type_packs
@@ -2280,6 +2299,12 @@ pub(super) fn instances_hold(
                 {
                     passed.entry((index, position)).or_default().push(call);
                 } else {
+                    if call_index < body_calls && independent.is_some() {
+                        independent_roots
+                            .entry((index, position))
+                            .or_default()
+                            .insert(source_call_key(&call));
+                    }
                     given.push(call);
                 }
             }
@@ -2290,7 +2315,7 @@ pub(super) fn instances_hold(
             .flatten()
             .chain(&module.store_body)
         {
-            made_in(&body.statements, &mut given);
+            made_in(body, &mut given);
         }
         if let Some(run) = &module.run_body {
             made_by(&run.call, &mut given);
@@ -2321,6 +2346,7 @@ pub(super) fn instances_hold(
         .chain(computing)
         .chain(configured.iter().copied())
         .chain(endpoint_reads.iter().copied())
+        .chain(dependent_indices.iter().copied())
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -2355,23 +2381,28 @@ pub(super) fn instances_hold(
     // The instances the calls that give every argument make, each once
     // with every call it is made from: two calls of `wrap<1>` are one
     // instance of it.
-    let mut roots: Vec<(Made, Vec<Location>)> = Vec::new();
+    let mut roots: Vec<(Made, Vec<InstanceRoot>)> = Vec::new();
     let mut root_of: HashMap<String, usize> = HashMap::new();
-    for made in given
+    for mut made in given
         .into_iter()
         .filter(|made| reaching.contains(&made.callee))
     {
         let key = instance_key(made.callee, &made.generics, &made.type_packs, &made.answers);
+        let from = InstanceRoot {
+            at: made.at,
+            via: made.via.take(),
+        };
         match root_of.get(&key) {
-            Some(&root) => roots[root].1.push(made.at),
+            Some(&root) => roots[root].1.push(from),
             None => {
                 root_of.insert(key, roots.len());
-                let at = made.at;
-                roots.push((made, vec![at]));
+                roots.push((made, vec![from]));
             }
         }
     }
-    for (root, from) in roots {
+    let mut rejected_calls = InstanceCallRejections::default();
+    for (root, root_calls) in roots {
+        let from: Vec<_> = root_calls.iter().map(|call| call.at).collect();
         // Each instance this one makes followed once, by what it is: its
         // callee and its arguments, the root's own among them.
         let mut seen: std::collections::HashSet<String> =
@@ -2381,12 +2412,12 @@ pub(super) fn instances_hold(
                 &root.type_packs,
                 &root.answers,
             )]);
-        let mut waiting: std::collections::VecDeque<Made> =
-            std::collections::VecDeque::from([root]);
+        let mut waiting = std::collections::VecDeque::from([(root, None)]);
+        let mut parents = Vec::new();
         // How many instances of each declaration this one has made.
         let mut followed: HashMap<(usize, usize), usize> = HashMap::new();
         let mut exhausted = false;
-        while let Some(made) = waiting.pop_front() {
+        while let Some((made, parent)) = waiting.pop_front() {
             let count = followed.entry(made.callee).or_insert(0);
             *count += 1;
             if *count > INSTANCES {
@@ -2402,9 +2433,17 @@ pub(super) fn instances_hold(
             let unit = &program.modules[made.callee.0];
             let graph = unit.phases.get(made.callee.1) == Some(&Some(Phase::Graph));
             let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
+            let recheck_results = selecting.iter().any(|call| call.result.is_some());
+            let recheck_indices = dependent_indices.contains(&made.callee);
             let declared = own(made.callee);
             let map: Vec<(Location, &Argument)> =
                 declared.iter().copied().zip(&made.generics).collect();
+            let chain = InstanceChain {
+                made: &made,
+                from: &root_calls,
+                parent,
+                parents: &parents,
+            };
             let recheck_endpoints = endpoint_reads.contains(&made.callee)
                 && matches!(
                     unit.details.get(made.callee.1),
@@ -2426,7 +2465,7 @@ pub(super) fn instances_hold(
                     diagnostics,
                     &mut body_reports,
                 )
-            } else if recheck_graph || recheck_endpoints {
+            } else if recheck_graph || recheck_endpoints || recheck_results || recheck_indices {
                 program.checked_instance(
                     made.callee,
                     &made.generics,
@@ -2438,18 +2477,81 @@ pub(super) fn instances_hold(
             } else {
                 None
             };
-            if recheck_graph && let Some((_, body)) = instance {
-                if let Some(Some(source)) = program.modules[made.callee.0].bodies.get(made.callee.1)
-                {
-                    made_after_inference(source, &body, &mut instance_calls);
+            if let Some(instance) = &instance
+                && let Some(result_uses) = &instance.result_uses
+            {
+                if !result_uses.reports.is_empty() {
+                    report_instance_result_uses(
+                        program,
+                        (made.callee, &made.generics, &made.type_packs),
+                        result_uses,
+                        &chain.paths(program, &root_calls),
+                        diagnostics,
+                    );
                 }
-                super::lifting::check_instance_constants(program, &body, &from, diagnostics);
-                super::lifting::report_instance_checks(
-                    &body_reports,
-                    &from,
-                    diagnostics,
-                    "this destination in the generic graph is checked for this instance",
-                );
+                if result_uses.reports.has_errors() {
+                    continue;
+                }
+            }
+            let mut replaced = HashSet::new();
+            let reread_body = instance
+                .as_ref()
+                .is_some_and(|instance| instance.reread_body);
+            if let Some(instance) = &instance
+                && let Some(Some(declared_body)) = unit.bodies.get(made.callee.1)
+            {
+                if reread_body || source.body(made.callee).is_some() {
+                    super::walk_body_calls(declared_body, &mut |call| {
+                        replaced.insert(call.at);
+                    });
+                    concrete_body_calls(
+                        instance,
+                        independent_roots.get(&made.callee),
+                        &mut instance_calls,
+                    );
+                } else if recheck_graph || recheck_indices {
+                    made_after_inference(declared_body, instance, &mut instance_calls);
+                }
+            }
+            if recheck_indices && !recheck_graph && !recheck_endpoints {
+                let paths = chain.paths(program, &root_calls);
+                for report in body_reports.as_slice() {
+                    emit_instance_report(report.clone(), &paths, diagnostics);
+                }
+                if body_reports.has_errors() {
+                    // An ill-typed value body does not make calls its
+                    // reread could only partially type (ERR-9).
+                    continue;
+                }
+            }
+            if recheck_graph && let Some(instance) = &instance {
+                let constants = super::lifting::instance_constants(program, &instance.body);
+                for (reports, message) in [
+                    (&constants, "this place in the generic body needs a value"),
+                    (
+                        &body_reports,
+                        "this destination in the generic graph is checked for this instance",
+                    ),
+                ] {
+                    let mut elsewhere = Diagnostics::new();
+                    for report in reports.as_slice() {
+                        if diagnostics.as_slice().contains(report) {
+                            continue;
+                        }
+                        if let Some(call) = selected_call_for_connection(selecting, report) {
+                            rejected_calls.record(
+                                program,
+                                &chain,
+                                call,
+                                vec![report.clone()],
+                                diagnostics,
+                            );
+                        } else {
+                            elsewhere.emit(report.clone());
+                        }
+                    }
+                    super::lifting::report_instance_checks(&elsewhere, &from, diagnostics, message);
+                }
             }
             if recheck_endpoints {
                 super::lifting::report_instance_checks(
@@ -2483,7 +2585,7 @@ pub(super) fn instances_hold(
             };
             let enclosing_packs =
                 super::dependent_packs::PackTypes::new(enclosing_packs, &made.type_packs);
-            for call in inner {
+            for call in inner.iter().filter(|call| !replaced.contains(&call.at)) {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with
                 // (GEN-16); any other has the instance's arguments and
@@ -2566,7 +2668,7 @@ pub(super) fn instances_hold(
             // GEN-5: a call whose candidate a generic parameter of the
             // body selects is selected here, with this instance's types
             // ([`Typer::select_at_instance`]).
-            if !selecting.is_empty() {
+            if !reread_body && !selecting.is_empty() {
                 let (module, declaration) = made.callee;
                 let unit = &program.modules[module];
                 // GEN-13: the body is read as the instance has it, each
@@ -2630,40 +2732,15 @@ pub(super) fn instances_hold(
                         );
                         current_locals = Some(locals);
                     }
-                    let name = &program.modules[call.operator.module].declarations
-                        [call.operator.declaration]
-                        .name;
-                    // What is rejected of the call in this instance is
-                    // reported at each call that makes the instance, with
-                    // the call in the body, and where it points there,
-                    // beside it.
-                    let rejected =
+                    let mut rejected =
                         |typer: &mut super::Typer, reports: Vec<hgl_diagnostics::Diagnostic>| {
-                            for report in reports {
-                                for &root in &from {
-                                    let mut report = report.clone();
-                                    let within = report.primary;
-                                    report.primary = root;
-                                    let mut report = report.with_related(
-                                        call.name,
-                                        format!(
-                                            "`{name}` is called here, with the generic arguments \
-                                         this call gives the function it calls"
-                                        ),
-                                    );
-                                    if within != call.name {
-                                        report = report.with_related(within, "here, in that call");
-                                    }
-                                    // A call rejected for a `requires` makes
-                                    // no instance to judge further (ERR-9:
-                                    // "Do not demand cascaded diagnostics").
-                                    if !typer.unmet_reported(root)
-                                        && !typer.diagnostics.as_slice().contains(&report)
-                                    {
-                                        typer.diagnostics.emit(report);
-                                    }
-                                }
-                            }
+                            rejected_calls.record(
+                                program,
+                                &chain,
+                                call.name,
+                                reports,
+                                typer.diagnostics,
+                            );
                         };
                     // ERR-9: "Failure during argument evaluation precedes
                     // later admission checks."
@@ -2711,17 +2788,17 @@ pub(super) fn instances_hold(
                                 type_packs,
                                 forwarded: false,
                                 answers,
-                                at: call.name,
+                                at: call.at,
                             });
                         }
                         // GEN-5: "No match rejects; tied most-specific
-                        // candidates are ambiguous", at each call that
-                        // makes the instance.
+                        // candidates are ambiguous."
                         AtInstance::Rejected(report) => rejected(&mut typer, vec![report]),
                         AtInstance::Untold => {}
                     }
                 }
             }
+            let mut link = None;
             for Resolved {
                 callee,
                 generics,
@@ -2789,14 +2866,32 @@ pub(super) fn instances_hold(
                     }
                 }
                 if reaching.contains(&callee) && seen.insert(key) {
-                    waiting.push_back(Made {
-                        callee,
-                        generics,
-                        type_packs,
-                        answers,
-                        required: None,
-                        at: made.at,
+                    let caller = *link.get_or_insert_with(|| {
+                        let index = parents.len();
+                        parents.push((
+                            MakingCall::new(
+                                program,
+                                made.callee,
+                                &made.generics,
+                                &made.type_packs,
+                                made.at,
+                            ),
+                            parent,
+                        ));
+                        index
                     });
+                    waiting.push_back((
+                        Made {
+                            callee,
+                            generics,
+                            type_packs,
+                            answers,
+                            required: None,
+                            at,
+                            via: None,
+                        },
+                        Some(caller),
+                    ));
                 }
             }
             if exhausted {
@@ -2805,6 +2900,221 @@ pub(super) fn instances_hold(
             }
         }
     }
+    rejected_calls.emit(diagnostics);
+}
+
+/// One call in a chain of concrete instances, shown with the instance it makes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct MakingCall {
+    at: Location,
+    instance: String,
+}
+
+/// A non-generic making site and the concrete forwarding path it exposes.
+struct InstanceRoot {
+    at: Location,
+    via: Option<Box<[MakingCall]>>,
+}
+
+impl MakingCall {
+    pub(super) fn new(
+        program: &Program,
+        callee: (usize, usize),
+        generics: &[Argument],
+        packs: &[hir::TypePackArgument],
+        at: Location,
+    ) -> Self {
+        Self {
+            at,
+            instance: instance_name(program, callee, generics, packs),
+        }
+    }
+}
+
+/// Walk the saved parent indices from the innermost call to the root.
+pub(super) fn making_path(
+    current: MakingCall,
+    mut parent: Option<usize>,
+    parents: &[(MakingCall, Option<usize>)],
+) -> Vec<MakingCall> {
+    let mut path = vec![current];
+    while let Some(index) = parent {
+        let (caller, previous) = &parents[index];
+        path.push(caller.clone());
+        parent = *previous;
+    }
+    path
+}
+
+/// The route to this instance, recorded as parent links in the bounded walk.
+struct InstanceChain<'a> {
+    made: &'a Made,
+    from: &'a [InstanceRoot],
+    parent: Option<usize>,
+    parents: &'a [(MakingCall, Option<usize>)],
+}
+
+impl InstanceChain<'_> {
+    /// One path per supplying call, starting at the innermost instance.
+    fn paths<'a>(
+        &self,
+        program: &Program,
+        from: impl IntoIterator<Item = &'a InstanceRoot>,
+    ) -> Vec<Vec<MakingCall>> {
+        let current = MakingCall::new(
+            program,
+            self.made.callee,
+            &self.made.generics,
+            &self.made.type_packs,
+            self.made.at,
+        );
+        let path = making_path(current, self.parent, self.parents);
+        let (root, inner) = path
+            .split_last()
+            .expect("the path contains its current call");
+        from.into_iter()
+            .map(|from| {
+                let mut path = inner.to_vec();
+                match &from.via {
+                    Some(via) => path.extend_from_slice(via),
+                    None => path.push(MakingCall {
+                        at: from.at,
+                        instance: root.instance.clone(),
+                    }),
+                }
+                path
+            })
+            .collect()
+    }
+}
+
+/// Report the instance's rejection once at each outer making call.
+/// Keep the failing body location and the intermediate calls beside it.
+pub(super) fn emit_instance_report(
+    report: Diagnostic,
+    paths: &[Vec<MakingCall>],
+    diagnostics: &mut Diagnostics,
+) {
+    let mut groups = HashMap::<Location, Vec<&[MakingCall]>>::new();
+    for path in paths {
+        if let Some(outer) = path.last() {
+            groups.entry(outer.at).or_default().push(path);
+        }
+    }
+    let mut groups: Vec<_> = groups.into_iter().collect();
+    groups.sort_by_key(|(at, _)| (at.file, at.span.start, at.span.end));
+    for (at, paths) in groups {
+        let mut here = report
+            .clone()
+            .with_related(report.primary, "the instance's body rejects here");
+        here.primary = at;
+        for call in paths.into_iter().flatten() {
+            let message = format!("this call makes the instance `{}`", call.instance);
+            if call.at == at {
+                if !here.notes.contains(&message) {
+                    here = here.with_note(message);
+                }
+            } else if !here
+                .related
+                .iter()
+                .any(|label| label.location == call.at && label.message == message)
+            {
+                here = here.with_related(call.at, message);
+            }
+        }
+        if !diagnostics.as_slice().contains(&here) {
+            diagnostics.emit(here);
+        }
+    }
+}
+
+/// Gather the paths that make each instance and give it this rejection.
+#[derive(Default)]
+struct InstanceCallRejections {
+    by_instance: HashMap<String, Vec<usize>>,
+    reports: Vec<(Diagnostic, Vec<Vec<MakingCall>>)>,
+}
+
+impl InstanceCallRejections {
+    fn record(
+        &mut self,
+        program: &Program,
+        chain: &InstanceChain,
+        call: Location,
+        reports: Vec<Diagnostic>,
+        diagnostics: &Diagnostics,
+    ) {
+        if reports.is_empty() {
+            return;
+        }
+        // A call rejected for a `requires` makes no instance to judge
+        // further (ERR-9: "Do not demand cascaded diagnostics").
+        let callers: Vec<_> = chain
+            .from
+            .iter()
+            .filter(|root| !unmet_reported(diagnostics, root.at))
+            .collect();
+        if callers.is_empty() {
+            return;
+        }
+        let made = chain.made;
+        let key = instance_key(made.callee, &made.generics, &made.type_packs, &made.answers);
+        let reports_of = self.by_instance.entry(key).or_default();
+        let instance = instance_note(program, made.callee, &made.generics, &made.type_packs);
+        let paths = chain.paths(program, callers);
+        for report in reports {
+            let mut report = report.with_note(&instance);
+            if report.primary != call {
+                let within = report.primary;
+                report.primary = call;
+                report = report.with_related(within, "here, in that call");
+            }
+            if let Some(index) = reports_of
+                .iter()
+                .copied()
+                .find(|&index| self.reports[index].0 == report)
+            {
+                self.reports[index].1.extend_from_slice(&paths);
+            } else {
+                reports_of.push(self.reports.len());
+                self.reports.push((report, paths.clone()));
+            }
+        }
+    }
+
+    fn emit(self, diagnostics: &mut Diagnostics) {
+        for (report, paths) in self.reports {
+            emit_instance_report(report, &paths, diagnostics);
+        }
+    }
+}
+
+/// An argument or setting that became a connection can point at the
+/// selected call that supplies it. Other graph checks keep their own
+/// destinations.
+fn selected_call_for_connection(
+    selecting: &[super::candidates::Selecting],
+    report: &Diagnostic,
+) -> Option<Location> {
+    if report.code != Code::Catalogued(codes::CONNECTION_AS_CONSTANT)
+        || !matches!(report.rule, Some("FN-3" | "FN-15" | "EXPR-14"))
+    {
+        return None;
+    }
+    selecting
+        .iter()
+        .filter(|call| contains_location(call.at, report.primary))
+        .min_by_key(|call| call.at.span.end - call.at.span.start)
+        .map(|call| call.name)
+}
+
+/// True where a `requires.unmet` has been reported at `at` already.
+fn unmet_reported(diagnostics: &Diagnostics, at: Location) -> bool {
+    diagnostics.as_slice().iter().any(|earlier| {
+        earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
+            && earlier.primary.file == at.file
+            && earlier.primary.span.start == at.span.start
+    })
 }
 
 /// What an instance is, written out: its declaration, its generic
@@ -3082,6 +3392,7 @@ fn applied_in(ty: &Type, at: Location, made: &mut Vec<Made>) {
                 answers: Vec::new(),
                 required: None,
                 at,
+                via: None,
             });
         }
     }
@@ -3140,16 +3451,227 @@ fn given_in(argument: &Argument, map: &[(Location, &Argument)], declared: &[Loca
 }
 
 /// The calls of generic declarations `statements` make, at any depth.
-fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
-    walk_nested_calls(statements, &mut |expression| made_at(expression, made));
+fn made_in(body: &hir::Body, made: &mut Vec<Made>) {
+    super::walk_body_calls(body, &mut |expression| made_at(expression, made));
 }
 
-/// Follow calls that graph settlement has made concrete through the same
-/// bounded admission traversal as other calls. A source call already
-/// concrete there does not create a new edge here (GEN-3, GEN-13).
-fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<Made>) {
-    let mut pending = std::collections::HashSet::new();
-    hir::walk_statements(&source.statements, &mut |expression| {
+/// The body as declared, read with provisional operator and pack results
+/// unknown. Calls whose arguments still resolve can be checked at their
+/// written sites, including in a generic declaration that is never made.
+pub(super) struct IndependentSourceBodies(Vec<Vec<Option<hir::Body>>>);
+
+impl IndependentSourceBodies {
+    pub(super) fn body(&self, (module, declaration): (usize, usize)) -> Option<&hir::Body> {
+        self.0.get(module)?.get(declaration)?.as_ref()
+    }
+}
+
+pub(super) fn independent_source_bodies(program: &Program) -> IndependentSourceBodies {
+    IndependentSourceBodies(
+        program
+            .modules
+            .iter()
+            .map(|module| {
+                module
+                    .bodies
+                    .iter()
+                    .zip(&module.selecting)
+                    .enumerate()
+                    .map(|(position, (body, selecting))| {
+                        let body = body.as_ref()?;
+                        let mut unsettled: HashSet<_> = selecting
+                            .iter()
+                            .filter(|call| call.result.is_some())
+                            .map(|call| call.at)
+                            .collect();
+                        super::walk_body_calls(body, &mut |value| {
+                            if matches!(called_or_referenced(value), Some(Callee::DeferredPackCall))
+                            {
+                                unsettled.insert(value.at);
+                            }
+                        });
+                        if unsettled.is_empty() {
+                            return None;
+                        }
+                        super::independent_source_body(program, module, position, &unsettled)
+                    })
+                    .collect()
+            })
+            .collect(),
+    )
+}
+
+fn source_call_key(call: &Made) -> (Location, String) {
+    (
+        call.at,
+        instance_key(call.callee, &call.generics, &call.type_packs, &call.answers),
+    )
+}
+
+/// GEN-7: a failure in a selected result's use points at its call and
+/// retains the ordinary diagnostic code and the concrete instance.
+pub(super) fn report_instance_result_uses(
+    program: &Program,
+    ((module, declaration), generics, packs): (
+        (usize, usize),
+        &[Argument],
+        &[hir::TypePackArgument],
+    ),
+    result_uses: &crate::instance::ResultUseChecks,
+    paths: &[Vec<MakingCall>],
+    diagnostics: &mut Diagnostics,
+) {
+    if result_uses.reports.is_empty() {
+        return;
+    }
+    let unit = &program.modules[module];
+    let instance = instance_note(program, (module, declaration), generics, packs);
+    let calls = &result_uses.changed_results;
+    for report in result_uses.reports.as_slice() {
+        let mut report = report.clone().with_note(&instance);
+        let changed = unit.bodies[declaration]
+            .as_ref()
+            .and_then(|body| changed_result_source(body, report.primary, calls));
+        if let Some(changed) = changed
+            && report.primary != changed
+        {
+            let use_at = report.primary;
+            report = report.with_related(use_at, "this use checks the selected result");
+            report.primary = changed;
+        }
+        emit_instance_report(report, paths, diagnostics);
+    }
+}
+
+/// GEN-7: identify the enclosing declaration and its concrete arguments.
+fn instance_note(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    generics: &[Argument],
+    packs: &[hir::TypePackArgument],
+) -> String {
+    format!(
+        "GEN-7: in `{}`",
+        instance_name(program, (module, declaration), generics, packs)
+    )
+}
+
+fn instance_name(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    generics: &[Argument],
+    packs: &[hir::TypePackArgument],
+) -> String {
+    let name = &program.modules[module].declarations[declaration].name;
+    let mut arguments = generics.iter().map(Argument::to_string).collect::<Vec<_>>();
+    for pack in packs {
+        if let Some(argument) = arguments.get_mut(pack.parameter) {
+            let types = pack.types.iter().map(Type::to_string).collect::<Vec<_>>();
+            *argument = format!("[{}]", types.join(", "));
+        }
+    }
+    if arguments.is_empty() {
+        return name.to_owned();
+    }
+    format!("{name}<{}>", arguments.join(", "))
+}
+
+/// Locate a changed call inside this use or through a local's initializer.
+fn changed_result_source(
+    body: &hir::Body,
+    use_at: Location,
+    calls: &[Location],
+) -> Option<Location> {
+    let within = |outer: Location| {
+        unique_location(
+            calls
+                .iter()
+                .copied()
+                .filter(|&call| contains_location(outer, call)),
+        )
+    };
+    if let Some(call) = within(use_at) {
+        return Some(call);
+    }
+    let mut reads = HashMap::new();
+    let mut initializers = HashMap::new();
+    hir::walk_statement_nodes(&body.statements, &mut |node| match node {
+        hir::Node::Expression(Expr {
+            kind: ExprKind::Local(local),
+            at,
+            ..
+        }) if matches!(body.locals[*local].kind, LocalKind::Let | LocalKind::Var) => {
+            reads.insert(*at, *local);
+        }
+        hir::Node::Statement(hir::Stmt::Declare {
+            local: declared,
+            value: Some(value),
+        }) if matches!(body.locals[*declared].kind, LocalKind::Let | LocalKind::Var) => {
+            initializers.insert(*declared, value.at);
+        }
+        _ => {}
+    });
+    let mut at = use_at;
+    let mut seen = HashSet::new();
+    while seen.insert(at) {
+        at = *initializers.get(reads.get(&at)?)?;
+        if let Some(call) = within(at) {
+            return Some(call);
+        }
+    }
+    None
+}
+
+fn contains_location(outer: Location, inner: Location) -> bool {
+    inner.file == outer.file
+        && inner.span.start >= outer.span.start
+        && inner.span.end <= outer.span.end
+}
+
+/// The only distinct source location, if the locations identify one.
+fn unique_location(mut locations: impl Iterator<Item = Location>) -> Option<Location> {
+    let first = locations.next()?;
+    locations.all(|location| location == first).then_some(first)
+}
+
+/// A reread makes its own calls. The same final HIR is used regardless
+/// of what caused the reread (GEN-7).
+fn concrete_body_calls(
+    instance: &crate::instance::CheckedInstance,
+    independent: Option<&HashSet<(Location, String)>>,
+    made: &mut Vec<Made>,
+) {
+    let mut calls = Vec::new();
+    instance.walk_calls(&mut |expression| made_at(expression, &mut calls));
+    made.extend(calls.into_iter().filter(|call| {
+        call.required.is_none()
+            && !independent.is_some_and(|calls| calls.contains(&source_call_key(call)))
+            && call.type_packs.iter().all(|pack| {
+                pack.forwarded_from.is_none() && pack.types_with_prefix().all(super::fit::whole)
+            })
+            && call
+                .generics
+                .iter()
+                .enumerate()
+                .all(|(position, argument)| {
+                    resolved_default_argument(argument)
+                        || call
+                            .type_packs
+                            .iter()
+                            .any(|pack| pack.parameter == position)
+                })
+    }));
+}
+
+/// Graph settlement can finish an unresolved call without rereading
+/// the body. The source's already-resolved calls still stand there.
+fn made_after_inference(
+    source: &hir::Body,
+    settled: &crate::instance::CheckedInstance,
+    made: &mut Vec<Made>,
+) {
+    let mut pending = HashSet::new();
+    walk_nested_calls(&source.statements, &mut |expression| {
         if super::calls::pending_function_inference(&expression.kind)
             || matches!(
                 expression.kind,
@@ -3166,13 +3688,11 @@ fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<
     if pending.is_empty() {
         return;
     }
-    hir::walk_statements(&settled.statements, &mut |expression| {
+    settled.walk_calls(&mut |expression| {
         if pending.contains(&expression.at)
-            && let ExprKind::Call {
-                callee: Callee::Function { generics, .. } | Callee::Candidate { generics, .. },
-                ..
-            } = &expression.kind
-            && generics.iter().all(resolved_default_argument)
+            && let Some(callee @ (Callee::Function { .. } | Callee::Candidate { .. })) =
+                called_or_referenced(expression)
+            && callee.generics().iter().all(resolved_default_argument)
         {
             made_at(expression, made);
         }
@@ -3211,6 +3731,15 @@ pub(super) fn concrete_default_calls(expression: &Expr, made: &mut Vec<Made>) {
     }));
 }
 
+/// The callable reached by a call or a function reference.
+pub(super) fn called_or_referenced(expression: &Expr) -> Option<&Callee> {
+    match &expression.kind {
+        ExprKind::Call { callee, .. } => Some(callee),
+        ExprKind::StaticCallable(callee) => Some(callee),
+        _ => None,
+    }
+}
+
 /// The instance a call, function reference, or struct construction makes.
 fn made_at(expression: &Expr, made: &mut Vec<Made>) {
     match &expression.kind {
@@ -3230,6 +3759,7 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
                 answers: Vec::new(),
                 required: None,
                 at: expression.at,
+                via: None,
             });
         }
         _ => {}
@@ -3262,6 +3792,7 @@ pub(super) fn made_callee(callee: &Callee, at: Location, made: &mut Vec<Made>) {
             answers: requirements.clone(),
             required: None,
             at,
+            via: None,
         }),
         // GEN-16: an operation the enclosing declaration requires, whose
         // candidate a call of that declaration answers.
@@ -3272,8 +3803,24 @@ pub(super) fn made_callee(callee: &Callee, at: Location, made: &mut Vec<Made>) {
             answers: Vec::new(),
             required: Some(*requirement),
             at,
+            via: None,
         }),
         _ => {}
+    }
+}
+
+/// A deferred call resolved by forwarding carries the path from its
+/// own location to the call that supplied the pack.
+pub(super) fn made_forwarded_callee(
+    callee: &Callee,
+    at: Location,
+    via: Vec<MakingCall>,
+    made: &mut Vec<Made>,
+) {
+    let index = made.len();
+    made_callee(callee, at, made);
+    if let Some(call) = made.get_mut(index) {
+        call.via = Some(via.into_boxed_slice());
     }
 }
 

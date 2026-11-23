@@ -3204,6 +3204,11 @@ const fn other() -> i64 => inferred("s")"#,
         "{}",
         checked.report
     );
+    assert!(
+        checked.report.contains("`inferred<i64>`"),
+        "{}",
+        checked.report
+    );
 }
 
 /// GEN-2 and FN-17: delayed inference reads a callback in its original
