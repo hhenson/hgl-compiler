@@ -25,7 +25,7 @@ transpiler: partial
 - Materializes arguments that can change state or fail in written order, before filling
   omitted defaults. Applies this to calls, constructors, lifted operands and entry
   calls.
-- Left: Statement-emitting or propagating defaults remain unsupported (UNIT-8, TYPE-5).
+- Left: Field defaults with statements and defaults that propagate a failure remain unsupported (UNIT-8, TYPE-5).
   Calls with no resolved target or argument slot have defensive reports.
 
 ## EXPR-3

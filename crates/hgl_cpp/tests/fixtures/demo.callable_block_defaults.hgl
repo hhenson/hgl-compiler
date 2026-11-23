@@ -1,0 +1,31 @@
+module demo.callable_block_defaults
+
+# UNIT-7 and UNIT-8: a block default has its own local bindings.
+const fn plus_default(value: i64, by: i64 = {
+    let seed = 7
+    seed
+}) -> i64 => value + by
+
+fn from_configuration(value: i64, const by: i64 = {
+    let seed = 2
+    seed + 1
+}) -> i64 {
+    when { return value + by }
+}
+
+fn configured(value: i64) -> i64 => from_configuration(value)
+
+fn lifted(value: i64) -> i64 => plus_default(value)
+
+test value_defaults {
+    let seed = 100
+    assert plus_default(0) == 7
+    assert plus_default(1, 40) == 41
+    assert seed == 100
+}
+
+test graph_defaults {
+    assert eval configured(value: [2]) == [5]
+    assert eval lifted(value: [2]) == [9]
+    assert eval plus_default(value: [3]) == [10]
+}
