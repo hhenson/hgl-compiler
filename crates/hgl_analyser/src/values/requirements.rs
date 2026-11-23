@@ -4720,10 +4720,16 @@ fn each_holds(
     for ty in &pack.types {
         // GEN-10: a zero-length forwarded pack contributes no element
         // to an each/any view, even while its tuple marker is symbolic.
-        if let Type::Parameter { at, .. } = ty
-            && pack.forwarded_from == Some(*at)
-            && empty_type_pack(of.program, *at)
-        {
+        let source = match ty {
+            Type::Parameter { at, .. }
+                if pack.tuple_sources.contains(at) || pack.forwarded_from == Some(*at) =>
+            {
+                Some(*at)
+            }
+            _ => None,
+        };
+        let bounds = source.and_then(|at| type_pack_bounds(of.program, at));
+        if bounds.is_some_and(|(_, maximum)| maximum == Some(0)) {
             continue;
         }
         let mut nested = keys.to_vec();
@@ -4752,7 +4758,15 @@ fn each_holds(
             ..*of
         };
         match holds_with_packs(&body, &here, Some(scope), &nested) {
-            Some(value) if value == existential => return Some(value),
+            Some(value) if value == existential => {
+                // A decisive any-true or each-false answer needs an
+                // actual element. A symbolic pack may still be empty.
+                if source.is_some() && bounds.is_none_or(|(minimum, _)| minimum == 0) {
+                    held = None;
+                } else {
+                    return Some(value);
+                }
+            }
             Some(_) => {}
             None => held = None,
         }
@@ -4760,29 +4774,41 @@ fn each_holds(
     held
 }
 
-/// A declared empty pack has no category to test (GEN-10).
-fn empty_type_pack(program: &Program, at: Location) -> bool {
-    program
-        .modules
-        .iter()
-        .flat_map(|module| &module.details)
-        .any(|detail| {
-            let generics = match detail {
-                Detail::Callable(signature) => &signature.generics,
-                Detail::Struct(structure) => &structure.generics,
-                _ => return false,
-            };
-            generics.iter().any(|generic| {
-                generic.at == at
-                    && matches!(
-                        generic.kind,
-                        GenericKind::Pack {
-                            maximum: Some(0),
-                            ..
-                        }
-                    )
-            })
-        })
+/// GEN-10: explicit pack bounds and a non-packed parameter exactly of
+/// type tuple<Us> guarantee lengths. A tuple with other elements does not.
+fn type_pack_bounds(program: &Program, at: Location) -> Option<(u64, Option<u64>)> {
+    for detail in program.modules.iter().flat_map(|module| &module.details) {
+        let (generics, parameters) = match detail {
+            Detail::Callable(signature) => (&signature.generics, &signature.parameters[..]),
+            Detail::Struct(structure) => (&structure.generics, &[][..]),
+            _ => continue,
+        };
+        let Some(generic) = generics.iter().find(|generic| generic.at == at) else {
+            continue;
+        };
+        let GenericKind::Pack {
+            mut minimum,
+            mut maximum,
+        } = generic.kind
+        else {
+            return None;
+        };
+        for parameter in parameters {
+            if parameter.pack.is_some()
+                && matches!(parameter.ty, Type::Parameter { at: declared, .. } if declared == at)
+            {
+                minimum = minimum.max(parameter.pack_bounds.0);
+                maximum = maximum.into_iter().chain(parameter.pack_bounds.1).min();
+            } else if parameter.pack.is_none()
+                && matches!(&parameter.ty, Type::Tuple(elements) if matches!(elements.as_slice(),
+                    [Type::Parameter { at: declared, .. }] if *declared == at))
+            {
+                minimum = minimum.max(1);
+            }
+        }
+        return Some((minimum, maximum));
+    }
+    None
 }
 
 /// The view name and pack name in a `types(Ts)` or `arg_keys(Ps)` form.

@@ -1472,20 +1472,21 @@ pub(super) fn tuple_pack_bindings(
         if matches!(generic.kind, GenericKind::Pack { .. })
             && let Some(Argument::Type(Type::Tuple(types))) = &mut found[index]
         {
-            let forwarded = types.iter().find_map(|ty| {
-                let Type::Parameter { at, .. } = ty else {
-                    return None;
-                };
-                enclosing
-                    .iter()
-                    .any(|generic| {
+            let mut sources = Vec::new();
+            for ty in types.iter() {
+                if let Type::Parameter { at, .. } = ty
+                    && enclosing.iter().any(|generic| {
                         generic.at == *at && matches!(generic.kind, GenericKind::Pack { .. })
                     })
-                    .then_some(*at)
-            });
+                    && !sources.contains(at)
+                {
+                    sources.push(*at);
+                }
+            }
             let types = std::mem::take(types);
             let mut captured = hir::TypePackArgument::positional(index, types);
-            captured.forwarded_from = forwarded;
+            captured.forwarded_from = sources.first().copied();
+            captured.tuple_sources = sources;
             packs.push(captured);
             found[index] = Some(Argument::Type(Type::Unknown));
         }

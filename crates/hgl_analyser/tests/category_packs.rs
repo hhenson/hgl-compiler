@@ -253,3 +253,53 @@ fn categories_accept_indexed_pack_types() {
         "constraint/requires.unmet",
     );
 }
+
+#[test]
+fn existential_category_facts_need_a_guaranteed_element() {
+    // GEN-10: a sole tuple pack is nonempty; a value pack can be empty.
+    let tuple = "module m\nconst fn inner<...Ts>(x: tuple<Ts>) -> bool requires any T in types(Ts) { T in struct } => true\n";
+    accepts(&format!(
+        "{tuple}const fn outer<...Us>(x: tuple<Us>) -> bool requires each U in types(Us) {{ U in struct }} => inner(x)"
+    ));
+}
+
+#[test]
+fn forwarded_value_pack_existence_is_checked_in_the_instance() {
+    // GEN-7: a forwarded FN-19 pack is checked in its concrete instance.
+    let packed = "module m\nstruct Label { text: str }\nconst fn inner<...Ts>(args: ...Ts) -> bool requires any T in types(Ts) { T in struct } => true\nconst fn outer<...Us>(args: ...Us) -> bool requires each U in types(Us) { U in struct } => inner(...args)\n";
+    accepts(packed);
+    accepts(&format!(
+        "{packed}test checks {{ assert outer(Label(text: \"a\")) }}"
+    ));
+    rejects(
+        &format!("{packed}test checks {{ assert outer() }}"),
+        "constraint/requires.unmet",
+    );
+}
+
+#[test]
+fn fixed_tuple_items_do_not_prove_a_pack_has_an_element() {
+    // GEN-10: a fixed prefix can supply the entire tuple.
+    let prefix = "module m\nconst fn inner<...Ts>(x: tuple<i64, Ts>) -> bool requires any T in types(Ts) { T in struct } => true\n";
+    rejects(
+        &format!(
+            "{prefix}const fn outer<...Us>(x: tuple<i64, Us>) -> bool requires each U in types(Us) {{ U in struct }} => inner(x)"
+        ),
+        "constraint/requires.unmet",
+    );
+}
+
+#[test]
+fn a_decisive_false_each_also_needs_an_element() {
+    // GEN-10: a possibly empty pack cannot disprove a conjunction.
+    let inner = "module m\nconst fn inner<...Ts>(x: tuple<i64, Ts>) -> bool requires !(each T in types(Ts) { T in struct }) => true\n";
+    rejects(
+        &format!(
+            "{inner}const fn outer<...Us>(x: tuple<i64, Us>) -> bool requires each U in types(Us) {{ !(U in struct) }} => inner(x)"
+        ),
+        "constraint/requires.unmet",
+    );
+    accepts(&format!(
+        "{inner}const fn outer<...Us{{1:*}}>(x: tuple<i64, Us>) -> bool requires each U in types(Us) {{ !(U in struct) }} => inner(x)"
+    ));
+}

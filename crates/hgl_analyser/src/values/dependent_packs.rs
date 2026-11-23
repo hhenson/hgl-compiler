@@ -55,34 +55,51 @@ impl<'p> PackTypes<'p> {
 
     /// Put the enclosing compile-time inputs into a passed-on pack (GEN-17).
     pub(crate) fn place_forwarded(&self, pack: &mut TypePackArgument) {
+        if !pack.tuple_sources.is_empty() {
+            let sources = std::mem::take(&mut pack.tuple_sources);
+            let mut unresolved = Vec::new();
+            let mut types = Vec::new();
+            for ty in std::mem::take(&mut pack.types) {
+                let source = match &ty {
+                    Type::Parameter { at, .. } if sources.contains(at) => Some(*at),
+                    _ => None,
+                };
+                let supplied = source.and_then(|source| {
+                    self.bindings
+                        .iter()
+                        .find(|(at, _)| *at == source)
+                        .map(|(_, given)| *given)
+                });
+                if let Some(given) = supplied
+                    && (given.forwarded_from.is_none() || !given.tuple_sources.is_empty())
+                {
+                    types.extend(given.types.iter().cloned());
+                    for source in &given.tuple_sources {
+                        if !unresolved.contains(source) {
+                            unresolved.push(*source);
+                        }
+                    }
+                } else {
+                    if let Some(source) = source
+                        && !unresolved.contains(&source)
+                    {
+                        unresolved.push(source);
+                    }
+                    types.push(ty);
+                }
+            }
+            pack.keys = (0..types.len())
+                .map(crate::hir::PackKey::Position)
+                .collect();
+            pack.types = types;
+            pack.forwarded_from = unresolved.first().copied();
+            pack.tuple_sources = unresolved;
+            return;
+        }
         let Some(source) = pack.forwarded_from else {
             return;
         };
         if let Some((_, given)) = self.bindings.iter().find(|(at, _)| *at == source) {
-            if pack
-                .types
-                .iter()
-                .any(|ty| matches!(ty, Type::Parameter { at, .. } if *at == source))
-            {
-                // GEN-10: the marker gives a tuple capture's splice point;
-                // unlike a reflected suffix, it can have entries after it.
-                pack.types = pack
-                    .types
-                    .iter()
-                    .flat_map(|ty| {
-                        if matches!(ty, Type::Parameter { at, .. } if *at == source) {
-                            given.types.clone()
-                        } else {
-                            vec![ty.clone()]
-                        }
-                    })
-                    .collect();
-                pack.keys = (0..pack.types.len())
-                    .map(crate::hir::PackKey::Position)
-                    .collect();
-                pack.forwarded_from = given.forwarded_from;
-                return;
-            }
             if let (Some(receiving), Some(original)) = (&mut pack.reflected, &given.reflected) {
                 // The original fixed inputs and the reflected suffix are
                 // one sequence. GEN-17 takes the suffix left by this template.

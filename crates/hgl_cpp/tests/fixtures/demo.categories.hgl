@@ -104,3 +104,37 @@ const fn rejected_pack_count() -> tuple<i64> => pair((1,))
 const fn pack_is_not_one_type<...Ts>(value: list<Ts>) -> bool => true
 # expect-error(type, "generic.argument_kind")
 const fn category_takes_no_value() -> bool => type_category<1>()
+
+# GEN-10: independent enclosing packs both survive tuple forwarding.
+const fn combine<...As, ...Bs>(left: tuple<As>, right: tuple<Bs>, joined: tuple<As, Bs>) -> tuple<As, Bs> => echo(joined)
+test multiple_tuple_sources {
+    let joined: tuple<i64, str, bool, f64> = combine((1, "a"), (true, 2.0), (3, "b", false, 4.0))
+    assert joined[0] == 3
+    assert joined[1] == "b"
+    assert joined[2] == false
+    assert joined[3] == 4.0
+}
+
+# GEN-10: an exact tuple pack supplies an existential witness.
+const fn some_struct<...Ts>(value: tuple<Ts>) -> bool
+    requires any T in types(Ts) { T in struct } => true
+const fn nonempty_structs<...Us>(value: tuple<Us>) -> bool
+    requires each U in types(Us) { U in struct } => some_struct(value)
+test nonempty_tuple_witness {
+    assert nonempty_structs((Label(text: "a"),))
+}
+const fn some_tail_struct<...Ts>(value: tuple<i64, Ts>) -> bool
+    requires any T in types(Ts) { T in struct } => true
+# expect-error(constraint, "requires.unmet")
+const fn missing_tail_witness<...Us>(value: tuple<i64, Us>) -> bool requires each U in types(Us) { U in struct } => some_tail_struct(value)
+
+# GEN-7: ordinary pack forwarding is checked in its instance.
+const fn some_value_struct<...Ts>(args: ...Ts) -> bool
+    requires any T in types(Ts) { T in struct } => true
+const fn forwarded_value_structs<...Us>(args: ...Us) -> bool
+    requires each U in types(Us) { U in struct } => some_value_struct(...args)
+test forwarded_value_witness {
+    assert forwarded_value_structs(Label(text: "a"), Point(x: 1.0, y: 2.0))
+}
+# expect-error(constraint, "requires.unmet")
+const fn rejected_empty_value_forwarding() -> bool => forwarded_value_structs()
