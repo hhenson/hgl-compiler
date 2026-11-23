@@ -31,26 +31,14 @@ struct Pending {
     reason: &'static str,
 }
 
-const FUNCTIONS: &str = "hgl_spec/spec/language/functions-and-phases.md";
 const GENERICS: &str = "hgl_spec/spec/language/generics-and-operators.md";
-const MAPPING: &str = "hgl_core/spec/mapping.md";
 const DIAGNOSTICS: &str = "hgl_core/spec/diagnostics.md";
 
 const PENDING: &[Pending] = &[
     Pending {
-        file: FUNCTIONS,
-        opening: "module examples.pack_forms",
-        reason: "LEX-29, EXPR-16, EXPR-17, FN-19 (#368)",
-    },
-    Pending {
         file: GENERICS,
         opening: "module examples.categories",
         reason: "GEN-3 type category and GEN-10 tuple type pack (#512)",
-    },
-    Pending {
-        file: MAPPING,
-        opening: "export enum Join { inner, outer, left }",
-        reason: "EXPR-16, EXPR-17 and FN-19 (#368)",
     },
     Pending {
         file: "hgl_core/spec/formatting.md",
