@@ -444,8 +444,8 @@ fn emit_writes_a_unit_a_header_and_an_entry() {
 }
 
 /// `hgl run --target cpp` says what an application needs that the
-/// target does not write, and runs nothing: here a read of the pending
-/// window result while its evaluation holds an arrival (TYPE-11).
+/// target does not write, and runs nothing: here a handler selecting on
+/// its own window result (TIME-7).
 #[test]
 fn run_says_what_an_application_lacks() {
     let root = scratch("run");
@@ -456,7 +456,7 @@ fn run_says_what_an_application_lacks() {
             "application demo.app\n",
             "fn cleared(reading: i64) -> rolling_window<i64, 2> {\n",
             "    inject out\n",
-            "    when { if valid(out) { return reading } }\n",
+            "    when valid(out, reading) { return reading }\n",
             "}\n",
             "fn counted(readings: rolling_window<i64, 2>) -> i64 {\n",
             "    when { return delta_value(readings) }\n",
@@ -476,7 +476,7 @@ fn run_says_what_an_application_lacks() {
     assert_eq!(
         text(&output.stderr),
         format!(
-            "{file}:4:15: the cpp target does not write a read of a node's own window result in its `when` yet\n"
+            "{file}:4:5: the cpp target does not write a handler that selects on a node's own window result yet\n"
         )
     );
 }
@@ -1268,7 +1268,16 @@ fn windows_run_on_the_sdk() {
         "src/demo.window_withdrawal.hgl",
         include_str!("fixtures/demo.window_withdrawal.hgl"),
     );
-    let output = hgl_in(&["test", &file, &withdrawal, "--target", "cpp"], &[], &[]);
+    let own_reads = write(
+        &root,
+        "src/demo.own_window_reads.hgl",
+        include_str!("fixtures/demo.own_window_reads.hgl"),
+    );
+    let output = hgl_in(
+        &["test", &file, &withdrawal, &own_reads, "--target", "cpp"],
+        &[],
+        &[],
+    );
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -1277,7 +1286,7 @@ fn windows_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 15 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 20 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
