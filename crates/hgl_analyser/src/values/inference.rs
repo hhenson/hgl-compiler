@@ -1432,12 +1432,15 @@ pub(super) fn infer_from_place<'r, 'p>(
         (result, false)
     };
     if !written && matches!(result, Type::Parameter { .. }) {
-        if fallible {
-            // A store read's inputs say nothing of V (core CAP-6).
-            return Some((result, requested));
-        }
         if matches!(requested, Type::Nullable(_)) {
+            // ERR-15 exposes the success to this place. GEN-2 leaves its
+            // bare type parameter to the call's arguments there as well.
             return None;
+        }
+        if fallible {
+            // A plain value place can decide a success type the inputs
+            // do not supply, as in a store read (core CAP-6).
+            return Some((result, requested));
         }
     }
     let place = if written || matches!(result, Type::Nullable(_)) {

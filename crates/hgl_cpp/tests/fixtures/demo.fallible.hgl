@@ -294,7 +294,7 @@ fn store_forms(value: i64) -> bool {
         let found = get<i64>(global_state, "present")
         let missing = get<i64>(global_state, "missing")
         let present: i64 = get(global_state, "present")
-        let nullable: i64? = get(global_state, "missing")
+        let nullable: i64? = get<i64>(global_state, "missing")
         if is_ok(found) {
             return found.value == value && is_err(missing) && present == value && nullable == null
         }

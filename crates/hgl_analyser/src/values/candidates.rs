@@ -234,6 +234,59 @@ impl<'a> Typer<'a> {
         ((Vec::new(), untold), errors)
     }
 
+    /// GEN-2 and GEN-8: a nullable destination leaves a bare result
+    /// parameter open. Report that missing type when an otherwise
+    /// matching candidate gets it solely from a plain value request.
+    pub(super) fn unresolved_nullable_result<'w>(
+        &mut self,
+        operator: OperatorRef,
+        candidates: &[Candidate<'a>],
+        given: &[Given],
+        wanted: &Wanted<'w>,
+    ) -> Option<(&'a str, &'w Type)> {
+        let Type::Nullable(payload) = wanted.place? else {
+            return None;
+        };
+        if wanted.written {
+            return None;
+        }
+        let parameter = |signature: &'a Signature| {
+            let result = match signature.result.as_ref()? {
+                Type::Result { value, error } if **error == Type::Error => value,
+                result => result,
+            };
+            let generic = &signature.generics[bare_parameter(result, &signature.generics)?];
+            // An input mentioning this parameter may already decide it.
+            // Here the trial supplies only a type the result leaves open.
+            signature
+                .parameters
+                .iter()
+                .all(|input| !mentions(&input.ty, &[generic.at]))
+                .then_some(generic.name.as_str())
+        };
+        let candidates: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|(_, _, signature)| parameter(signature).is_some())
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        let plain = Wanted {
+            place: Some(payload),
+            among: wanted.among.clone(),
+            written: false,
+            callback: None,
+        };
+        let mark = self.mark();
+        let (selected, untold) = self.admitted(operator, &candidates, given, &plain);
+        self.take_back(mark, false);
+        match selected.as_slice() {
+            [chosen] if !untold => Some((parameter(chosen.declared)?, payload)),
+            _ => None,
+        }
+    }
+
     /// Read each candidate's static arguments once, before ranking the
     /// ordinary arguments' precisions and result forms (FN-17, GEN-5).
     fn function_trials(

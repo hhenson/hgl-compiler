@@ -710,6 +710,29 @@ impl<'a> Typer<'a> {
                 }
                 return (self.unselected(given, Form::Named), Type::Unknown);
             }
+            if selected.is_empty()
+                && let Some((parameter, payload)) =
+                    self.unresolved_nullable_result(operator, &candidates, &given, &wanted)
+            {
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::GENERIC_UNRESOLVED,
+                        at,
+                        format!(
+                            "this call of `{}` leaves `{parameter}` unresolved in a nullable place",
+                            name.text()
+                        ),
+                        "GEN-8",
+                    )
+                    .with_note(format!(
+                        "write the type argument, `{}<{payload}?>(...)` or `{}<{payload}>(...)`",
+                        name.text(),
+                        name.text()
+                    )),
+                );
+                return (self.unselected(given, Form::Named), Type::Unknown);
+            }
             let diagnostic = self.no_one_candidate(
                 (name.text(), at),
                 public,

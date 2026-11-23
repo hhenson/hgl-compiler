@@ -146,12 +146,12 @@ fn a_nullable_type_written_for_a_result_that_is_a_type_parameter_is_taken_whole(
     );
 }
 
-/// GEN-2 and ERR-15: a nullable place can take the nullable form of
-/// a fallible store read without an explicit type argument.
+/// GEN-2, GEN-8 and CAP-6: a nullable place leaves the store's value
+/// type open when the call writes no type.
 #[test]
-fn a_nullable_place_infers_the_value_type_of_a_store_read() {
+fn a_nullable_store_read_requires_a_written_value_type() {
     let checked = module(concat!(
-        "fn hooked(value: i64) -> i64? {\n",
+        "fn hooked(value: i64?) -> i64? {\n",
         "    inject global_state\n",
         "    when {\n",
         "        put(global_state, \"k\", value)\n",
@@ -160,10 +160,87 @@ fn a_nullable_place_infers_the_value_type_of_a_store_read() {
         "    }\n",
         "}\n",
     ));
-    assert_eq!(checked.summary(), NONE);
     assert_eq!(
-        called(&checked, body(&checked, "hooked")),
-        ["put<i64>: _", "get<i64>: result<i64, error>"]
+        checked.summary(),
+        ["m.hgl:6:27 type/generic.unresolved GEN-8"],
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked
+            .report
+            .contains("write the type argument, `get<i64?>(...)` or `get<i64>(...)`"),
+        "{}",
+        checked.report
+    );
+}
+
+/// TIME-8 and CAP-6: the written read type is the key's type even
+/// where the read itself is used as a nullable value.
+#[test]
+fn an_explicit_store_read_checks_the_type_of_the_key() {
+    let checked = module(concat!(
+        "fn hooked(value: i64?) -> i64? {\n",
+        "    inject global_state\n",
+        "    when {\n",
+        "        put(global_state, \"k\", value)\n",
+        "        let saved: i64? = get<i64>(global_state, \"k\")\n",
+        "        return saved\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:27 injectable/store.key_type TIME-8"],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-2 and GEN-8: a local, return or argument's nullable type leaves
+/// the bare result type open where the call's arguments say nothing.
+#[test]
+fn a_nullable_place_alone_does_not_decide_a_bare_result_type() {
+    let checked = module(concat!(
+        "const fn choose<T>() -> T {\n",
+        "    let values: list<T> = []\n",
+        "    return values[0]\n",
+        "}\n",
+        "const fn into_local<T>() -> T? {\n",
+        "    let item: T? = choose()\n",
+        "    return item\n",
+        "}\n",
+        "const fn into_return() -> i64? { return choose() }\n",
+        "const fn take_optional(value: i64?) -> i64? => value\n",
+        "const fn into_argument() -> i64? => take_optional(choose())\n",
+        "const fn plain() -> i64 => choose()\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:7:20 type/generic.unresolved GEN-8",
+            "m.hgl:10:41 type/generic.unresolved GEN-8",
+            "m.hgl:12:51 type/generic.unresolved GEN-8",
+        ],
+        "{}",
+        checked.report
+    );
+    assert_eq!(
+        called(&checked, body(&checked, "plain")),
+        ["choose<i64>: i64"]
+    );
+}
+
+/// GEN-5: an invalid input still leaves no candidate to select, even
+/// with the result type supplied by a plain place.
+#[test]
+fn a_nullable_store_read_with_an_invalid_key_has_no_candidate() {
+    let checked = module("const fn read(store: GlobalState) -> i64? => get(store, 1)\n");
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:46 operator/operator.no_candidate GEN-5"],
+        "{}",
+        checked.report
     );
 }
 
