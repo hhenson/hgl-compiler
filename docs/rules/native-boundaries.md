@@ -19,8 +19,8 @@ analyser: partial
 analyser: partial
 
 - An implementation completes one declaration of its name and role; duplicates rejected
-- A native candidate's implementation needs a candidate of its name and role
-- Left: the exact match of signatures, which says which candidate an implementation completes, their `var` and `ref` marks among them (FN-15, FN-16); selection
+- A native implementation's known parameter and result types, parameter forms and order, `var` and `ref` marks, and generic kinds match one declaration of its name and role. For a native candidate, other candidates of that operator are alternatives.
+- Left: equivalence of written constraints and unresolved type arguments, reflected pack types, and provider selection (#517)
 
 ## NATIVE-3
 
