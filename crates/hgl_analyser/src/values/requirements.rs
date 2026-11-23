@@ -3444,12 +3444,12 @@ pub(super) fn report_instance_result_uses(
         let changed = unit.bodies[declaration]
             .as_ref()
             .and_then(|body| changed_result_source(body, report.primary, calls));
-        if let Some(changed) = changed {
-            if report.primary != changed {
-                let use_at = report.primary;
-                report = report.with_related(use_at, "this use checks the selected result");
-                report.primary = changed;
-            }
+        if let Some(changed) = changed
+            && report.primary != changed
+        {
+            let use_at = report.primary;
+            report = report.with_related(use_at, "this use checks the selected result");
+            report.primary = changed;
         }
         emit_instance_report(report, paths, diagnostics);
     }
