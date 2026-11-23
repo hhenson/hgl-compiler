@@ -504,8 +504,9 @@ transpiler: done
 - Supplies scheduler state and writes schedule, cancellation and reset using the SDK
   adapter. Distinguishes due scheduler wakes from input ticks.
 - Drops a nonfuture dated request in graph time, except for the node's first
-  evaluation when asked at the current time in `start`. Logs the first drop
-  per node and counts later ones at stop (TIME-8).
+  evaluation when asked at the current time in `start`. Logs the node's
+  display name and the requested time on its first drop, then counts later
+  drops at stop (TIME-8).
 
 ## CAP-5
 
