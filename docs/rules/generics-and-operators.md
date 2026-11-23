@@ -246,12 +246,14 @@ transpiler: partial
 parser: partial
 
 - Reads a function type's named pack and `arg_keys` and member types in requirements. `Ps[arg]` has a type form, with an index tree in positions that also allow values.
-- Left: pack key membership in a body, alongside pack values and unrolled loops (#368).
+- Reads `key in arg_keys(Ps)` at comparison precedence in a body.
+- Left: pack-key iteration outside the computed spread slice (#368).
 
 analyser: partial
 
 - Reflects the selected callback's fixed suffix and its supplied positional and named pack entries. A dependent pack keeps the callback parameter keys and the types written at the call.
 - Evaluates `each` over `arg_keys`, constant key membership, and keyed type projection. Candidate requirements can compare bare pack members. A missing member of a known pack reports `pack.name`.
+- In a pack comprehension, `arg_keys` names a declared type pack and the iteration name is a compile-time key. A membership condition reads those bindings and has type `bool`. Generic unrolling and the value of that condition in a pass await the GEN-7 decision (#368).
 - A generic call that receives another function parameter checks its pack requirements when the caller supplies the reflected types. The receiver's fixed positions determine which original inputs its pack reflects.
 - An operator callback reflects the public declaration's parameter names and the selected candidate's types (FN-17).
 - Specializes a pack-member type written as a function call's generic argument (GEN-8), including within another type. A missing key reports `pack.name`. A positive member-type equality, including one stated for each key of a pack, can admit a constrained call under GEN-7. A call with an untold member type remains unsupported in the target.

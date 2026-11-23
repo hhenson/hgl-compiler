@@ -14,6 +14,8 @@ const BRACE_BEFORE_BODY: &str =
 /// starts. A list size and a constraint operand are `additive_expr`.
 pub(crate) const ADDITIVE: u8 = 5;
 
+const COMPARISON: u8 = 4;
+
 /// The precedence tier of a binary operator, 1 binding loosest; `None` for
 /// a token that is not one.
 ///
@@ -24,7 +26,7 @@ fn binary_tier(kind: SyntaxKind) -> Option<u8> {
         PipePipe => 1,
         AmpAmp => 2,
         EqEq | BangEq => 3,
-        Lt | LtEq | Gt | GtEq | Spaceship => 4,
+        Lt | LtEq | Gt | GtEq | Spaceship => COMPARISON,
         Plus | Minus => ADDITIVE,
         Star | Slash | SlashSlash | Percent => 6,
         _ => return None,
@@ -97,21 +99,31 @@ impl Parser<'_> {
             return false;
         }
         let mark = self.mark();
-        let bare_fn = self.unary_expr();
-        let bare_fn = self.binary_tail(mark, lowest, bare_fn);
+        let membership = lowest <= COMPARISON && self.pack_key_membership_ahead();
+        let bare_fn = if membership {
+            self.pack_key_membership();
+            false
+        } else {
+            self.unary_expr()
+        };
+        let bare_fn = self.binary_tail(mark, lowest, bare_fn, membership);
         self.leave();
         bare_fn
     }
 
     /// Continue an expression from its already-read left operand.
-    fn binary_tail(&mut self, mark: Mark, lowest: u8, mut bare_fn: bool) -> bool {
+    fn binary_tail(&mut self, mark: Mark, lowest: u8, mut bare_fn: bool, membership: bool) -> bool {
         loop {
             let operator = self.current();
             let Some(tier) = binary_tier(operator) else {
                 break;
             };
             // GEN-14: inside generic arguments `>` closes the list.
-            if tier < lowest || (operator == Gt && self.context.no_gt) {
+            // GEN-17 membership is a comparison expression of its own.
+            if tier < lowest
+                || membership && tier >= COMPARISON
+                || (operator == Gt && self.context.no_gt)
+            {
                 break;
             }
             // LEX-5, LEX-14: a binary operator at the start of a line
@@ -142,6 +154,10 @@ impl Parser<'_> {
     /// `iterable = range | expression` (EXPR-16). Read the additive
     /// prefix once so a normal iterable can continue with looser operators.
     pub(super) fn loop_iterable(&mut self) {
+        if self.pack_key_membership_ahead() {
+            self.binary_expr(1);
+            return;
+        }
         let mark = self.mark();
         let bare_fn = self.binary_expr(ADDITIVE);
         if self.at(RangeUntil) && !self.nl() {
@@ -154,8 +170,35 @@ impl Parser<'_> {
             }
             self.wrap(mark, RangeExpr);
         } else {
-            self.binary_tail(mark, 1, bare_fn);
+            self.binary_tail(mark, 1, bare_fn, false);
         }
+    }
+
+    /// GEN-17 writes membership as `IDENTIFIER, "in", "arg_keys", "(", IDENTIFIER, ")"`.
+    fn pack_key_membership_ahead(&self) -> bool {
+        self.at(Ident) && self.nth_word(1, "in") && !self.nl_at(1) && self.nth_word(2, "arg_keys")
+    }
+
+    fn pack_key_membership(&mut self) {
+        self.start(PackKeyMembership);
+        self.leaf(NameExpr);
+        self.bump(); // `in`
+        self.bump(); // `arg_keys`
+        if self.at(LParen) && !self.nl() {
+            self.attached(Bracket::Call);
+            self.bump();
+            self.nested(Context::PLAIN, |parser| {
+                if parser.at(Ident) {
+                    parser.leaf(NameExpr);
+                } else {
+                    parser.expected("a pack name");
+                }
+                parser.close(RParen);
+            });
+        } else {
+            self.expected("`(`");
+        }
+        self.finish();
     }
 
     /// `unary_expr = ( "-" | "!" ), [ operator_configuration ], unary_expr | postfix_expr ;`
@@ -372,7 +415,7 @@ impl Parser<'_> {
     /// ```text
     /// primary_expr = literal | IDENTIFIER | qualified_name | "(", expression, ")"
     ///              | tuple_literal | sequence_literal | typed_constructor
-    ///              | delta_constructor | type_call | function_expr
+    ///              | delta_constructor | type_call | pack_loop | function_expr
     ///              | if_expression | eval_expression | run_expression | block ;
     /// literal = INTEGER_LITERAL | FLOAT_LITERAL | STRING_LITERAL | TEMPORAL_LITERAL
     ///         | "true" | "false" | "null" ;
@@ -426,10 +469,49 @@ impl Parser<'_> {
             LBrace if self.context.no_brace => {
                 self.expected_with("an expression", Some("CTRL-9"), Some(BRACE_BEFORE_BODY))
             }
+            LBrace if self.nth(1) == KwFor && self.pack_comprehension_ahead() => {
+                self.pack_comprehension();
+            }
             LBrace => self.block(),
             _ => self.expected("an expression"),
         }
         false
+    }
+
+    /// A brace and `for` can also open a block whose first statement is a loop.
+    /// The pack form has a colon after the iterable (FN-19).
+    fn pack_comprehension_ahead(&mut self) -> bool {
+        self.choose(Choice::PackComprehension, |parser| {
+            parser.bump(); // `{`
+            let errors = parser.errors;
+            parser.nested(Context::PLAIN, Self::pack_comprehension_header);
+            if parser.errors == errors && parser.at(Colon) {
+                Verdict::Yes
+            } else {
+                Verdict::No
+            }
+        }) == Verdict::Yes
+    }
+
+    fn pack_comprehension_header(&mut self) {
+        self.bump(); // `for`
+        self.expect_name("an iteration name");
+        if self.expect_word("in") {
+            self.loop_iterable();
+        }
+    }
+
+    fn pack_comprehension(&mut self) {
+        self.start(PackComprehension);
+        self.bump(); // `{`
+        self.nested(Context::PLAIN, |parser| {
+            parser.pack_comprehension_header();
+            if parser.expect(Colon) {
+                parser.expression();
+            }
+            parser.close(RBrace);
+        });
+        self.finish();
     }
 
     /// ```text

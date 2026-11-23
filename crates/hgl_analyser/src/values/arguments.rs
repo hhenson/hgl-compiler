@@ -451,7 +451,12 @@ impl<'a> Typer<'a> {
         };
         // FN-19: written arguments bind first. Forwarded names then
         // bind ahead of forwarded positions, which take the slots left.
-        let spreads = self.forwarded_arguments(list);
+        let computed = super::forwarded_packs::has_computed_spread(list);
+        let spreads = if computed {
+            Vec::new()
+        } else {
+            self.forwarded_arguments(list)
+        };
         let written = entries
             .into_iter()
             .map(|(brace, name, value)| (brace, name, value, None));
@@ -602,7 +607,12 @@ impl<'a> Typer<'a> {
             });
         }
         for (index, slot) in slots.iter().enumerate() {
-            if slot.required && slot.pack.is_none() && !filled[index] && !unnamed_field {
+            if slot.required
+                && (!computed || slot.configuration)
+                && slot.pack.is_none()
+                && !filled[index]
+                && !unnamed_field
+            {
                 let missing = if slot.name.is_empty() {
                     format!(
                         "`{}` needs an argument at position {}",
@@ -630,10 +640,11 @@ impl<'a> Typer<'a> {
             }
         }
         for index in [positional_pack, named_pack].into_iter().flatten() {
+            let (minimum, maximum) = slots[index].pack_bounds;
             self.check_pack_count(
                 list,
                 slots[index].name,
-                slots[index].pack_bounds,
+                (if computed { 0 } else { minimum }, maximum),
                 &pack_locations[index],
             );
         }

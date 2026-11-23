@@ -273,6 +273,10 @@ define_syntax_kinds! {
         SequenceExpr,
         /// `[for item in iterable: expression]`.
         ListComprehension,
+        /// `{for key in arg_keys(Ps): expression}` (FN-19).
+        PackComprehension,
+        /// `key in arg_keys(Ps)` (GEN-17).
+        PackKeyMembership,
         /// `lower..<upper`, only as a loop iterable.
         RangeExpr,
         /// `a: b` in a sequence

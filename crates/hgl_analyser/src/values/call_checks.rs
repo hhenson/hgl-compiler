@@ -580,7 +580,7 @@ impl<'a> Typer<'a> {
                 // later part (ERR-9).
                 let judged = parameter.constant
                     && !matches!(argument.value.kind, ExprKind::Unread)
-                    && !self.is_fixed(&argument.value);
+                    && !self.is_fixed(&argument.value, &[]);
                 judged.then(|| (argument.value.at, parameter.name.clone()))
             })
             .collect();
@@ -606,43 +606,41 @@ impl<'a> Typer<'a> {
 
     /// True when `value` is a constant expression (FN-1): "of literals,
     /// enum members, constants (UNIT-13), generic value parameters, and
-    /// the enclosing function's own `const` parameters."
-    fn is_fixed(&self, value: &Expr) -> bool {
+    /// the enclosing function's own `const` parameters." CTRL-16 also
+    /// supplies constants from active unrolled passes to range bounds.
+    pub(super) fn is_fixed(&self, value: &Expr, range_bindings: &[LocalId]) -> bool {
+        let fixed = |operand: &Expr| self.is_fixed(operand, range_bindings);
         match &value.kind {
             ExprKind::Literal(_)
             | ExprKind::EnumMember { .. }
             | ExprKind::GenericValue { .. }
             | ExprKind::Constant { .. } => true,
             // A parameter's local has its position among the parameters.
-            ExprKind::Local(local) => self
-                .signature
-                .parameters
-                .get(*local)
-                .is_some_and(|parameter| parameter.constant),
-            ExprKind::Widen(inner) => self.is_fixed(inner),
+            ExprKind::Local(local) => {
+                range_bindings.contains(local)
+                    || self
+                        .signature
+                        .parameters
+                        .get(*local)
+                        .is_some_and(|parameter| parameter.constant)
+            }
+            ExprKind::Widen(inner) => fixed(inner),
             // ERR-12 and ERR-15 read the argument's existing value.
-            ExprKind::Raised { result, .. } | ExprKind::OrNull { result, .. } => {
-                self.is_fixed(result)
-            }
-            ExprKind::NullRead { value, .. } => self.is_fixed(value),
+            ExprKind::Raised { result, .. } | ExprKind::OrNull { result, .. } => fixed(result),
+            ExprKind::NullRead { value, .. } => fixed(value),
             // `Side(N)`, of what is fixed: the member is fixed too.
-            ExprKind::EnumFrom { value, .. } | ExprKind::DeferredEnumFrom(value) => {
-                self.is_fixed(value)
-            }
-            ExprKind::Unary { operand, .. } => self.is_fixed(operand),
-            ExprKind::Binary { left, right, .. } => self.is_fixed(left) && self.is_fixed(right),
+            ExprKind::EnumFrom { value, .. } | ExprKind::DeferredEnumFrom(value) => fixed(value),
+            ExprKind::Unary { operand, .. } => fixed(operand),
+            ExprKind::Binary { left, right, .. } => fixed(left) && fixed(right),
             ExprKind::DeferredNegation {
                 configuration,
                 operand,
                 ..
             } => {
-                self.is_fixed(operand)
-                    && configuration.iter().all(|entry| {
-                        entry
-                            .value
-                            .as_ref()
-                            .is_some_and(|value| self.is_fixed(value))
-                    })
+                fixed(operand)
+                    && configuration
+                        .iter()
+                        .all(|entry| entry.value.as_ref().is_some_and(fixed))
             }
             ExprKind::DeferredBinary {
                 left,
@@ -650,29 +648,22 @@ impl<'a> Typer<'a> {
                 right,
                 ..
             } => {
-                self.is_fixed(left)
-                    && self.is_fixed(right)
-                    && configuration.iter().all(|entry| {
-                        entry
-                            .value
-                            .as_ref()
-                            .is_some_and(|value| self.is_fixed(value))
-                    })
+                fixed(left)
+                    && fixed(right)
+                    && configuration
+                        .iter()
+                        .all(|entry| entry.value.as_ref().is_some_and(fixed))
             }
             // A symbol over constants: `-1`, `1 + 2`.
             ExprKind::Call {
                 arguments,
                 form: Form::Binary(_) | Form::Unary(_),
                 ..
-            } => arguments
-                .iter()
-                .all(|argument| self.is_fixed(&argument.value)),
-            ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => {
-                entries.iter().all(|entry| self.is_fixed(entry))
-            }
+            } => arguments.iter().all(|argument| fixed(&argument.value)),
+            ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => entries.iter().all(fixed),
             ExprKind::Pairs(entries) => entries
                 .iter()
-                .all(|(key, value)| self.is_fixed(key) && self.is_fixed(value)),
+                .all(|(key, value)| fixed(key) && fixed(value)),
             _ => false,
         }
     }

@@ -125,6 +125,8 @@ pub(crate) enum Choice {
     Raises,
     /// A statement that starts with a name is an assignment.
     Assignment,
+    /// A brace and `for` start a pack comprehension instead of a block (FN-19).
+    PackComprehension,
 }
 
 /// The opening brackets that directly follow what they apply to (LEX-27).
