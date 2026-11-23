@@ -1142,6 +1142,9 @@ pub enum Callee {
         /// `generics` in place: see [`Answer`]. Empty where `generics`
         /// is.
         requirements: Vec<Answer>,
+        /// A stated pack-member requirement is still untold (GEN-7).
+        /// The call's reflected type arguments stay symbolic in an instance.
+        defer_pack_members: bool,
         /// Written arguments whose places still depend on graph instance
         /// inference, by index and source location (GEN-2, EXPR-9, ERR-2).
         contextual: Vec<ContextualArgument>,
