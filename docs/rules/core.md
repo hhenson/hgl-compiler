@@ -30,12 +30,12 @@ transpiler: done
 
 ## NUM-4
 
-transpiler: partial
+transpiler: done
 
 - Passes absolute and relative tolerances to the selected numeric equality native, which
   applies the exact and configured comparisons.
-- The execution catalogue registers `numeric.invalid_tolerance`. Emitting it for a
-  negative or nonfinite tolerance is planned in #516.
+- The runtime raises `numeric.invalid_tolerance` for a negative or non-finite
+  tolerance on `==` or `!=`.
 
 ## NUM-5
 
@@ -519,7 +519,8 @@ transpiler: partial
 
 - Reads a store entry as a whole result before applying the recorded form, and writes
   supported ordinary payloads before a run, at graph build and in hooks.
-- Returning `value.missing_key` for an absent store entry is planned in #516.
+- Reading an absent store key gives `value.missing_key`, the same code as a
+  strict dictionary lookup (ERR-6).
 - Left: an explicitly typed nullable store write and a temporal child graph using the surrounding store are declined (CRUN-7).
 
 ## CAP-7

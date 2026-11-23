@@ -1106,6 +1106,51 @@ fn timing_runs_on_the_sdk() {
     );
 }
 
+/// TIME-8 and CAP-4: a node logs its first dropped wake during a run and
+/// reports later drops even when the HGL node has no explicit stop hook.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn dropped_wake_counts_reach_the_run_log_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("wake-logs");
+    let node = write(
+        &root,
+        "wakes.hgl",
+        "module wakes\n\
+         export fn requests() -> bool {\n\
+             inject scheduler, clock\n\
+             start { schedule(scheduler, clock.evaluation_time) }\n\
+             when scheduled() {\n\
+                 schedule(scheduler, clock.evaluation_time)\n\
+                 schedule(scheduler, clock.evaluation_time - 1us)\n\
+                 return true\n\
+             }\n\
+         }\n",
+    );
+    let app = write(
+        &root,
+        "wakes.app.hgl",
+        "application wakes.main\nuse wakes::{requests}\neval requests()\n",
+    );
+    let output = hgl_in(&["run", &node, &app, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains(": 1 publication"), "{stdout}");
+    assert_eq!(
+        stderr.matches("Dropped wake requested").count(),
+        1,
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("Additional dropped wakes totaled 1").count(),
+        1,
+        "{stderr}"
+    );
+}
+
 /// SOURCE-2, GEN-7. A generic yield time uses its instance's duration
 /// or datetime, including when the source is wired from another graph.
 #[test]

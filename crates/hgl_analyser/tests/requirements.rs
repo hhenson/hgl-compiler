@@ -14,6 +14,28 @@ use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Stmt, ValueCategor
 /// No lines.
 const NONE: [&str; 0] = [];
 
+#[test]
+fn a_type_inequality_tests_the_resolved_argument() {
+    // GEN-3: `T != f64` tests a known type as `!(T == f64)` and binds nothing.
+    let declaration = "const fn non_float<T>(value: T) -> T requires T != f64 => value\n";
+    let accepted = module(&format!(
+        "{declaration}const fn good() -> i64 => non_float(7)\n"
+    ));
+    assert_eq!(accepted.summary(), NONE);
+
+    let rejected = module(&format!(
+        "{declaration}const fn bad() -> f64 => non_float(1.0)\n"
+    ));
+    assert!(
+        rejected
+            .findings
+            .iter()
+            .any(|finding| finding.code == "constraint/requires.unmet"),
+        "{}",
+        rejected.report
+    );
+}
+
 /// What each statement of `name` that holds a call calls: the name of
 /// the operator a requirement names, `candidate` for a candidate
 /// selected, and `none` for a call with no callee.
