@@ -314,5 +314,6 @@ fn typed_delta_publication(value: i64) -> i64? {
 test store_result_forms {
     assert eval store_forms(value: [7, 0]) == [true, true]
     assert eval nullable_store_publication(value: [7]) == [null]
-    assert eval typed_delta_publication(value: [7]) == [7]
+    assert eval typed_delta_publication(value: [7]) == [delta<i64?>(value: 7)]
+    assert eval nullable_store_publication(value: [7]) == [local_checked(-1)]
 }

@@ -16,7 +16,7 @@ use crate::hir::{
     self, Body, ConfigEntry, EndpointOperation, Expr, ExprKind, Hook, LocalId, Stmt, ValueCategory,
 };
 use crate::program::{Binding, LocalKind, RUN_CONFIG};
-use crate::syntax::{child, leads_its_test, tokens, ungrouped};
+use crate::syntax::{child, leads_its_test, name_token, tokens, ungrouped};
 use crate::types::{Detail, Scalar, Type};
 use crate::{codes, error, warning};
 
@@ -1042,7 +1042,12 @@ impl<'a> Typer<'a> {
             return endpoint;
         }
         if self.diagnostics.len() == reported {
+            let previous = self.designating;
+            self.designating = call_callee(&ungrouped(node.clone()))
+                .and_then(|callee| name_token(&callee))
+                .map(|name| Location::new(self.file, name.span()));
             let value = self.expression(node, Some(result));
+            self.designating = previous;
             if self.diagnostics.len() == reported {
                 self.diagnostics.emit(
                     error(

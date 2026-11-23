@@ -628,12 +628,16 @@ impl<'a> Typer<'a> {
         // for the operator's result that is a type parameter and nothing
         // more: the `i64?` of `get<i64?>(global_state, key)` for core's
         // `operator get<V, S, K>(store: S, key: K) -> V` (GEN-8).
+        let result_parameter = public.result.as_ref().and_then(|result| {
+            let result = match result {
+                Type::Result { value, error } if **error == Type::Error => value.as_ref(),
+                other => other,
+            };
+            bare_parameter(result, &public.generics)
+        });
         let result_written = requested.is_some()
-            && bare_parameter(
-                public.result.as_ref().unwrap_or(&Type::Unknown),
-                &public.generics,
-            )
-            .is_some_and(|index| matches!(explicit[index], Some(Argument::Type(_))));
+            && result_parameter
+                .is_some_and(|index| matches!(explicit[index], Some(Argument::Type(_))));
         // GEN-5: "the requested output before inputs". EXPR-5: an
         // integer literal is an `f64` where one is expected; it selects
         // as the `i64` it is where a candidate takes one.
@@ -695,6 +699,18 @@ impl<'a> Typer<'a> {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
         let at = Location::new(self.file, name.span());
+        let nullable_place = match wanted.place {
+            Some(Type::Nullable(payload)) if !wanted.written && self.designating != Some(at) => {
+                Some(payload.as_ref())
+            }
+            _ => None,
+        };
+        if selected.is_empty() && function_errors.is_empty() && nullable_place.is_some() {
+            // A nonfallible bare candidate may have no place-based
+            // binding even for admission. Try the payload only to
+            // diagnose an otherwise valid call.
+            selected.extend(self.nullable_result_candidate(operator, &candidates, &given, &wanted));
+        }
         if selected.len() != 1 {
             // GEN-5: "the requested output before inputs". Where what
             // the place expects is not known, it may be what tells tied
@@ -708,29 +724,6 @@ impl<'a> Typer<'a> {
                 for diagnostic in function_errors {
                     self.diagnostics.emit(diagnostic);
                 }
-                return (self.unselected(given, Form::Named), Type::Unknown);
-            }
-            if selected.is_empty()
-                && let Some((parameter, payload)) =
-                    self.unresolved_nullable_result(operator, &candidates, &given, &wanted)
-            {
-                self.diagnostics.emit(
-                    error(
-                        Category::Type,
-                        codes::GENERIC_UNRESOLVED,
-                        at,
-                        format!(
-                            "this call of `{}` leaves `{parameter}` unresolved in a nullable place",
-                            name.text()
-                        ),
-                        "GEN-8",
-                    )
-                    .with_note(format!(
-                        "write the type argument, `{}<{payload}?>(...)` or `{}<{payload}>(...)`",
-                        name.text(),
-                        name.text()
-                    )),
-                );
                 return (self.unselected(given, Form::Named), Type::Unknown);
             }
             let diagnostic = self.no_one_candidate(
@@ -749,13 +742,92 @@ impl<'a> Typer<'a> {
             self.diagnostics.emit(diagnostic);
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
-        self.called(
+        let unresolved = nullable_place
+            .filter(|_| chosen.nullable_result_fallback)
+            .map(|payload| {
+                self.unresolved_operator_result(
+                    (name.text(), at),
+                    public,
+                    &given,
+                    explicit,
+                    result_parameter,
+                    payload,
+                )
+            });
+        let reported = self.diagnostics.len();
+        let (mut kind, ty) = self.called(
             operator,
             chosen,
             given,
             operator_generics,
             (Form::Named, at),
-        )
+        );
+        if let Some(diagnostic) = unresolved
+            && let ExprKind::Call { callee, .. } = &mut kind
+        {
+            if self.diagnostics.len() == reported && !open(&ty) {
+                self.diagnostics.emit(diagnostic);
+            }
+            // A diagnostic trial cannot create an instance or a store
+            // key use with the provisional type.
+            *callee = Callee::Unread;
+            return (kind, Type::Unknown);
+        }
+        (kind, ty)
+    }
+
+    /// The result parameter and its written position belong to the
+    /// public operator, even when the candidate calls it another name.
+    fn unresolved_operator_result(
+        &self,
+        (name, at): (&str, Location),
+        public: &Signature,
+        given: &[Given],
+        mut found: Vec<Option<Argument>>,
+        parameter: Option<usize>,
+        payload: &Type,
+    ) -> Diagnostic {
+        let Some(index) = parameter else {
+            return error(
+                Category::Type,
+                codes::GENERIC_UNRESOLVED,
+                at,
+                format!(
+                    "this call of `{name}` leaves its result type unresolved in a nullable place"
+                ),
+                "GEN-8",
+            );
+        };
+        let parameter = &public.generics[index].name;
+        let diagnostic = error(
+            Category::Type,
+            codes::GENERIC_UNRESOLVED,
+            at,
+            format!("this call of `{name}` leaves `{parameter}` unresolved in a nullable place"),
+            "GEN-8",
+        );
+        self.infer_operator_inputs(public, &mut found, &public_inputs(public, given));
+        let prefix: Option<Vec<_>> = found[..index]
+            .iter()
+            .map(|argument| match argument.as_ref()? {
+                Argument::Type(ty) if !whole(ty) => None,
+                Argument::Constant(value) if matches!(value.value, ConstantValue::Unknown) => None,
+                argument => Some(argument.to_string()),
+            })
+            .collect();
+        let Some(mut arguments) = prefix else {
+            return diagnostic.with_note(format!(
+                "write `{parameter}` as generic argument {} of `{name}`",
+                index + 1
+            ));
+        };
+        arguments.push(payload.to_string());
+        let plain = arguments.join(", ");
+        arguments[index] = Type::Nullable(Box::new(payload.clone())).to_string();
+        let optional = arguments.join(", ");
+        diagnostic.with_note(format!(
+            "write the type argument, `{name}<{optional}>(...)` or `{name}<{plain}>(...)`"
+        ))
     }
 
     /// A contextual literal may contain a computation or a read whose type

@@ -825,7 +825,15 @@ impl<'a> Typer<'a> {
                 self.infer_function_argument(&entry.value, pattern, generics, &mut found);
             }
         }
-        infer_result_fallback(*result_fallback, generics, &mut found);
+        // A nullable place supplies no final bare success type (GEN-2).
+        // The probe of a value given to a ref result still reports the
+        // endpoint mismatch when the value has no fault of its own.
+        if let Some((result, place)) = result_fallback
+            && (!matches!(place, Type::Nullable(_))
+                || self.designating == Some(Location::new(self.file, name.span())))
+        {
+            infer(result, place, generics, &mut found);
+        }
         // GEN-8: "A generic value parameter the call does not give takes
         // its default, when it has one." Nothing has said what it is,
         // and it is its default before any argument is held to its
@@ -1439,21 +1447,6 @@ pub(super) fn infer_from_place<'r, 'p>(
     };
     infer(result, place, generics, found);
     None
-}
-
-/// GEN-2 and ERR-15: after the arguments, a plain place can supply a
-/// fallible call's bare success type. A nullable place leaves it open,
-/// including for a store read (CAP-6).
-pub(super) fn infer_result_fallback(
-    fallback: Option<(&Type, &Type)>,
-    generics: &[GenericParameter],
-    found: &mut [Option<Argument>],
-) {
-    if let Some((result, place)) = fallback
-        && !matches!(place, Type::Nullable(_))
-    {
-        infer(result, place, generics, found);
-    }
 }
 
 /// [`infer`], for a size or a constant argument: a generic value

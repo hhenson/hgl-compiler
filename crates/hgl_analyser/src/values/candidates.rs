@@ -20,8 +20,7 @@ use super::fit::{
 };
 use super::function_arguments::{CallbackInputs, matches_template};
 use super::inference::{
-    bare_parameter, infer, infer_from_place, infer_result_fallback, mentions, pack_bounds, placed,
-    type_pack,
+    bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
 };
 use super::operators::unreadable;
 use super::requirements::{Condition, holds};
@@ -235,40 +234,39 @@ impl<'a> Typer<'a> {
         ((Vec::new(), untold), errors)
     }
 
-    /// GEN-2 and GEN-8: a nullable destination leaves a bare result
-    /// parameter open. Report that missing type when an otherwise
-    /// matching candidate gets it solely from a plain value request.
-    pub(super) fn unresolved_nullable_result<'w>(
+    /// GEN-2 and GEN-8: give a bare nonfallible result a plain place
+    /// solely to diagnose an otherwise valid call. Fallible results
+    /// already participated in ranking with their contextual success.
+    pub(super) fn nullable_result_candidate(
         &mut self,
         operator: OperatorRef,
         candidates: &[Candidate<'a>],
         given: &[Given],
-        wanted: &Wanted<'w>,
-    ) -> Option<(&'a str, &'w Type)> {
+        wanted: &Wanted,
+    ) -> Option<Chosen<'a>> {
         let Type::Nullable(payload) = wanted.place? else {
             return None;
         };
         if wanted.written {
             return None;
         }
-        let parameter = |signature: &'a Signature| {
-            let result = match signature.result.as_ref()? {
-                Type::Result { value, error } if **error == Type::Error => value,
-                result => result,
-            };
-            let generic = &signature.generics[bare_parameter(result, &signature.generics)?];
-            // An input mentioning this parameter may already decide it.
-            // Here the trial supplies only a type the result leaves open.
-            signature
-                .parameters
-                .iter()
-                .all(|input| !mentions(&input.ty, &[generic.at]))
-                .then_some(generic.name.as_str())
-        };
         let candidates: Vec<_> = candidates
             .iter()
             .copied()
-            .filter(|(_, _, signature)| parameter(signature).is_some())
+            .filter(|(_, _, signature)| {
+                let parameter = signature
+                    .result
+                    .as_ref()
+                    .and_then(|result| bare_parameter(result, &signature.generics));
+                // An input mentioning this parameter may already decide it.
+                parameter.is_some_and(|index| {
+                    let at = signature.generics[index].at;
+                    signature
+                        .parameters
+                        .iter()
+                        .all(|input| !mentions(&input.ty, &[at]))
+                })
+            })
             .collect();
         if candidates.is_empty() {
             return None;
@@ -280,12 +278,14 @@ impl<'a> Typer<'a> {
             callback: None,
         };
         let mark = self.mark();
-        let (selected, untold) = self.admitted(operator, &candidates, given, &plain);
+        let (mut selected, untold) = self.admitted(operator, &candidates, given, &plain);
         self.take_back(mark, false);
-        match selected.as_slice() {
-            [chosen] if !untold => Some((parameter(chosen.declared)?, payload)),
-            _ => None,
+        if untold || selected.len() != 1 {
+            return None;
         }
+        let mut chosen = selected.pop()?;
+        chosen.nullable_result_fallback = true;
+        Some(chosen)
     }
 
     /// Read each candidate's static arguments once, before ranking the
@@ -516,7 +516,13 @@ impl<'a> Typer<'a> {
                     }
                     self.default_constant(candidate, generic)
                 };
-                let Some((mut taken, generics, mut type_packs, defaulted)) = instance(
+                let Some((
+                    mut taken,
+                    generics,
+                    mut type_packs,
+                    defaulted,
+                    nullable_result_fallback,
+                )) = instance(
                     self,
                     signature,
                     (module, candidate),
@@ -528,7 +534,8 @@ impl<'a> Typer<'a> {
                         converting.then_some((self, forms, &payload_parameters, &rejects_form)),
                     ),
                     &mut choose,
-                ) else {
+                )
+                else {
                     continue;
                 };
                 let mut callbacks = Vec::new();
@@ -649,6 +656,7 @@ impl<'a> Typer<'a> {
                     bound: bound.clone(),
                     callbacks,
                     ambiguous_reads: false,
+                    nullable_result_fallback,
                     selecting: None,
                 };
                 if admits == Admits::Unknown {
@@ -1471,7 +1479,7 @@ impl<'a> Typer<'a> {
         // A function already known contributes its types in declaration
         // order, before any later argument can decide them (GEN-2).
         // An unresolved callback contributes only what the probe knows.
-        let (mut found, type_packs) = candidate_bindings(
+        let (mut found, type_packs, _) = candidate_bindings(
             self,
             signature,
             (module, candidate),
@@ -2914,6 +2922,9 @@ pub(super) struct Chosen<'s> {
     callbacks: Vec<(usize, hir::TypePackArgument)>,
     /// Equally preferred choices of which operands to read (ERR-15).
     pub(super) ambiguous_reads: bool,
+    /// A nullable place supplied an unresolved bare success type for
+    /// ranking. A named call cannot use that type to settle the result.
+    pub(super) nullable_result_fallback: bool,
     /// The call to select again after its generic operand types are known (GEN-7).
     selecting: Option<Box<Selecting>>,
 }
@@ -2963,6 +2974,7 @@ fn instance<'s>(
     Vec<Argument>,
     Vec<hir::TypePackArgument>,
     Vec<usize>,
+    bool,
 )> {
     let generics = &signature.generics;
     if generics.is_empty() {
@@ -2971,9 +2983,10 @@ fn instance<'s>(
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            false,
         ));
     }
-    let (mut found, type_packs) = candidate_bindings(
+    let (mut found, type_packs, nullable_result_fallback) = candidate_bindings(
         typer,
         signature,
         (module, declaration),
@@ -3045,6 +3058,7 @@ fn instance<'s>(
         resolved,
         type_packs,
         defaulted,
+        nullable_result_fallback,
     ))
 }
 
@@ -3068,7 +3082,7 @@ fn candidate_bindings(
         )>,
     ),
     choose: &mut dyn FnMut([Option<ResultBinding>; 3]) -> ResultBinding,
-) -> Option<(Vec<Option<Argument>>, Vec<hir::TypePackArgument>)> {
+) -> Option<(Vec<Option<Argument>>, Vec<hir::TypePackArgument>, bool)> {
     let generics = &signature.generics;
     let mut found: Vec<Option<Argument>> = vec![None; generics.len()];
     if let Some(callback) = &wanted.callback {
@@ -3235,7 +3249,15 @@ fn candidate_bindings(
     // type says anything of takes its default (GEN-2). GEN-6: "a
     // candidate whose option has none is admitted only when the call
     // gives it."
-    infer_result_fallback(result_fallback, generics, &mut found);
+    // Keep the contextual success type for admission and ranking. The
+    // named call diagnoses GEN-2 after the ordinary call checks if only
+    // this nullable place could supply its bare result type.
+    let mut nullable_result_fallback = false;
+    if let Some((result, place)) = result_fallback {
+        nullable_result_fallback = matches!(place, Type::Nullable(_))
+            && bare_parameter(result, generics).is_some_and(|index| found[index].is_none());
+        infer(result, place, generics, &mut found);
+    }
     // GEN-10: reflected packs are known before a positive existential
     // equality chooses its first binding. Unresolved non-pack arguments
     // remain placeholders during this projection.
@@ -3266,7 +3288,7 @@ fn candidate_bindings(
         &type_packs,
         &mut found,
     );
-    Some((found, type_packs))
+    Some((found, type_packs, nullable_result_fallback))
 }
 
 /// ERR-12 and ERR-15: a result of a nullable value can supply the

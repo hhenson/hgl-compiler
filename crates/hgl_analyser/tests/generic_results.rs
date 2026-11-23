@@ -336,3 +336,151 @@ fn a_nullable_place_accepts_a_result_its_arguments_say_is_not_nullable() {
     ));
     assert_eq!(checked.summary(), NONE);
 }
+
+/// TIME-7 and TST-5: assignment, yield and trace cells use the
+/// nullable publication type before considering its delta.
+#[test]
+fn nullable_publications_do_not_infer_a_bare_success() {
+    let checked = module(concat!(
+        "const fn choose<T>() -> T {\n",
+        "    let empty: list<T> = []\n",
+        "    return empty[0]\n",
+        "}\n",
+        "const fn fetch<T>(value: i64) -> result<T, error> =>\n",
+        "    err(error(message: \"none\", code: \"sample.none\"))\n",
+        "operator get_value<O>(value: i64) -> O\n",
+        "impl const fn get_value<T>(value: i64) -> result<T, error> => fetch<T>(value)\n",
+        "fn assigned(value: i64) -> i64? {\n",
+        "    inject out\n",
+        "    when { out = choose() }\n",
+        "}\n",
+        "fn yielded(const values: list<i64>) -> i64? {\n",
+        "    for value in values { yield 1us: fetch(value) }\n",
+        "}\n",
+        "fn selected(value: i64) -> i64? {\n",
+        "    when { return get_value(value) }\n",
+        "}\n",
+        "fn relay(value: i64?) -> i64? => value\n",
+        "test a { assert eval relay(value: [null]) == [choose()] }\n",
+        "test b { assert eval relay(value: [null]) == [fetch(1)] }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:18 type/generic.unresolved GEN-8",
+            "m.hgl:15:38 type/generic.unresolved GEN-8",
+            "m.hgl:18:19 type/generic.unresolved GEN-8",
+            "m.hgl:21:47 type/generic.unresolved GEN-8",
+            "m.hgl:22:47 type/generic.unresolved GEN-8",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-5: a candidate needing the contextual success still counts
+/// when the call is ambiguous, with either concrete result shape.
+#[test]
+fn a_bare_fallible_candidate_does_not_hide_an_ambiguity() {
+    for concrete in ["i64?", "i64"] {
+        let source = format!(
+            "operator convert_value<O>(value: i64) -> O\n\
+             impl const fn convert_value<T>(value: i64) -> result<T, error> =>\n\
+                 err(error(message: \"none\", code: \"sample.none\"))\n\
+             impl const fn convert_value(value: i64) -> {concrete} => value\n\
+             const fn read() -> i64? => convert_value(1)\n"
+        );
+        let checked = module(&source);
+        assert_eq!(
+            checked.summary(),
+            ["m.hgl:6:28 operator/operator.ambiguous GEN-5"],
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// CAP-6 and FN-16: the ordinary faults remain primary when a nullable
+/// store read would also have a bare result to resolve.
+#[test]
+fn a_nullable_store_read_preserves_the_calls_own_diagnostic() {
+    let checked = module(concat!(
+        "const fn from_runtime_key(store: GlobalState, key: str) -> i64? => get(store, key)\n",
+        "const fn from_reserved_key(store: GlobalState) -> i64? => get(store, \"run.output\")\n",
+        "fn from_ref_result(value: i64) -> ref i64? {\n",
+        "    inject global_state\n",
+        "    when { return get(global_state, \"absent\") }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:79 type/argument.constant FN-1",
+            "m.hgl:3:70 injectable/store.reserved_key TIME-8",
+            "m.hgl:6:19 type/type.mismatch FN-16",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-8: the diagnostic's type argument occupies the same position
+/// as the one that checks successfully in the public operator.
+#[test]
+fn a_nullable_operator_result_names_its_public_type_argument() {
+    let checked = module(concat!(
+        "operator pick_from<K, O>(key: K) -> O\n",
+        "impl const fn pick_from<T>(key: str) -> T {\n",
+        "    let empty: list<T> = []\n",
+        "    return empty[0]\n",
+        "}\n",
+        "const fn unresolved() -> i64? => pick_from(\"a\")\n",
+        "const fn written() -> i64? => pick_from<str, i64?>(\"a\")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:7:34 type/generic.unresolved GEN-8"],
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked.report.contains("leaves `O` unresolved"),
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked.report.contains("`pick_from<str, i64?>(...)`"),
+        "{}",
+        checked.report
+    );
+}
+
+/// ERR-9: a rejected nullable bare success does not cascade into a
+/// mismatch, while a known incompatible success still reports one.
+#[test]
+fn an_unresolved_fallible_call_does_not_cascade_into_a_type_mismatch() {
+    let checked = module(concat!(
+        "const fn fetch<T>(store: GlobalState, const key: str) -> result<T, error> =>\n",
+        "    get<T>(store, key)\n",
+        "fn read(value: i64) -> i64? {\n",
+        "    inject global_state\n",
+        "    when {\n",
+        "        let saved: i64? = fetch(global_state, \"absent\")\n",
+        "        return saved\n",
+        "    }\n",
+        "}\n",
+        "const fn incompatible(store: GlobalState) -> i64? {\n",
+        "    let saved: i64? = fetch<str>(store, \"a\")\n",
+        "    return saved\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:7:27 type/generic.unresolved GEN-8",
+            "m.hgl:12:23 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+}

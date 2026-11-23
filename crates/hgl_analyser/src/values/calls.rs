@@ -1027,7 +1027,8 @@ impl<'a> Typer<'a> {
         let requires_rejects = judged
             && !unresolved.is_empty()
             && self.pack_requires_rejects(at, (module, declaration), &found, &known_packs);
-        if judged && !unresolved.is_empty() && !requires_rejects {
+        let reports_unresolved = judged && !unresolved.is_empty() && !requires_rejects;
+        if reports_unresolved {
             let names: Vec<String> = unresolved.iter().map(|name| format!("`{name}`")).collect();
             self.diagnostics.emit(
                 error(
@@ -1138,6 +1139,14 @@ impl<'a> Typer<'a> {
             lifted: false,
         };
         self.finished_call(&kind, evaluating);
+        // An already-rejected bare success supplies no result type for
+        // the nullable place to check again (ERR-9).
+        if reports_unresolved
+            && result_fallback.is_some_and(|(_, place)| matches!(place, Type::Nullable(_)))
+            && matches!(&ty, Type::Result { value, .. } if **value == Type::Unknown)
+        {
+            return (kind, Type::Unknown);
+        }
         (kind, ty)
     }
 
