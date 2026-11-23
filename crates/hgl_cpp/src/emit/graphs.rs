@@ -148,11 +148,14 @@ impl Emitter<'_> {
             }
             text.push('\n');
         }
-        let closing = self.debug_end(at, end, format!("{INDENT}}}\n"));
-        text.push_str(&format!(
-            "{INDENT}static {result} compose({})\n{INDENT}{{\n{statements}{closing}}};\n",
+        let opening = format!(
+            "{INDENT}static {result} compose({})\n{INDENT}{{\n",
             parameters.join(", ")
-        ));
+        );
+        text.push_str(&self.debug_stamp(at, opening));
+        text.push_str(&statements);
+        text.push_str(&self.debug_end(at, end, format!("{INDENT}}}\n")));
+        text.push_str("};\n");
         Some(text)
     }
 

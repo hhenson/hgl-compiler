@@ -1,6 +1,7 @@
 //! The build command and the application and debugger paths that use it.
 
-use std::collections::BTreeSet;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -15,17 +16,11 @@ use super::application::{self, RanApplication};
 use super::build::{Interrupt, Workspace};
 use super::plan::{self, Action};
 use super::stamp::debug_source_path;
-use super::{BuildSession, BuiltProgram, Replacements, sdk};
+use super::{BuildSession, BuiltProgram, DEBUG_SOURCES, Replacements, sdk};
 use crate::{
     BuildArgs, BuildFormat, EXIT_FAILED, EXIT_REJECTED, LimitArgs, ProgramSources, RunArgs,
     TestArgs, count,
 };
-
-/// The bundled HGL declarations of the replay and record used by eval.
-const BUNDLED_EVAL_SOURCE: &str = "<core>/core/core.hgl";
-/// A debugger-readable copy that project source discovery does not pick up
-/// when the build directory is itself under a source root.
-pub(super) const DEBUG_EVAL_SOURCE: &str = "debug-sources/core.hgl.source";
 
 /// Inputs the build, run, test and debugger commands give to the same builder.
 pub(super) struct BuildRequest<'a> {
@@ -233,8 +228,10 @@ impl<'a> BuildRequest<'a> {
         sources: &SourceMap,
         original_source: Option<&(hgl_source::SourceFile, crate::replace::SourceEdits)>,
     ) -> Output {
+        let bundled = RefCell::new(BTreeMap::new());
         let position = |at: Location, line: usize| {
-            let name = sources.file(at.file).name();
+            let source = sources.file(at.file);
+            let name = source.name();
             let line = match original_source {
                 Some((original, edits)) if original.name() == name => {
                     original.line_index(edits.original_offset(at.span.start)?) + 1
@@ -242,8 +239,9 @@ impl<'a> BuildRequest<'a> {
                 _ => line,
             };
             let path = if self.debug {
-                if name == BUNDLED_EVAL_SOURCE {
-                    DEBUG_EVAL_SOURCE.to_string()
+                if let Some(path) = bundled_debug_source(name) {
+                    bundled.borrow_mut().insert(path.clone(), source.text());
+                    path
                 } else {
                     debug_source_path(name)
                 }
@@ -255,16 +253,17 @@ impl<'a> BuildRequest<'a> {
         let mut unwritten = Diagnostics::new();
         if self.debug {
             let mut output = hgl_cpp::transpile_for_debugger(program, &position, &mut unwritten);
-            if let Some(core) = sources
-                .files()
-                .iter()
-                .find(|file| file.name() == BUNDLED_EVAL_SOURCE)
-            {
-                output.files.push(hgl_cpp::File {
-                    path: DEBUG_EVAL_SOURCE.to_string(),
-                    text: core.text().to_string(),
-                });
-            }
+            output
+                .files
+                .extend(
+                    bundled
+                        .into_inner()
+                        .into_iter()
+                        .map(|(path, text)| hgl_cpp::File {
+                            path,
+                            text: text.to_string(),
+                        }),
+                );
             output
         } else {
             hgl_cpp::transpile_with_positions(program, &position, &mut unwritten)
@@ -280,6 +279,17 @@ impl<'a> BuildRequest<'a> {
         }
         build_error(reason)
     }
+}
+
+/// Store the supplied Core sources named by debug lines. The `.source`
+/// suffix keeps project discovery from reading a generated copy as HGL.
+fn bundled_debug_source(name: &str) -> Option<String> {
+    let (name, _) = hgl_analyser::CORE_FILES
+        .iter()
+        .find(|(file, _)| *file == name)?;
+    let relative = name.strip_prefix("<core>/")?;
+    let relative = relative.strip_prefix("core/").unwrap_or(relative);
+    Some(format!("{DEBUG_SOURCES}/{relative}.source"))
 }
 
 pub(super) fn build_error(reason: String) -> ExitCode {

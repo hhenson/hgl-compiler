@@ -50,8 +50,8 @@ fn plan(output: Output) -> Value {
     plan
 }
 
-/// The launch maps HGL function ends and Core's eval wiring to source a
-/// debugger can read. A warm launch repairs a missing bundled source.
+/// The launch maps graph entry, HGL function ends and bundled Core to
+/// readable source. A warm launch repairs the bundled copies.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn debug_launch_maps_closing_braces_and_eval_wiring() {
@@ -90,6 +90,11 @@ test value_steps {
 test eval_steps {
     assert eval observed_graph(value: [1]) == [2]
 }
+
+test calendar_steps {
+    let next_day = @2026-01-02 + 1B
+    assert next_day == @2026-01-05
+}
 "#;
     write(&root, "stepping.hgl", source);
     let workspace = root.join("debug workspace");
@@ -108,9 +113,24 @@ test eval_steps {
     let launch = run();
     assert_eq!(
         launch["launches"][0]["tests"],
-        json!(["debug.stepping::value_steps", "debug.stepping::eval_steps"])
+        json!([
+            "debug.stepping::value_steps",
+            "debug.stepping::eval_steps",
+            "debug.stepping::calendar_steps"
+        ])
     );
     let module = fs::read_to_string(workspace.join("modules/mod-debug-stepping.cpp")).unwrap();
+    assert!(
+        module
+            .lines()
+            .zip(module.lines().skip(1))
+            .any(|(map, next)| {
+                map.trim_start().starts_with("#line 15 ")
+                    && map.ends_with("stepping.hgl\"")
+                    && next.contains(" compose(")
+            }),
+        "missing graph composition entry mapping"
+    );
     // Value function, handler, node, graph, test-local helper and test.
     for line in [6, 12, 13, 18, 24, 27] {
         let directive = format!("#line {line} ");
@@ -126,14 +146,18 @@ test eval_steps {
             "missing closing-brace mapping for line {line}"
         );
     }
+    let bundled = |file| {
+        hgl_analyser::CORE_FILES
+            .iter()
+            .find_map(|(name, text)| (*name == file).then_some(*text))
+            .unwrap()
+    };
     let core_path = workspace.join("debug-sources/core.hgl.source");
-    let core_source = fs::read_to_string(&core_path).unwrap();
-    let bundled_source = hgl_analyser::CORE_FILES
-        .iter()
-        .find_map(|(name, text)| (*name == "<core>/core/core.hgl").then_some(*text))
-        .unwrap();
-    assert!(core_source == bundled_source);
+    let core_source = bundled("<core>/core/core.hgl");
+    assert!(fs::read_to_string(&core_path).unwrap() == core_source);
     let core_module = fs::read_to_string(workspace.join("modules/mod-core.cpp")).unwrap();
+    assert!(!core_module.contains("\"<core>/"));
+    assert!(core_module.contains("\"debug-sources/calendar.hgl.source\""));
     for (source_name, wiring) in [
         (
             "fn replay<",
@@ -159,10 +183,31 @@ test eval_steps {
         );
     }
 
+    let calendar_path = workspace.join("debug-sources/calendar.hgl.source");
+    let calendar_source = bundled("<core>/core/calendar.hgl");
+    assert!(fs::read_to_string(&calendar_path).unwrap() == calendar_source);
+    let executable = Path::new(launch["launches"][0]["executable"].as_str().unwrap());
+    let built = || fs::metadata(executable).unwrap().modified().unwrap();
+    let modification = built();
+
     assert_eq!(run(), launch);
-    fs::remove_file(&core_path).unwrap();
+    fs::remove_file(&calendar_path).unwrap();
     assert_eq!(run(), launch);
-    assert_eq!(fs::read_to_string(core_path).unwrap(), core_source);
+    assert!(fs::read_to_string(calendar_path).unwrap() == calendar_source);
+    assert_eq!(built(), modification);
+
+    #[cfg(unix)]
+    {
+        let target = root.join("core-copy.txt");
+        fs::write(&target, core_source).unwrap();
+        fs::remove_file(&core_path).unwrap();
+        std::os::unix::fs::symlink(&target, &core_path).unwrap();
+        assert_eq!(run(), launch);
+        assert!(fs::symlink_metadata(&core_path).unwrap().is_file());
+        assert!(fs::read_to_string(&core_path).unwrap() == core_source);
+        assert!(fs::read_to_string(&target).unwrap() == core_source);
+        assert_eq!(built(), modification);
+    }
 }
 
 /// TST-14, TST-15: usage errors start no build, and a selected empty
