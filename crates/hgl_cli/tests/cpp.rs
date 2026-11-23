@@ -3775,7 +3775,7 @@ fn store_values_and_failure_places_on_the_sdk() {
         text(&output.stderr)
     );
     // The failing `l[3]` is on line 7 of the application's file; the `get`
-    // of a key put nowhere on line 80 of the module's, in the graph.
+    // of a key put nowhere on line 80 of the module's, in the graph (CAP-6).
     let failing = root.join("demo.store.failing.hgl").display().to_string();
     for (application, said) in [
         (
@@ -3788,7 +3788,7 @@ fn store_values_and_failure_places_on_the_sdk() {
         (
             "demo.store.unbuilt",
             format!(
-                "hgl: demo.store.unbuilt failed: the global store holds nothing under 'by', \
+                "hgl: demo.store.unbuilt failed: value.missing_key: the global store holds nothing under 'by', \
                  raised at {module}:80"
             ),
         ),
