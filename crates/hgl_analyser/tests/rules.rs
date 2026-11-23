@@ -1054,6 +1054,7 @@ fn a_native_candidate_names_its_operator_and_is_completed_by_a_part() {
         checked.summary(),
         [
             "interface.hgl:7:16 operator/impl.unknown_operator GEN-4",
+            "provider.hgl:5:22 name/native.missing_declaration NATIVE-2",
             "provider.hgl:5:57 phase/native.const_hook NATIVE-3",
             "provider.hgl:6:16 name/native.missing_declaration NATIVE-2",
         ]
@@ -1119,6 +1120,109 @@ fn a_native_implementation_completes_its_declaration() {
     let module = checked.program.module("examples.native").unwrap();
     assert_eq!(module.lookup("accumulate").count(), 1);
     assert_eq!(module.lookup("describe").count(), 2);
+}
+
+/// NATIVE-2 requires matching public types, order, and `var` and `ref` marks.
+#[test]
+fn native_parts_reject_a_different_public_signature() {
+    let checked = check(&[
+        (
+            "interface.hgl",
+            concat!(
+                "module m\n",
+                "native const fn count(value: i64) -> i64\n",
+                "native const fn update(var value: i64)\n",
+                "native fn follow(ref value: i64) -> ref i64\n",
+                "native const fn pair(first: i64, second: i64)\n",
+                "operator choice<T>(value: T) -> i64\n",
+                "native impl const fn choice(value: i64) -> i64\n",
+            ),
+        ),
+        (
+            "provider.hgl",
+            concat!(
+                "module m part provider\n",
+                "native const fn count(value: str) -> i64 {}\n",
+                "native const fn update(value: i64) {}\n",
+                "native fn follow(value: i64) -> i64 { when; }\n",
+                "native const fn pair(second: i64, first: i64) {}\n",
+                "native impl const fn choice(value: str) -> i64 {}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "provider.hgl:2:17 name/native.missing_declaration NATIVE-2",
+            "provider.hgl:3:17 name/native.missing_declaration NATIVE-2",
+            "provider.hgl:4:11 name/native.missing_declaration NATIVE-2",
+            "provider.hgl:5:17 name/native.missing_declaration NATIVE-2",
+            "provider.hgl:6:22 name/native.missing_declaration NATIVE-2",
+        ]
+    );
+}
+
+/// Proposed reading of NATIVE-2 (#517): a type parameter is positional
+/// (GEN-8), a reordered membership names the same set, and the default
+/// belongs to the public declaration.
+#[test]
+fn native_parts_keep_accepted_spellings_of_a_signature() {
+    let checked = check(&[
+        (
+            "interface.hgl",
+            concat!(
+                "module m\n",
+                "native const fn choose<T>(value: list<T>) -> list<T>\n",
+                "native const fn member<T>(value: T) -> T requires T in {i64, f64}\n",
+                "native const fn defaulted(value: i64 = 1) -> i64\n",
+                "native const fn part_default(value: i64) -> i64\n",
+            ),
+        ),
+        (
+            "provider.hgl",
+            concat!(
+                "module m part provider\n",
+                "native const fn choose<U>(value: list<U>) -> list<U> {}\n",
+                "native const fn member<T>(value: T) -> T requires T in {f64, i64} {}\n",
+                "native const fn defaulted(value: i64) -> i64 {}\n",
+                "native const fn part_default(value: i64 = 2) -> i64 {}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(checked.summary(), [] as [&str; 0]);
+}
+
+/// Proposed reading of NATIVE-2 (#517): the complete written result type
+/// includes the failure type of `result<T, E>`.
+#[test]
+fn native_parts_match_the_complete_result_type() {
+    let checked = check(&[
+        (
+            "interface.hgl",
+            concat!(
+                "module m\n",
+                "native const fn same() -> result<i64, str>\n",
+                "native const fn different() -> result<i64, str>\n",
+                "native fn follow(ref value: i64) -> ref i64\n",
+            ),
+        ),
+        (
+            "provider.hgl",
+            concat!(
+                "module m part provider\n",
+                "native const fn same() -> result<i64, str> {}\n",
+                "native const fn different() -> result<i64, i64> {}\n",
+                "native fn follow(ref value: i64) -> i64 { when; }\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "provider.hgl:3:17 name/native.missing_declaration NATIVE-2",
+            "provider.hgl:4:11 name/native.missing_declaration NATIVE-2",
+        ]
+    );
 }
 
 /// NATIVE-2: "Duplicate declarations or selected implementations are
