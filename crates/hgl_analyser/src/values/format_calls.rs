@@ -9,7 +9,7 @@ use hgl_source::Span;
 
 use super::{Tables, Typer, calls::call_callee, tables};
 use crate::declared::names_parameter;
-use crate::formatting::{self, Piece};
+use crate::formatting::{self, PatternFault, PatternMemo, PatternText, Piece};
 use crate::hir::{Argument, Expr, ExprKind, Form, TextCall, Value, ValueCategory};
 use crate::syntax::{child, name_token, ungrouped};
 use crate::{ConstantValue, DeclarationKind, Detail, Role, Scalar, Signature, Type, codes, error};
@@ -49,53 +49,31 @@ impl Typer<'_> {
         if pattern.value.ty == Type::Unknown || matches!(pattern.value.kind, ExprKind::Unread) {
             return;
         }
-        let written = self.node_at(pattern.value.at);
-        let constant = if let ExprKind::Literal(Value::Str(text)) = &pattern.value.kind {
-            Some(ConstantValue::Str(text.clone()))
-        } else {
-            written
-                .as_ref()
-                .and_then(|node| {
-                    self.read_constant(node, Some(&Type::Scalar(Scalar::Str)))
-                        .ok()
-                })
-                .map(|constant| {
-                    constant.substituted(&|at| {
-                        let (_, argument) = self
-                            .instance
-                            .iter()
-                            .find(|(parameter, _)| *parameter == at)?;
-                        match argument {
-                            crate::Argument::Constant(constant) => Some(constant.value.clone()),
-                            crate::Argument::Type(_) => None,
-                        }
-                    })
-                })
-        };
-        let text = match constant {
-            Some(ConstantValue::Str(text)) => Some(text),
-            // Deferred selection can retain a generic value in its
-            // typed argument even after the instance has bound it.
-            _ => formatting::constant_pattern_in(self.program, &pattern.value, &self.instance),
-        };
-        let folded = if text.is_none() {
-            written
-                .as_ref()
-                .and_then(|source| self.fold_source_pattern(source, 64))
-        } else {
-            None
-        };
-        let Some(text) = text.or(folded) else {
-            if (self.graph || self.value_code) && !self.is_fixed(&pattern.value, &[]) {
-                self.diagnostics.emit(error(
-                    Category::Type,
-                    codes::ARGUMENT_CONSTANT,
-                    pattern.value.at,
-                    "a format pattern takes a compile-time string".to_string(),
-                    "FMT-1",
-                ));
+        let text =
+            match formatting::constant_pattern_in(self.program, &pattern.value, &self.instance) {
+                Err(PatternFault::Unread) => self
+                    .node_at(pattern.value.at)
+                    .ok_or(PatternFault::Unread)
+                    .and_then(|source| {
+                        self.fold_source_pattern(&source, 64, &mut PatternMemo::default())
+                    }),
+                known => known,
+            };
+        let text = match text {
+            Ok(text) => text,
+            Err(PatternFault::Limit) => return,
+            Err(PatternFault::Unread) => {
+                if (self.graph || self.value_code) && !self.is_fixed(&pattern.value, &[]) {
+                    self.diagnostics.emit(error(
+                        Category::Type,
+                        codes::ARGUMENT_CONSTANT,
+                        pattern.value.at,
+                        "a format pattern takes a compile-time string".to_string(),
+                        "FMT-1",
+                    ));
+                }
+                return;
             }
-            return;
         };
         let Some(parts) = self.checked_places(&pattern.value, &text) else {
             return;
@@ -202,7 +180,7 @@ impl Typer<'_> {
             }
         }
         *planned = Some(Box::new(TextCall {
-            pattern: Some(text),
+            pattern: Some(text.to_string()),
             conversions: conversions.into_boxed_slice(),
         }));
     }
@@ -210,92 +188,122 @@ impl Typer<'_> {
     /// A string pattern may name a module constant whose initializer
     /// calls a value function (FMT-1, UNIT-13). Read a pure return
     /// expression in that declaration's scope with a bounded call chain.
-    fn fold_source_pattern(&self, source: &SyntaxNode, remaining: usize) -> Option<String> {
-        let next = remaining.checked_sub(1)?;
+    fn fold_source_pattern(
+        &self,
+        source: &SyntaxNode,
+        remaining: usize,
+        memo: &mut PatternMemo,
+    ) -> PatternText {
+        use PatternFault::{Limit, Unread};
+
+        let next = remaining.checked_sub(1).ok_or(Limit)?;
         let source = if source.kind() == SyntaxKind::Arg {
-            source.children().last()?
+            source.children().last().ok_or(Unread)?
         } else {
             source.clone()
         };
         let source = ungrouped(source);
-        let text = Type::Scalar(Scalar::Str);
-        let (module, declaration, is_call) = match self.read_constant(&source, Some(&text)) {
-            Ok(ConstantValue::Str(text)) => return Some(text),
-            Ok(ConstantValue::Named {
-                module,
-                declaration,
-            }) => (module, declaration, false),
-            _ => {
-                if source.kind() == SyntaxKind::BinaryExpr
-                    && source.children_with_tokens().any(|child| {
-                        child
-                            .into_token()
-                            .is_some_and(|token| token.kind() == SyntaxKind::Plus)
-                    })
-                    && child(&source, SyntaxKind::OperatorConfig).is_none()
-                {
-                    let mut operands = source.children();
-                    let mut left = self.fold_source_pattern(&operands.next()?, next)?;
-                    let right = self.fold_source_pattern(&operands.next()?, next)?;
-                    left.push_str(&right);
-                    return Some(left);
-                }
-                let callee = call_callee(&source)?;
-                if callee.kind() != SyntaxKind::NameExpr
-                    || child(&source, SyntaxKind::ArgList)?
-                        .children()
-                        .next()
-                        .is_some()
-                {
-                    return None;
-                }
-                let (module, declarations) = self.declarations(&name_token(&callee)?)?;
-                let [declaration] = declarations else {
-                    return None;
-                };
-                (module, *declaration, true)
+        if source.kind() == SyntaxKind::Literal {
+            return match self.read_constant(&source, Some(&Type::Scalar(Scalar::Str))) {
+                Ok(ConstantValue::Str(text)) => formatting::pattern_text(&text),
+                _ => Err(Unread),
+            };
+        }
+        if source.kind() == SyntaxKind::BinaryExpr
+            && source.children_with_tokens().any(|child| {
+                child
+                    .into_token()
+                    .is_some_and(|token| token.kind() == SyntaxKind::Plus)
+            })
+            && child(&source, SyntaxKind::OperatorConfig).is_none()
+        {
+            let mut operands = source.children();
+            let left = self.fold_source_pattern(&operands.next().ok_or(Unread)?, next, memo)?;
+            let right = self.fold_source_pattern(&operands.next().ok_or(Unread)?, next, memo)?;
+            return formatting::joined_pattern(left, right);
+        }
+        let (name, kind) = if source.kind() == SyntaxKind::NameExpr {
+            (
+                name_token(&source).ok_or(Unread)?,
+                DeclarationKind::Constant,
+            )
+        } else {
+            let callee = call_callee(&source).ok_or(Unread)?;
+            if callee.kind() != SyntaxKind::NameExpr
+                || child(&source, SyntaxKind::ArgList)
+                    .ok_or(Unread)?
+                    .children()
+                    .next()
+                    .is_some()
+            {
+                return Err(Unread);
             }
+            (
+                name_token(&callee).ok_or(Unread)?,
+                DeclarationKind::Function(Role::Value),
+            )
         };
+        let (module, declarations) = self.declarations(&name).ok_or(Unread)?;
+        let [declaration] = declarations else {
+            return Err(Unread);
+        };
+        if self.program.modules[module].declarations[*declaration].kind != kind {
+            return Err(Unread);
+        }
+        memo.declaration((module, *declaration), |memo| {
+            self.fold_pattern_declaration(module, *declaration, next, memo)
+        })
+    }
+
+    fn fold_pattern_declaration(
+        &self,
+        module: usize,
+        declaration: usize,
+        remaining: usize,
+        memo: &mut PatternMemo,
+    ) -> PatternText {
+        use PatternFault::Unread;
+
         let unit = &self.program.modules[module];
         let owner = &unit.declarations[declaration];
+        let text = Type::Scalar(Scalar::Str);
         let empty = Signature {
             generics: Vec::new(),
             parameters: Vec::new(),
             result: None,
             reference: false,
         };
-        let (expression, signature) = if is_call {
-            let Detail::Callable(signature) = &unit.details[declaration] else {
-                return None;
-            };
-            if owner.kind != DeclarationKind::Function(Role::Value)
-                || !signature.generics.is_empty()
-                || !signature.parameters.is_empty()
-                || signature.result.as_ref() != Some(&text)
+        let (expression, signature) = match &unit.details[declaration] {
+            Detail::Callable(signature)
+                if signature.generics.is_empty()
+                    && signature.parameters.is_empty()
+                    && signature.result.as_ref() == Some(&text) =>
             {
-                return None;
+                let expression = if let Some(arrow) = child(&owner.syntax, SyntaxKind::ArrowBody) {
+                    arrow.children().next().ok_or(Unread)?
+                } else {
+                    let block = child(&owner.syntax, SyntaxKind::Block).ok_or(Unread)?;
+                    let mut statements = block.children();
+                    let only = statements.next().ok_or(Unread)?;
+                    if statements.next().is_some()
+                        || !matches!(only.kind(), SyntaxKind::ReturnStmt | SyntaxKind::ExprStmt)
+                    {
+                        return Err(Unread);
+                    }
+                    only.children().next().ok_or(Unread)?
+                };
+                (expression, signature)
             }
-            let expression = if let Some(arrow) = child(&owner.syntax, SyntaxKind::ArrowBody) {
-                arrow.children().next()?
-            } else {
-                let block = child(&owner.syntax, SyntaxKind::Block)?;
-                let mut statements = block.children();
-                let only = statements.next()?;
-                if statements.next().is_some()
-                    || !matches!(only.kind(), SyntaxKind::ReturnStmt | SyntaxKind::ExprStmt)
-                {
-                    return None;
-                }
-                only.children().next()?
-            };
-            (expression, signature)
-        } else {
-            let written = crate::read::type_child(&owner.syntax);
-            let expression = owner
-                .syntax
-                .children()
-                .find(|node| Some(node) != written.as_ref())?;
-            (expression, &empty)
+            Detail::Constant(ty) if ty == &text => {
+                let written = crate::read::type_child(&owner.syntax);
+                let expression = owner
+                    .syntax
+                    .children()
+                    .find(|node| Some(node) != written.as_ref())
+                    .ok_or(Unread)?;
+                (expression, &empty)
+            }
+            _ => return Err(Unread),
         };
         let (bindings, written, calls) = tables(unit);
         let selecting = RefCell::new(Vec::new());
@@ -313,7 +321,7 @@ impl Typer<'_> {
             },
             &mut diagnostics,
         );
-        typer.fold_source_pattern(&expression, next)
+        typer.fold_source_pattern(&expression, remaining, memo)
     }
 
     /// Record the selected ordinary call, with an input supplied by

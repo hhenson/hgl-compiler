@@ -1,6 +1,8 @@
 //! Run the first Core formatting slice through the ordinary C++ SDK driver.
 
+use std::fmt::Write;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 use super::{argument, hgl_in, scratch, sdk_named, text, write};
@@ -88,29 +90,67 @@ fn target_declines_unresolved_format_patterns() {
     for (name, declaration, call) in cases {
         let source = format!("module {name}\n{declaration}\ntest t {{ assert {call} == \"\" }}\n");
         let file = write(&root, &format!("{name}.hgl"), &source);
-        let checked = hgl_in(&["check", &file], &[], &[]);
-        assert!(checked.status.success(), "{}", text(&checked.stderr));
-        let output = root.join(name);
-        let emitted = hgl_in(
-            &[
-                "emit",
-                &file,
-                "--target",
-                "cpp",
-                "--out",
-                &argument(&output),
-            ],
-            &[],
-            &[],
-        );
-        let stderr = text(&emitted.stderr);
-        assert_eq!(emitted.status.code(), Some(1), "{stderr}");
-        assert!(
-            stderr.contains("does not write a format pattern whose text is not known here yet"),
-            "{stderr}"
-        );
-        assert!(!output.exists());
+        assert_target_declines_pattern(&file, &root.join(name));
     }
+}
+
+/// Each declaration doubles its predecessor's text without doubling the
+/// analyser's work. Programs beyond the reader's budget still check cleanly.
+#[test]
+fn bounds_doubling_format_patterns() {
+    let root = scratch("doubling-format-patterns");
+    for (name, depth, use_functions) in [
+        ("readable", 14, true),
+        ("large_function", 20, true),
+        ("larger_function", 24, true),
+        ("large_constant", 24, false),
+    ] {
+        let mut source = format!("module {name}\n");
+        let mut expression = "\"x\"".to_string();
+        for level in 0..=depth {
+            let declaration = format!("p{level}");
+            if use_functions {
+                writeln!(source, "const fn {declaration}() -> str => {expression}").unwrap();
+                expression = format!("{declaration}()");
+            } else {
+                writeln!(source, "const {declaration}: str = {expression}").unwrap();
+                expression = declaration;
+            }
+            if level != depth {
+                expression = format!("{expression} + {expression}");
+            }
+        }
+        writeln!(source, "test t {{ assert format({expression}) != \"\" }}").unwrap();
+        let file = write(&root, &format!("{name}.hgl"), &source);
+        let output = root.join(name);
+        if name == "readable" {
+            let emitted = emit_format_program(&file, &output);
+            assert!(emitted.status.success(), "{}", text(&emitted.stderr));
+        } else {
+            assert_target_declines_pattern(&file, &output);
+        }
+    }
+}
+
+fn emit_format_program(file: &str, output: &Path) -> std::process::Output {
+    hgl_in(
+        &["emit", file, "--target", "cpp", "--out", &argument(output)],
+        &[],
+        &[],
+    )
+}
+
+fn assert_target_declines_pattern(file: &str, output: &Path) {
+    let checked = hgl_in(&["check", file], &[], &[]);
+    assert!(checked.status.success(), "{}", text(&checked.stderr));
+    let emitted = emit_format_program(file, output);
+    let stderr = text(&emitted.stderr);
+    assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("does not write a format pattern whose text is not known here yet"),
+        "{stderr}"
+    );
+    assert!(!output.exists());
 }
 
 /// OUT-1, OUT-2, FMT-4: keep the process streams independent of the test

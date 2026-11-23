@@ -2,8 +2,9 @@
 //! FMT-7 and FMT-9). The formatter consumes the resulting places and
 //! typed specifiers.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::ops::Range;
+use std::rc::Rc;
 
 use hgl_diagnostics::Location;
 
@@ -320,62 +321,111 @@ pub fn marked_payload<'a>(program: &Program, ty: &'a Type) -> Option<&'a Type> {
     }
 }
 
+/// Why the compiler has yet to read a format pattern.
+#[derive(Clone, Copy)]
+pub(crate) enum PatternFault {
+    /// An expression outside the compile-time reader's supported forms.
+    Unread,
+    /// The pattern would exceed the reader's budget.
+    Limit,
+}
+
+pub(crate) type PatternText = Result<Rc<str>, PatternFault>;
+
+const PATTERN_BYTES: usize = 64 * 1024;
+
+pub(crate) fn pattern_text(text: &str) -> PatternText {
+    if text.len() > PATTERN_BYTES {
+        return Err(PatternFault::Limit);
+    }
+    Ok(Rc::from(text))
+}
+
+pub(crate) fn joined_pattern(left: Rc<str>, right: Rc<str>) -> PatternText {
+    let length = left.len() + right.len();
+    if length > PATTERN_BYTES {
+        return Err(PatternFault::Limit);
+    }
+    let mut text = String::with_capacity(length);
+    text.push_str(&left);
+    text.push_str(&right);
+    Ok(Rc::from(text))
+}
+
+/// One read per declaration in this fold. Copies of a named result
+/// share the same text, and a recursive reference finds an unread value.
+#[derive(Default)]
+pub(crate) struct PatternMemo(HashMap<(usize, usize), PatternText>);
+
+impl PatternMemo {
+    pub(crate) fn declaration(
+        &mut self,
+        key: (usize, usize),
+        read: impl FnOnce(&mut Self) -> PatternText,
+    ) -> PatternText {
+        if let Some(result) = self.0.get(&key) {
+            return result.clone();
+        }
+        self.0.insert(key, Err(PatternFault::Unread));
+        let result = read(self);
+        self.0.insert(key, result.clone());
+        result
+    }
+}
+
 /// A pattern known in the typed program, including its bound generic
 /// values and additions of constant strings (FMT-1).
 pub(crate) fn constant_pattern_in(
     program: &Program,
     value: &Expr,
     instance: &[(Location, GenericArgument)],
-) -> Option<String> {
-    fn append(
+) -> PatternText {
+    use PatternFault::{Limit, Unread};
+
+    fn read(
         program: &Program,
         value: &Expr,
         instance: &[(Location, GenericArgument)],
-        text: &mut String,
-        seen: &mut HashSet<(usize, usize)>,
-    ) -> Option<()> {
+        memo: &mut PatternMemo,
+        remaining: usize,
+    ) -> PatternText {
+        let next = remaining.checked_sub(1).ok_or(Limit)?;
         match &value.kind {
-            ExprKind::Literal(Value::Str(value)) => text.push_str(value),
+            ExprKind::Literal(Value::Str(value)) => pattern_text(value),
             ExprKind::GenericValue { at, .. } => {
-                let (_, GenericArgument::Constant(given)) =
-                    instance.iter().find(|(parameter, _)| parameter == at)?
+                let Some((_, GenericArgument::Constant(given))) =
+                    instance.iter().find(|(parameter, _)| parameter == at)
                 else {
-                    return None;
+                    return Err(Unread);
                 };
-                let ConstantValue::Str(value) = &given.value else {
-                    return None;
-                };
-                text.push_str(value);
+                match &given.value {
+                    ConstantValue::Str(value) => pattern_text(value),
+                    _ => Err(Unread),
+                }
             }
             ExprKind::Constant {
                 module,
                 declaration,
-            } => {
-                let key = (*module, *declaration);
-                if !seen.insert(key) {
-                    return None;
-                }
+            } => memo.declaration((*module, *declaration), |memo| {
                 let defined = program.modules[*module]
                     .constants
-                    .get(*declaration)?
-                    .as_ref()?;
-                append(program, &defined.value, instance, text, seen)?;
-                seen.remove(&key);
-            }
+                    .get(*declaration)
+                    .and_then(Option::as_ref)
+                    .ok_or(Unread)?;
+                read(program, &defined.value, instance, memo, next)
+            }),
             _ => {
-                let (BinaryOperator::Add, left, right) = value.kind.binary()? else {
-                    return None;
+                let Some((BinaryOperator::Add, left, right)) = value.kind.binary() else {
+                    return Err(Unread);
                 };
-                append(program, left, instance, text, seen)?;
-                append(program, right, instance, text, seen)?;
+                let left = read(program, left, instance, memo, next)?;
+                let right = read(program, right, instance, memo, next)?;
+                joined_pattern(left, right)
             }
         }
-        Some(())
     }
 
-    let mut pattern = String::new();
-    append(program, value, instance, &mut pattern, &mut HashSet::new())?;
-    Some(pattern)
+    read(program, value, instance, &mut PatternMemo::default(), 64)
 }
 
 /// True where FMT-5 needs a selected `convert<str>` call.

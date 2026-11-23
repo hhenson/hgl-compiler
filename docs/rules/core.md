@@ -889,6 +889,7 @@ analyser: done
 analyser: partial
 
 - A direct value call is checked for braces, missing and unused arguments, and specifiers. A dependent string is checked in its concrete instance. Diagnostics use `format.syntax`, `format.argument`, `format.unused` and `format.specifier`.
+- The current compile-time pattern reader builds up to 64 KiB of text per result. The C++ target declines calls whose patterns exceed that support limit (#695).
 - Left: patterns whose text the analyser cannot yet read, including ordinary `const` parameters and options (#695), and patterns reached through forwarded packs (#368, #434).
 
 ## FMT-4
