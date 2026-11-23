@@ -2374,7 +2374,11 @@ pub(super) fn instances_hold(
                 {
                     passed.entry((index, position)).or_default().push(call);
                 } else {
-                    if call_index < body_calls && independent.is_some() {
+                    let checks_const_inputs =
+                        !matches!(&call.constants, Ok(values) if values.is_empty());
+                    // A concrete reread checks the calls whose inputs changed.
+                    // This call already has its own independent checking root.
+                    if call_index < body_calls && (independent.is_some() || checks_const_inputs) {
                         independent_roots
                             .entry((index, position))
                             .or_default()
@@ -2616,6 +2620,9 @@ pub(super) fn instances_hold(
             if (recheck_indices || recheck_format) && !recheck_graph && !recheck_endpoints {
                 let paths = chain.paths(program, &root_calls);
                 for report in body_reports.as_slice() {
+                    if recheck_format && diagnostics.as_slice().contains(report) {
+                        continue;
+                    }
                     emit_instance_report(report.clone(), &paths, diagnostics);
                 }
                 if body_reports.has_errors() {

@@ -96,6 +96,67 @@ fn formatting_checks_const_inputs_at_every_call() {
     );
 }
 
+/// GEN-7: an independent const input rejects at its body call once.
+#[test]
+fn formatting_checks_independent_const_inputs_once() {
+    let body = concat!(
+        "const fn show(const pattern: str, value: f64) -> str => format(pattern, value)\n",
+        "const fn outer<T>(w: f64, v: T) -> str => show(\"{:x}\", w)\n",
+        "test first { assert outer(1.5, 4) == \"\" }\n",
+    );
+    for additional_call in ["", "test second { assert outer(1.5, true) == \"\" }\n"] {
+        let checked = with_core(&format!("{body}{additional_call}"));
+        assert_eq!(
+            checked.summary(),
+            ["m.hgl:3:43 type/format.specifier FMT-4"],
+            "{}",
+            checked.report,
+        );
+    }
+}
+
+/// GEN-7: a separate const-input call does not replay a direct rejection.
+#[test]
+fn formatting_reread_keeps_one_direct_source_rejection() {
+    let checked = with_core(concat!(
+        "const fn show(const pattern: str, value: f64) -> str => format(pattern, value)\n",
+        "const fn outer<T>(w: f64, v: T) -> str => format(\"{:x}\", w) + show(\"{}\", w)\n",
+        "test outer_call { assert outer(1.5, 4) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:53 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// GEN-7: a call that passes its type parameter still checks at the caller.
+#[test]
+fn formatting_checks_type_dependent_const_inputs_at_the_caller() {
+    let checked = with_core(concat!(
+        "const fn show<T>(const pattern: str, value: f64, witness: T) -> str => format(pattern, value)\n",
+        "const fn outer<T>(w: f64, v: T) -> str => show(\"{:x}\", w, v)\n",
+        "test outside { assert outer(1.5, 4) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:23 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+    assert!(
+        checked
+            .report
+            .contains("this call makes the instance `show<i64>`")
+    );
+    assert!(
+        checked
+            .report
+            .contains("this call makes the instance `outer<i64>`")
+    );
+}
+
 /// FMT-3: an independent unread pattern does not hide a known error.
 #[test]
 fn formatting_checks_known_const_inputs_when_another_is_unread() {
