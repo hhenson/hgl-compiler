@@ -1062,11 +1062,10 @@ fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
     }
     assert_eq!(emitted.blocked("written_then_invalidated"), None);
     assert!(unit.contains("arrival_.invalidate();"), "{unit}");
-    assert_eq!(
-        emitted.blocked("written_then_read").as_deref(),
-        Some(
-            "m.hgl:23:12 the cpp target does not write a read of a node's own window result in its `when` yet"
-        )
+    assert_eq!(emitted.blocked("written_then_read"), None);
+    assert!(
+        unit.contains("::hglrt::fn_valid(arrival_.observe())"),
+        "{unit}"
     );
     // A handler's header that names the window result, whose guard is
     // tested where the evaluation may hold a write of it.

@@ -441,8 +441,8 @@ transpiler: partial
 
 - Maps rolling windows to the SDK, writes their arrival publication and reads validity,
   deltas and removed values in supported contexts.
-- A node's body observes its latest staged window arrival with the same
-  retention and publication metadata as the arrival it commits (TIME-7).
+- A node's body observes its latest staged window arrival, including its
+  retention and endpoint metadata (TIME-7).
 - Left: Reports a handler selecting on its own window result, a native
   call borrowing that result in its `when`, and unsupported window reads
   and operations.

@@ -337,8 +337,8 @@ impl Family for Windows {
         value: &Expr,
     ) -> Option<String> {
         let locals = &scope.body.locals;
-        // A borrowed endpoint can be retained by native code. Its view
-        // cannot refer to the evaluation's temporary read snapshot.
+        // TIME-9 gives a native the endpoint itself. The detached view
+        // serves the direct window observations implemented here.
         if let ExprKind::Call { arguments, .. } = &value.kind
             && arguments.iter().any(|argument| {
                 matches!(
