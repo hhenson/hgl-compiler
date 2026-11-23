@@ -17,13 +17,12 @@
 //! | A window given to a lifted call (FN-11, FN-12) | the helper given the window's `list<V>` (`read_type`), and not called where the window is valid and not all valid (`lifting`) |
 //! | A trace of a window, a source of one (TST-16, TIME-7) | a trace of its V, each cell the V that arrives; a source's payload a V |
 //!
-//! `valid`, `modified` and `last_modified` of a window are the endpoints'
-//! family's, which hgraph's views answer for a window as for any value.
-//! A window whose V is no scalar, or whose bounds are not known,
-//! or a node's read of its own
-//! window result in a `when`, or a handler whose header names it, which
-//! would not see what the evaluation holds to publish, are not written
-//! yet, and are reported.
+//! `valid`, `modified`, `delta_value` and `last_modified` read a node's
+//! pending arrival directly. Reads of its window use a detached preview
+//! through `WindowArrival::observe` (TIME-7, END-9).
+//! The target reports windows of structs or lists and windows whose bounds
+//! are unknown, handlers that select on their own window result, and a
+//! native call borrowing that window in a `when`.
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Hook, Stmt};
 use hgl_analyser::{ConstantValue, DeclarationKind, Scalar, Type};
@@ -132,42 +131,40 @@ fn holding(emitter: &Emitter, view: &str) -> bool {
     emitter.kind() == Some(Kind::Hook(Hook::When)) && view == OUT
 }
 
-/// True where `local` of `locals` is the window result of the node whose
-/// `when` is being written: what a read of it gives would not hold what
-/// the evaluation has written of it yet.
+/// True where `local` is the current node's staged window result.
 fn own_window(emitter: &Emitter, locals: &[hgl_analyser::hir::Local], local: usize) -> bool {
     emitter.role(local) == Role::Out
         && emitter.kind() == Some(Kind::Hook(Hook::When))
         && window_type(emitter, locals, local).is_some()
 }
 
-/// True where `value` reads the window result of the node whose `when`
-/// is being written: an endpoint operation on it but `invalidate`, which
-/// withdraws the result, its `delta_value` or `removed_value` into a
-/// `result`, or its value into a `result`. (A plain read of `out` is the
-/// endpoints' family's to report.)
-fn own_read(emitter: &Emitter, locals: &[hgl_analyser::hir::Local], value: &Expr) -> bool {
-    let own = |local: usize| own_window(emitter, locals, local);
-    match &value.kind {
-        ExprKind::Endpoint {
-            operation,
-            inputs: Some(inputs),
-        } => *operation != EndpointOperation::Invalidate && inputs.iter().any(|&local| own(local)),
-        ExprKind::CheckedWindow(read) => matches!(read.kind, ExprKind::Local(local) if own(local)),
-        ExprKind::CheckedDelta(read) => match &read.kind {
-            ExprKind::Endpoint {
-                inputs: Some(inputs),
-                ..
-            } => inputs.iter().any(|&local| own(local)),
-            ExprKind::Call { arguments, .. } => arguments.iter().any(
-                |argument| matches!(argument.value.kind, ExprKind::EndpointOf(local) if own(local)),
-            ),
-            _ => false,
-        },
-        ExprKind::Call { arguments, .. } => arguments.iter().any(
-            |argument| matches!(argument.value.kind, ExprKind::EndpointOf(local) if own(local)),
-        ),
-        _ => false,
+impl Emitter<'_> {
+    /// The retained window, including a preview of its staged arrival
+    /// where the node reads its own result (TIME-7, END-9).
+    pub(super) fn observation_view(
+        &self,
+        locals: &[hgl_analyser::hir::Local],
+        local: usize,
+    ) -> Option<String> {
+        if own_window(self, locals, local) {
+            Some(format!("{ARRIVAL}.observe()"))
+        } else {
+            self.view(locals, local)
+        }
+    }
+
+    /// The argument of a metadata or delta read (END-1, END-2, END-3,
+    /// END-6). A node's staged window answers directly from its arrival.
+    pub(super) fn metadata_view(
+        &self,
+        locals: &[hgl_analyser::hir::Local],
+        local: usize,
+    ) -> Option<String> {
+        if own_window(self, locals, local) {
+            Some(ARRIVAL.to_string())
+        } else {
+            self.view(locals, local)
+        }
     }
 }
 
@@ -355,24 +352,30 @@ impl Family for Windows {
         value: &Expr,
     ) -> Option<String> {
         let locals = &scope.body.locals;
-        // END-5: what a node's `when` writes of its window result is held
-        // until its evaluation ends, so a read of that result there would
-        // not see it.
-        if own_read(emitter, locals, value) {
+        // TIME-9 gives a native the endpoint itself. The detached view
+        // serves the direct window observations implemented here.
+        if let ExprKind::Call { arguments, .. } = &value.kind
+            && arguments.iter().any(|argument| {
+                matches!(
+                    argument.value.kind,
+                    ExprKind::EndpointOf(local) if own_window(emitter, locals, local)
+                )
+            })
+        {
             return Some(emitter.missing(
                 value.at,
-                "a read of a node's own window result in its `when`",
+                "a native call that borrows a node's own window result in its `when`",
             ));
         }
         match &value.kind {
-            // TYPE-11: a read of a window input's value in a hook, as its
+            // TYPE-11: a read of a window's value in a hook, as its
             // temporal form reads it. The read is typed as the `list<V>`
             // it gives.
-            ExprKind::Local(local) if emitter.role(*local) == Role::Input => {
+            ExprKind::Local(local) => {
                 let ty = window_type(emitter, locals, *local)?;
                 scope.read = true;
                 scope.acted = true;
-                let view = emitter.view(locals, *local)?;
+                let view = emitter.observation_view(locals, *local)?;
                 Some(emitter.temporal_read(&ty, &view, value.at))
             }
             // END-9: "`all_valid(x)` where it holds at least its minimum".
@@ -390,7 +393,7 @@ impl Family for Windows {
                 if window(emitter, &ty).is_none() {
                     return Some(emitter.missing(value.at, &format!("a temporal value of `{ty}`")));
                 }
-                let view = emitter.view(locals, *local)?;
+                let view = emitter.observation_view(locals, *local)?;
                 Some(format!("{}({view})", library("fn_all_valid")))
             }
             // END-4: discard both the pending arrival and retained history.
@@ -426,7 +429,10 @@ impl Family for Windows {
                         emitter.missing(value.at, "this read of a window into a `result`"),
                     );
                 }
-                let view = emitter.read_endpoint_view(scope, read)?;
+                let view = match read.kind {
+                    ExprKind::Local(local) => emitter.observation_view(locals, local)?,
+                    _ => emitter.read_endpoint_view(scope, read)?,
+                };
                 scope.read = true;
                 scope.acted = true;
                 Some(format!("{}({view})", library("window_value_checked")))
@@ -462,7 +468,7 @@ impl Family for Windows {
                         if window(emitter, &ty).is_none() {
                             return Some(emitter.missing(value.at, "this `removed_value`"));
                         }
-                        emitter.view(locals, *local)?
+                        emitter.observation_view(locals, *local)?
                     }
                     ExprKind::ChildEndpointOf(child) => emitter.read_endpoint_view(scope, child)?,
                     _ => return Some(emitter.missing(value.at, "this `removed_value`")),
