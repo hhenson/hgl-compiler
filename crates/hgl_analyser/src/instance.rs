@@ -920,13 +920,28 @@ fn place_callee(
     }
     // GEN-17: written type arguments can mention a reflected pack
     // member, which needs the enclosing instance's keys and types.
+    // An untold member requirement keeps those arguments symbolic.
+    let defer_pack_members = matches!(
+        callee,
+        Callee::Function {
+            defer_pack_members: true,
+            ..
+        }
+    );
+    let place_type = |ty: &Type| {
+        if defer_pack_members {
+            substitute_within(ty, instance.types)
+        } else {
+            instance.project(ty)
+        }
+    };
     let place = |argument: &Argument| match argument {
-        Argument::Type(ty) => Argument::Type(instance.project(ty)),
+        Argument::Type(ty) => Argument::Type(place_type(ty)),
         Argument::Constant(_) => placed(argument, instance.types),
     };
     if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } = callee {
         for pack in type_packs {
-            pack.place_types(|ty| instance.project(ty));
+            pack.place_types(place_type);
         }
     }
     if let Callee::Candidate {

@@ -517,7 +517,7 @@ impl<'a> Typer<'a> {
             // by what its `requires` states, and never again for the
             // generic arguments a call of it gives" (hhenson/hgl_spec#144:
             // so is a call in it of another generic function).
-            None if function && passes_on(generics, &own) => {
+            None if function && (passes_on(generics, &own) || reflects(generics, &own)) => {
                 return self.check_stated_requirements(at, callee, (generics, &[]), &condition);
             }
             None if unvalued && !passes_on(generics, &own) => self
@@ -567,7 +567,10 @@ impl<'a> Typer<'a> {
         let report = match held {
             Some(true) => return true,
             Some(false) => unmet(program, callee, at, &condition),
-            None if passes_on(generics, &own) || packs_pass_on(type_packs, &own) => {
+            None if passes_on(generics, &own)
+                || reflects(generics, &own)
+                || packs_pass_on(type_packs, &own) =>
+            {
                 return self.check_stated_requirements(
                     at,
                     callee,
@@ -687,16 +690,15 @@ impl<'a> Typer<'a> {
         let stated_members = self.stated_pack_members();
         // Existing checks still report unmet ordinary generic requirements.
         // A proof needed only for a reflected type can remain untold.
-        let unread_packs =
-            if ordinary_arguments_pass_on(generics, &own) || packs_pass_on(type_packs, &own) {
-                HashSet::new()
-            } else {
-                self.unread_stated_packs(&stated_members)
-            };
+        let unread_packs = if passes_on(generics, &own) || packs_pass_on(type_packs, &own) {
+            HashSet::new()
+        } else {
+            self.unread_stated_packs(&stated_members)
+        };
         let stated_members = stated_members
             .into_iter()
             .filter(|member| {
-                passes_on(generics, &[member.pack]) || packs_pass_on(type_packs, &[member.pack])
+                reflects(generics, &[member.pack]) || packs_pass_on(type_packs, &[member.pack])
             })
             .collect::<Vec<_>>();
         let memberships: Vec<(Location, Vec<Argument>)> = self
@@ -3089,18 +3091,21 @@ fn passes_on(generics: &[Argument], declared: &[Location]) -> bool {
     !declared.is_empty()
         && generics.iter().any(|argument| match argument {
             Argument::Constant(constant) => constant.value.names_one_of(declared),
-            Argument::Type(ty) => mentions(ty, declared),
+            Argument::Type(ty) => ty.any_part(
+                &|part| matches!(part, Type::Parameter { at, .. } if declared.contains(at)),
+                &|constant| constant.value.names_one_of(declared),
+            ),
         })
 }
 
-/// A generic argument whose declaration-time requirement check can
-/// follow it without knowing a reflected member type (GEN-7, GEN-17).
-fn ordinary_arguments_pass_on(generics: &[Argument], declared: &[Location]) -> bool {
+/// True where a written argument reflects a member of a named pack
+/// (GEN-17). Source requirement checking can read its stated type.
+fn reflects(generics: &[Argument], packs: &[Location]) -> bool {
     generics.iter().any(|argument| match argument {
-        Argument::Constant(constant) => constant.value.names_one_of(declared),
+        Argument::Constant(_) => false,
         Argument::Type(ty) => ty.any_part(
-            &|part| matches!(part, Type::Parameter { at, .. } if declared.contains(at)),
-            &|constant| constant.value.names_one_of(declared),
+            &|part| matches!(part, Type::PackMember { pack, .. } if packs.contains(pack)),
+            &|_| false,
         ),
     })
 }

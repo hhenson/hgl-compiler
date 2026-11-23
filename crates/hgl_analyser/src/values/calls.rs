@@ -796,6 +796,7 @@ impl<'a> Typer<'a> {
                 generics: Vec::new(),
                 type_packs: Vec::new(),
                 requirements,
+                defer_pack_members: false,
                 contextual: Vec::new(),
             };
             let kind = ExprKind::Call {
@@ -1051,7 +1052,7 @@ impl<'a> Typer<'a> {
         // GEN-3 and GEN-10: the callee's `requires` holds with what was
         // resolved, including the separate sequence in each type pack.
         // Not where something else was reported of the call (ERR-9).
-        let mut readable = true;
+        let mut defer_pack_members = false;
         if judged
             && unresolved.is_empty()
             && type_packs.iter().all(|pack| !pack.infer_from_arguments)
@@ -1069,10 +1070,10 @@ impl<'a> Typer<'a> {
             ) {
                 // GEN-18 handled the condition with its function identity.
             } else if first_pack.is_none() {
-                readable = self.requires_met(at, (module, declaration), &resolved);
+                defer_pack_members = !self.requires_met(at, (module, declaration), &resolved);
             } else {
-                readable =
-                    self.pack_requires_met(at, (module, declaration), &resolved, &type_packs);
+                defer_pack_members =
+                    !self.pack_requires_met(at, (module, declaration), &resolved, &type_packs);
             }
         }
         // Named operator requirements over pack members still need to
@@ -1082,23 +1083,18 @@ impl<'a> Typer<'a> {
         } else {
             Vec::new()
         };
-        let callee = if readable {
-            Callee::Function {
-                module,
-                declaration,
-                generics: resolved,
-                type_packs,
-                requirements,
-                contextual: if !faulty && self.diagnostics.len() == reported {
-                    contextual
-                } else {
-                    Vec::new()
-                },
-            }
-        } else {
-            // Preserve the result type. The target cannot write a call
-            // whose reflected member requirement is still untold (GEN-7).
-            Callee::Unread
+        let callee = Callee::Function {
+            module,
+            declaration,
+            generics: resolved,
+            type_packs,
+            requirements,
+            defer_pack_members,
+            contextual: if !faulty && self.diagnostics.len() == reported {
+                contextual
+            } else {
+                Vec::new()
+            },
         };
         let kind = ExprKind::Call {
             callee,
@@ -1173,6 +1169,7 @@ impl<'a> Typer<'a> {
                     generics,
                     type_packs,
                     requirements,
+                    defer_pack_members,
                     contextual,
                 },
             arguments,
@@ -1445,9 +1442,9 @@ impl<'a> Typer<'a> {
             if let Some(missing) = pack_types.written_member_fault(owner, *declaration, &map) {
                 self.pack_member_fault(call.at, &missing);
             } else if packs.is_empty() {
-                self.requires_met(call.at, callee, &resolved);
+                *defer_pack_members = !self.requires_met(call.at, callee, &resolved);
             } else {
-                self.pack_requires_met(call.at, callee, &resolved, &packs);
+                *defer_pack_members = !self.pack_requires_met(call.at, callee, &resolved, &packs);
             }
         }
         if packs.is_empty() {

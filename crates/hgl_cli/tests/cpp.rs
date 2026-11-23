@@ -1993,6 +1993,34 @@ fn an_unproved_reflected_type_declines_cpp_emission() {
     }
 }
 
+/// GEN-5 and GEN-7: an unread member proof preserves the ordinary
+/// call's operator diagnostic at the declaration.
+#[test]
+fn an_unread_reflected_membership_preserves_the_operator_error() {
+    let root = scratch("unread-reflected-membership");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const item_key: str = \"item\"\n",
+            "const fn words(item: str) -> i64 => 0\n",
+            "const fn twice<T>(x: T) -> T requires T in {i64, f64} => x + x\n",
+            "const fn call<...Ps>(f: const fn(...{Ps}) -> i64, a: Ps[item_key]) -> Ps[item_key]\n",
+            "    requires Ps[item_key] in {i64, str} => twice<Ps[item_key]>(a)\n",
+            "test t { assert call(words, \"s\") == \"ss\" }\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    let stderr = text(&checked.stderr);
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("error[operator/operator.no_candidate]")
+            && stderr.contains("no value candidate of operator `add_` takes `Ps[item_key]`"),
+        "{stderr}"
+    );
+}
+
 /// FN-18 and EXPR-10: brace arguments reach their ordinary, generic,
 /// value and temporal slots. Graphs pass const values and connections
 /// on to a node, and configuration defaults are used when omitted.
