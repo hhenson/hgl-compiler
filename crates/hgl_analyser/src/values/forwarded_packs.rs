@@ -616,6 +616,7 @@ impl ForwardingInstance {
             functions: &self.functions,
             type_packs: &self.type_packs,
             pack_inputs: Some(&self.pack_inputs),
+            ..crate::InstanceInputs::default()
         }
     }
 }

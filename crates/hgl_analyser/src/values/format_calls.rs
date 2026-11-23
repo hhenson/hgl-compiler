@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_diagnostics::{Category, Diagnostics, Location, Severity};
 use hgl_lexer::literal::string_source_range;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::Span;
@@ -81,6 +81,7 @@ impl Typer<'_> {
                 return;
             }
         };
+        let before = self.diagnostics.len();
         let Some(parts) = self.checked_places(&pattern.value, &text) else {
             return;
         };
@@ -184,6 +185,12 @@ impl Typer<'_> {
                     ));
                 }
             }
+        }
+        if self.diagnostics.as_slice()[before..]
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error)
+        {
+            return;
         }
         *planned = Some(Box::new(TextCall {
             pattern: Some(text.to_string()),

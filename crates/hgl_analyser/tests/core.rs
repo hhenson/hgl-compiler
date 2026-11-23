@@ -72,6 +72,65 @@ fn formatting_checks_a_generic_pattern_and_argument_together() {
     );
 }
 
+/// FN-1, FMT-3 and GEN-7: report each call whose const input makes the
+/// body reject, even when two callers supply the same bad pattern.
+#[test]
+fn formatting_checks_const_inputs_at_every_call() {
+    let checked = with_core(concat!(
+        "const fn show(const pattern: str, value: f64) -> str => format(pattern, value)\n",
+        "const fn relay<const P: str>(value: f64) -> str => show(P, value)\n",
+        "test first { assert show(\"{:x}\", 1.5) == \"\" }\n",
+        "test second { assert show(\"{:x}\", 2.5) == \"\" }\n",
+        "test relay_call { assert relay<\"{:x}\">(2.5) == \"\" }\n",
+        "test good { assert show(\"{:.1f}\", 1.5) == \"1.5\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:21 type/format.specifier FMT-4",
+            "m.hgl:5:22 type/format.specifier FMT-4",
+            "m.hgl:6:26 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// GEN-13: a growing const input must stop making new instances.
+#[test]
+fn demanded_const_input_growth_reports_the_instance_limit() {
+    let checked = with_core(concat!(
+        "const fn grow(const pattern: str) -> str => format(pattern) + grow(pattern + \"x\")\n",
+        "test t { assert grow(\"\") == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:17 type/generic.instance_limit GEN-13"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// FN-1: const instancing does not change the admission of projections
+/// as const arguments. See #697 for those expressions.
+#[test]
+fn const_instance_checks_leave_aggregate_admission_as_written() {
+    let checked = with_core(concat!(
+        "struct Settings { pattern: str }\n",
+        "const fn field(const settings: Settings) -> str => format(settings.pattern)\n",
+        "const fn entry(const settings: tuple<str, i64>) -> str => format(settings[0])\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:59 type/argument.constant FN-1",
+            "m.hgl:4:66 type/argument.constant FN-1",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 /// FMT-5: the selected conversion must consume the whole value and
 /// yield `str`, including when a native collection converts its parts.
 #[test]

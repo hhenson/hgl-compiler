@@ -14,6 +14,9 @@ const fn display_value<const Pattern: str, T>(value: T) -> str =>
     format("value " + Pattern, value)
 const fn hex_prefix() -> str { return "{:" }
 const HEX: str = hex_prefix() + "x}"
+const fn positional(const pattern: str, value: f64) -> str => format(pattern, value)
+operator configured{const pattern: str = "{}"}(value: f64) -> str
+impl const fn configured{const pattern: str}(value: f64) -> str => format(pattern, value)
 
 struct FormatMember { number: i64 }
 impl const fn convert(value: FormatMember) -> str => convert<str>(value.number)
@@ -39,6 +42,9 @@ test typed_formats {
     assert display<"{:.2f}">(1.25) == "1.25"
     assert display_value<"{:x}">(42) == "value 2a"
     assert format(HEX, 255) == "ff"
+    assert positional("{:.2f}", 1.5) == "1.50"
+    assert configured(1.5) == "1.5"
+    assert configured{pattern: "{:.2f}"}(1.5) == "1.50"
     let least = -9223372036854775807us - 1us
     assert format("{:%[S].9}", least) == "-9223372036854.775808000"
     let boundary = @0001-01-01T19:59:05.224192Z
@@ -59,23 +65,8 @@ test selected_converters {
 /// FMT-3, #695: the target needs the analyser's checked pattern text.
 #[test]
 fn target_declines_unresolved_format_patterns() {
-    let root = scratch("ordinary-format-constants");
+    let root = scratch("unresolved-format-constants");
     let cases = [
-        (
-            "positional",
-            "const fn show(const p: str, v: f64) -> str => format(p, v)",
-            "show(\"{:x}\", 1.5)",
-        ),
-        (
-            "default_option",
-            "const fn show{const p: str = \"{:x}\"}(v: f64) -> str => format(p, v)",
-            "show(1.5)",
-        ),
-        (
-            "given_option",
-            "const fn show{const p: str = \"{}\"}(v: i64) -> str => format(p, v)",
-            "show{p: \"{:c}\"}(65)",
-        ),
         (
             "constant_from_input",
             "const fn pattern(s: str) -> str => s\nconst P: str = pattern(\"{:x}\")",
@@ -92,6 +83,38 @@ fn target_declines_unresolved_format_patterns() {
         let file = write(&root, &format!("{name}.hgl"), &source);
         assert_target_declines_pattern(&file, &root.join(name));
     }
+}
+
+/// FN-1 and FMT-3: equivalent option values share a compiled body.
+#[test]
+fn format_options_key_instances_by_value() {
+    let root = scratch("format-option-instance-keys");
+    let file = write(
+        &root,
+        "keys.hgl",
+        r#"module format_option_keys
+const P: str = "{}"
+const fn show{const pattern: str = "{}"}(value: f64) -> str => format(pattern, value)
+test t {
+    assert show(1.5) == "1.5"
+    assert show{pattern: P}(1.5) == "1.5"
+    assert show{pattern: "{}"}(1.5) == "1.5"
+    assert show{pattern: "{:.2f}"}(1.5) == "1.50"
+}
+"#,
+    );
+    let output = root.join("cpp");
+    let emitted = emit_format_program(&file, &output);
+    assert!(emitted.status.success(), "{}", text(&emitted.stderr));
+    let module = fs::read_to_string(output.join("modules/mod-format_option_keys.cpp")).unwrap();
+    assert_eq!(
+        module
+            .lines()
+            .filter(|line| *line == "namespace i_::show")
+            .count(),
+        2,
+        "{module}"
+    );
 }
 
 /// Each declaration doubles its predecessor's text without doubling the

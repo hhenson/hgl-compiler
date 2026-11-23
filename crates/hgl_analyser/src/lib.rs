@@ -78,6 +78,7 @@
 //! and the rest is analysed.
 
 mod assemble;
+mod const_inputs;
 mod constant;
 mod cycles;
 mod declare;
@@ -88,6 +89,7 @@ mod forms;
 pub mod hir;
 mod imports;
 mod instance;
+pub use const_inputs::{ConstInput, ConstInputFault};
 pub use instance::InstanceInputs;
 mod laws;
 mod phases;

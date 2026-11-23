@@ -203,6 +203,8 @@ struct Asked {
     generics: Vec<GenericArgument>,
     /// The concrete type sequences of the call's generic packs.
     type_packs: Vec<TypePackArgument>,
+    /// Ordinary const values needed by a compile-time check in the body.
+    constants: Vec<hgl_analyser::ConstInput>,
     /// Which arguments the call captures in its parameter packs.
     captures: Captures,
     /// What answers each requirement it states there.
@@ -281,6 +283,7 @@ pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring>
                 functions: &functions_of(arguments),
                 type_packs: callee.type_packs(),
                 pack_inputs: Some(&captures.inputs()),
+                ..hgl_analyser::InstanceInputs::default()
             },
         )
     };
@@ -716,7 +719,7 @@ fn key<'a>(
     type_packs: &[TypePackArgument],
     captures: &Captures,
     functions: impl Iterator<Item = (usize, &'a Callee)> + Clone,
-    requirements: &[Answer],
+    (requirements, constants): (&[Answer], &[hgl_analyser::ConstInput]),
 ) -> Option<Vec<String>> {
     let Some(Detail::Callable(signature)) = program.modules.get(module)?.details.get(declaration)
     else {
@@ -753,6 +756,11 @@ fn key<'a>(
                 .collect::<Option<Vec<_>>>()?,
         );
     }
+    key.extend(
+        constants
+            .iter()
+            .map(|input| format!("const[{}]:{}", input.slot, input.key)),
+    );
     Some(key)
 }
 
@@ -844,6 +852,7 @@ impl Instances {
                         declaration,
                         generics: vec![GenericArgument::Type(result)],
                         type_packs: Vec::new(),
+                        constants: Vec::new(),
                         captures: Captures::default(),
                         requirements: Vec::new(),
                         functions: Vec::new(),
@@ -883,7 +892,7 @@ impl Instances {
                 &next.type_packs,
                 &next.captures,
                 next.functions.iter().map(|(slot, target)| (*slot, target)),
-                &next.requirements,
+                (&next.requirements, &next.constants),
             ) else {
                 continue;
             };
@@ -921,13 +930,14 @@ impl Instances {
                     functions: &next.functions,
                     type_packs: &next.type_packs,
                     pack_inputs: Some(&next.captures.inputs()),
+                    constants: &next.constants,
                 },
             ) else {
                 continue;
             };
             let (slots, pack_use) = next.captures.expand(&mut signature, &mut body);
             // The arguments as part of a name.
-            let plain: String = key
+            let mut plain: String = key[..key.len() - next.constants.len()]
                 .join("_")
                 .chars()
                 .map(|character| {
@@ -938,6 +948,11 @@ impl Instances {
                     }
                 })
                 .collect();
+            if !next.constants.is_empty() {
+                // The suffix distinguishes const instances without embedding
+                // the text of a potentially long pattern in an identifier.
+                plain.push_str("_const");
+            }
             // Two sets of arguments may differ only in characters that
             // are no letter or digit: a number then tells them apart.
             let mut suffix = plain.clone();
@@ -1000,6 +1015,7 @@ impl Instances {
                     declaration,
                     generics: vec![GenericArgument::Type(ty.clone())],
                     type_packs: Vec::new(),
+                    constants: Vec::new(),
                     captures: Captures::default(),
                     requirements: Vec::new(),
                     functions: Vec::new(),
@@ -1058,12 +1074,14 @@ impl Instances {
                 arguments,
                 &self.callable_limits,
             )
+            && let Ok(constants) = program.call_const_inputs(callee, arguments)
         {
             found.push(Asked {
                 module: *module,
                 declaration: *declaration,
                 generics: generics.clone(),
                 type_packs: callee.type_packs().to_vec(),
+                constants,
                 captures: Captures::of(program, callee, signature, arguments),
                 requirements: requirements.clone(),
                 functions: functions_of(arguments),
@@ -1126,6 +1144,7 @@ impl Instances {
     pub fn instanced(&self, program: &Program, module: usize, declaration: usize) -> bool {
         generic_temporal(program, module, declaration)
             || self.requiring.contains(&(module, declaration))
+            || program.needs_const_inputs((module, declaration))
     }
 
     /// The instances of `declaration` of `module`, in the order they
@@ -1152,7 +1171,7 @@ impl Instances {
             &[],
             &Captures::default(),
             std::iter::empty(),
-            &[],
+            (&[], &[]),
         )?;
         self.declared(module, declaration)
             .iter()
@@ -1213,6 +1232,7 @@ fn call_key(program: &Program, callee: &Callee, arguments: &[Argument]) -> Optio
         return None;
     };
     let captures = Captures::of(program, callee, signature, arguments);
+    let constants = program.call_const_inputs(callee, arguments).ok()?;
     let requirements = match callee {
         Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
             requirements.as_slice()
@@ -1226,6 +1246,6 @@ fn call_key(program: &Program, callee: &Callee, arguments: &[Argument]) -> Optio
         callee.type_packs(),
         &captures,
         function_arguments(arguments),
-        requirements,
+        (requirements, &constants),
     )
 }
