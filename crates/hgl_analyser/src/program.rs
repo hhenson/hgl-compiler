@@ -693,7 +693,7 @@ pub enum LocalKind {
     /// A generic parameter, or the name an `each ... in` constraint
     /// binds.
     GenericParameter,
-    /// The key bound by `each arg in arg_keys(Ps)` (GEN-17).
+    /// The key bound by `each` or a pack comprehension over `arg_keys(Ps)` (GEN-17).
     PackKey,
 }
 

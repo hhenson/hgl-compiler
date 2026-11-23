@@ -2,14 +2,16 @@
 //! (FN-19). Argument placement uses each entry's key and reads the input
 //! slot that holds it.
 
-use hgl_diagnostics::Category;
-use hgl_parser::{SyntaxKind, SyntaxNode};
+use hgl_diagnostics::{Category, Location};
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
+use super::requirements::pack_view;
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey};
-use crate::syntax::ungrouped;
-use crate::types::Type;
+use crate::program::{Binding, LocalKind};
+use crate::syntax::{child, has_token, is_arg_keys_call, name_token, ungrouped};
+use crate::types::{GenericKind, Scalar, Type};
 use crate::{codes, error};
 
 /// A concrete entry supplied by one spread in the original call.
@@ -38,14 +40,20 @@ impl Typer<'_> {
         result: Option<&Type>,
         expected: Option<&Type>,
     ) -> Option<(ExprKind, Type)> {
-        if self.pack_inputs.is_some() {
-            return None;
-        }
         let mut spreads = spread_operands(list).peekable();
         spreads.peek()?;
+        let computed = spread_operands(list)
+            .any(|spread| ungrouped(spread).kind() == SyntaxKind::PackComprehension);
+        if self.pack_inputs.is_some() && !computed {
+            return None;
+        }
         let before = self.diagnostics.len();
         for spread in spreads {
             let operand = ungrouped(spread.clone());
+            if operand.kind() == SyntaxKind::PackComprehension {
+                self.check_pack_comprehension(&operand);
+                continue;
+            }
             let pack = self
                 .local_of(&operand)
                 .and_then(|local| self.signature.parameters.get(local))
@@ -68,6 +76,11 @@ impl Typer<'_> {
             .or(expected)
             .cloned()
             .unwrap_or(Type::Unknown);
+        if computed {
+            // FN-19: this spread is an inline pack. Keep the call for
+            // the target to decline without instantiating its passes.
+            return Some((self.unread_call(list).0, ty));
+        }
         Some((
             ExprKind::Call {
                 callee: Callee::DeferredPackCall,
@@ -78,6 +91,94 @@ impl Typer<'_> {
             },
             ty,
         ))
+    }
+
+    /// Check the declaration-time shape of a pack comprehension (FN-19).
+    /// Its generic passes and their branch values stay unread.
+    pub(super) fn check_pack_comprehension(&mut self, node: &SyntaxNode) {
+        let Some(iterable) = node.children().next().map(ungrouped) else {
+            return;
+        };
+        if !is_arg_keys_call(&iterable) {
+            return;
+        }
+        let operand = pack_view(iterable.clone()).filter(|(view, _)| {
+            view.text() == "arg_keys"
+                && iterable.children().count() == 2
+                && child(&iterable, SyntaxKind::ArgList)
+                    .and_then(|list| list.children().next())
+                    .is_some_and(|argument| !has_token(&argument, SyntaxKind::Colon))
+        });
+        if let Some((_, pack)) = operand {
+            self.check_key_pack(&pack);
+        } else {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                self.at(&iterable),
+                "`arg_keys` takes a single type pack name".to_string(),
+                "GEN-17",
+            ));
+        }
+        // Membership syntax says which names are compile-time keys and
+        // type packs. Neither the truth value nor a branch is selected here.
+        if let Some(entry) = node.children().nth(1) {
+            for membership in entry
+                .descendants()
+                .filter(|part| part.kind() == SyntaxKind::PackKeyMembership)
+            {
+                self.pack_key_membership(&membership);
+            }
+        }
+    }
+
+    /// `key in arg_keys(Ps)` is a compile-time bool with its pack still
+    /// symbolic in this pass (GEN-17).
+    pub(super) fn pack_key_membership(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
+        let mut operands = node.children();
+        if let Some(key) = operands.next().and_then(|node| name_token(&node))
+            && let Some(binding) = self.bindings.get(&(self.file, key.span().start))
+            && !matches!(
+                binding,
+                Binding::Local {
+                    kind: LocalKind::PackKey,
+                    ..
+                }
+            )
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                Location::new(self.file, key.span()),
+                format!("`{}` is not a pack key", key.text()),
+                "GEN-17",
+            ));
+        }
+        if let Some(pack) = operands.next().and_then(|node| name_token(&node)) {
+            self.check_key_pack(&pack);
+        }
+        (ExprKind::Unread, Type::Scalar(Scalar::Bool))
+    }
+
+    fn check_key_pack(&mut self, name: &SyntaxToken) {
+        let Some(binding) = self.bindings.get(&(self.file, name.span().start)) else {
+            return;
+        };
+        let type_pack = matches!(binding, Binding::Local { at, kind: LocalKind::GenericParameter }
+            if self.signature.generics.iter().any(|generic| generic.at == *at
+                && matches!(generic.kind, GenericKind::Pack { .. })));
+        if !type_pack {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                Location::new(self.file, name.span()),
+                format!(
+                    "`arg_keys` needs a type pack, and `{}` is not one",
+                    name.text()
+                ),
+                "GEN-17",
+            ));
+        }
     }
 
     /// The entries the instance gives to this call. Bind names before

@@ -2138,6 +2138,63 @@ fn an_unread_reflected_membership_preserves_the_operator_error() {
     );
 }
 
+/// FN-19 and GEN-17: a computed spread is read through its pack-key
+/// expressions. C++ declines it while the generic passes remain unread.
+#[test]
+fn a_computed_pack_spread_checks_and_declines_cpp_emission() {
+    let root = scratch("computed-pack-spread");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn identity(x: i64) -> i64 => x\n",
+            "const fn forward<...Ps, ...As>(f: const fn(...{Ps}) -> i64, args: ...{As for f}) -> i64 =>\n",
+            "    f(...{for key in arg_keys(Ps): if key in arg_keys(As) { args[key] }})\n",
+            "test example { assert forward(identity, 3) == 3 }\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
+    let out = root.join("out");
+    let emitted = hgl_in(
+        &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
+        &[],
+        &[],
+    );
+    let stderr = text(&emitted.stderr);
+    assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("error[build/target.unsupported]")
+            && stderr.contains("f(...{for key in arg_keys(Ps)"),
+        "{stderr}"
+    );
+}
+
+/// GEN-17 and FN-19: the keys in a computed spread are those of a type pack.
+#[test]
+fn a_computed_pack_spread_reports_a_value_pack_used_as_a_type_pack() {
+    let root = scratch("computed-spread-value-pack");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn pair(a: i64, b: i64) -> i64 => a + b\n",
+            "const fn forward(items: ...i64{2}) -> i64 =>\n",
+            "    pair(...{for key in arg_keys(items): items[key]})\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    let stderr = text(&checked.stderr);
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("error[type/type.mismatch]")
+            && stderr.contains("`arg_keys` needs a type pack, and `items` is not one"),
+        "{stderr}"
+    );
+}
+
 /// FN-18 and EXPR-10: brace arguments reach their ordinary, generic,
 /// value and temporal slots. Graphs pass const values and connections
 /// on to a node, and configuration defaults are used when omitted.
