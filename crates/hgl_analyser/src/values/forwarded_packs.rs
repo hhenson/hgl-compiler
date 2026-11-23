@@ -141,7 +141,7 @@ impl Typer<'_> {
             && !matches!(
                 binding,
                 Binding::Local {
-                    kind: LocalKind::PackKey,
+                    kind: LocalKind::PackIterationKey,
                     ..
                 }
             )

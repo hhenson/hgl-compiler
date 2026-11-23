@@ -2140,6 +2140,7 @@ fn an_unread_reflected_membership_preserves_the_operator_error() {
 
 /// FN-19 and GEN-17: a computed spread is read through its pack-key
 /// expressions. C++ declines it while the generic passes remain unread.
+/// A function inside an entry may capture its iteration key (FN-14).
 #[test]
 fn a_computed_pack_spread_checks_and_declines_cpp_emission() {
     let root = scratch("computed-pack-spread");
@@ -2149,8 +2150,11 @@ fn a_computed_pack_spread_checks_and_declines_cpp_emission() {
         concat!(
             "module m\n",
             "const fn identity(x: i64) -> i64 => x\n",
+            "const fn apply(f: const fn() -> i64) -> i64 => f()\n",
             "const fn forward<...Ps, ...As>(f: const fn(...{Ps}) -> i64, args: ...{As for f}) -> i64 =>\n",
-            "    f(...{for key in arg_keys(Ps): if key in arg_keys(As) { args[key] }})\n",
+            "    f(...{for key in arg_keys(Ps):\n",
+            "        if key == \"unused\" { apply(fn() => if key == \"unused\" { 0 } else { 1 }) }\n",
+            "        else if key in arg_keys(As) { args[key] }})\n",
             "test example { assert forward(identity, 3) == 3 }\n",
         ),
     );

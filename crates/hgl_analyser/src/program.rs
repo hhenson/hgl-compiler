@@ -693,8 +693,10 @@ pub enum LocalKind {
     /// A generic parameter, or the name an `each ... in` constraint
     /// binds.
     GenericParameter,
-    /// The key bound by `each` or a pack comprehension over `arg_keys(Ps)` (GEN-17).
+    /// The key bound by `each` or `any` over `arg_keys(Ps)` (GEN-17).
     PackKey,
+    /// The iteration binding of a pack comprehension over `arg_keys(Ps)` (FN-19).
+    PackIterationKey,
 }
 
 impl LocalKind {
@@ -702,7 +704,11 @@ impl LocalKind {
     pub(crate) fn capture_allowed(self) -> bool {
         matches!(
             self,
-            Self::Parameter | Self::GenericParameter | Self::Let | Self::Iteration
+            Self::Parameter
+                | Self::GenericParameter
+                | Self::Let
+                | Self::Iteration
+                | Self::PackIterationKey
         )
     }
 
@@ -717,7 +723,7 @@ impl LocalKind {
             LocalKind::Iteration => "an iteration binding",
             LocalKind::Parameter => "a parameter",
             LocalKind::GenericParameter => "a generic parameter",
-            LocalKind::PackKey => "a pack key",
+            LocalKind::PackKey | LocalKind::PackIterationKey => "a pack key",
         }
     }
 }

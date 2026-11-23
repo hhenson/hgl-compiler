@@ -679,7 +679,7 @@ impl Resolver<'_> {
         if let Some(sequence) = parts.next() {
             let source = ungrouped(sequence.clone());
             if pack && is_arg_keys_call(&source) {
-                kind = LocalKind::PackKey;
+                kind = LocalKind::PackIterationKey;
                 // The name of the type pack is looked up, rather than
                 // the contextual `arg_keys` form itself (GEN-17).
                 if let Some(arguments) = child(&source, SyntaxKind::ArgList) {
