@@ -285,6 +285,35 @@ fn a_later_property_clause_cannot_repeat_an_earlier_domain() {
 }
 
 #[test]
+fn a_property_clause_cannot_repeat_a_domain_or_property() {
+    // GEN-9: the diagnostic points at the later domain or property.
+    for (clause, repeated) in [
+        ("properties<i64, i64> { associative }", "i64"),
+        ("properties<i64, f64, i64> { commutative }", "i64"),
+        (
+            "properties<i64> { associative, associative }",
+            "associative",
+        ),
+        ("properties<i64> { identity = 0, identity = 1 }", "identity"),
+    ] {
+        let rejected = check(&[(
+            "m.hgl",
+            &format!("module m\noperator combine<T>(a: T, b: T) -> T\n    {clause}\n"),
+        )]);
+        let column = clause.rfind(repeated).unwrap() + 5;
+        assert!(rejected.rejected, "{clause}");
+        assert_eq!(
+            rejected.summary(),
+            [format!(
+                "m.hgl:3:{column} operator/property.duplicate GEN-9"
+            )],
+            "{}",
+            rejected.report
+        );
+    }
+}
+
+#[test]
 fn a_law_default_queries_the_public_operator_and_allows_a_caller_override() {
     // GEN-9, GEN-18: metadata belongs to the operator and concrete domain.
     for call in [
