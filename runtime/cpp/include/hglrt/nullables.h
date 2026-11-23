@@ -21,6 +21,18 @@
 
 namespace hglrt {
 
+/// TYPE-14 and TYPE-15: compare each publication of a nullable scalar
+/// connection with null. Only a valid input can run this node.
+template <class S, bool Equal>
+struct CompareNull {
+    static constexpr auto name = "hgl.compare_null";
+
+    static void eval(hgraph::In<"value", S> input, hgraph::Out<hgraph::TS<hgraph::Bool>> out) {
+        const bool present = input.value().as_optional().has_value();
+        out.set(Equal ? !present : present);
+    }
+};
+
 /// The payload of the nullable endpoint `input`, `TS<Optional<T>>`, read in
 /// a hook (TIME-1): the `std::optional<T>` it holds, which holds nothing for
 /// a published null (TYPE-15: "A present null is ordinary data, distinct

@@ -745,6 +745,33 @@ fn value_code_runs_on_the_sdk() {
     );
 }
 
+/// TYPE-14 and TYPE-15: graph comparisons with null observe published values.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn graph_null_comparisons_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("graph-null-comparison");
+    let file = write(
+        &root,
+        "demo.graph_null_comparison.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.graph_null_comparison.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The temporal forms of a list and of a tuple on the SDK (`demo.lists`):
 /// each test passes, a failing child read among them.
 #[test]

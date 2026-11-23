@@ -1,0 +1,17 @@
+module demo.graph_null_comparison
+
+# TYPE-14 and TYPE-15: test the value that arrives on the connection.
+fn is_null_graph(value: i64?) -> bool => value == null
+fn is_present_graph(value: i64?) -> bool => null != value
+
+test null_and_number {
+    assert eval is_null_graph(value: [null, 7]) == [true, false]
+    assert eval is_present_graph(value: [null, 7]) == [false, true]
+}
+
+test silent_cycles_publish_nothing {
+    assert eval is_null_graph(value: [_, null, 7, _, null]) ==
+        [_, true, false, _, true]
+    assert eval is_present_graph(value: [_, null, 7, _, null]) ==
+        [_, false, true, _, false]
+}
