@@ -499,6 +499,55 @@ fn an_indexed_type_parameter_reaches_its_instances() {
     }
 }
 
+/// GEN-7: a provisional result supplies a consumer only in the instance
+/// that selects it. Independent concrete calls still make instances.
+#[test]
+fn a_provisional_result_does_not_make_an_independent_instance() {
+    let definitions = concat!(
+        "operator items_of<T, C>(value: T) -> C\n",
+        "impl const fn items_of<T>(value: T) -> list<i64, 2> => [1, 2]\n",
+        "impl const fn items_of(value: i64) -> list<i64, 3> => [1, 2, 3]\n",
+        "operator marker<T, C>(value: T) -> C\n",
+        "impl const fn marker<T>(value: T) -> list<i64, 1> => [9]\n",
+        "impl const fn marker(value: list<i64, 2>) -> set<i64> => [3]\n",
+        "const fn first<T>(value: T) -> i64 => marker(value)[0]\n",
+        "const fn outer<T>(value: T) -> i64 {\n",
+        "    let items = items_of(value)\n",
+        "    let alias = items\n",
+        "    return first(alias)\n",
+        "}\n",
+    );
+    for suffix in [
+        "",
+        "test invoke { assert outer(5) == 9 }\n",
+        "test invoke { let items: list<i64, 3> = [1, 2, 3]\n assert first(items) == 9 }\n",
+    ] {
+        let accepted = module(&format!("{definitions}{suffix}"));
+        assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+    }
+    let rejected = module(&format!("{definitions}test invoke {{ outer(\"s\") }}\n"));
+    assert_eq!(
+        rejected.summary(),
+        ["m.hgl:14:15 type/type.mismatch EXPR-7"]
+    );
+    for instance in ["first<list<i64, 2>>", "outer<str>"] {
+        assert!(
+            rejected
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            rejected.report
+        );
+    }
+    let independent = module(&format!(
+        "{definitions}const fn concrete<T>(unused: T) -> i64 {{\n    let items: list<i64, 2> = [1, 2]\n    return first(items)\n}}\n"
+    ));
+    assert_eq!(
+        independent.summary(),
+        ["m.hgl:16:12 type/type.mismatch EXPR-7"]
+    );
+}
+
 /// GEN-7: an unrelated changed result does not move a call's rejection.
 #[test]
 fn a_changed_result_does_not_relocate_other_argument_checks() {

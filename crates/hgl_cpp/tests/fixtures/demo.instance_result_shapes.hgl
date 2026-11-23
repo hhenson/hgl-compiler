@@ -18,6 +18,16 @@ operator extent_of<C>(items: C) -> i64
 impl const fn extent_of(items: list<i64, 2>) -> i64 => 2
 impl const fn extent_of(items: list<i64, 3>) -> i64 => 3
 
+operator marker_of<T, C>(items: T) -> C
+impl const fn marker_of<T>(items: T) -> list<i64, 1> => [9]
+impl const fn marker_of(items: list<i64, 2>) -> set<i64> => [3]
+
+const fn marker_at_first<T>(items: T) -> i64 => marker_of(items)[0]
+const fn first_marker<T>(value: T) -> i64 {
+    let items = items_of(value)
+    return marker_at_first(items)
+}
+
 const fn first_of<T>(value: T) -> i64 => items_of(value)[0]
 const fn first_from_index<T>(values: T) -> i64 => first_of(values[0])
 const fn relay_first<...Args>(values: ...Args) -> i64 => first_of(...values)
@@ -58,6 +68,7 @@ test indexed {
     assert first_from_index([5]) == 5
     assert first_from_index(["string"]) == 1
     assert call_first(relay_instance<i64>, 5) == 5
+    assert first_marker(5) == 9
 }
 test whole {
     assert extent(5) == 3

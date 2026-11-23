@@ -2222,9 +2222,16 @@ pub(super) fn instances_hold(
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let mut made = Vec::new();
-            if let Some(Some(body)) = module.bodies.get(position) {
+            let provisional = if let Some(Some(body)) = module.bodies.get(position) {
                 made_in(&body.statements, &mut made);
-            }
+                let selecting = module
+                    .selecting
+                    .get(position)
+                    .map_or(&[][..], Vec::as_slice);
+                provisional_result_calls(body, selecting)
+            } else {
+                HashSet::new()
+            };
             for default in module
                 .defaults
                 .get(position)
@@ -2277,6 +2284,7 @@ pub(super) fn instances_hold(
                     computing.insert((index, position));
                 }
                 if call.required.is_some()
+                    || provisional.contains(&call.at)
                     || passes_on(&call.generics, &declared)
                     || call
                         .type_packs
@@ -3418,6 +3426,81 @@ fn given_in(argument: &Argument, map: &[(Location, &Argument)], declared: &[Loca
 /// The calls of generic declarations `statements` make, at any depth.
 fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
     walk_nested_calls(statements, &mut |expression| made_at(expression, made));
+}
+
+/// A source call supplied by a result that an instance selects is an
+/// edge of that body, even if the admitting result gave it concrete
+/// generic arguments. Only the instance determines the callee's types.
+fn provisional_result_calls(
+    body: &hir::Body,
+    selecting: &[super::candidates::Selecting],
+) -> HashSet<Location> {
+    let results: HashSet<_> = selecting
+        .iter()
+        .filter(|call| call.result.is_some())
+        .map(|call| call.at)
+        .collect();
+    let mut provisional = HashSet::new();
+    if !results.is_empty() {
+        collect_provisional_result_calls(body, &results, &mut provisional);
+    }
+    provisional
+}
+
+/// Keep each anonymous body's locals separate from its enclosing body.
+fn collect_provisional_result_calls(
+    body: &hir::Body,
+    results: &HashSet<Location>,
+    provisional: &mut HashSet<Location>,
+) {
+    let mut initializers = HashMap::new();
+    hir::walk_statement_nodes(&body.statements, &mut |node| {
+        if let hir::Node::Statement(hir::Stmt::Declare {
+            local,
+            value: Some(value),
+        }) = node
+        {
+            initializers.insert(*local, value);
+        }
+    });
+    hir::walk_statements(&body.statements, &mut |value| {
+        if let ExprKind::Call { arguments, .. } = &value.kind
+            && arguments
+                .iter()
+                .any(|argument| reads_provisional_result(&argument.value, results, &initializers))
+        {
+            provisional.insert(value.at);
+        }
+        if let Some(Callee::Anonymous(function)) = called_or_referenced(value) {
+            collect_provisional_result_calls(&function.body, results, provisional);
+        }
+    });
+}
+
+/// Follow initializer reads without repeatedly visiting the same binding.
+fn reads_provisional_result(
+    source: &Expr,
+    results: &HashSet<Location>,
+    initializers: &HashMap<hir::LocalId, &Expr>,
+) -> bool {
+    let mut waiting = vec![source];
+    let mut seen = HashSet::new();
+    while let Some(value) = waiting.pop() {
+        let mut found = false;
+        value.walk(&mut |part| {
+            found |= results.contains(&part.at);
+            if let ExprKind::Local(local) = part.kind
+                && seen.insert(local)
+                && let Some(initializer) = initializers.get(&local)
+            {
+                waiting.push(initializer);
+            }
+        });
+        if found {
+            return true;
+        }
+    }
+    false
 }
 
 /// GEN-7: a failure in a selected result's use points at its call and
