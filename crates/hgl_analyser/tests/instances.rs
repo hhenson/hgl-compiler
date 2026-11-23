@@ -567,6 +567,26 @@ fn a_provisional_result_does_not_make_an_independent_instance() {
         "{}",
         rejected.report
     );
+    let forwarded = format!(
+        "{definitions}\
+         const fn relay<...A>(items: ...A) -> i64 => first(...items)\n\
+         const fn by_pack<T>(value: T) -> i64 {{\n\
+             let items = items_of(value)\n\
+             return relay(items)\n\
+         }}\n"
+    );
+    for suffix in ["", "test invoke { assert by_pack(5) == 9 }\n"] {
+        let accepted = module(&format!("{forwarded}{suffix}"));
+        assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+    }
+    let rejected = module(&format!("{forwarded}test invoke {{ by_pack(\"s\") }}\n"));
+    assert_eq!(
+        rejected.summary(),
+        ["m.hgl:19:15 type/type.mismatch EXPR-7"],
+        "{}",
+        rejected.report
+    );
+    assert!(rejected.report.contains("`relay<[list<i64, 2>]>`"));
 }
 
 /// GEN-7: non-generic bodies make instances where they write the calls or

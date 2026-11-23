@@ -2,6 +2,8 @@
 //! (FN-19). Argument placement uses each entry's key and reads the input
 //! slot that holds it.
 
+use std::collections::HashSet;
+
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -646,10 +648,11 @@ pub(super) fn walk_nested_calls(statements: &[crate::hir::Stmt], visit: &mut dyn
 pub(super) fn check_instances(
     program: &crate::Program,
     discovered: &mut Vec<super::requirements::Made>,
+    provisional: &HashSet<Location>,
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
     use super::requirements::{MakingCall, emit_instance_report, making_path};
-    use std::collections::{HashMap, HashSet, VecDeque};
+    use std::collections::{HashMap, VecDeque};
 
     let mut forwarding = HashSet::new();
     let mut deferred_at = HashSet::new();
@@ -684,7 +687,8 @@ pub(super) fn check_instances(
     let mut roots = Vec::new();
     for unit in &program.modules {
         let mut record = |value: &Expr| {
-            if let Some(instance) = ForwardingInstance::for_check(program, value)
+            if !provisional.contains(&value.at)
+                && let Some(instance) = ForwardingInstance::for_check(program, value)
                 && forwarding.contains(&instance.declaration)
             {
                 roots.push((instance, value.at));
@@ -778,6 +782,10 @@ pub(super) fn check_instances(
                         &[making_path(making(), parent, &parents)],
                         diagnostics,
                     );
+                    if result_uses.reports.has_errors() {
+                        seen.push(instance);
+                        continue;
+                    }
                 }
                 let mut link = None;
                 walk_nested_calls(&checked.body.statements, &mut |value| {

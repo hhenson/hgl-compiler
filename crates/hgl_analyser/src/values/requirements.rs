@@ -2198,6 +2198,7 @@ fn nesting<'t>(ty: &'t Type) -> usize {
 pub(super) fn instances_hold(
     program: &Program,
     mut given: Vec<Made>,
+    provisional: &HashSet<Location>,
     diagnostics: &mut Diagnostics,
 ) {
     // The generic parameters of `(module, declaration)`, by where each
@@ -2222,16 +2223,9 @@ pub(super) fn instances_hold(
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let mut made = Vec::new();
-            let provisional = if let Some(Some(body)) = module.bodies.get(position) {
+            if let Some(Some(body)) = module.bodies.get(position) {
                 made_in(&body.statements, &mut made);
-                let selecting = module
-                    .selecting
-                    .get(position)
-                    .map_or(&[][..], Vec::as_slice);
-                provisional_result_calls(program, module, body, selecting)
-            } else {
-                HashSet::new()
-            };
+            }
             for default in module
                 .defaults
                 .get(position)
@@ -3436,20 +3430,20 @@ fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
 /// A source call supplied by a result that an instance selects is an
 /// edge of that body, even if the admitting result gave it concrete
 /// generic arguments. Only the instance determines the callee's types.
-fn provisional_result_calls(
-    program: &Program,
-    module: &crate::Module,
-    body: &hir::Body,
-    selecting: &[super::candidates::Selecting],
-) -> HashSet<Location> {
-    let results: HashSet<_> = selecting
-        .iter()
-        .filter(|call| call.result.is_some())
-        .map(|call| call.at)
-        .collect();
+pub(super) fn provisional_result_calls(program: &Program) -> HashSet<Location> {
     let mut provisional = HashSet::new();
-    if !results.is_empty() {
-        collect_provisional_result_calls(program, module, body, &results, &mut provisional);
+    for module in &program.modules {
+        for (body, selecting) in module.bodies.iter().zip(&module.selecting) {
+            let Some(body) = body else { continue };
+            let results: HashSet<_> = selecting
+                .iter()
+                .filter(|call| call.result.is_some())
+                .map(|call| call.at)
+                .collect();
+            if !results.is_empty() {
+                collect_provisional_result_calls(program, module, body, &results, &mut provisional);
+            }
+        }
     }
     provisional
 }

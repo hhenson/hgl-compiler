@@ -359,8 +359,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     // parameter of its own is told where each call gives that one.
     operators::inherit_configuration_defaults(program);
     let mut instance_calls = operator_defaults::check(program, diagnostics);
-    forwarded_packs::check_instances(program, &mut instance_calls, diagnostics);
-    requirements::instances_hold(program, instance_calls, diagnostics);
+    let provisional = requirements::provisional_result_calls(program);
+    forwarded_packs::check_instances(program, &mut instance_calls, &provisional, diagnostics);
+    requirements::instances_hold(program, instance_calls, &provisional, diagnostics);
     // TYPE-10, TYPE-11: the sizes each struct application written in a
     // type gives the struct's lists and windows.
     sizes::applied_sizes(program, diagnostics);
