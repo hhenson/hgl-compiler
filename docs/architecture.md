@@ -597,7 +597,7 @@ capability.
 | --- | --- | --- |
 | `inject run_config` in a function, in a test that is no integration test, or after an integration test's other statements (the phase pass) | RUN-6 | `inject.position` |
 | Braces after any capability but `run_config` | RUN-6 | `inject.configuration` |
-| A key of the global store written out, used with two types in one program (`store_keys`, once every body is typed); a `get` of `T` beside a key of `T?` is not judged, awaiting hhenson/hgl_spec#165 | TIME-8 | `store.key_type` |
+| A key of the global store written out, used with two types in one program (`store_keys`, once every body is typed) | TIME-8 | `store.key_type` |
 
 ### Integration tests
 
