@@ -942,6 +942,22 @@ fn a_fixed_lists_size_remains_part_of_its_type() {
     );
 }
 
+/// TYPE-10: diagnostics name both growing-list spellings `list<T>`.
+#[test]
+fn growing_list_spellings_have_one_diagnostic_type_name() {
+    let checked = module(concat!(
+        "const fn plain(value: bool) -> list<i64> => value\n",
+        "const fn explicit(value: bool) -> list<i64, unbounded> => value\n",
+    ));
+    let [plain, explicit] = checked.findings.as_slice() else {
+        panic!("{}", checked.report);
+    };
+    assert_eq!(plain.code, "type/type.mismatch");
+    assert_eq!(explicit.code, plain.code);
+    assert_eq!(explicit.message, plain.message);
+    assert!(plain.message.contains("`list<i64>`"), "{}", plain.message);
+}
+
 /// TYPE-10: "`list<T>` denotes a growing shape; fixed sizes are
 /// nonnegative constants. `unbounded` is the size sentinel. Size
 /// participates in identity ... A tuple retains positional identity and
@@ -1002,6 +1018,8 @@ fn a_lists_size_is_a_nonnegative_count() {
             .ty
     };
     assert_ne!(ty("a"), ty("b"));
+    assert_eq!(ty("a"), ty("c"));
+    assert_eq!(ty("c").to_string(), "list<f64>");
     assert_ne!(ty("b"), ty("c"));
     assert_ne!(ty("b"), ty("f"));
     assert_eq!(ty("b"), ty("h"));

@@ -35,6 +35,32 @@ fn document(arguments: &[&str]) -> Vec<u8> {
     output.stdout
 }
 
+/// TYPE-10: both spellings present the same analysed type in the API model.
+#[test]
+fn growing_list_spellings_have_one_api_type() {
+    let root = scratch("documentation-list-identity");
+    let source = write(
+        &root,
+        "lists.hgl",
+        concat!(
+            "module lists\n",
+            "export struct Packet<T> { value: T }\n",
+            "export const fn plain(value: Packet<list<i64>>) -> list<i64> => value.value\n",
+            "export const fn explicit(value: Packet<list<i64, unbounded>>) -> list<i64, unbounded> => value.value\n",
+        ),
+    );
+    let model: Value = serde_json::from_slice(&document(&[&source])).unwrap();
+    let lists = module(&model, "lists");
+    let plain = declaration(lists, "plain");
+    let explicit = declaration(lists, "explicit");
+    assert_eq!(
+        plain["parameters"][0]["type"],
+        explicit["parameters"][0]["type"]
+    );
+    assert_eq!(plain["result"]["type"], "list<i64>");
+    assert_eq!(explicit["result"]["type"], "list<i64>");
+}
+
 /// SDOC-1, SDOC-2, SDOC-3 and SDOC-10. The module, functions, operator, struct,
 /// field, enum, member, native type and named test keep their own comments.
 #[test]

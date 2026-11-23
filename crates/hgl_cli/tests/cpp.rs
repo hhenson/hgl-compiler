@@ -864,8 +864,8 @@ fn list_code_runs_on_the_sdk() {
     );
 }
 
-/// TYPE-10: the explicit unbounded sentinel uses the growing-list
-/// representation in value code, node and graph connections, and bundles.
+/// TYPE-10: both growing-list spellings share representation and identity
+/// in value code, node and graph connections, bundles and instances.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn explicit_unbounded_lists_run_on_the_sdk() {
@@ -887,7 +887,7 @@ fn explicit_unbounded_lists_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

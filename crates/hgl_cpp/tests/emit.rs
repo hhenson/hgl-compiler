@@ -1744,6 +1744,36 @@ fn list_code_is_written() {
     );
 }
 
+/// TYPE-10: explicit and omitted unbounded sizes select one emitted instance.
+#[test]
+fn growing_list_spellings_share_an_emitted_instance() {
+    let emitted = emit_with(
+        &[(
+            "demo.explicit_unbounded.hgl",
+            include_str!("fixtures/demo.explicit_unbounded.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    let path = hgl_cpp::header_path("demo.explicit_unbounded");
+    let header = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == path)
+        .unwrap()
+        .text;
+    let instances: Vec<_> = header
+        .lines()
+        .filter(|line| line.starts_with("// retain_values<V>"))
+        .collect();
+    assert_eq!(instances.len(), 1, "{instances:?}");
+    assert!(
+        instances[0].contains("instance `list_i64_`"),
+        "{instances:?}"
+    );
+}
+
 /// The timing the target writes (`emit/scheduling.rs`): nodes woken by a
 /// scheduler or an alarm, and sources with declarations and hooks, each
 /// as the goldens under `tests/goldens/demo.timing` have it. Each test of
