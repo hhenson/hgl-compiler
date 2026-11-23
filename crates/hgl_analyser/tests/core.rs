@@ -96,6 +96,39 @@ fn formatting_checks_const_inputs_at_every_call() {
     );
 }
 
+/// FMT-3: an independent unread pattern does not hide a known error.
+#[test]
+fn formatting_checks_known_const_inputs_when_another_is_unread() {
+    let checked = with_core(concat!(
+        "const fn pattern(value: str) -> str => value\n",
+        "const P: str = pattern(\"{}\")\n",
+        "const fn join(const a: str, const b: str, value: f64) -> str => format(a, value) + format(b, value)\n",
+        "test t { assert join(\"{:x}\", P, 1.5) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:17 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// UNIT-13 rejects a cyclic const input without a second instance limit.
+#[test]
+fn cyclic_const_input_keeps_its_constant_cycle_diagnostic() {
+    let checked = with_core(concat!(
+        "const Pattern: str = Pattern\n",
+        "const fn show(const pattern: str) -> str => format(pattern)\n",
+        "test t { assert show(Pattern) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:7 name/constant.cycle UNIT-13"],
+        "{}",
+        checked.report,
+    );
+}
+
 /// GEN-13: a growing const input must stop making new instances.
 #[test]
 fn demanded_const_input_growth_reports_the_instance_limit() {

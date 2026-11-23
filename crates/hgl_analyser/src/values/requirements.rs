@@ -2869,7 +2869,7 @@ pub(super) fn instances_hold(
                             let constants = match &kind {
                                 ExprKind::Call {
                                     callee, arguments, ..
-                                } => program.call_const_inputs(callee, arguments),
+                                } => program.known_const_inputs(callee, arguments),
                                 _ => Ok(Vec::new()),
                             };
                             typer.fit_selected_result(
@@ -3895,7 +3895,7 @@ fn made_at(program: &Program, expression: &Expr, made: &mut Vec<Made>) {
         } => make_call(
             callee,
             expression.at,
-            program.call_const_inputs(callee, arguments),
+            program.known_const_inputs(callee, arguments),
             made,
         ),
         ExprKind::StaticCallable(callee) => made_callee(callee, expression.at, made),

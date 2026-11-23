@@ -56,6 +56,25 @@ impl Program {
         callee: &Callee,
         arguments: &[Argument],
     ) -> Result<Vec<ConstInput>, ConstInputFault> {
+        let known = self.known_const_inputs(callee, arguments)?;
+        let expected = callee
+            .declaration()
+            .and_then(|declaration| self.const_demands.get(&declaration))
+            .map_or(0, BTreeSet::len);
+        if known.len() == expected {
+            Ok(known)
+        } else {
+            Err(ConstInputFault::Unread)
+        }
+    }
+
+    /// Analysis can check the known inputs even when another input remains
+    /// unread. Lowering requires the complete set through `call_const_inputs`.
+    pub(crate) fn known_const_inputs(
+        &self,
+        callee: &Callee,
+        arguments: &[Argument],
+    ) -> Result<Vec<ConstInput>, ConstInputFault> {
         use ConstInputFault::Unread;
 
         let Some((module, declaration)) = callee.declaration() else {
@@ -71,6 +90,7 @@ impl Program {
         let mut reader = Reader {
             program: self,
             remaining: INPUT_BUDGET,
+            reading: Vec::new(),
         };
         demand
             .iter()
@@ -128,6 +148,7 @@ impl Program {
                 }
                 Ok(ConstInput { slot, value, key })
             })
+            .filter(|input| !matches!(input, Err(Unread)))
             .collect()
     }
 }
@@ -135,9 +156,29 @@ impl Program {
 struct Reader<'a> {
     program: &'a Program,
     remaining: usize,
+    reading: Vec<(Declaration, Option<usize>)>,
 }
 
 impl Reader<'_> {
+    fn read_declaration(
+        &mut self,
+        declaration: Declaration,
+        field: Option<usize>,
+        value: &Expr,
+        depth: usize,
+        generics: &[(Location, &GenericArgument)],
+    ) -> Result<Expr, ConstInputFault> {
+        let dependency = (declaration, field);
+        if self.reading.contains(&dependency) {
+            // UNIT-8 and UNIT-13 report these dependency cycles themselves.
+            return Err(ConstInputFault::Unread);
+        }
+        self.reading.push(dependency);
+        let read = self.read(value, depth, generics);
+        self.reading.pop();
+        read
+    }
+
     fn read(
         &mut self,
         expression: &Expr,
@@ -187,7 +228,13 @@ impl Reader<'_> {
                     .get(*declaration)
                     .and_then(Option::as_ref)
                     .ok_or(Unread)?;
-                return self.read(&constant.value, next, &[]);
+                return self.read_declaration(
+                    (*module, *declaration),
+                    None,
+                    &constant.value,
+                    next,
+                    &[],
+                );
             }
             ExprKind::Call {
                 callee,
@@ -224,7 +271,7 @@ impl Reader<'_> {
                 else {
                     return Err(Unread);
                 };
-                return self.read(returned, next, &[]);
+                return self.read_declaration((module, declaration), None, returned, next, &[]);
             }
             ExprKind::Tuple(parts) | ExprKind::Sequence(parts)
                 if matches!(expression.ty, Type::Tuple(_) | Type::List { .. }) =>
@@ -255,21 +302,28 @@ impl Reader<'_> {
                     let value = if let Some(given) =
                         arguments.iter().find(|arg| arg.parameter == Some(position))
                     {
-                        &given.value
+                        self.read(&given.value, next, generics)?
                     } else {
                         let default = member.default.ok_or(Unread)?;
-                        &self.program.modules[default.module]
+                        let value = &self.program.modules[default.module]
                             .defaults
                             .get(default.declaration)
                             .and_then(|fields| fields.get(default.field))
                             .and_then(Option::as_ref)
                             .ok_or(Unread)?
-                            .value
+                            .value;
+                        self.read_declaration(
+                            (default.module, default.declaration),
+                            Some(default.field),
+                            value,
+                            next,
+                            generics,
+                        )?
                     };
                     fields.push(Argument {
                         parameter: Some(position),
                         pack: None,
-                        value: self.read(value, next, generics)?,
+                        value,
                     });
                 }
                 ExprKind::Construct {
@@ -617,6 +671,7 @@ const C: Settings = Settings(part: ("a", -0.0), count: 1)
             let mut reader = Reader {
                 program: &program,
                 remaining: INPUT_BUDGET,
+                reading: Vec::new(),
             };
             let value = reader.read(&constant.value, INPUT_DEPTH, &[]).unwrap();
             let mut output = String::new();
