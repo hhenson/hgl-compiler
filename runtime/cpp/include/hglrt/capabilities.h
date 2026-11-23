@@ -124,7 +124,7 @@ class DroppedWakes {
 
   private:
     /// Warn on the first drop and count any further drops.
-    void record(const hgraph::NodeView& node);
+    void record(const hgraph::NodeView& node, datetime at);
     /// At stop, report the count of drops after the initial warning.
     void finish(const hgraph::NodeView& node) const;
 
@@ -137,14 +137,14 @@ struct DroppedWakeLog {
     enum class Operation { record, finish };
 
     const hgraph::NodeView* node{nullptr};
-    void (*apply)(const hgraph::NodeView&, Operation){nullptr};
+    void (*apply)(const hgraph::NodeView&, Operation, datetime){nullptr};
 
     template <class State, DroppedWakes State::*field>
     [[nodiscard]] static DroppedWakeLog bind(const hgraph::NodeView& node) noexcept {
-        return {&node, [](const hgraph::NodeView& owner, Operation operation) {
+        return {&node, [](const hgraph::NodeView& owner, Operation operation, datetime at) {
                     hgraph::State<State> state{owner.state()};
                     if (operation == Operation::record) {
-                        (state.modify().*field).record(owner);
+                        (state.modify().*field).record(owner, at);
                     } else {
                         (state.ref().*field).finish(owner);
                     }
@@ -152,7 +152,7 @@ struct DroppedWakeLog {
     }
 
     /// Record a drop where the timer is bound to the node's state.
-    void record() const noexcept;
+    void record(datetime at) const noexcept;
     /// Report any further drops at this node's stop.
     void finish() const noexcept;
 };
@@ -209,7 +209,7 @@ class Scheduler {
     [[nodiscard]] Hook hook() const noexcept { return hook_; }
 
     /// Record a stale dated request unless it is to be handled by the wall clock.
-    [[nodiscard]] bool record_drop(bool on_wall_clock) const;
+    [[nodiscard]] bool record_drop(datetime at, bool on_wall_clock) const;
 
   private:
     hgraph::NodeScheduler view_;
@@ -282,7 +282,7 @@ class Alarm {
     [[nodiscard]] Hook hook() const noexcept { return hook_; }
 
     /// Record a stale dated request.
-    void record_drop() const;
+    void record_drop(datetime at) const;
 
   private:
     hgraph::NodeScheduler view_;

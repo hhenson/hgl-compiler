@@ -1,4 +1,7 @@
 // Core's capabilities and the native operations on them (capabilities.h).
+#include "instant_text.h"
+
+#include <hgraph/runtime/diagnostic_path.h>
 #include <hglrt/capabilities.h>
 #include <hglrt/temporal.h>
 
@@ -79,9 +82,11 @@ void fn_log(const Logger& logger, LogLevel level, std::string_view message) {
 
 // ---- The scheduler -------------------------------------------------------------
 
-void DroppedWakes::record(const hgraph::NodeView& node) {
+void DroppedWakes::record(const hgraph::NodeView& node, datetime at) {
     if (count_++ == 0) {
-        logger_of(node).warn("Dropped wake requested at or before the evaluation time");
+        logger_of(node).warn("Dropped wake requested by {} for {}Z at or before the evaluation time",
+                             hgraph::diagnostic::node_label(node),
+                             detail::instant_text(at, detail::InstantFormat::publication));
     }
 }
 
@@ -91,10 +96,10 @@ void DroppedWakes::finish(const hgraph::NodeView& node) const {
     }
 }
 
-void DroppedWakeLog::record() const noexcept {
+void DroppedWakeLog::record(datetime at) const noexcept {
     if (apply != nullptr) {
         try {
-            apply(*node, Operation::record);
+            apply(*node, Operation::record, at);
         } catch (...) {
             // A dropped wake is never a failure (TIME-8).
         }
@@ -104,7 +109,7 @@ void DroppedWakeLog::record() const noexcept {
 void DroppedWakeLog::finish() const noexcept {
     if (apply != nullptr) {
         try {
-            apply(*node, Operation::finish);
+            apply(*node, Operation::finish, {});
         } catch (...) {
             // Preserve any failure already raised by the stop hook.
         }
@@ -114,11 +119,11 @@ void DroppedWakeLog::finish() const noexcept {
 Scheduler::Scheduler(hgraph::NodeScheduler view, Hook hook, DroppedWakeLog drop_log)
     : view_(view), hook_(hook), drop_log_(drop_log) {}
 
-bool Scheduler::record_drop(bool on_wall_clock) const {
+bool Scheduler::record_drop(datetime at, bool on_wall_clock) const {
     if (on_wall_clock && (drop_log_.node == nullptr || drop_log_.node->evaluation_clock().supports_wall_clock())) {
         return false; // Let hgraph handle real-time requests or an unbound view.
     }
-    drop_log_.record();
+    drop_log_.record(at);
     return true;
 }
 
@@ -139,7 +144,7 @@ void schedule_Scheduler_duration_str__bool(const Scheduler& capability, duration
 
 void schedule_Scheduler_datetime_str__bool(const Scheduler& capability, datetime at,
                                            const std::optional<str>& tag, bool on_wall_clock) {
-    if (dropped(at, capability.view().now(), capability.hook()) && capability.record_drop(on_wall_clock)) {
+    if (dropped(at, capability.view().now(), capability.hook()) && capability.record_drop(at, on_wall_clock)) {
         return;
     }
     capability.view().schedule(at, engine_tag(tag), on_wall_clock);
@@ -175,15 +180,15 @@ Alarm::Alarm(hgraph::NodeScheduler view, Hook hook, DroppedWakeLog drop_log)
     }
 }
 
-void Alarm::record_drop() const {
-    drop_log_.record();
+void Alarm::record_drop(datetime at) const {
+    drop_log_.record(at);
 }
 
 void schedule_Alarm_datetime(const Alarm& capability, datetime at) {
     // hgraph's scheduler drops a time before its evaluation time, and keeps
     // one at it in `start` alone.
     if (dropped(at, capability.view().now(), capability.hook())) {
-        capability.record_drop();
+        capability.record_drop(at);
         return;
     }
     // CAP-5: "asking again keeps the earliest".

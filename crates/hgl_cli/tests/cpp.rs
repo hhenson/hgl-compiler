@@ -1347,9 +1347,9 @@ fn timing_runs_on_the_sdk() {
     );
 }
 
-/// TIME-8 and CAP-4: a node logs its first dropped wake during a run and
-/// reports later drops even when the scheduler is passed to a value helper
-/// and the HGL node has no explicit stop hook.
+/// TIME-8 and CAP-4: the first dropped-wake warning names the generated node.
+/// Later drops are reported even when the scheduler is passed to a value
+/// helper and the HGL node has no explicit stop hook.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn dropped_wake_counts_reach_the_run_log_on_the_sdk() {
@@ -1385,6 +1385,12 @@ fn dropped_wake_counts_reach_the_run_log_on_the_sdk() {
     assert_eq!(
         stderr.matches("Dropped wake requested").count(),
         1,
+        "{stderr}"
+    );
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.contains("Dropped wake requested by wakes::requests")),
         "{stderr}"
     );
     assert_eq!(
