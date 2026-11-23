@@ -43,11 +43,12 @@
 //! run's store with (UNIT-14).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt::Write;
 
 use hgl_analyser::formatting;
 use hgl_analyser::hir::{
-    Answer, Argument, Body, Callee, Expr, ExprKind, Local, Run, Stmt, TypePackArgument,
-    ValueCategory, walk_statements,
+    Answer, Argument, Body, Callee, Expr, ExprKind, Local, Node, Run, Stmt, TypePackArgument,
+    ValueCategory, walk_statement_nodes_at, walk_statements,
 };
 use hgl_analyser::{
     Argument as GenericArgument, DeclarationKind, Detail, GenericKind, LocalKind, Pack, Program,
@@ -167,6 +168,30 @@ pub struct Instances {
     /// The value functions and value candidates that are written by
     /// instance: each with generic parameters and a body.
     requiring: BTreeSet<(usize, usize)>,
+    callable_limits: CallableLimits,
+    /// The exact instances that exceeded the target's growth limit.
+    growing: BTreeSet<(usize, usize, Vec<String>)>,
+}
+
+/// The target's resource limits for instancing static function arguments.
+#[derive(Default)]
+pub struct CallableLimits {
+    /// Copied targets, statements, expressions and locals allowed in one request.
+    pub size: usize,
+    /// Nested nodes allowed on one path through the specialized body.
+    pub depth: usize,
+    /// Deeper requests for the same declaration allowed on one request chain.
+    pub growth: usize,
+}
+
+/// Which limit prevented the target from writing an instance.
+pub enum CallableLimit {
+    /// The request would copy too many nodes to specialize its body.
+    Size,
+    /// The resulting body would nest too deeply to copy or emit safely.
+    Depth,
+    /// The same declaration was requested too often with a deeper argument.
+    Growth,
 }
 
 /// One call's request for an instance.
@@ -185,6 +210,16 @@ struct Asked {
     requirements: Vec<Answer>,
     /// Its static callable targets, by the argument's original slot.
     functions: Vec<(usize, Callee)>,
+    /// The anonymous target depth of each of those arguments.
+    depths: Vec<(usize, usize)>,
+}
+
+/// A completed request on the path to another instance.
+struct Request {
+    declaration: (usize, usize),
+    depths: Vec<(usize, usize)>,
+    /// Index of the preceding callable request in the search's request list.
+    parent: Option<usize>,
 }
 
 /// What an eval's run is wired with (core's CEVAL-1: "core's `replay`
@@ -352,19 +387,184 @@ fn generic(program: &Program, module: usize, declaration: usize) -> bool {
     generic && matches!(declared.bodies.get(declaration), Some(Some(_)))
 }
 
-/// Bind the static callable arguments by the original parameter index.
+/// Read the static callable arguments by the original parameter index.
+fn function_arguments(arguments: &[Argument]) -> impl Iterator<Item = (usize, &Callee)> + Clone {
+    arguments.iter().filter_map(|argument| {
+        let ExprKind::StaticCallable(target) = &argument.value.kind else {
+            return None;
+        };
+        Some((argument.parameter?, target.as_ref()))
+    })
+}
+
 fn functions_of(arguments: &[Argument]) -> Vec<(usize, Callee)> {
-    let mut functions: Vec<_> = arguments
-        .iter()
-        .filter_map(|argument| {
-            let ExprKind::StaticCallable(target) = &argument.value.kind else {
-                return None;
-            };
-            Some((argument.parameter?, (**target).clone()))
-        })
+    let mut functions: Vec<_> = function_arguments(arguments)
+        .map(|(slot, target)| (slot, target.clone()))
         .collect();
     functions.sort_by_key(|(slot, _)| *slot);
     functions
+}
+
+fn called_or_supplied(value: &Expr) -> Option<&Callee> {
+    match &value.kind {
+        ExprKind::Call { callee, .. } => Some(callee),
+        ExprKind::StaticCallable(callee) => Some(callee),
+        _ => None,
+    }
+}
+
+struct CopyBudget {
+    remaining: usize,
+    depth_limit: usize,
+}
+
+impl CopyBudget {
+    fn spend(&mut self, nodes: usize, depth: usize) -> Result<(), CallableLimit> {
+        if depth > self.depth_limit {
+            return Err(CallableLimit::Depth);
+        }
+        self.remaining = self
+            .remaining
+            .checked_sub(nodes)
+            .ok_or(CallableLimit::Size)?;
+        Ok(())
+    }
+}
+
+struct CallableShape {
+    /// Deepest HIR node or callee, counting from the whole body's root.
+    deepest: usize,
+    /// The anonymous callee levels, which measure repeated request growth.
+    anonymous: usize,
+}
+
+struct ArgumentCost {
+    nodes: usize,
+    height: usize,
+}
+
+/// Spend the cost of one callee and its owned body. A named callee owns
+/// its identity and an anonymous callee owns the nodes of its body.
+fn callable_shape(
+    target: &Callee,
+    depth: usize,
+    budget: &mut CopyBudget,
+    arguments: &[(usize, ArgumentCost)],
+) -> Result<CallableShape, CallableLimit> {
+    if let Callee::Parameter { parameter, .. } = target
+        && let Some((_, cost)) = arguments.iter().find(|(slot, _)| slot == parameter)
+    {
+        let deepest = depth + cost.height - 1;
+        budget.spend(cost.nodes, deepest)?;
+        // In the forecast only, the argument's anonymous nesting was
+        // already measured. Its structural depth grows at this use site.
+        return Ok(CallableShape {
+            deepest,
+            anonymous: 0,
+        });
+    }
+    budget.spend(1, depth)?;
+    if let Callee::Anonymous(function) = target {
+        let mut shape = body_shape(&function.body, depth + 1, budget, arguments)?;
+        shape.anonymous += 1;
+        return Ok(shape);
+    }
+    Ok(CallableShape {
+        deepest: depth,
+        anonymous: 0,
+    })
+}
+
+/// Walk an owned body. When `arguments` is given, forecast each copy the
+/// instancing pass makes at a call or forwarding use of a static parameter.
+fn body_shape(
+    body: &Body,
+    depth: usize,
+    budget: &mut CopyBudget,
+    arguments: &[(usize, ArgumentCost)],
+) -> Result<CallableShape, CallableLimit> {
+    let mut shape = CallableShape {
+        deepest: depth - 1,
+        anonymous: 0,
+    };
+    budget.spend(body.locals.len(), shape.deepest)?;
+    walk_statement_nodes_at(&body.statements, depth, &mut |node, depth| {
+        budget.spend(1, depth)?;
+        shape.deepest = shape.deepest.max(depth);
+        if let Node::Expression(expression) = node
+            && let Some(callee) = called_or_supplied(expression)
+        {
+            let nested = callable_shape(callee, depth + 1, budget, arguments)?;
+            shape.deepest = shape.deepest.max(nested.deepest);
+            shape.anonymous = shape.anonymous.max(nested.anonymous);
+        }
+        Ok(())
+    })?;
+    Ok(shape)
+}
+
+/// Check the borrowed arguments and the body that their instance would
+/// own. Neither a wide copy nor a deeply nested copy may be constructed
+/// first and checked only when it makes its next request.
+fn request_depths(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    arguments: &[Argument],
+    limits: &CallableLimits,
+) -> Result<Vec<(usize, usize)>, CallableLimit> {
+    let mut budget = CopyBudget {
+        remaining: limits.size,
+        depth_limit: limits.depth,
+    };
+    let mut costs = Vec::new();
+    let mut depths = Vec::new();
+    for (slot, target) in function_arguments(arguments) {
+        let before = budget.remaining;
+        let shape = callable_shape(target, 1, &mut budget, &[])?;
+        depths.push((slot, shape.anonymous));
+        costs.push((
+            slot,
+            ArgumentCost {
+                nodes: before - budget.remaining,
+                height: shape.deepest,
+            },
+        ));
+    }
+    if !costs.is_empty()
+        && let Some(body) = &program.modules[module].bodies[declaration]
+    {
+        body_shape(body, 1, &mut budget, &costs)?;
+    }
+    Ok(depths)
+}
+
+fn exceeds_growth(
+    declaration: (usize, usize),
+    depths: &[(usize, usize)],
+    requests: &[Request],
+    mut parent: Option<usize>,
+    mut remaining: usize,
+) -> bool {
+    if depths.iter().all(|(_, depth)| *depth == 0) {
+        return false;
+    }
+    while let Some(index) = parent {
+        let above = &requests[index];
+        if above.declaration == declaration
+            && depths.iter().any(|(slot, depth)| {
+                above.depths.iter().any(|(previous_slot, previous_depth)| {
+                    slot == previous_slot && depth > previous_depth
+                })
+            })
+        {
+            if remaining == 0 {
+                return true;
+            }
+            remaining -= 1;
+        }
+        parent = above.parent;
+    }
+    false
 }
 
 /// Identify the candidate that answers a callable's requirement, with
@@ -448,18 +648,21 @@ fn function_key(program: &Program, target: &Callee) -> Option<String> {
         // functions when its enclosing function is specialized.
         let mut targets = Vec::new();
         walk_statements(&function.body.statements, &mut |expression| {
-            let target = match &expression.kind {
-                ExprKind::Call { callee, .. } => callee,
-                ExprKind::StaticCallable(callee) => callee.as_ref(),
-                _ => return,
-            };
-            if !matches!(target, Callee::Unread) {
+            if let Some(target) = called_or_supplied(expression)
+                && !matches!(target, Callee::Unread)
+            {
                 targets.push(function_key(program, target));
             }
         });
-        let targets = targets.into_iter().collect::<Option<Vec<_>>>()?;
+        // A nested key is already encoded. Quoting it again would escape
+        // the escapes at every level. Its byte length frames it as-is.
+        let mut encoded = String::new();
+        for target in targets {
+            let target = target?;
+            write!(encoded, "{}#{target}", target.len()).expect("writing to a string succeeds");
+        }
         return Some(format!(
-            "anonymous:{}:{}:{}:{types:?}:{result:?}:{generic_arguments:?}:{type_packs:?}:{pack_inputs:?}:{targets:?}",
+            "anonymous:{}:{}:{}:{types:?}:{result:?}:{generic_arguments:?}:{type_packs:?}:{pack_inputs:?}:{encoded}",
             function.at.file.index(),
             function.at.span.start,
             function.template.value,
@@ -507,13 +710,13 @@ fn uses_test_candidate(program: &Program, answer: &Answer) -> bool {
 /// instance's key. `None` where they are not whole: one of them names
 /// a generic parameter or is not known, or the call does not say what
 /// each generic parameter of the declaration is.
-fn key(
+fn key<'a>(
     program: &Program,
     (module, declaration): (usize, usize),
     generics: &[GenericArgument],
     type_packs: &[TypePackArgument],
     captures: &Captures,
-    functions: &[(usize, Callee)],
+    functions: impl Iterator<Item = (usize, &'a Callee)> + Clone,
     requirements: &[Answer],
 ) -> Option<Vec<String>> {
     let Some(Detail::Callable(signature)) = program.modules.get(module)?.details.get(declaration)
@@ -533,7 +736,7 @@ fn key(
         if !matches!(parameter.ty, Type::Function(_)) {
             continue;
         }
-        let (_, target) = functions.iter().find(|(index, _)| *index == slot)?;
+        let (_, target) = functions.clone().find(|(index, _)| *index == slot)?;
         key.push(format!(
             "function[{slot}]:{}",
             function_key(program, target)?
@@ -592,15 +795,19 @@ impl Instances {
     /// found once, the analyser gives up a type that grows past its
     /// bound, which is then not whole, and no more instances of one
     /// declaration are made from one call than the analyser follows
-    /// ([`hgl_analyser::INSTANCES`]): one past them is not made, and a
-    /// call of it is reported.
+    /// ([`hgl_analyser::INSTANCES`]). Lowering also applies the target's
+    /// limits to the size, structural depth and growth of static function arguments
+    /// (FN-17). The target reports a call whose instance was declined.
     ///
     /// The target's values are typed, so every value function and value
     /// candidate with generic parameters is written by instance, one for
     /// each set of generic arguments it is called with (GEN-2), as a
     /// temporal one is.
-    pub fn typed(program: &Program) -> Instances {
-        let mut instances = Instances::default();
+    pub fn typed(program: &Program, callable_limits: CallableLimits) -> Instances {
+        let mut instances = Instances {
+            callable_limits,
+            ..Instances::default()
+        };
         for (index, module) in program.modules.iter().enumerate() {
             for (declaration, body) in module.bodies.iter().enumerate() {
                 let value = module.declarations[declaration].kind.role() == Some(Role::Value);
@@ -641,6 +848,7 @@ impl Instances {
                         captures: Captures::default(),
                         requirements: Vec::new(),
                         functions: Vec::new(),
+                        depths: Vec::new(),
                     });
                 }
             }
@@ -660,26 +868,40 @@ impl Instances {
         // Each call asked from where the search starts is a root, and
         // what an instance asks for is asked from that instance's root:
         // how many instances of each declaration each root has made.
-        let mut waiting: VecDeque<(Asked, usize)> = waiting
+        let mut waiting: VecDeque<(Asked, usize, Option<usize>)> = waiting
             .into_iter()
             .enumerate()
-            .map(|(root, asked)| (asked, root))
+            .map(|(root, asked)| (asked, root, None))
             .collect();
         let mut made: BTreeMap<(usize, usize, usize), usize> = BTreeMap::new();
-        while let Some((next, root)) = waiting.pop_front() {
+        let mut requests = Vec::new();
+        while let Some((next, root, parent)) = waiting.pop_front() {
+            let declaration = (next.module, next.declaration);
             let Some(key) = key(
                 program,
-                (next.module, next.declaration),
+                declaration,
                 &next.generics,
                 &next.type_packs,
                 &next.captures,
-                &next.functions,
+                next.functions.iter().map(|(slot, target)| (*slot, target)),
                 &next.requirements,
             ) else {
                 continue;
             };
             let found = instances.declared(next.module, next.declaration);
             if found.iter().any(|instance| instance.key == key) {
+                continue;
+            }
+            if exceeds_growth(
+                declaration,
+                &next.depths,
+                &requests,
+                parent,
+                instances.callable_limits.growth,
+            ) {
+                instances
+                    .growing
+                    .insert((next.module, next.declaration, key));
                 continue;
             }
             // No rule says a program whose instances never end is
@@ -725,11 +947,22 @@ impl Instances {
                 suffix = format!("{plain}_{number}");
                 number += 1;
             }
+            let parent = if next.depths.is_empty() {
+                parent
+            } else {
+                let index = requests.len();
+                requests.push(Request {
+                    declaration,
+                    depths: next.depths,
+                    parent,
+                });
+                Some(index)
+            };
             waiting.extend(
                 instances
                     .asked(program, &body.statements)
                     .into_iter()
-                    .map(|asked| (asked, root)),
+                    .map(|asked| (asked, root, parent)),
             );
             instances
                 .declared
@@ -771,6 +1004,7 @@ impl Instances {
                     captures: Captures::default(),
                     requirements: Vec::new(),
                     functions: Vec::new(),
+                    depths: Vec::new(),
                 })
             };
             let replay = core_function(program, "replay");
@@ -818,7 +1052,15 @@ impl Instances {
         };
         let mut found = Vec::new();
         self.ask_text_converters(program, callee, arguments, expanding, &mut found);
-        if self.instanced(program, *module, *declaration) {
+        // Check the borrowed arguments before cloning them into a request.
+        if self.instanced(program, *module, *declaration)
+            && let Ok(depths) = request_depths(
+                program,
+                (*module, *declaration),
+                arguments,
+                &self.callable_limits,
+            )
+        {
             found.push(Asked {
                 module: *module,
                 declaration: *declaration,
@@ -827,6 +1069,7 @@ impl Instances {
                 captures: Captures::of(program, callee, signature, arguments),
                 requirements: requirements.clone(),
                 functions: functions_of(arguments),
+                depths,
             });
         }
         // The declaration's open default was already visited. Here it may
@@ -948,7 +1191,7 @@ impl Instances {
             generics,
             &[],
             &Captures::default(),
-            &[],
+            std::iter::empty(),
             &[],
         )?;
         self.declared(module, declaration)
@@ -965,27 +1208,64 @@ impl Instances {
         arguments: &[Argument],
     ) -> Option<&Instance> {
         let (module, declaration) = callee.declaration()?;
-        let Detail::Callable(signature) = program.modules[module].details.get(declaration)? else {
-            return None;
-        };
-        let captures = Captures::of(program, callee, signature, arguments);
-        let requirements = match callee {
-            Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
-                requirements.as_slice()
-            }
-            _ => &[],
-        };
-        let key = key(
+        request_depths(
             program,
             (module, declaration),
-            callee.generics(),
-            callee.type_packs(),
-            &captures,
-            &functions_of(arguments),
-            requirements,
-        )?;
+            arguments,
+            &self.callable_limits,
+        )
+        .ok()?;
+        let key = call_key(program, callee, arguments)?;
         self.declared(module, declaration)
             .iter()
             .find(|instance| instance.key == key)
     }
+
+    /// The reason this missing instance exceeded the target's limits.
+    pub fn callable_limit(
+        &self,
+        program: &Program,
+        callee: &Callee,
+        arguments: &[Argument],
+    ) -> Option<CallableLimit> {
+        let (module, declaration) = callee.declaration()?;
+        if let Err(limit) = request_depths(
+            program,
+            (module, declaration),
+            arguments,
+            &self.callable_limits,
+        ) {
+            return Some(limit);
+        }
+        if self.growing.is_empty() {
+            return None;
+        }
+        let key = call_key(program, callee, arguments)?;
+        self.growing
+            .contains(&(module, declaration, key))
+            .then_some(CallableLimit::Growth)
+    }
+}
+
+fn call_key(program: &Program, callee: &Callee, arguments: &[Argument]) -> Option<Vec<String>> {
+    let (module, declaration) = callee.declaration()?;
+    let Detail::Callable(signature) = program.modules[module].details.get(declaration)? else {
+        return None;
+    };
+    let captures = Captures::of(program, callee, signature, arguments);
+    let requirements = match callee {
+        Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
+            requirements.as_slice()
+        }
+        _ => &[],
+    };
+    key(
+        program,
+        (module, declaration),
+        callee.generics(),
+        callee.type_packs(),
+        &captures,
+        function_arguments(arguments),
+        requirements,
+    )
 }
