@@ -155,11 +155,12 @@ unknown test name or conflicting integration flags exits 2 before any build.
 
 The debugger sets breakpoints in the original HGL files, including on the
 statements of ordinary and integration tests. Step Over between test
-statements stays in HGL. A graph's composition function opens at its
-HGL declaration, and function and handler ends map to their HGL
-closing lines. Step Into on an `eval` can stop at the Core declaration
-that its replay or record wiring belongs to. The debug workspace stores
-the bundled Core files named by its line tables under `debug-sources/`.
+statements stays in HGL. Value functions, their generic instances, and
+graph composition open at their HGL declarations. Function and handler
+ends map to their HGL closing lines. Step Into on an `eval` can stop at
+the Core declaration that its replay or record wiring belongs to. The
+debug workspace stores the bundled Core files named by its line tables
+under `debug-sources/`.
 Breakpoints on declaration lines can bind to
 nearby executable lines, including a helper. Set a breakpoint on a body
 statement to stop there. The same sources and selection in `DIR` reuse
