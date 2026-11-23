@@ -151,39 +151,49 @@ fn result_in_candidate(
     packs: &HashMap<Location, &ReflectedPack>,
 ) -> Type {
     let member = |at, _: &str, key: &Constant| {
-        let Some(pack) = packs.get(&at) else {
-            return Some(Type::Unknown);
-        };
-        let mut key = key.clone();
-        if let ConstantValue::Parameter { at, name } = &key.value
-            && let Some(option) = public.generics.iter().find(|option| option.at == *at)
-        {
-            let Some(given) = candidate.generics.iter().find(|given| {
-                given.name == *name
-                    && matches!((&option.kind, &given.kind),
-                        (GenericKind::Value(ty), GenericKind::Value(given_ty))
-                        if same_type(ty, given_ty) == Some(true))
-            }) else {
-                return Some(Type::Unknown);
-            };
-            key.value = ConstantValue::Parameter {
-                name: given.name.clone(),
-                at: given.at,
-            };
-        }
-        if matches!(
-            key.value,
-            ConstantValue::Unknown | ConstantValue::Unevaluated
-        ) {
-            return Some(Type::Unknown);
-        }
-        Some(Type::PackMember {
-            pack: pack.at,
-            name: pack.name.clone(),
-            key,
-        })
+        Some(
+            packs
+                .get(&at)
+                .and_then(|pack| reflected_member(public, candidate, pack, key))
+                .unwrap_or(Type::Unknown),
+        )
     };
     substitute_with_members(result, bindings, &member, 1)
+}
+
+/// A reflected member written in the candidate's pack and option scope.
+fn reflected_member(
+    public: &Signature,
+    candidate: &Signature,
+    pack: &ReflectedPack,
+    key: &Constant,
+) -> Option<Type> {
+    let mut key = key.clone();
+    if let ConstantValue::Parameter { at, name } = &key.value
+        && let Some(option) = public.generics.iter().find(|option| option.at == *at)
+    {
+        let given = candidate.generics.iter().find(|given| {
+            given.name == *name
+                && matches!((&option.kind, &given.kind),
+                    (GenericKind::Value(ty), GenericKind::Value(given_ty))
+                    if same_type(ty, given_ty) == Some(true))
+        })?;
+        key.value = ConstantValue::Parameter {
+            name: given.name.clone(),
+            at: given.at,
+        };
+    }
+    if matches!(
+        key.value,
+        ConstantValue::Unknown | ConstantValue::Unevaluated
+    ) {
+        return None;
+    }
+    Some(Type::PackMember {
+        pack: pack.at,
+        name: pack.name.clone(),
+        key,
+    })
 }
 
 /// An earlier error in either declaration can invalidate the comparison.
@@ -260,13 +270,30 @@ fn parameter_types<'a>(
         .iter()
         .filter_map(|&(at, argument)| matches!(argument, Argument::Constant(_)).then_some(at))
         .collect();
+    let member = |at, _: &str, key: &Constant| {
+        packs
+            .get(&at)
+            .and_then(|pack| reflected_member(public, candidate, pack, key))
+    };
     // Inference retains the first binding within an input and does not
     // solve equations. Once all inputs have contributed, check repeats
     // and expressions before trusting the bindings for diagnostics.
     for (pattern, given) in inputs {
-        if needs_binding_check(pattern, &bindings, &values)
-            && same_type(&substitute_within(pattern, &bindings), given) != Some(true)
+        if !needs_binding_check(pattern, &bindings, &values) {
+            continue;
+        }
+        let mut bound = substitute_with_members(pattern, &bindings, &member, 1);
+        // GEN-17: the corresponding callback packs have different source
+        // locations but come from the same reflected suffix. Keep the
+        // template's own shape and bounds when checking repeated bindings.
+        if let Type::Function(callback) = &mut bound
+            && let Some(pack) = &mut callback.named_pack
+            && let Some(actual) = packs.get(&pack.at)
         {
+            pack.at = actual.at;
+            pack.name.clone_from(&actual.name);
+        }
+        if same_type(&bound, given) != Some(true) {
             return None;
         }
     }
