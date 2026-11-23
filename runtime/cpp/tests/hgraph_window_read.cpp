@@ -5,7 +5,7 @@
 //
 // TYPE-11: "A read of [a window's value] before the window is `all_valid`
 // fails with `value.unset_read`, or gives an `err` of an `error` with that
-// code where its place takes a `result<list<V>, error>`". hgraph 0.9.23 reads
+// code where its place takes a `result<list<V>, error>`". hgraph reads
 // the values the window holds whatever its minimum: below it, a window of a
 // tick count and one of a duration each give the one value they hold.
 //
