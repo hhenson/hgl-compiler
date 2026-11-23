@@ -96,8 +96,43 @@ const TEXT_BLOCK_DELIMITER: &str = "\"\"\"";
 /// assert_eq!(decode_string(r#""\u{20AC}5""#).unwrap(), "\u{20ac}5");
 /// ```
 pub fn decode_string(text: &str) -> Result<String, LiteralError> {
+    let mut value = String::with_capacity(text.len());
+    string_characters(text, |character, _| value.push(character))?;
+    Ok(value)
+}
+
+/// The source bytes of the characters in a nonempty decoded range.
+/// An escape contributes its whole spelling and a text block's line break
+/// contributes the source line break, including both bytes of CRLF.
+pub fn string_source_range(
+    text: &str,
+    decoded: std::ops::Range<usize>,
+) -> Option<std::ops::Range<usize>> {
+    if decoded.is_empty() {
+        return None;
+    }
+    let mut current = 0;
+    let mut first = None;
+    let mut last = None;
+    string_characters(text, |character, source| {
+        if current == decoded.start {
+            first = Some(source.start);
+        }
+        current += character.len_utf8();
+        if current == decoded.end {
+            last = Some(source.end);
+        }
+    })
+    .ok()?;
+    Some(first?..last?)
+}
+
+fn string_characters(
+    text: &str,
+    mut append: impl FnMut(char, std::ops::Range<usize>),
+) -> Result<(), LiteralError> {
     if text.starts_with(TEXT_BLOCK_DELIMITER) {
-        return decode_text_block(text);
+        return decode_text_block(text, append);
     }
     // `strip_prefix` and `strip_suffix` return the remainder when the quote
     // is there. The `?` after `ok_or` returns the error from this function
@@ -106,13 +141,16 @@ pub fn decode_string(text: &str) -> Result<String, LiteralError> {
         .strip_prefix('"')
         .and_then(|rest| rest.strip_suffix('"'))
         .ok_or(LiteralError::Malformed)?;
-    let mut value = String::with_capacity(content.len());
-    decode_content(content, false, &mut value)?;
-    Ok(value)
+    decode_content(content, false, |character, source| {
+        append(character, source.start + 1..source.end + 1);
+    })
 }
 
 /// The contents of a text block (LEX-25). `text` is the whole token.
-fn decode_text_block(text: &str) -> Result<String, LiteralError> {
+fn decode_text_block(
+    text: &str,
+    mut append: impl FnMut(char, std::ops::Range<usize>),
+) -> Result<(), LiteralError> {
     // Two delimiters, not one that is read as both.
     let delimiter = TEXT_BLOCK_DELIMITER.len();
     if text.len() < 2 * delimiter || !text.ends_with(TEXT_BLOCK_DELIMITER) {
@@ -123,22 +161,30 @@ fn decode_text_block(text: &str) -> Result<String, LiteralError> {
     // which part of the layout is wrong.
     let layout = shape::text_block_layout(body).map_err(|_| LiteralError::Malformed)?;
 
-    let mut value = String::with_capacity(body.len());
-    for (index, line) in layout.lines.iter().enumerate() {
+    let mut previous_end = None;
+    for line in &layout.lines {
         // Lines are joined by line feeds; none follows the last.
-        if index > 0 {
-            value.push('\n');
+        if let Some(end) = previous_end {
+            append('\n', delimiter + end..delimiter + line.start);
         }
+        previous_end = Some(line.end);
+        let start = delimiter + line.start + layout.indentation.len();
         let line = &body[line.clone()];
         // A line of only spaces and tabs is an empty line.
         if !shape::is_blank(line) {
-            decode_content(&line[layout.indentation.len()..], true, &mut value)?;
+            decode_content(
+                &line[layout.indentation.len()..],
+                true,
+                |character, source| {
+                    append(character, start + source.start..start + source.end);
+                },
+            )?;
         }
     }
-    Ok(value)
+    Ok(())
 }
 
-/// Appends the characters of `content` to `value`, with each escape
+/// Visits the characters of `content` with their spans, with each escape
 /// replaced by the character it denotes.
 ///
 /// `content` is the inside of a one-line string or one line of a text
@@ -147,13 +193,13 @@ fn decode_text_block(text: &str) -> Result<String, LiteralError> {
 fn decode_content(
     content: &str,
     in_text_block: bool,
-    value: &mut String,
+    mut append: impl FnMut(char, std::ops::Range<usize>),
 ) -> Result<(), LiteralError> {
     let mut rest = content;
     while let Some(character) = rest.chars().next() {
-        let length = match character {
+        let (length, character) = match character {
             '\\' => {
-                let (length, escaped) = match rest.as_bytes().get(1) {
+                match rest.as_bytes().get(1) {
                     Some(b'"') => (2, '"'),
                     Some(b'\\') => (2, '\\'),
                     Some(b'n') => (2, '\n'),
@@ -166,19 +212,16 @@ fn decode_content(
                         _ => return Err(LiteralError::Malformed),
                     },
                     _ => return Err(LiteralError::Malformed),
-                };
-                value.push(escaped);
-                length
+                }
             }
             '\n' | '\r' => return Err(LiteralError::Malformed),
             '"' if !in_text_block || rest.starts_with(TEXT_BLOCK_DELIMITER) => {
                 return Err(LiteralError::Malformed);
             }
-            other => {
-                value.push(other);
-                other.len_utf8()
-            }
+            other => (other.len_utf8(), other),
         };
+        let start = content.len() - rest.len();
+        append(character, start..start + length);
         rest = &rest[length..];
     }
     Ok(())
@@ -949,6 +992,18 @@ mod tests {
         assert_eq!(decode_string(r#""\u{000041}""#).unwrap(), "A");
         assert_eq!(decode_string(r#""\u{10FFFF}""#).unwrap(), "\u{10ffff}");
         assert_eq!(decode_string(r#""a\u{1F600}b""#).unwrap(), "a\u{1f600}b");
+    }
+
+    #[test]
+    fn string_ranges_cover_source_escapes_and_crlf() {
+        let quoted = r#""a\u{7B}é}""#;
+        assert_eq!(
+            &quoted[string_source_range(quoted, 1..4).unwrap()],
+            "\\u{7B}é"
+        );
+        let block = "\"\"\"\r\n  é\r\n  {}\r\n  \"\"\"";
+        assert_eq!(&block[string_source_range(block, 2..3).unwrap()], "\r\n");
+        assert_eq!(&block[string_source_range(block, 3..5).unwrap()], "{}");
     }
 
     #[test]

@@ -2322,8 +2322,8 @@ use hosted runners only.
 `runtime/cpp` is `libhglrt`, the C++ library that the code of the
 [C++ target](cpp-target.md) links: what that code calls and hgraph does
 not have. It is
-a skeleton that the target's first step fills. It is built on hgraph's
-runtime and wiring libraries alone (`hgraph::runtime`, `hgraph::wiring`):
+a skeleton that the target's first step fills. It uses hgraph's runtime
+and wiring libraries (`hgraph::runtime`, `hgraph::wiring`) and the SDK's fmt:
 `hgraph::core` would bring hgraph's standard library, which no generated
 code uses. Its headers take hgraph's front end for generated code,
 `<hgraph/types/generated.h>` (static nodes, `wire<Node>` with complete
@@ -2334,7 +2334,7 @@ fails where a public header brings it in.
 
 | Header (`include/hglrt/`) | Holds | Rules |
 | --- | --- | --- |
-| `hglrt.h` | The one header generated code includes: all below | |
+| `hglrt.h` | The common header generated code includes | |
 | `values.h` | HGL's scalars as hgraph's types (`i64`, `f64`, `bool`, `str`, `bytes`, `date`, `time`, `datetime`, `duration`, `civil_datetime`, `zoned_datetime`, `tenor`); `list<T>`, a `std::vector<T>` with a hash, registered with hgraph as an atomic; `delta_t<T>`, a scalar's, a nullable's (`nullable_delta`), a tuple's and a list's delta (`list_delta`); an enum's names, `EnumNames`, which the enum gives through `hgl_enum` (found by argument-dependent lookup) and by which the library names it, prints its members (`Side.buy`) and registers it with hgraph as an atomic; `value_form<T>`, the name, text and hash of a type another header declares (keyed.h's sets and dictionaries, capture.h's errors and results) | TYPE-1, TYPE-2, TYPE-4, TYPE-7, TYPE-16 |
 | `failure.h` | `error` (hgraph's `CanonicalError`), `result<T>` (`std::expected`); `Failure`, hgraph's `ExecutionFailure` with the place it was raised at; `fail`, `fail_uncoded`, `raise`; the catalogued codes it raises | ERR-1, ERR-2, ERR-4, ERR-5, ERR-8 |
 | `capture.h` | `capture<G>`, hgraph's `compiled::try_except_` of the graph the compiler writes for a captured call, compiled with `compile_subgraph` given the call's other arguments, with canonical errors; `captured_value`, `captured_error`; a `result` registered with hgraph as an atomic; the name, text and hash of an `error` and of a `result` (`value_form`) | ERR-2, ERR-4, ERR-7, ERR-8 |
@@ -2342,6 +2342,8 @@ fails where a public header brings it in.
 | `scalar.h` | Core's natives of numbers and the ordered types: checked `i64` arithmetic, `f64` and mixed arithmetic, every division of numbers under each zero policy, exact numeric equality with tolerances, order and `compare_`, the Boolean forms; core's `ZeroPolicy` and `CmpResult` | NUM-1 to NUM-12, OPS-2, OPS-3, OPS-5 |
 | `temporal.h` | Core's natives of durations and instants: a duration's arithmetic, rounded and checked; a `datetime`, `civil_datetime`, `date` or `zoned_datetime` moved by a duration, and the duration between two; `date + time`; zoned equality; a zone's literals, checked against the provider's catalogue and a `zoned_datetime`'s offset against its zone | OPS-1, OPS-2, OPS-10, NUM-12, LEX-12 |
 | `text.h` | Core's natives of `str`: concatenation and repetition | OPS-1 |
+| `output.h` | `write` and `Stream`, with ordinary stream buffering and an explicit flush | OUT-1, OUT-2 |
+| `formatting.h` | Core's value formatter and native collection text. Only units that use them include the header. The analyser checks the pattern; generated code supplies typed arguments, compiled fmt specifiers and checked chrono directives. | FMT-1 to FMT-5, FMT-7, FMT-9 |
 | `conversions.h` | Every `convert` of core's: those that cannot fail, and those that can under `invalid`; core's `Rounding` and `InvalidPolicy` | OPS-4, OPS-6 to OPS-8 |
 | `tenors.h` | Core's natives of `tenor`, which is hgraph's `Tenor` (counts and form alone): its arithmetic, order and text, and the parts core's calendar candidates use, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-9 |
 | `lists.h` | `append`, `extend` | LIST-1 to LIST-3 |

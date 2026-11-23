@@ -76,6 +76,7 @@ impl<'a> Typer<'a> {
         self.configuration_connections(&selected, connected);
         self.capabilities_given(&selected);
         self.fixed_arguments(&selected);
+        self.format_arguments(kind);
         self.traces_given(&selected, evaluating);
         self.store_keys(&selected);
         self.wake_durations(&selected);

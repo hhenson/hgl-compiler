@@ -92,6 +92,18 @@ impl Emitter<'_> {
         let at = whole.at;
         // True for the call that is the whole of a statement.
         let statement = std::mem::take(&mut scope.statement_call);
+        if let Some(signature) = hgl_analyser::formatting::value_signature(self.program, callee) {
+            return self.format_call(scope, callee, signature, arguments, whole);
+        }
+        if let [argument] = arguments
+            && let Some(members) = hgl_analyser::formatting::collection_members(
+                self.program,
+                callee,
+                &argument.value.ty,
+            )
+        {
+            return self.collection_text(scope, &argument.value, &members);
+        }
         if let Callee::Anonymous(function) = callee {
             if !function.template.value {
                 return self.missing(at, "a call of a temporal function");
