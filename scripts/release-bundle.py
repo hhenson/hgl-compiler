@@ -17,6 +17,7 @@ from urllib.request import urlopen
 MACOS_TARGET = "aarch64-apple-darwin"
 LINUX_TARGET = "x86_64-unknown-linux-gnu"
 ARTIFACTS = ("hgl-macos-arm64", "hgl-linux-x86_64")
+RELEASE_VERIFIERS = {"verify", "verify-debug", "hosted-check", "verify-linux", "verify-debug-linux"}
 LINUX_GLIBC = (2, 43)
 LINUX_SYSTEM_LIBRARIES = {
     "ld-linux-x86-64.so.2", "libc.so.6", "libdl.so.2", "libgcc_s.so.1",
@@ -130,25 +131,37 @@ def github_items(endpoint, key):
 
 
 def verified_run(repository, commit, current_run):
-    """Find a completed main push that verified both live artifacts for this commit."""
+    """Find a main push whose release jobs verified live artifacts for this commit."""
     base = f"repos/{repository}/actions"
     query = urlencode({
         "branch": "main", "event": "push", "head_sha": commit,
-        "status": "success", "per_page": 100,
+        "per_page": 100,
     })
     for run in github_items(f"{base}/workflows/release.yml/runs?{query}", "workflow_runs"):
-        if (run["head_sha"], run["head_branch"], run["event"], run["conclusion"]) != (
-            commit, "main", "push", "success",
-        ) or str(run["id"]) == current_run:
+        run_id = run["id"]
+        if run["status"] not in {"in_progress", "completed"}:
+            continue
+        if (run["head_sha"], run["head_branch"], run["event"]) != (
+            commit, "main", "push",
+        ) or str(run_id) == current_run:
+            continue
+        attempt = run["run_attempt"]
+        # The workspace test runs after verification and is independent of release reuse.
+        jobs_url = f"{base}/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"
+        passed = {
+            job["name"] for job in github_items(jobs_url, "jobs")
+            if job["conclusion"] == "success"
+        }
+        if not RELEASE_VERIFIERS <= passed:
             continue
         live = {
             artifact["name"]: artifact["id"]
-            for artifact in github_items(f"{base}/runs/{run['id']}/artifacts?per_page=100", "artifacts")
+            for artifact in github_items(f"{base}/runs/{run_id}/artifacts?per_page=100", "artifacts")
             if not artifact["expired"]
         }
-        names = [f"{artifact}-{run['run_attempt']}" for artifact in ARTIFACTS]
+        names = [f"{artifact}-{attempt}" for artifact in ARTIFACTS]
         if all(name in live for name in names):
-            return run["id"], *(live[name] for name in names)
+            return run_id, *(live[name] for name in names)
     return None
 
 
