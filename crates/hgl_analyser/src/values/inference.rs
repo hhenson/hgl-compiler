@@ -825,10 +825,16 @@ impl<'a> Typer<'a> {
                 self.infer_function_argument(&entry.value, pattern, generics, &mut found);
             }
         }
-        if let Some((result, requested)) = result_fallback {
+        // A nullable place supplies no final bare success type (GEN-2).
+        // The probe of a value given to a ref result still reports the
+        // endpoint mismatch when the value has no fault of its own.
+        if let Some((result, place)) = result_fallback
+            && (!matches!(place, Type::Nullable(_))
+                || self.designating == Some(Location::new(self.file, name.span())))
+        {
             infer(
                 result,
-                not_null(Some(requested)).unwrap_or(requested),
+                not_null(Some(place)).unwrap_or(place),
                 generics,
                 &mut found,
             );
@@ -1416,7 +1422,7 @@ pub(super) fn infer(
 /// fallible result can also be read from a nullable success (ERR-12,
 /// ERR-15). In that case a bare success parameter can be decided by
 /// the inputs first, such as a dictionary's value type in `get`.
-/// The returned pair supplies the output constraint during inference.
+/// The returned pair preserves that argument context during inference.
 pub(super) fn infer_from_place<'r, 'p>(
     result: &'r Type,
     requested: &'p Type,
@@ -1433,7 +1439,6 @@ pub(super) fn infer_from_place<'r, 'p>(
     };
     if !written && matches!(result, Type::Parameter { .. }) {
         if fallible {
-            // A store read's inputs say nothing of V (core CAP-6).
             return Some((result, requested));
         }
         if matches!(requested, Type::Nullable(_)) {
