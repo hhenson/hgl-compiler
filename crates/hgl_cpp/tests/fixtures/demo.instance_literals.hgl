@@ -127,3 +127,20 @@ test n2_still_honors_a_written_result {
     const fn fixed<V>(items: list<V>) -> i64 requires V in {i64, f64} => n2<i64>(items, 1)
 }
 
+
+# UNIT-8: generic wrappers retain the existing configuration-default
+# metadata while literal result requests are resolved per instance.
+operator configured<T, V>{fallback: T = 2}(value: V, literal: T) -> i64
+impl const fn configured<V>{fallback: f64}(value: V, literal: f64) -> i64
+    => if fallback == 2.0 { 7 } else { 9 }
+operator configured_option<T, V, const on: bool = true>{fallback: T = 2}(value: V, literal: T) -> i64
+impl const fn configured_option<V, const on: bool = true>{fallback: f64}(value: V, literal: f64) -> i64
+    requires on => if fallback == 2.0 { 7 } else { 9 }
+const fn configured_wrapper<V>(value: V) -> i64 requires V in {i64, f64} => configured(value, 1)
+const fn configured_option_wrapper<V>(value: V) -> i64 requires V in {i64, f64} => configured_option(value, 1)
+test configuration_defaults_keep_their_values {
+    assert configured_wrapper(3) == 7
+    assert configured_wrapper(1.5) == 7
+    assert configured_option_wrapper(3) == 7
+    assert configured_option_wrapper(1.5) == 7
+}

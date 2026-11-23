@@ -113,7 +113,13 @@ impl<'a> Typer<'a> {
                 self.infer_operator_inputs(public, &mut requested, &fixed);
                 requested
             });
-        self.request_output(operator, public, found, &supplied, said, requested)
+        let mut request = self.request_output(operator, public, found, &supplied, said, requested);
+        if !own.is_empty() {
+            // UNIT-8: retain generic configuration-default metadata. GEN-7
+            // changes the requested result here, not those defaults.
+            request.call_generics = request.generics.clone();
+        }
+        request
     }
 
     fn request_output(
