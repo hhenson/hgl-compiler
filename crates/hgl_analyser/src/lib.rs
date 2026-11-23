@@ -346,6 +346,8 @@ pub mod codes {
     pub const RUN_CONFIGURATION: &str = "run.configuration";
     /// A constant's value depends on itself (UNIT-13).
     pub const CONSTANT_CYCLE: &str = "constant.cycle";
+    /// A field or parameter default depends on itself (UNIT-8).
+    pub const DEFAULT_CYCLE: &str = "default.cycle";
     /// A module constant or parameter/field default whose evaluation
     /// fails (UNIT-13, UNIT-8, ERR-9).
     /// The catalogue row is proposed.
