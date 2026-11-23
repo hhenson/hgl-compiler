@@ -208,8 +208,11 @@ jobs:
       # Core's cases, held to the list of those it does not run yet
       # (crates/hgl_cpp/ci/unsupported_cases.toml) by check_core.py, whose
       # own tests run first, once.
-      - if: matrix.part == 'runtime and core' && matrix.mode == 'plain'
-        run: python3 -m unittest discover -s crates/hgl_cpp/ci
+      - name: Run the Python script tests
+        if: matrix.part == 'runtime and core' && matrix.mode == 'plain'
+        run: |
+          python3 -m unittest discover -s crates/hgl_cpp/ci
+          python3 -m unittest discover -s scripts -p test_release_bundle.py
       - if: matrix.part == 'runtime and core'
         run: cargo build --locked --bin hgl
       - if: matrix.part == 'runtime and core'

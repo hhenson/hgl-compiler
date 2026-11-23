@@ -346,7 +346,8 @@ pub mod codes {
     pub const RUN_CONFIGURATION: &str = "run.configuration";
     /// A constant's value depends on itself (UNIT-13).
     pub const CONSTANT_CYCLE: &str = "constant.cycle";
-    /// A module constant whose evaluation fails (UNIT-13, ERR-9).
+    /// A module constant or parameter/field default whose evaluation
+    /// fails (UNIT-13, UNIT-8, ERR-9).
     /// The catalogue row is proposed.
     pub const CONSTANT_FAILURE: &str = "constant.failure";
     /// An endpoint operation given what is no temporal input of its
@@ -591,18 +592,15 @@ pub mod codes {
 
         /// A property clause names an unresolved generic domain (GEN-9).
         pub const PROPERTY_DOMAIN: &str = "property.domain";
-        /// A parameter default whose required constant evaluation fails (UNIT-8, ERR-9).
-        pub const DEFAULT_CONSTANT_FAILURE: &str = "default.constant_failure";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 7] = [
+        pub const ALL: [&str; 6] = [
             READING_LIMIT,
             LOOP_CARRIED,
             FUNCTION_VALUE,
             PARAMETER_CONFIGURATION,
             IMPL_CONFIGURATION,
             PROPERTY_DOMAIN,
-            DEFAULT_CONSTANT_FAILURE,
         ];
     }
 }
