@@ -129,8 +129,8 @@ analyser: partial
 - One whose evaluation fails, an `i64` out of range or a division of two `i64` by zero, is `constant.failure` where it is declared ("a failure in evaluating it is a required-constant failure (ERR-9)"), and says nothing more where it is read
 - One the reader does not work out, a datetime moved by a duration, is no value a generic value argument is given (`generic.argument_constant`), as the same expression written in place is not
 - An expression is read in a loop along a chain of operators, `1 + 1 + ... + 1`, of any length the parser builds a tree for
-- One whose value depends on itself is `constant.cycle`: through another constant, the definition a call selected, an operator's candidate a symbol or a name selected, or a default a call leaves to be read
-- Left: evaluating constants computed by a `const fn` (#240), including required-constant failures. A constructor can acquire a false dependency from the default of a field it explicitly supplies. Source formatting is pending and must preserve constant spellings.
+- One whose value depends on itself is `constant.cycle`: through another constant, the definition a call selected, an operator's candidate a symbol or a name selected, or a parameter or field default selected for an omitted argument (UNIT-8, TYPE-5).
+- Left: evaluating constants computed by a `const fn` (#240), including required-constant failures. Source formatting is pending and must preserve constant spellings.
 
 transpiler: partial
 

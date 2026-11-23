@@ -13,7 +13,9 @@
 //! * of an operator's candidates, the one the operands selected, whether
 //!   the operator is called by name or written as a symbol (OPS-2);
 //! * of a function's parameter defaults, those of the parameters the
-//!   call leaves out, and no other (UNIT-8).
+//!   call leaves out (UNIT-8);
+//! * of a struct's field defaults, the default selected for each field
+//!   the constructor leaves out (TYPE-5).
 //!
 //! Each such thing is a node of a graph, with an edge to every other it
 //! reads, and a constant depends on itself when it is in a cycle of that
@@ -28,11 +30,8 @@
 //! brackets or by name. So every name that is bound to a constant is an
 //! edge to it too, from the part it is written in.
 //!
-//! One approximation is kept, on the safe side: a construction of a
-//! struct counts every default of the struct's fields and of its
-//! parents', given or not. What the typed program does not hold, the
-//! body of an anonymous function, is followed only to the constants it
-//! names.
+//! What the typed program does not hold, the body of an anonymous
+//! function, is followed only to the constants it names.
 
 use std::collections::HashMap;
 
@@ -77,8 +76,10 @@ enum Part {
     /// The default of a parameter of a function: the function, and the
     /// parameter's position.
     Default(Declared, usize),
-    /// The defaults of a struct's fields, and of its parents'.
-    Fields(Declared),
+    /// A struct's declaration, including the types of its fields and parents.
+    Struct(Declared),
+    /// The default of a field a struct writes, by its declared position.
+    FieldDefault(Declared, usize),
 }
 
 impl Part {
@@ -88,7 +89,8 @@ impl Part {
             Part::Constant(declaration)
             | Part::Body(declaration)
             | Part::Default(declaration, _)
-            | Part::Fields(declaration) => declaration,
+            | Part::Struct(declaration)
+            | Part::FieldDefault(declaration, _) => declaration,
         }
     }
 }
@@ -138,8 +140,30 @@ fn reads_of(program: &Program, visited: &Expr, reads: &mut Vec<Part>) {
         ExprKind::Construct {
             module,
             declaration,
+            arguments,
             ..
-        } => reads.push(Part::Fields((*module, *declaration))),
+        } => {
+            reads.push(Part::Struct((*module, *declaration)));
+            let Some(Detail::Struct(structure)) =
+                program.modules[*module].details.get(*declaration)
+            else {
+                return;
+            };
+            // TYPE-5: a constructor reads the selected default for each
+            // omitted field, including a default it takes from a parent.
+            for (position, member) in structure.members.iter().enumerate() {
+                if let Some(default) = member.default
+                    && !arguments
+                        .iter()
+                        .any(|argument| argument.parameter == Some(position))
+                {
+                    reads.push(Part::FieldDefault(
+                        (default.module, default.declaration),
+                        default.field,
+                    ));
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -194,8 +218,16 @@ fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
         if module.declarations[position].kind == DeclarationKind::Constant {
             return Some(Part::Constant(declared));
         }
-        if matches!(module.details.get(position), Some(Detail::Struct(_))) {
-            return Some(Part::Fields(declared));
+        if let Some(Detail::Struct(structure)) = module.details.get(position) {
+            let field = structure.fields.iter().position(|field| {
+                field
+                    .default_at
+                    .is_some_and(|default| default.span.start <= at && at < default.span.end)
+            });
+            return Some(match field {
+                Some(field) => Part::FieldDefault(declared, field),
+                None => Part::Struct(declared),
+            });
         }
         let default = defaults[position]
             .iter()
@@ -259,25 +291,28 @@ fn parts_of(program: &Program, index: usize, parts: &mut Vec<(Part, Vec<Part>)>)
         let defaults = module.defaults.get(position).map_or(&[][..], Vec::as_slice);
         match module.details.get(position) {
             Some(Detail::Struct(read)) => {
-                // A struct's field defaults are one part, which reads
-                // its parents' too (TYPE-4).
-                let written: Vec<&Expr> = defaults
+                // The struct still needs its parents' types (TYPE-4).
+                let parents = read
+                    .parents
                     .iter()
-                    .flatten()
-                    .map(|default| &default.value)
+                    .filter_map(|parent| match parent {
+                        Type::Named {
+                            module,
+                            declaration,
+                            ..
+                        } => Some(Part::Struct((*module, *declaration))),
+                        _ => None,
+                    })
                     .collect();
-                let mut reads = gather(&written);
-                for parent in &read.parents {
-                    if let Type::Named {
-                        module,
-                        declaration,
-                        ..
-                    } = parent
-                    {
-                        reads.push(Part::Fields((*module, *declaration)));
+                parts.push((Part::Struct(declared), parents));
+                for (field, default) in defaults.iter().enumerate() {
+                    if let Some(default) = default {
+                        parts.push((
+                            Part::FieldDefault(declared, field),
+                            gather(&[&default.value]),
+                        ));
                     }
                 }
-                parts.push((Part::Fields(declared), reads));
             }
             _ => {
                 for (parameter, default) in defaults.iter().enumerate() {
