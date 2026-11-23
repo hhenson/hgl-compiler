@@ -1,0 +1,119 @@
+module demo.written_pack_types
+
+# GEN-8 and GEN-17: a call writes a type under a reflected pack key.
+
+const item_key: str = "item"
+const missing_key: str = "missing"
+const fn num(item: i64) -> i64 => item
+const fn words(item: str) -> i64 => 0
+const fn extra(other: i64) -> i64 => other
+const fn identity<T>(value: T) -> T => value
+const fn one<T>() -> i64 => 1
+
+const fn reflected<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
+    identity<Ps[item_key]>(item)
+
+const fn nested<...Ps>(f: const fn(...{Ps}) -> i64, items: list<Ps[item_key]>) -> list<Ps[item_key]> =>
+    identity<list<Ps[item_key]>>(items)
+
+const fn chosen<const key: str, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key] =>
+    identity<Ps[key]>(item)
+
+fn reflected_graph<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
+    identity<Ps[item_key]>(item)
+
+fn reflected_graph_i64(item: i64) -> i64 => reflected_graph(num, item)
+
+const fn missing<...Ps>(f: const fn(...{Ps}) -> i64) -> i64 => one<Ps[missing_key]>()
+
+test direct_and_nested_type_arguments {
+    assert reflected(num, 7) == 7
+    assert reflected(words, "value") == "value"
+    assert nested(num, [2, 4]) == [2, 4]
+    assert chosen<"other">(extra, 5) == 5
+}
+
+test reflected_type_argument_on_a_connection {
+    assert eval reflected_graph_i64([2, 3]) == [2, 3]
+}
+
+test unknown_written_member {
+    # expect-error(type, "pack.name")
+    assert missing(num) == 1
+}
+
+# GEN-3 and GEN-7: the generic body needs evidence for the reflected type.
+const fn exact<T>(value: T) -> T requires T == i64 => value
+const fn exact_list<T>(value: T) -> T requires T == list<i64, 2> => value
+
+struct Boxed<const N: i64> {
+    items: list<i64, N>
+}
+
+const fn exact_box<T>(value: T) -> T requires T == tuple<Boxed<2>, str> => value
+const fn pair(item: list<i64, 2>) -> i64 => item[0] + item[1]
+const fn boxed_shape(item: tuple<Boxed<2>, str>) -> i64 => 0
+const fn known<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] requires i64 == Ps[item_key] =>
+    exact<Ps[item_key]>(item)
+
+const fn fixed_key<const key: str, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key]
+    requires key == "item" && Ps[key] == i64 => exact<Ps[key]>(item)
+
+test a_stated_member_type_admits_the_call {
+    assert known(num, 8) == 8
+    assert fixed_key<"item">(num, 9) == 9
+}
+
+# expect-error(constraint, "requires.unmet")
+const fn unstated<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] => exact<Ps[item_key]>(item)
+
+test a_false_member_constraint_rejects {
+    # expect-error(constraint, "requires.unmet")
+    assert known(words, "value") == "value"
+}
+
+# GEN-3, GEN-7 and GEN-17: a member's stated key and type use the same bindings.
+const fn sized_member<const N: i64, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires N == 2 && Ps[item_key] == list<i64, N> => exact_list<Ps[item_key]>(item)
+
+const fn fixed_default<const key: str = "item", const N: i64 = 2, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key]
+    requires key == "item" && N == 2 && Ps[key] == list<i64, N> => exact_list<Ps[key]>(item)
+
+const fn nested_value<const N: i64, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires N == 2 && Ps[item_key] == tuple<Boxed<N>, str> => exact_box<Ps[item_key]>(item)
+
+const fn member_of_finite_sizes<const N: i64, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires N in {2} && Ps[item_key] == list<i64, N> => exact_list<Ps[item_key]>(item)
+
+test stated_member_types_use_bound_values {
+    assert sized_member<2>(pair, [2, 3]) == [2, 3]
+    assert fixed_default(pair, [4, 5]) == [4, 5]
+    let boxed = Boxed<2>(items: [1, 6])
+    assert nested_value<2>(boxed_shape, (boxed, "tag")) == (boxed, "tag")
+    assert member_of_finite_sizes<2>(pair, [7, 9]) == [7, 9]
+}
+
+# GEN-8: a caller can override a default, so it proves no requirement in the body.
+# expect-error(constraint, "requires.unmet")
+const fn unconstrained_default<const N: i64 = 2, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] requires Ps[item_key] == list<i64, N> => exact_list<Ps[item_key]>(item)
+
+# GEN-10 and GEN-17: an equality over each key proves the type at any known key.
+const fn every_integer<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires each key in arg_keys(Ps) { i64 == Ps[key] } => exact<Ps[item_key]>(item)
+
+const fn every_sized<const N: i64, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires N == 2 && each key in arg_keys(Ps) { Ps[key] == list<i64, N> } => exact_list<Ps[item_key]>(item)
+
+test each_proves_the_member_type {
+    assert every_integer(num, 11) == 11
+    assert every_sized<2>(pair, [3, 4]) == [3, 4]
+}
+
+test a_nonmatching_member_rejects_the_universal_requirement {
+    # expect-error(constraint, "requires.unmet")
+    assert every_integer(words, "value") == "value"
+}
+
+# A known false requirement still rejects in the presence of an existential.
+# expect-error(constraint, "requires.unmet")
+const fn known_false<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] requires Ps[item_key] == str && any key in arg_keys(Ps) { Ps[key] == i64 } => exact<Ps[item_key]>(item)

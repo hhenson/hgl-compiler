@@ -12,6 +12,11 @@
 #[path = "cpp/build_reuse.rs"]
 mod build_reuse;
 mod common;
+#[path = "cpp/debug_tests.rs"]
+mod debug_tests;
+#[cfg(unix)]
+#[path = "common/executable.rs"]
+mod executable;
 
 use std::fs;
 use std::path::Path;
@@ -312,8 +317,9 @@ fn release_prefixes_follow_the_real_executable() {
     let file = write(&root, "flags.hgl", FLAGS);
     let bundle = root.join("bundle");
     let hgl = bundle.join("bin/hgl");
-    fs::create_dir_all(hgl.parent().unwrap()).unwrap();
-    fs::copy(env!("CARGO_BIN_EXE_hgl"), &hgl).unwrap();
+    let source = fs::File::open(env!("CARGO_BIN_EXE_hgl")).unwrap();
+    let permissions = source.metadata().unwrap().permissions();
+    executable::publish_executable(&hgl, source, permissions);
     let linked = root.join("hgl");
     std::os::unix::fs::symlink(&hgl, &linked).unwrap();
     let sdk = bundle.join("libexec/hgraph-sdk/lib/cmake/hgraph");
@@ -438,8 +444,8 @@ fn emit_writes_a_unit_a_header_and_an_entry() {
 }
 
 /// `hgl run --target cpp` says what an application needs that the
-/// target does not write, and runs nothing: here a read of the pending
-/// window result while its evaluation holds an arrival (TYPE-11).
+/// target does not write, and runs nothing: here a handler selecting on
+/// its own window result (TIME-7).
 #[test]
 fn run_says_what_an_application_lacks() {
     let root = scratch("run");
@@ -450,7 +456,7 @@ fn run_says_what_an_application_lacks() {
             "application demo.app\n",
             "fn cleared(reading: i64) -> rolling_window<i64, 2> {\n",
             "    inject out\n",
-            "    when { if valid(out) { return reading } }\n",
+            "    when valid(out, reading) { return reading }\n",
             "}\n",
             "fn counted(readings: rolling_window<i64, 2>) -> i64 {\n",
             "    when { return delta_value(readings) }\n",
@@ -470,7 +476,7 @@ fn run_says_what_an_application_lacks() {
     assert_eq!(
         text(&output.stderr),
         format!(
-            "{file}:4:15: the cpp target does not write a read of a node's own window result in its `when` yet\n"
+            "{file}:4:5: the cpp target does not write a handler that selects on a node's own window result yet\n"
         )
     );
 }
@@ -674,6 +680,134 @@ fn block(path: &Path) {
     fs::create_dir(path).unwrap();
 }
 
+/// UNIT-13, EXPR-5: module statement-block initializers use their
+/// checked cold scope and retain the constant's one stored value.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn block_constants_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("block_constants");
+    let file = write(
+        &root,
+        "demo.block_constants.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.block_constants.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 0 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// EXPR-5, TYPE-14, UNIT-8: a generic null default is written using
+/// the selected nullable value parameter's concrete type.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn generic_null_defaults_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic_null_defaults");
+    let file = write(
+        &root,
+        "demo.generic_null_defaults.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.generic_null_defaults.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 0 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// GEN-2, GEN-6 and UNIT-8: concrete operator calls read literals at
+/// each candidate; generic-body calls retain main's existing behavior.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn direct_operator_literal_options_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("direct_operator_literal_options");
+    let file = write(
+        &root,
+        "demo.operator_literal_options.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.operator_literal_options.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 15 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// TIME-5, END-3 and END-4: hook mutations reject at source checking,
+/// and admitted checked deltas handle publication and silence.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn endpoint_hook_checks_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("endpoint_hook_checks");
+    let file = write(
+        &root,
+        "demo.endpoint_hook_checks.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.endpoint_hook_checks.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 5 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// Value code over the scalars and the plain composites, the emitter's
 /// own test program: constants, an enum, `if`, `switch`, `while` and
 /// `for`, places, defaults, a generic function by instance, tuples,
@@ -707,6 +841,33 @@ fn value_code_runs_on_the_sdk() {
     );
 }
 
+/// TYPE-14 and TYPE-15: graph comparisons with null observe published values.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn graph_null_comparisons_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("graph-null-comparison");
+    let file = write(
+        &root,
+        "demo.graph_null_comparison.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.graph_null_comparison.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The temporal forms of a list and of a tuple on the SDK (`demo.lists`):
 /// each test passes, a failing child read among them.
 #[test]
@@ -731,6 +892,34 @@ fn list_code_runs_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// TYPE-10: both growing-list spellings share representation and identity
+/// in value code, node and graph connections, bundles and instances.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn explicit_unbounded_lists_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("explicit-unbounded");
+    let file = write(
+        &root,
+        "src/demo.explicit_unbounded.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.explicit_unbounded.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -853,6 +1042,34 @@ fn endpoint_read_forms_run_on_the_sdk() {
     );
 }
 
+/// EXPR-6 and ERR-12: nested scalar guards in a graph short-circuit
+/// in order, and a guard still admits the nullable read it protects.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn nested_scalar_guards_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("nested-scalar-guards");
+    let file = write(
+        &root,
+        "demo.nested_scalar_guards.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.nested_scalar_guards.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// ERR-3 and ERR-14: observe validity separately from the tag of a bound
 /// result child, and use the matching success or error payload. ERR-12:
 /// a present nullable child refines only the alias named in the guard.
@@ -966,6 +1183,36 @@ fn recorded_eval_traces_are_replayed_on_the_sdk() {
     );
 }
 
+/// GEN-17 and TST-5: a reflected input type determines its trace cells
+/// and the replay that supplies a graph's port.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn reflected_eval_inputs_are_replayed_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("reflected-eval-inputs");
+    let file = write(
+        &root,
+        "demo.reflected_eval_inputs.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.reflected_eval_inputs.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 1 passed, 0 failed\nexecutable cases: 2 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
 /// `const` parameters of every kind of ordinary value on the SDK
 /// (`demo.configurations`, FN-1): a set, a dictionary, a tuple, a struct
 /// that holds a list, one that holds a set, one with an optional field,
@@ -1021,7 +1268,16 @@ fn windows_run_on_the_sdk() {
         "src/demo.window_withdrawal.hgl",
         include_str!("fixtures/demo.window_withdrawal.hgl"),
     );
-    let output = hgl_in(&["test", &file, &withdrawal, "--target", "cpp"], &[], &[]);
+    let own_reads = write(
+        &root,
+        "src/demo.own_window_reads.hgl",
+        include_str!("fixtures/demo.own_window_reads.hgl"),
+    );
+    let output = hgl_in(
+        &["test", &file, &withdrawal, &own_reads, "--target", "cpp"],
+        &[],
+        &[],
+    );
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -1030,7 +1286,7 @@ fn windows_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 15 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 20 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1061,6 +1317,34 @@ fn references_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 15 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// A node designates a dictionary key across membership changes and can
+/// designate an ordinary input on a timer wake (FN-16, END-10, TIME-9).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn reference_designations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("reference-designations");
+    let file = write(
+        &root,
+        "src/demo.reference_designations.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.reference_designations.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1097,6 +1381,59 @@ fn timing_runs_on_the_sdk() {
     assert!(
         stdout.ends_with("executable cases: 17 passed, 0 failed, 0 not run\n"),
         "{stdout}"
+    );
+}
+
+/// TIME-8 and CAP-4: the first dropped-wake warning names the generated node.
+/// Later drops are reported even when the scheduler is passed to a value
+/// helper and the HGL node has no explicit stop hook.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn dropped_wake_counts_reach_the_run_log_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("wake-logs");
+    let node = write(
+        &root,
+        "wakes.hgl",
+        "module wakes\n\
+         const fn ask(scheduler: Scheduler, at: datetime) { schedule(scheduler, at) }\n\
+         export fn requests() -> bool {\n\
+             inject scheduler, clock\n\
+             start { schedule(scheduler, 0us) }\n\
+             when scheduled() {\n\
+                 ask(scheduler, clock.evaluation_time)\n\
+                 ask(scheduler, clock.evaluation_time - 1us)\n\
+                 return true\n\
+             }\n\
+         }\n",
+    );
+    let app = write(
+        &root,
+        "wakes.app.hgl",
+        "application wakes.main\nuse wakes::{requests}\neval requests()\n",
+    );
+    let output = hgl_in(&["run", &node, &app, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains(": 1 publication"), "{stdout}");
+    assert_eq!(
+        stderr.matches("Dropped wake requested").count(),
+        1,
+        "{stderr}"
+    );
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.contains("Dropped wake requested by wakes::requests")),
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("Additional dropped wakes totaled 1").count(),
+        1,
+        "{stderr}"
     );
 }
 
@@ -1698,6 +2035,62 @@ fn dependent_call_packs_run_on_the_sdk() {
     );
 }
 
+/// EXPR-9: a fixed list literal composes one connection for each entry.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn graph_list_literals_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("graph-list-literals");
+    let file = write(
+        &root,
+        "demo.graph_list_literals.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.graph_list_literals.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// EXPR-17: graph comprehensions respect their category and capture
+/// each pass's binding in a temporal conditional or switch.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn comprehension_phases_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("comprehension-phases");
+    let file = write(
+        &root,
+        "demo.comprehension_phases.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.comprehension_phases.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 2 passed, 0 failed")
+            && stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// EXPR-16 and EXPR-17: range bounds, value construction and graph ports.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
@@ -1749,6 +2142,33 @@ fn inferred_list_sizes_are_values_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// TYPE-10: an unsized value parameter takes the entries of a fixed list.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn fixed_lists_supply_unsized_value_parameters_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("fixed-list-arguments");
+    let file = write(
+        &root,
+        "demo.fixed_list_arguments.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.fixed_list_arguments.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1901,6 +2321,415 @@ fn reflected_pack_followups_run_on_the_sdk() {
         stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
+}
+
+/// GEN-8 and GEN-17: explicitly written reflected types specialize calls
+/// in value and graph bodies and still carry their stated requirements (GEN-7).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn written_pack_member_types_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("written-pack-member-types");
+    let file = write(
+        &root,
+        "demo.written_pack_types.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.written_pack_types.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 6 passed, 0 failed\nexecutable cases: 5 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
+/// GEN-10 and GEN-17: an existential or cross-pack relation can leave a
+/// member's type untold. Analysis preserves that judgment and C++ reports the call.
+#[test]
+fn an_unproved_reflected_type_declines_cpp_emission() {
+    let root = scratch("unproved-reflected-type");
+    let cases = [
+        (
+            "existential",
+            concat!(
+                "const fn shape(item: str, other: i64) -> i64 => other\n",
+                "const fn choose<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key]\n",
+                "    requires any arg in arg_keys(Ps) { Ps[arg] == i64 } => exact<Ps[key]>(item)\n",
+                "test chosen_member { assert choose(shape, \"text\") == \"text\" }\n",
+            ),
+        ),
+        (
+            "cross_pack",
+            concat!(
+                "const fn shape(item: i64) -> i64 => item\n",
+                "const fn choose<...Ps, ...Qs>(f: const fn(...{Ps}) -> i64, g: const fn(...{Qs}) -> i64,\n",
+                "    item: Ps[key]) -> Ps[key]\n",
+                "    requires each arg in arg_keys(Ps) { Ps[arg] == Qs[arg] } => exact<Ps[key]>(item)\n",
+                "test chosen_member { assert choose(shape, shape, 3) == 3 }\n",
+            ),
+        ),
+    ];
+    for (name, body) in cases {
+        let file = write(
+            &root,
+            &format!("{name}.hgl"),
+            &format!(
+                "module {name}\nconst key: str = \"item\"\n\
+                 const fn exact<T>(value: T) -> T requires T == i64 => value\n{body}"
+            ),
+        );
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        assert_eq!(
+            checked.status.code(),
+            Some(0),
+            "{name}: {}",
+            text(&checked.stderr)
+        );
+        let out = root.join(name);
+        let emitted = hgl_in(
+            &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
+            &[],
+            &[],
+        );
+        let stderr = text(&emitted.stderr);
+        assert_eq!(emitted.status.code(), Some(1), "{name}: {stderr}");
+        assert!(
+            stderr.contains("error[build/target.unsupported]"),
+            "{name}: {stderr}"
+        );
+    }
+}
+
+/// GEN-5 and GEN-7: an unread member proof preserves the ordinary
+/// call's operator diagnostic at the declaration.
+#[test]
+fn an_unread_reflected_membership_preserves_the_operator_error() {
+    let root = scratch("unread-reflected-membership");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const item_key: str = \"item\"\n",
+            "const fn words(item: str) -> i64 => 0\n",
+            "const fn twice<T>(x: T) -> T requires T in {i64, f64} => x + x\n",
+            "const fn call<...Ps>(f: const fn(...{Ps}) -> i64, a: Ps[item_key]) -> Ps[item_key]\n",
+            "    requires Ps[item_key] in {i64, str} => twice<Ps[item_key]>(a)\n",
+            "test t { assert call(words, \"s\") == \"ss\" }\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    let stderr = text(&checked.stderr);
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("error[operator/operator.no_candidate]")
+            && stderr.contains("no value candidate of operator `add_` takes `Ps[item_key]`"),
+        "{stderr}"
+    );
+}
+
+/// FN-19 and GEN-17: a computed spread is read through its pack-key
+/// expressions. C++ declines it while the generic passes remain unread.
+/// A function inside an entry may capture its iteration key (FN-14).
+#[test]
+fn a_computed_pack_spread_checks_and_declines_cpp_emission() {
+    let root = scratch("computed-pack-spread");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn identity(x: i64) -> i64 => x\n",
+            "const fn apply(f: const fn() -> i64) -> i64 => f()\n",
+            "const fn forward<...Ps, ...As>(f: const fn(...{Ps}) -> i64, args: ...{As for f}) -> i64 =>\n",
+            "    f(...{for key in arg_keys(Ps):\n",
+            "        if key == \"unused\" { apply(fn() => if key == \"unused\" { 0 } else { 1 }) }\n",
+            "        else if key in arg_keys(As) { args[key] }})\n",
+            "test example { assert forward(identity, 3) == 3 }\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
+    let out = root.join("out");
+    let emitted = hgl_in(
+        &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
+        &[],
+        &[],
+    );
+    let stderr = text(&emitted.stderr);
+    assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("error[build/target.unsupported]")
+            && stderr.contains("f(...{for key in arg_keys(Ps)"),
+        "{stderr}"
+    );
+}
+
+/// GEN-17 and FN-19: the keys in a computed spread are those of a type pack.
+#[test]
+fn a_computed_pack_spread_reports_a_value_pack_used_as_a_type_pack() {
+    let root = scratch("computed-spread-value-pack");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn pair(a: i64, b: i64) -> i64 => a + b\n",
+            "const fn forward(items: ...i64{2}) -> i64 =>\n",
+            "    pair(...{for key in arg_keys(items): items[key]})\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    let stderr = text(&checked.stderr);
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("error[type/type.mismatch]")
+            && stderr.contains("`arg_keys` needs a type pack, and `items` is not one"),
+        "{stderr}"
+    );
+}
+
+/// GEN-17 and FN-19: a written member type in a deferred entry keeps its
+/// type reading in calls, nested types and binding or parameter annotations.
+#[test]
+fn a_computed_pack_spread_preserves_written_pack_member_types() {
+    let root = scratch("computed-pack-entry-types");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn exact<T>(value: T) -> T => value\n",
+            "const fn apply<T>(f: const fn(T) -> T, value: T) -> T => f(value)\n",
+            "operator pick_value<T>(value: T) -> T\n",
+            "impl const fn pick_value<T>(value: T) -> T => value\n",
+            "const fn forward<...Ps, ...As>(f: const fn(...{Ps}) -> i64, args: ...{As for f}) -> i64 =>\n",
+            "    f(...{for key in arg_keys(Ps): {\n",
+            "        let value: Ps[key] = args[key]\n",
+            "        let values: list<Ps[key]> = [value]\n",
+            "        let picked = pick_value<Ps[key]>(value)\n",
+            "        apply<Ps[key]>(fn(item: Ps[key]) => item, exact<Ps[key]>(picked))\n",
+            "    }})\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
+}
+
+/// CTRL-16 and FN-19: a constant range's pass gives the computed entry
+/// a compile-time name in both a graph statement and a list comprehension.
+#[test]
+fn a_computed_pack_spread_can_read_a_graph_range_binding_in_a_guard() {
+    let root = scratch("computed-pack-graph-range-guard");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn looped<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}) -> f64 {\n",
+            "    var out = 0.0\n",
+            "    for i in 0..<2 {\n",
+            "        out = f(...{for key in arg_keys(Ps): if i == 0 { args[key] } else { 1.0 }})\n",
+            "    }\n",
+            "    return out\n",
+            "}\n",
+            "fn nested<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}) -> f64 {\n",
+            "    var out = 0.0\n",
+            "    for i in 0..<2 {\n",
+            "        for j in 0..<(i + 1) {\n",
+            "            out = f(...{for key in arg_keys(Ps): if j == 0 { args[key] } else { 1.0 }})\n",
+            "        }\n",
+            "    }\n",
+            "    return out\n",
+            "}\n",
+            "fn listed<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}) -> list<f64, 2> =>\n",
+            "    [for i in 0..<2: f(...{for key in arg_keys(Ps): if i == 0 { args[key] } else { 1.0 }})]\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
+}
+
+/// FN-17, FN-19 and GEN-17: an entry recognizes the same direct
+/// callback operands and written member types as an ordinary expression.
+#[test]
+fn computed_pack_entries_preserve_call_operands_and_type_places() {
+    let cases = [
+        ("positional_callback", "apply(1, cb)", true),
+        ("named_callback", "apply(x: 1, cb: cb)", true),
+        ("braced_callback", "apply{cb: cb}(1)", true),
+        ("callback_callee", "(cb)(1)", true),
+        ("callback_in_list", "{ let stored = [cb]\n 1 }", false),
+        (
+            "callback_called_in_lambda",
+            "apply(1, fn(v) => cb(v))",
+            true,
+        ),
+        ("callback_read_in_lambda", "apply(1, fn(v) => cb)", false),
+        ("callback_forwarded_twice", "relay{cb: cb}(1)", true),
+        (
+            "member_annotation",
+            "{ let value: Ps[key] = args[key]\n 1 }",
+            true,
+        ),
+        (
+            "member_argument",
+            "{ let value = exact<Ps[key]>(args[key])\n 1 }",
+            true,
+        ),
+        (
+            "nested_member_argument",
+            "{ let values = exact<list<Ps[key]>>([])\n 1 }",
+            true,
+        ),
+        (
+            "lambda_member_annotation",
+            "apply_typed<Ps[key]>(args[key], fn(v: Ps[key]) => 1)",
+            true,
+        ),
+    ];
+    for (name, expression, valid) in cases {
+        for in_entry in [false, true] {
+            let root = scratch(&format!("computed-pack-{name}-{in_entry}"));
+            let (generics, expression) = if in_entry {
+                (
+                    "...Ps, ...As",
+                    format!("shape(...{{for key in arg_keys(Ps): {expression}}})"),
+                )
+            } else {
+                ("...Ps, ...As, const key: str", expression.to_string())
+            };
+            let file = write(
+                &root,
+                "m.hgl",
+                &format!(
+                    "module m\n\
+                     const fn apply(x: i64, cb: const fn(i64) -> i64) -> i64 => cb(x)\n\
+                     const fn relay(x: i64, cb: const fn(i64) -> i64) -> i64 => apply{{cb: cb}}(x)\n\
+                     const fn exact<T>(value: T) -> T => value\n\
+                     const fn apply_typed<T>(value: T, cb: const fn(T) -> i64) -> i64 => cb(value)\n\
+                     const fn compare<{generics}>(cb: const fn(i64) -> i64,\n\
+                         shape: const fn(...{{Ps}}) -> i64, args: ...{{As for shape}}) -> i64 => {expression}\n"
+                ),
+            );
+            let checked = hgl_in(&["check", &file], &[], &[]);
+            let stderr = text(&checked.stderr);
+            assert_eq!(
+                checked.status.code(),
+                Some(i32::from(!valid)),
+                "{name} in entry {in_entry}: {stderr}"
+            );
+            if !valid {
+                assert!(
+                    stderr.contains("error[type/function.value]"),
+                    "{name} in entry {in_entry}: {stderr}"
+                );
+            }
+        }
+    }
+}
+
+/// FN-19, FN-17 and EXPR-3: invalid places, iterables and declaration-bound
+/// reads are diagnosed without unrolling the computed pack.
+#[test]
+fn a_computed_pack_spread_rejects_invalid_declaration_uses() {
+    let cases = [
+        (
+            "pair(item: {for k in arg_keys(Ps): 1}, other: 2)",
+            "type/type.mismatch",
+            "a pack loop must be bound",
+        ),
+        (
+            "{ let xs = [({for k in arg_keys(Ps): 1})]\n return 1 }",
+            "type/type.mismatch",
+            "a pack loop must be bound",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): {for j in arg_keys(Ps): 1}})",
+            "type/type.mismatch",
+            "a pack loop must be bound",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): Ps})",
+            "type/type.mismatch",
+            "is a type pack and cannot be read as a value",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): Ps[k]})",
+            "type/type.mismatch",
+            "is a type pack and cannot be read as a value",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): f})",
+            "type/function.value",
+            "a function parameter can be invoked or passed",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): { k = \"x\"\n 1 }})",
+            "name/binding.immutable",
+            "is a pack key and cannot be assigned",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): if b { 1 } else { 2 }})",
+            "type/type.mismatch",
+            "a pack loop condition must be constant",
+        ),
+        (
+            "{ let flag = x > 1\n return f(...{for k in arg_keys(Ps): if flag { 1 } else { 2 }}) }",
+            "type/type.mismatch",
+            "a pack loop condition must be constant",
+        ),
+        (
+            "{ var t = 0\n for i in [1, 2] { t += f(...{for k in arg_keys(Ps): if i == 1 { 1 } else { 2 }}) }\n return t }",
+            "type/type.mismatch",
+            "a pack loop condition must be constant",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): if false { 1 } else if k in arg_keys(Ps) && b { 2 }})",
+            "type/type.mismatch",
+            "a pack loop condition must be constant",
+        ),
+        (
+            "f(...{for i in 0..<3: i})",
+            "type/type.mismatch",
+            "a pack loop needs `arg_keys` of a type pack",
+        ),
+        (
+            "f(...{for i in [1, 2]: i})",
+            "type/type.mismatch",
+            "a pack loop needs `arg_keys` of a type pack",
+        ),
+    ];
+    for (index, (entry, code, message)) in cases.into_iter().enumerate() {
+        let root = scratch(&format!("computed-pack-rejection-{index}"));
+        let body = if entry.starts_with('{') { "" } else { "=> " };
+        let file = write(
+            &root,
+            "m.hgl",
+            &format!(
+                "module m\n\
+                 const fn pair(item: i64, other: i64) -> i64 => item + other\n\
+                 const fn g<...Ps>(f: const fn(...{{Ps}}) -> i64, b: bool, x: i64) -> i64 {body}{entry}\n"
+            ),
+        );
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        let stderr = text(&checked.stderr);
+        assert_eq!(checked.status.code(), Some(1), "{entry}\n{stderr}");
+        assert!(
+            stderr.contains(&format!("error[{code}]")) && stderr.contains(message),
+            "{entry}\n{stderr}",
+        );
+    }
 }
 
 /// FN-18 and EXPR-10: brace arguments reach their ordinary, generic,
@@ -2208,6 +3037,34 @@ fn temporal_structs_run_on_the_sdk() {
     );
 }
 
+/// A concrete generic struct is replayed and recorded using its applied
+/// nominal schema (TYPE-3, TYPE-9, CEVAL-3, CEVAL-4).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn concrete_generic_struct_traces_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic-struct-traces");
+    let file = write(
+        &root,
+        "src/demo.generic-struct-traces.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.generic-struct-traces.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// `demo.keyed`, the temporal form of a set and of a dictionary (TYPE-9,
 /// TIME-7, TIME-9, END-3, END-4, TST-9): every test of it passes on the
 /// SDK, and under the sanitizers where `HGL_CPP_FLAGS` names them.
@@ -2233,6 +3090,34 @@ fn keyed_temporal_code_runs_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// Nested dictionary entry observations retain the final child's validity,
+/// modification and delta, including where an intermediate key is absent (END-8).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn nested_dictionary_entry_observations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("nested-dictionary-observations");
+    let file = write(
+        &root,
+        "src/demo.nested_dictionary_observations.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.nested_dictionary_observations.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2749,12 +3634,14 @@ fn builds_an_isolated_debug_application_without_running_it() {
     write(&root, "ticks.hgl", TICKS);
     write(&root, "backtest.hgl", BACKTEST);
     let builds = root.join("debug builds");
-    // hgraph's libraries built for debugging where HGL_HGRAPH_DEBUG names
-    // them, and the optimised ones HGL_HGRAPH_SDK names otherwise: the
-    // binary under test has no release beside it.
-    let libraries = match std::env::var_os("HGL_HGRAPH_DEBUG") {
-        Some(_) => "debug",
-        None => "optimised",
+    // The test binary has no release beside it. Only a package stamped
+    // for this hgl can supply debug libraries through HGL_HGRAPH_DEBUG.
+    let version = std::env::var_os("HGL_HGRAPH_DEBUG")
+        .and_then(|directory| fs::read_to_string(Path::new(&directory).join("hgl-debug.txt")).ok());
+    let libraries = if version.as_deref().map(str::trim) == Some(env!("CARGO_PKG_VERSION")) {
+        "debug"
+    } else {
+        "optimised"
     };
     let prepare = || {
         let report = hgl_in(
@@ -3666,7 +4553,7 @@ fn store_values_and_failure_places_on_the_sdk() {
         text(&output.stderr)
     );
     // The failing `l[3]` is on line 7 of the application's file; the `get`
-    // of a key put nowhere on line 80 of the module's, in the graph.
+    // of a key put nowhere on line 80 of the module's, in the graph (CAP-6).
     let failing = root.join("demo.store.failing.hgl").display().to_string();
     for (application, said) in [
         (
@@ -3679,7 +4566,7 @@ fn store_values_and_failure_places_on_the_sdk() {
         (
             "demo.store.unbuilt",
             format!(
-                "hgl: demo.store.unbuilt failed: the global store holds nothing under 'by', \
+                "hgl: demo.store.unbuilt failed: value.missing_key: the global store holds nothing under 'by', \
                  raised at {module}:80"
             ),
         ),
@@ -3913,6 +4800,29 @@ fn logical_connections_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// UNIT-7 and UNIT-8: omitted defaults can run their own blocks in
+/// value calls and in graph configuration, including for a lifted call.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn callable_block_defaults_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("callable-block-defaults");
+    let file = write(
+        &root,
+        "demo.callable_block_defaults.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.callable_block_defaults.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

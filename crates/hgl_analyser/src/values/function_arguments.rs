@@ -15,8 +15,8 @@ use super::forwarded_packs::spread_operands;
 use super::inference::{ExplicitGenerics, infer, mentions, pack_bounds, type_pack};
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{
-    AnonymousFunction, Callee, Expr, ExprKind, Form, Node, Stmt, TypePackArgument, ValueCategory,
-    walk_statement_nodes,
+    AnonymousFunction, Callee, Expr, ExprKind, Form, LocalId, Node, Stmt, TypePackArgument,
+    ValueCategory, walk_statement_nodes,
 };
 use crate::program::{Declaration, OperatorRef, Role};
 use crate::syntax::{child, name_token, ungrouped};
@@ -224,6 +224,7 @@ impl<'a> Typer<'a> {
             generics,
             type_packs,
             requirements,
+            defer_pack_members: false,
             contextual: Vec::new(),
         };
         Some((callee, actual))
@@ -1129,9 +1130,20 @@ impl<'a> Typer<'a> {
         (kind, result)
     }
 
-    /// A static function's body is reached from a call or by passing the
-    /// parameter onward. There is no expression that reads its value.
-    pub(super) fn function_value(&mut self, at: Location) {
+    /// A static function can be invoked or passed onward (FN-17).
+    /// When an entry's calls are deferred, their operand reader will
+    /// finish checking a name with either role.
+    pub(super) fn reject_function_value(
+        &mut self,
+        local: LocalId,
+        at: Location,
+        deferred: Option<&SyntaxNode>,
+    ) -> bool {
+        if !matches!(self.locals[local].ty, Type::Function(_))
+            || deferred.is_some_and(|node| self.is_call_operand(node))
+        {
+            return false;
+        }
         self.diagnostics.emit(local_error(
             Category::Type,
             codes::local::FUNCTION_VALUE,
@@ -1140,6 +1152,7 @@ impl<'a> Typer<'a> {
                 .to_string(),
             "FN-17",
         ));
+        true
     }
 }
 

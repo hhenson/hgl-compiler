@@ -1,0 +1,102 @@
+module demo.explicit_unbounded
+
+# TYPE-10: the explicit size sentinel uses the target's growing list.
+const fn ordinary(values: list<i64, unbounded>) -> list<i64, unbounded> => values
+
+fn scaled(value: i64, const factors: list<i64, unbounded>) -> i64 {
+    return value * factors[0]
+}
+
+fn with_literal(value: i64) -> i64 => scaled(value, [2, 3])
+
+fn relay(values: list<i64, unbounded>) -> list<i64, unbounded> {
+    when all_valid(values) { return ordinary(values) }
+}
+
+fn through_graph(values: list<i64, unbounded>) -> list<i64, unbounded> => relay(values)
+
+test ordinary_growing_list_configuration {
+    assert eval with_literal([1, 2]) == [2, 4]
+}
+
+test growing_node_input_and_output {
+    assert eval relay(values: [[1], _, [2, 3], []]) == [[1], _, [2, 3], []]
+}
+
+test growing_graph_input_and_output {
+    assert eval through_graph(values: [[1, 2], [], [3]]) == [[1, 2], [], [3]]
+}
+
+struct Container {
+    values: list<i64, unbounded>
+}
+
+fn bundled(item: Container) -> Container {
+    when all_valid(item) { return item }
+}
+
+test growing_list_as_bundle_field {
+    assert eval bundled(item: [Container(values: [1, 2]), Container(values: [])]) ==
+        [Container(values: [1, 2]), Container(values: [])]
+}
+
+struct Packet<T> { value: T }
+
+fn through_packet(item: Packet<list<i64, unbounded>>) -> Packet<list<i64, unbounded>> => item
+
+test growing_list_as_a_generic_bundle_field {
+    assert eval through_packet(item: [Packet<list<i64, unbounded>>(value: [1, 2])]) ==
+        [Packet<list<i64, unbounded>>(value: [1, 2])]
+}
+
+fn consume(value: i64) {
+    when { let read = value }
+}
+
+fn with_a_loop(values: list<i64, unbounded>) -> list<i64, unbounded> {
+    for value in values { consume(value) }
+    return relay(values)
+}
+
+test growing_connections_in_a_graph_loop {
+    assert eval with_a_loop(values: [[1], [], [2, 3]]) == [[1], [], [2, 3]]
+}
+
+# TYPE-10 and FN-15: either spelling matches the same mutable list place.
+const fn grown() -> list<i64, unbounded> {
+    var made: list<i64, unbounded> = []
+    append(made, 4)
+    append(made, 5)
+    return made
+}
+
+test append_to_an_unbounded_list {
+    assert grown() == [4, 5]
+}
+
+const fn first_plain(values: list<i64>) -> i64 => values[0]
+const fn first_unbounded(values: list<i64, unbounded>) -> i64 => values[0]
+
+test growing_arguments_use_either_spelling {
+    let explicit: list<i64, unbounded> = [6, 7]
+    let plain: list<i64> = [8, 9]
+    assert first_plain(explicit) == 6
+    assert first_unbounded(plain) == 8
+}
+
+test an_unbounded_parameter_accepts_a_fixed_list {
+    let fixed: list<i64, 2> = [4, 5]
+    assert first_unbounded(fixed) == 4
+}
+
+const fn retain_values<V>(value: V) -> V => value
+
+const fn convert_packet(value: Packet<list<i64>>) -> Packet<list<i64, unbounded>> => value
+
+test generic_specializations_use_one_list_type {
+    let plain = retain_values<list<i64>>([1, 2])
+    let explicit = retain_values<list<i64, unbounded>>([3, 4])
+    let packet = convert_packet(Packet<list<i64>>(value: plain))
+    assert packet.value == [1, 2]
+    assert explicit == [3, 4]
+}

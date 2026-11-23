@@ -12,11 +12,13 @@ use super::Typer;
 use super::evals::{holds_trace, publications};
 use super::fit::whole;
 use super::inference::{Inferred, Places, fixed, infer, mentions, placed};
-use crate::declared::{is_optional, substitute_within};
+use crate::declared::{agree, is_optional, substitute_within};
 use crate::hir::{self, EndpointOperation, Expr, ExprKind, Value};
 use crate::program::DeclarationKind;
 use crate::syntax::{child, has_token, name_token, tokens};
-use crate::types::{Argument, Detail, GenericKind, GenericParameter, NamedKind, Pack, Type};
+use crate::types::{
+    Argument, ConstantValue, Detail, GenericKind, GenericParameter, NamedKind, Pack, Type,
+};
 use crate::{RESULT_FORMS, codes, error};
 
 impl<'a> Typer<'a> {
@@ -449,7 +451,12 @@ impl<'a> Typer<'a> {
         };
         // FN-19: written arguments bind first. Forwarded names then
         // bind ahead of forwarded positions, which take the slots left.
-        let spreads = self.forwarded_arguments(list);
+        let computed = super::forwarded_packs::has_computed_spread(list);
+        let spreads = if computed {
+            Vec::new()
+        } else {
+            self.forwarded_arguments(list)
+        };
         let written = entries
             .into_iter()
             .map(|(brace, name, value)| (brace, name, value, None));
@@ -600,7 +607,12 @@ impl<'a> Typer<'a> {
             });
         }
         for (index, slot) in slots.iter().enumerate() {
-            if slot.required && slot.pack.is_none() && !filled[index] && !unnamed_field {
+            if slot.required
+                && (!computed || slot.configuration)
+                && slot.pack.is_none()
+                && !filled[index]
+                && !unnamed_field
+            {
                 let missing = if slot.name.is_empty() {
                     format!(
                         "`{}` needs an argument at position {}",
@@ -628,10 +640,11 @@ impl<'a> Typer<'a> {
             }
         }
         for index in [positional_pack, named_pack].into_iter().flatten() {
+            let (minimum, maximum) = slots[index].pack_bounds;
             self.check_pack_count(
                 list,
                 slots[index].name,
-                slots[index].pack_bounds,
+                (if computed { 0 } else { minimum }, maximum),
                 &pack_locations[index],
             );
         }
@@ -810,10 +823,31 @@ impl<'a> Typer<'a> {
         } else {
             value
         };
+        self.fit_prepared_argument(value, slot, traced, takes)
+    }
+
+    /// Fits an argument whose publication read has already been chosen.
+    pub(super) fn fit_prepared_argument(
+        &mut self,
+        value: Expr,
+        slot: &Slot<'_>,
+        traced: bool,
+        takes: Takes,
+    ) -> Expr {
         // FN-12: a window's connection given to a value
         // function's `list<V>` in composition (`lifted_window`).
         let lifted = self.lifted_window(&slot.ty, slot.listed, &value, takes);
-        if lifted || (!traced && holds_trace(&value.ty)) {
+        // TYPE-10: an ordinary list argument keeps its actual size;
+        // an unsized value parameter takes its entries in order.
+        let fixed_list_value = takes == Takes::Parameters
+            && slot.listed
+            && !self.composes(&value)
+            && matches!(
+                (&slot.ty, value.ty.omission_removed()),
+                (Type::List { element, size: None }, Type::List { element: actual, size: Some(size) })
+                    if !matches!(size.value, ConstantValue::Unbounded) && agree(element, actual)
+            );
+        if lifted || fixed_list_value || (!traced && holds_trace(&value.ty)) {
             value
         } else {
             let place = format!("the {} `{}`", takes.noun(), slot.name);

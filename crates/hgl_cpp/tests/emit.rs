@@ -777,41 +777,25 @@ fn activity_and_enums_are_written() {
     );
 }
 
-/// A change of an input's activity in `stop` is reported: hgraph makes
-/// passive at stop only the inputs a node declares active, so an input
-/// it activated would stay subscribed. `is_active` there is written.
+/// TIME-5: an activity query remains metadata in stop. Activity
+/// mutations are source rejections, covered by endpoint_hooks.
 #[test]
-fn a_change_of_activity_in_stop_is_reported() {
+fn an_activity_query_in_stop_is_written() {
     let emitted = emit_with(
         &[(
             "m.hgl",
             concat!(
                 "module m\n",
-                "\n",
-                "fn stopping(value: i64) -> i64 {\n",
-                "    when { return value }\n",
-                "    stop { passivate(value) }\n",
-                "}\n",
-                "\n",
                 "fn asking(value: i64) -> i64 {\n",
                 "    when { return value }\n",
                 "    stop { let active = is_active(value) }\n",
                 "}\n",
-                "\n",
-                "test a_change {\n",
-                "    assert eval stopping(value: [1]) == [1]\n",
-                "}\n",
-                "\n",
                 "test a_read {\n",
                 "    assert eval asking(value: [1]) == [1]\n",
                 "}\n",
             ),
         )],
         &hgl_cpp::runtime::provides,
-    );
-    assert_eq!(
-        emitted.blocked("a_change").as_deref(),
-        Some("m.hgl:5:12 the cpp target does not write `passivate` here yet")
     );
     assert_eq!(emitted.blocked("a_read"), None);
 }
@@ -992,9 +976,8 @@ fn a_window_not_written_yet_is_reported() {
 /// publication"; TYPE-11: "A window takes at most one value a cycle"): its
 /// handlers run inside `::hglrt::WindowArrival::run`, and each write holds
 /// its value. A write then `invalidate(out)` (END-4: "publish then
-/// invalidate leaves the endpoint invalid") discards the write. A read
-/// of the result in that `when` is still reported, since it
-/// would not see what the evaluation holds.
+/// invalidate leaves the endpoint invalid") discards the write.
+/// Metadata and delta observations use the held arrival (TIME-7).
 #[test]
 fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
     let emitted = emit_with(
@@ -1023,7 +1006,10 @@ fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
                 "    inject out\n",
                 "    when {\n",
                 "        out = reading\n",
-                "        if valid(out) { out = reading + 1 }\n",
+                "        let staged: result<i64, error> = delta_value(out)\n",
+                "        if valid(out) && modified(out) && last_modified(out) != null && is_ok(staged) {\n",
+                "            out = delta_value(out) + 1\n",
+                "        }\n",
                 "    }\n",
                 "}\n",
                 "\n",
@@ -1078,24 +1064,30 @@ fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
     }
     assert_eq!(emitted.blocked("written_then_invalidated"), None);
     assert!(unit.contains("arrival_.invalidate();"), "{unit}");
-    assert_eq!(
-        emitted.blocked("written_then_read").as_deref(),
-        Some(
-            "m.hgl:23:12 the cpp target does not write a read of a node's own window result in its `when` yet"
-        )
-    );
+    assert_eq!(emitted.blocked("written_then_read"), None);
+    for native in [
+        "fn_valid",
+        "fn_modified",
+        "fn_last_modified",
+        "fn_delta_value",
+        "fn_delta_value_checked",
+    ] {
+        let read = format!("::hglrt::{native}(arrival_)");
+        assert!(unit.contains(&read), "{read} in\n{unit}");
+    }
+    assert!(!unit.contains("arrival_.observe()"), "{unit}");
     // A handler's header that names the window result, whose guard is
     // tested where the evaluation may hold a write of it.
     assert_eq!(
         emitted.blocked("selected_by_its_validity").as_deref(),
         Some(
-            "m.hgl:42:5 the cpp target does not write a handler that selects on a node's own window result yet"
+            "m.hgl:45:5 the cpp target does not write a handler that selects on a node's own window result yet"
         )
     );
     assert_eq!(
         emitted.blocked("selected_by_its_publication").as_deref(),
         Some(
-            "m.hgl:48:5 the cpp target does not write a handler that selects on a node's own window result yet"
+            "m.hgl:51:5 the cpp target does not write a handler that selects on a node's own window result yet"
         )
     );
 }
@@ -1760,6 +1752,36 @@ fn list_code_is_written() {
     );
 }
 
+/// TYPE-10: explicit and omitted unbounded sizes select one emitted instance.
+#[test]
+fn growing_list_spellings_share_an_emitted_instance() {
+    let emitted = emit_with(
+        &[(
+            "demo.explicit_unbounded.hgl",
+            include_str!("fixtures/demo.explicit_unbounded.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    let path = hgl_cpp::header_path("demo.explicit_unbounded");
+    let header = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == path)
+        .unwrap()
+        .text;
+    let instances: Vec<_> = header
+        .lines()
+        .filter(|line| line.starts_with("// retain_values<V>"))
+        .collect();
+    assert_eq!(instances.len(), 1, "{instances:?}");
+    assert!(
+        instances[0].contains("instance `list_i64_`"),
+        "{instances:?}"
+    );
+}
+
 /// The timing the target writes (`emit/scheduling.rs`): nodes woken by a
 /// scheduler or an alarm, and sources with declarations and hooks, each
 /// as the goldens under `tests/goldens/demo.timing` have it. Each test of
@@ -1824,9 +1846,9 @@ fn keyed_temporal_code_is_written() {
 }
 
 /// A dictionary's key of a type the family does not write, a constant
-/// connection of a set, and an entry of a dictionary's entry in a hook are
-/// reported, and block what reaches them. A key's child as a connection of
-/// a graph is written (`references`).
+/// connection of a set, and a direct payload read of a nested dictionary
+/// entry are reported, and block what reaches them. A key's child as a
+/// connection of a graph is written (`references`).
 #[test]
 fn a_keyed_form_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -1878,7 +1900,7 @@ fn a_keyed_form_not_written_yet_is_reported() {
     );
     assert_eq!(
         emitted.blocked("an_entry_of_an_entry").as_deref(),
-        Some("m.hgl:12:21 the cpp target does not write an entry of a dictionary's entry yet")
+        Some("m.hgl:12:46 the cpp target does not write an entry of a dictionary's entry yet")
     );
     assert_eq!(emitted.blocked("a_child_in_a_graph"), None);
 }
@@ -2258,11 +2280,10 @@ fn a_trace_held_in_a_let_is_replayed_by_an_eval() {
 
 /// A temporal call that leaves out `const` parameters (UNIT-8): where
 /// more than one default may fail, each is held in the order of the
-/// parameters (EXPR-2); a default that runs statements is reported, as a
-/// value call's is; and a lifted call that leaves one out binds its
-/// default as configuration where the graph is built (FN-6).
+/// parameters (EXPR-2). Defaults may use their own statement blocks, and
+/// lifting binds defaults as configuration where the graph is built (FN-6).
 #[test]
-fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
+fn a_temporal_calls_defaults_are_held_in_order() {
     let emitted = emit_with(
         &[(
             "m.hgl",
@@ -2284,7 +2305,7 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
                 "    when { return value * by }\n",
                 "}\n",
                 "\n",
-                "fn blocked(value: i64) -> i64 => blocky(value)\n",
+                "fn with_block(value: i64) -> i64 => blocky(value)\n",
                 "\n",
                 "const fn add(a: i64, b: i64 = 1) -> i64 => a + b\n",
                 "\n",
@@ -2295,7 +2316,7 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
                 "}\n",
                 "\n",
                 "test block {\n",
-                "    assert eval blocked(value: [1]) == [3]\n",
+                "    assert eval with_block(value: [1]) == [3]\n",
                 "}\n",
                 "\n",
                 "test lifted {\n",
@@ -2325,13 +2346,7 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
         ),
         "{twice}"
     );
-    assert!(
-        emitted.blocked("block").is_some_and(
-            |reason| reason.ends_with("does not write a default that runs statements yet")
-        ),
-        "{:?}",
-        emitted.blocked("block")
-    );
+    assert_eq!(emitted.blocked("block"), None);
     // The lifting family's (`a_lifted_calls_omitted_defaults_are_configuration`).
     assert_eq!(emitted.blocked("lifted"), None);
     assert!(
@@ -2345,8 +2360,8 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
 /// an `hgraph::Scalar`, evaluated where the graph is built (EXPR-14), after the
 /// arguments written and in the order of the parameters, each held first
 /// where more than one may fail (EXPR-2); one written `T?` with none is
-/// null in the node's call (UNIT-8); a default that runs statements is
-/// reported, as a temporal call's is. An eval of a value function binds
+/// null in the node's call (UNIT-8). A statement block runs when its
+/// default is evaluated. An eval of a value function binds
 /// what it leaves out so too, and holds it before its run's
 /// configuration.
 #[test]
@@ -2420,13 +2435,7 @@ fn a_lifted_calls_omitted_defaults_are_configuration() {
         ),
         "{twice}"
     );
-    assert!(
-        emitted.blocked("block").is_some_and(
-            |reason| reason.ends_with("does not write a default that runs statements yet")
-        ),
-        "{:?}",
-        emitted.blocked("block")
-    );
+    assert_eq!(emitted.blocked("block"), None);
     // The eval holds the run's configuration, written before the call
     // (RUN-6), and then the defaults, `b` before `c`, and gives them to
     // the node.
@@ -2437,27 +2446,6 @@ fn a_lifted_calls_omitted_defaults_are_configuration() {
     let b = tests.find("= ::hgl::m::m_::one();").expect("`b` held");
     let bounds = tests.find("const auto bounds_").expect("the bounds held");
     assert!(bounds < b, "{tests}");
-}
-
-/// UNIT-8: a default is written where its argument is left out; one
-/// that calls its own function with that argument left out again would
-/// be written inside itself without end, and is reported.
-#[test]
-fn a_default_that_leaves_itself_out_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "const fn again(value: bool = again()) -> bool => value\n",
-            "const fn uses() -> bool => again()\n",
-            "test calls {\n",
-            "    assert uses()\n",
-            "}\n",
-        ),
-    )]);
-    let reported = "m.hgl:2:30 the cpp target does not write a default that leaves itself out yet";
-    assert_eq!(emitted.reported, [reported]);
-    assert_eq!(emitted.blocked("calls").as_deref(), Some(reported));
 }
 
 /// TST-1 and FN-4: value and temporal helpers may share a name inside a
@@ -2788,32 +2776,49 @@ fn a_case_binding_read_after_its_switch_is_reported() {
     );
 }
 
-/// UNIT-13, UNIT-8: the analyser keeps a constant's value and a default
-/// with no locals of their own, so a block in one that runs statements is
-/// reported, and not written (and the target does not fail on it).
+/// UNIT-13 and EXPR-5: a module constant can run statements in its
+/// checked initializer. Callable defaults keep their own locals (UNIT-7).
 #[test]
-fn a_constant_or_a_default_that_runs_statements_is_reported() {
+fn statement_blocks_in_constants_and_callable_defaults_are_written() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
             "module m\n",
             "const made: i64 = {\n",
             "    let a = 20\n",
-            "    a + 1\n",
+            "    21\n",
             "}\n",
             "const fn offset(x: i64, by: i64 = {\n",
             "    let b = 2\n",
             "    b + 1\n",
             "}) -> i64 => x + by\n",
             "const fn used() -> i64 => offset(1)\n",
+            "const fn supplied() -> i64 => offset(1, 9)\n",
         ),
     )]);
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/mod-m.cpp")
+        .unwrap()
+        .text;
+    // UNIT-13: the block initializes the one stored constant value.
+    assert!(
+        unit.contains("static const ::hgraph::Int value ="),
+        "{unit}"
+    );
+    assert!(unit.contains("const ::hgraph::Int a = 20;"), "{unit}");
+    // Only the call that leaves `by` out evaluates the default block.
     assert_eq!(
-        emitted.reported,
-        [
-            "m.hgl:2:7 the cpp target does not write a constant whose value runs statements yet",
-            "m.hgl:6:35 the cpp target does not write a default that runs statements yet",
-        ]
+        unit.matches("const ::hgraph::Int b = 2;").count(),
+        1,
+        "{unit}"
+    );
+    assert!(
+        unit.contains("return ::hgl::m::m_::offset(1, 9);"),
+        "{unit}"
     );
 }
 
@@ -2973,8 +2978,8 @@ fn temporal_structs_and_nullables_are_written() {
 
 /// What the target does not write of temporal structs, tuples and
 /// nullables yet is reported, and nothing is miswritten: a struct whose
-/// field has a form the library does not read as a part (a set), a generic
-/// struct, an abstract one, a nullable put in the run's store (a `get`
+/// field has a form the library does not read as a part (a set), a struct
+/// with generic value arguments, a nullable put in the run's store (a `get`
 /// through a nullable place has the payload's type: hgl_spec issue 165),
 /// and a tuple with an atomic position.
 #[test]
@@ -2986,13 +2991,13 @@ fn temporal_structs_not_written_yet_are_reported() {
             "struct Listed {\n",
             "    values: set<i64>\n",
             "}\n",
-            "struct Box<T> {\n",
-            "    value: T\n",
+            "struct Box<const N: i64> {\n",
+            "    value: i64\n",
             "}\n",
             "fn listed(value: Listed) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
-            "fn boxed(value: Box<i64>) -> i64 {\n",
+            "fn boxed(value: Box<2>) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
             "fn stored(value: i64?) -> bool {\n",
@@ -3014,11 +3019,36 @@ fn temporal_structs_not_written_yet_are_reported() {
         emitted.reported,
         [
             "m.hgl:8:11 the cpp target does not write a temporal value of `Listed` yet",
-            "m.hgl:11:10 the cpp target does not write a temporal value of `Box<i64>` yet",
+            "m.hgl:11:10 the cpp target does not write a temporal value of `Box<2>` yet",
             "m.hgl:17:9 the cpp target does not write a nullable value put in the run's store (hgl_spec issue 165) yet",
             "m.hgl:24:11 the cpp target does not write a temporal value of `tuple<atomic<Plain>, i64>` yet",
         ]
     );
+}
+
+/// Schema identity includes the applied type arguments (TYPE-3), and the
+/// same schema is usable by both sides of a trace (TYPE-9, CEVAL-3, CEVAL-4).
+#[test]
+fn concrete_generic_structs_use_applied_bundle_schemas() {
+    let emitted = emit_with(
+        &[(
+            "demo.generic-struct-traces.hgl",
+            include_str!("fixtures/demo.generic-struct-traces.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let types = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/type-demo-generic_struct_traces.h")
+        .expect("generated types header")
+        .text;
+    assert!(types.contains("::hgraph::BundleArguments<::hglrt::bundle_value<T_p_>>"));
 }
 
 /// Structs, sets, dictionaries and deltas as values (TYPE-3 to TYPE-6,

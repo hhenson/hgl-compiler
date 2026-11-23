@@ -1,7 +1,7 @@
 //! The content key and the successful build it vouches for. The workspace
 //! lock covers reading, clearing and publishing the stamp.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::{self, ErrorKind, Read as _};
 use std::path::{Component, Path};
@@ -10,7 +10,7 @@ use hgl_runner::CaseKind;
 use serde::{Deserialize, Serialize};
 
 use super::build::{Workspace, application_target, test_target_stem, write_if_changed};
-use super::plan::{Action, Program};
+use super::plan::{Action, Program, TestCase};
 use crate::{LimitArgs, ProgramSources, Replacement};
 
 const FILE: &str = ".hgl-built.json";
@@ -23,6 +23,9 @@ pub(super) struct Stamp {
     version: u32,
     key: String,
     artifacts: Vec<Artifact>,
+    /// A debugger's test selection does not cover the whole program.
+    #[serde(default)]
+    partial_tests: bool,
     /// The program's built applications and, where built, its tests.
     pub(super) program: Program,
 }
@@ -55,6 +58,31 @@ impl PreviousBuild {
         self.active && self.stamp.reusable(workspace, key, tests)
     }
 
+    /// The complete case inventory for an active snapshot, even if only
+    /// some of its test executables were built.
+    pub(super) fn test_inventory(&self, key: &str) -> Option<&[TestCase]> {
+        if self.active && self.stamp.key == key {
+            self.stamp.program.tests.as_deref()
+        } else {
+            None
+        }
+    }
+
+    /// Whether all selected test executables belong to this active build.
+    pub(super) fn tests_reusable(
+        &self,
+        workspace: &Workspace,
+        key: &str,
+        stems: &BTreeSet<&str>,
+    ) -> bool {
+        self.test_inventory(key).is_some()
+            && self.stamp.verified_paths(workspace).is_some_and(|paths| {
+                stems
+                    .iter()
+                    .all(|stem| paths.contains(test_target_stem(stem).as_str()))
+            })
+    }
+
     /// Atomically withdraws permission to run and keeps the digests. A
     /// later failure with no active stamp leaves those digests alone.
     pub(super) fn invalidate(workspace: &Workspace, previous: Option<&Self>) -> Result<(), String> {
@@ -73,8 +101,8 @@ impl PreviousBuild {
     }
 }
 
-/// The relative path and BLAKE3 digest of a generated object or executable.
-#[derive(Deserialize, Serialize)]
+/// The relative path and BLAKE3 digest of a generated build artifact.
+#[derive(Clone, Deserialize, Serialize)]
 struct Artifact {
     path: String,
     digest: String,
@@ -111,20 +139,18 @@ impl Stamp {
 
     fn reusable(&self, workspace: &Workspace, key: &str, tests: bool) -> bool {
         if self.key != key
+            || self.partial_tests
             || (tests && self.program.tests.is_none())
             // The test runner omits rejection owners (TST-13). An ordinary
             // build or run checks the whole source under TST-14.
             || (!tests
                 && self.program.tests.iter().flatten().any(|case| case.kind == CaseKind::Rejection))
-            || !self.artifacts.iter().all(|artifact| artifact.matches(&workspace.directory))
         {
             return false;
         }
-        let artifacts: HashSet<_> = self
-            .artifacts
-            .iter()
-            .map(|artifact| artifact.path.as_str())
-            .collect();
+        let Some(artifacts) = self.verified_paths(workspace) else {
+            return false;
+        };
         let listed = |name: String| artifacts.contains(name.as_str());
         self.program
             .applications
@@ -140,6 +166,17 @@ impl Stamp {
                     Action::Checked(_) => true,
                     Action::Run(test) => listed(test_target_stem(&test.stem)),
                 })
+    }
+
+    fn verified_paths(&self, workspace: &Workspace) -> Option<HashSet<&str>> {
+        self.artifacts
+            .iter()
+            .map(|artifact| {
+                artifact
+                    .matches(&workspace.directory)
+                    .then_some(artifact.path.as_str())
+            })
+            .collect()
     }
 
     /// Unverified outputs cannot serve as Ninja's incremental inputs. Only
@@ -171,7 +208,21 @@ impl Stamp {
         key: &str,
         artifacts: Vec<String>,
         program: &Program,
+        partial_tests: bool,
+        previous: Option<&Self>,
     ) -> Result<String, String> {
+        // A partial build keeps earlier, still verified artifacts of the
+        // same source snapshot. A different key gets a fresh inventory.
+        let new: HashSet<_> = artifacts.iter().map(String::as_str).collect();
+        let mut retained: Vec<_> = previous
+            .filter(|previous| previous.key == key)
+            .into_iter()
+            .flat_map(|previous| &previous.artifacts)
+            .filter(|artifact| {
+                !new.contains(artifact.path.as_str()) && artifact.matches(&workspace.directory)
+            })
+            .cloned()
+            .collect();
         let artifacts = artifacts
             .into_iter()
             .map(|path| {
@@ -182,10 +233,12 @@ impl Stamp {
                 Ok(Artifact { path, digest })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        retained.extend(artifacts);
         serde_json::to_string(&serde_json::json!({
             "version": VERSION,
             "key": key,
-            "artifacts": artifacts,
+            "artifacts": retained,
+            "partial_tests": partial_tests,
             "program": program,
         }))
         .map_err(|error| error.to_string())

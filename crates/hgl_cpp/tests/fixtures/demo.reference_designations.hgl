@@ -1,0 +1,89 @@
+module demo.reference_designations
+
+# FN-16, END-10: the key names a logical endpoint even while it is absent.
+fn select(key: str, input: dict<str, i64>) -> ref i64 {
+    when modified(key) { return input[key] }
+}
+
+fn receive(input: i64) -> i64 {
+    when { return input }
+}
+
+fn observed(key: str, input: dict<str, i64>) -> i64 => receive(select(key, input))
+
+fn fixed_key(input: dict<i64, i64>) -> ref i64 {
+    when { return input[1] }
+}
+
+fn fixed_observed(input: dict<i64, i64>) -> i64 => receive(fixed_key(input))
+
+test a_designated_key_follows_later_membership {
+    assert eval observed(
+        key: ["a", _, _, _, _, "b", _, "b"],
+        input: [
+            [], ["a": 1], ["a": 2, "b": 30], ["b": 31],
+            ["a": 5, "b": 31], _, ["b": 35], _,
+        ],
+    ) == [_, 1, 2, _, 5, 31, 35, _]
+    assert eval fixed_observed(input: [[], [1: 4], [2: 8], [1: 7]]) == [_, 4, _, 7]
+}
+
+fn select_on(wake: i64, key: str, input: dict<str, i64>) -> ref i64 {
+    inject out
+    when modified(wake) && valid(key) { out = input[key] }
+}
+
+fn observed_on(wake: i64, key: str, input: dict<str, i64>) -> i64 =>
+    receive(select_on(wake, key, input))
+
+test a_key_change_alone_does_not_change_the_selected_endpoint {
+    assert eval observed_on(
+        wake: [1, _, _, 2],
+        key: ["a", "b", _, _],
+        input: [["a": 1, "b": 8], _, delta<dict<str, i64>>(updated: ["a": 2]), _],
+    ) == [1, _, 2, 8]
+}
+
+# TIME-9, FN-16: a follower refresh on a rebinding is no alarm wake.
+fn alarm_once(input: i64, spare: i64) -> ref i64 {
+    cache ran: bool = false
+    inject alarm
+    start { schedule(alarm, 1us) }
+    when scheduled() {
+        if ran { return spare }
+        ran = true
+        return input
+    }
+}
+
+fn observed_alarm(key: str, input: dict<str, i64>, spare: i64) -> i64 =>
+    receive(alarm_once(select(key, input), spare))
+
+test rebinding_an_alarm_nodes_input_does_not_run_the_handler_again {
+    assert eval observed_alarm(
+        key: ["a", _, "missing", "b"],
+        input: [["a": 7, "b": 8], _, _, _],
+        spare: [100, _, _, _],
+    ) == [_, 7, _, 8]
+}
+
+# TIME-9, FN-16: a timer wake can select an ordinary input.
+fn scheduled_only(input: i64) -> ref i64 {
+    inject scheduler
+    start { schedule(scheduler, 1us) }
+    when scheduled() { return input }
+}
+
+fn alarm_only(input: i64) -> ref i64 {
+    inject alarm
+    start { schedule(alarm, 1us) }
+    when scheduled() { return input }
+}
+
+fn through_scheduler(input: i64) -> i64 => receive(scheduled_only(input))
+fn through_alarm(input: i64) -> i64 => receive(alarm_only(input))
+
+test a_timer_can_designate_an_ordinary_input {
+    assert eval through_scheduler(input: [7, _, 9, _, 9]) == [_, 7, 9, _, 9]
+    assert eval through_alarm(input: [7, _, 9, _, 9]) == [_, 7, 9, _, 9]
+}

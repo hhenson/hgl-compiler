@@ -77,7 +77,16 @@ struct InstanceArguments<'a> {
 
 impl InstanceArguments<'_> {
     fn project(&self, ty: &Type) -> Type {
-        self.packs.project(ty, self.types).unwrap_or(Type::Unknown)
+        if ty.any_part(
+            &|part| matches!(part, Type::Parameter { .. } | Type::PackMember { .. }),
+            &|constant| constant.value.key().is_none(),
+        ) {
+            self.packs.project(ty, self.types).unwrap_or(Type::Unknown)
+        } else {
+            // A reread can already supply a concrete type. Substitution's
+            // growth bound applies only when there is something to place.
+            ty.clone()
+        }
     }
 }
 
@@ -88,6 +97,8 @@ pub(crate) struct CheckedInstance {
     pub(crate) signature: Signature,
     /// The body with its concrete types and callees.
     pub(crate) body: Body,
+    /// The instance read the body from its syntax with concrete types.
+    pub(crate) reread_body: bool,
     /// Checks made when a selected result differs from the admitting result.
     pub(crate) result_uses: Option<ResultUseChecks>,
 }
@@ -98,6 +109,13 @@ pub(crate) struct ResultUseChecks {
     pub(crate) changed_results: Vec<Location>,
     /// Type checks from reading the body with the selected results.
     pub(crate) reports: Diagnostics,
+}
+
+impl CheckedInstance {
+    /// Visit calls and references in the final body, including nested functions.
+    pub(crate) fn walk_calls(&self, visit: &mut dyn FnMut(&crate::hir::Expr)) {
+        crate::values::walk_body_calls(&self.body, visit);
+    }
 }
 
 impl Program {
@@ -365,7 +383,10 @@ impl Program {
         let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
         let recheck_endpoints =
             crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
-        if (recheck_endpoints || pending_forwards.is_some())
+        let mut reread_body = false;
+        if (recheck_endpoints
+            || pending_forwards.is_some()
+            || (!generics.is_empty() && crate::values::has_dependent_index(&body)))
             && let Some(reread) = crate::values::reread_instance_body(
                 self,
                 (module, declaration),
@@ -376,6 +397,7 @@ impl Program {
             )
         {
             body = reread;
+            reread_body = true;
         }
         let recheck = graph
             && (!declared.selecting[declaration].is_empty()
@@ -401,6 +423,7 @@ impl Program {
             ) {
                 diagnostics.borrow_mut().truncate(before);
                 body = reread;
+                reread_body = true;
                 destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
                 self.place_body(&mut body, &arguments, &functions);
             }
@@ -427,6 +450,7 @@ impl Program {
         Some(CheckedInstance {
             signature: taken,
             body,
+            reread_body,
             result_uses,
         })
     }
@@ -665,7 +689,7 @@ impl Program {
             self.place_body(&mut function.body, instance, &functions);
             crate::values::record(self, &mut function.body, !function.template.value);
         } else {
-            place_callee(callee, instance.types, instance.requirements, functions);
+            place_callee(callee, instance, functions);
             if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } =
                 callee
             {
@@ -960,7 +984,11 @@ fn required_uses(callee: &Callee, at: Location, uses: &mut Vec<(usize, Location)
 /// operation the declaration requires becomes the call of the candidate
 /// that answers the requirement (GEN-16); one nothing answers is left
 /// as it is.
-fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &[(usize, Callee)]) {
+fn place_callee(
+    callee: &mut Callee,
+    instance: &InstanceArguments<'_>,
+    functions: &[(usize, Callee)],
+) {
     if let Callee::Parameter { parameter, .. } = callee
         && let Some((_, target)) = functions.iter().find(|(index, _)| index == parameter)
     {
@@ -968,9 +996,30 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
         // The argument belongs to the caller's context, which was already placed.
         return;
     }
+    // GEN-17: written type arguments can mention a reflected pack
+    // member, which needs the enclosing instance's keys and types.
+    // An untold member requirement keeps those arguments symbolic.
+    let defer_pack_members = matches!(
+        callee,
+        Callee::Function {
+            defer_pack_members: true,
+            ..
+        }
+    );
+    let place_type = |ty: &Type| {
+        if defer_pack_members {
+            substitute_within(ty, instance.types)
+        } else {
+            instance.project(ty)
+        }
+    };
+    let place = |argument: &Argument| match argument {
+        Argument::Type(ty) => Argument::Type(place_type(ty)),
+        Argument::Constant(_) => placed(argument, instance.types),
+    };
     if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } = callee {
         for pack in type_packs {
-            pack.place_types(|ty| substitute_within(ty, map));
+            pack.place_types(place_type);
         }
     }
     if let Callee::Candidate {
@@ -981,7 +1030,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
     } = callee
     {
         for argument in operator_generics {
-            *argument = placed(argument, map);
+            *argument = place(argument);
         }
     }
     match callee {
@@ -996,10 +1045,10 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
             ..
         } => {
             for argument in generics {
-                *argument = placed(argument, map);
+                *argument = place(argument);
             }
             for answer in requirements {
-                place_answer(answer, map, answers);
+                place_answer(answer, instance.types, instance.requirements);
             }
         }
         Callee::Required {
@@ -1013,7 +1062,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
                 declaration,
                 generics,
                 requirements,
-            }) = answers.get(*requirement)
+            }) = instance.requirements.get(*requirement)
             {
                 *callee = Callee::Candidate {
                     operator: *operator,

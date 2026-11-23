@@ -918,6 +918,46 @@ fn a_cardinalitys_upper_bound_is_at_least_its_lower() {
 
 // ---- Sizes ----
 
+/// TYPE-10: a fixed list keeps its type outside an unsized value parameter.
+#[test]
+fn a_fixed_lists_size_remains_part_of_its_type() {
+    let checked = module(concat!(
+        "struct Holder { items: list<i64> }\n",
+        "const fn first_of(items: list<i64>) -> i64 => items[0]\n",
+        "const fn return_list(items: list<i64, 2>) -> list<i64> => items\n",
+        "const fn bind_list(items: list<i64, 2>) { let copy: list<i64> = items }\n",
+        "const fn hold_list(items: list<i64, 2>) -> Holder => Holder(items: items)\n",
+        "const fn wrong_element(items: list<bool, 2>) -> i64 => first_of(items)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:59 type/type.mismatch EXPR-5",
+            "m.hgl:5:65 type/type.mismatch EXPR-5",
+            "m.hgl:6:68 type/type.mismatch EXPR-5",
+            "m.hgl:7:65 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// TYPE-10: diagnostics name both growing-list spellings `list<T>`.
+#[test]
+fn growing_list_spellings_have_one_diagnostic_type_name() {
+    let checked = module(concat!(
+        "const fn plain(value: bool) -> list<i64> => value\n",
+        "const fn explicit(value: bool) -> list<i64, unbounded> => value\n",
+    ));
+    let [plain, explicit] = checked.findings.as_slice() else {
+        panic!("{}", checked.report);
+    };
+    assert_eq!(plain.code, "type/type.mismatch");
+    assert_eq!(explicit.code, plain.code);
+    assert_eq!(explicit.message, plain.message);
+    assert!(plain.message.contains("`list<i64>`"), "{}", plain.message);
+}
+
 /// TYPE-10: "`list<T>` denotes a growing shape; fixed sizes are
 /// nonnegative constants. `unbounded` is the size sentinel. Size
 /// participates in identity ... A tuple retains positional identity and
@@ -978,6 +1018,8 @@ fn a_lists_size_is_a_nonnegative_count() {
             .ty
     };
     assert_ne!(ty("a"), ty("b"));
+    assert_eq!(ty("a"), ty("c"));
+    assert_eq!(ty("c").to_string(), "list<f64>");
     assert_ne!(ty("b"), ty("c"));
     assert_ne!(ty("b"), ty("f"));
     assert_eq!(ty("b"), ty("h"));

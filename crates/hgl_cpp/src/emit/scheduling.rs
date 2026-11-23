@@ -27,8 +27,15 @@
 //! input's tick before it is due takes nothing from it (CAP-5: "asking
 //! again keeps the earliest").
 
-use hgl_analyser::hir::{Body, EndpointOperation, Expr, ExprKind, Hook, Stmt};
-use hgl_analyser::{LocalKind, Signature};
+use std::collections::HashSet;
+
+use hgl_analyser::hir::{
+    Body, Callee, EndpointOperation, Expr, ExprKind, Hook, Stmt, walk_statements,
+};
+use hgl_analyser::{
+    DeclarationKind, Detail, LocalKind, Program, Role as DeclarationRole, Scalar, Signature, Type,
+};
+use hgl_lower::instances::Instances;
 use hgl_lower::nodes::{Handler, Timer};
 
 use super::Emitter;
@@ -42,6 +49,148 @@ use crate::runtime;
 /// The name of what says that the node's scheduler or alarm woke it in
 /// the evaluation, read as `eval` is entered (TIME-9).
 pub(super) const TIMER_WOKE: &str = "timer_woke_";
+
+/// The field holding the timer's dropped-wake count in the node's state.
+pub(super) const DROPPED_WAKES: &str = "dropped_wakes_";
+
+/// The borrowed node used to obtain its logger and clock mode on demand.
+const WAKE_NODE: &str = "wake_node_";
+
+/// Which of a node's hooks can reach a dated schedule call (TIME-8).
+#[derive(Default)]
+pub(super) struct DatedWakes {
+    pub(super) start: bool,
+    pub(super) evaluation: bool,
+    pub(super) stop: bool,
+}
+
+impl DatedWakes {
+    pub(super) fn any(&self) -> bool {
+        self.start || self.evaluation || self.stop
+    }
+}
+
+/// Follow the analysed callees, including specialized value helpers that
+/// a hook hands its scheduler or alarm. A duration call never needs a drop log.
+pub(super) fn dated_wakes(
+    program: &Program,
+    instances: &Instances,
+    states: &[(usize, Option<&Expr>)],
+    start: &[Stmt],
+    running: &[Handler<'_>],
+    stop: &[Stmt],
+) -> DatedWakes {
+    let mut starting = DatedCalls::new(program, instances);
+    for (_, initializer) in states {
+        if let Some(initializer) = initializer {
+            initializer.walk(&mut |expr| starting.call(expr));
+        }
+    }
+    starting.statements(start);
+
+    let mut evaluating = DatedCalls::new(program, instances);
+    for handler in running {
+        for condition in &handler.conditions {
+            condition.walk(&mut |expr| evaluating.call(expr));
+        }
+        evaluating.statements(handler.body);
+    }
+
+    let mut stopping = DatedCalls::new(program, instances);
+    stopping.statements(stop);
+    DatedWakes {
+        start: starting.found(),
+        evaluation: evaluating.found(),
+        stop: stopping.found(),
+    }
+}
+
+/// A worklist of the concrete callable bodies that a hook can reach.
+struct DatedCalls<'a> {
+    program: &'a Program,
+    instances: &'a Instances,
+    seen: HashSet<*const Body>,
+    pending: Vec<&'a Body>,
+    found: bool,
+}
+
+impl<'a> DatedCalls<'a> {
+    fn new(program: &'a Program, instances: &'a Instances) -> Self {
+        Self {
+            program,
+            instances,
+            seen: HashSet::new(),
+            pending: Vec::new(),
+            found: false,
+        }
+    }
+
+    fn statements(&mut self, statements: &[Stmt]) {
+        walk_statements(statements, &mut |expr| self.call(expr));
+    }
+
+    fn call(&mut self, expr: &Expr) {
+        if self.found {
+            return;
+        }
+        let ExprKind::Call {
+            callee, arguments, ..
+        } = &expr.kind
+        else {
+            return;
+        };
+        if let Callee::Anonymous(function) = callee {
+            self.statements(&function.body.statements);
+            return;
+        }
+        let Some((unit, index)) = callee.declaration() else {
+            return;
+        };
+        let module = &self.program.modules[unit];
+        let declaration = &module.declarations[index];
+        if matches!(
+            declaration.kind,
+            DeclarationKind::NativeCandidate(DeclarationRole::Value, _)
+        ) && self.program.core() == Some(unit)
+            && declaration.name == "schedule"
+            && let Some(Detail::Callable(signature)) = module.details.get(index)
+        {
+            self.found = signature
+                .parameters
+                .get(1)
+                .is_some_and(|time| time.ty == Type::Scalar(Scalar::Datetime));
+        }
+        if !matches!(
+            declaration.kind,
+            DeclarationKind::Function(DeclarationRole::Value)
+                | DeclarationKind::Implementation(DeclarationRole::Value, _)
+        ) {
+            return;
+        }
+        let body = if self.instances.instanced(self.program, unit, index) {
+            self.instances
+                .find_call(self.program, callee, arguments)
+                .map(|instance| &instance.body)
+        } else {
+            module.bodies.get(index).and_then(Option::as_ref)
+        };
+        if let Some(body) = body
+            && self.seen.insert(std::ptr::from_ref(body))
+        {
+            self.pending.push(body);
+        }
+    }
+
+    fn found(mut self) -> bool {
+        while !self.found {
+            let Some(body) = self.pending.pop() else {
+                break;
+            };
+            self.statements(&body.statements);
+        }
+        self.found
+    }
+}
 
 /// The name of what says that one of the node's inputs woke it in the
 /// evaluation.
@@ -131,12 +280,23 @@ pub(super) fn capability(name: &str) -> Option<(&'static str, &'static str)> {
     })
 }
 
-/// What the library's capability `name` is made from beside its view in
-/// the hook `hook`: for the scheduler and the alarm, the hook, since what
-/// may be asked of them depends on it (TIME-8: "A wake asked for with a
-/// `duration` takes one more than zero, but in `start`"); nothing for any
-/// other.
-pub(super) fn made_in(name: &str, hook: Hook) -> String {
+/// Bind the node's drop state without reading it or obtaining its logger.
+/// A stop that also schedules reuses the same borrowed node parameter.
+pub(super) fn drop_log(parameters: &mut Vec<String>) -> String {
+    let view = format!("::hgraph::NodeView {WAKE_NODE}");
+    if !parameters.contains(&view) {
+        parameters.push(view);
+    }
+    let library = runtime::NAMESPACE;
+    format!(
+        "::{library}::DroppedWakeLog::bind<state_type_, &state_type_::{DROPPED_WAKES}>({WAKE_NODE})"
+    )
+}
+
+/// The extra arguments for a scheduler or alarm in `hook` (TIME-8): the
+/// hook and, where the hook can schedule a dated wake, the node's drop log.
+/// Other capabilities take only their own view.
+pub(super) fn made_in(name: &str, hook: Hook, dated: bool, parameters: &mut Vec<String>) -> String {
     if Timer::of(name).is_none() {
         return String::new();
     }
@@ -145,7 +305,11 @@ pub(super) fn made_in(name: &str, hook: Hook) -> String {
         Hook::When => "evaluation",
         Hook::Stop => "stop",
     };
-    format!(", ::{}::Hook::{hook}", runtime::NAMESPACE)
+    let mut arguments = format!(", ::{}::Hook::{hook}", runtime::NAMESPACE);
+    if dated {
+        arguments.push_str(&format!(", {}", drop_log(parameters)));
+    }
+    arguments
 }
 
 /// What a node with a scheduler or an alarm, as `context` says, of
@@ -154,7 +318,12 @@ pub(super) fn made_in(name: &str, hook: Hook) -> String {
 /// with neither. It is read once: a handler before another may ask for a
 /// wake under the tag that is due or passivate the input that ticked,
 /// and neither changes what woke the evaluation.
-pub(super) fn woken(context: &Context, body: &Body, inputs: &[usize]) -> String {
+pub(super) fn woken(
+    context: &Context,
+    body: &Body,
+    inputs: &[usize],
+    follows_designations: bool,
+) -> String {
     let Some(timer) = context.timer else {
         return String::new();
     };
@@ -202,10 +371,20 @@ pub(super) fn woken(context: &Context, body: &Body, inputs: &[usize]) -> String 
         Timer::Scheduler => format!("{}.is_scheduled_now()", identifier("scheduler")),
         // TIME-9: "In a node that injects `alarm` it holds where the node
         // is evaluated and no temporal input has ticked."
-        Timer::Alarm => match ticked.as_slice() {
-            [] => "true".to_string(),
-            _ => format!("!({})", ticked.join(" || ")),
-        },
+        Timer::Alarm => {
+            let no_input = match ticked.as_slice() {
+                [] => "true".to_string(),
+                _ => format!("!({})", ticked.join(" || ")),
+            };
+            // FN-16: a hidden follower's wake only refreshes the result.
+            // Where one exists, a wake without an input tick could be
+            // the follower alone, so require a due alarm for the handler.
+            if follows_designations {
+                format!("{}.was_due() && {no_input}", identifier("alarm"))
+            } else {
+                no_input
+            }
+        }
     };
     let indent = INDENT.repeat(2);
     format!(
@@ -394,9 +573,9 @@ impl Emitter<'_> {
         let made = self.capabilities(
             body,
             &injected,
-            &[],
             &reached,
             Hook::Start,
+            false,
             &mut start_parameters,
         )?;
         let mut start_before =
@@ -422,9 +601,9 @@ impl Emitter<'_> {
             let made = self.capabilities(
                 body,
                 &injected,
-                &[],
                 statements,
                 Hook::Stop,
+                false,
                 &mut stop_parameters,
             )?;
             stop_after.push_str(&kept_bound);

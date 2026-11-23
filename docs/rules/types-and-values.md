@@ -136,8 +136,11 @@ transpiler: partial
 
 - Writes structural temporal lists, tuples, structs, sets and dictionaries, including
   atomic struct connections, and maps supported children to endpoints.
-- Left: Reports generic or abstract temporal structs, bundles with unsupported field
-  types, list parts that are sets, dictionaries, windows or atomic structs, nullable
+- Gives concrete struct applications with supported type arguments their own nominal
+  schemas and maps their substituted fields to child endpoints.
+- Left: Reports abstract temporal structs, structs with generic value arguments,
+  bundles with unsupported field or type argument schemas, list parts that are
+  sets, dictionaries, windows or atomic structs, nullable
   aggregate connections, non-scalar temporal keys, and dictionary values outside
   scalars, sets, dictionaries and tuples of supported keyed forms. The family dispatch
   reports unsupported schemas, reads, writes, deltas, constants and traces.
@@ -146,14 +149,15 @@ transpiler: partial
 
 analyser: partial
 
-- A size is a count that is not negative; `unbounded`; size in identity, by value; tuples distinct from lists
+- `list<T>` and `list<T, unbounded>` share one type, instance identity and API documentation type name. Fixed sizes are nonnegative counts and participate in list identity. Tuples have positional identity.
 - A size is read by the one reader (`constant`) as an `i64`: a constant of a module, and a constant expression of those, is its value (UNIT-13); a list constant of another length than its place's size is of another type
 - A size a generic value parameter gives is held where the parameter is given (`values::sizes`): by a struct application written in any type, a construction's and a parent's included, its argument written, defaulted, or worked out from a size expression, through the fields of the structs it applies; and by a call of a generic function, in its parameters and result. A negative count, or no count, is `list.size` there
-- Left: an unsized pattern accepting a fixed size; a size inside a generic body, a local's `list<i64, N - 3>`, which GEN-7 judges once where the body is declared
+- Ordinary and generic value functions accept a fixed-size list at an unsized `list<T>` parameter when the element type agrees.
+- Left: fixed-size connections at unsized inputs, and a size inside a generic body, a local's `list<i64, N - 3>`, which GEN-7 judges once where the body is declared
 
 transpiler: partial
 
-- Writes growing lists and positive fixed-size lists in value code and as connections.
+- Writes growing lists (`list<T>` and `list<T, unbounded>`) and positive fixed-size lists in value code and as connections.
 - Left: Zero-size and unresolved sizes have no C++ representation. Temporal element
   forms follow TYPE-9.
 
@@ -240,6 +244,8 @@ transpiler: partial
 
 - Keeps null distinct from invalidity and silence in nullable scalar and enum
   connections. A supported bundle's absent optional field reads as null.
+- A graph's comparison of a nullable scalar connection with null publishes a
+  Boolean on each input publication, including a published null.
 - Left: Nullable temporal aggregate types and unsupported optional field forms follow
   TYPE-9.
 

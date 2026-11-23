@@ -30,12 +30,12 @@ transpiler: done
 
 ## NUM-4
 
-transpiler: partial
+transpiler: done
 
 - Passes absolute and relative tolerances to the selected numeric equality native, which
   applies the exact and configured comparisons.
-- The execution catalogue registers `numeric.invalid_tolerance`. Emitting it for a
-  negative or nonfinite tolerance is planned in #516.
+- The runtime raises `numeric.invalid_tolerance` for a negative or non-finite
+  tolerance on `==` or `!=`.
 
 ## NUM-5
 
@@ -352,29 +352,38 @@ analyser: partial
 - For a nullable scalar it is the optional TYPE-16 gives it, and for a window the V that arrived
 - A result place takes `CheckedDelta`, including in a generic body such as core's `record`. A nullable place takes the same checked delta and discards its error (ERR-14, ERR-15).
 - A child's `delta_value` needs the child's admission (TIME-1)
-- Left: proof that `x` is valid and modified
+- A direct input's delta read needs its validity admission (TIME-1, TIME-4), as a child's does. This reads no whole collection payload, so it does not require every child to be valid.
+- An admitted result or nullable form needs no static proof of a tick; it handles a cycle with no delta (ERR-14, ERR-15).
 
 transpiler: partial
 
 - Reads current scalar, nullable, collection and window deltas, with checked result
   and nullable forms where selected.
-- Left: Reports unsupported endpoint deltas and window observations, including a node's
-  own window in its `when`. The temporal forms are under TYPE-9.
+- Left: Reports delta reads outside supported endpoint forms. The temporal
+  forms are under TYPE-9.
 
 ## END-4
+
+analyser: done
+
+- `invalidate` takes only the node's own `out`; a direct value or reference input is `endpoint.argument`.
 
 transpiler: partial
 
 - Emits result invalidation, including clearing collection results and reference
   designations, and permits observation of the transition without a modified guard.
-- Left: `invalidate(input)` passes source checking and is declined by the target. The Core operation clears the node's own `out`. Unsupported output shapes follow TYPE-9.
+- Left: unsupported output shapes follow TYPE-9.
 
 ## END-5
+
+analyser: partial
+
+- `activate` and `passivate` in `stop` reject as `input.lifecycle` (TIME-5); the input binding is passive there.
 
 transpiler: partial
 
 - Writes input activity control and suppresses silent no-change collection updates. A window result holds its last arrival until the handler's evaluation finishes (END-9).
-- Left: `activate` and `passivate` in `stop` pass source checking and are declined by the target. TIME-5 specifies a source `input.lifecycle` rejection.
+- Left: unsupported temporal shapes follow TYPE-9.
 
 ## END-6
 
@@ -412,11 +421,13 @@ analyser: partial
 transpiler: partial
 
 - Emits child reads and endpoint observations for supported list, tuple, struct and
-  dictionary projections.
+  dictionary projections. Observes nested dictionary entries, including where a
+  parent key or the final key is absent.
 - Captures each held child's position or key at binding. A valid but incomplete
   dictionary entry fails the whole read, and a wholly unset entry is omitted.
-- Left: The unsupported child forms under EXPR-7 and TYPE-9 are reported, including a
-  nested dictionary entry and unsupported operations on a field or child.
+- Left: The unsupported child forms under EXPR-7 and TYPE-9 are reported, including
+  direct payload reads of nested dictionary entries and unsupported operations on a
+  field or child.
 
 ## END-9
 
@@ -430,9 +441,11 @@ transpiler: partial
 
 - Maps rolling windows to the SDK, writes their arrival publication and reads validity,
   deltas and removed values in supported contexts.
-- Left: Reports a handler selecting on its own window result, access to that result
-  inside its `when`, and reads or operations outside the supported window endpoint
-  forms.
+- A node's body observes its latest staged window arrival, including its
+  retention and endpoint metadata (TIME-7).
+- Left: Reports a handler selecting on its own window result, a native
+  call borrowing that result in its `when`, and unsupported window reads
+  and operations.
 
 ## END-10
 
@@ -443,10 +456,11 @@ analyser: done
 
 transpiler: partial
 
-- A reader observes the designated input or fixed-list child through the reference port,
-  including changes caused by rebinding or removing the target.
-- A scheduler can wake a node that forwards a `ref` parameter.
-- Left: designating a dictionary child and designating an ordinary input in a node with a timer (FN-16).
+- A reader observes the designated input, fixed-list child or dictionary entry through
+  the reference port, including changes caused by rebinding or removing the target.
+- A timer can wake a node that designates an ordinary input. A follower-only wake refreshes
+  the result without running the node's handlers.
+- Left: Unsupported reference destinations follow FN-16.
 
 ## CAP-1
 
@@ -487,11 +501,14 @@ analyser: done
 
 - A scheduler's three properties, `is_scheduled_now` among them; `schedule` with a `duration` or a `datetime`, a `tag` and `on_wall_clock`; `un_schedule`, with a tag or without, and `reset`
 
-transpiler: partial
+transpiler: done
 
 - Supplies scheduler state and writes schedule, cancellation and reset using the SDK
   adapter. Distinguishes due scheduler wakes from input ticks.
-- Dropped datetime wake requests and their run-log warning are planned in #516 (TIME-8).
+- Drops a nonfuture dated request in graph time, except for the node's first
+  evaluation when asked at the current time in `start`. Logs the node's
+  display name and the requested time on its first drop, then counts later
+  drops at stop (TIME-8).
 
 ## CAP-5
 
@@ -500,11 +517,11 @@ analyser: done
 - An alarm has no property, and a node injects it or `scheduler` (TIME-8)
 - `schedule` on it takes a `duration` or a `datetime`, and neither a tag nor a clock
 
-transpiler: partial
+transpiler: done
 
 - Supplies the alarm adapter and emits duration or datetime scheduling, retaining the
   earliest outstanding wake.
-- Dropped datetime wake requests and their run-log warning are planned in #516 (TIME-8).
+- Uses the same dated-wake rules and per-node warning as the scheduler (TIME-8).
 
 ## CAP-6
 
@@ -519,7 +536,8 @@ transpiler: partial
 
 - Reads a store entry as a whole result before applying the recorded form, and writes
   supported ordinary payloads before a run, at graph build and in hooks.
-- Returning `value.missing_key` for an absent store entry is planned in #516.
+- Reading an absent store key gives `value.missing_key`, the same code as a
+  strict dictionary lookup (ERR-6).
 - Left: an explicitly typed nullable store write and a temporal child graph using the surrounding store are declined (CRUN-7).
 
 ## CAP-7
@@ -596,7 +614,8 @@ transpiler: partial
 - Replays scalar publications, whole or delta collection entries, and window arrivals as
   their forms require.
 - Replays a supported nested dictionary.
-- Left: an input of a concrete instantiation of a generic struct cannot yet be replayed. Other schema limits are under TYPE-9 and TYPE-11.
+- Replays supported concrete struct applications with generic type arguments.
+  Remaining schema limits are under TYPE-9 and TYPE-11.
 
 ## CEVAL-4
 
@@ -604,7 +623,8 @@ transpiler: partial
 
 - Records independent timestamp and delta pairs, including an empty recording. A cycle
   that only ages a window adds no entry.
-- Left: a result of a concrete instantiation of a generic struct cannot yet be recorded. Other schema limits are under TYPE-9 and TYPE-16.
+- Records supported concrete struct applications with generic type arguments.
+  Remaining schema limits are under TYPE-9 and TYPE-16.
 
 ## CEVAL-5
 

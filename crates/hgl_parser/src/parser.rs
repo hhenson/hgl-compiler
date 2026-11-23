@@ -119,12 +119,10 @@ pub(crate) enum Choice {
     Operand,
     /// A constraint term is a relation such as `T in {i64, f64}`.
     Relation,
-    /// `switch` starts a switch statement, rather than naming a value.
-    Switch,
-    /// `raises` after `assert` starts a raises assertion.
-    Raises,
     /// A statement that starts with a name is an assignment.
     Assignment,
+    /// A brace and `for` start a pack comprehension instead of a block (FN-19).
+    PackComprehension,
 }
 
 /// The opening brackets that directly follow what they apply to (LEX-27).
@@ -287,7 +285,7 @@ impl<'a> Parser<'a> {
 
     /// True when the token under the cursor is the name `word`.
     ///
-    /// This is how a contextual name such as `const` or `switch` is
+    /// This is how a contextual name such as `const` or `case` is
     /// recognised: the lexer gives it as an identifier and its position
     /// gives it its meaning (LEX-9, LEX-10).
     pub(crate) fn at_word(&self, word: &str) -> bool {
@@ -1126,6 +1124,7 @@ fn starts_a_line(kind: SyntaxKind) -> bool {
             | SyntaxKind::KwFor
             | SyntaxKind::KwWhile
             | SyntaxKind::KwYield
+            | SyntaxKind::KwSwitch
             | SyntaxKind::KwAssert
             | SyntaxKind::KwTest
             | SyntaxKind::KwUse

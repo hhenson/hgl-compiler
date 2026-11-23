@@ -65,6 +65,8 @@ std::optional<std::string> code_raised(Call&& call) {
 }
 
 std::vector<Seen> window_seen;
+std::vector<Seen> staged_seen;
+std::optional<list<i64>> stopped_window;
 
 /// What `window` shows at `at`. Each read that takes its form from its place
 /// is read in both forms (ERR-14), which agree: `ok` of the value or an
@@ -124,10 +126,34 @@ struct Twice {
 
     static void eval(hgraph::In<"reading", hgraph::TS<i64>> reading, hgraph::Out<W> out) {
         hglrt::WindowArrival<hgraph::Out<W>> arrival{out};
+        const auto now = out.evaluation_time();
+        const auto before = seen_of(now, out);
+        const i64 first = hglrt::checked_value(reading);
+        const i64 last = hglrt::add__i64_i64(first, 10);
         arrival.run([&] {
-            arrival.hold(hglrt::checked_value(reading));
-            arrival.hold(hglrt::add__i64_i64(hglrt::checked_value(reading), 10));
+            CHECK(seen_of(now, arrival.observe()) == before);
+            arrival.hold(first);
+            auto expected = seen_of(now, arrival.observe());
+            CHECK(expected.delta == first);
+            CHECK(seen_of(now, out) == before);
+
+            arrival.hold(last);
+            const auto staged = seen_of(now, arrival.observe());
+            expected.delta = last;
+            if (expected.held) {
+                expected.held->back() = last;
+            }
+            CHECK(staged == expected);
+            CHECK(seen_of(now, arrival.observe()) == staged);
+            CHECK(seen_of(now, out) == before);
+            staged_seen.push_back(staged);
         });
+    }
+
+    static void stop(hgraph::Out<W> out) {
+        if (const auto read = hglrt::window_value_checked(out); read.has_value()) {
+            stopped_window = *read;
+        }
     }
 };
 
@@ -154,6 +180,8 @@ struct WrittenThenFailed {
 template <class W, template <class> class Writer = Collect>
 void watched(const Dense<i64>& reading) {
     window_seen.clear();
+    staged_seen.clear();
+    stopped_window.reset();
     (void)hglrt::testing::run([reading](hgraph::Wiring& wiring, datetime) {
         auto replayed =
             hgraph::wire<hglrt_test::Replay>(wiring, hglrt::testing::replay_items(reading, start));
@@ -218,6 +246,25 @@ TEST_CASE("two writes of a window in one evaluation are its one arrival (END-5, 
               {start + 1us, true, true, true, 12, std::nullopt, list<i64>{11, 12}, start + 1us},
               {start + 2us, true, true, true, 13, 11, list<i64>{12, 13}, start + 2us},
           });
+    // TIME-7: each observation sees the staged arrival. Other nodes
+    // and stop see only the arrival finally published.
+    CHECK(staged_seen == window_seen);
+    CHECK(stopped_window == list<i64>{12, 13});
+}
+
+TEST_CASE("staged duration window reads preserve the cycle's expiry (TIME-7, END-9)") {
+    watched<hgraph::TSWDuration<i64, 3, 1>, Twice>(
+        Dense<i64>{1, 2, std::nullopt, std::nullopt, std::nullopt, 3});
+    std::vector<Seen> published;
+    for (const auto& seen : window_seen) {
+        if (seen.delta.has_value()) {
+            published.push_back(seen);
+        }
+    }
+    REQUIRE(published.size() == 3);
+    CHECK(staged_seen == published);
+    CHECK(staged_seen.back().at == start + 5us);
+    CHECK(staged_seen.back().removed == 12);
 }
 
 TEST_CASE("a window written before a failure holds the arrival (ERR-8)") {

@@ -84,6 +84,7 @@ analyser: done
 - A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`; a source is held to the same
 - A state's initialiser reads no temporal input (`state.input_read`)
 - `start` reads no temporal input and gives none to an endpoint operation (`input.lifecycle`); `stop` reads one under manual admission, each read under a guard (`payload.unguarded`), a struct's, a tuple's or a fixed list's whole read under its `all_valid` (TIME-4)
+- Inputs are passive in `stop`; `activate` and `passivate` there are `input.lifecycle`.
 - A cache's initialiser reads no temporal input (`cache.input_read`, TIME-6).
 - A read in an anonymous function written in any of them is held to the same
 
@@ -114,11 +115,14 @@ analyser: partial
 transpiler: partial
 
 - Publishes returns, whole `out` assignments and supported struct or tuple child writes.
-  A source yields whole values or deltas, and a window holds the last arrival of the
-  evaluation.
-- Left: Reports plain reads of `out` or its children, unsupported output writes or child
-  places, and a read of a node's own window in its `when`. Other unsupported publication
-  forms are under TYPE-9.
+  A source yields whole values or deltas. A window result exposes its latest
+  staged arrival to reads in the handler body, and publishes the last arrival once.
+  Validity, modification time, and delta reads use the staged arrival directly.
+  The first read of retained data after each write copies the samples in time
+  and space proportional to their count. A later read reuses that copy until
+  another write or withdrawal.
+- Left: Reports unsupported reads and writes of `out` and its children.
+  Other publication forms are under TYPE-9 and window observation limits are under END-9.
 
 ## TIME-8
 
@@ -127,8 +131,8 @@ analyser: partial
 - `inject` names one of the listed capabilities and binds each but `out` to a local of the type core declares for it; `alarm` and `scheduler` in one node are rejected (`inject.alarm_and_scheduler`)
 - `run_config` is an application's and an integration test's, and no function's (`inject.position`, RUN-6); braces after any other capability are `inject.configuration`
 - A key of the global store written out is used with one type in a program: a `put` or a `get` of another type than its earlier use is `store.key_type`, at the later use
-- A capability type written other than as the whole type of a parameter of a `const fn` or a native value function, and a capability that is the value of a `state` or `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published, is rejected (`capability.as_value`); a `let` and an argument of a parameter of its type are uses, one given to a parameter written as a generic parameter or `any` is rejected (hhenson/hgl_spec#73), and a property is read with its type (NATIVE-6)
-- The exception for naming a capability type in an operator declaration's membership is planned in #562 (GEN-3).
+- A capability type may be written as the whole type of a parameter of a `const fn` or native value function, or as a type listed in an operator declaration's membership (GEN-3). Other positions reject with `capability.as_value`.
+- The analyser reports `capability.as_value` for a capability held in `state`, `cache`, a tuple, list, set, dictionary or struct, returned or published, or given to a parameter written as a generic parameter or `any` (hhenson/hgl_spec#73). A `let` and an argument to a parameter of its type are uses. A property is read with its type (NATIVE-6).
 - A capture by an anonymous function is reported: of the injected name by the resolver (`name.captured`, FN-14), and of a `let` it is bound to or a parameter of its type here
 - A wake asked of the scheduler or the alarm, a call of core's `schedule`, with a duration the compiler sees, a literal, a constant or a constant expression of them, that is not more than zero rejects (`schedule.duration_bounds`): in `start` a negative one, and in a `when` or `stop` zero too; in a value function given the capability a negative one, and a zero is left to the target, since the rule does not say whether a call there is in `start`
 
@@ -136,7 +140,10 @@ transpiler: partial
 
 - Supplies the declared node, source and application capabilities, including timers and
   run configuration. Wires them before initializers that read them.
-- Dropping a datetime wake at or before evaluation time, except for an equal-time request in `start`, is planned in #516. The first dropped request warns once per node, and further requests are counted for its stop log.
+- Drops a graph-time `datetime` wake at or before the evaluation time, except
+  for an equal-time request in `start`. The first drop warns once per node
+  with its display name and the requested time. At stop, the node logs the
+  number of further drops.
 - Left: Unknown or unavailable injections are reported, including graph injections other
   than the store. A nested child graph cannot read capabilities captured from its parent
   (CTRL-2).
@@ -149,6 +156,7 @@ analyser: partial
 - An `endpoint<T>` parameter of a native value function is given an input by its name, a child of one, or `out`, in a hook, and its payload is not read; anything else, and any argument in a graph or a value function, is `endpoint.argument`
 - Core declares the endpoint operations, including `delta_value` (UNIT-12)
 - `scheduled()` in a node that injects neither `scheduler` nor `alarm` is `inject.no_scheduler`: in a hook, a `state`'s or a `cache`'s initialiser, and a source's body (SOURCE-1)
+- The unqualified call still selects the wake when the same name binds a declaration or a local (UNIT-10).
 - `scheduled()` in a value function, a graph or a test, which is no node, is `scheduled.outside_node` (FN-9)
 - `scheduled()` in `start` or `stop` is `scheduled.lifecycle`, wherever it stands in the hook, beside `inject.no_scheduler` in a node that injects neither
 - `scheduled()` in an anonymous function is judged where the function is written, each of the above (FN-14), wherever it is called; so is every endpoint operation in one, by what it is given (`endpoint.argument`: the function's own parameter or `let` is no input), how many arguments and generic arguments it takes, and the type its generic argument names
@@ -177,5 +185,5 @@ analyser: done
 transpiler: partial
 
 - Uses hgraph reference ports to follow endpoint rebinding without re-evaluating the
-  designating node. Supports sampled, whole-input and fixed-list child designations.
+  designating node. Supports sampled, whole-input, fixed-list child and dictionary entry designations.
 - Left: Unsupported targets and output combinations are listed under FN-16.

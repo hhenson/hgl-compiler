@@ -15,9 +15,9 @@
 # 2. Both in one tree: the debug tree is verified (release-bundle.py
 #    verify-debug); a debug build links the debug libraries beside hgl, says
 #    so, and runs; a debugger stops in an engine frame of it with its file,
-#    line and locals; and the release's optimised library resolves an engine
-#    function to its file and line through its symbol file, in a live process
-#    and in a core file of it on Linux.
+#    line and locals. The release's optimised engine and fmt libraries
+#    resolve functions to files and lines through their symbol files. On
+#    Linux the engine's line is also checked in a live process and core file.
 #
 # The debuggers look for symbol files beside the libraries alone, never in a
 # directory or service of the machine's: gdb is given an empty debug file
@@ -34,9 +34,17 @@ fail() {
 
 [[ $# -eq 1 ]] || fail "usage: $0 DIRECTORY"
 archives=$(cd -- "$1" && pwd -P)
+source scripts/hgraph-dependencies.sh
+fmt_major=${FMT_VERSION%%.*}
 case "$(uname -s)-$(uname -m)" in
-    Darwin-arm64) platform=macos-arm64 target=aarch64-apple-darwin suffix=dylib checksum=(shasum -a 256) ;;
-    Linux-x86_64) platform=linux-x86_64 target=x86_64-unknown-linux-gnu suffix=so checksum=(sha256sum) ;;
+    Darwin-arm64)
+        platform=macos-arm64 target=aarch64-apple-darwin suffix=dylib checksum=(shasum -a 256)
+        fmt_library=libfmt.$fmt_major.dylib
+        ;;
+    Linux-x86_64)
+        platform=linux-x86_64 target=x86_64-unknown-linux-gnu suffix=so checksum=(sha256sum)
+        fmt_library=libfmt.so.$fmt_major
+        ;;
     *) fail "runs on Apple silicon macOS or x86-64 Linux" ;;
 esac
 version=$(python3 scripts/release-bundle.py version)
@@ -44,6 +52,7 @@ name=hgl-$version-$platform
 debug_name=hgl-debug-$version-$platform
 fixtures=$PWD/crates/hgl_cpp/tests/fixtures
 program=("$fixtures/demo.apps.hgl" "$fixtures/demo.apps.backtest.hgl")
+fmt_function=fmt::v${fmt_major}::assert_fail
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/hgl-check-debug.XXXXXX")
 scratch=$(cd -- "$scratch" && pwd -P)
@@ -108,14 +117,13 @@ launch = json.load(open(sys.argv[1]))
 print("\n".join([launch["executable"], *launch["arguments"]]))' "$1"
 }
 
-# What the platform's debugger says of the engine function at its address in
-# hgraph's runtime library $1, read alone.
-lookup_engine() {
+# What the platform's debugger says of function $2 in shared library $1.
+lookup_symbol() {
     if [[ $platform == linux-x86_64 ]]; then
-        "${gdb[@]}" -ex 'info line hgraph::NodeView::global_state' "$1" 2>&1
+        "${gdb[@]}" -ex "info line $2" "$1" 2>&1
     else
         "${lldb[@]}" -o "target create '$1'" \
-            -o 'image lookup -v -n hgraph::NodeView::global_state' 2>&1
+            -o "image lookup -v -n $2" 2>&1
     fi
 }
 
@@ -210,13 +218,22 @@ grep -qx "hgl: a debug build, with hgraph's optimised libraries in .*: the \`hgl
     fail "the release alone said: $said"
 [[ $(json "$scratch/alone.json" hgraph libraries) == optimised ]] || fail "the release alone did not link the optimised libraries"
 run_described "$scratch/alone.json"
-looked=$(lookup_engine "$alone/$name/libexec/hgraph-sdk/lib/libhgraph_runtime.$suffix")
+looked=$(lookup_symbol "$alone/$name/libexec/hgraph-sdk/lib/libhgraph_runtime.$suffix" hgraph::NodeView::global_state)
 printf '%s\n' "$looked"
 ! grep -q 'node\.cpp' <<<"$looked" || fail "the release alone found a line of the engine"
+# Open the install-name link that a program loads, especially on macOS
+# where the sibling dSYM is named for that link.
+looked=$(lookup_symbol "$alone/$name/libexec/hgraph-deps/lib/$fmt_library" "$fmt_function")
+printf '%s\n' "$looked"
+grep -q 'assert_fail' <<<"$looked" || fail "the release alone found no fmt symbol"
+! grep -Eq '^Line [0-9]+ of |^[[:space:]]*LineEntry:' <<<"$looked" ||
+    fail "the release alone found a line of fmt"
 
 echo "== the release with hgl-debug"
 tar -xzf "$archives/$name.tar.gz" -C "$both"
 tar -xzf "$archives/$debug_name.tar.gz" -C "$both"
+stamp=$both/$name/libexec/hgraph-debug/hgl-debug.txt
+[[ -f $stamp && $(<"$stamp") == "$version" ]] || fail "the debug archive has no stamp for hgl $version"
 python3 scripts/release-bundle.py verify-debug --target "$target" "$both/$name"
 said=$(debug_build "$both" "$scratch/both")
 grep -qx "hgl: a debug build, with hgraph's debug libraries in .*/libexec/hgraph-debug, installed beside hgl" <<<"$said" ||
@@ -236,9 +253,13 @@ else
 fi
 
 # The release's optimised library, through its symbol file.
-looked=$(lookup_engine "$both/$name/libexec/hgraph-sdk/lib/libhgraph_runtime.$suffix")
+looked=$(lookup_symbol "$both/$name/libexec/hgraph-sdk/lib/libhgraph_runtime.$suffix" hgraph::NodeView::global_state)
 printf '%s\n' "$looked"
 grep -q 'node\.cpp' <<<"$looked" || fail "the release's library found no line of the engine with hgl-debug"
+looked=$(lookup_symbol "$both/$name/libexec/hgraph-deps/lib/$fmt_library" "$fmt_function")
+printf '%s\n' "$looked"
+grep -Eq '^Line [1-9][0-9]* of "/hgl-release/fmt/[^\"]+"|^[[:space:]]*LineEntry: .* /hgl-release/fmt/[^:]+:[1-9][0-9]*' <<<"$looked" ||
+    fail "the release's library found no line of fmt with hgl-debug"
 if [[ $platform == linux-x86_64 ]]; then
     # An ordinary build, and its executable stopped in the engine with a core
     # file written, then the core file read.

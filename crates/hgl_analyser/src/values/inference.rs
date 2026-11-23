@@ -11,7 +11,7 @@ use super::candidates::typed_by_place;
 use super::constants::{constant_text, generic_default};
 use super::control::value_of_branch;
 use super::dependent_packs::{PackTypes, dependent_slot};
-use super::evals::{holds_trace, publications, trace_input_type, trace_pack_type};
+use super::evals::{publications, trace_input_type, trace_pack_type};
 use super::expressions::{holds_block, takes_its_type, written_null};
 use super::fit::{not_null, open, whole};
 use super::forms::Taken;
@@ -825,10 +825,16 @@ impl<'a> Typer<'a> {
                 self.infer_function_argument(&entry.value, pattern, generics, &mut found);
             }
         }
-        if let Some((result, requested)) = result_fallback {
+        // A nullable place supplies no final bare success type (GEN-2).
+        // The probe of a value given to a ref result still reports the
+        // endpoint mismatch when the value has no fault of its own.
+        if let Some((result, place)) = result_fallback
+            && (!matches!(place, Type::Nullable(_))
+                || self.designating == Some(Location::new(self.file, name.span())))
+        {
             infer(
                 result,
-                not_null(Some(requested)).unwrap_or(requested),
+                not_null(Some(place)).unwrap_or(place),
                 generics,
                 &mut found,
             );
@@ -915,6 +921,8 @@ impl<'a> Typer<'a> {
                 };
                 let pattern = patterns[index];
                 let traced = matches!(pattern, Type::Trace { .. });
+                let reflected_trace = matches!(pattern, Type::Trace { cell, .. }
+                    if cell.any_part(&|ty| matches!(ty, Type::PackMember { .. }), &|_| false));
                 let mut resolved_type = |ty| {
                     let ty = pack_types.project(ty, &map).unwrap_or_else(|missing| {
                         self.pack_member_fault(self.at(node), &missing);
@@ -928,9 +936,11 @@ impl<'a> Typer<'a> {
                 let ty = match (written_type, pattern) {
                     (Some(ty), Type::Trace { .. }) => trace_input_type(ty.clone()),
                     (Some(ty), _) => ty.clone(),
-                    // TST-5: form the publication type after a homogeneous
-                    // or heterogeneous pack's input type is substituted.
-                    (None, Type::Trace { cell, .. }) if pack.is_some() && names_parameter(cell) => {
+                    // TST-5 and GEN-17: form the publication type after a
+                    // pack input or a reflected member type is substituted.
+                    (None, Type::Trace { cell, .. })
+                        if reflected_trace || pack.is_some() && names_parameter(cell) =>
+                    {
                         trace_input_type(resolved_type(cell))
                     }
                     (None, _) => resolved_type(pattern),
@@ -968,15 +978,15 @@ impl<'a> Typer<'a> {
                 // `same(repeat(1), repeat(2))`. `null` and `.member`
                 // have no reading of their own. An unwritten type pack
                 // learns each argument's type separately (GEN-8). A
-                // captured eval trace stays a trace even when its cells
-                // give no type (TST-5).
+                // captured or reflected eval input stays a trace while
+                // its cells' type is settled (TST-5).
                 let unfound_type = match slot.type_pack {
                     Some(parameter) => written_pack.is_none_or(|(given, _)| given != parameter),
                     None => mentions(patterns[index], &unfound),
                 };
                 let placeless = *settled
                     && !matches!(slot.ty, Type::Function(_))
-                    && !(traced && pack.is_some())
+                    && !(reflected_trace || traced && pack.is_some())
                     && !takes_its_type(node)
                     && !depends_on_instance
                     && unfound_type;
@@ -1038,34 +1048,11 @@ impl<'a> Typer<'a> {
                             value,
                         }
                     }
-                    // A value that holds a trace is the place's to
-                    // report where the call is finished (TST-3), and is
-                    // not held to its type.
-                    Some(value) if !traced && holds_trace(&value.ty) => hir::Argument {
+                    Some(value) => hir::Argument {
                         parameter: Some(index),
                         pack: None,
-                        value,
+                        value: self.fit_prepared_argument(value, &slot, traced, takes),
                     },
-                    Some(value) if self.lifted_window(&slot.ty, slot.listed, &value, takes) => {
-                        hir::Argument {
-                            parameter: Some(index),
-                            pack: None,
-                            value,
-                        }
-                    }
-                    Some(value) => {
-                        let place = format!("the {} `{}`", takes.noun(), slot.name);
-                        let value = if takes == Takes::Parameters {
-                            self.fit_input(value, &slot.ty, &place)
-                        } else {
-                            self.fit(value, &slot.ty, &place)
-                        };
-                        hir::Argument {
-                            parameter: Some(index),
-                            pack: None,
-                            value,
-                        }
-                    }
                     None if traced && written_type.is_none() && slot.type_pack.is_some() => {
                         self.infer_trace_pack_argument(index, node, &slot)
                     }
@@ -1435,7 +1422,7 @@ pub(super) fn infer(
 /// fallible result can also be read from a nullable success (ERR-12,
 /// ERR-15). In that case a bare success parameter can be decided by
 /// the inputs first, such as a dictionary's value type in `get`.
-/// The returned pair supplies the output constraint during inference.
+/// The returned pair preserves that argument context during inference.
 pub(super) fn infer_from_place<'r, 'p>(
     result: &'r Type,
     requested: &'p Type,
@@ -1452,7 +1439,6 @@ pub(super) fn infer_from_place<'r, 'p>(
     };
     if !written && matches!(result, Type::Parameter { .. }) {
         if fallible {
-            // A store read's inputs say nothing of V (core CAP-6).
             return Some((result, requested));
         }
         if matches!(requested, Type::Nullable(_)) {

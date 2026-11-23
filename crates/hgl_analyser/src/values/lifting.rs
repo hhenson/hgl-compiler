@@ -196,12 +196,7 @@ fn check_const_arguments(
 /// GEN-7: a selected temporal candidate can make a formerly unsettled
 /// argument or a loop condition a connection. Check the graph's
 /// constant places after recording the instance.
-pub(super) fn check_instance_constants(
-    program: &Program,
-    body: &Body,
-    from: &[Location],
-    diagnostics: &mut Diagnostics,
-) {
+pub(super) fn instance_constants(program: &Program, body: &Body) -> Diagnostics {
     let mut reports = Diagnostics::new();
     walk_statement_nodes(&body.statements, &mut |node| match node {
         Node::Expression(value) => {
@@ -217,12 +212,7 @@ pub(super) fn check_instance_constants(
         }
         _ => {}
     });
-    report_instance_checks(
-        &reports,
-        from,
-        diagnostics,
-        "this place in the generic body needs a value",
-    );
+    reports
 }
 
 pub(super) fn report_instance_checks(
@@ -296,8 +286,14 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
         // EXPR-16: a range has ordinary bounds. Its loop variable does
         // not become a connection even when a bound was reported.
         ExprKind::Range { .. } => Value,
-        // EXPR-17: the graph builds a fixed list of connections, even
-        // when one or more entries compose as ordinary constants.
+        // EXPR-17: a graph range takes the category of its entries.
+        // Iteration over a list connection always gives a connection.
+        ExprKind::ListComprehension {
+            composition: true,
+            sequence,
+            entry,
+            ..
+        } if matches!(sequence.kind, ExprKind::Range { .. }) => category(entry),
         ExprKind::ListComprehension {
             composition: true, ..
         } => Connection,
@@ -526,6 +522,7 @@ pub(super) fn record_with(
                             binding,
                             sequence,
                             entry,
+                            ordinary_size,
                         },
                     ty,
                     ..
@@ -537,6 +534,22 @@ pub(super) fn record_with(
                         std::slice::from_ref(binding),
                     );
                     match ty {
+                        Type::Unknown if matches!(sequence.kind, ExprKind::Range { .. }) => {
+                            let entry_category = category(program, locals, entry);
+                            if entry_category != Unsettled
+                                && let Some(extent) = fixed_list_extent(&sequence.ty)
+                            {
+                                *ty = Type::List {
+                                    element: Box::new(entry.ty.clone()),
+                                    size: if entry_category == ValueCategory::Connection {
+                                        Some(extent.clone())
+                                    } else {
+                                        ordinary_size.clone()
+                                    },
+                                };
+                                settling = true;
+                            }
+                        }
                         Type::Unknown
                             if category(program, locals, sequence) == ValueCategory::Connection =>
                         {

@@ -1,6 +1,7 @@
 //! The build command and the application and debugger paths that use it.
 
-use std::collections::BTreeSet;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -15,7 +16,7 @@ use super::application::{self, RanApplication};
 use super::build::{Interrupt, Workspace};
 use super::plan::{self, Action};
 use super::stamp::debug_source_path;
-use super::{BuildSession, BuiltProgram, Replacements, sdk};
+use super::{BuildSession, BuiltProgram, DEBUG_SOURCES, Replacements, sdk};
 use crate::{
     BuildArgs, BuildFormat, EXIT_FAILED, EXIT_REJECTED, LimitArgs, ProgramSources, RunArgs,
     TestArgs, count,
@@ -40,6 +41,14 @@ pub(super) enum BuildStart {
     Miss(ProgramSources, Result<(BuildSession, String), String>),
 }
 
+/// Whether a test front-end failure also prints the ordinary stdout summary.
+pub(super) enum TestFailure {
+    /// Keep the ordinary test summary on stdout.
+    Summary,
+    /// Reserve stdout for the debugger's JSON description.
+    DiagnosticsOnly,
+}
+
 impl<'a> BuildRequest<'a> {
     pub(super) fn tests(arguments: &'a TestArgs) -> Self {
         Self {
@@ -58,6 +67,33 @@ impl<'a> BuildRequest<'a> {
         }
     }
 
+    /// The same test inventory in a persistent debug workspace.
+    pub(super) fn debug_tests(arguments: &'a TestArgs, directory: &'a Path) -> Self {
+        Self {
+            keep: Some(directory),
+            debug: true,
+            ..Self::tests(arguments)
+        }
+    }
+
+    /// Opens the workspace and derives its key from the input snapshot.
+    pub(super) fn keyed_session(
+        &self,
+        inputs: &ProgramSources,
+    ) -> Result<(BuildSession, String), String> {
+        let session = BuildSession::open(self.roots, self.keep, self.debug)?;
+        self.with_key(session, inputs)
+    }
+
+    fn with_key(
+        &self,
+        session: BuildSession,
+        inputs: &ProgramSources,
+    ) -> Result<(BuildSession, String), String> {
+        let key = session.key(inputs, self.limits, &self.replacements)?;
+        Ok((session, key))
+    }
+
     pub(super) fn start(&self, paths: Option<&[PathBuf]>) -> Result<BuildStart, ExitCode> {
         let session = BuildSession::open(self.roots, self.keep, self.debug);
         let inputs = match paths {
@@ -73,10 +109,7 @@ impl<'a> BuildRequest<'a> {
                 return Err(status);
             }
         };
-        let session = session.and_then(|session| {
-            let key = session.key(&inputs, self.limits, &self.replacements)?;
-            Ok((session, key))
-        });
+        let session = session.and_then(|session| self.with_key(session, &inputs));
         let session = match session {
             Ok((mut session, key)) => {
                 if (!self.compile_commands || session.workspace.manifest().is_file())
@@ -99,7 +132,7 @@ impl<'a> BuildRequest<'a> {
             }
             BuildStart::Miss(inputs, session) => (inputs, session),
         };
-        let (output, program, chosen) = self.prepare(&inputs)?;
+        let (output, program, chosen) = self.prepare(&inputs, TestFailure::Summary)?;
         if (self.running || self.debug)
             && let Some(path) = &chosen
         {
@@ -119,16 +152,23 @@ impl<'a> BuildRequest<'a> {
         ))
     }
 
-    fn prepare(
+    pub(super) fn prepare(
         &self,
         inputs: &ProgramSources,
+        failure: TestFailure,
     ) -> Result<(Output, plan::Program, Option<String>), ExitCode> {
         let limits = self.limits.limits();
         let has_replacements =
             !self.replacements.arguments.is_empty() || !self.replacements.configuration.is_empty();
         if self.tests && !has_replacements {
             let parsed = crate::parse_sources(inputs, limits, None, true)?;
-            return self.prepare_tests(parsed.sources, &parsed.files, &parsed.diagnostics, None);
+            return self.prepare_tests(
+                parsed.sources,
+                &parsed.files,
+                &parsed.diagnostics,
+                None,
+                failure,
+            );
         }
         let checked = crate::prepare_program(
             inputs,
@@ -144,6 +184,7 @@ impl<'a> BuildRequest<'a> {
                 &checked.parsed,
                 &checked.front_end,
                 checked.original_source.as_ref(),
+                failure,
             );
         }
         let output = self.lower(
@@ -161,10 +202,15 @@ impl<'a> BuildRequest<'a> {
         files: &[hgl_analyser::ParsedFile],
         front_end: &Diagnostics,
         original_source: Option<&(hgl_source::SourceFile, crate::replace::SourceEdits)>,
+        failure: TestFailure,
     ) -> Result<(Output, plan::Program, Option<String>), ExitCode> {
         let checked = hgl_runner::prepare_all(&sources, files, front_end, &Selection::default());
         let Some(program) = checked.program else {
-            return Err(crate::print_report(&sources, &checked.report));
+            return Err(crate::print_test_prevention(
+                &sources,
+                &checked.report,
+                matches!(failure, TestFailure::Summary),
+            ));
         };
         let output = self.lower(&program, &sources, original_source);
         let program = plan::Program::new(&output, Some(&checked.report), &sources);
@@ -182,8 +228,10 @@ impl<'a> BuildRequest<'a> {
         sources: &SourceMap,
         original_source: Option<&(hgl_source::SourceFile, crate::replace::SourceEdits)>,
     ) -> Output {
+        let bundled = RefCell::new(BTreeMap::new());
         let position = |at: Location, line: usize| {
-            let name = sources.file(at.file).name();
+            let source = sources.file(at.file);
+            let name = source.name();
             let line = match original_source {
                 Some((original, edits)) if original.name() == name => {
                     original.line_index(edits.original_offset(at.span.start)?) + 1
@@ -191,13 +239,35 @@ impl<'a> BuildRequest<'a> {
                 _ => line,
             };
             let path = if self.debug {
-                debug_source_path(name)
+                if let Some(path) = bundled_debug_source(name) {
+                    bundled.borrow_mut().insert(path.clone(), source.text());
+                    path
+                } else {
+                    debug_source_path(name)
+                }
             } else {
                 name.to_string()
             };
             Some((path, line))
         };
-        hgl_cpp::transpile_with_positions(program, &position, &mut Diagnostics::new())
+        let mut unwritten = Diagnostics::new();
+        if self.debug {
+            let mut output = hgl_cpp::transpile_for_debugger(program, &position, &mut unwritten);
+            output
+                .files
+                .extend(
+                    bundled
+                        .into_inner()
+                        .into_iter()
+                        .map(|(path, text)| hgl_cpp::File {
+                            path,
+                            text: text.to_string(),
+                        }),
+                );
+            output
+        } else {
+            hgl_cpp::transpile_with_positions(program, &position, &mut unwritten)
+        }
     }
 
     fn failed(&self, path: Option<&str>, reason: String) -> ExitCode {
@@ -209,6 +279,17 @@ impl<'a> BuildRequest<'a> {
         }
         build_error(reason)
     }
+}
+
+/// Store the supplied Core sources named by debug lines. The `.source`
+/// suffix keeps project discovery from reading a generated copy as HGL.
+fn bundled_debug_source(name: &str) -> Option<String> {
+    let (name, _) = hgl_analyser::CORE_FILES
+        .iter()
+        .find(|(file, _)| *file == name)?;
+    let relative = name.strip_prefix("<core>/")?;
+    let relative = relative.strip_prefix("core/").unwrap_or(relative);
+    Some(format!("{DEBUG_SOURCES}/{relative}.source"))
 }
 
 pub(super) fn build_error(reason: String) -> ExitCode {
@@ -305,7 +386,7 @@ fn legacy_debug(
 ) -> Result<serde_json::Value, ExitCode> {
     let interrupt = Interrupt::watch(None).map_err(build_error)?;
     let inputs = ProgramSources::read(request.roots)?;
-    let (output, program, chosen) = request.prepare(&inputs)?;
+    let (output, program, chosen) = request.prepare(&inputs, TestFailure::Summary)?;
     let chosen =
         chosen.ok_or_else(|| build_error("the program has no application to run".into()))?;
     let app = runnable_application(&program, &chosen, true)?;

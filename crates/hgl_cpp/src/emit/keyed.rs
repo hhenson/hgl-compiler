@@ -18,11 +18,12 @@
 //! A set's element and a dictionary's key are a scalar, which hgraph
 //! holds as a value of its own; a dictionary's value is a scalar, a set,
 //! a dictionary or a tuple of such positions, whose form the library
-//! converts, a tuple's an entry read whole as a tuple is (TIME-1). Every
-//! other one, a constant connection of a set or a dictionary (FN-3) and an
-//! entry of an entry (`book["a"]["b"]`), are not written yet, and are
-//! reported. A key's child as a connection of a graph (EXPR-7) is the
-//! `references` family's, a designation of the entry.
+//! converts (TIME-1). This family reports unsupported temporal forms,
+//! constant connections of sets and dictionaries (FN-3), and direct
+//! payload reads of nested entries (`book["a"]["b"]`). Observations of
+//! nested entries (END-8) use the `endpoints` family's view of the complete
+//! path. A key's child as a graph connection (EXPR-7) is the `references`
+//! family's, a designation of the entry.
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind};
 use hgl_analyser::{Scalar, Type};
@@ -178,7 +179,7 @@ impl Family for Keyed {
                 Some(format!("::{library}::fn_all_valid({view})"))
             }
             // END-1 to END-3, END-6 of an entry (TIME-9).
-            ExprKind::ChildEndpoint { operation, child } => {
+            ExprKind::ChildEndpoint { operation, child } if !nested_dictionary_entry(child) => {
                 let (view, key) = match entry_of(emitter, scope, child)? {
                     Ok(entry) => entry,
                     Err(reported) => return Some(reported),
@@ -208,6 +209,9 @@ impl Family for Keyed {
                 else {
                     return None;
                 };
+                if nested_dictionary_entry(child) {
+                    return None;
+                }
                 let (view, key) = match entry_of(emitter, scope, child)? {
                     Ok(entry) => entry,
                     Err(reported) => return Some(reported),
@@ -246,6 +250,16 @@ impl Family for Keyed {
             _ => None,
         }
     }
+}
+
+/// An observation of an entry in a nested dictionary uses the endpoint
+/// family's recursive view, which also represents a missing parent (END-8).
+fn nested_dictionary_entry(child: &Expr) -> bool {
+    matches!(
+        &child.kind,
+        ExprKind::Index { base, .. }
+            if matches!(base.ty, Type::Dict { .. }) && matches!(base.kind, ExprKind::Index { .. })
+    )
 }
 
 /// The view of the dictionary input and the C++ of the key, where `read`

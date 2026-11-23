@@ -6,8 +6,9 @@
 //!
 //! Each statement of the test is told to the runtime library's test
 //! host before it runs, `::hglrt::testing::statement()`, which takes the
-//! line it is called on, so that a failure names the statement that was
-//! running. A test's statements are written as a value function's are
+//! line it is called on. Ordinary builds record a generated line. Debugger
+//! builds give the marker and the statement the same HGL line. A test's
+//! statements are written as a value function's are
 //! (`statements`), and two are a test's own: `assert condition` is
 //! `::hglrt::testing::check(condition)` (TST-4), and `assert
 //! raises("code") { ... }` is `::hglrt::testing::raises("code", ...)`
@@ -57,19 +58,24 @@ impl Emitter<'_> {
         let mut scope = Scope::cold(self.program, body);
         scope.testing = true;
         let mut text = format!("void {}()\n{{\n", names::test_identifier(test, index));
+        text = self.debug_stamp(test.at, text);
         for statement in &body.statements {
-            // The line the statement starts on, counted from 0 in the
-            // piece's text.
-            let line = text.matches('\n').count();
-            self.piece
-                .statements
-                .push((line, statement_at(statement, &body.locals)));
             // ERR-1: preserve the source statement of a runtime failure.
+            let at = statement_at(statement, &body.locals);
+            let directive = self.debug_position(at);
+            let line = text.matches('\n').count() + usize::from(directive.is_some());
+            self.piece.statements.push((line, at));
             let marked = names::testing("statement");
-            text.push_str(&format!("{INDENT}{marked}();\n"));
+            let marker = format!("{INDENT}{marked}();\n");
+            if let Some(directive) = directive {
+                text.push_str(&super::stamped(&directive, &marker));
+            } else {
+                text.push_str(&marker);
+            }
             self.statement(&mut scope, statement, 1, &mut text);
         }
-        text.push_str("}\n");
+        let end = test.syntax.text_range().end().into();
+        text.push_str(&self.debug_end(test.at, end, "}\n".to_string()));
         self.piece.text = text;
     }
 

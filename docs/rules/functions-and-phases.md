@@ -35,7 +35,8 @@ analyser: partial
 transpiler: partial
 
 - Emits calls in their analysed phase and wires supported ordinary values as constant
-  connections.
+  connections. A supported fixed-size list publishes its positions together at graph start
+  (TIME-7), whether written as a literal or made by a loop.
 - Left: A read of a connection outside an admitted phase, an ordinary call of a temporal
   function, unsupported connection expressions and constant connections of sets or
   dictionaries are reported.
@@ -191,7 +192,7 @@ analyser: partial
 - It is not left out though its type is nullable (`argument.missing`)
 - A place is of the parameter's type exactly: one of a type the parameter's only admits, an `i64` place for an `i64?` parameter or a struct's for its abstract parent's, is `type.mismatch`
 - The call is held to what an assignment of the place is: a property of a native value or of a delta is `binding.immutable` (NATIVE-6, TYPE-16), and in a graph a `var` of an ordinary value in a branch selected at runtime is `binding.category` (CTRL-14) and one declared outside a loop that still makes a child for each member local `loop.carried` (CTRL-15, #373)
-- Left: a native implementation part's `var` marks matched with its declaration's (NATIVE-2)
+- A native implementation part's `var` marks match its declaration's (NATIVE-2)
 
 transpiler: partial
 
@@ -216,16 +217,16 @@ analyser: partial
 - An assignment to a part of `out` of a `ref` result in a `when`, `out.bid = x`, `out[0] = x`, at any depth and compound, is `binding.immutable`: "A `ref` result designates one endpoint whole"; the place is named and not read, so no `ref.read` is reported beside it
 - In a hook a `ref` parameter, a child of one and `out` of a `ref` result are endpoints: the endpoint operations take them, and a read of the value or the `delta_value` of any of them is `ref.read`, and so is the `removed_value` of a window that is a child of one; an atomic projection, an iteration, a comparison and a call that reads one among them
 - A `return` to a `ref` result, and `out =` of one, names a temporal input of the node, `ref` or not, or a child of one: it is read as the designation it is (`EndpointOf`, `ChildEndpointOf`), of the result's type (EXPR-5), reads no payload and needs no admission; a value there is `type.mismatch`, and so is a source's `yield` to a `ref` result: a source has no temporal input to name (TIME-7: "A `ref` result takes no value")
-- Left: a native implementation part's marks matched with its declaration's (NATIVE-2)
+- A native implementation part's parameter and result `ref` marks match its declaration's (NATIVE-2)
 
 transpiler: partial
 
 - Writes node `ref` inputs and results. A return can sample a ref-parameter designation,
-  designate a whole ordinary input or designate a child of a fixed-list input.
+  designate a whole ordinary input, a fixed-list position or a dictionary entry.
+  Nodes with a scheduler or an alarm can make these designations.
 - Left: Reports designations of other children and list forms, simultaneous whole and
-  positional designation of one input, designation in a node with scheduler or alarm,
-  and unsupported assignments to a `ref` result. Graph and source `ref` forms have
-  defensive reports.
+  positional designation of one input, and unsupported assignments to a `ref` result.
+  Graph and source `ref` forms have defensive reports.
 
 ## FN-17
 
@@ -274,6 +275,7 @@ transpiler: partial
 parser: partial
 
 - Reads a pack spread among ordinary call arguments.
+- Reads a pack comprehension as a primary expression.
 
 analyser: partial
 
@@ -282,9 +284,11 @@ analyser: partial
 - Checks function, operator and static callback arguments with the ordinary call diagnostics (EXPR-2) and uses the names written by a callback template (FN-17).
 - A forwarded name that binds a generic value parameter or a selecting operator option reports `generic.argument_constant` at the runtime entry (GEN-6, GEN-8). Generic value names take priority over a callee's ordinary named pack.
 - Follows concrete calls in parameter and field defaults and anonymous bodies. Struct fields bind by name, and positional entries reject (TYPE-5). An enum constructor with a spread reports the argument during analysis (TYPE-7).
+- Checks where a pack comprehension is held and requires its iterable to name a type pack's keys. Checks condition chains for runtime bindings, assignments to the iteration key, and ordinary reads of a type pack or callback. A computed spread retains the call for the target to decline while the generic passes remain unread.
+- Reads a declared function's written arguments, including its configuration, through their parameter types before the computed entries are known.
 
 transpiler: partial
 
-- Lowers each forwarded entry from its own pack input slot, using the analyser's concrete entry shape. Lowers a constant-key read to the same fitted slot, including a captured value or a connection. The SDK cases also exercise operator selection, static callbacks and constructors.
+- Lowers forwarded entries and constant-key reads from the same fitted pack input slots, including captured values and connections. The SDK cases also exercise operator selection, static callbacks and constructors.
 
-Left: Pack comprehensions and pack bindings are tracked in #368.
+Left: Unrolling a generic pack comprehension and spreading a pack bound with `let` are tracked in #368. Generic unrolling awaits the GEN-7 decision.

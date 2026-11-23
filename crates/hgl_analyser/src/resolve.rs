@@ -31,7 +31,10 @@ use crate::program::{
     Binding, Decision, DeclarationKind, ImportKind, LocalKind, Module, NameUse, PreludeName,
     Program, RUN_CONFIG,
 };
-use crate::syntax::{child, has_token, is_arg_keys_call, leads_its_test, pack_for_names};
+use crate::syntax::{
+    child, has_token, is_arg_keys_call, leads_its_test, pack_for_names, parent_outside_grouping,
+    ungrouped,
+};
 use crate::{INJECTABLES, RESULT_FORMS, codes, error};
 
 /// Resolves the names of every module, filling in [`Module::uses`] and
@@ -151,6 +154,12 @@ fn is_callee(node: &SyntaxNode) -> bool {
         SyntaxKind::TypedConstructor | SyntaxKind::UndecidedConstructor => true,
         _ => false,
     }
+}
+
+/// An unqualified call that keeps its language meaning in any scope
+/// (ERR-13, UNIT-10, TIME-9).
+fn reserved_call(name: &str) -> bool {
+    RESULT_FORMS.contains(&name) || name == "scheduled"
 }
 
 /// The name a parameter or generic parameter declares: the last
@@ -466,7 +475,9 @@ impl Resolver<'_> {
             }
             SyntaxKind::InjectDecl => self.inject(node),
             SyntaxKind::ForStmt => self.for_statement(node),
-            SyntaxKind::ListComprehension => self.list_comprehension(node),
+            SyntaxKind::ListComprehension | SyntaxKind::PackComprehension => {
+                self.comprehension(node)
+            }
             SyntaxKind::FnExpr => self.function_expression(node),
             SyntaxKind::ConstraintEach | SyntaxKind::ConstraintAny => self.each_constraint(node),
             SyntaxKind::PackMemberType => {
@@ -571,13 +582,13 @@ impl Resolver<'_> {
         // generic type, function, or operator in an expression, `<`
         // opens generic arguments rather than a comparison."
         let binding = self.name_of(node);
-        // ERR-13: a result form's name is the form, whatever follows
-        // it: `ok<i64>(1)` is that call given generic arguments, which
-        // the pass that reads it rejects (ERR-2), and no comparison.
+        // ERR-13 and TIME-9: a reserved call is still the form when
+        // generic arguments are written. The typing pass reports those
+        // arguments; the brackets do not become a comparison.
         let form = child(node, SyntaxKind::QualifiedName).is_none()
             && identifiers(node)
                 .next()
-                .is_some_and(|name| RESULT_FORMS.contains(&name.text()));
+                .is_some_and(|name| reserved_call(name.text()));
         self.decisions.push(Decision {
             at: Location::new(self.file_id, node.span()),
             constructor: if form {
@@ -661,15 +672,51 @@ impl Resolver<'_> {
         self.frames.pop();
     }
 
-    /// Bind the EXPR-17 iteration variable in the entry expression only.
-    fn list_comprehension(&mut self, node: &SyntaxNode) {
+    /// A loop's name is bound only in its entry expression (EXPR-17, FN-19).
+    fn comprehension(&mut self, node: &SyntaxNode) {
+        let pack = node.kind() == SyntaxKind::PackComprehension;
+        if pack
+            && !parent_outside_grouping(node).is_some_and(|parent| {
+                parent.kind() == SyntaxKind::PackSpreadArg
+                    || (parent.kind() == SyntaxKind::LocalDecl
+                        && has_token(&parent, SyntaxKind::KwLet))
+            })
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                Location::new(self.file_id, node.span()),
+                "a pack loop must be bound with `let` or spread into a call".to_string(),
+                "FN-19",
+            ));
+        }
         let mut parts = node.children();
+        let mut kind = LocalKind::Iteration;
         if let Some(sequence) = parts.next() {
-            self.walk(&sequence);
+            let source = ungrouped(sequence.clone());
+            if pack && is_arg_keys_call(&source) {
+                kind = LocalKind::PackIterationKey;
+                // The name of the type pack is looked up, rather than
+                // the contextual `arg_keys` form itself (GEN-17).
+                if let Some(arguments) = child(&source, SyntaxKind::ArgList) {
+                    self.children(&arguments);
+                }
+            } else {
+                if pack {
+                    self.diagnostics.emit(error(
+                        Category::Type,
+                        codes::TYPE_MISMATCH,
+                        Location::new(self.file_id, sequence.span()),
+                        "a pack loop needs `arg_keys` of a type pack".to_string(),
+                        "FN-19",
+                    ));
+                }
+                self.walk(&sequence);
+            }
         }
         self.frames.push(Frame::default());
         if let Some(name) = identifiers(node).next() {
-            self.bind(&name, LocalKind::Iteration);
+            self.bind(&name, kind);
         }
         if let Some(entry) = parts.next() {
             self.walk(&entry);
@@ -863,11 +910,9 @@ impl Resolver<'_> {
             return self.qualified(&alias, &name);
         }
         let name = identifiers(node).next()?;
-        // ERR-13: "as the callee of a call each is the form this
-        // chapter defines, whatever else is in scope." So the name is
-        // looked up nowhere, and is not one the prelude is waited on
-        // for.
-        if RESULT_FORMS.contains(&name.text()) && is_callee(node) {
+        // ERR-13 and UNIT-10: result forms and the TIME-9 wake selector
+        // keep their meaning when called, even when the name is bound.
+        if reserved_call(name.text()) && is_callee(node) {
             return None;
         }
         // GEN-17: in a requirement `arg_keys(Ps)` is a language form.

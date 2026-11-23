@@ -1,4 +1,4 @@
-//! Constants whose value depends on itself (UNIT-13).
+//! Constants and defaults that depend on themselves (UNIT-8, UNIT-13).
 //!
 //! > It is referenced forward as any module declaration is (UNIT-6), and
 //! > its value depends on no constant that depends on it.
@@ -13,44 +13,45 @@
 //! * of an operator's candidates, the one the operands selected, whether
 //!   the operator is called by name or written as a symbol (OPS-2);
 //! * of a function's parameter defaults, those of the parameters the
-//!   call leaves out, and no other (UNIT-8).
+//!   call leaves out (UNIT-8);
+//! * of a struct's field defaults, the default selected for each field
+//!   the constructor leaves out, using the concrete keys of a forwarded
+//!   argument pack (TYPE-5, FN-19).
 //!
 //! Each such thing is a node of a graph, with an edge to every other it
 //! reads, and a constant depends on itself when it is in a cycle of that
-//! graph. The graph is of the whole program. Modules do not import one
-//! another (UNIT-3), and a value may still be worked out through one
-//! that does not import it back: an operator's candidates are found
-//! wherever they are declared (GEN-5), so a function of one module may
-//! select a candidate of a module that imports it.
+//! graph. A default that needs itself without relying on a constant
+//! is reported at its expression. The graph is of the whole program.
+//! Modules do not import one another (UNIT-3), and a value may still
+//! be worked out through one that does not import it back. An operator's
+//! candidates are found wherever they are declared (GEN-5), so a function
+//! of one module may select a candidate of a module that imports it.
 //!
 //! A constant is also read where the typed program has only its value:
 //! in a type, as a size or a generic value argument, given in angle
 //! brackets or by name. So every name that is bound to a constant is an
 //! edge to it too, from the part it is written in.
 //!
-//! One approximation is kept, on the safe side: a construction of a
-//! struct counts every default of the struct's fields and of its
-//! parents', given or not. What the typed program does not hold, the
-//! body of an anonymous function, is followed only to the constants it
-//! names.
+//! An anonymous function body is followed only to the constants it names.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
-use hgl_diagnostics::{Category, Diagnostics};
+use hgl_diagnostics::{Category, Code, Diagnostics};
 use hgl_parser::HasSpan;
 use hgl_source::{FileId, Span};
 use petgraph::algo::kosaraju_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::NodeFiltered;
 
 use crate::hir::{Callee, Expr, ExprKind, walk_statements};
-use crate::program::{Binding, DeclarationKind, Program};
+use crate::program::{Binding, DeclarationKind, Program, Role};
 use crate::read::{default_of, parameters};
 use crate::types::{Detail, Type};
+use crate::values::{ForwardingInstance, has_forwarded_calls};
 use crate::{codes, error};
 
-/// Reports each constant whose value depends on itself
-/// (`constant.cycle`), at its name. It reads the typed program, so it
-/// runs after the pass that types it.
+/// Reports cyclic constants at their names and cyclic defaults at their
+/// expressions. It reads the typed program, after the pass that types it.
 pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
     let has_constant = program.modules.iter().any(|module| {
         module
@@ -58,8 +59,12 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
             .iter()
             .any(|declaration| declaration.kind == DeclarationKind::Constant)
     });
-    if has_constant {
-        cycles(program, diagnostics);
+    let has_default = program
+        .modules
+        .iter()
+        .any(|module| module.defaults.iter().flatten().any(Option::is_some));
+    if has_constant || has_default {
+        cycles(program, diagnostics, has_constant, has_default);
     }
 }
 
@@ -74,11 +79,15 @@ enum Part {
     Constant(Declared),
     /// The body of a function.
     Body(Declared),
+    /// The body of a function under one caller's concrete pack shape.
+    PackBody(Declared, usize),
     /// The default of a parameter of a function: the function, and the
     /// parameter's position.
     Default(Declared, usize),
-    /// The defaults of a struct's fields, and of its parents'.
-    Fields(Declared),
+    /// A struct's declaration, including the types of its fields and parents.
+    Struct(Declared),
+    /// The default of a field a struct writes, by its declared position.
+    FieldDefault(Declared, usize),
 }
 
 impl Part {
@@ -87,15 +96,104 @@ impl Part {
         match self {
             Part::Constant(declaration)
             | Part::Body(declaration)
+            | Part::PackBody(declaration, _)
             | Part::Default(declaration, _)
-            | Part::Fields(declaration) => declaration,
+            | Part::Struct(declaration)
+            | Part::FieldDefault(declaration, _) => declaration,
+        }
+    }
+}
+
+/// Value bodies that can reach a call awaiting concrete pack inputs.
+/// Follow callers in reverse so an ordinary generic wrapper is included.
+fn forwarding_bodies(program: &Program) -> HashSet<Declared> {
+    let value_bodies = program
+        .modules
+        .iter()
+        .enumerate()
+        .flat_map(|(module, unit)| {
+            unit.bodies
+                .iter()
+                .enumerate()
+                .filter_map(move |(declaration, body)| {
+                    let body = body.as_ref()?;
+                    (unit.declarations[declaration].kind.role() == Some(Role::Value))
+                        .then_some(((module, declaration), body))
+                })
+        });
+    let mut forwarding: HashSet<_> = value_bodies
+        .clone()
+        .filter_map(|(owner, body)| has_forwarded_calls(body).then_some(owner))
+        .collect();
+    if forwarding.is_empty() {
+        return forwarding;
+    }
+    let mut callers = HashMap::<Declared, Vec<Declared>>::new();
+    for (owner, body) in value_bodies {
+        walk_statements(&body.statements, &mut |value| {
+            if let ExprKind::Call { callee, .. } = &value.kind
+                && let Some(called) = callee.declaration()
+            {
+                callers.entry(called).or_default().push(owner);
+            }
+        });
+    }
+    let mut waiting: Vec<_> = forwarding.iter().copied().collect();
+    while let Some(called) = waiting.pop() {
+        for &owner in callers.get(&called).into_iter().flatten() {
+            if forwarding.insert(owner) {
+                waiting.push(owner);
+            }
+        }
+    }
+    forwarding
+}
+
+/// Concrete bodies are separate graph nodes. A default read by one pack
+/// shape must not become a dependency of another shape of the same call.
+#[derive(Default)]
+struct PackBodies {
+    forwarding: HashSet<Declared>,
+    instances: HashMap<Declared, Vec<ForwardingInstance>>,
+    waiting: VecDeque<(Declared, usize)>,
+}
+
+impl PackBodies {
+    fn body_of(&mut self, program: &Program, called: Declared, expression: &Expr) -> Part {
+        if !self.forwarding.contains(&called) {
+            return Part::Body(called);
+        }
+        let Some(instance) = ForwardingInstance::of(program, expression) else {
+            return Part::Body(called);
+        };
+        let instances = self.instances.entry(called).or_default();
+        if let Some(index) = instances.iter().position(|known| known == &instance) {
+            return Part::PackBody(called, index);
+        }
+        let index = instances.len();
+        instances.push(instance);
+        self.waiting.push_back((called, index));
+        Part::PackBody(called, index)
+    }
+
+    fn add_parts(&mut self, program: &Program, parts: &mut Vec<(Part, Vec<Part>)>) {
+        while let Some((declaration, index)) = self.waiting.pop_front() {
+            // Keep the declaration's folded constant references, and use
+            // the checked body for edges that depend on the pack shape.
+            let mut reads = vec![Part::Body(declaration)];
+            if let Some(body) = self.instances[&declaration][index].body(program) {
+                walk_statements(&body.statements, &mut |visited| {
+                    reads_of(program, visited, self, &mut reads);
+                });
+            }
+            parts.push((Part::PackBody(declaration, index), reads));
         }
     }
 }
 
 /// Adds to `reads` each part of `program` that working out the
 /// expression `visited` reads directly.
-fn reads_of(program: &Program, visited: &Expr, reads: &mut Vec<Part>) {
+fn reads_of(program: &Program, visited: &Expr, packs: &mut PackBodies, reads: &mut Vec<Part>) {
     match &visited.kind {
         ExprKind::Constant {
             module,
@@ -117,7 +215,7 @@ fn reads_of(program: &Program, visited: &Expr, reads: &mut Vec<Part>) {
             ..
         } => {
             let called = (*module, *declaration);
-            reads.push(Part::Body(called));
+            reads.push(packs.body_of(program, called, visited));
             // UNIT-8: the call reads the default of each parameter it
             // leaves out. An argument says which parameter it is given
             // to.
@@ -138,8 +236,30 @@ fn reads_of(program: &Program, visited: &Expr, reads: &mut Vec<Part>) {
         ExprKind::Construct {
             module,
             declaration,
+            arguments,
             ..
-        } => reads.push(Part::Fields((*module, *declaration))),
+        } => {
+            reads.push(Part::Struct((*module, *declaration)));
+            let Some(Detail::Struct(structure)) =
+                program.modules[*module].details.get(*declaration)
+            else {
+                return;
+            };
+            // TYPE-5: a constructor reads the selected default for each
+            // omitted field, including a default it takes from a parent.
+            for (position, member) in structure.members.iter().enumerate() {
+                if let Some(default) = member.default
+                    && !arguments
+                        .iter()
+                        .any(|argument| argument.parameter == Some(position))
+                {
+                    reads.push(Part::FieldDefault(
+                        (default.module, default.declaration),
+                        default.field,
+                    ));
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -194,8 +314,16 @@ fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
         if module.declarations[position].kind == DeclarationKind::Constant {
             return Some(Part::Constant(declared));
         }
-        if matches!(module.details.get(position), Some(Detail::Struct(_))) {
-            return Some(Part::Fields(declared));
+        if let Some(Detail::Struct(structure)) = module.details.get(position) {
+            let field = structure.fields.iter().position(|field| {
+                field
+                    .default_at
+                    .is_some_and(|default| default.span.start <= at && at < default.span.end)
+            });
+            return Some(match field {
+                Some(field) => Part::FieldDefault(declared, field),
+                None => Part::Struct(declared),
+            });
         }
         let default = defaults[position]
             .iter()
@@ -234,57 +362,65 @@ fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
 
 /// Adds to `parts` each part of module `index` of `program`, with the
 /// parts it reads.
-fn parts_of(program: &Program, index: usize, parts: &mut Vec<(Part, Vec<Part>)>) {
+fn parts_of(
+    program: &Program,
+    index: usize,
+    packs: &mut PackBodies,
+    parts: &mut Vec<(Part, Vec<Part>)>,
+) {
     let module = &program.modules[index];
     // What each expression of a part reads, gathered by walking it.
-    let gather = |expressions: &[&Expr]| {
+    let gather = |expressions: &[&Expr], packs: &mut PackBodies| {
         let mut reads = Vec::new();
         for expression in expressions {
-            expression.walk(&mut |visited| reads_of(program, visited, &mut reads));
+            expression.walk(&mut |visited| reads_of(program, visited, packs, &mut reads));
         }
         reads
     };
     for position in 0..module.declarations.len() {
         let declared = (index, position);
         if let Some(Some(value)) = module.constants.get(position) {
-            parts.push((Part::Constant(declared), gather(&[&value.value])));
+            parts.push((Part::Constant(declared), gather(&[&value.value], packs)));
         }
         if let Some(Some(body)) = module.bodies.get(position) {
             let mut reads = Vec::new();
             walk_statements(&body.statements, &mut |visited| {
-                reads_of(program, visited, &mut reads);
+                reads_of(program, visited, packs, &mut reads);
             });
             parts.push((Part::Body(declared), reads));
         }
         let defaults = module.defaults.get(position).map_or(&[][..], Vec::as_slice);
         match module.details.get(position) {
             Some(Detail::Struct(read)) => {
-                // A struct's field defaults are one part, which reads
-                // its parents' too (TYPE-4).
-                let written: Vec<&Expr> = defaults
+                // The struct still needs its parents' types (TYPE-4).
+                let parents = read
+                    .parents
                     .iter()
-                    .flatten()
-                    .map(|default| &default.value)
+                    .filter_map(|parent| match parent {
+                        Type::Named {
+                            module,
+                            declaration,
+                            ..
+                        } => Some(Part::Struct((*module, *declaration))),
+                        _ => None,
+                    })
                     .collect();
-                let mut reads = gather(&written);
-                for parent in &read.parents {
-                    if let Type::Named {
-                        module,
-                        declaration,
-                        ..
-                    } = parent
-                    {
-                        reads.push(Part::Fields((*module, *declaration)));
+                parts.push((Part::Struct(declared), parents));
+                for (field, default) in defaults.iter().enumerate() {
+                    if let Some(default) = default {
+                        parts.push((
+                            Part::FieldDefault(declared, field),
+                            gather(&[&default.value], packs),
+                        ));
                     }
                 }
-                parts.push((Part::Fields(declared), reads));
             }
             _ => {
                 for (parameter, default) in defaults.iter().enumerate() {
                     if let Some(default) = default {
                         parts.push((
                             Part::Default(declared, parameter),
-                            gather(&[&default.value]),
+                            gather(&[&default.value], packs),
                         ));
                     }
                 }
@@ -298,12 +434,23 @@ fn parts_of(program: &Program, index: usize, parts: &mut Vec<(Part, Vec<Part>)>)
 }
 
 /// The cycles of `program`.
-fn cycles(program: &Program, diagnostics: &mut Diagnostics) {
+fn cycles(program: &Program, diagnostics: &mut Diagnostics, has_constant: bool, has_default: bool) {
+    let mut packs = PackBodies::default();
+    // The value pass has already bounded this instantiation walk. Do not
+    // repeat a walk that it rejected for exceeding the instance limit.
+    if !diagnostics
+        .as_slice()
+        .iter()
+        .any(|d| d.code == Code::Catalogued(codes::INSTANCE_LIMIT))
+    {
+        packs.forwarding = forwarding_bodies(program);
+    }
     // Each part of each module, with the parts it reads.
     let mut parts: Vec<(Part, Vec<Part>)> = Vec::new();
     for index in 0..program.modules.len() {
-        parts_of(program, index, &mut parts);
+        parts_of(program, index, &mut packs, &mut parts);
     }
+    packs.add_parts(program, &mut parts);
 
     // A node for each part, made when it is first met: a part nothing
     // was gathered for, a function with no body say, reads nothing.
@@ -321,51 +468,83 @@ fn cycles(program: &Program, diagnostics: &mut Diagnostics) {
         }
     }
 
+    if has_constant {
+        report_constants(program, &graph, diagnostics);
+    }
+    if has_default {
+        report_defaults(program, &graph, diagnostics);
+    }
+}
+
+/// A one-node component cycles only when it has an edge to itself.
+fn cyclic(graph: &DiGraph<Part, ()>, group: &[NodeIndex]) -> bool {
+    group.len() > 1 || graph.contains_edge(group[0], group[0])
+}
+
+/// Each declaration on a cycle, in declaration order.
+fn declarations_on(graph: &DiGraph<Part, ()>, group: &[NodeIndex]) -> Vec<Declared> {
+    let mut declarations: Vec<_> = group
+        .iter()
+        .map(|&part| graph[part].declaration())
+        .collect();
+    declarations.sort_unstable();
+    declarations.dedup();
+    declarations
+}
+
+/// Name the other declarations on the path. Give an imported
+/// declaration's module when its name is outside the subject's module.
+fn cycle_message(
+    program: &Program,
+    subject: String,
+    own: Declared,
+    declarations: &[Declared],
+) -> String {
+    let through: Vec<_> = declarations
+        .iter()
+        .filter(|&&other| other != own)
+        .map(|&(module, declaration)| {
+            let other = &program.modules[module];
+            let name = &other.declarations[declaration].name;
+            if module == own.0 {
+                format!("`{name}`")
+            } else {
+                format!("`{name}` of `{}`", other.path)
+            }
+        })
+        .collect();
+    if through.is_empty() {
+        format!("{subject} depends on itself")
+    } else {
+        format!(
+            "{subject} depends on itself, through {}",
+            through.join(" and ")
+        )
+    }
+}
+
+/// UNIT-13: a constant may not depend on itself, even through a default.
+fn report_constants(program: &Program, graph: &DiGraph<Part, ()>, diagnostics: &mut Diagnostics) {
     // Parts that read one another are a strongly connected group of the
     // graph. The findings are gathered and then given in the order the
     // constants are declared, whatever order the groups are found in.
     let mut findings: Vec<(Declared, String)> = Vec::new();
-    for group in kosaraju_scc(&graph) {
-        // One part is a cycle only when it reads itself.
-        let cyclic = group.len() > 1 || graph.contains_edge(group[0], group[0]);
-        if !cyclic {
+    for group in kosaraju_scc(graph) {
+        if !cyclic(graph, &group) {
             continue;
         }
-        // The declarations the group's parts belong to.
-        let mut members: Vec<Declared> = group
-            .iter()
-            .map(|&part| graph[part].declaration())
-            .collect();
-        members.sort_unstable();
-        members.dedup();
+        let declarations = declarations_on(graph, &group);
         for &part in &group {
             let Part::Constant(member) = graph[part] else {
                 continue;
             };
             let name = &program.modules[member.0].declarations[member.1].name;
-            // Another declaration of the constant's module is given by
-            // its name, and one of another module with that module's.
-            let through: Vec<String> = members
-                .iter()
-                .filter(|&&other| other != member)
-                .map(|&(module, declaration)| {
-                    let other = &program.modules[module];
-                    let name = &other.declarations[declaration].name;
-                    if module == member.0 {
-                        format!("`{name}`")
-                    } else {
-                        format!("`{name}` of `{}`", other.path)
-                    }
-                })
-                .collect();
-            let message = if through.is_empty() {
-                format!("the value of `{name}` depends on itself")
-            } else {
-                format!(
-                    "the value of `{name}` depends on itself, through {}",
-                    through.join(" and ")
-                )
-            };
+            let message = cycle_message(
+                program,
+                format!("the value of `{name}`"),
+                member,
+                &declarations,
+            );
             findings.push((member, message));
         }
     }
@@ -377,6 +556,61 @@ fn cycles(program: &Program, diagnostics: &mut Diagnostics) {
             program.modules[module].declarations[declaration].at,
             message,
             "UNIT-13",
+        ));
+    }
+}
+
+/// UNIT-8: a default may not require itself. Follow the default's
+/// dependencies independently of named-constant cycles (UNIT-13).
+fn report_defaults(program: &Program, graph: &DiGraph<Part, ()>, diagnostics: &mut Diagnostics) {
+    let defaults = NodeFiltered::from_fn(graph, |part| !matches!(graph[part], Part::Constant(_)));
+    let mut findings = Vec::new();
+    for group in kosaraju_scc(&defaults) {
+        if !cyclic(graph, &group) {
+            continue;
+        }
+        let declarations = declarations_on(graph, &group);
+        for part in group {
+            let (member, position) = match graph[part] {
+                Part::Default(member, position) | Part::FieldDefault(member, position) => {
+                    (member, position)
+                }
+                _ => continue,
+            };
+            let module = &program.modules[member.0];
+            let Some(default) = module
+                .defaults
+                .get(member.1)
+                .and_then(|defaults| defaults.get(position))
+                .and_then(Option::as_ref)
+            else {
+                continue;
+            };
+            let name = match module.details.get(member.1) {
+                Some(Detail::Callable(signature)) => signature
+                    .parameters
+                    .get(position)
+                    .map(|parameter| &parameter.name),
+                Some(Detail::Struct(structure)) => {
+                    structure.fields.get(position).map(|field| &field.name)
+                }
+                _ => None,
+            };
+            let Some(name) = name else { continue };
+            let owner = &module.declarations[member.1].name;
+            let subject = format!("the default of `{name}` in `{owner}`");
+            let message = cycle_message(program, subject, member, &declarations);
+            findings.push((member, position, default.value.at, message));
+        }
+    }
+    findings.sort_by_key(|&(member, position, ..)| (member, position));
+    for (_, _, at, message) in findings {
+        diagnostics.emit(error(
+            Category::Name,
+            codes::DEFAULT_CYCLE,
+            at,
+            message,
+            "UNIT-8",
         ));
     }
 }

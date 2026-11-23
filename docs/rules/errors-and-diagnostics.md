@@ -119,8 +119,9 @@ analyser: partial
 
 - A type that is not known is reported once, and nothing is reported of its uses
 - A module constant whose evaluation fails is rejected where it is declared (`constant.failure`, UNIT-13), and nothing is reported of its uses
+- Known required-constant failures in parameter and field defaults use `constant.failure` (UNIT-8)
 - A generic value argument a generic body works out from its own parameters, `times<(M * 2)>`, whose evaluation fails, or that this compiler does not work out, with what an instance gives them is `generic.argument_constant` at the call that makes the instance, as the same argument written in place is, and the callee's `requires` is then not told ("Failure during argument evaluation precedes later admission checks"); one fault is reported once at each such call
-- Left: other required constant failures, a generic value argument's or a default's written in place, which is `generic.argument_constant`
+- Left: required failures the constant reader cannot establish, including calls it cannot evaluate (#240); generic value arguments retain `generic.argument_constant`
 
 optimiser: planned
 
@@ -188,9 +189,9 @@ transpiler: partial
 - Writes checked child, dictionary, unsized-list and window reads in the analysed
   value, result or nullable form. A dictionary omits wholly unset entries and a
   partial valid entry fails its whole read.
-- Left: Deltas or window reads outside the supported endpoint forms are reported. List
-  children and nested dictionary entries have the EXPR-7 limits, and reading a node's
-  own window result during its `when` is reported (END-9).
+- Left: Deltas and window reads outside the supported endpoint forms are
+  reported (END-9). List children and nested dictionary entries have the
+  EXPR-7 limits.
 
 ## ERR-15
 

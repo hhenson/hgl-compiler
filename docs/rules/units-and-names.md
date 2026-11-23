@@ -69,16 +69,19 @@ analyser: partial
 - A default is read as a value of its parameter's type (`type.mismatch`) and kept for the stages after, `Module::defaults`
 - A bool generic law default is evaluated from the static function supplied at the call; an explicit bool value overrides it (GEN-18).
 - A default on a `ref` parameter is checked against the type after its mode (FN-16).
-- Known required-constant failures reject at the parameter default (ERR-9). A window default is checked as an arrival and an atomic default as its whole payload (TYPE-9, TYPE-11).
-- Using the proposed `constant.failure` catalogue code for parameter and field defaults is planned (hhenson/hgl_spec#228).
+- Known required-constant failures reject at the parameter or field default (ERR-9). A window default is checked as an arrival and an atomic default as its whole payload (TYPE-9, TYPE-11).
+- Required-constant failures in parameter and field defaults use `constant.failure` (ERR-9).
 - Omitted parameter defaults are checked against the concrete parameter type after generic selection, including in a call made by a generic body.
+- A field or parameter default that needs itself through omitted arguments reports `default.cycle` at its expression and names the dependency path through checked calls and concrete forwarded packs.
+- The default and constant dependency checks follow the written branches (UNIT-13).
+- Left: cyclic dependencies reached only by invoking a callable parameter (FN-17, #635).
 
 transpiler: partial
 
-- Binds omitted defaults or null after explicit arguments. Wires an omitted temporal
+- Binds omitted defaults or null after explicit arguments. A literal null default is held as the selected nullable parameter type, including when its declaration names a generic. Wires an omitted temporal
   default as a constant or leaves an optional input silent.
-- An inherited operator configuration default can run a block in its own lexical scope.
-- Left: blocks with statements in callable and field defaults, and nonempty field defaults whose type depends on a generic struct argument. A graph call leaving out a nullable temporal input is reported (#399). The target also reports a recursively omitted default and retains a defensive report for defaults whose emitted evaluation needs failure-handling statements.
+- A callable default, including an inherited operator configuration default, can run a block in its own lexical scope.
+- Left: blocks with statements in field defaults, and nonempty field defaults whose type depends on a generic struct argument. A graph call leaving out a nullable temporal input is reported (#399). The target retains defensive reports for recursively omitted defaults and defaults whose emitted evaluation needs failure-handling statements.
 
 ## UNIT-9
 
@@ -94,7 +97,8 @@ analyser: partial
 
 - Every name in a signature, body, type and constraint resolved to its one binding, and one that nothing binds is `name.unknown`
 - Clock properties resolve on the capability, and `types(Ts)` supplies the selections in an `each` constraint (GEN-10).
-- Left: a declaration named `scheduled` can shadow the reserved `scheduled()` form (TIME-9).
+- An unqualified call of `scheduled()` retains the wake selector's meaning when a binding has the same name (TIME-9).
+- A function named `scheduled` reports `name.reserved` at the declaration. Reserving the name for other declaration kinds remains proposed.
 
 ## UNIT-11
 
@@ -129,13 +133,14 @@ analyser: partial
 - One whose evaluation fails, an `i64` out of range or a division of two `i64` by zero, is `constant.failure` where it is declared ("a failure in evaluating it is a required-constant failure (ERR-9)"), and says nothing more where it is read
 - One the reader does not work out, a datetime moved by a duration, is no value a generic value argument is given (`generic.argument_constant`), as the same expression written in place is not
 - An expression is read in a loop along a chain of operators, `1 + 1 + ... + 1`, of any length the parser builds a tree for
-- One whose value depends on itself is `constant.cycle`: through another constant, the definition a call selected, an operator's candidate a symbol or a name selected, or a default a call leaves to be read
-- Left: evaluating constants computed by a `const fn` (#240), including required-constant failures. A constructor can acquire a false dependency from the default of a field it explicitly supplies. Source formatting is pending and must preserve constant spellings.
+- One whose value depends on itself is `constant.cycle`: through another constant, the definition a call selected, an operator's candidate a symbol or a name selected, or a parameter or field default selected for an omitted argument (UNIT-8, TYPE-5).
+- For a constructor given a pack, the constant dependency check follows the defaults of fields the concrete pack and any written arguments leave out (FN-19, TYPE-5).
+- Left: evaluating constants computed by a `const fn` (#240), including required-constant failures. Source formatting is pending and must preserve constant spellings.
 
 transpiler: partial
 
 - Emits one module constant value and reuses it at its reads.
-- Left: reports a constant whose value runs statements. Defensive reports remain for a constant without a typed value or whose emitted evaluation needs failure-handling statements.
+- A checked statement-block initializer runs in its own cold scope while the constant's one stored value is initialized (EXPR-5). Defensive reports remain for a constant without a typed value or whose emitted evaluation needs failure-handling statements.
 
 ## UNIT-14
 

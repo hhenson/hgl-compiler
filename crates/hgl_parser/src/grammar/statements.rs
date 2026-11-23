@@ -63,20 +63,20 @@ impl Parser<'_> {
     /// A block that is the body of the declaration or statement before it.
     pub(crate) fn body_block(&mut self) {
         if self.at(LBrace) {
-            self.header_brace();
+            self.check_body_brace();
             self.block();
         } else {
             self.expected("`{`");
         }
     }
 
-    /// Reports the `{` under the cursor when it is not on the line of the
-    /// header it belongs to. LEX-5: "A body's opening brace stays with its
-    /// header."
-    pub(crate) fn header_brace(&mut self) {
-        if self.broken() {
+    /// LEX-5: a body continues its incomplete header across one line
+    /// break. Report two or more separating line breaks and read the body
+    /// for recovery.
+    pub(crate) fn check_body_brace(&mut self) {
+        if self.cut() {
             self.error(
-                "a body's opening brace stays on its header's line",
+                "two or more line breaks separate a body's opening brace from its header",
                 "LEX-5",
                 None,
             );
@@ -132,6 +132,7 @@ impl Parser<'_> {
                 }
                 self.finish();
             }
+            KwSwitch => self.switch_stmt(),
             KwAssert => self.assert_stmt(),
             Ident => self.name_statement(),
             // `.member` begins an expression and no statement after
@@ -294,36 +295,22 @@ impl Parser<'_> {
             self.finish();
             return;
         }
-        // LEX-10: `raises` is a name with a meaning only here, and only
-        // in this form. `assert raises(x) == 1` calls a function.
-        let raises = self.at_word("raises")
-            && self.choose(Choice::Raises, |parser| {
-                let errors = parser.errors;
-                parser.bump();
-                if !parser.eat(LParen) {
-                    return Verdict::No;
-                }
-                parser.nested(Context::LIST, |parser| {
+        // LEX-10 and TST-4: the reserved word selects the raises form.
+        if self.at(KwRaises) {
+            self.start(RaisesAssertion);
+            self.bump();
+            if self.at(LParen) && !self.cut() {
+                // LEX-27: the opening parenthesis directly follows `raises`.
+                self.attached(Bracket::Call);
+                self.bump();
+                self.nested(Context::LIST, |parser| {
                     parser.expression();
                     parser.close(RParen);
                 });
-                if parser.errors == errors && parser.at(LBrace) && !parser.nl() {
-                    Verdict::Yes
-                } else {
-                    Verdict::No
-                }
-            }) == Verdict::Yes;
-        if raises {
-            self.start(RaisesAssertion);
-            self.bump();
-            // LEX-27: `raises(...)` is a call.
-            self.attached(Bracket::Call);
-            self.bump();
-            self.nested(Context::LIST, |parser| {
-                parser.expression();
-                parser.close(RParen);
-            });
-            self.body_block();
+                self.body_block();
+            } else {
+                self.expected("`(`");
+            }
             self.finish();
         } else {
             self.expression();
@@ -331,30 +318,8 @@ impl Parser<'_> {
         self.finish();
     }
 
-    /// A statement that starts with a name: a `switch`, an assignment, or
-    /// an expression.
+    /// A statement that starts with a name: an assignment or an expression.
     fn name_statement(&mut self) {
-        // LEX-10: `switch` is a name with a meaning only at the start of
-        // a statement of this form. `switch = 1` assigns to a variable.
-        if self.at_word("switch") {
-            let switch = self.choose(Choice::Switch, |parser| {
-                let errors = parser.errors;
-                parser.bump();
-                if parser.nl() {
-                    return Verdict::No;
-                }
-                parser.expression();
-                if parser.errors == errors && parser.at(LBrace) && !parser.nl() {
-                    Verdict::Yes
-                } else {
-                    Verdict::No
-                }
-            });
-            if switch == Verdict::Yes {
-                self.switch_stmt();
-                return;
-            }
-        }
         // An assignment and an expression begin alike, `a.b[0] = 1` and
         // `a.b[0](1)`, so the place is read and taken back to see whether
         // an assignment operator follows it.
@@ -421,8 +386,10 @@ impl Parser<'_> {
     fn switch_stmt(&mut self) {
         self.start(SwitchStmt);
         self.bump();
-        // CTRL-9: the first `{` opens the cases.
-        self.subject();
+        // LEX-5: a selector is required. CTRL-9: the first `{` opens the cases.
+        if self.goes_on("an expression") {
+            self.subject();
+        }
         // A switch body holds statements, switches among them, without
         // going through `block`; `enter` bounds that nesting here.
         if !self.at(LBrace) || !self.enter() {
@@ -430,7 +397,7 @@ impl Parser<'_> {
             self.finish();
             return;
         }
-        self.header_brace();
+        self.check_body_brace();
         self.bump();
         self.nested(Context::BLOCK, |parser| {
             let mut default_seen = false;

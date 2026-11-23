@@ -15,11 +15,25 @@ use super::inference::{fixed, placed, type_pack};
 use super::results::{captured_output, proof_binding};
 use crate::constant::Fault;
 use crate::declared::substitute_within;
-use crate::hir::{Expr, ExprKind, PackKey, Value, ValueCategory};
+use crate::hir::{Body, Expr, ExprKind, PackKey, Value, ValueCategory};
 use crate::program::DeclarationKind;
 use crate::syntax::{name_token, tokens, ungrouped};
 use crate::types::{Argument, Constant, ConstantValue, Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
+
+/// EXPR-7 and GEN-7: the type of an indexed parameter is known only in
+/// the instance. Reread the bracket and any call it supplies there.
+pub(crate) fn has_dependent_index(body: &Body) -> bool {
+    let mut dependent = false;
+    super::forwarded_packs::walk_nested_calls(&body.statements, &mut |value| {
+        if let ExprKind::Index { base, .. } = &value.kind
+            && matches!(base.ty, Type::Parameter { .. } | Type::PackMember { .. })
+        {
+            dependent = true;
+        }
+    });
+    dependent
+}
 
 impl<'a> Typer<'a> {
     // ---- Members and elements ----
@@ -472,21 +486,39 @@ impl<'a> Typer<'a> {
         )
     }
 
-    /// EXPR-7: brackets read a list, tuple or dictionary. A set has no
-    /// element at an index, and no indexed place to assign (EXPR-3).
+    /// EXPR-7: brackets read a list, tuple or dictionary. A base whose
+    /// payload shape is known must be one of those collections.
     pub(super) fn check_index_base(&mut self, ty: &Type, at: Location) {
-        if matches!(ty, Type::Set(_)) {
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::TYPE_MISMATCH,
-                at,
-                format!(
-                    "this is `{ty}`, and a set has no element at an index: brackets read a \
-                     list, a tuple, or a dictionary"
-                ),
-                "EXPR-7",
-            ));
+        // Its wrapper can affect how the payload is read (TYPE-9,
+        // ERR-12, ERR-15). The payload decides whether it has an index.
+        let mut shape = ty;
+        while let Type::Atomic(payload)
+        | Type::Nullable(payload)
+        | Type::Result { value: payload, .. } = shape
+        {
+            shape = payload;
         }
+        if open(shape)
+            || matches!(shape, Type::Parameter { .. } | Type::PackMember { .. })
+            || index_collection(shape)
+        {
+            return;
+        }
+        let message = if matches!(shape, Type::Set(_)) {
+            format!(
+                "this is `{shape}`, and a set has no element at an index: brackets read a \
+                 list, a tuple, or a dictionary"
+            )
+        } else {
+            format!("this is `{shape}`. Brackets read a list, a tuple, or a dictionary")
+        };
+        self.diagnostics.emit(error(
+            Category::Type,
+            codes::TYPE_MISMATCH,
+            at,
+            message,
+            "EXPR-7",
+        ));
     }
 
     /// EXPR-7: a tuple index is a constant within its length. Read it

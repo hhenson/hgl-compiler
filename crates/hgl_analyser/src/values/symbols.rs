@@ -12,7 +12,7 @@ use super::control::joined;
 use super::expressions::{takes_its_type, written_null};
 use super::fit::{open, whole};
 use super::operators::{
-    from_place, has_generic_configuration_default, options_of, public_inputs, unreadable,
+    bare_result_parameter, from_place, has_generic_configuration_default, options_of, unreadable,
 };
 use super::{BOOL, Typer};
 use crate::constant::is_least_magnitude;
@@ -20,7 +20,7 @@ use crate::hir::{
     Argument, BinaryOperator, Callee, DeferredOperator, DeferredOption, Expr, ExprKind, Form,
     UnaryOperator, Value, ValueCategory,
 };
-use crate::program::{DeclarationKind, OperatorRef};
+use crate::program::{Binding, DeclarationKind, OperatorRef};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{Detail, Scalar, Signature, Type};
 use crate::{codes, error};
@@ -383,15 +383,7 @@ impl<'a> Typer<'a> {
             && (self.diagnostics.len() != reported
                 || !self.assigned.starts_with(&mark.assigned)
                 || self.returned != mark.returned
-                || given[..given.len() - 1].iter().any(|given| {
-                    let (when_true, when_false) = self.null_tests(&given.value);
-                    let facts = if operator == BinaryOperator::And {
-                        when_true
-                    } else {
-                        when_false
-                    };
-                    facts.iter().any(|fact| !self.present.contains(fact))
-                }))
+                || self.guards_refine_later_operands(operator, &given))
             && self.may_reread()
         {
             // Only reread when short-circuit flow can change the typing
@@ -440,6 +432,45 @@ impl<'a> Typer<'a> {
             );
         }
         self.call_logic(form, identity, at, given)
+    }
+
+    /// EXPR-6: a new presence fact can affect an operand only if it
+    /// refers to the guarded binding. Other new facts retain the
+    /// existing short-circuit reread.
+    fn guards_refine_later_operands(&self, operator: BinaryOperator, operands: &[Given]) -> bool {
+        let Some((_, guards)) = operands.split_last() else {
+            return false;
+        };
+        guards.iter().enumerate().any(|(position, guard)| {
+            let (when_true, when_false) = self.null_tests(&guard.value);
+            let facts = if operator == BinaryOperator::And {
+                when_true
+            } else {
+                when_false
+            };
+            facts.iter().any(|fact| {
+                if self.present.contains(fact) {
+                    return false;
+                }
+                let super::Fact::Present(local) = fact else {
+                    return true;
+                };
+                let declaration = self.locals[*local].at;
+                operands[position + 1..].iter().any(|operand| {
+                    operand
+                        .node
+                        .descendants_with_tokens()
+                        .filter_map(|part| part.into_token())
+                        .filter(|token| token.kind() == SyntaxKind::Ident)
+                        .any(|token| {
+                            matches!(
+                                self.bindings.get(&(self.file, token.span().start)),
+                                Some(Binding::Local { at, .. }) if *at == declaration
+                            )
+                        })
+                })
+            })
+        })
     }
 
     /// Select an already-read Boolean form once its operands have types.
@@ -1078,19 +1109,18 @@ impl<'a> Typer<'a> {
         let has_default = has_generic_configuration_default(public);
         let (requested, among, operator_generics) = if said || has_default {
             from_place(public, symbol.place.as_ref(), &mut found);
-            let supplied = public_inputs(public, &given);
-            let requested = self.output_requested(operator, public, found, &supplied, said);
+            let requested = self.argument_output_requested(operator, public, found, &given, said);
             if let Some(unfit) = &requested.unfit {
                 self.diagnostics.emit(unfit.diagnostic(public, symbol.at));
                 return (self.unselected(given, symbol.form), symbol.unjudged);
             }
             if said {
-                (requested.place, requested.among, requested.generics)
+                (requested.place, requested.among, requested.call_generics)
             } else {
                 (
                     None,
                     self.result_among(operator, public, &[], &own_generics),
-                    requested.generics,
+                    requested.call_generics,
                 )
             }
         } else {
@@ -1159,6 +1189,15 @@ impl<'a> Typer<'a> {
         if untold || self.rereads == 0 && given.iter().any(|given| given.by_place) {
             return (self.unselected(given, symbol.form), symbol.unjudged);
         }
+        let nullable_place = match wanted.place {
+            Some(Type::Nullable(payload)) if self.designating != Some(symbol.at) => {
+                Some(payload.as_ref())
+            }
+            _ => None,
+        };
+        if selected.is_empty() && unsettled.is_empty() && nullable_place.is_some() {
+            selected.extend(self.nullable_result_candidate(operator, &candidates, &given, &wanted));
+        }
         if selected.len() == 1
             && let Some(chosen) = selected.pop()
         {
@@ -1166,12 +1205,27 @@ impl<'a> Typer<'a> {
                 self.diagnostics.emit(diagnostic);
                 return (self.unselected(given, symbol.form), Type::Unknown);
             }
-            return self.called(
+            let unresolved = nullable_place
+                .filter(|_| chosen.nullable_result_fallback)
+                .map(|payload| {
+                    let name =
+                        &program.modules[operator.module].declarations[operator.declaration].name;
+                    self.unresolved_operator_result(
+                        (name, symbol.at),
+                        public,
+                        &given,
+                        vec![None; public.generics.len()],
+                        bare_result_parameter(public),
+                        payload,
+                    )
+                });
+            return self.called_with_result_diagnostic(
                 operator,
                 chosen,
                 given,
                 operator_generics,
                 (symbol.form, symbol.at),
+                unresolved,
             );
         }
         // `i64` and `f64`, and after them what the configuration gives:
@@ -1371,6 +1425,18 @@ fn logical_call(operator: BinaryOperator, operands: usize) -> &'static str {
         (BinaryOperator::Or, true) => "any_",
         _ => operator.identity(),
     }
+}
+
+/// The token at which a source symbol call is diagnosed.
+pub(super) fn symbol_span(node: &SyntaxNode) -> Option<Span> {
+    let token = match node.kind() {
+        SyntaxKind::BinaryExpr => {
+            tokens(node).find(|token| binary_operator(token.kind()).is_some())
+        }
+        SyntaxKind::UnaryExpr => tokens(node).next(),
+        _ => None,
+    }?;
+    Some(token.span())
 }
 
 /// The operator a token is, between two operands.

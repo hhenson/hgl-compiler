@@ -65,6 +65,7 @@ analyser: partial
 - An eval calls a module function or a helper of the named test where it stands, the temporal definition where there are both (`eval.target`: an operator, a struct)
 - The call's arguments are bound as any call's are, its generic arguments among them: a `const` parameter takes configuration and every other a trace
 - Each positional or named pack capture takes its own trace (FN-8). A heterogeneous pack infers the types it replays from those traces or takes its written types.
+- A parameter whose type is a reflected pack member takes a trace of that member's publication type, determined once the callback supplies the pack (GEN-17).
 - A cell is written as a `return` is: a T whole or a `delta<T>`, each by its type, for a list, a set, a dictionary, a struct and a tuple; a tuple that is a T is the whole tuple, a null position a published null, and one that is no T, `(null, 3)` of a `tuple<i64, i64>`, its delta, a tuple of its positions; a window's cell is the V that arrived, its delta (TYPE-16), a generic target's window once its arguments are known
 - A generic target's parameters are found from the cells, or from a trace an eval gave; a tuple that names one, `tuple<T, T>`, has its cells read as any tuple's once they are found
 - A trace is an argument of the eval's call and of no call inside it, which takes a value there (`type.mismatch`)
@@ -237,7 +238,9 @@ transpiler: done
 
 - Emits integration test runs in both modes and passes inherited run configuration and
   timeouts to the host.
+- Maps integration test statements to their HGL lines in debugger builds.
 
 runner: done
 
 - An integration test and its rejection case are selected only when asked for. `--integration` adds integration cases, `--test` names one, and `--integration-only` selects only integration cases.
+- Debugger launches use the same selectors. Their integration tests can pause at a breakpoint without a host-clock limit.

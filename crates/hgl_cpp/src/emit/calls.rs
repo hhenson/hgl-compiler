@@ -356,6 +356,36 @@ impl Emitter<'_> {
                 continue;
             }
             let value = self.expression(scope, &argument.value);
+            // TYPE-10: the ordinary unsized parameter takes the fixed
+            // list's entries. Read the array once, in argument order.
+            if let (
+                Type::List { size: None, .. },
+                Type::List {
+                    element,
+                    size: Some(_),
+                },
+            ) = (&parameter.ty, &argument.value.ty)
+            {
+                // A generic native declaration can still name its type
+                // parameter here. The fitted argument has its concrete element.
+                let list_type = Type::List {
+                    element: element.clone(),
+                    size: None,
+                };
+                let Some(ty) = self.named_type(&list_type) else {
+                    return self.missing(at, &format!("the type `{list_type}`"));
+                };
+                let list = format!(
+                    "[](const auto& entries) {{ return {ty}(entries.begin(), entries.end()); }}({value})"
+                );
+                written.push((
+                    index,
+                    list,
+                    self.may_fail_here(&argument.value),
+                    Held::Value(ty),
+                ));
+                continue;
+            }
             let Some(ty) = self.named_type(&argument.value.ty) else {
                 return self.missing(at, &format!("the type `{}`", argument.value.ty));
             };
@@ -404,8 +434,18 @@ impl Emitter<'_> {
                     let Some(value) = value else {
                         return "0".to_string();
                     };
-                    let Some(ty) = self.named_type(&default.ty) else {
-                        return self.missing(default.at, &format!("the type `{}`", default.ty));
+                    // EXPR-5, TYPE-14, UNIT-8: null takes the selected
+                    // nullable parameter's type. Its generic source type
+                    // need not have a concrete C++ name here.
+                    let ty = if matches!(default.kind, ExprKind::Literal(Value::Null))
+                        && matches!(parameter.ty, Type::Nullable(_))
+                    {
+                        &parameter.ty
+                    } else {
+                        &default.ty
+                    };
+                    let Some(ty) = self.named_type(ty) else {
+                        return self.missing(default.at, &format!("the type `{ty}`"));
                     };
                     defaulted.push((index, value, may_fail(&default), Held::Value(ty)));
                 }
@@ -688,14 +728,9 @@ fn told_apart_by_result(program: &Program, operator: OperatorRef) -> bool {
 }
 
 impl Emitter<'_> {
-    /// Write the omitted parameter's expression in its own lexical scope (UNIT-7).
+    /// Write the omitted parameter's expression in its own lexical scope
+    /// (UNIT-7, UNIT-8), including the locals of a statement block.
     pub(super) fn write_default(&mut self, default: &DefaultValue<'_>) -> Option<String> {
-        // Statement blocks are supported for specialized operator defaults.
-        // Other declaration defaults still have their existing target limit.
-        if matches!(default, DefaultValue::Declared(_)) && changes(default) {
-            self.unsupported(default.at, "a default that runs statements");
-            return None;
-        }
         let body = default.body();
         let mut scope = Scope::cold(self.program, &body);
         // A default's local IDs do not index the caller's temporal readers.

@@ -102,11 +102,10 @@ impl Emitter<'_> {
     }
 
     /// Writes `statement` into `text`, `depth` levels in, after what it
-    /// needs run before it (`Scope::before`). Outside a test, each line it
-    /// writes, what runs before it among them, is given the HGL file and
-    /// line of the statement, so that a failure raised in it names them
-    /// (`stamped`); a test's statements tell the test host their own lines
-    /// instead (`tests`).
+    /// needs run before it (`Scope::before`). Each line it writes is given
+    /// the HGL file and line of the statement outside a test, and in a test
+    /// written for a debugger (`stamped`). The debugger also maps the
+    /// test host's marker to the statement (`tests`).
     pub(super) fn statement(
         &mut self,
         scope: &mut Scope,
@@ -159,8 +158,7 @@ impl Emitter<'_> {
     }
 
     /// Pushes `written`, the code of `statement`, onto `text`, each of its
-    /// lines given the statement's HGL file and line outside a test
-    /// (`stamped`).
+    /// lines given the statement's HGL file and line (`stamped`).
     pub(super) fn push_stamped(
         &mut self,
         scope: &Scope,
@@ -168,7 +166,7 @@ impl Emitter<'_> {
         written: &str,
         text: &mut String,
     ) {
-        let directive = if scope.testing {
+        let directive = if scope.testing && !self.debugger {
             None
         } else {
             self.line_directive(statement_at(statement, &scope.body.locals))

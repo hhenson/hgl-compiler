@@ -135,7 +135,7 @@ that began with it would have no effect. `\` before a line break joins the
 two lines whatever the next one begins with (LEX-26): the lexer makes the
 `\` and its line break one token, and the parser sees no line break there. A comment that holds a
 line break counts as one (LEX-21), and a line that holds only a comment is
-a line. A body's opening brace stays with its header.
+a line. A body's opening brace may follow its header across one line break.
 
 An opening bracket touches what it applies to (LEX-27; owner decisions,
 2026-11-14): the `(` of a call or a parameter list, the `[` of an index,
@@ -597,7 +597,7 @@ capability.
 | --- | --- | --- |
 | `inject run_config` in a function, in a test that is no integration test, or after an integration test's other statements (the phase pass) | RUN-6 | `inject.position` |
 | Braces after any capability but `run_config` | RUN-6 | `inject.configuration` |
-| A key of the global store written out, used with two types in one program (`store_keys`, once every body is typed); a `get` of `T` beside a key of `T?` is not judged, awaiting hhenson/hgl_spec#165 | TIME-8 | `store.key_type` |
+| A key of the global store written out, used with two types in one program (`store_keys`, once every body is typed) | TIME-8 | `store.key_type` |
 
 ### Integration tests
 
@@ -1066,6 +1066,10 @@ places none of its own before or after them.
 Its rejection is `default.order`, and a tuple's index that is no
 constant or is outside the tuple is `tuple.index`.
 
+The C++ target writes a literal null default using the selected nullable
+value parameter's concrete type, rather than its unresolved generic source
+type (EXPR-5, TYPE-14, UNIT-8).
+
 Control flow in a value function is read as it is written (CTRL-10 to
 CTRL-12, FN-7). A block has the value of its last statement when that is
 an expression, and so has the function's body, which returns it. An `if`
@@ -1328,13 +1332,25 @@ So `requires window(T) -> list<T, 5>` neither is the body's bare
 `window(value)`, which asks for the default, nor meets a candidate's
 `requires window(T)`.
 
-A requirement and a call ask the candidates through one function,
-`Typer::output_requested`: what the place expects, the types supplied
+Named requirements and calls written in generic bodies keep the
+complete request through `Typer::output_requested`: what the place
+expects, the types supplied
 in the operator's parameter order with an abstract struct widening what
 an earlier one decided (GEN-2), the operator's defaults, each of its
 parameter's type as resolved (GEN-13), and the operator's own
-requirement of its result. So a requirement holds exactly where the
-call it names would select one candidate.
+requirement of its result.
+
+Outside a generic body, a value call uses
+`Typer::argument_output_requested`: its result request keeps written and
+contextual types, generic value options and types fixed by typed inputs,
+while literal-derived types remain open for candidate-local fitting (GEN-5, GEN-6, GEN-8).
+The complete public inference still checks dependent defaults (GEN-13),
+result membership and reflected packs. Separate call metadata lets
+`Typer::called` resolve inherited configuration defaults from the fitted
+arguments (UNIT-8): fitting to `f64?` yields the `f64` payload type.
+Named requirements and calls written in generic bodies keep the existing
+complete request; this change neither rereads an instance nor changes
+the held GEN-7 result/literal behavior.
 
 Where two requirements name one operator with the same types and
 different results, the call is the one that gives what its place
@@ -1766,7 +1782,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 | `timezone`, `zoned_time` (TYPE-2) | hgraph's `ZoneId` and `ZonedTime`. A literal of either, and of a `zoned_datetime`, is `hglrt::zone_literal`, `zoned_time_literal`, `zoned_datetime_literal`, which check the zone against the catalogue of hgraph's time-zone provider for the process, and a `zoned_datetime`'s offset against the zone, where it is evaluated (LEX-12), failing uncoded: such a literal is one that may fail |
 | `T?`, `tuple<A, B>`, `list<T>`, `list<T, N>` | `std::optional<T>`, `std::tuple<A, B>`, `hglrt::list<T>`, `std::array<T, N>` |
 | `error`, `result<T, error>`, `?` (ERR-2 to ERR-5) | `hglrt::error`, `hglrt::result<T>`; the result held before its statement, the function left with its failure; a `?` only where it is the first thing its statement evaluates, and reported anywhere else |
-| A constant (UNIT-13) | A function giving a reference to one `static` value, made where it is first read; a read of one whose value may fail is one that may fail, which a `?` after it is not run before |
+| A constant (UNIT-13) | A function giving a reference to one `static` value, made where it is first read; a checked statement block uses its own cold local scope inside that initializer (EXPR-5); a read of one whose value may fail is one that may fail, which a `?` after it is not run before |
 | `let`, `var` (EXPR-3) | `const T` or `const T&` as the copy rule says (`hgl_lower::copies`), `T` |
 | `if`, `switch`, `while`, `for` over a list (CTRL-6, CTRL-10, CTRL-12) | `if`, a chain of `if`s on the selector held once, each case a block (a case's binding read after the `switch`, which UNIT-12 binds in the block around it, is reported), `while`, a range `for` over the list or a copy of it |
 | A native candidate or function of core | The runtime library's function, named by its operation and its parameters' types ("The C++ runtime library" below): `::hglrt::add__i64_i64`, a generic one's arguments its template's, `::hglrt::div__f64_f64<::hglrt::ZeroPolicy::nan>`; `convert`'s, of one value, given the type it gives first, `::hglrt::convert_i64<::hgraph::Float>` |
@@ -1780,7 +1796,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 | `when` (TIME-3) | Tested in source order in `eval`, each guarded by what it asks beyond what the node requires: `::hglrt::fn_valid` of an input it alone requires, `::hglrt::fn_modified` of a `modified` selector, and the rest of its condition. One that `scheduled()` or `modified([])` selects is never run in a node that injects no timer, and is not written |
 | `return value`, `out = value`, `invalidate(out)` in a handler (TIME-7, FN-7) | The value published to `out_` as its temporal form publishes, `out_.set(value);`, and for a `return` the evaluation left; `::hglrt::fn_invalidate(out_)` |
 | A temporal input read in a hook; `valid`, `modified`, `delta_value`, `last_modified` of one (TIME-1, END-1 to END-6) | The form's checked read of the view, `::hglrt::checked_value(price)`; the library's natives given the view itself, `::hglrt::fn_valid(price)`; `delta_value` in the form its place takes, `fn_delta_value_checked` where the analyser recorded a `result` (ERR-14) |
-| `is_active(data)`; `activate(data)`, `passivate(data)` (TIME-9, END-5) | The library's natives given the input's view, `::hglrt::fn_is_active(data)`, `::hglrt::fn_activate(data);`: hgraph's own subscription of that binding, which the input's declared activity starts from, and which the guards read as it is. A change in `stop` is reported: hgraph makes passive at stop only the inputs a node declares active |
+| `is_active(data)`; `activate(data)`, `passivate(data)` (TIME-9, END-5) | The library's natives given the input's view, `::hglrt::fn_is_active(data)`, `::hglrt::fn_activate(data);`: hgraph's own subscription of that binding, which the input's declared activity starts from, and which the guards read as it is. Source checking rejects activity changes in `stop` as `input.lifecycle`: every input is passive there (TIME-5) |
 | A temporal value of an enum (TYPE-7, TYPE-16) | hgraph's `TS<Side>`, read, published, replayed, recorded and wired as a constant as a scalar is: its delta is itself |
 | `inject clock`, `logger`, `global_state`; a property of one (TIME-8, CAP-1) | The hook's hgraph view, a parameter of each hook that uses it, and the library's `::hglrt::Clock` made from it at the top of the hook; `clock.evaluation_time()` |
 | `get`, `has`, `put` on the store (CAP-6) | The library's natives, `::hglrt::put_GlobalState_str_V<T>(global_state, key, value)`; every ordinary value is held alike, a struct, a tuple, a set, a dictionary and a delta among them |
@@ -1818,7 +1834,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 | A result taken as its success value in a `when` (ERR-5, ERR-8, ERR-15) | Hold the result before the statement and call `::hglrt::raise(held.error())` on failure. The raised error keeps its context. |
 | `failure.context`, and its `.node`, `.phase`, `.evaluation_time` (ERR-4) | `(failure).context`, a `std::optional` of hgraph's `ErrorContext`, and its members of those names |
 | A trace written out; `==` and `!=` of two (TST-4, TST-6, TST-7, TST-16) | `::hglrt::testing::Dense<T>`, `Timed<T>`, each cell as its type's family writes it; in an `assert`, `expect_same` or `expect_different` of the two held in order, elsewhere `same`; a trace given to a `const fn`, `publications` |
-| A window of a scalar, `rolling_window<i64, 3, 2>`, `rolling_window<i64, 3us, 1us>` (TYPE-11; core's END-9) | hgraph's `TSW<::hgraph::Int, 3, 2>`, `TSWDuration<::hgraph::Int, 3, 1>` (its bounds in microseconds), whose values leave it by age as hgraph has it; a node's `return value` and `out = value` `arrival_.hold(value)`, its `eval` running its handlers in `::hglrt::WindowArrival::run`, which pushes the last value written once they have run, the cycle's one arrival (END-5; `forms::Family::evaluation`), and a source's `::hglrt::window_push(out_, value)`; a read of a node's own window result in its `when`, which would not see what is held, reported; its value read in a hook `::hglrt::window_value(view)`, which fails before it is all valid, or `window_value_checked` where a `result` is taken (`ExprKind::CheckedWindow`); `all_valid` `::hglrt::fn_all_valid`; `delta_value` plain or checked, and `removed_value`, read only into a `result`, `::hglrt::fn_removed_value_checked`; a lifted helper given its `list<V>` (`forms::Family::read_type`), and not called where it is valid and not all valid (FN-11, FN-12; `lifting`); a trace of one, and a source's payload, of its V (`forms::Family::payload`) |
+| A window of a scalar, `rolling_window<i64, 3, 2>`, `rolling_window<i64, 3us, 1us>` (TYPE-11; core's END-9) | hgraph's `TSW<::hgraph::Int, 3, 2>`, `TSWDuration<::hgraph::Int, 3, 1>` (its bounds in microseconds), whose values leave it by age as hgraph has it; a node's `return value` and `out = value` `arrival_.hold(value)`, its `eval` running its handlers in `::hglrt::WindowArrival::run`, which pushes the last value written once they have run, the cycle's one arrival (END-5; `forms::Family::evaluation`), and a source's `::hglrt::window_push(out_, value)`; a handler body reads its own window through `WindowArrival::observe`, which resolves forwarding and applies the staged arrival to a detached hgraph output, and reads metadata and the delta directly from that arrival (TIME-7); its value read in a hook `::hglrt::window_value(view)`, which fails before it is all valid, or `window_value_checked` where a `result` is taken (`ExprKind::CheckedWindow`); `all_valid` `::hglrt::fn_all_valid`; `delta_value` plain or checked, and `removed_value`, read only into a `result`, `::hglrt::fn_removed_value_checked`; a lifted helper given its `list<V>` (`forms::Family::read_type`), and not called where it is valid and not all valid (FN-11, FN-12; `lifting`); a trace of one, and a source's payload, of its V (`forms::Family::payload`) |
 | A temporal struct, tuple and atomic struct (TYPE-9) | `hgraph::NativeTSB<S>`, through `hgraph::native_bundle<S>`, its nominal schema and members, which `structs` writes beside the aggregate with `hglrt::type_named` of it and its delta; a `NominalTSB` of each field's own form where a field is optional; `UnNamedTSB<Field<"0", ...>, ...>`; `TS<S>`, an optional field at any depth among it, which hgraph maps to its `Optional` |
 | A read of one whole, a field read in a hook, `out.bid = value`, a field in a graph (TIME-1, TIME-7, EXPR-7) | `::hglrt::whole_value(quote)`, checked; the child's view `::hglrt::child<0>(quote)` read as its form reads; the child's publication; `::hglrt::field_port<0>(port)`, and for an atomic struct `::hglrt::atomic_field<0, S>(wiring_, port)` |
 | `all_valid`, a publication, `delta_value` of one (TIME-9, TYPE-16) | `::hglrt::fn_all_valid`, one level deep, an optional field aside; `::hglrt::publish(out_, value);` of a whole value or a delta; `::hglrt::fn_delta_value`, each field that published |
@@ -2077,6 +2093,9 @@ or a universal Mach-O, is not held against the package: the line `hgl`
 prints says so. One of no form known, or too short to tell, is. `HGL_HGRAPH_DEBUG` naming a directory that is not whole
 is an error that says what is wrong; a package beside `hgl` that is not
 is passed over, and the optimised libraries are linked, saying why.
+Both forms of package must identify the running hgl version in
+`hgl-debug.txt`. A missing stamp or a different version selects the
+optimised libraries and reports the reason.
 hgraph's installed headers do not depend on `NDEBUG`, so the debug build
 stands in for the optimised one. The runtime library and the
 description of a program are configured with the libraries' own build
@@ -2122,7 +2141,7 @@ many jobs, which changes nothing made.
 DIR/hgraph-sdk`, with `HGL_HGRAPH_SOURCE` naming a checkout of `TAG` for
 a debugger to read, makes a debug SDK for `HGL_HGRAPH_DEBUG` to name,
 beside `DIR/hgraph-deps`, the prefix it was built against or a link to
-it.
+it. Write the hgl version on a single line in `DIR/hgl-debug.txt`.
 
 A toolchain is prepared once and kept under the cache in
 `toolchains/<hash>`, the hash of which build of hgraph's libraries it
@@ -2282,16 +2301,17 @@ before it is committed. Its own tests are
 | Platform | Automatic pull request checks | C++ check before merge |
 | --- | --- | --- |
 | Linux | Hosted formatting, Clippy and Rust workspace tests | Hosted C++ job runs runtime CTests, SDK tests and pinned core cases, plain and sanitized |
-| macOS | Hosted Rust workspace tests | A maintainer dispatches **macOS C++ target** on the reviewed repository branch. It adds the workspace tests and the same C++ checks on Apple silicon |
+| macOS | Hosted Rust workspace tests | A maintainer dispatches **Release bundles** on the reviewed repository branch. Its `cpp-macos` job runs the workspace tests and the same C++ checks on Apple silicon |
 | Windows | Hosted Rust workspace tests | C++ build and execution remain outside CI |
 
-The macOS C++ workflow runs on pushes to `main` and on manual dispatches
-of branches in this repository, when `HGL_SELF_HOSTED_MACOS` is `true`.
-Once the workflow is on `main` and the reviewed branch contains it, a
-maintainer with write access can dispatch that branch.
+**Release bundles** runs its `cpp-macos` job after verifying the
+macOS packages, with the release deployment target. The job runs on pushes
+to `main` and on manual dispatches of branches in this repository when
+`HGL_SELF_HOSTED_MACOS` is `true`. Once the reviewed branch contains the job,
+a maintainer with write access can dispatch that branch.
 
 ```sh
-gh workflow run cpp-macos.yml --repo hhenson/hgl-compiler --ref BRANCH
+gh workflow run release.yml --repo hhenson/hgl-compiler --ref BRANCH
 ```
 
 Check the dispatch result for the commit being merged. Pull request events

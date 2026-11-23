@@ -101,6 +101,39 @@ fn a_capability_has_the_type_core_declares() {
     assert_eq!(locals(&checked, "poll"), ["alarm: Alarm"]);
 }
 
+/// TIME-8 and GEN-3 admit a capability type listed in the type set of an
+/// operator declaration's membership. Other constraints and nested types
+/// still reject it.
+#[test]
+fn a_capability_type_can_be_listed_in_an_operator_type_membership() {
+    let checked = module(concat!(
+        "operator wake<C, W>(capability: C, at: W)\n",
+        "    requires C in {Scheduler, Alarm} && W in {duration, datetime}\n",
+        "operator nested<C>(value: C) requires C in {list<Alarm>}\n",
+        "operator equal<C>(value: C) requires C == Alarm\n",
+        "operator ordinary<C>(value: C)\n",
+        "impl const fn ordinary<C>(value: C) requires C in {Scheduler} {}\n",
+        "const fn helper<C>(value: C) requires C in {Alarm} {}\n",
+        "const ONE: i64 = 1\n",
+        "operator mixed<C>(value: C) requires C in {Alarm, 1}\n",
+        "operator named<C>(value: C) requires C in {ONE, Alarm}\n",
+        "operator constant<const N: i64>(value: i64) requires N in {Alarm}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:50 injectable/capability.as_value TIME-8",
+            "m.hgl:5:43 injectable/capability.as_value TIME-8",
+            "m.hgl:7:52 injectable/capability.as_value TIME-8",
+            "m.hgl:8:45 injectable/capability.as_value TIME-8",
+            "m.hgl:10:44 injectable/capability.as_value TIME-8",
+            "m.hgl:11:44 type/type.not_a_type UNIT-10",
+            "m.hgl:11:49 injectable/capability.as_value TIME-8",
+            "m.hgl:12:60 injectable/capability.as_value TIME-8",
+        ]
+    );
+}
+
 /// TIME-8: "A capability type is written only as the type of a
 /// parameter of a `const fn` or of a native value function. A capability
 /// is used within the node that injects it and is not retained: it is
@@ -539,8 +572,8 @@ fn the_supplied_core_declares_scheduling_and_the_store() {
             "    if price == null { return 0 }\n",
             "    return price\n",
             "}\n",
-            // A tag on an alarm, a number for a time, a key that is no
-            // string, and a key that is a value of the evaluation.
+            // A tag on an alarm, unsupported schedule argument types, a
+            // key that is no string, and a key from the evaluation.
             "fn wrong(value: str) -> str {\n",
             "    inject alarm, global_state\n",
             "    start { schedule(alarm, 1s, tag: \"poll\") }\n",
@@ -565,6 +598,7 @@ fn the_supplied_core_declares_scheduling_and_the_store() {
             // A function of the program that is given the store: its
             // own `const` parameter is no key of the store.
             "const fn labelled(store: GlobalState, const label: str, value: i64) -> i64 => value\n",
+            "const fn wrong_capability(clock: Clock) { schedule(clock, 1s) }\n",
         ),
     )]);
     assert!(checked.core_supplied);
@@ -580,6 +614,7 @@ fn the_supplied_core_declares_scheduling_and_the_store() {
             "m.hgl:41:31 injectable/store.reserved_key TIME-8",
             "m.hgl:43:30 injectable/store.reserved_key TIME-8",
             "m.hgl:43:76 injectable/store.reserved_key TIME-8",
+            "m.hgl:49:43 operator/operator.no_candidate GEN-5",
         ]
     );
     assert_eq!(checked.prelude_names("m"), [""; 0]);

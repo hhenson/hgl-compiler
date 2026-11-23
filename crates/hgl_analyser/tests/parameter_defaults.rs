@@ -14,7 +14,7 @@ fn a_known_failure_in_a_default_is_rejected() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:2:29 local:type/default.constant_failure UNIT-8"],
+        ["m.hgl:2:29 type/constant.failure UNIT-8"],
         "{}",
         checked.report
     );
@@ -44,8 +44,8 @@ fn a_short_circuiting_default_is_checked_at_its_use() {
     assert_eq!(
         bad.summary(),
         [
-            "m.hgl:2:49 local:type/default.constant_failure UNIT-8",
-            "m.hgl:3:46 local:type/default.constant_failure UNIT-8",
+            "m.hgl:2:49 type/constant.failure UNIT-8",
+            "m.hgl:3:46 type/constant.failure UNIT-8",
         ],
         "{}",
         bad.report
@@ -103,5 +103,35 @@ fn an_omitted_default_fits_the_concrete_parameter_type() {
         ["m.hgl:2:44 type/type.mismatch EXPR-5"],
         "{}",
         nested.report
+    );
+}
+
+/// UNIT-8, ERR-9: the catalogued constant.failure code also
+/// covers field defaults; an operand skipped by EXPR-6 does not fail.
+#[test]
+fn field_defaults_use_the_catalogued_constant_failure_code() {
+    let checked = module(concat!(
+        "struct Bad { value: i64 = 1 // 0 }\n",
+        "struct Skipped { value: bool = false && (1 // 0 == 0) }\n",
+        "const fn supplied() -> Bad => Bad(value: 1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:27 type/constant.failure UNIT-8"],
+        "{}",
+        checked.report
+    );
+}
+
+/// ERR-9: an earlier type error prevents another diagnostic about the
+/// same field default's required evaluation.
+#[test]
+fn an_invalid_field_default_type_does_not_cascade_to_constant_failure() {
+    let checked = module("struct Bad { value: bool = 1 // 0 }\n");
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:30 operator/operator.no_candidate OPS-1"],
+        "{}",
+        checked.report
     );
 }

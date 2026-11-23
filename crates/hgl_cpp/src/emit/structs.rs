@@ -28,16 +28,18 @@
 //! endpoint of the whole struct as any other is: hgraph maps the C++
 //! optional of the field to its `Optional`, a null to a published null.
 //!
-//! Not this family's, and reported: a generic struct and an abstract
-//! one as a temporal value, a struct with no field, a tuple with an
-//! atomic position, a struct or a tuple
+//! Not this family's, and reported: an abstract struct or a struct with
+//! generic value arguments as a temporal value, a struct with no field,
+//! a tuple with an atomic position, a struct or a tuple
 //! with a part whose form is not a scalar's, an enum's, a nullable's, a
 //! list's or another of this family's (a set, a dictionary, a window), a
 //! constant connection of one (FN-3), and a read of a part of `out`.
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Hook, Stmt, Value};
-use hgl_analyser::{DeclarationKind, Detail, NamedKind, Program, Scalar, Type};
-use hgl_lower::types::{fields_of, inherited};
+use hgl_analyser::{
+    Argument, DeclarationKind, Detail, GenericKind, NamedKind, Program, Scalar, Type,
+};
+use hgl_lower::types::{fields_of, fixed_list_size, inherited};
 
 use super::Emitter;
 use super::forms::Family;
@@ -45,7 +47,7 @@ use super::graphs::WIRING;
 use super::names;
 use super::nodes::{Kind, Role};
 use super::statements::Scope;
-use super::types::cpp_type;
+use super::types::{cpp_type, cpp_type_in};
 use super::values::INDENT;
 use crate::runtime;
 
@@ -53,9 +55,25 @@ use crate::runtime;
 pub(super) struct Structs;
 
 /// The struct `(module, declaration)` that `ty` names, where it is one
-/// hgraph holds as a nominal bundle: concrete, not generic, with a field,
-/// and each field of a type the bundle can hold ([`bundle_field`]).
+/// hgraph holds as a nominal bundle: concrete, with a supported schema
+/// for each field and generic type argument ([`bundle_field`]).
 pub(super) fn bundled(program: &Program, ty: &Type) -> Option<(usize, usize)> {
+    let Type::Named {
+        module,
+        declaration,
+        kind: NamedKind::Struct,
+        ..
+    } = ty
+    else {
+        return None;
+    };
+    bundles(program, ty, 0, &mut Vec::new()).then_some((*module, *declaration))
+}
+
+/// Check the fields of this particular application, giving each field
+/// the struct's type arguments before looking up its schema (TYPE-3,
+/// TYPE-4). `depth` bounds the structs it holds (TYPE-6).
+fn bundles(program: &Program, ty: &Type, depth: usize, checked: &mut Vec<(Type, usize)>) -> bool {
     let Type::Named {
         module,
         declaration,
@@ -64,47 +82,51 @@ pub(super) fn bundled(program: &Program, ty: &Type) -> Option<(usize, usize)> {
         ..
     } = ty
     else {
-        return None;
+        return false;
     };
-    (arguments.is_empty() && bundles(program, *module, *declaration, 0))
-        .then_some((*module, *declaration))
-}
-
-/// True where the struct `declaration` of `module` is one hgraph holds as
-/// a nominal bundle (TYPE-3): concrete, not generic, with at least one
-/// field, each of a type [`bundle_field`] writes. `depth` bounds the
-/// structs it holds, which hold none of it (TYPE-6).
-fn bundles(program: &Program, module: usize, declaration: usize, depth: usize) -> bool {
-    if depth > 32 || inherited(program, module, declaration) {
+    // An application can occur both as an argument and as a field. Reuse
+    // a successful check with the same or a smaller remaining depth bound.
+    if checked
+        .iter()
+        .any(|(known, at)| depth <= *at && known == ty)
+    {
+        return true;
+    }
+    if depth > 32 || inherited(program, *module, *declaration) || cpp_type(program, ty).is_none() {
         return false;
     }
-    let Some(Detail::Struct(read)) = program.modules[module].details.get(declaration) else {
-        return false;
-    };
-    read.generics.is_empty()
-        && !read.members.is_empty()
-        && read
-            .members
-            .iter()
-            .all(|member| bundle_field(program, &member.ty, depth).is_some())
+    let supported = arguments.iter().all(|argument| {
+        matches!(argument, Argument::Type(ty) if bundle_field(program, ty, depth + 1, checked).is_some())
+    }) && fields_of(program, ty).is_some_and(|fields| {
+        !fields.is_empty()
+            && fields
+                .iter()
+                .all(|(_, field)| bundle_field(program, field, depth, checked).is_some())
+    });
+    if supported {
+        checked.push((ty.clone(), depth));
+    }
+    supported
 }
 
 /// The type of a field of type `ty` in a struct's nominal schema, as
 /// hgraph holds it (`hgraph::NominalBundle`): a scalar or an enum as its
 /// C++ type, a nullable of one as hgraph's `Optional`, and a struct, or
 /// an atomic one, as that struct's own schema. `None` for any other.
-fn bundle_field(program: &Program, ty: &Type, depth: usize) -> Option<String> {
+fn bundle_field(
+    program: &Program,
+    ty: &Type,
+    depth: usize,
+    checked: &mut Vec<(Type, usize)>,
+) -> Option<String> {
     match ty {
         Type::Scalar(Scalar::Any | Scalar::Timezone | Scalar::ZonedTime) => None,
         Type::Scalar(_) => cpp_type(program, ty),
         Type::Named {
-            module,
-            declaration,
-            arguments,
             kind: NamedKind::Struct,
             ..
         } => {
-            if !arguments.is_empty() || !bundles(program, *module, *declaration, depth + 1) {
+            if !bundles(program, ty, depth + 1, checked) {
                 return None;
             }
             Some(format!(
@@ -116,18 +138,18 @@ fn bundle_field(program: &Program, ty: &Type, depth: usize) -> Option<String> {
         Type::Nullable(inner)
             if matches!(**inner, Type::Scalar(_)) || enumeration(program, inner) =>
         {
-            let payload = bundle_field(program, inner, depth)?;
+            let payload = bundle_field(program, inner, depth, checked)?;
             Some(format!("::hgraph::Optional<{payload}>"))
         }
         Type::Atomic(payload) if matches!(**payload, Type::Named { .. }) => {
-            bundle_field(program, payload, depth)
+            bundle_field(program, payload, depth, checked)
         }
         // A list field, whose temporal form is the `lists` family's `TSL`:
         // the value schema hgraph holds that `TSL` as, of the element's
         // (structs.h, `list_value`), which the bundle's field must be.
         Type::List { element, size } => {
-            let element = bundle_field(program, element, depth)?;
-            match size {
+            let element = bundle_field(program, element, depth, checked)?;
+            match fixed_list_size(size.as_ref()) {
                 None => Some(format!("::{}::list_value<{element}>", runtime::NAMESPACE)),
                 Some(size) => match size.value {
                     hgl_analyser::ConstantValue::Int(count) if count > 0 => Some(format!(
@@ -626,18 +648,40 @@ impl Emitter<'_> {
     /// (its module's path and its name) with each field's type, and its
     /// members; and `hglrt::type_named` of it and of its delta, by which
     /// the library names it, a list of it among them (values.h).
-    pub(super) fn bundle_traits(&self, index: usize, qualified: &str, delta: &str) -> String {
+    pub(super) fn bundle_traits(
+        &self,
+        index: usize,
+        qualified: &str,
+        delta: &str,
+        specialized: &str,
+        parameters: &[String],
+    ) -> String {
         let program = self.program;
         let declared = &program.modules[self.module];
-        if !bundles(program, self.module, index, 0) {
-            return String::new();
-        }
         let Some(Detail::Struct(read)) = declared.details.get(index) else {
             return String::new();
         };
+        if inherited(program, self.module, index)
+            || read.members.is_empty()
+            || read
+                .generics
+                .iter()
+                .any(|parameter| !matches!(parameter.kind, GenericKind::Plain | GenericKind::Type))
+        {
+            return String::new();
+        }
+        let generic = !parameters.is_empty();
+        let ns = runtime::NAMESPACE;
+        let schema_of = |ty: &str| format!("::{ns}::bundle_value<{ty}>");
         let mut fields = Vec::new();
+        let mut checked = Vec::new();
         for member in &read.members {
-            let Some(field) = bundle_field(program, &member.ty, 0) else {
+            let field = if generic {
+                cpp_type_in(program, &member.ty, true).map(|ty| schema_of(&ty))
+            } else {
+                bundle_field(program, &member.ty, 0, &mut checked)
+            };
+            let Some(field) = field else {
                 return String::new();
             };
             fields.push(format!(
@@ -645,18 +689,26 @@ impl Emitter<'_> {
                 names::string(&member.name)
             ));
         }
-        let name = &declared.declarations[index].name;
-        let hgl_name = format!("{}::{name}", declared.path);
+        let declaration = &declared.declarations[index];
+        let name = &declaration.name;
+        let hgl_name = declared.qualified_declaration_name(name, declaration.test_owner);
+        let namespace = hgl_name
+            .rsplit_once("::")
+            .map_or(&*declared.path, |(scope, _)| scope);
+        let arguments = parameters
+            .iter()
+            .map(|parameter| schema_of(parameter))
+            .collect::<Vec<_>>()
+            .join(", ");
         let schema = format!(
-            "::hgraph::NominalBundle<{}, {}, false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<>, {}>",
-            names::string(&declared.path),
+            "::hgraph::NominalBundle<{}, {}, false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<{arguments}>, {}>",
+            names::string(namespace),
             names::string(name),
             fields.join(", ")
         );
-        let ns = runtime::NAMESPACE;
         let mut text = format!(
             "// TYPE-9: `{name}` as hgraph's nominal bundle, its fields as `fields` names them.\n\
-             template <>\nstruct hgraph::native_bundle<{qualified}>\n{{\n\
+             {specialized}struct hgraph::native_bundle<{qualified}>\n{{\n\
              {INDENT}using schema = {schema};\n\
              {INDENT}static constexpr auto members = ::{ns}::fields<{qualified}>::members;\n}};\n"
         );
@@ -665,16 +717,35 @@ impl Emitter<'_> {
             .iter()
             .map(|member| names::string(&member.name))
             .collect();
-        for (of, named, is_delta) in [
-            (qualified.to_string(), hgl_name.clone(), false),
-            (delta.to_string(), format!("delta<{hgl_name}>"), true),
-        ] {
+        for (of, is_delta) in [(qualified, false), (delta, true)] {
+            let name = if generic {
+                let applied = format!(
+                    "::{ns}::applied_struct_name<{}>({})",
+                    parameters.join(", "),
+                    names::string(&hgl_name),
+                );
+                let name = if is_delta {
+                    format!("\"delta<\" + {applied} + \">\"")
+                } else {
+                    applied
+                };
+                format!("static ::std::string name() {{ return {name}; }}")
+            } else {
+                let name = if is_delta {
+                    format!("delta<{hgl_name}>")
+                } else {
+                    hgl_name.clone()
+                };
+                format!(
+                    "static constexpr ::std::string_view name = {};",
+                    names::string(&name)
+                )
+            };
             text.push_str(&format!(
-                "template <>\nstruct {ns}::type_named<{of}>\n{{\n\
-                 {INDENT}static constexpr ::std::string_view name = {};\n\
+                "{specialized}struct {ns}::type_named<{of}>\n{{\n\
+                 {INDENT}{name}\n\
                  {INDENT}static constexpr ::std::array<::std::string_view, {}> fields{{{}}};\n\
                  {INDENT}static constexpr bool delta = {is_delta};\n}};\n",
-                names::string(&named),
                 field_names.len(),
                 field_names.join(", ")
             ));

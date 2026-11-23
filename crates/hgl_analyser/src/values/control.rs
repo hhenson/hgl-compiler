@@ -776,7 +776,9 @@ impl<'a> Typer<'a> {
         if children {
             self.dynamic = Some(outside);
         }
+        let range_scope = self.enter_range_bindings(&sequence, &names);
         let body = self.loop_body(child(node, SyntaxKind::Block).as_ref());
+        self.unrolled_range_bindings.truncate(range_scope);
         self.dynamic = outer;
         Stmt::For {
             names,
@@ -784,6 +786,20 @@ impl<'a> Typer<'a> {
             body,
             at,
         }
+    }
+
+    /// CTRL-16: a graph range with fixed bounds gives each pass a
+    /// constant name. Track it only while reading that pass's body.
+    fn enter_range_bindings(&mut self, sequence: &Expr, names: &[LocalId]) -> usize {
+        let scope = self.unrolled_range_bindings.len();
+        if self.graph
+            && let ExprKind::Range { lower, upper } = &sequence.kind
+            && self.is_fixed(lower, &self.unrolled_range_bindings)
+            && self.is_fixed(upper, &self.unrolled_range_bindings)
+        {
+            self.unrolled_range_bindings.extend_from_slice(names);
+        }
+        scope
     }
 
     /// An iterable has the ordinary collection rules (CTRL-12), or is a
@@ -841,7 +857,7 @@ impl<'a> Typer<'a> {
             return (ExprKind::Unread, Type::Unknown);
         };
         let before_sequence = self.diagnostics.len();
-        let sequence = self.loop_iterable(&sequence_node);
+        let mut sequence = self.loop_iterable(&sequence_node);
         let binding_ty = self.loop_bindings(&sequence, 1).remove(0);
         let sequence_reported = self.diagnostics.len() != before_sequence;
         let over = if self.graph {
@@ -858,20 +874,19 @@ impl<'a> Typer<'a> {
             true,
         );
         self.locals[binding].category = item_category[0];
-        let (element, fixed) = match not_null(expected) {
-            Some(Type::List { element, size }) => (
-                Some(&**element),
-                size.as_ref()
-                    .filter(|size| !matches!(size.value, ConstantValue::Unbounded)),
-            ),
+        let (element, expected_size) = match not_null(expected) {
+            Some(Type::List { element, size }) => (Some(&**element), size.as_ref()),
             _ => (None, None),
         };
+        let fixed = expected_size.filter(|size| !matches!(size.value, ConstantValue::Unbounded));
         // It is possible to make no entries. What happens in an entry
         // cannot prove a binding assigned, present, or returned after it.
         let before = self.assigned.clone();
         let returned = self.returned;
         let present = self.present.len();
+        let range_scope = self.enter_range_bindings(&sequence, &[binding]);
         let value = self.expression(&entry, element);
+        self.unrolled_range_bindings.truncate(range_scope);
         let value = match element {
             Some(element) => self.fit_input(value, element, "this list entry"),
             None => value,
@@ -886,14 +901,32 @@ impl<'a> Typer<'a> {
         } else {
             None
         };
-        let ty = if self.graph && !sequence_reported && size.is_none() && open(&sequence.ty) {
+        // EXPR-17: an ordinary range result has the same list shape as
+        // its entries written out. A temporal result uses the pass count.
+        let range_entry =
+            (self.graph && fixed.is_none() && matches!(sequence.kind, ExprKind::Range { .. }))
+                .then(|| self.category(&value));
+        let pending_range =
+            range_entry == Some(ValueCategory::Unsettled) && !sequence_reported && size.is_some();
+        if pending_range && let Type::List { size: extent, .. } = &mut sequence.ty {
+            // Keep the pass count on the range until the result's
+            // category settles. The range's type is projected as usual.
+            *extent = size.clone();
+        }
+        let ty = if pending_range
+            || self.graph && !sequence_reported && size.is_none() && open(&sequence.ty)
+        {
             // The fixed list's size and the type of the binding can
             // still depend on instance selection.
             Type::Unknown
         } else {
             Type::List {
                 element: Box::new(element.cloned().unwrap_or_else(|| value.ty.clone())),
-                size,
+                size: if range_entry == Some(ValueCategory::Value) {
+                    expected_size.cloned()
+                } else {
+                    size
+                },
             }
         };
         (
@@ -902,6 +935,7 @@ impl<'a> Typer<'a> {
                 binding,
                 sequence: Box::new(sequence),
                 entry: Box::new(value),
+                ordinary_size: expected_size.filter(|_| pending_range).cloned(),
             },
             ty,
         )

@@ -1,0 +1,83 @@
+module demo.nested_scalar_guards
+
+# EXPR-6 and ERR-12: the separate guards preserve short-circuit order
+# and the last guard can still protect a nullable payload read.
+const fn positive(value: i64) -> bool => value > 0
+
+fn all_present(
+    const a0: i64?, const a1: i64?, const a2: i64?,
+    const a3: i64?, const a4: i64?, const a5: i64?,
+    const a6: i64?, const a7: i64?, const a8: i64?,
+    const a9: i64?, const a10: i64?, const a11: i64?,
+    const a12: i64?, const a13: i64?, const a14: i64?,
+    const a15: i64?, const a16: i64?, const a17: i64?,
+    const a18: i64?, const a19: i64?, const a20: i64?,
+    const a21: i64?, const a22: i64?, const a23: i64?
+) -> bool =>
+    a0 != null && (a1 != null && (a2 != null && (a3 != null &&
+    (a4 != null && (a5 != null && (a6 != null && (a7 != null &&
+    (a8 != null && (a9 != null && (a10 != null && (a11 != null &&
+    (a12 != null && (a13 != null && (a14 != null && (a15 != null &&
+    (a16 != null && (a17 != null && (a18 != null && (a19 != null &&
+    (a20 != null && (a21 != null && (a22 != null && (a23 != null &&
+    true)))))))))))))))))))))))
+
+fn mixed(
+    const a0: i64?, const a1: i64?, const a2: i64?,
+    const a3: i64?, const a4: i64?, const a5: i64?,
+    const a6: i64?, const a7: i64?, const a8: i64?,
+    const a9: i64?, const a10: i64?, const a11: i64?,
+    const a12: i64?, const a13: i64?, const a14: i64?,
+    const a15: i64?, const a16: i64?, const a17: i64?,
+    const a18: i64?, const a19: i64?, const a20: i64?,
+    const a21: i64?, const a22: i64?, const a23: i64?
+) -> bool =>
+    a0 != null && (a1 == null || (a2 != null && (a3 == null ||
+    (a4 != null && (a5 == null || (a6 != null && (a7 == null ||
+    (a8 != null && (a9 == null || (a10 != null && (a11 == null ||
+    (a12 != null && (a13 == null || (a14 != null && (a15 == null ||
+    (a16 != null && (a17 == null || (a18 != null && (a19 == null ||
+    (a20 != null && (a21 == null || (a22 != null && (a23 == null ||
+    positive(a23))))))))))))))))))))))))
+
+test all_present_guards {
+    assert eval all_present(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: 1, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: 1, a19: 1, a20: 1, a21: 1, a22: 1, a23: 1
+    ) == [true]
+    assert eval all_present(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: 1, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: 1, a19: 1, a20: 1, a21: 1, a22: 1, a23: null
+    ) == [false]
+}
+
+test mixed_guards {
+    assert eval mixed(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: 1, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: 1, a19: 1, a20: 1, a21: 1, a22: 1, a23: 1
+    ) == [true]
+    assert eval mixed(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: 1, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: 1, a19: 1, a20: 1, a21: 1, a22: null, a23: 1
+    ) == [false]
+    assert eval mixed(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: 1, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: 1, a19: 1, a20: 1, a21: 1, a22: 1, a23: null
+    ) == [true]
+    assert eval mixed(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: 1, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: 1, a19: 1, a20: 1, a21: 1, a22: 1, a23: -1
+    ) == [false]
+}

@@ -7,12 +7,13 @@
 mod application;
 mod build;
 mod commands;
+mod debug_tests;
 mod plan;
 mod results;
 mod sdk;
 mod stamp;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::Read as _;
@@ -39,6 +40,9 @@ pub(super) use build::native_build_child;
 pub(super) use commands::{build, run};
 pub(super) use plan::CaseOutcome;
 pub(super) use stamp::Replacements;
+
+/// Workspace directory for embedded sources named by debugger line tables.
+const DEBUG_SOURCES: &str = "debug-sources";
 
 /// Writes `files` under `directory`, each where it differs from what is
 /// there: `hgl emit --target cpp`.
@@ -166,6 +170,17 @@ impl BuildSession {
         program: &plan::Program,
         interrupt: &Interrupt,
     ) -> Result<Description, String> {
+        self.finish_native(key, output, program, interrupt, None)
+    }
+
+    fn finish_native(
+        &self,
+        key: &str,
+        output: &Output,
+        program: &plan::Program,
+        interrupt: &Interrupt,
+        debug_tests: Option<&BTreeSet<&str>>,
+    ) -> Result<Description, String> {
         interrupt.check()?;
         let ninja = self.toolchain.ninja()?;
         let description =
@@ -174,19 +189,40 @@ impl BuildSession {
         interrupt.check()?;
         self.workspace
             .write(output, &description, program.tests.is_some())?;
-        let artifacts = self.workspace.build_program(
-            ninja,
-            output,
-            program.tests.is_some(),
-            self.jobs.as_deref(),
-            self.previous.as_ref().map(|previous| &previous.stamp),
-        );
+        let previous = self.previous.as_ref().map(|previous| &previous.stamp);
+        let jobs = self.jobs.as_deref();
+        let artifacts = match debug_tests {
+            Some(stems) => self
+                .workspace
+                .build_debug_tests(ninja, output, stems, jobs, previous),
+            None => {
+                self.workspace
+                    .build_program(ninja, output, program.tests.is_some(), jobs, previous)
+            }
+        };
         interrupt.check()?;
-        let artifacts = artifacts?;
+        let mut artifacts = artifacts?;
+        // A reusable debug launch needs the sources from its line tables
+        // as well as the executable.
+        artifacts.extend(
+            output
+                .files
+                .iter()
+                .filter(|file| Path::new(&file.path).starts_with(DEBUG_SOURCES))
+                .map(|file| file.path.clone()),
+        );
         if self.toolchain.key() != self.toolchain_key {
             return Err("the C++ toolchain changed during the build".to_string());
         }
-        let stamp = Stamp::describe(&self.workspace, key, artifacts, program)?;
+        let retained = debug_tests.and(previous);
+        let stamp = Stamp::describe(
+            &self.workspace,
+            key,
+            artifacts,
+            program,
+            debug_tests.is_some(),
+            retained,
+        )?;
         interrupt.finish()?;
         Stamp::save(&self.workspace, &stamp)?;
         Ok(description)
@@ -199,6 +235,9 @@ pub(super) fn test(
     selection: &Selection,
     paths: Option<&[PathBuf]>,
 ) -> ExitCode {
+    if let Some(directory) = arguments.debug_build.as_deref() {
+        return debug_tests::run(arguments, directory, selection, paths);
+    }
     let interrupt = match Interrupt::watch(None) {
         Ok(interrupt) => interrupt,
         Err(reason) => return commands::build_error(reason),

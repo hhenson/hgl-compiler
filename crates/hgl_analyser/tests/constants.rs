@@ -495,3 +495,251 @@ fn a_constant_whose_value_depends_on_itself_is_reported() {
         across.report
     );
 }
+/// UNIT-13 and TYPE-5: a constructor follows the selected defaults of
+/// omitted fields when checking constant dependencies.
+#[test]
+fn only_omitted_fields_contribute_constructor_default_dependencies() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Own {\n    value: i64 = supplied\n    other: i64 = 9\n}\n",
+            "const supplied: i64 = Own(value: 4).value\n",
+            "abstract struct Parent { value: i64 = inherited }\n",
+            "struct Child : Parent {}\n",
+            "const inherited: i64 = Child(value: 5).value\n",
+            "abstract struct Base { value: i64 = overridden }\n",
+            "struct Override : Base { value = 11 }\n",
+            "const overridden: i64 = Override().value\n",
+            "struct Cycle { value: i64 = omitted }\n",
+            "const omitted: i64 = Cycle().value\n",
+            "abstract struct CycleBase { value: i64 = inherited_cycle }\n",
+            "struct CycleChild : CycleBase {}\n",
+            "const inherited_cycle: i64 = CycleChild().value\n",
+            "abstract struct OverrideBase { value: i64 = 8 }\n",
+            "struct OverrideCycle : OverrideBase { value = override_cycle }\n",
+            "const override_cycle: i64 = OverrideCycle().value\n",
+        ),
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:14:7 name/constant.cycle UNIT-13",
+            "m.hgl:17:7 name/constant.cycle UNIT-13",
+            "m.hgl:20:7 name/constant.cycle UNIT-13",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// UNIT-13, TYPE-5, FN-19: each concrete constructor call reads the
+/// defaults of the fields its written and forwarded arguments leave out.
+#[test]
+fn packed_constructors_follow_omitted_field_defaults() {
+    let checked = check(&[
+        (
+            "direct.hgl",
+            concat!(
+                "module direct\n",
+                "struct Pt {\n    a: i64 = A\n    b: i64 = 0\n}\n",
+                "const fn make<...Vs>(values: ...{Vs}) -> i64 => Pt(...values).a\n",
+                "const A: i64 = make(b: 1)\n",
+            ),
+        ),
+        (
+            "forwarded.hgl",
+            concat!(
+                "module forwarded\n",
+                "struct Pt {\n    a: i64 = A\n    b: i64 = 0\n}\n",
+                "const fn make<...Vs>(values: ...{Vs}) -> i64 => Pt(...values).a\n",
+                "const fn relay<...Vs>(values: ...{Vs}) -> i64 => make(...values)\n",
+                "const A: i64 = relay(b: 2)\n",
+            ),
+        ),
+        (
+            "mixed.hgl",
+            concat!(
+                "module mixed\n",
+                "struct Trio {\n    a: i64 = 8\n    b: i64 = B\n    c: i64 = 0\n}\n",
+                "const fn choose<...Vs>(values: ...{Vs}) -> i64 => Trio(a: 1, ...values).b\n",
+                "const fn relay<T>(value: T) -> i64 => choose(c: value)\n",
+                "const B: i64 = relay(3)\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "direct.hgl:7:7 name/constant.cycle UNIT-13",
+            "forwarded.hgl:8:7 name/constant.cycle UNIT-13",
+            "mixed.hgl:9:7 name/constant.cycle UNIT-13",
+        ],
+        "{}",
+        checked.report
+    );
+    for path in [
+        "through `Pt` and `make`",
+        "through `Pt` and `make` and `relay`",
+        "through `Trio` and `choose` and `relay`",
+    ] {
+        assert!(checked.report.contains(path), "{}", checked.report);
+    }
+}
+
+/// TYPE-5: giving a field bypasses its default even when another call of
+/// the same function uses that default through a different pack shape.
+#[test]
+fn a_supplied_field_keeps_its_pack_shape_away_from_the_default() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Pt {\n    a: i64 = Provided\n    b: i64 = 0\n}\n",
+            "const fn make<...Vs>(values: ...{Vs}) -> i64 => Pt(...values).a\n",
+            "const Provided: i64 = make(a: 5, b: 1)\n",
+            "const UsesDefault: i64 = make(b: 2)\n",
+        ),
+    )]);
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// UNIT-8: a parameter or field default that needs itself is rejected at
+/// its expression, through the function it calls or directly.
+#[test]
+fn a_default_which_needs_itself_is_reported_where_declared() {
+    let checked = check(&[
+        (
+            "fields.hgl",
+            concat!(
+                "module fields\n",
+                "struct Pt { a: i64 = make() }\n",
+                "const fn make() -> i64 => Pt().a\n",
+                "struct Direct { a: i64 = Direct().a }\n",
+            ),
+        ),
+        (
+            "parameters.hgl",
+            concat!(
+                "module parameters\n",
+                "const fn first(value: i64 = again()) -> i64 => value\n",
+                "const fn again() -> i64 => first()\n",
+                "const fn direct(value: i64 = direct()) -> i64 => value\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "fields.hgl:2:22 name/default.cycle UNIT-8",
+            "fields.hgl:4:26 name/default.cycle UNIT-8",
+            "parameters.hgl:2:29 name/default.cycle UNIT-8",
+            "parameters.hgl:4:30 name/default.cycle UNIT-8",
+        ],
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked
+            .report
+            .contains("the default of `a` in `Pt` depends on itself, through `make`")
+    );
+    assert!(
+        checked
+            .report
+            .contains("the default of `value` in `first` depends on itself, through `again`")
+    );
+}
+
+/// UNIT-8: a supplied field or parameter does not evaluate its default
+/// even if the call comes back to its own declaration.
+#[test]
+fn supplied_arguments_break_the_path_through_a_default() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Kept { a: i64 = filled_field() }\n",
+            "const fn filled_field() -> i64 => Kept(a: 9).a\n",
+            "const fn defaulted(value: i64 = filled_parameter()) -> i64 => value\n",
+            "const fn filled_parameter() -> i64 => defaulted(value: 11)\n",
+            "test t {\n    assert Kept().a == 9\n    assert defaulted() == 11\n}\n",
+        ),
+    )]);
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// UNIT-8 and TYPE-5: a concrete forwarded pack reads the default of
+/// a field only if its keys leave that field out (FN-19).
+#[test]
+fn a_forwarded_pack_can_omit_a_cyclic_field_default() {
+    let source = concat!(
+        "module m\n",
+        "struct Pt {\n",
+        "    a: i64 = make(b: 1)\n",
+        "    b: i64 = 0\n",
+        "}\n",
+        "const fn make<...Vs>(values: ...{Vs}) -> i64 => Pt(...values).a\n",
+    );
+    let omitted = check(&[("m.hgl", source)]);
+    assert_eq!(
+        omitted.summary(),
+        ["m.hgl:3:14 name/default.cycle UNIT-8"],
+        "{}",
+        omitted.report
+    );
+
+    let filled = source.replace("make(b: 1)", "make(a: 5, b: 1)");
+    let supplied = check(&[("m.hgl", &filled)]);
+    assert_eq!(supplied.summary(), NONE, "{}", supplied.report);
+}
+
+/// UNIT-8 and UNIT-13 read dependencies in the written branches, even
+/// when the condition prevents a branch from running.
+#[test]
+fn written_branches_supply_constant_and_default_dependencies() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const A: i64 = if false { A } else { 1 }\n",
+            "struct Point { a: i64 = make() }\n",
+            "const fn make() -> i64 => if false { Point().a } else { 1 }\n",
+        ),
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:7 name/constant.cycle UNIT-13",
+            "m.hgl:3:25 name/default.cycle UNIT-8",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// A default's own cycle still rejects when a constant also depends on
+/// itself through that default (UNIT-8, UNIT-13).
+#[test]
+fn a_default_cycle_can_share_a_dependency_with_a_constant_cycle() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Pt { a: i64 = again() + A }\n",
+            "const fn again() -> i64 => Pt().a\n",
+            "const A: i64 = Pt().a\n",
+        ),
+    )]);
+    let mut found = checked.summary();
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            "m.hgl:2:22 name/default.cycle UNIT-8",
+            "m.hgl:4:7 name/constant.cycle UNIT-13",
+        ],
+        "{}",
+        checked.report
+    );
+}

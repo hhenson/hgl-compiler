@@ -85,7 +85,7 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         used: bool,
     ) -> (ExprKind, Type) {
-        let (Some(callee), Some(list)) = (node.children().next(), child(node, SyntaxKind::ArgList))
+        let (Some(callee), Some(list)) = (call_callee(node), child(node, SyntaxKind::ArgList))
         else {
             return (ExprKind::Unread, Type::Unknown);
         };
@@ -497,6 +497,28 @@ impl<'a> Typer<'a> {
             .collect()
     }
 
+    /// Whether a name occupies a call's callee or a written argument
+    /// position. The argument reader owns both parentheses and braces.
+    pub(super) fn is_call_operand(&self, node: &SyntaxNode) -> bool {
+        let Some(parent) = crate::syntax::parent_outside_grouping(node) else {
+            return false;
+        };
+        if call_callee(&parent).map(ungrouped).as_ref() == Some(node) {
+            return true;
+        }
+        // The value's parent is its entry. The parentheses or braces
+        // containing that entry are a direct child of their call.
+        parent
+            .parent()
+            .and_then(|entries| entries.parent())
+            .and_then(|call| child(&call, SyntaxKind::ArgList))
+            .is_some_and(|list| {
+                self.call_entries(&list)
+                    .into_iter()
+                    .any(|(_, _, value)| ungrouped(value) == *node)
+            })
+    }
+
     /// The names and expressions in a call's configuration (EXPR-10).
     fn configuration_entries(list: &SyntaxNode) -> impl Iterator<Item = (SyntaxToken, SyntaxNode)> {
         list.parent()
@@ -534,14 +556,7 @@ impl<'a> Typer<'a> {
                 value: self.expression(&value, Some(&Type::Unknown)),
             })
             .collect();
-        let kind = ExprKind::Call {
-            callee: Callee::Unread,
-            arguments,
-            form: Form::Named,
-            braced: Vec::new(),
-            lifted: false,
-        };
-        (kind, Type::Unknown)
+        (unread_call_kind(arguments), Type::Unknown)
     }
 
     /// A call of the value function `declaration` of `module`.
@@ -577,7 +592,19 @@ impl<'a> Typer<'a> {
             Detail::Callable(signature) => signature.result.as_ref(),
             _ => None,
         };
-        if let Some(call) = self.defer_pack_call(list, result, expected) {
+        if let Some(call) = self.defer_pack_call_with(list, result, expected, |typer| {
+            let evaluating = std::mem::take(&mut typer.evaluating);
+            typer
+                .call_function_with(
+                    name,
+                    list,
+                    (module, declaration),
+                    expected,
+                    given,
+                    evaluating,
+                )
+                .0
+        }) {
             return call;
         }
         // The call an `eval` stands for is this one, and not one among
@@ -705,6 +732,7 @@ impl<'a> Typer<'a> {
         else {
             return self.unread_call(list);
         };
+        let computed = super::forwarded_packs::has_computed_spread(list);
         // What a parameter takes: its type, or in an eval a trace for
         // one that is not `const`. TST-5: "Each cell is one cycle's
         // publication: it is read as the `delta<T>` (TYPE-16) of its
@@ -774,6 +802,9 @@ impl<'a> Typer<'a> {
             let reported = self.diagnostics.len();
             let arguments = self.bind(name, list, &slots, Takes::Parameters);
             let ty = signature.result.as_ref().map_or(Type::Unknown, known);
+            if computed {
+                return (unread_call_kind(arguments), ty);
+            }
             // GEN-3: a function with no generic parameter may state a
             // `requires` too, of types it names itself, and a call of
             // it is held to that. Not where something else was
@@ -796,6 +827,7 @@ impl<'a> Typer<'a> {
                 generics: Vec::new(),
                 type_packs: Vec::new(),
                 requirements,
+                defer_pack_members: false,
                 contextual: Vec::new(),
             };
             let kind = ExprKind::Call {
@@ -856,7 +888,7 @@ impl<'a> Typer<'a> {
             slots: &slots,
             patterns: patterns.iter().collect(),
             generics,
-            settled: !expected.is_some_and(open),
+            settled: !computed && !expected.is_some_and(open),
             aside: &value_names,
             values: &named,
             written_pack: written_pack
@@ -878,6 +910,9 @@ impl<'a> Typer<'a> {
             missing_pack_context,
             type_packs: reflected,
         } = self.infer_arguments(name, list, &places, found, Takes::Parameters);
+        if computed {
+            return (unread_call_kind(arguments), Type::Unknown);
+        }
         let mut type_packs = vec![None; generics.len()];
         // FN-8 and GEN-10: collect the individual types in capture order.
         for (slot, parameter) in slots.iter().enumerate() {
@@ -992,7 +1027,8 @@ impl<'a> Typer<'a> {
         let requires_rejects = judged
             && !unresolved.is_empty()
             && self.pack_requires_rejects(at, (module, declaration), &found, &known_packs);
-        if judged && !unresolved.is_empty() && !requires_rejects {
+        let reports_unresolved = judged && !unresolved.is_empty() && !requires_rejects;
+        if reports_unresolved {
             let names: Vec<String> = unresolved.iter().map(|name| format!("`{name}`")).collect();
             self.diagnostics.emit(
                 error(
@@ -1051,6 +1087,7 @@ impl<'a> Typer<'a> {
         // GEN-3 and GEN-10: the callee's `requires` holds with what was
         // resolved, including the separate sequence in each type pack.
         // Not where something else was reported of the call (ERR-9).
+        let mut defer_pack_members = false;
         if judged
             && unresolved.is_empty()
             && type_packs.iter().all(|pack| !pack.infer_from_arguments)
@@ -1068,9 +1105,10 @@ impl<'a> Typer<'a> {
             ) {
                 // GEN-18 handled the condition with its function identity.
             } else if first_pack.is_none() {
-                self.requires_met(at, (module, declaration), &resolved);
+                defer_pack_members = !self.requires_met(at, (module, declaration), &resolved);
             } else {
-                self.pack_requires_met(at, (module, declaration), &resolved, &type_packs);
+                defer_pack_members =
+                    !self.pack_requires_met(at, (module, declaration), &resolved, &type_packs);
             }
         }
         // Named operator requirements over pack members still need to
@@ -1086,6 +1124,7 @@ impl<'a> Typer<'a> {
             generics: resolved,
             type_packs,
             requirements,
+            defer_pack_members,
             contextual: if !faulty && self.diagnostics.len() == reported {
                 contextual
             } else {
@@ -1100,6 +1139,14 @@ impl<'a> Typer<'a> {
             lifted: false,
         };
         self.finished_call(&kind, evaluating);
+        // An already-rejected bare success supplies no result type for
+        // the nullable place to check again (ERR-9).
+        if reports_unresolved
+            && result_fallback.is_some_and(|(_, place)| matches!(place, Type::Nullable(_)))
+            && matches!(&ty, Type::Result { value, .. } if **value == Type::Unknown)
+        {
+            return (kind, Type::Unknown);
+        }
         (kind, ty)
     }
 
@@ -1165,6 +1212,7 @@ impl<'a> Typer<'a> {
                     generics,
                     type_packs,
                     requirements,
+                    defer_pack_members,
                     contextual,
                 },
             arguments,
@@ -1437,9 +1485,9 @@ impl<'a> Typer<'a> {
             if let Some(missing) = pack_types.written_member_fault(owner, *declaration, &map) {
                 self.pack_member_fault(call.at, &missing);
             } else if packs.is_empty() {
-                self.requires_met(call.at, callee, &resolved);
+                *defer_pack_members = !self.requires_met(call.at, callee, &resolved);
             } else {
-                self.pack_requires_met(call.at, callee, &resolved, &packs);
+                *defer_pack_members = !self.pack_requires_met(call.at, callee, &resolved, &packs);
             }
         }
         if packs.is_empty() {
@@ -1578,6 +1626,25 @@ impl<'a> Typer<'a> {
             ),
             _ => None,
         }
+    }
+}
+
+fn unread_call_kind(arguments: Vec<hir::Argument>) -> ExprKind {
+    ExprKind::Call {
+        callee: Callee::Unread,
+        arguments,
+        form: Form::Named,
+        braced: Vec::new(),
+        lifted: false,
+    }
+}
+
+/// The callable expression, as it is written before the arguments.
+pub(super) fn call_callee(node: &SyntaxNode) -> Option<SyntaxNode> {
+    if node.kind() == SyntaxKind::CallExpr {
+        node.children().next()
+    } else {
+        None
     }
 }
 

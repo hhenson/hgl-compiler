@@ -91,7 +91,9 @@ impl Emitter<'_> {
         shown: &str,
     ) {
         let program = self.program;
-        let at = program.modules[self.module].declarations[index].at;
+        let declaration = &program.modules[self.module].declarations[index];
+        let at = declaration.at;
+        let end = declaration.syntax.text_range().end().into();
         // SOURCE-1: what the source's declarations and hooks add to its
         // node (`scheduling`): nothing for one that has none.
         let Some(hooked) = self.source_hooks(signature, body) else {
@@ -218,6 +220,7 @@ impl Emitter<'_> {
         eval.extend(hooked.eval_parameters.iter().cloned());
         let mut stop = vec![state.clone()];
         stop.extend(hooked.stop_parameters.iter().cloned());
+        let closing = self.debug_end(at, end, format!("{INDENT}}}\n"));
         let text = format!(
             "// {shown}\n\
              struct {IMPLEMENTATION}\n{{\n\
@@ -229,7 +232,7 @@ impl Emitter<'_> {
              {INDENT}using body_type_ = ::{library}::generator<yielded_type_>;\n\n\
              {declared}\
              {INDENT}// The body (SOURCE-1), given its configuration by value.\n\
-             {INDENT}static body_type_ body_({taken})\n{INDENT}{{\n{statements}{INDENT}}}\n\n\
+             {INDENT}static body_type_ body_({taken})\n{INDENT}{{\n{statements}{closing}\n\
              {INDENT}// The node's state (TIME-6): the body, where it is, and the\n\
              {INDENT}// timing of its yields.\n\
              {INDENT}struct state_type_\n{INDENT}{{\n\

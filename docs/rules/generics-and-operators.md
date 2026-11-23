@@ -22,7 +22,8 @@ analyser: partial
 - A graph instance fills unresolved inferred struct type arguments from settled fields in written order and checks the concrete application (GEN-3, GEN-7). An earlier unsettled field can defer a later field's binding. Explicit and expected type arguments and types needed to read a contextual field or generic default keep their source treatment.
 - A graph instance can infer a named function's type arguments from settled operands and use the resulting parameter types to read context-dependent arguments (EXPR-9, ERR-2).
 - A nullable type the call writes for an operator's result that is a type parameter is given whole to a generic candidate whose result is one: `get<i64?>(...)` gives core's candidate an `i64?`
-- A nullable place leaves a bare result parameter for the inputs to decide. A fallible dictionary read resolves its success type from the dictionary. A store read can infer it from its place (CAP-6).
+- A nullable place leaves a bare result parameter for the inputs, a written type, or a solvable equality to decide (GEN-3, GEN-8). A fallible dictionary read resolves its success type from the dictionary. A plain value place can decide a store read's success type (CAP-6, ERR-15).
+- A nullable temporal result preserves an unresolved bare call result when checking a publication. A call whose declared result has a delta shape can still take the publication's delta context (TIME-7).
 - A plain result place can resolve the success type of a fallible generic call and let a bare parameter read the success of a result argument (ERR-15).
 - A generic value parameter takes its default where nothing else says what it is: a function's and a candidate's at a call, a struct's where it is named bare or constructed, an operator's in the output requested
 - Left: packs; solvable equalities; temporal bodies
@@ -42,7 +43,7 @@ analyser: partial
 - A positive conjunctive `any` equality binds one unresolved generic from the first matching pack entry, with tentative bindings discarded on a failed trial and conjuncts revisited to a fixed point. Negation and disjunction only test supplied bindings.
 - Bare bool generic terms and their negations are checked at calls and candidates; positive terms also state a bool bound in a generic body.
 - Inequality constraints parse and test resolved operands, including named module constants, without binding.
-- Naming a capability type in an operator declaration's type membership is planned in #562 (TIME-8).
+- An operator declaration may name a capability type as a member of a type set, as in `requires C in {Scheduler, Alarm}` (TIME-8).
 
 - A parameter compared in a constraint is a const option or is rejected, and each constant it is compared with is a value of the option's type (`type.mismatch`, `member.unknown`, `enum.context_type`, at the declaration); a constant of a module among those is its value (UNIT-13)
 - At a named operator call in a value function, a candidate's `T in {types}` and `T == type` are checked against what `T` stands for, and a named operator requirement is tested with the call's types (GEN-16)
@@ -97,6 +98,7 @@ transpiler: done
 analyser: partial
 
 - In a value function a named call is matched against each value candidate's own signature
+- Outside a generic body, literals in named and symbolic operator calls are fitted independently by each candidate, with or without a selecting option. A typed argument still fixes its generic in a requested result; another literal argument does not erase that type. Public generic defaults, result requirements and reflected-pack checks keep their complete inference; inherited configuration defaults use the fitted input type (GEN-2, GEN-8, GEN-13, UNIT-8). Calls written in generic bodies retain the existing output request pending the GEN-7 result/literal work.
 - Each value or temporal candidate supplies the function type of a fixed callback, including its phase (FN-17).
 - An option that selects is a generic value parameter, given by name or by its default, and the candidate's `requires` is checked against its value; one that does not select is a parameter, by name or position
 - An option's name is one kind across an operator's candidates
@@ -116,8 +118,8 @@ analyser: partial
 - The call records the position of the requirement it is (`Callee::Required`), so that a call of the declaration says which candidate it calls
 - "It is judged once, where it is declared, by what its `requires` states, and never again for the generic arguments a call of it gives": a call of an operator in it is admitted where a candidate takes every generic argument the requirements admit, where a named operator requirement states it, or under a membership where each listed type has one (GEN-3), and otherwise the declaration rejects (`operator.no_candidate`, with a note), by name and by symbol, in a value function and a graph: the fragments `less` and `wrap` with no `requires`
 - Each instance selects again for an operator call whose operand types use the enclosing declaration's generic parameters, including when a generic candidate admitted the body. The new selection uses the instance's operands and the operator binding at the call (GEN-5), including private operators, symbols, and calls in nodes and graphs.
-- Instance checks follow function references, calls inside anonymous functions, and calls that become known when a pack is forwarded (GEN-7, FN-17, FN-19).
-- An instance selects with the call's written or contextual output request. It rechecks uses when the selected result changes type, including inferred locals, calls, indexing and loops. A failed use reports its ordinary diagnostic in the body and names the instance (GEN-7).
+- Instance checks reach named function references, calls in anonymous bodies, and concrete calls produced by pack forwarding, including forwarding reached through a reference. They enforce a selected candidate's `var` place (FN-15), `const` argument (FN-1, FN-3), and configuration (EXPR-14). A rejection keeps its ordinary code at the call that makes the instance, with the instance and failing body call named in related sites. Nested instances report at each outermost making call and name each instance in the chain.
+- An instance selects with the call's written or contextual output request. It rechecks uses when the selected result changes type, including inferred locals, calls, indexing and loops. A consumer of a selected result is checked in the enclosing instances that make it. A failed use retains its ordinary diagnostic code and gives the selected operator call as the failing site in its body (GEN-7).
 - A generic body reads a fixed list's inferred size `N` as an `i64` constant (GEN-13, TYPE-10). The C++ target executes it in arithmetic, range bounds, subscripts and local initializers in value code, node handlers and graph composition.
 - Left: a requirement met by widening an argument, and checking misuse of a type or size parameter as a runtime value
 
@@ -143,7 +145,7 @@ analyser: partial
 analyser: done
 
 - Property domains are ordinary concrete value types. A generic domain rejects with local `property.domain`.
-- Each domain in a clause gets its laws and expects its own identity type (EXPR-5). A later clause naming an earlier domain rejects at that domain with the proposed `property.duplicate` code. The proposed checks for repeated domains or properties within one clause are pending.
+- Each domain in a clause gets its laws and expects its own identity type (EXPR-5). A repeated domain in one or more clauses, or a repeated property in one clause, rejects at the later domain or property (`property.duplicate`).
 - Law queries read the public operator's metadata for the concrete operand type; an ordinary or anonymous function declares no guarantee. Metadata performs no arithmetic transformation.
 
 optimiser: planned
@@ -248,14 +250,17 @@ transpiler: partial
 parser: partial
 
 - Reads a function type's named pack and `arg_keys` and member types in requirements. `Ps[arg]` has a type form, with an index tree in positions that also allow values.
-- Left: pack key membership in a body, alongside pack values and unrolled loops (#368).
+- Reads `key in arg_keys(Ps)` at comparison precedence in a body.
+- Left: pack-key iteration outside the computed spread slice (#368).
 
 analyser: partial
 
 - Reflects the selected callback's fixed suffix and its supplied positional and named pack entries. A dependent pack keeps the callback parameter keys and the types written at the call.
 - Evaluates `each` over `arg_keys`, constant key membership, and keyed type projection. Candidate requirements can compare bare pack members. A missing member of a known pack reports `pack.name`.
+- In a pack comprehension, `arg_keys` names a declared type pack and the iteration name is a compile-time key. A membership condition reads those bindings and has type `bool`. Generic unrolling and the value of that condition in a pass await the GEN-7 decision (#368).
 - A generic call that receives another function parameter checks its pack requirements when the caller supplies the reflected types. The receiver's fixed positions determine which original inputs its pack reflects.
 - An operator callback reflects the public declaration's parameter names and the selected candidate's types (FN-17).
+- Specializes a pack-member type written as a function call's generic argument (GEN-8), including within another type. A missing key reports `pack.name`. A positive member-type equality, including one stated for each key of a pack, can admit a constrained call under GEN-7. A call with an untold member type remains unsupported in the target.
 
 ## GEN-18
 

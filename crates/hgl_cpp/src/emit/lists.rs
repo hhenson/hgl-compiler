@@ -14,6 +14,8 @@
 //! | `values[i]`, a child named in a hook (TIME-1, END-8) | `::hglrt::child(view, i)`: an endpoint whether or not it is valid, given to `valid`, `modified`, `delta_value`, `last_modified`, `all_valid` |
 //! | `values[i]` read where it is checked when it runs (ERR-14) | `::hglrt::checked_whole(child)`, or `checked_whole_result` where its place takes a `result` |
 //! | `pair[0]`, a child of a connection of a graph (TIME-9) | `::hglrt::element_port(port, 0)` |
+//! | A fixed list made of connections (EXPR-9, EXPR-17) | A structural port whose children are the entries in order |
+//! | An ordinary fixed list wired as a constant (FN-3) | `::hglrt::constant<T, S>` publishes the positions in one cycle |
 //! | A cell of a trace of one (TST-5) | `::hglrt::testing::Cell<T>`, of a `Whole<T>` or of a delta |
 //!
 //! A part is read and published through its own form (TYPE-9): a scalar,
@@ -25,6 +27,7 @@
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind};
 use hgl_analyser::{ConstantValue, NamedKind, Type};
+use hgl_lower::types::fixed_list_size;
 
 use super::Emitter;
 use super::forms::Family;
@@ -53,22 +56,22 @@ fn check_extent(items: &str, count: i64) -> String {
     )
 }
 
-/// The shape of `ty`, where it is a list this family writes: a fixed list
-/// of a positive size (TYPE-10 allows none of no position that hgraph's
-/// `TSL` takes).
+/// The fixed list's structural port, made from its wired children.
+fn structural_list_port(schema: &str, children: &str) -> String {
+    format!(
+        "{{&{WIRING}, ::hgraph::WiringPortRef::structural_source(::hgraph::schema_descriptor<{schema}>::ts_meta(), ::std::move({children}))}}"
+    )
+}
+
+/// The shape written by this family (TYPE-10): a growing list or a fixed
+/// list with a positive size, as hgraph's `TSL` requires.
 fn shape(ty: &Type) -> Option<Shape<'_>> {
-    match ty {
-        Type::List {
-            element,
-            size: None,
-        } => Some(Shape::Growing(element)),
-        Type::List {
-            element,
-            size: Some(size),
-        } => match size.value {
-            ConstantValue::Int(count) if count > 0 => Some(Shape::Fixed(element, count)),
-            _ => None,
-        },
+    let Type::List { element, size } = ty else {
+        return None;
+    };
+    match fixed_list_size(size.as_ref()).map(|size| &size.value) {
+        None => Some(Shape::Growing(element)),
+        Some(ConstantValue::Int(count)) if *count > 0 => Some(Shape::Fixed(element, *count)),
         _ => None,
     }
 }
@@ -149,7 +152,7 @@ impl Emitter<'_> {
         let Some(result) = self.written_type(&value.ty, value.at) else {
             return "0".to_string();
         };
-        let fixed = if let Some(size) = size {
+        let fixed = if let Some(size) = fixed_list_size(size.as_ref()) {
             let ConstantValue::Int(count) = size.value else {
                 return self.missing(
                     value.at,
@@ -249,14 +252,71 @@ impl Emitter<'_> {
             )
         };
         let begin = std::mem::take(&mut scope.before).join("\n");
-        let entry = self.connection(scope, entry, element);
+        let entry = self.with_unrolled_bindings(&[binding], |emitter| {
+            emitter.comprehension_entry_port(scope, entry, element)
+        });
         let before_entry = std::mem::replace(&mut scope.before, saved).join("\n");
         scope.conditional -= 1;
         scope.acted = true;
         let check = check_extent(&children, count);
+        let port = structural_list_port(&schema, &children);
         format!(
-            "[&]() -> ::hgraph::Port<{schema}> {{\n{begin}\n::std::vector<::hgraph::WiringPortRef> {children};\n{children}.reserve({count});\n{header}\n{before_entry}\n{children}.push_back(({entry}).erased());\n}}\n{check}return {{&{WIRING}, ::hgraph::WiringPortRef::structural_source(::hgraph::schema_descriptor<{schema}>::ts_meta(), ::std::move({children}))}};\n}}()"
+            "[&]() -> ::hgraph::Port<{schema}> {{\n{begin}\n::std::vector<::hgraph::WiringPortRef> {children};\n{children}.reserve({count});\n{header}\n{before_entry}\n{children}.push_back(({entry}).erased());\n}}\n{check}return {port};\n}}()"
         )
+    }
+
+    /// Compose each entry of a fixed list literal once (EXPR-9, EXPR-2).
+    fn list_literal_port(
+        &mut self,
+        scope: &mut Scope,
+        value: &Expr,
+        entries: &[Expr],
+        element: &Type,
+    ) -> String {
+        let Some(schema) = self.temporal_schema(&value.ty, value.at) else {
+            return "0".to_string();
+        };
+        let children = names::temporary("list_children", self.temporary());
+        let saved = std::mem::take(&mut scope.before);
+        scope.conditional += 1;
+        let mut written = Vec::new();
+        for entry in entries {
+            let port = self.connection(scope, entry, element);
+            written.append(&mut scope.before);
+            written.push(format!("{children}.push_back(({port}).erased());"));
+        }
+        scope.conditional -= 1;
+        scope.before = saved;
+        scope.acted = true;
+        let written = written.join("\n");
+        let count = entries.len();
+        let port = structural_list_port(&schema, &children);
+        format!(
+            "[&]() -> ::hgraph::Port<{schema}> {{\n::std::vector<::hgraph::WiringPortRef> {children};\n{children}.reserve({count});\n{written}\nreturn {port};\n}}()"
+        )
+    }
+
+    /// Compose a list entry in its pass, including the statements of a
+    /// block whose tail gives the entry's connection (CTRL-10, EXPR-17).
+    fn comprehension_entry_port(
+        &mut self,
+        scope: &mut Scope,
+        mut entry: &Expr,
+        element: &Type,
+    ) -> String {
+        let mut body = String::new();
+        while let ExprKind::Block {
+            statements,
+            value: Some(tail),
+        } = &entry.kind
+        {
+            self.statements(scope, statements, 0, &mut body);
+            entry = tail;
+        }
+        if !body.is_empty() {
+            scope.before.push(body);
+        }
+        self.connection(scope, entry, element)
     }
 
     /// The endpoint of `child`, a child of a temporal input that is a
@@ -344,6 +404,20 @@ impl Family for Lists {
                 Some(format!("::hgraph::TSL<{child}, {size}>"))
             }
         }
+    }
+
+    // FN-3: a fixed list wired as a constant publishes its whole value
+    // once, through the list's own temporal shape (TIME-7).
+    fn constant(&self, emitter: &mut Emitter<'_>, ty: &Type, value: &str) -> Option<String> {
+        let Shape::Fixed(..) = shape(ty)? else {
+            return None;
+        };
+        let schema = self.schema(emitter, ty)?;
+        let written = super::types::cpp_type(emitter.program, ty)?;
+        Some(format!(
+            "::{}::constant<{written}, {schema}>({WIRING}, {value})",
+            runtime::NAMESPACE
+        ))
     }
 
     // TIME-1: "A read of a struct, a tuple or a fixed list whole ...
@@ -532,11 +606,17 @@ impl Family for Lists {
         scope: &mut Scope<'_>,
         value: &Expr,
     ) -> Option<String> {
+        if let ExprKind::Sequence(entries) = &value.kind
+            && let Some(Shape::Fixed(element, _)) = shape(&value.ty)
+        {
+            return Some(emitter.list_literal_port(scope, value, entries, element));
+        }
         if let ExprKind::ListComprehension {
             composition: true,
             binding,
             sequence,
             entry,
+            ..
         } = &value.kind
         {
             return Some(emitter.list_comprehension_port(

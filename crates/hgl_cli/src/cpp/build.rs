@@ -20,6 +20,7 @@
 //! The caller publishes a content stamp after Ninja succeeds. The stamp
 //! covers the objects and the executables needed to reuse the build.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write as _;
@@ -31,6 +32,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use hgl_cpp::{Executable, Output, application_stem};
 
 use super::{
+    DEBUG_SOURCES,
     application::Stop,
     sdk::{Description, last_lines},
     stamp::Stamp,
@@ -137,6 +139,10 @@ pub(super) fn write_if_changed(path: &Path, text: &str) -> Result<(), String> {
     if fs::read(path).ok().as_deref() == Some(text.as_bytes()) {
         return Ok(());
     }
+    write_text(path, text)
+}
+
+fn write_text(path: &Path, text: &str) -> Result<(), String> {
     let parent = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(parent)
         .map_err(|error| format!("{} could not be made: {error}", parent.display()))?;
@@ -243,7 +249,15 @@ impl Workspace {
                 .path
                 .split('/')
                 .fold(self.directory.clone(), |path, part| path.join(part));
-            write_if_changed(&path, &file.text)?;
+            // The build stamp requires a regular copy of the debug source.
+            // Rename over an old symlink without following its target.
+            if Path::new(&file.path).starts_with(DEBUG_SOURCES)
+                && fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_symlink())
+            {
+                write_text(&path, &file.text)?;
+            } else {
+                write_if_changed(&path, &file.text)?;
+            }
         }
         write_if_changed(&self.manifest(), &ninja_file(output, description, tests))
     }
@@ -319,6 +333,43 @@ impl Workspace {
                 .filter_map(|application| application.source.as_deref())
                 .map(object),
         );
+        if !targets.is_empty() {
+            Stamp::remove_unverified(previous, self, &artifacts)?;
+            self.build_targets(ninja, &targets, jobs)?;
+        }
+        Ok(artifacts)
+    }
+
+    /// Builds the selected test executables and their object dependencies.
+    /// The full manifest lets a later selection reuse the same files.
+    pub(super) fn build_debug_tests(
+        &self,
+        ninja: &Path,
+        output: &Output,
+        stems: &BTreeSet<&str>,
+        jobs: Option<&str>,
+        previous: Option<&Stamp>,
+    ) -> Result<Vec<String>, String> {
+        let mut targets = Vec::new();
+        let mut artifacts = BTreeSet::new();
+        for executable in &output.executables {
+            if stems.contains(executable.stem.as_str()) {
+                let target = test_target(executable);
+                artifacts.insert(target.clone());
+                targets.push(target);
+                artifacts.insert(object(&executable.source));
+                artifacts.extend(
+                    executable
+                        .units
+                        .iter()
+                        .map(|&unit| object(&output.units[unit].source)),
+                );
+            }
+        }
+        if targets.len() != stems.len() {
+            return Err("the test build plan is missing a selected module".to_string());
+        }
+        let artifacts: Vec<_> = artifacts.into_iter().collect();
         if !targets.is_empty() {
             Stamp::remove_unverified(previous, self, &artifacts)?;
             self.build_targets(ninja, &targets, jobs)?;

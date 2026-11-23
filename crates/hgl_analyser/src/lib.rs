@@ -204,6 +204,8 @@ pub mod codes {
     pub const ALIAS_UNKNOWN: &str = "alias.unknown";
     /// A name that nothing in scope binds (UNIT-10).
     pub const NAME_UNKNOWN: &str = "name.unknown";
+    /// A function declared with a reserved activation form's name (UNIT-10).
+    pub const NAME_RESERVED: &str = "name.reserved";
     /// A generic type's name stands before a `<` that does not open its
     /// arguments (GEN-14).
     pub const GENERIC_INVALID_APPLICATION: &str = "generic.invalid_application";
@@ -315,7 +317,7 @@ pub mod codes {
     /// value in either (TIME-7).
     pub const OUT_LIFECYCLE: &str = "out.lifecycle";
     /// A temporal input read, or given to an endpoint operation, in
-    /// `start` (TIME-5).
+    /// `start`, or activated/passivated in `stop` (TIME-5).
     pub const INPUT_LIFECYCLE: &str = "input.lifecycle";
     /// A key of the global store that is the run's own (TIME-8).
     pub const STORE_RESERVED_KEY: &str = "store.reserved_key";
@@ -346,7 +348,10 @@ pub mod codes {
     pub const RUN_CONFIGURATION: &str = "run.configuration";
     /// A constant's value depends on itself (UNIT-13).
     pub const CONSTANT_CYCLE: &str = "constant.cycle";
-    /// A module constant whose evaluation fails (UNIT-13, ERR-9).
+    /// A field or parameter default depends on itself (UNIT-8).
+    pub const DEFAULT_CYCLE: &str = "default.cycle";
+    /// A module constant or parameter/field default whose evaluation
+    /// fails (UNIT-13, UNIT-8, ERR-9).
     /// The catalogue row is proposed.
     pub const CONSTANT_FAILURE: &str = "constant.failure";
     /// An endpoint operation given what is no temporal input of its
@@ -591,18 +596,15 @@ pub mod codes {
 
         /// A property clause names an unresolved generic domain (GEN-9).
         pub const PROPERTY_DOMAIN: &str = "property.domain";
-        /// A parameter default whose required constant evaluation fails (UNIT-8, ERR-9).
-        pub const DEFAULT_CONSTANT_FAILURE: &str = "default.constant_failure";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 7] = [
+        pub const ALL: [&str; 6] = [
             READING_LIMIT,
             LOOP_CARRIED,
             FUNCTION_VALUE,
             PARAMETER_CONFIGURATION,
             IMPL_CONFIGURATION,
             PROPERTY_DOMAIN,
-            DEFAULT_CONSTANT_FAILURE,
         ];
     }
 }

@@ -11,10 +11,30 @@
 #include <doctest/doctest.h>
 #include <hgraph/types/generated.h>
 
+#include <algorithm>
 #include <chrono>
+#include <memory>
 #include <optional>
+#include <spdlog/logger.h>
 #include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
 #include <vector>
+
+namespace hglrt_test {
+struct WakeDropState {
+    hglrt::DroppedWakes wakes;
+};
+} // namespace hglrt_test
+
+template <>
+struct hgraph::scalar_descriptor<hglrt_test::WakeDropState> {
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta() {
+        return TypeRegistry::instance().register_scalar<hglrt_test::WakeDropState>("hglrt_test:dropped_wakes");
+    }
+};
 
 namespace {
 
@@ -229,8 +249,8 @@ struct WallClockLate {
     }
 
     static void eval(hgraph::NodeScheduler view, hgraph::EvaluationClockView clock_view,
-                     hgraph::EngineControlView engine, hgraph::DateTime now) {
-        const hglrt::Scheduler scheduler = made(view, Hook::evaluation);
+                     hgraph::EngineControlView engine, hgraph::DateTime now, hgraph::NodeView node) {
+        const hglrt::Scheduler scheduler{view, Hook::evaluation, {&node}};
         const hglrt::Clock clock{clock_view};
         woken.push_back(Woken{now, scheduler.is_scheduled_now(), false, std::nullopt});
         if (woken.size() == 1) {
@@ -252,6 +272,97 @@ TEST_CASE("in real time a wall-clock wake already due comes in the next cycle (C
     REQUIRE(woken.size() == 2);
     CHECK(woken[1].now);
     CHECK(woken[1].at > woken[0].at);
+}
+
+using LogRecord = std::pair<spdlog::level::level_enum, std::string>;
+std::vector<LogRecord> drop_records;
+
+/// A node that requests either a scheduler or alarm wake at its start, then
+/// asks for nonfuture wakes in its first evaluation (TIME-8, CAP-4, CAP-5).
+template <bool uses_alarm, bool second = false>
+struct RecordedDrops {
+    static constexpr auto name =
+        second ? "test::other_drops" : (uses_alarm ? "test::alarm_drops" : "test::scheduler_drops");
+
+    using DropState = hgraph::State<hglrt_test::WakeDropState>;
+    using signature_args = std::tuple<hgraph::Scalar<"requests", i64>, hgraph::NodeScheduler, DropState>;
+
+    static hglrt::DroppedWakeLog log(const hgraph::NodeView& node) {
+        return hglrt::DroppedWakeLog::bind<hglrt_test::WakeDropState, &hglrt_test::WakeDropState::wakes>(node);
+    }
+
+    static void ask(hgraph::NodeScheduler view, Hook hook, hglrt::DroppedWakeLog log, datetime at) {
+        if constexpr (uses_alarm) {
+            hglrt::schedule_Alarm_datetime(hglrt::Alarm{view, hook, log}, at);
+        } else {
+            hglrt::schedule_Scheduler_datetime_str__bool(hglrt::Scheduler{view, hook, log}, at);
+        }
+    }
+
+    static void start(DropState drops, hgraph::NodeScheduler view, hgraph::NodeView node) {
+        drops.set(hglrt_test::WakeDropState{});
+        ask(view, Hook::start, log(node), view.now());
+    }
+
+    static void eval(hgraph::Scalar<"requests", i64> requests,
+                     hgraph::NodeScheduler view, hgraph::NodeView node) {
+        const auto past = view.now() - (second ? 2us : 1us);
+        for (i64 index = 0; index < requests.value(); ++index) {
+            const datetime at = index % 2 == 0 ? past : view.now();
+            ask(view, Hook::evaluation, log(node), at);
+        }
+    }
+
+    static void stop(hgraph::NodeView node) {
+        const hglrt::DroppedWakeReport report{log(node)};
+    }
+};
+
+template <bool uses_alarm>
+void run_recorded_drops(i64 requests, bool two_nodes = false) {
+    drop_records.clear();
+    static const hgraph::LoggerOps capture{
+        .emit_impl = [](spdlog::logger&, spdlog::level::level_enum level, std::string_view message,
+                        hgraph::NodePtr) { drop_records.emplace_back(level, std::string{message}); },
+    };
+    auto logger = std::make_shared<spdlog::logger>("test");
+    logger->set_level(spdlog::level::info);
+    hgraph::Wiring wiring;
+    hgraph::wire<RecordedDrops<uses_alarm>>(wiring, requests);
+    if (two_nodes) {
+        hgraph::wire<RecordedDrops<uses_alarm, true>>(wiring, requests);
+    }
+    const datetime start = std::chrono::sys_days{2025y / 1 / 1} + 1s;
+    hgraph::GraphExecutorBuilder builder;
+    builder.graph_builder(std::move(wiring).finish())
+        .start_time(start)
+        .end_time(start + 2us)
+        .logger(std::move(logger), &capture);
+    hgraph::GraphExecutorValue executor = builder.make_executor();
+    executor.view().run();
+}
+
+TEST_CASE("dropped dated wakes warn once per node and report further drops at stop (TIME-8)") {
+    const LogRecord warning{
+        spdlog::level::warn,
+        "Dropped wake requested by test::scheduler_drops for 2025-01-01T00:00:00.999999Z at or before the evaluation time"};
+    const LogRecord other_warning{
+        spdlog::level::warn,
+        "Dropped wake requested by test::other_drops for 2025-01-01T00:00:00.999998Z at or before the evaluation time"};
+    const LogRecord alarm_warning{
+        spdlog::level::warn,
+        "Dropped wake requested by test::alarm_drops for 2025-01-01T00:00:00.999999Z at or before the evaluation time"};
+    run_recorded_drops<false>(0);
+    CHECK(drop_records.empty());
+    run_recorded_drops<false>(1);
+    CHECK(drop_records == std::vector<LogRecord>{warning});
+    run_recorded_drops<false>(100);
+    CHECK(drop_records == std::vector<LogRecord>{warning, {spdlog::level::info, "Additional dropped wakes totaled 99"}});
+    run_recorded_drops<false>(1, true);
+    const std::vector expected{warning, other_warning};
+    CHECK(std::is_permutation(drop_records.begin(), drop_records.end(), expected.begin(), expected.end()));
+    run_recorded_drops<true>(2);
+    CHECK(drop_records == std::vector<LogRecord>{alarm_warning, {spdlog::level::info, "Additional dropped wakes totaled 1"}});
 }
 
 TEST_CASE("a duration not admitted fails, and a datetime past is dropped (TIME-8, CAP-4)") {

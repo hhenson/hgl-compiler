@@ -1,0 +1,65 @@
+module demo.nested_dictionary_observations
+
+# TIME-1, END-8: projecting an absent dictionary entry reads no payload.
+fn child_metadata(values: dict<str, dict<i64, i64>>) -> list<bool, 3> {
+    when {
+        return [
+            valid(values["outer"][1]),
+            modified(values["outer"][1]),
+            last_modified(values["outer"][1]) != null,
+        ]
+    }
+}
+
+test a_nested_child_is_observed_without_reading_its_parent {
+    assert eval child_metadata(values: [
+        [],
+        ["outer": [2: 8]],
+        ["outer": [1: 7, 2: 8]],
+        delta<dict<str, dict<i64, i64>>>(updated: ["outer": delta<dict<i64, i64>>(updated: [2: 9])]),
+        delta<dict<str, dict<i64, i64>>>(updated: ["outer": delta<dict<i64, i64>>(updated: [1: 7])]),
+        ["outer": [2: 9]],
+        ["other": [1: 7]],
+    ]) == [
+        [false, false, false],
+        [false, false, false],
+        [true, true, true],
+        [true, false, true],
+        [true, true, true],
+        [false, false, false],
+        [false, false, false],
+    ]
+}
+
+# END-3, ERR-14: the same path gives a delta only when the entry ticks.
+fn child_delta(values: dict<str, dict<i64, i64>>, key: i64) -> i64 {
+    when valid(key) {
+        let read: result<i64, error> = delta_value(values["outer"][key])
+        if is_ok(read) { return read.value }
+        let code = read.error.code
+        if code == "value.unset_read" { return -1 }
+        return -2
+    }
+}
+
+test a_dynamic_nested_child_delta_checks_the_child_tick {
+    assert eval child_delta(
+        values: [_, ["outer": [2: 8]], _, ["outer": [1: 7]], _],
+        key: [2, 2, 2, 1, 1],
+    ) == [-1, 8, -1, 7, -1]
+}
+
+# END-7, END-8: a nested dictionary can be observed as a collection.
+fn collection_validity(values: dict<str, dict<i64, dict<str, i64>>>) -> bool {
+    when { return all_valid(values["outer"][1]) }
+}
+
+test a_nested_collection_can_be_observed {
+    assert eval collection_validity(values: [
+        [],
+        ["outer": [2: ["other": 1]]],
+        ["outer": [1: []]],
+        ["outer": [1: ["held": 7]]],
+        ["outer": [2: ["other": 1]]],
+    ]) == [false, false, true, true, false]
+}

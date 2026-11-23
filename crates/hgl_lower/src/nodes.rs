@@ -9,6 +9,8 @@ use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Header, Local, Stmt};
 use hgl_analyser::{LocalKind, Signature, Type};
 use hgl_diagnostics::Location;
 
+use crate::types::fixed_list_size;
+
 /// What wakes a node beside its inputs (TIME-9): the scheduler or the
 /// alarm it injects.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -213,13 +215,15 @@ pub fn designates(value: &Expr) -> bool {
 
 /// How a node designates a temporal input (FN-16: "A parameter that is
 /// not `ref` may be designated too"): whole, or by a position of it, a
-/// fixed list.
+/// fixed list, or by a dictionary key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Designated {
     /// `return value`
     Whole,
     /// `return items[idx]`, of a `list<T, N>`.
     Position,
+    /// `return dictionary[key]`.
+    Key,
 }
 
 /// What `value`, a designation (`designates`), designates of a temporal
@@ -237,11 +241,18 @@ pub fn designated(
         }
         ExprKind::ChildEndpointOf(child) => match &child.kind {
             ExprKind::Index { base, .. } => match (&base.kind, &base.ty) {
-                (ExprKind::Local(local), Type::List { size: Some(_), .. })
-                    if is_input(locals, signature, *local)
+                (ExprKind::Local(local), Type::List { size, .. })
+                    if fixed_list_size(size.as_ref()).is_some()
+                        && is_input(locals, signature, *local)
                         && !is_reference(locals, signature, *local) =>
                 {
                     Some((*local, Designated::Position))
+                }
+                (ExprKind::Local(local), Type::Dict { .. })
+                    if is_input(locals, signature, *local)
+                        && !is_reference(locals, signature, *local) =>
+                {
+                    Some((*local, Designated::Key))
                 }
                 _ => None,
             },

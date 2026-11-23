@@ -143,6 +143,69 @@ warm-up.
 | Compile without a precompiled header | 3.84 s | 2.21 s |
 | Build the precompiled header | 7.23 s, 320.8 MiB | 6.44 s, 278.9 MiB |
 
+## Debugging tests
+
+`hgl test ROOTS --target cpp --debug-build DIR` builds the selected test
+modules with debug information and no optimisation. It starts no tests.
+Stdout contains the JSON description or is empty. Diagnostics go to
+stderr. Use `--test`, repeatable
+`--test-path`, `--integration` or `--integration-only` as for an ordinary
+test run. Omitting selectors selects the ordinary cases. A bad path, an
+unknown test name or conflicting integration flags exits 2 before any build.
+
+The debugger sets breakpoints in the original HGL files, including on the
+statements of ordinary and integration tests. Step Over between test
+statements stays in HGL. Value functions, their generic instances, and
+graph composition open at their HGL declarations. Function and handler
+ends map to their HGL closing lines. Step Into on an `eval` can stop at
+the Core declaration that its replay or record wiring belongs to. The
+debug workspace stores the bundled Core files named by its line tables
+under `debug-sources/`.
+Breakpoints on declaration lines can bind to
+nearby executable lines, including a helper. Set a breakpoint on a body
+statement to stop there. The same sources and selection in `DIR` reuse
+the same launches without compiling again. A new
+selection builds only missing modules and their dependencies. Debug library
+selection matches application debug builds.
+
+The description has `version: 1`, `launches`, and `skipped`. Both arrays
+can be empty. Each launch contains the fully qualified `module` and its
+fully qualified `tests` in execution order. The modules appear in name
+order. Pass `arguments` to `executable` as supplied, in `workingDirectory`
+with the given `environment`. Those arguments select exactly the listed
+tests. `resultsFile` identifies the file the launch writes under `DIR`.
+All paths are absolute. `hgraph` reports the linked libraries as in an
+application launch. Each skipped entry gives a `name` and `reason` for a
+selected rejection case or a test the target cannot write.
+
+A failed selected rejection has `status: "failed"` in its skipped entry
+and gives the ordinary rejection details in `reason`. The command exits 1
+and still prints the description with any launches it prepared. An error
+in the surviving source exits 1 with empty stdout. A native build failure,
+a missing C++ compiler, an unwritable build directory or an interrupted
+build exits 2 with empty stdout. A failed build supplies no partial launches.
+
+The test executable's result file is text. It starts fresh on each
+launch and flushes one record per line. `N` is the zero-based index in the
+launch's `tests` array.
+
+| Record | Meaning |
+| --- | --- |
+| `start N` | The host started processing that test. |
+| `passed N` | The test ran to completion. |
+| `failed N LINE TEXT` | The test failed. `LINE` is the HGL line of the test statement, or 0 if unavailable. |
+| `unloaded N TEXT` | The executable could not find the requested test. |
+
+`TEXT` escapes backslash, newline and carriage return as `\\`, `\n` and
+`\r`. Exit 0 means the host finished writing its records. Test failures
+appear in those records and the host still runs later tests in the module.
+Exit 2 means usage or result-file failure. Debugger launches do not apply
+integration tests' host-clock limits. Ordinary runs keep their TST-17
+limits. If a launch stops early, an index without an outcome did not
+finish. Remove any previous results file before
+starting an executable if the debugger needs to distinguish a launch
+failure from old results.
+
 ## What hgraph is asked for
 
 The SDK is hgraph 0.9.23. One request is open:

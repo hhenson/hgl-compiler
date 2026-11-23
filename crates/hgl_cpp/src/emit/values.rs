@@ -26,7 +26,6 @@ use hgl_analyser::{Detail, Signature, Type};
 use hgl_diagnostics::Location;
 
 use super::Emitter;
-use super::calls::changes;
 use super::names::{self, identifier};
 use super::statements::Scope;
 use super::types::by_value;
@@ -105,14 +104,18 @@ impl Emitter<'_> {
         let Some((prototype, head)) = self.head(&name, signature, declaration.at) else {
             return;
         };
-        let mut text = format!("{head}\n{{\n");
+        // Depending on how the native parameters are passed, a debugger
+        // may enter on the signature or on the opening brace.
+        let mut text = self.debug_stamp(declaration.at, format!("{head}\n"));
+        text.push_str(&self.debug_stamp(declaration.at, "{\n".to_string()));
         if self
             .value_body(body, signature.result.as_ref(), declaration.at, &mut text)
             .is_none()
         {
             return;
         }
-        text.push_str("}\n");
+        let end = declaration.syntax.text_range().end().into();
+        text.push_str(&self.debug_end(declaration.at, end, "}\n".to_string()));
         let place = self.place_of(index);
         let comment = format!("// {described}, {place}\n");
         self.piece.declaration = within(namespace.as_deref(), &format!("{comment}{prototype};\n"));
@@ -241,15 +244,14 @@ impl Emitter<'_> {
             self.unsupported(at, "a constant with no value");
             return;
         };
-        if changes(&value.value) {
-            self.unsupported(at, "a constant whose value runs statements");
-            return;
-        }
         let Some(written) = self.written_type(ty, at) else {
             return;
         };
         let (namespace, name) = names::placed(program, self.module, index, None);
         let body = value.clone().into_body();
+        // UNIT-13, EXPR-5: the checked initializer has its own cold
+        // locals. The ordinary block writer encloses their statements
+        // in an expression, inside this constant's one static value.
         let mut scope = Scope::cold(program, &body);
         let value = self.expression(&mut scope, &value.value);
         if !scope.before.is_empty() {

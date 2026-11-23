@@ -38,6 +38,9 @@ is the release's, `hgl-VERSION-PLATFORM`. It holds:
   them a debugger attached to an ordinary run, or reading a core file of
   one, gives an engine frame's file and line; without them it names the
   function.
+- `libexec/hgraph-debug/hgl-debug.txt`, with the hgl version this archive
+  belongs to. A missing stamp or a different version selects the optimised
+  libraries and reports the reason for either source of a debug package.
 
 The release's libraries are built with debug information, which is split
 out of them into the symbol files. They keep their symbol tables and build
@@ -77,9 +80,10 @@ alone links the optimised libraries for a debug build and says why; with
 the debug archive unpacked into it, the debug tree is verified, a debug
 build links the debug libraries, lldb or gdb stops in an engine frame of it
 with its file, line and arguments (gdb: the locals of the engine's loop),
-the release's own library resolves an engine function to its file and line,
-and on Linux so does a core file of an ordinary run, whose process loads
-the release's own engine library. The debuggers look for symbol files
+and the release's engine and fmt libraries resolve functions to files and
+lines. On Linux a core file of an ordinary run also identifies the engine
+function's file and line. The ordinary process loads the release's own engine
+library. The debuggers look for symbol files
 beside the libraries alone, never in the machine's directories or, on
 macOS, through Spotlight, which finds a dSYM of the same UUID wherever it
 has seen one (a release cache keeps the release's). The macOS job runs
@@ -90,14 +94,18 @@ prompt: `DevToolsSecurity -status` says developer mode is enabled
 _developer`). Without both, `process launch` waits for an administrator's
 password in a dialog no one sees, and the job ends at its 30-minute
 limit. The debugged programs are this repository's own, signed ad hoc
-without the hardened runtime, so nothing else is needed. Run **Release
-bundles** by hand to rehearse these steps without publishing.
+without the hardened runtime, so nothing else is needed. Dispatch
+**Release bundles** on a branch to rehearse these steps. If the self-hosted
+release runner is enabled, the dispatch also runs `cpp-macos` after the
+macOS verification jobs. Publishing requires a version tag push.
 
 Push the bare workspace version as a tag, such as `0.1.0`. The tag run
-checks the version and publishes the four archives and their checksums
-from the successful `main` run for that commit. If there is no run with
-both verified artifacts available, the tag run builds and verifies both
-bundles before publishing.
+checks the version and publishes the four archives and their checksums.
+It reuses artifacts from a push to `main` for the same commit once all
+five release verifiers pass in the attempt that produced both live
+artifacts. Publication depends on those verifiers and can proceed while
+`cpp-macos` is pending or after it fails. If no run has both verified
+artifacts available, the tag run builds and verifies both bundles.
 
 ## Update the Homebrew tap
 

@@ -10,6 +10,202 @@ use hgl_analyser::{Argument, Detail, Signature};
 /// No lines.
 const NONE: [&str; 0] = [];
 
+const INSTANCE_CALLS: [&str; 4] = [
+    "checked(value)",
+    "apply(checked<i64>, value)",
+    "apply(fn(inner) => checked(inner), value)",
+    "relay(value)",
+];
+
+/// GEN-7, FN-15: each route to the same instance checks its candidate's
+/// `var` argument even when every candidate gives the same result type.
+#[test]
+fn selected_arguments_are_checked_through_functions_and_forwarded_packs() {
+    let definitions = concat!(
+        "operator update<T>(value: T) -> i64\n",
+        "impl const fn update<T>(value: T) -> i64 => 1\n",
+        "impl const fn update(var value: i64) -> i64 {\n",
+        "    value = value + 1\n",
+        "    return 2\n",
+        "}\n",
+        "const fn checked<T>(value: T) -> i64 => update(value)\n",
+        "const fn apply(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+        "const fn relay<...Args>(values: ...Args) -> i64 => checked(...values)\n",
+    );
+    for call in [
+        "checked(1)",
+        "apply(checked<i64>, 1)",
+        "apply(fn(value) => checked(value), 1)",
+        "relay(1)",
+    ] {
+        let checked = module(&format!("{definitions}test invoke {{ {call} }}\n"));
+        assert_eq!(checked.findings.len(), 1, "{call}: {}", checked.report);
+        let finding = &checked.findings[0];
+        assert_eq!(
+            (finding.code.as_str(), finding.rule),
+            ("name/binding.immutable", "FN-15"),
+            "{call}: {}",
+            checked.report,
+        );
+        let column = 15 + call.find("checked").unwrap_or(0);
+        assert_eq!(
+            finding.at,
+            format!("m.hgl:11:{column}"),
+            "{}",
+            checked.report
+        );
+        assert!(
+            checked.report.contains("`checked<i64>`"),
+            "{}",
+            checked.report
+        );
+        assert!(
+            checked.report.contains("this call makes the instance"),
+            "{}",
+            checked.report
+        );
+    }
+    let accepted = module(&format!(
+        "{definitions}test invoke {{\n    assert checked(\"value\") == 1\n    assert relay(\"value\") == 1\n}}\n"
+    ));
+    assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+}
+
+/// GEN-7: each distinct outer caller gets one report with its call chain.
+#[test]
+fn a_rejected_instance_reports_each_making_call() {
+    let checked = module(concat!(
+        "operator update<T>(value: T) -> i64\n",
+        "impl const fn update<T>(value: T) -> i64 => 1\n",
+        "impl const fn update(var value: i64) -> i64 => value\n",
+        "const fn checked<T>(value: T) -> i64 => update(value)\n",
+        "const fn forward<T>(value: T) -> i64 => checked(value)\n",
+        "const fn relay<...Args>(values: ...Args) -> i64 => checked(...values)\n",
+        "test invoke {\n",
+        "    checked(1)\n",
+        "    forward(2)\n",
+        "    relay(3)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:5 name/binding.immutable FN-15",
+            "m.hgl:10:5 name/binding.immutable FN-15",
+            "m.hgl:11:5 name/binding.immutable FN-15",
+        ],
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked.report.contains("`checked<i64>`"),
+        "{}",
+        checked.report
+    );
+    assert_eq!(
+        checked
+            .report
+            .matches("this call makes the instance")
+            .count(),
+        5,
+        "{}",
+        checked.report
+    );
+    for instance in ["forward<i64>", "relay<[i64]>"] {
+        assert!(
+            checked
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// GEN-7, FN-1 and FN-3: the selected candidate can require a constant
+/// in value code or a fixed value in composition.
+#[test]
+fn selected_constants_are_checked_through_functions_and_forwarded_packs() {
+    let candidates = concat!(
+        "operator update<T>(value: T) -> i64\n",
+        "impl const fn update<T>(value: T) -> i64 => 1\n",
+        "impl const fn update(const value: i64) -> i64 => value\n",
+    );
+    for (phase, diagnosis) in [
+        ("const ", "type/argument.constant FN-1"),
+        ("", "phase/connection.as_constant FN-3"),
+    ] {
+        for call in INSTANCE_CALLS {
+            let checked = module(&format!(
+                "{candidates}\
+                 {phase}fn checked<T>(value: T) -> i64 => update(value)\n\
+                 {phase}fn apply(f: {phase}fn(i64) -> i64, value: i64) -> i64 => f(value)\n\
+                 {phase}fn relay<...Args>(values: ...Args) -> i64 => checked(...values)\n\
+                 {phase}fn invoke(value: i64) -> i64 => {call}\n"
+            ));
+            let column = 33 + phase.len() + call.find("checked").unwrap_or(0);
+            assert_eq!(
+                checked.summary(),
+                [format!("m.hgl:8:{column} {diagnosis}")],
+                "{call}: {}",
+                checked.report
+            );
+            assert!(
+                checked.report.contains("`checked<i64>`"),
+                "{}",
+                checked.report
+            );
+            assert!(
+                checked.report.contains("this call makes the instance"),
+                "{}",
+                checked.report
+            );
+        }
+    }
+}
+
+/// GEN-7 and EXPR-14: a configuration can lose its fixed value when its
+/// deferred call selects a temporal candidate.
+#[test]
+fn selected_settings_are_checked_through_functions_and_forwarded_packs() {
+    let definitions = concat!(
+        "operator helper<T>(input: list<T>) -> f64\n",
+        "impl const fn helper<T>(input: list<T>) -> f64 => 0.1\n",
+        "impl fn helper(input: list<i64>) -> f64 { when { return 0.1 } }\n",
+        "const fn near{abs: f64}(a: f64, b: f64) -> bool => a =={abs: abs} b\n",
+        "fn checked<T>(value: T) -> bool {\n",
+        "    let fixed: list<T> = []\n",
+        "    return near{abs: helper(fixed)}(2.5, 2.55)\n",
+        "}\n",
+        "fn apply(f: fn(i64) -> bool, value: i64) -> bool => f(value)\n",
+        "fn relay<...Args>(values: ...Args) -> bool => checked(...values)\n",
+    );
+    for call in INSTANCE_CALLS {
+        let checked = module(&format!(
+            "{definitions}fn invoke(value: i64) -> bool => {call}\n"
+        ));
+        let column = 34 + call.find("checked").unwrap_or(0);
+        assert_eq!(
+            checked.summary(),
+            [format!(
+                "m.hgl:12:{column} phase/connection.as_constant EXPR-14"
+            )],
+            "{call}: {}",
+            checked.report
+        );
+        assert!(
+            checked.report.contains("`checked<i64>`"),
+            "{}",
+            checked.report
+        );
+        assert!(
+            checked.report.contains("this call makes the instance"),
+            "{}",
+            checked.report
+        );
+    }
+}
+
 /// What a call calls, as the instance of it: the declaration, what its
 /// generic parameters stand for, and what answers its requirements.
 type Called = (usize, usize, Vec<Argument>, Vec<Answer>);
@@ -146,7 +342,7 @@ fn an_instance_uses_the_selected_candidates_result() {
 }
 
 /// GEN-7 and EXPR-7: when the instance chooses a set, its bracket read
-/// rejects where the body calls the operator and names the instance.
+/// rejects at the making call and names the operator call in the body.
 #[test]
 fn an_instance_rejects_an_index_into_its_selected_set() {
     let checked = module(concat!(
@@ -158,7 +354,7 @@ fn an_instance_rejects_an_index_into_its_selected_set() {
     ));
     assert!(checked.rejected, "{}", checked.report);
     assert_eq!(checked.findings.len(), 1, "{}", checked.report);
-    assert_eq!(checked.summary(), ["m.hgl:5:39 type/type.mismatch EXPR-7"]);
+    assert_eq!(checked.summary(), ["m.hgl:6:31 type/type.mismatch EXPR-7"]);
     assert!(checked.report.contains("first<bool>"), "{}", checked.report);
 }
 
@@ -177,7 +373,7 @@ fn an_instance_rejects_a_return_of_its_selected_result() {
         "const fn concrete() -> i64 => inferred(3)\n",
     ));
     assert!(checked.rejected, "{}", checked.report);
-    assert_eq!(checked.summary(), ["m.hgl:6:18 type/type.mismatch EXPR-5"]);
+    assert_eq!(checked.summary(), ["m.hgl:9:31 type/type.mismatch EXPR-5"]);
     assert!(
         checked.report.contains("inferred<i64>"),
         "{}",
@@ -204,74 +400,414 @@ fn an_instance_checks_the_consumer_of_its_selected_result() {
         "const fn concrete() -> i64 => outer(5)\n",
     ));
     assert!(checked.rejected, "{}", checked.report);
-    assert_eq!(checked.summary(), ["m.hgl:8:39 type/type.mismatch EXPR-7"]);
+    assert_eq!(checked.summary(), ["m.hgl:13:31 type/type.mismatch EXPR-7"]);
     assert!(
         checked.report.contains("first<list<i64, 3>>"),
         "{}",
         checked.report
     );
+    for instance in ["first<list<i64, 3>>", "outer<i64>"] {
+        assert!(
+            checked
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            checked.report
+        );
+    }
 }
 
-/// GEN-7: the instance checks also run when a call is reached through a
-/// function reference, an anonymous body or a forwarded pack.
+/// GEN-7: a changed result is checked also through a function reference,
+/// an anonymous body, or a forwarded pack.
 #[test]
-fn instances_reached_through_functions_or_packs_are_checked() {
-    let definitions = [
-        (
-            concat!(
-                "operator fetch<T, R>(value: T) -> R\n",
-                "impl const fn fetch<T>(value: T) -> i64 => 5\n",
-                "impl const fn fetch(value: i64) -> str => \"other\"\n",
-                "const fn checked<T>(value: T) -> i64 {\n",
-                "    let answer = fetch(value)\n",
-                "    return answer\n",
-                "}\n",
-            ),
-            "type/type.mismatch",
-            "EXPR-5",
-        ),
-        (
-            concat!(
-                "operator update<T>(value: T) -> i64\n",
-                "impl const fn update<T>(value: T) -> i64 => 1\n",
-                "impl const fn update(var value: i64) -> i64 {\n",
-                "    value = value + 1\n",
-                "    return 2\n",
-                "}\n",
-                "const fn checked<T>(value: T) -> i64 => update(value)\n",
-            ),
-            "name/binding.immutable",
-            "FN-15",
-        ),
-    ];
-    let calls = [
-        "apply(checked<i64>, 1)",
-        "apply(fn(value) => checked(value), 1)",
-        "relay(1)",
-    ];
-    for (definitions, code, rule) in definitions {
-        for call in calls {
-            let checked = module(&format!(
-                "{definitions}{}{}test invoke {{ {call} }}\n",
-                "const fn apply(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
-                "const fn relay<...Args>(values: ...Args) -> i64 => checked(...values)\n",
-            ));
-            assert_eq!(checked.findings.len(), 1, "{call}: {}", checked.report);
-            let finding = &checked.findings[0];
-            assert_eq!((finding.code.as_str(), finding.rule), (code, rule));
-            if code == "type/type.mismatch" {
-                assert!(
-                    checked.report.contains("checked<i64>"),
-                    "{}",
-                    checked.report
-                );
-            }
+fn instances_reached_through_functions_or_packs_check_the_selected_result() {
+    let definitions = concat!(
+        "operator fetch<T, R>(value: T) -> R\n",
+        "impl const fn fetch<T>(value: T) -> i64 => 5\n",
+        "impl const fn fetch(value: i64) -> str => \"other\"\n",
+        "const fn checked<T>(value: T) -> i64 {\n",
+        "    let answer = fetch(value)\n",
+        "    return answer\n",
+        "}\n",
+    );
+    for (call, chain) in [
+        ("apply(checked<i64>, 1)", &[][..]),
+        ("apply(fn(value) => checked(value), 1)", &[][..]),
+        ("relay(1)", &["relay<[i64]>"][..]),
+        ("apply(via<i64>, 1)", &["relay<[i64]>", "via<i64>"][..]),
+    ] {
+        let checked = module(&format!(
+            "{definitions}{}{}{}test invoke {{ {call} }}\n",
+            "const fn apply(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+            "const fn relay<...Args>(values: ...Args) -> i64 => checked(...values)\n",
+            "const fn via<T>(value: T) -> i64 => relay(value)\n",
+        ));
+        assert_eq!(checked.findings.len(), 1, "{call}: {}", checked.report);
+        let finding = &checked.findings[0];
+        assert_eq!(
+            (finding.code.as_str(), finding.rule),
+            ("type/type.mismatch", "EXPR-5")
+        );
+        assert!(
+            checked.report.contains("checked<i64>"),
+            "{}",
+            checked.report
+        );
+        for instance in chain {
+            assert!(
+                checked
+                    .report
+                    .contains(&format!("this call makes the instance `{instance}`")),
+                "{}",
+                checked.report
+            );
         }
     }
 }
 
-/// GEN-7: a failing use of an inferred binding points to its initializer
-/// when another selected call in the body also changed its result type.
+/// GEN-7 and EXPR-7: a concrete bracket result supplies the inner call.
+#[test]
+fn an_indexed_type_parameter_reaches_its_instances() {
+    let definitions = concat!(
+        "operator fetch<T, R>(value: T) -> R\n",
+        "impl const fn fetch<T>(value: T) -> i64 => 5\n",
+        "impl const fn fetch(value: i64) -> str => \"other\"\n",
+        "const fn checked<T>(value: T) -> i64 {\n",
+        "    let answer = fetch(value)\n",
+        "    return answer\n",
+        "}\n",
+        "const fn first<T>(value: T) -> i64 => checked(value[0])\n",
+        "const fn outer<T>(value: T) -> i64 => first([value])\n",
+    );
+    let accepted = module(&format!(
+        "{definitions}test invoke {{ assert outer(\"text\") == 5 }}\n"
+    ));
+    assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+    let rejected = module(&format!("{definitions}test invoke {{ outer(3) }}\n"));
+    assert_eq!(
+        rejected.summary(),
+        ["m.hgl:11:15 type/type.mismatch EXPR-5"]
+    );
+    for instance in ["checked<i64>", "first<list<i64>>", "outer<i64>"] {
+        assert!(
+            rejected
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            rejected.report
+        );
+    }
+}
+
+const PROVISIONAL_RESULTS: &str = concat!(
+    "operator items_of<T, C>(value: T) -> C\n",
+    "impl const fn items_of<T>(value: T) -> list<i64, 2> => [1, 2]\n",
+    "impl const fn items_of(value: i64) -> list<i64, 3> => [1, 2, 3]\n",
+    "operator marker<T, C>(value: T) -> C\n",
+    "impl const fn marker<T>(value: T) -> list<i64, 1> => [9]\n",
+    "impl const fn marker(value: list<i64, 2>) -> set<i64> => [3]\n",
+    "const fn first<T>(value: T) -> i64 => marker(value)[0]\n",
+);
+
+/// GEN-7: a provisional result supplies a consumer only in the instance
+/// that selects it. Independent concrete calls still make instances.
+#[test]
+fn a_provisional_result_does_not_make_an_independent_instance() {
+    let outer = concat!(
+        "const fn outer<T>(value: T) -> i64 {\n",
+        "    let items = items_of(value)\n",
+        "    let alias = items\n",
+        "    return first(alias)\n",
+        "}\n",
+    );
+    let definitions = format!("{PROVISIONAL_RESULTS}{outer}");
+    for suffix in [
+        "",
+        "test invoke { assert outer(5) == 9 }\n",
+        "test invoke { let items: list<i64, 3> = [1, 2, 3]\n assert first(items) == 9 }\n",
+    ] {
+        let accepted = module(&format!("{definitions}{suffix}"));
+        assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+    }
+    let rejected = module(&format!("{definitions}test invoke {{ outer(\"s\") }}\n"));
+    assert_eq!(
+        rejected.summary(),
+        ["m.hgl:14:15 type/type.mismatch EXPR-7"]
+    );
+    for instance in ["first<list<i64, 2>>", "outer<str>"] {
+        assert!(
+            rejected
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            rejected.report
+        );
+    }
+    let independent = module(&format!(
+        "{definitions}const fn concrete<T>(unused: T) -> i64 {{\n    let items: list<i64, 2> = [1, 2]\n    return first(items)\n}}\n"
+    ));
+    assert_eq!(
+        independent.summary(),
+        ["m.hgl:16:12 type/type.mismatch EXPR-7"]
+    );
+    let called = module(&format!(
+        "{definitions}\
+         const fn concrete<T>(value: T) -> i64 {{\n\
+             let changed = items_of(value)\n\
+             let items: list<i64, 2> = [1, 2]\n\
+             return first(items)\n\
+         }}\n\
+         test invoke {{ concrete(5) }}\n"
+    ));
+    assert_eq!(
+        called.summary(),
+        ["m.hgl:17:8 type/type.mismatch EXPR-7"],
+        "{}",
+        called.report
+    );
+    let callbacks = format!(
+        "{definitions}\
+         const fn apply<T>(f: const fn(T) -> i64, items: T) -> i64 => f(items)\n\
+         const fn by_reference<T>(value: T) -> i64 {{\n\
+             let items = items_of(value)\n\
+             return apply(first, items)\n\
+         }}\n"
+    );
+    for suffix in ["", "test invoke { assert by_reference(5) == 9 }\n"] {
+        let accepted = module(&format!("{callbacks}{suffix}"));
+        assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+    }
+    let rejected = module(&format!(
+        "{callbacks}test invoke {{ by_reference(\"s\") }}\n"
+    ));
+    assert_eq!(
+        rejected.summary(),
+        ["m.hgl:19:15 type/type.mismatch EXPR-7"],
+        "{}",
+        rejected.report
+    );
+    let forwarded = format!(
+        "{definitions}\
+         const fn relay<...A>(items: ...A) -> i64 => first(...items)\n\
+         const fn by_pack<T>(value: T) -> i64 {{\n\
+             let items = items_of(value)\n\
+             return relay(items)\n\
+         }}\n"
+    );
+    for suffix in ["", "test invoke { assert by_pack(5) == 9 }\n"] {
+        let accepted = module(&format!("{forwarded}{suffix}"));
+        assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+    }
+    let rejected = module(&format!("{forwarded}test invoke {{ by_pack(\"s\") }}\n"));
+    assert_eq!(
+        rejected.summary(),
+        ["m.hgl:19:15 type/type.mismatch EXPR-7"],
+        "{}",
+        rejected.report
+    );
+    assert!(rejected.report.contains("`relay<[list<i64, 2>]>`"));
+
+    let indexed = format!(
+        "{definitions}\
+         const fn with_index<T, U>(value: T, extra: U) -> i64 {{\n\
+             let unused = extra[0]\n\
+             let items = items_of(value)\n\
+             return first(items)\n\
+         }}\n"
+    );
+    let accepted = module(&format!(
+        "{indexed}test invoke {{ assert with_index(5, [0]) == 9 }}\n"
+    ));
+    assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+    let rejected = module(&format!(
+        "{indexed}test invoke {{ with_index(\"s\", [0]) }}\n"
+    ));
+    assert_eq!(
+        rejected.summary(),
+        ["m.hgl:19:15 type/type.mismatch EXPR-7"],
+        "{}",
+        rejected.report
+    );
+
+    let node = format!(
+        "{definitions}\
+         fn with_endpoint<T, U>(value: T, extra: U) -> i64 {{\n\
+             when all_valid(extra) {{\n\
+                 let read = extra\n\
+                 let items = items_of(value)\n\
+                 return first(items)\n\
+             }}\n\
+         }}\n"
+    );
+    let entry = |value_type| {
+        module(&format!(
+            "{node}fn entry(value: {value_type}, extra: tuple<i64, i64>) -> i64 => with_endpoint(value, extra)\n"
+        ))
+    };
+    let accepted = entry("i64");
+    assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+    let rejected = entry("str");
+    assert_eq!(rejected.findings.len(), 1, "{}", rejected.report);
+    assert_eq!(rejected.findings[0].rule, "EXPR-7", "{}", rejected.report);
+    assert!(rejected.report.contains("`first<list<i64, 2>>`"));
+    assert!(
+        rejected
+            .report
+            .contains("`with_endpoint<str, tuple<i64, i64>>`")
+    );
+}
+
+/// GEN-7 and FN-19: the final body supplies types through captures,
+/// iteration bindings and a call that consumes a forwarded pack's result.
+#[test]
+fn a_reread_follows_the_types_it_gives_to_consumers() {
+    for route in [
+        concat!(
+            "const fn apply<T>(f: const fn(T) -> i64, input: T) -> i64 => f(input)\n",
+            "const fn visit<T>(value: T) -> i64 {\n",
+            "    let items = items_of(value)\n",
+            "    return apply(fn(input) => first(items), value)\n",
+            "}\n",
+        ),
+        concat!(
+            "operator rows_of<T, C>(value: T) -> C\n",
+            "impl const fn rows_of<T>(value: T) -> list<list<i64, 2>, 1> => [[1, 2]]\n",
+            "impl const fn rows_of(value: i64) -> list<list<i64, 3>, 1> => [[value, value, value]]\n",
+            "const fn visit<T>(value: T) -> i64 {\n",
+            "    var total = 0\n",
+            "    for row in rows_of(value) { total = total + first(row) }\n",
+            "    return total\n",
+            "}\n",
+        ),
+        "const fn visit<...A>(input: ...A) -> i64 => first(items_of(...input))\n",
+    ] {
+        let accepted = module(&format!(
+            "{PROVISIONAL_RESULTS}{route}test invoke {{ assert visit(5) == 9 }}\n"
+        ));
+        assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+        let rejected = module(&format!(
+            "{PROVISIONAL_RESULTS}{route}test invoke {{ visit(\"s\") }}\n"
+        ));
+        assert_eq!(rejected.findings.len(), 1, "{}", rejected.report);
+        assert_eq!(rejected.findings[0].rule, "EXPR-7", "{}", rejected.report);
+        assert!(rejected.report.contains("`first<list<i64, 2>>`"));
+    }
+}
+
+/// GEN-7: a callback's parameter is typed by the final call. This works
+/// for an ordinary call and where the input comes from FN-19 forwarding.
+#[test]
+fn a_callback_parameter_uses_the_type_selected_in_its_instance() {
+    let apply = "const fn apply<T>(f: const fn(T) -> i64, input: T) -> i64 => f(input)\n";
+    for route in [
+        "const fn visit<T>(value: T) -> i64 => apply(fn(input) => first(input), items_of(value))\n",
+        "const fn visit<...A>(values: ...A) -> i64 => apply(fn(input) => first(input), items_of(...values))\n",
+    ] {
+        let call = "test invoke { assert visit(5) == 9 }\n";
+        let accepted = module(&format!("{PROVISIONAL_RESULTS}{apply}{route}{call}"));
+        assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+
+        let definitions = PROVISIONAL_RESULTS
+            .replace("marker(value: list<i64, 2>)", "marker(value: list<i64, 3>)");
+        let rejected = module(&format!("{definitions}{apply}{route}{call}"));
+        assert_eq!(
+            rejected.summary(),
+            ["m.hgl:11:22 type/type.mismatch EXPR-7"],
+            "{}",
+            rejected.report
+        );
+        assert!(rejected.report.contains("`first<list<i64, 3>>`"));
+    }
+}
+
+/// GEN-7: non-generic bodies make instances where they write the calls or
+/// references. Calling those bodies does not make those instances again.
+#[test]
+fn forwarding_through_a_non_generic_body_reports_only_its_making_site() {
+    let checked = module(concat!(
+        "operator fetch<T, R>(value: T) -> R\n",
+        "impl const fn fetch<T>(value: T) -> i64 => 5\n",
+        "impl const fn fetch(value: i64) -> str => \"other\"\n",
+        "const fn inferred<T>(value: T) -> i64 {\n",
+        "    let answer = fetch(value)\n",
+        "    return answer\n",
+        "}\n",
+        "const fn relay<...A>(values: ...A) -> i64 => inferred(...values)\n",
+        "const fn via<T>(value: T) -> i64 => relay(value)\n",
+        "const fn apply(f: const fn(i64) -> i64, value: i64) -> i64 => f(value)\n",
+        "const fn reference(value: i64) -> i64 => apply(via<i64>, value)\n",
+        "const fn named(value: i64) -> i64 => relay(value)\n",
+        "test invoke { reference(3)\n reference(4)\n named(5) }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:48 type/type.mismatch EXPR-5",
+            "m.hgl:13:38 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7, ERR-9: the type error in this instance precedes the recursive
+/// call's admission and confines the error to the making site.
+#[test]
+fn an_ill_typed_indexed_instance_does_not_make_a_recursive_call() {
+    let checked = module(concat!(
+        "const fn repeat<T>(items: T, n: i64) -> i64 {\n",
+        "    if n <= 0 { return 0 }\n",
+        "    return repeat([items, items[0]], n - 1)\n",
+        "}\n",
+        "test invoke { assert repeat([7], 3) == 0 }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:22 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7: an unrelated changed result does not move a call's rejection.
+#[test]
+fn a_changed_result_does_not_relocate_other_argument_checks() {
+    for (mode, expected) in [
+        ("var", "name/binding.immutable FN-15"),
+        ("const", "type/argument.constant FN-1"),
+    ] {
+        let checked = module(&format!(
+            concat!(
+                "operator fetch<T, R>(value: T) -> R\n",
+                "impl const fn fetch<T>(value: T) -> i64 => 5\n",
+                "impl const fn fetch(value: i64) -> str => \"other\"\n",
+                "operator update<T>(value: T) -> i64\n",
+                "impl const fn update<T>(value: T) -> i64 => 1\n",
+                "impl const fn update({mode} value: i64) -> i64 => value\n",
+                "const fn both<T>(value: T) -> i64 {{\n",
+                "    let answer = fetch(value)\n",
+                "    return update(value)\n",
+                "}}\n",
+                "test invoke {{ both(3) }}\n",
+            ),
+            mode = mode,
+        ));
+        assert_eq!(checked.summary(), [format!("m.hgl:12:15 {expected}")]);
+        let lines: Vec<_> = checked.report.lines().collect();
+        let at = lines
+            .iter()
+            .position(|line| line.contains("the instance's body rejects here"))
+            .unwrap();
+        assert!(
+            lines[at - 1].contains("return update(value)"),
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// GEN-7: a failing use of an inferred binding points through an alias
+/// to its initializer when another call also changed its result type.
 #[test]
 fn an_instance_reports_the_changed_call_that_its_local_reads() {
     let checked = module(concat!(
@@ -283,12 +819,13 @@ fn an_instance_reports_the_changed_call_that_its_local_reads() {
         "impl const fn items_of(value: i64) -> list<i64, 3> => [1, 2, 3]\n",
         "const fn two<T>(value: T) -> i64 {\n",
         "    let answer = fetch(value)\n",
+        "    let alias = answer\n",
         "    let items = items_of(value)\n",
-        "    return answer\n",
+        "    return alias\n",
         "}\n",
         "test invoke { two(1) }\n",
     ));
-    assert_eq!(checked.summary(), ["m.hgl:9:18 type/type.mismatch EXPR-5"]);
+    assert_eq!(checked.summary(), ["m.hgl:14:15 type/type.mismatch EXPR-5"]);
     assert!(checked.report.contains("two<i64>"), "{}", checked.report);
     assert!(
         !checked
@@ -297,6 +834,28 @@ fn an_instance_reports_the_changed_call_that_its_local_reads() {
         "{}",
         checked.report
     );
+}
+
+/// GEN-7: the inferred type of a mutable local originates at its initializer.
+#[test]
+fn a_changed_result_keeps_the_label_on_a_var_initializer() {
+    let checked = module(concat!(
+        "operator fetch<T, R>(value: T) -> R\n",
+        "impl const fn fetch<T>(value: T) -> i64 => 5\n",
+        "impl const fn fetch(value: i64) -> str => \"other\"\n",
+        "const fn read<T>(value: T) -> i64 {\n",
+        "    var answer = fetch(value)\n",
+        "    return answer\n",
+        "}\n",
+        "test invoke { read(3) }\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:9:15 type/type.mismatch EXPR-5"]);
+    let lines: Vec<_> = checked.report.lines().collect();
+    let label = lines
+        .iter()
+        .position(|line| line.contains("the instance's body rejects here"))
+        .unwrap();
+    assert!(lines[label - 1].contains("var answer = fetch(value)"));
 }
 
 /// GEN-2: a call resolves each generic parameter of its callee, and
