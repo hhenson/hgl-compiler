@@ -421,11 +421,13 @@ analyser: partial
 transpiler: partial
 
 - Emits child reads and endpoint observations for supported list, tuple, struct and
-  dictionary projections.
+  dictionary projections. Observes nested dictionary entries, including where a
+  parent key or the final key is absent.
 - Captures each held child's position or key at binding. A valid but incomplete
   dictionary entry fails the whole read, and a wholly unset entry is omitted.
-- Left: The unsupported child forms under EXPR-7 and TYPE-9 are reported, including a
-  nested dictionary entry and unsupported operations on a field or child.
+- Left: The unsupported child forms under EXPR-7 and TYPE-9 are reported, including
+  direct payload reads of nested dictionary entries and unsupported operations on a
+  field or child.
 
 ## END-9
 

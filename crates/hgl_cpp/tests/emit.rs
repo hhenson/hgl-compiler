@@ -1808,9 +1808,9 @@ fn keyed_temporal_code_is_written() {
 }
 
 /// A dictionary's key of a type the family does not write, a constant
-/// connection of a set, and an entry of a dictionary's entry in a hook are
-/// reported, and block what reaches them. A key's child as a connection of
-/// a graph is written (`references`).
+/// connection of a set, and a direct payload read of a nested dictionary
+/// entry are reported, and block what reaches them. A key's child as a
+/// connection of a graph is written (`references`).
 #[test]
 fn a_keyed_form_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -1862,7 +1862,7 @@ fn a_keyed_form_not_written_yet_is_reported() {
     );
     assert_eq!(
         emitted.blocked("an_entry_of_an_entry").as_deref(),
-        Some("m.hgl:12:21 the cpp target does not write an entry of a dictionary's entry yet")
+        Some("m.hgl:12:46 the cpp target does not write an entry of a dictionary's entry yet")
     );
     assert_eq!(emitted.blocked("a_child_in_a_graph"), None);
 }
