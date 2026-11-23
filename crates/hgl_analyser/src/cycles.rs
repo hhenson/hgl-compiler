@@ -14,6 +14,8 @@
 //!   the operator is called by name or written as a symbol (OPS-2);
 //! * of a function's parameter defaults, those of the parameters the
 //!   call leaves out (UNIT-8);
+//! * of a callable parameter, the static function the caller supplied
+//!   where the body invokes it (FN-17);
 //! * of a struct's field defaults, the default selected for each field
 //!   the constructor leaves out, using the concrete keys of a forwarded
 //!   argument pack (TYPE-5, FN-19).
@@ -32,7 +34,10 @@
 //! brackets or by name. So every name that is bound to a constant is an
 //! edge to it too, from the part it is written in.
 //!
-//! An anonymous function body is followed only to the constants it names.
+//! An anonymous argument contributes its call dependencies where a body
+//! invokes it. Its written constant names are also read by UNIT-13.
+
+mod callbacks;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -49,6 +54,7 @@ use crate::read::{default_of, parameters};
 use crate::types::{Detail, Type};
 use crate::values::{ForwardingInstance, has_forwarded_calls};
 use crate::{codes, error};
+use callbacks::CallbackUses;
 
 /// Reports cyclic constants at their names and cyclic defaults at their
 /// expressions. It reads the typed program, after the pass that types it.
@@ -81,6 +87,8 @@ enum Part {
     Body(Declared),
     /// The body of a function under one caller's concrete pack shape.
     PackBody(Declared, usize),
+    /// The body of a function with its called arguments' dependencies.
+    BoundBody(Declared, usize),
     /// The default of a parameter of a function: the function, and the
     /// parameter's position.
     Default(Declared, usize),
@@ -97,6 +105,7 @@ impl Part {
             Part::Constant(declaration)
             | Part::Body(declaration)
             | Part::PackBody(declaration, _)
+            | Part::BoundBody(declaration, _)
             | Part::Default(declaration, _)
             | Part::Struct(declaration)
             | Part::FieldDefault(declaration, _) => declaration,
@@ -156,6 +165,7 @@ struct PackBodies {
     forwarding: HashSet<Declared>,
     instances: HashMap<Declared, Vec<ForwardingInstance>>,
     waiting: VecDeque<(Declared, usize)>,
+    bound: HashMap<Declared, Vec<Vec<Part>>>,
 }
 
 impl PackBodies {
@@ -176,24 +186,56 @@ impl PackBodies {
         Part::PackBody(called, index)
     }
 
-    fn add_parts(&mut self, program: &Program, parts: &mut Vec<(Part, Vec<Part>)>) {
+    fn bound_body(&mut self, called: Declared, body: Part, mut reads: Vec<Part>) -> Part {
+        if reads.is_empty() {
+            return body;
+        }
+        reads.push(body);
+        reads.sort_unstable();
+        reads.dedup();
+        let bodies = self.bound.entry(called).or_default();
+        if let Some(index) = bodies.iter().position(|known| *known == reads) {
+            return Part::BoundBody(called, index);
+        }
+        let index = bodies.len();
+        bodies.push(reads);
+        Part::BoundBody(called, index)
+    }
+
+    fn add_parts(
+        &mut self,
+        program: &Program,
+        callbacks: &CallbackUses,
+        parts: &mut Vec<(Part, Vec<Part>)>,
+    ) {
         while let Some((declaration, index)) = self.waiting.pop_front() {
             // Keep the declaration's folded constant references, and use
             // the checked body for edges that depend on the pack shape.
             let mut reads = vec![Part::Body(declaration)];
             if let Some(body) = self.instances[&declaration][index].body(program) {
                 walk_statements(&body.statements, &mut |visited| {
-                    reads_of(program, visited, self, &mut reads);
+                    reads_of(program, visited, callbacks, self, &mut reads);
                 });
             }
             parts.push((Part::PackBody(declaration, index), reads));
+        }
+        for (declaration, bodies) in self.bound.drain() {
+            for (index, reads) in bodies.into_iter().enumerate() {
+                parts.push((Part::BoundBody(declaration, index), reads));
+            }
         }
     }
 }
 
 /// Adds to `reads` each part of `program` that working out the
 /// expression `visited` reads directly.
-fn reads_of(program: &Program, visited: &Expr, packs: &mut PackBodies, reads: &mut Vec<Part>) {
+fn reads_of(
+    program: &Program,
+    visited: &Expr,
+    callbacks: &CallbackUses,
+    packs: &mut PackBodies,
+    reads: &mut Vec<Part>,
+) {
     match &visited.kind {
         ExprKind::Constant {
             module,
@@ -215,23 +257,42 @@ fn reads_of(program: &Program, visited: &Expr, packs: &mut PackBodies, reads: &m
             ..
         } => {
             let called = (*module, *declaration);
-            reads.push(packs.body_of(program, called, visited));
-            // UNIT-8: the call reads the default of each parameter it
-            // leaves out. An argument says which parameter it is given
-            // to.
-            let defaults = program.modules[*module]
-                .defaults
-                .get(*declaration)
-                .into_iter()
-                .flatten();
-            for (position, default) in defaults.enumerate() {
-                let given = arguments
-                    .iter()
-                    .any(|argument| argument.parameter == Some(position));
-                if default.is_some() && !given {
-                    reads.push(Part::Default(called, position));
+            let body = packs.body_of(program, called, visited);
+            let mut callback_reads = Vec::new();
+            for (target, supplied) in callbacks.of_call(called, arguments) {
+                if let Some(target) = target.declaration() {
+                    callback_reads.push(Part::Body(target));
+                    read_parameter_defaults(
+                        program,
+                        target,
+                        |position| supplied.contains(&position),
+                        &mut callback_reads,
+                    );
+                } else if let Callee::Anonymous(function) = target {
+                    walk_statements(&function.body.statements, &mut |value| {
+                        reads_of(program, value, callbacks, packs, &mut callback_reads);
+                    });
                 }
             }
+            reads.push(packs.bound_body(called, body, callback_reads));
+            read_parameter_defaults(
+                program,
+                called,
+                |position| {
+                    arguments
+                        .iter()
+                        .any(|argument| argument.parameter == Some(position))
+                },
+                reads,
+            );
+        }
+        ExprKind::Call {
+            callee: Callee::Anonymous(function),
+            ..
+        } => {
+            walk_statements(&function.body.statements, &mut |value| {
+                reads_of(program, value, callbacks, packs, reads);
+            });
         }
         ExprKind::Construct {
             module,
@@ -261,6 +322,25 @@ fn reads_of(program: &Program, visited: &Expr, packs: &mut PackBodies, reads: &m
             }
         }
         _ => {}
+    }
+}
+
+/// UNIT-8: a call reads the default of each parameter it leaves out.
+fn read_parameter_defaults(
+    program: &Program,
+    called: Declared,
+    supplied: impl Fn(usize) -> bool,
+    reads: &mut Vec<Part>,
+) {
+    let defaults = program.modules[called.0]
+        .defaults
+        .get(called.1)
+        .into_iter()
+        .flatten();
+    for (position, default) in defaults.enumerate() {
+        if default.is_some() && !supplied(position) {
+            reads.push(Part::Default(called, position));
+        }
     }
 }
 
@@ -365,6 +445,7 @@ fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
 fn parts_of(
     program: &Program,
     index: usize,
+    callbacks: &CallbackUses,
     packs: &mut PackBodies,
     parts: &mut Vec<(Part, Vec<Part>)>,
 ) {
@@ -373,7 +454,8 @@ fn parts_of(
     let gather = |expressions: &[&Expr], packs: &mut PackBodies| {
         let mut reads = Vec::new();
         for expression in expressions {
-            expression.walk(&mut |visited| reads_of(program, visited, packs, &mut reads));
+            expression
+                .walk(&mut |visited| reads_of(program, visited, callbacks, packs, &mut reads));
         }
         reads
     };
@@ -385,7 +467,7 @@ fn parts_of(
         if let Some(Some(body)) = module.bodies.get(position) {
             let mut reads = Vec::new();
             walk_statements(&body.statements, &mut |visited| {
-                reads_of(program, visited, packs, &mut reads);
+                reads_of(program, visited, callbacks, packs, &mut reads);
             });
             parts.push((Part::Body(declared), reads));
         }
@@ -446,11 +528,12 @@ fn cycles(program: &Program, diagnostics: &mut Diagnostics, has_constant: bool, 
         packs.forwarding = forwarding_bodies(program);
     }
     // Each part of each module, with the parts it reads.
+    let callbacks = CallbackUses::of(program);
     let mut parts: Vec<(Part, Vec<Part>)> = Vec::new();
     for index in 0..program.modules.len() {
-        parts_of(program, index, &mut packs, &mut parts);
+        parts_of(program, index, &callbacks, &mut packs, &mut parts);
     }
-    packs.add_parts(program, &mut parts);
+    packs.add_parts(program, &callbacks, &mut parts);
 
     // A node for each part, made when it is first met: a part nothing
     // was gathered for, a function with no body say, reads nothing.
