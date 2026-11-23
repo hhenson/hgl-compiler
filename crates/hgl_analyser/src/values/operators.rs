@@ -56,18 +56,60 @@ impl<'a> Typer<'a> {
     /// inherits from widens the parameter to that struct". GEN-4: the
     /// operator's own requirement of its result.
     ///
-    /// A call by name and the test of a named operator requirement
-    /// (GEN-16) both ask through here, so a requirement holds as the
-    /// call it names would select.
+    /// Named operator requirements (GEN-16) and calls written in generic
+    /// bodies retain complete input-derived result requests here. Value
+    /// calls outside generic bodies use `argument_output_requested`.
     pub(super) fn output_requested(
+        &self,
+        operator: OperatorRef,
+        public: &Signature,
+        found: Vec<Option<Argument>>,
+        supplied: &[Option<&Type>],
+        said: bool,
+    ) -> Requested {
+        self.request_output(operator, public, found, supplied, said, false)
+    }
+
+    /// GEN-5, GEN-6, GEN-8: outside a generic body, an option contributes
+    /// its generic value without promoting input-derived type arguments
+    /// into result constraints. Every candidate still checks every input.
+    pub(super) fn argument_output_requested(
+        &self,
+        operator: OperatorRef,
+        public: &Signature,
+        found: Vec<Option<Argument>>,
+        given: &[Given],
+        said: bool,
+    ) -> Requested {
+        let supplied = public_inputs(public, given);
+        // This extraction changes only calls written outside a generic
+        // body. GEN-7's result/literal rule is held; retain the existing
+        // complete request within that body and its concrete rereads.
+        self.request_output(
+            operator,
+            public,
+            found,
+            &supplied,
+            said,
+            self.signature.generics.is_empty(),
+        )
+    }
+
+    fn request_output(
         &self,
         operator: OperatorRef,
         public: &Signature,
         mut found: Vec<Option<Argument>>,
         supplied: &[Option<&Type>],
         said: bool,
+        value_call: bool,
     ) -> Requested {
         let program = self.program;
+        // GEN-5, GEN-6, GEN-8: a generic value default is a request for
+        // that value, not for every input-derived type. Public checks below
+        // still use every argument. Written types and the expected place
+        // constrain a value call's result independently of input spelling.
+        let requested_types = found.clone();
         self.infer_operator_inputs(public, &mut found, supplied);
         let operator_declaration =
             &program.modules[operator.module].declarations[operator.declaration];
@@ -130,6 +172,7 @@ impl<'a> Typer<'a> {
                     place: None,
                     among: None,
                     generics: Vec::new(),
+                    call_generics: Vec::new(),
                     unfit: Some(Unfit {
                         generic: index,
                         described,
@@ -140,12 +183,31 @@ impl<'a> Typer<'a> {
         }
         // The output requested, as far as it is known: a `list<T, 3>`
         // with `T` not yet said is a list of three of anything.
+        let output_arguments: Vec<_> = public
+            .generics
+            .iter()
+            .zip(&explicit)
+            .zip(requested_types)
+            .map(|((generic, inferred), requested)| match generic.kind {
+                GenericKind::Plain | GenericKind::Type if value_call => {
+                    requested.unwrap_or(Argument::Type(Type::Unknown))
+                }
+                _ => inferred.clone(),
+            })
+            .collect();
+        let output_map: Vec<_> = public
+            .generics
+            .iter()
+            .zip(&output_arguments)
+            .filter(|(generic, _)| !matches!(generic.kind, GenericKind::Pack { .. }))
+            .map(|(generic, argument)| (generic.at, argument))
+            .collect();
         let place: Option<Type> = asked
             .then(|| {
                 public
                     .result
                     .as_ref()
-                    .map(|result| placed(substitute_within(result, &map), &own_generics))
+                    .map(|result| placed(substitute_within(result, &output_map), &own_generics))
                     .filter(|requested| !matches!(requested, Type::Unknown))
             })
             .flatten();
@@ -163,6 +225,16 @@ impl<'a> Typer<'a> {
                 || reflects(&program.modules[operator.module], public)
             {
                 explicit
+            } else {
+                Vec::new()
+            },
+            call_generics: if public
+                .parameters
+                .iter()
+                .any(|parameter| parameter.configuration)
+                || reflects(&program.modules[operator.module], public)
+            {
+                output_arguments
             } else {
                 Vec::new()
             },
@@ -437,13 +509,13 @@ impl<'a> Typer<'a> {
         // Then its arguments, in the order the operator declares its
         // parameters (GEN-12), and its defaults: see
         // `Typer::output_requested`.
-        let supplied = public_inputs(public, &given);
         let Requested {
             place: mut requested,
             among,
             generics: operator_generics,
+            call_generics,
             unfit,
-        } = self.output_requested(operator, public, found, &supplied, said);
+        } = self.argument_output_requested(operator, public, found, &given, said);
         // GEN-13: a default the call takes is of its parameter's type
         // as the call resolves it: the `2` of
         // `operator choose<T, const fallback: T = 2>` is no `str`. One
@@ -510,6 +582,10 @@ impl<'a> Typer<'a> {
                 }
             }
         }
+        // Public constraints and pack checks above use the original
+        // inference. Only configuration defaults use the fitted argument
+        // types completed by `called` (UNIT-8, GEN-6).
+        let operator_generics = call_generics;
         // GEN-7: "A generic body is checked under its stated
         // requirements": what the enclosing declaration requires of its
         // generic parameters is callable in its body. The requirement
@@ -1663,8 +1739,11 @@ pub(super) struct Requested {
     pub(super) place: Option<Type>,
     /// The types the operator's own requirement admits for its result.
     pub(super) among: Option<Vec<Type>>,
-    /// The operator's resolved generic arguments, for any configuration defaults.
+    /// Complete public inference, used by reflected pack constraints.
     pub(super) generics: Vec<Argument>,
+    /// Arguments for inherited configuration defaults: an argument-derived
+    /// type stays open until the candidate fits its source expression.
+    pub(super) call_generics: Vec<Argument>,
     /// A default the call takes that is not of its parameter's type as
     /// the call resolves it (GEN-13). Nothing is then requested.
     pub(super) unfit: Option<Unfit>,

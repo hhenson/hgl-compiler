@@ -712,6 +712,38 @@ fn generic_null_defaults_run_on_the_sdk() {
     );
 }
 
+/// GEN-2, GEN-6 and UNIT-8: concrete operator calls read literals at
+/// each candidate; generic-body calls retain main's existing behavior.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn direct_operator_literal_options_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("direct_operator_literal_options");
+    let file = write(
+        &root,
+        "demo.operator_literal_options.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.operator_literal_options.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 13 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// TIME-5, END-3 and END-4: hook mutations reject at source checking,
 /// and admitted checked deltas handle publication and silence.
 #[test]

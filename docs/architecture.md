@@ -1332,13 +1332,25 @@ So `requires window(T) -> list<T, 5>` neither is the body's bare
 `window(value)`, which asks for the default, nor meets a candidate's
 `requires window(T)`.
 
-A requirement and a call ask the candidates through one function,
-`Typer::output_requested`: what the place expects, the types supplied
+Named requirements and calls written in generic bodies keep the
+complete request through `Typer::output_requested`: what the place
+expects, the types supplied
 in the operator's parameter order with an abstract struct widening what
 an earlier one decided (GEN-2), the operator's defaults, each of its
 parameter's type as resolved (GEN-13), and the operator's own
-requirement of its result. So a requirement holds exactly where the
-call it names would select one candidate.
+requirement of its result.
+
+Outside a generic body, a value call uses
+`Typer::argument_output_requested`: its result request keeps written and
+contextual types and generic value options, while input-derived types
+remain open for candidate-local literal fitting (GEN-5, GEN-6, GEN-8).
+The complete public inference still checks dependent defaults (GEN-13),
+result membership and reflected packs. Separate call metadata lets
+`Typer::called` resolve inherited configuration defaults from the fitted
+arguments (UNIT-8): fitting to `f64?` yields the `f64` payload type.
+Named requirements and calls written in generic bodies keep the existing
+complete request; this change neither rereads an instance nor changes
+the held GEN-7 result/literal behavior.
 
 Where two requirements name one operator with the same types and
 different results, the call is the one that gives what its place
