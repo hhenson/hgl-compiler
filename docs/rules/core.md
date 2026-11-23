@@ -536,9 +536,11 @@ transpiler: partial
 
 - Reads a store entry as a whole result before applying the recorded form, and writes
   supported ordinary payloads before a run, at graph build and in hooks.
+- A stored nullable value reads back through an explicitly typed `get<V?>`. A
+  stored null is successful and the key remains present.
 - Reading an absent store key gives `value.missing_key`, the same code as a
   strict dictionary lookup (ERR-6).
-- Left: an explicitly typed nullable store write and a temporal child graph using the surrounding store are declined (CRUN-7).
+- Left: a temporal child graph using the surrounding store is declined (CRUN-7).
 
 ## CAP-7
 
@@ -717,7 +719,7 @@ transpiler: partial
 
 - Creates one store for a run, populated by the application before graph construction,
   and executes its wiring-time store calls in order.
-- Left: a temporal branch using its surrounding graph's store, and an explicitly typed nullable write, are declined by the target (FN-9, CAP-6).
+- Left: a temporal branch using its surrounding graph's store is declined by the target (FN-9, CAP-6).
 
 ## CRUN-8
 

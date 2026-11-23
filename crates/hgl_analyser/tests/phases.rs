@@ -648,3 +648,28 @@ fn a_test_is_a_composition_block_with_assertions() {
         ]
     );
 }
+
+/// TST-10: the parser reports an absent raises argument once. Analyser
+/// validation applies to a supplied argument.
+#[test]
+fn a_missing_raises_argument_is_reported_once() {
+    for (tail, expected) in [
+        (" {\n    boom(3)\n}\n}", "expected `(`, found `{`"),
+        (" }", "expected `(`, found `}`"),
+        ("", "expected `(`, found end of file"),
+        (" == 1 }", "expected `(`, found `==`"),
+        ("() {} }", "expected an expression, found `)`"),
+    ] {
+        let source = format!("module m\nconst fn boom(n: i64) {{}}\ntest t {{ assert raises{tail}");
+        let checked = check_broken(&[("m.hgl", &source)]);
+        assert_eq!(checked.front_end_errors, 1, "{}", checked.report);
+        assert!(checked.findings.is_empty(), "{}", checked.report);
+        assert!(
+            checked
+                .report
+                .contains(&format!("error[parse/syntax.expected_token]: {expected}")),
+            "{}",
+            checked.report
+        );
+    }
+}

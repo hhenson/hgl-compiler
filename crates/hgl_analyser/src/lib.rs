@@ -185,6 +185,10 @@ pub mod codes {
     pub const PROPERTY_DUPLICATE: &str = "property.duplicate";
     /// A candidate declares a fixed parameter in its operator's pack slot (GEN-6).
     pub const IMPL_PACK: &str = "impl.pack";
+    /// A candidate's result disagrees with its operator's result for its parameters (GEN-6).
+    pub const IMPL_RESULT: &str = "impl.result";
+    /// A candidate's parameter types fall outside its operator's stated type set (GEN-6).
+    pub const IMPL_REQUIRES: &str = "impl.requires";
     /// A native implementation completes no declaration (NATIVE-2).
     pub const NATIVE_MISSING_DECLARATION: &str = "native.missing_declaration";
     /// A local is used before the statement that declares it (UNIT-6).
