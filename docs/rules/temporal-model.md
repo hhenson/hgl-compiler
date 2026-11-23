@@ -136,7 +136,9 @@ transpiler: partial
 
 - Supplies the declared node, source and application capabilities, including timers and
   run configuration. Wires them before initializers that read them.
-- Dropping a datetime wake at or before evaluation time, except for an equal-time request in `start`, is planned in #516. The first dropped request warns once per node, and further requests are counted for its stop log.
+- Drops a graph-time `datetime` wake at or before the evaluation time, except
+  for an equal-time request in `start`. The first drop warns once per node,
+  and the node logs the number of further drops at stop.
 - Left: Unknown or unavailable injections are reported, including graph injections other
   than the store. A nested child graph cannot read capabilities captured from its parent
   (CTRL-2).

@@ -426,9 +426,22 @@ struct impl_
 {
     static constexpr auto name = "demo.timing::wake_in_the_past";
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
     {
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation};
+        ::hglrt::DroppedWakes dropped_wakes_{};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_)
+    {
+        state_.set(state_type_{});
+    }
+
+    using signature_args = ::std::tuple<::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked>, ::hgraph::Out<::hgraph::TS<::hgraph::Str>>, ::hgraph::NodeScheduler, ::hgraph::NodeView, ::hgraph::State<state_type_>>;
+
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation, ::hglrt::DroppedWakeLog::bind<state_type_, &state_type_::dropped_wakes_>(wake_node_)};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = scheduler.is_scheduled_now();
         [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
@@ -446,8 +459,28 @@ struct impl_
             return;
         }
     }
+
+    static void stop([[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        ::hglrt::DroppedWakeLog::bind<state_type_, &state_type_::dropped_wakes_>(wake_node_).finish();
+    }
 };
 }  // namespace n_::wake_in_the_past
+}  // namespace hgl::demo::timing::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::wake_in_the_past::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::wake_in_the_past::impl_::state_type_>("hgl:demo.timing::wake_in_the_past.state");
+    }
+};
+
+namespace hgl::demo::timing::m_
+{
 namespace w_
 {
 // wake_in_the_past(value: i64) -> str (node), module demo.timing, line 88

@@ -187,14 +187,13 @@ bool at_most(Exact lhs, Exact rhs) {
     return lhs.value <= rhs.value;
 }
 
-/// NUM-4: "Tolerances must be finite and nonnegative ... An invalid tolerance
-/// is an HGL error". The catalogue has no code for it.
+/// NUM-4: a negative or non-finite tolerance fails with `numeric.invalid_tolerance`.
 void check_tolerances(f64 abs, f64 rel, std::source_location where) {
     if (!std::isfinite(abs) || abs < 0.0) {
-        fail_uncoded("the tolerance `abs` is not finite and nonnegative", where);
+        fail(codes::invalid_tolerance, "the tolerance `abs` is not finite and nonnegative", where);
     }
     if (!std::isfinite(rel) || rel < 0.0) {
-        fail_uncoded("the tolerance `rel` is not finite and nonnegative", where);
+        fail(codes::invalid_tolerance, "the tolerance `rel` is not finite and nonnegative", where);
     }
 }
 
