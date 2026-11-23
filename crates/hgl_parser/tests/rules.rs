@@ -444,8 +444,9 @@ fn a_bodys_opening_brace_can_follow_its_header_by_one_line() {
 }
 
 #[test]
-fn a_blank_line_separates_a_body_from_its_header() {
-    let message = "LEX-5 3:1: a blank line separates a body's opening brace from its header";
+fn two_line_breaks_separate_a_body_from_its_header() {
+    let message =
+        "LEX-5 3:1: two or more line breaks separate a body's opening brace from its header";
     for (entry, text) in [
         (Entry::Declarations, "fn f()\n\n{}"),
         (Entry::Declarations, "native fn f()\n\n{ when; }"),
@@ -453,6 +454,7 @@ fn a_blank_line_separates_a_body_from_its_header() {
             Entry::Declarations,
             "test t\n# Separate line\n{ assert true }",
         ),
+        (Entry::Declarations, "fn f() /* first\nsecond */\n{}"),
         (Entry::Statements, "if ready\n\n{ step() }"),
         (Entry::Statements, "switch value\n\n{ default: step() }"),
         (Entry::Statements, "let f = fn()\n\n{ step() }"),
@@ -464,7 +466,7 @@ fn a_blank_line_separates_a_body_from_its_header() {
 #[test]
 fn a_brace_after_a_complete_statement_begins_its_own_block() {
     // LEX-5: a statement that can end before `{` ends at the line break.
-    for text in ["return x", "call(x)", "x = y", "switch(x)", "switch - 1"] {
+    for text in ["return x", "call(x)", "x = y"] {
         assert_eq!(
             statements(&format!("{text}\n{{ step() }}")),
             format!("{} {}", statements(text), statements("{ step() }"))

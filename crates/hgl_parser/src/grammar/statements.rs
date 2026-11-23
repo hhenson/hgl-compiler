@@ -71,12 +71,12 @@ impl Parser<'_> {
     }
 
     /// LEX-5: a body continues its incomplete header across one line
-    /// break. After a separating blank line, report it and read the body
+    /// break. Report two or more separating line breaks and read the body
     /// for recovery.
     pub(crate) fn check_body_brace(&mut self) {
         if self.cut() {
             self.error(
-                "a blank line separates a body's opening brace from its header",
+                "two or more line breaks separate a body's opening brace from its header",
                 "LEX-5",
                 None,
             );
