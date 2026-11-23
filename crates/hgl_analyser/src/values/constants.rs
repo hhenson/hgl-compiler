@@ -22,7 +22,7 @@ use crate::syntax::{child, name_token, tokens};
 use crate::types::{
     Argument, Constant, ConstantValue, GenericKind, GenericParameter, Parameter, StructType, Type,
 };
-use crate::{codes, error, local_error};
+use crate::{codes, error};
 
 impl<'a> Typer<'a> {
     /// GEN-9: the identity is read independently against every concrete
@@ -142,19 +142,21 @@ impl<'a> Typer<'a> {
                         .typed_in(self.file, &written, Some(expected))
                         .is_ok_and(|constant| constant.evaluation_failed())
                 {
-                    self.report_failed_default(value.at, parameter);
+                    self.report_failed_default(value.at, &parameter.name);
                 }
                 Some(self.take_default(value))
             })
             .collect()
     }
 
-    fn report_failed_default(&mut self, at: Location, parameter: &Parameter) {
-        self.diagnostics.emit(local_error(
+    // UNIT-8, ERR-9: the catalogue's proposed constant.failure row
+    // covers parameter and field defaults as well as module constants.
+    fn report_failed_default(&mut self, at: Location, name: &str) {
+        self.diagnostics.emit(error(
             Category::Type,
-            codes::local::DEFAULT_CONSTANT_FAILURE,
+            codes::CONSTANT_FAILURE,
             at,
-            format!("evaluating the default of `{}` fails", parameter.name),
+            format!("evaluating the default of `{name}` fails"),
             "UNIT-8",
         ));
     }
@@ -233,14 +235,27 @@ impl<'a> Typer<'a> {
                 // (`field.null_default`), and not again as no value of
                 // the field's type.
                 let judged = field.null_default && !matches!(ty, Type::Nullable(_));
-                let expected = if shaped(&ty) || judged {
+                let invalid_shape = shaped(&ty);
+                let expected = if invalid_shape || judged {
                     Type::Unknown
                 } else {
                     ty
                 };
+                let reported = self.diagnostics.len();
                 let value = self.expression(&written, Some(&expected));
                 let place = format!("the field `{}`", field.name);
                 let value = self.fit(value, &expected, &place);
+                // UNIT-8, ERR-9: a field default is required constant,
+                // with the same evaluation order as a parameter default.
+                if !invalid_shape
+                    && !judged
+                    && self.diagnostics.len() == reported
+                    && self
+                        .typed_in(self.file, &written, Some(&expected))
+                        .is_ok_and(|constant| constant.evaluation_failed())
+                {
+                    self.report_failed_default(value.at, &field.name);
+                }
                 Some(self.take_default(value))
             })
             .collect()
@@ -329,7 +344,7 @@ impl<'a> Typer<'a> {
             .typed_in_scope(at.file, &written, Some(expected), &generic_type, &map)
             .is_ok_and(|constant| constant.evaluation_failed())
         {
-            self.report_failed_default(at, parameter);
+            self.report_failed_default(at, &parameter.name);
         }
     }
 
