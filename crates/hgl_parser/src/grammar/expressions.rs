@@ -864,6 +864,8 @@ impl Parser<'_> {
         self.bump();
         // LEX-5: line breaks do not count inside brackets.
         let kind = self.nested(Context::LIST, |parser| {
+            // EXPR-17: a list comprehension starts with `for` and gives
+            // one expression for each item of its iterable.
             if parser.eat(KwFor) {
                 parser.expect_name("an iteration name");
                 if parser.expect_word("in") {
