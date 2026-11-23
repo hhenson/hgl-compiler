@@ -316,6 +316,38 @@ fn a_result_contract_needs_consistent_input_bindings() {
     );
 }
 
+/// GEN-6 and GEN-17: corresponding reflected packs preserve a consistent
+/// binding from a callback template's parameter and result.
+#[test]
+fn a_result_contract_checks_repeated_bindings_beside_reflected_packs() {
+    let checked = module(concat!(
+        "operator packed_bad<T, ...Ps>(f: const fn(T, ...{Ps}) -> T) -> T\n",
+        "impl const fn packed_bad<...Qs>(f: const fn(i64, ...{Qs}) -> i64) -> str => \"wrong\"\n",
+        "operator packed_ok<T, ...Ps>(f: const fn(T, ...{Ps}) -> T) -> T\n",
+        "impl const fn packed_ok<...Qs>(f: const fn(i64, ...{Qs}) -> i64) -> i64 => 1\n",
+        "operator packed_conflict<T, ...Ps>(f: const fn(T, ...{Ps}) -> T) -> T\n",
+        "impl const fn packed_conflict<...Qs>(f: const fn(i64, ...{Qs}) -> f64) -> str => \"unproven\"\n",
+        "operator plain_bad<T>(f: const fn(T) -> T) -> T\n",
+        "impl const fn plain_bad(f: const fn(i64) -> i64) -> str => \"wrong\"\n",
+        "const item: str = \"item\"\n",
+        "const other: str = \"other\"\n",
+        "operator packed_member<T, ...Ps>(f: const fn(T, list<Ps[item]>, ...{Ps}) -> T) -> T\n",
+        "impl const fn packed_member<...Qs>(f: const fn(i64, list<Qs[item]>, ...{Qs}) -> i64) -> str => \"wrong\"\n",
+        "operator packed_key_conflict<T, ...Ps>(f: const fn(T, list<Ps[item]>, ...{Ps}) -> T) -> T\n",
+        "impl const fn packed_key_conflict<...Qs>(f: const fn(i64, list<Qs[other]>, ...{Qs}) -> i64) -> str => \"unproven\"\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:70 operator/impl.result GEN-6",
+            "m.hgl:9:53 operator/impl.result GEN-6",
+            "m.hgl:13:89 operator/impl.result GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-6: repeats and expressions inside composite constants must
 /// agree with the binding before it gives a declared result type.
 #[test]
