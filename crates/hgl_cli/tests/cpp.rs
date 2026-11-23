@@ -896,8 +896,8 @@ fn list_code_runs_on_the_sdk() {
     );
 }
 
-/// TYPE-10: the explicit unbounded sentinel uses the growing-list
-/// representation in value code, node and graph connections, and bundles.
+/// TYPE-10: both growing-list spellings share representation and identity
+/// in value code, node and graph connections, bundles and instances.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn explicit_unbounded_lists_run_on_the_sdk() {
@@ -919,7 +919,7 @@ fn explicit_unbounded_lists_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1308,6 +1308,34 @@ fn references_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 15 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// A node designates a dictionary key across membership changes and can
+/// designate an ordinary input on a timer wake (FN-16, END-10, TIME-9).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn reference_designations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("reference-designations");
+    let file = write(
+        &root,
+        "src/demo.reference_designations.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.reference_designations.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

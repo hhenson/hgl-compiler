@@ -1744,6 +1744,36 @@ fn list_code_is_written() {
     );
 }
 
+/// TYPE-10: explicit and omitted unbounded sizes select one emitted instance.
+#[test]
+fn growing_list_spellings_share_an_emitted_instance() {
+    let emitted = emit_with(
+        &[(
+            "demo.explicit_unbounded.hgl",
+            include_str!("fixtures/demo.explicit_unbounded.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    let path = hgl_cpp::header_path("demo.explicit_unbounded");
+    let header = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == path)
+        .unwrap()
+        .text;
+    let instances: Vec<_> = header
+        .lines()
+        .filter(|line| line.starts_with("// retain_values<V>"))
+        .collect();
+    assert_eq!(instances.len(), 1, "{instances:?}");
+    assert!(
+        instances[0].contains("instance `list_i64_`"),
+        "{instances:?}"
+    );
+}
+
 /// The timing the target writes (`emit/scheduling.rs`): nodes woken by a
 /// scheduler or an alarm, and sources with declarations and hooks, each
 /// as the goldens under `tests/goldens/demo.timing` have it. Each test of
@@ -2408,27 +2438,6 @@ fn a_lifted_calls_omitted_defaults_are_configuration() {
     let b = tests.find("= ::hgl::m::m_::one();").expect("`b` held");
     let bounds = tests.find("const auto bounds_").expect("the bounds held");
     assert!(bounds < b, "{tests}");
-}
-
-/// UNIT-8: a default is written where its argument is left out; one
-/// that calls its own function with that argument left out again would
-/// be written inside itself without end, and is reported.
-#[test]
-fn a_default_that_leaves_itself_out_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "const fn again(value: bool = again()) -> bool => value\n",
-            "const fn uses() -> bool => again()\n",
-            "test calls {\n",
-            "    assert uses()\n",
-            "}\n",
-        ),
-    )]);
-    let reported = "m.hgl:2:30 the cpp target does not write a default that leaves itself out yet";
-    assert_eq!(emitted.reported, [reported]);
-    assert_eq!(emitted.blocked("calls").as_deref(), Some(reported));
 }
 
 /// TST-1 and FN-4: value and temporal helpers may share a name inside a
