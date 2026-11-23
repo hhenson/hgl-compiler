@@ -4445,11 +4445,19 @@ fn store_values_and_failure_places_on_the_sdk() {
     ] {
         write(&root, name, source);
     }
+    // Include the rejected source only in the test harness. The ordinary
+    // application runs reject a program with an invalid test context.
+    let rejection = write(
+        &scratch("store_inferred_nullable"),
+        "demo.store.inferred_nullable.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.store.inferred_nullable.hgl"),
+    );
     let kept = root.join("build");
     let output = hgl_in(
         &[
             "test",
             &argument(&root),
+            &rejection,
             "--target",
             "cpp",
             "--keep",
@@ -4471,7 +4479,7 @@ fn store_values_and_failure_places_on_the_sdk() {
     );
     assert!(
         stdout.contains(
-            "passed   rejection   demo.store.nullable::an_unwritten_store_read_rejects\n"
+            "passed   rejection   demo.store.inferred_nullable::an_unwritten_store_read_rejects\n"
         ),
         "{stdout}"
     );
