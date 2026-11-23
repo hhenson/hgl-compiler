@@ -30,12 +30,12 @@ transpiler: done
 
 ## NUM-4
 
-transpiler: partial
+transpiler: done
 
 - Passes absolute and relative tolerances to the selected numeric equality native, which
   applies the exact and configured comparisons.
-- The execution catalogue registers `numeric.invalid_tolerance`. Emitting it for a
-  negative or nonfinite tolerance is planned in #516.
+- The runtime raises `numeric.invalid_tolerance` for a negative or non-finite
+  tolerance on `==` or `!=`.
 
 ## NUM-5
 
@@ -352,7 +352,8 @@ analyser: partial
 - For a nullable scalar it is the optional TYPE-16 gives it, and for a window the V that arrived
 - A result place takes `CheckedDelta`, including in a generic body such as core's `record`. A nullable place takes the same checked delta and discards its error (ERR-14, ERR-15).
 - A child's `delta_value` needs the child's admission (TIME-1)
-- Left: proof that `x` is valid and modified
+- A direct input's delta read needs its validity admission (TIME-1, TIME-4), as a child's does. This reads no whole collection payload, so it does not require every child to be valid.
+- An admitted result or nullable form needs no static proof of a tick; it handles a cycle with no delta (ERR-14, ERR-15).
 
 transpiler: partial
 
@@ -363,18 +364,26 @@ transpiler: partial
 
 ## END-4
 
+analyser: done
+
+- `invalidate` takes only the node's own `out`; a direct value or reference input is `endpoint.argument`.
+
 transpiler: partial
 
 - Emits result invalidation, including clearing collection results and reference
   designations, and permits observation of the transition without a modified guard.
-- Left: `invalidate(input)` passes source checking and is declined by the target. The Core operation clears the node's own `out`. Unsupported output shapes follow TYPE-9.
+- Left: unsupported output shapes follow TYPE-9.
 
 ## END-5
+
+analyser: partial
+
+- `activate` and `passivate` in `stop` reject as `input.lifecycle` (TIME-5); the input binding is passive there.
 
 transpiler: partial
 
 - Writes input activity control and suppresses silent no-change collection updates. A window result holds its last arrival until the handler's evaluation finishes (END-9).
-- Left: `activate` and `passivate` in `stop` pass source checking and are declined by the target. TIME-5 specifies a source `input.lifecycle` rejection.
+- Left: unsupported temporal shapes follow TYPE-9.
 
 ## END-6
 
@@ -487,11 +496,13 @@ analyser: done
 
 - A scheduler's three properties, `is_scheduled_now` among them; `schedule` with a `duration` or a `datetime`, a `tag` and `on_wall_clock`; `un_schedule`, with a tag or without, and `reset`
 
-transpiler: partial
+transpiler: done
 
 - Supplies scheduler state and writes schedule, cancellation and reset using the SDK
   adapter. Distinguishes due scheduler wakes from input ticks.
-- Dropped datetime wake requests and their run-log warning are planned in #516 (TIME-8).
+- Drops a nonfuture dated request in graph time, except for the node's first
+  evaluation when asked at the current time in `start`. Logs the first drop
+  per node and counts later ones at stop (TIME-8).
 
 ## CAP-5
 
@@ -500,11 +511,11 @@ analyser: done
 - An alarm has no property, and a node injects it or `scheduler` (TIME-8)
 - `schedule` on it takes a `duration` or a `datetime`, and neither a tag nor a clock
 
-transpiler: partial
+transpiler: done
 
 - Supplies the alarm adapter and emits duration or datetime scheduling, retaining the
   earliest outstanding wake.
-- Dropped datetime wake requests and their run-log warning are planned in #516 (TIME-8).
+- Uses the same dated-wake rules and per-node warning as the scheduler (TIME-8).
 
 ## CAP-6
 
@@ -519,7 +530,8 @@ transpiler: partial
 
 - Reads a store entry as a whole result before applying the recorded form, and writes
   supported ordinary payloads before a run, at graph build and in hooks.
-- Returning `value.missing_key` for an absent store entry is planned in #516.
+- Reading an absent store key gives `value.missing_key`, the same code as a
+  strict dictionary lookup (ERR-6).
 - Left: an explicitly typed nullable store write and a temporal child graph using the surrounding store are declined (CRUN-7).
 
 ## CAP-7

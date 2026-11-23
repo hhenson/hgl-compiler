@@ -680,6 +680,38 @@ fn block(path: &Path) {
     fs::create_dir(path).unwrap();
 }
 
+/// UNIT-13, EXPR-5: module statement-block initializers use their
+/// checked cold scope and retain the constant's one stored value.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn block_constants_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("block_constants");
+    let file = write(
+        &root,
+        "demo.block_constants.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.block_constants.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 0 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// EXPR-5, TYPE-14, UNIT-8: a generic null default is written using
 /// the selected nullable value parameter's concrete type.
 #[test]
@@ -712,19 +744,19 @@ fn generic_null_defaults_run_on_the_sdk() {
     );
 }
 
-/// UNIT-13, EXPR-5: module statement-block initializers use their
-/// checked cold scope and retain the constant's one stored value.
+/// TIME-5, END-3 and END-4: hook mutations reject at source checking,
+/// and admitted checked deltas handle publication and silence.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
-fn block_constants_run_on_the_sdk() {
+fn endpoint_hook_checks_run_on_the_sdk() {
     if !sdk_named() {
         return;
     }
-    let root = scratch("block_constants");
+    let root = scratch("endpoint_hook_checks");
     let file = write(
         &root,
-        "demo.block_constants.hgl",
-        include_str!("../../hgl_cpp/tests/fixtures/demo.block_constants.hgl"),
+        "demo.endpoint_hook_checks.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.endpoint_hook_checks.hgl"),
     );
     let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
@@ -735,11 +767,11 @@ fn block_constants_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.contains("rejection cases: 0 passed, 0 failed\n"),
+        stdout.contains("rejection cases: 5 passed, 0 failed\n"),
         "{stdout}"
     );
     assert!(
-        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1252,6 +1284,53 @@ fn timing_runs_on_the_sdk() {
     assert!(
         stdout.ends_with("executable cases: 17 passed, 0 failed, 0 not run\n"),
         "{stdout}"
+    );
+}
+
+/// TIME-8 and CAP-4: a node logs its first dropped wake during a run and
+/// reports later drops even when the scheduler is passed to a value helper
+/// and the HGL node has no explicit stop hook.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn dropped_wake_counts_reach_the_run_log_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("wake-logs");
+    let node = write(
+        &root,
+        "wakes.hgl",
+        "module wakes\n\
+         const fn ask(scheduler: Scheduler, at: datetime) { schedule(scheduler, at) }\n\
+         export fn requests() -> bool {\n\
+             inject scheduler, clock\n\
+             start { schedule(scheduler, 0us) }\n\
+             when scheduled() {\n\
+                 ask(scheduler, clock.evaluation_time)\n\
+                 ask(scheduler, clock.evaluation_time - 1us)\n\
+                 return true\n\
+             }\n\
+         }\n",
+    );
+    let app = write(
+        &root,
+        "wakes.app.hgl",
+        "application wakes.main\nuse wakes::{requests}\neval requests()\n",
+    );
+    let output = hgl_in(&["run", &node, &app, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains(": 1 publication"), "{stdout}");
+    assert_eq!(
+        stderr.matches("Dropped wake requested").count(),
+        1,
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("Additional dropped wakes totaled 1").count(),
+        1,
+        "{stderr}"
     );
 }
 
@@ -3962,7 +4041,7 @@ fn store_values_and_failure_places_on_the_sdk() {
         text(&output.stderr)
     );
     // The failing `l[3]` is on line 7 of the application's file; the `get`
-    // of a key put nowhere on line 80 of the module's, in the graph.
+    // of a key put nowhere on line 80 of the module's, in the graph (CAP-6).
     let failing = root.join("demo.store.failing.hgl").display().to_string();
     for (application, said) in [
         (
@@ -3975,7 +4054,7 @@ fn store_values_and_failure_places_on_the_sdk() {
         (
             "demo.store.unbuilt",
             format!(
-                "hgl: demo.store.unbuilt failed: the global store holds nothing under 'by', \
+                "hgl: demo.store.unbuilt failed: value.missing_key: the global store holds nothing under 'by', \
                  raised at {module}:80"
             ),
         ),

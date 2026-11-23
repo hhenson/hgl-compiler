@@ -84,6 +84,7 @@ analyser: done
 - A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`; a source is held to the same
 - A state's initialiser reads no temporal input (`state.input_read`)
 - `start` reads no temporal input and gives none to an endpoint operation (`input.lifecycle`); `stop` reads one under manual admission, each read under a guard (`payload.unguarded`), a struct's, a tuple's or a fixed list's whole read under its `all_valid` (TIME-4)
+- Inputs are passive in `stop`; `activate` and `passivate` there are `input.lifecycle`.
 - A cache's initialiser reads no temporal input (`cache.input_read`, TIME-6).
 - A read in an anonymous function written in any of them is held to the same
 
@@ -136,7 +137,9 @@ transpiler: partial
 
 - Supplies the declared node, source and application capabilities, including timers and
   run configuration. Wires them before initializers that read them.
-- Dropping a datetime wake at or before evaluation time, except for an equal-time request in `start`, is planned in #516. The first dropped request warns once per node, and further requests are counted for its stop log.
+- Drops a graph-time `datetime` wake at or before the evaluation time, except
+  for an equal-time request in `start`. The first drop warns once per node,
+  and the node logs the number of further drops at stop.
 - Left: Unknown or unavailable injections are reported, including graph injections other
   than the store. A nested child graph cannot read capabilities captured from its parent
   (CTRL-2).

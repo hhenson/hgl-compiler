@@ -35,6 +35,7 @@
 #include <hgraph/types/generated.h>
 #include <hgraph/types/value/value.h>
 
+#include <cstddef>
 #include <optional>
 #include <source_location>
 #include <string>
@@ -117,6 +118,58 @@ class Clock {
 
 // ---- The scheduler (CAP-4) ---------------------------------------------------
 
+/// The dropped datetime wakes of one node in a run (TIME-8, CAP-4, CAP-5).
+class DroppedWakes {
+    friend struct DroppedWakeLog;
+
+  private:
+    /// Warn on the first drop and count any further drops.
+    void record(const hgraph::NodeView& node);
+    /// At stop, report the count of drops after the initial warning.
+    void finish(const hgraph::NodeView& node) const;
+
+    std::size_t count_{0};
+};
+
+/// Borrowed access to the node-local count. A drop uses the SDK's write
+/// path and the stop report only reads.
+struct DroppedWakeLog {
+    enum class Operation { record, finish };
+
+    const hgraph::NodeView* node{nullptr};
+    void (*apply)(const hgraph::NodeView&, Operation){nullptr};
+
+    template <class State, DroppedWakes State::*field>
+    [[nodiscard]] static DroppedWakeLog bind(const hgraph::NodeView& node) noexcept {
+        return {&node, [](const hgraph::NodeView& owner, Operation operation) {
+                    hgraph::State<State> state{owner.state()};
+                    if (operation == Operation::record) {
+                        (state.modify().*field).record(owner);
+                    } else {
+                        (state.ref().*field).finish(owner);
+                    }
+                }};
+    }
+
+    /// Record a drop where the timer is bound to the node's state.
+    void record() const noexcept;
+    /// Report any further drops at this node's stop.
+    void finish() const noexcept;
+};
+
+/// Report later drops on leaving a user-written stop hook, including drops
+/// requested by that hook before an early return.
+class DroppedWakeReport {
+  public:
+    explicit DroppedWakeReport(DroppedWakeLog log) noexcept : log_(log) {}
+    DroppedWakeReport(const DroppedWakeReport&) = delete;
+    DroppedWakeReport& operator=(const DroppedWakeReport&) = delete;
+    ~DroppedWakeReport() { log_.finish(); }
+
+  private:
+    DroppedWakeLog log_;
+};
+
 /// `Scheduler` (CAP-4), what `inject scheduler` binds: the node's own
 /// scheduler, hgraph's `NodeScheduler`, in the hook `hook`.
 ///
@@ -135,7 +188,7 @@ class Clock {
 /// the generated code runs no handler in it.
 class Scheduler {
   public:
-    Scheduler(hgraph::NodeScheduler view, Hook hook);
+    Scheduler(hgraph::NodeScheduler view, Hook hook, DroppedWakeLog drop_log = {});
 
     /// `scheduler.next_scheduled_time` (CAP-4): the time of the earliest
     /// pending wake, and null with none.
@@ -155,9 +208,13 @@ class Scheduler {
     /// The hook it is used in.
     [[nodiscard]] Hook hook() const noexcept { return hook_; }
 
+    /// Record a stale dated request unless it is to be handled by the wall clock.
+    [[nodiscard]] bool record_drop(bool on_wall_clock) const;
+
   private:
     hgraph::NodeScheduler view_;
     Hook hook_;
+    DroppedWakeLog drop_log_;
 };
 
 // The wall-clock option, `on_wall_clock: true`, is hgraph's own, as CAP-4
@@ -186,13 +243,10 @@ void schedule_Scheduler_duration_str__bool(const Scheduler& capability, duration
                                            std::source_location where = std::source_location::current());
 
 /// `schedule(capability: Scheduler, at: datetime, tag: str? = null,
-/// on_wall_clock: bool = false)` (CAP-4): asks for a wake at `at`. "One
-/// asked for at a `datetime` before the current evaluation time is
-/// dropped: there is no wake, and no failure", but a wake of the wall-clock
-/// option in real time, which comes in the next cycle. One at the current
-/// evaluation time is a wake at the start in `start`, and is dropped in an
-/// evaluation, where no cycle can still run then (CRUN-3), as hgraph drops
-/// it.
+/// on_wall_clock: bool = false)` (CAP-4): asks for a wake at `at`. In graph
+/// time, an earlier wake or one at the current time outside `start` is
+/// dropped and logged (TIME-8). An equal time in `start` requests the node's
+/// first evaluation. Real-time wall-clock requests are handled by hgraph.
 void schedule_Scheduler_datetime_str__bool(const Scheduler& capability, datetime at,
                                            const std::optional<str>& tag = std::nullopt,
                                            bool on_wall_clock = false);
@@ -220,16 +274,20 @@ void fn_reset(const Scheduler& scheduler);
 /// is kept whatever its time.
 class Alarm {
   public:
-    Alarm(hgraph::NodeScheduler view, Hook hook);
+    Alarm(hgraph::NodeScheduler view, Hook hook, DroppedWakeLog drop_log = {});
 
     /// The hgraph scheduler it is made from.
     [[nodiscard]] const hgraph::NodeScheduler& view() const noexcept { return view_; }
     /// The hook it is used in.
     [[nodiscard]] Hook hook() const noexcept { return hook_; }
 
+    /// Record a stale dated request.
+    void record_drop() const;
+
   private:
     hgraph::NodeScheduler view_;
     Hook hook_;
+    DroppedWakeLog drop_log_;
 };
 
 /// `schedule(capability: Alarm, at: duration)` (CAP-5): asks for a wake `at`
@@ -292,12 +350,11 @@ error store_type(std::string_view key);
 } // namespace detail
 
 // CAP-6: "`get<V>(global_state, key)` is the value under `key`, of the type
-// the call writes or its place expects; an absent key fails the node.
+// the call writes or its place expects; an absent key gives `value.missing_key`.
 // `has(global_state, key)` is whether the key holds a value.
 // `put(global_state, key, value)` puts one there. A key keeps the type of its
 // first value: a `put` of another type is rejected where the two are in one
 // program, and fails otherwise. Reading or writing the store wakes no node."
-// The catalogue has no code for either failure, so each has none.
 
 /// `has(store: GlobalState, const key: str) -> bool`: whether `key` holds a
 /// value (CAP-6).
