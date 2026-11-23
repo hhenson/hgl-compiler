@@ -1,0 +1,52 @@
+module demo.endpoint_hook_checks
+
+# END-3: endpoint validity admits either checked form without a static
+# modified guard. A silent cycle has no delta while the input stays valid.
+fn checked_delta(pulse: bool, input: i64) -> bool {
+    when modified(pulse) && valid(input) {
+        let read: result<i64, error> = delta_value(input)
+        return is_ok(read)
+    }
+}
+fn optional_delta(pulse: bool, input: i64) -> i64? {
+    when modified(pulse) && valid(input) {
+        let read: i64? = delta_value(input)
+        return read
+    }
+}
+test result_form_observes_publication_and_silence {
+    assert eval checked_delta(pulse: [true, true, true, true], input: [7, _, 8, _]) ==
+        [true, false, true, false]
+}
+test nullable_form_observes_publication_and_silence {
+    assert eval optional_delta(pulse: [true, true, true, true], input: [7, _, 8, _]) ==
+        [7, null, 8, null]
+}
+
+# TIME-5: inputs are passive in stop, and their activity cannot change.
+fn activate_in_stop(input: i64) {
+    when {}
+    stop {
+        # expect-error(phase, "input.lifecycle")
+        activate(input)
+    }
+}
+fn passivate_in_stop(input: i64) {
+    when {}
+    stop {
+        # expect-error(phase, "input.lifecycle")
+        passivate(input)
+    }
+}
+
+# END-4: only the node's own out may be cleared.
+# expect-error(phase, "endpoint.argument")
+fn invalidate_value_input(input: i64) { when { invalidate(input) } }
+# expect-error(phase, "endpoint.argument")
+fn invalidate_ref_input(ref input: i64) { when { invalidate(input) } }
+
+# END-3, TIME-4: delta_value is a read, not metadata of an invalid endpoint.
+fn unadmitted_delta(pulse: bool, input: i64) -> i64 {
+    # expect-error(phase, "payload.unguarded")
+    when modified(pulse) && valid([]) { return delta_value(input) }
+}

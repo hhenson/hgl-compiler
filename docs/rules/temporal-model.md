@@ -84,6 +84,7 @@ analyser: done
 - A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`; a source is held to the same
 - A state's initialiser reads no temporal input (`state.input_read`)
 - `start` reads no temporal input and gives none to an endpoint operation (`input.lifecycle`); `stop` reads one under manual admission, each read under a guard (`payload.unguarded`), a struct's, a tuple's or a fixed list's whole read under its `all_valid` (TIME-4)
+- Inputs are passive in `stop`; `activate` and `passivate` there are `input.lifecycle`.
 - A cache's initialiser reads no temporal input (`cache.input_read`, TIME-6).
 - A read in an anonymous function written in any of them is held to the same
 

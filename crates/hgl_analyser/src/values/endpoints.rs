@@ -257,6 +257,29 @@ impl<'a> Typer<'a> {
                 self.input_lifecycle(at, &input);
             }
         }
+        // TIME-5: every input is passive in stop; neither operation
+        // may change its subscription there.
+        if self.hook == Some(Hook::Stop)
+            && matches!(
+                operation,
+                EndpointOperation::Activate | EndpointOperation::Passivate
+            )
+            && let Some(inputs) = &inputs
+        {
+            for &input in inputs {
+                self.diagnostics.emit(error(
+                    Category::Phase,
+                    codes::INPUT_LIFECYCLE,
+                    at,
+                    format!(
+                        "`{}` cannot change the activity of `{}` in `stop`: every input is passive",
+                        operation.name(),
+                        self.locals[input].name
+                    ),
+                    "TIME-5",
+                ));
+            }
+        }
         // TIME-9: "`all_valid` takes only a collection or a window;
         // another endpoint is rejected (`endpoint.argument`)". A
         // collection is "a list, a tuple, a struct and a dictionary", and
@@ -353,6 +376,15 @@ impl<'a> Typer<'a> {
                     );
                     Type::Unknown
                 } else {
+                    // END-3, TIME-1, TIME-4: reading a direct input's
+                    // delta requires its admission, including in a result
+                    // or nullable place. A delta is not a whole payload
+                    // read of every child of a collection.
+                    if let Some(input) = input.filter(|&input| self.is_temporal_input(input))
+                        && self.hook != Some(Hook::Start)
+                    {
+                        self.delta_read(input, at);
+                    }
                     of.map_or(Type::Unknown, Type::delta)
                 }
             }
@@ -577,9 +609,16 @@ impl<'a> Typer<'a> {
             operation,
             EndpointOperation::Activate | EndpointOperation::Passivate
         );
+        // END-4: invalidate clears this node's own output. A direct
+        // input, including a ref input, is another node's endpoint.
+        let output_only = operation == EndpointOperation::Invalidate;
         match local {
             Some(local)
-                if self.is_temporal_input(local) || (!input_only && Some(local) == self.out) =>
+                if if output_only {
+                    Some(local) == self.out
+                } else {
+                    self.is_temporal_input(local) || (!input_only && Some(local) == self.out)
+                } =>
             {
                 Some(local)
             }
@@ -588,14 +627,23 @@ impl<'a> Typer<'a> {
                     Category::Phase,
                     codes::ENDPOINT_ARGUMENT,
                     self.at(node),
-                    format!(
-                        "`{}` takes a temporal input of `{}` by its name{}",
-                        operation.name(),
-                        self.declaration.name,
-                        if input_only { "" } else { ", or `out`" }
-                    ),
-                    "TIME-9",
+                    if output_only {
+                        "`invalidate` takes this node's own `out`".to_string()
+                    } else {
+                        format!(
+                            "`{}` takes a temporal input of `{}` by its name{}",
+                            operation.name(),
+                            self.declaration.name,
+                            if input_only { "" } else { ", or `out`" }
+                        )
+                    },
+                    if output_only { "END-4" } else { "TIME-9" },
                 ));
+                // This is already an endpoint; rejecting mutation does
+                // not read its payload as well, notably for ref (ERR-9).
+                if output_only && local.is_some_and(|local| self.is_temporal_input(local)) {
+                    return None;
+                }
                 // Read for what it reports itself. The argument is
                 // rejected already, so what it reads of an input is not
                 // judged as well (ERR-9).

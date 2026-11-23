@@ -315,7 +315,7 @@ pub mod codes {
     /// value in either (TIME-7).
     pub const OUT_LIFECYCLE: &str = "out.lifecycle";
     /// A temporal input read, or given to an endpoint operation, in
-    /// `start` (TIME-5).
+    /// `start`, or activated/passivated in `stop` (TIME-5).
     pub const INPUT_LIFECYCLE: &str = "input.lifecycle";
     /// A key of the global store that is the run's own (TIME-8).
     pub const STORE_RESERVED_KEY: &str = "store.reserved_key";
