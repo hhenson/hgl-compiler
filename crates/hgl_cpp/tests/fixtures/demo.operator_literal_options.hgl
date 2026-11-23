@@ -244,8 +244,9 @@ test an_option_call_in_a_generic_body_keeps_its_rejection {
 }
 
 # GEN-2, GEN-5: keep the typed input's result request beside each flag
-# spelling. GEN-6 candidate declaration validation is a separate task.
+# spelling. GEN-6 also rejects each incompatible candidate declaration.
 operator fixed<T, const on: bool = true>(value: T, flag: bool) -> T
+# expect-error(operator, "impl.result")
 impl const fn fixed(value: i64, flag: bool) -> f64 => 2.5
 test a_typed_input_keeps_its_result_request {
     let value: i64 = 3
@@ -264,6 +265,7 @@ test a_typed_input_keeps_its_result_request {
     let option_variable = fixed{on: true}(value, flag)
 }
 operator fx2<U, T>(flag: U, value: T) -> T
+# expect-error(operator, "impl.result")
 impl const fn fx2(flag: bool, value: i64) -> f64 => 2.5
 test a_written_generic_keeps_a_typed_result_request {
     let value: i64 = 3

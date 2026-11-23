@@ -242,6 +242,23 @@ fn growing_list_spelling_does_not_change_a_candidate_contract() {
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
 }
 
+/// GEN-6: repeated bindings inside one parameter must agree before its
+/// inferred type is used to report a result contradiction.
+#[test]
+fn a_result_contract_needs_consistent_input_bindings() {
+    let checked = module(concat!(
+        "operator pick<T>(pair: tuple<T, T>) -> T\n",
+        "impl const fn pick(pair: tuple<i64, str>) -> str => \"chosen\"\n",
+        "impl const fn pick(pair: tuple<i64, i64>) -> str => \"wrong\"\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:46 operator/impl.result GEN-6"],
+        "{}",
+        checked.report
+    );
+}
+
 /// FN-8 and GEN-10: capture in written order, keeping the pack slot,
 /// positional indexes or named keys, and the resolved argument types.
 #[test]

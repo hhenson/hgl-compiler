@@ -396,7 +396,7 @@ fn deferred_callback_captures<T>(const value: T) -> f64 {
 
 # ERR-3 and GEN-7: a tag-only use works with the selected result,
 # even when its success type differs from the generic candidate's.
-operator tagged_shape<T>(value: T) -> result<i64, error>
+operator tagged_shape<T, R>(value: T) -> result<R, error>
 impl const fn tagged_shape<T>(value: T) -> result<i64, error> => err(error(message: "generic"))
 impl const fn tagged_shape(value: i64) -> result<str, error> => ok("concrete")
 

@@ -1,6 +1,9 @@
 //! GEN-6 declaration checks for a candidate's result and its operator's
 //! type requirements. The signature pass runs these before bodies are typed.
 
+use std::cell::RefCell;
+use std::collections::HashSet;
+
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind};
 
@@ -8,7 +11,7 @@ use crate::declared::{same_type, substitute_within};
 use crate::program::{Program, Role};
 use crate::read::type_child;
 use crate::syntax::child;
-use crate::types::{Argument, Detail, Signature, Type};
+use crate::types::{Argument, ConstantValue, Detail, Signature, Type};
 use crate::{codes, error};
 
 use super::inference::infer;
@@ -107,6 +110,20 @@ fn parameter_types(public: &Signature, candidate: &Signature, role: Role) -> Opt
             &public.generics,
             &mut from_parameter,
         );
+        let inferred: Vec<_> = public
+            .generics
+            .iter()
+            .zip(&from_parameter)
+            .filter_map(|(generic, argument)| Some((generic.at, argument.as_ref()?)))
+            .collect();
+        // Inference retains the first binding within a parameter. Check
+        // that the known parts agree when a binding is used more than
+        // once before using it for a declaration diagnostic.
+        if repeated_binding(&parameter.ty, &inferred)
+            && same_type(&substitute_within(&parameter.ty, &inferred), &given.ty) != Some(true)
+        {
+            return None;
+        }
         for (known, next) in arguments.iter_mut().zip(&mut from_parameter) {
             if let Some(next) = next.take() {
                 match (&*known, &next) {
@@ -125,6 +142,16 @@ fn parameter_types(public: &Signature, candidate: &Signature, role: Role) -> Opt
             .into_iter()
             .map(|argument| argument.unwrap_or(Argument::Type(Type::Unknown)))
             .collect(),
+    )
+}
+
+fn repeated_binding(ty: &Type, inferred: &[(Location, &Argument)]) -> bool {
+    let seen = RefCell::new(HashSet::new());
+    let repeated =
+        |at| inferred.iter().any(|&(known, _)| known == at) && !seen.borrow_mut().insert(at);
+    ty.any_part(
+        &|part| matches!(part, Type::Parameter { at, .. } if repeated(*at)),
+        &|constant| matches!(&constant.value, ConstantValue::Parameter { at, .. } if repeated(*at)),
     )
 }
 
