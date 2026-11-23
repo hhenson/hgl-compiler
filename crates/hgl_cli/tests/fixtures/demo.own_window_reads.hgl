@@ -94,3 +94,78 @@ test a_duration_exit_and_a_staged_arrival_share_a_cycle {
     assert eval duration_ticks(reading: [1, 2, _, _, _, 3]) ==
         [11, 23, _, _, -1, 13, _, _, _, -1]
 }
+
+# TIME-7: writers inside either branch read their retained samples and
+# provisional arrival. Only the second write reaches the graph output.
+fn branch_writer(reading: i64) -> rolling_window<i64, 2, 1> {
+    inject out
+    when {
+        out = reading
+        let held: list<i64> = out
+        out = total(held)
+    }
+}
+
+fn if_window(first: bool, reading: i64) -> rolling_window<i64, 2, 1> {
+    if first { return branch_writer(reading) }
+    return branch_writer(reading + 100)
+}
+
+fn switch_window(route: i64, reading: i64) -> rolling_window<i64, 2, 1> {
+    switch route {
+        case 1: return branch_writer(reading)
+        default: return branch_writer(reading + 100)
+    }
+}
+
+fn branch_samples(clock: bool, window: rolling_window<i64, 2, 1>) -> list<i64> {
+    when modified(clock) && all_valid(window) { return window }
+}
+
+fn if_branch_read(clock: bool, first: bool, reading: i64) -> list<i64> =>
+    branch_samples(clock, if_window(first, reading))
+
+fn switch_branch_read(clock: bool, route: i64, reading: i64) -> list<i64> =>
+    branch_samples(clock, switch_window(route, reading))
+
+test both_temporal_branches_read_their_staged_windows {
+    # Branch re-entry and fresh window history are covered by #676.
+    assert eval if_branch_read(clock: [true, true, true], first: [true, true, true],
+                               reading: [1, 2, 3]) == [[1], [1, 3], [3, 6]]
+    assert eval if_branch_read(clock: [true, true, true], first: [false, false, false],
+                               reading: [1, 2, 3]) == [[101], [101, 203], [203, 306]]
+    assert eval switch_branch_read(clock: [true, true, true], route: [1, 1, 1],
+                                   reading: [1, 2, 3]) == [[1], [1, 3], [3, 6]]
+    assert eval switch_branch_read(clock: [true, true, true], route: [0, 0, 0],
+                                   reading: [1, 2, 3]) == [[101], [101, 203], [203, 306]]
+}
+
+# END-1, END-2, END-3 and END-6: metadata follows the last pending arrival,
+# and the published endpoint supplies it in evaluations with no write.
+fn metadata_writer(reading: i64) -> rolling_window<i64, 2, 1> {
+    inject out, clock
+    cache published: datetime? = null
+    when {
+        if last_modified(out) != published || modified(out) { return -1 }
+        let before: i64? = delta_value(out)
+        if before != null { return -2 }
+        if reading > 0 {
+            out = reading
+            if !valid(out) || !modified(out) || last_modified(out) != clock.evaluation_time {
+                return -3
+            }
+            let staged: result<i64, error> = delta_value(out)
+            if !is_ok(staged) || staged.value != reading { return -4 }
+            out = reading + 10
+            let last: i64? = delta_value(out)
+            if last != reading + 10 { return -5 }
+            published = clock.evaluation_time
+        }
+    }
+}
+
+fn metadata_arrivals(reading: i64) -> i64 => tick_observer(metadata_writer(reading))
+
+test metadata_follows_staged_arrivals_without_reading_the_window {
+    assert eval metadata_arrivals([1, 0, 2, 0, 3]) == [11, _, 12, _, 13]
+}

@@ -27,12 +27,14 @@
 #include <hglrt/values.h>
 
 #include <hgraph/types/generated.h>
+#include <hgraph/types/time_series/ts_output/forwarding.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <optional>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -196,13 +198,26 @@ class WindowArrival {
             return E{window_.base().borrowed_ref(), now};
         }
         if (!preview_) {
-            hgraph::TSOutput detached{*window_.base().output()};
+            // Branch writers borrow their result through a target link.
+            // Resolve it before copying the owned window's history.
+            const auto source = hgraph::resolve_forwarding_source(window_.base().borrowed_ref());
+            if (!source.bound() || source.forwarding() ||
+                source.data_view().data() != source.output()->data_view().data()) {
+                throw std::logic_error("a staged window read needs a bound window output root");
+            }
+            hgraph::TSOutput detached{*source.output()};
             const E view{detached.view(now), now};
             window_push(view, *held_);
             preview_.emplace(std::move(detached));
         }
         return E{preview_->view(now), now};
     }
+
+    /// The value awaiting publication in this evaluation, if written.
+    const std::optional<window_value_t<E>>& pending() const { return held_; }
+
+    /// The live result used for observations before an arrival is held.
+    const E& published() const { return window_; }
 
     /// END-4: withdraw even a pending first publication, then let a later
     /// write start a fresh history. Repeated withdrawals alone stay silent.
@@ -244,6 +259,46 @@ class WindowArrival {
     std::optional<window_value_t<E>> held_{};
     std::optional<hgraph::TSOutput> preview_{};
 };
+
+/// END-1 and TIME-7: the pending arrival makes the result valid.
+template <window_view E>
+bool fn_valid(const WindowArrival<E>& arrival) {
+    return arrival.pending().has_value() || fn_valid(arrival.published());
+}
+
+/// END-2 and TIME-7: a pending arrival is a modification this cycle.
+template <window_view E>
+bool fn_modified(const WindowArrival<E>& arrival) {
+    return arrival.pending().has_value() || fn_modified(arrival.published());
+}
+
+/// END-3 and END-9: a held arrival is the window's delta.
+template <window_view E>
+window_value_t<E> fn_delta_value(const WindowArrival<E>& arrival,
+                                 std::source_location where = std::source_location::current()) {
+    if (const auto& pending = arrival.pending(); pending) {
+        return *pending;
+    }
+    return fn_delta_value(arrival.published(), where);
+}
+
+/// END-3 and ERR-14: the same delta in its result form.
+template <window_view E>
+result<window_value_t<E>> fn_delta_value_checked(const WindowArrival<E>& arrival) {
+    if (const auto& pending = arrival.pending(); pending) {
+        return *pending;
+    }
+    return fn_delta_value_checked(arrival.published());
+}
+
+/// END-6 and TIME-7: a pending arrival was made in this evaluation.
+template <window_view E>
+std::optional<datetime> fn_last_modified(const WindowArrival<E>& arrival) {
+    if (arrival.pending()) {
+        return arrival.published().evaluation_time();
+    }
+    return fn_last_modified(arrival.published());
+}
 
 /// A read of a window's value in a hook or for a lifted helper (TYPE-11,
 /// END-9): "a `list<V>` of the values held, oldest first. Before the window

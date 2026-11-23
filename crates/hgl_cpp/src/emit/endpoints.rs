@@ -468,7 +468,7 @@ fn endpoint(
             if operation == EndpointOperation::Invalidate {
                 emitter.view(locals, local)
             } else {
-                emitter.observation_view(locals, local)
+                emitter.metadata_view(locals, local)
             }
         })
         .collect();
@@ -537,7 +537,7 @@ impl Emitter<'_> {
         checked: bool,
         at: hgl_diagnostics::Location,
     ) -> String {
-        let Some(view) = self.observation_view(locals, local) else {
+        let Some(view) = self.metadata_view(locals, local) else {
             return self.missing(at, "`delta_value` of this");
         };
         let ty = match self.role(local) {

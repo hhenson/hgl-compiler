@@ -17,11 +17,12 @@
 //! | A window given to a lifted call (FN-11, FN-12) | the helper given the window's `list<V>` (`read_type`), and not called where the window is valid and not all valid (`lifting`) |
 //! | A trace of a window, a source of one (TST-16, TIME-7) | a trace of its V, each cell the V that arrives; a source's payload a V |
 //!
-//! `valid`, `modified` and `last_modified` of a window are the endpoints'
-//! family's, which hgraph's views answer for a window as for any value.
-//! A node reads its latest staged arrival through `WindowArrival::observe`
-//! (TIME-7, END-9). A handler's header selecting on its result and a native
-//! call that borrows that window in a `when` are separate target gaps.
+//! `valid`, `modified`, `delta_value` and `last_modified` read a node's
+//! pending arrival directly. Reads of its window use a detached preview
+//! through `WindowArrival::observe` (TIME-7, END-9).
+//! The target reports windows of structs or lists and windows whose bounds
+//! are unknown, handlers that select on their own window result, and a
+//! native call borrowing that window in a `when`.
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Hook, Stmt};
 use hgl_analyser::{ConstantValue, DeclarationKind, Scalar, Type};
@@ -138,8 +139,8 @@ fn own_window(emitter: &Emitter, locals: &[hgl_analyser::hir::Local], local: usi
 }
 
 impl Emitter<'_> {
-    /// The view for a direct endpoint observation (TIME-7, END-9).
-    /// A write, withdrawal or borrowed native endpoint still uses `view`.
+    /// The retained window, including a preview of its staged arrival
+    /// where the node reads its own result (TIME-7, END-9).
     pub(super) fn observation_view(
         &self,
         locals: &[hgl_analyser::hir::Local],
@@ -147,6 +148,20 @@ impl Emitter<'_> {
     ) -> Option<String> {
         if own_window(self, locals, local) {
             Some(format!("{ARRIVAL}.observe()"))
+        } else {
+            self.view(locals, local)
+        }
+    }
+
+    /// The argument of a metadata or delta read (END-1, END-2, END-3,
+    /// END-6). A node's staged window answers directly from its arrival.
+    pub(super) fn metadata_view(
+        &self,
+        locals: &[hgl_analyser::hir::Local],
+        local: usize,
+    ) -> Option<String> {
+        if own_window(self, locals, local) {
+            Some(ARRIVAL.to_string())
         } else {
             self.view(locals, local)
         }
