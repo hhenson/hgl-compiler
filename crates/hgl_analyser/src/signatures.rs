@@ -6,6 +6,8 @@
 //!   (GEN-13, GEN-2);
 //! * an option's name is one kind across the candidates of an operator
 //!   (GEN-6);
+//! * a native implementation matches a declaration of its name and
+//!   role once the parameter and result types are read (NATIVE-2);
 //! * a `var` parameter is one of a value function or a value candidate
 //!   (FN-15), and a `ref` mark one of a node (FN-16).
 
@@ -23,6 +25,8 @@ use crate::types::{Detail, GenericKind, NamedKind, Pack, Type};
 use crate::values::generic_default;
 use crate::{codes, error};
 
+mod native;
+
 /// Checks the signature of every callable of the program.
 pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
     constant_failures(program, diagnostics);
@@ -34,6 +38,7 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
     configuration_shapes(program, diagnostics);
     var_parameters(program, diagnostics);
     ref_marks(program, diagnostics);
+    native::check(program, diagnostics);
 }
 
 /// FN-8 permits one pack of each kind. GEN-6 requires an operator's
