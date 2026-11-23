@@ -976,9 +976,8 @@ fn a_window_not_written_yet_is_reported() {
 /// publication"; TYPE-11: "A window takes at most one value a cycle"): its
 /// handlers run inside `::hglrt::WindowArrival::run`, and each write holds
 /// its value. A write then `invalidate(out)` (END-4: "publish then
-/// invalidate leaves the endpoint invalid") discards the write. A read
-/// of the result in that `when` is still reported, since it
-/// would not see what the evaluation holds.
+/// invalidate leaves the endpoint invalid") discards the write.
+/// Metadata and delta observations use the held arrival (TIME-7).
 #[test]
 fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
     let emitted = emit_with(
@@ -1007,7 +1006,10 @@ fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
                 "    inject out\n",
                 "    when {\n",
                 "        out = reading\n",
-                "        if valid(out) { out = reading + 1 }\n",
+                "        let staged: result<i64, error> = delta_value(out)\n",
+                "        if valid(out) && modified(out) && last_modified(out) != null && is_ok(staged) {\n",
+                "            out = delta_value(out) + 1\n",
+                "        }\n",
                 "    }\n",
                 "}\n",
                 "\n",
@@ -1062,24 +1064,30 @@ fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
     }
     assert_eq!(emitted.blocked("written_then_invalidated"), None);
     assert!(unit.contains("arrival_.invalidate();"), "{unit}");
-    assert_eq!(
-        emitted.blocked("written_then_read").as_deref(),
-        Some(
-            "m.hgl:23:12 the cpp target does not write a read of a node's own window result in its `when` yet"
-        )
-    );
+    assert_eq!(emitted.blocked("written_then_read"), None);
+    for native in [
+        "fn_valid",
+        "fn_modified",
+        "fn_last_modified",
+        "fn_delta_value",
+        "fn_delta_value_checked",
+    ] {
+        let read = format!("::hglrt::{native}(arrival_)");
+        assert!(unit.contains(&read), "{read} in\n{unit}");
+    }
+    assert!(!unit.contains("arrival_.observe()"), "{unit}");
     // A handler's header that names the window result, whose guard is
     // tested where the evaluation may hold a write of it.
     assert_eq!(
         emitted.blocked("selected_by_its_validity").as_deref(),
         Some(
-            "m.hgl:42:5 the cpp target does not write a handler that selects on a node's own window result yet"
+            "m.hgl:45:5 the cpp target does not write a handler that selects on a node's own window result yet"
         )
     );
     assert_eq!(
         emitted.blocked("selected_by_its_publication").as_deref(),
         Some(
-            "m.hgl:48:5 the cpp target does not write a handler that selects on a node's own window result yet"
+            "m.hgl:51:5 the cpp target does not write a handler that selects on a node's own window result yet"
         )
     );
 }
