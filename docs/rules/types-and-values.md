@@ -241,6 +241,8 @@ transpiler: partial
 
 - Keeps null distinct from invalidity and silence in nullable scalar and enum
   connections. A supported bundle's absent optional field reads as null.
+- A graph's comparison of a nullable scalar connection with null publishes a
+  Boolean on each input publication, including a published null.
 - Left: Nullable temporal aggregate types and unsupported optional field forms follow
   TYPE-9.
 

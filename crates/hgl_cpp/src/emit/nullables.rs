@@ -9,6 +9,7 @@
 //! | A read of its payload in a hook (TIME-1) | `::hglrt::nullable_value(view)`, a `std::optional<T>`, checked when it runs |
 //! | A read of it where a test against null has proved it is not null (ERR-12) | `::hglrt::nullable_payload(view)`, the T |
 //! | `value == null`, `value != null` of it (ERR-12) | whether that read holds nothing, or something |
+//! | A scalar connection compared with null in a graph (TYPE-14, TYPE-15) | `::hglrt::CompareNull` publishes a Boolean on each input publication |
 //! | `return value`, `out = value` (TIME-7) | `::hglrt::publish_nullable(view, value);`: "`return null` for an `i64?` result a null, as `return delta<i64?>()` does" |
 //! | `delta_value(view)` (END-3, ERR-14) | `::hglrt::fn_delta_value(view)`, the optional that is `delta<T?>`, or `fn_delta_value_checked` where its place takes a `result` |
 //! | A cell of a trace of it (TST-5) | a `std::optional<T>`: a nullable publishes whole, a published null among it; a cell written as its delta, the optional the delta holds |
@@ -23,6 +24,7 @@ use hgl_analyser::{Argument as GenericArgument, DeclarationKind, Detail, Scalar,
 
 use super::Emitter;
 use super::forms::Family;
+use super::graphs::WIRING;
 use super::names::identifier;
 use super::nodes::Role;
 use super::statements::Scope;
@@ -72,6 +74,25 @@ fn nullable_input(emitter: &Emitter, scope: &Scope, value: &Expr) -> Option<Loca
     matches!(declared.ty, Type::Nullable(_)).then_some(local)
 }
 
+/// The operand compared with null and whether the test is for equality.
+fn null_test(value: &Expr) -> Option<(&Expr, bool)> {
+    let ExprKind::Binary {
+        operator: operator @ (BinaryOperator::Equal | BinaryOperator::NotEqual),
+        left,
+        right,
+    } = &value.kind
+    else {
+        return None;
+    };
+    let null = |side: &Expr| matches!(side.kind, ExprKind::Literal(Value::Null));
+    let tested = match (null(left), null(right)) {
+        (true, false) => right,
+        (false, true) => left,
+        _ => return None,
+    };
+    Some((tested, *operator == BinaryOperator::Equal))
+}
+
 /// The name of the declaration the call `value` calls, where it is one.
 fn callee_name<'p>(emitter: &Emitter<'p>, value: &Expr) -> Option<&'p str> {
     let ExprKind::Call { callee, .. } = &value.kind else {
@@ -89,6 +110,23 @@ fn callee_name<'p>(emitter: &Emitter<'p>, value: &Expr) -> Option<&'p str> {
 impl Family for Nullables {
     fn schema(&self, emitter: &mut Emitter<'_>, ty: &Type) -> Option<String> {
         payload(emitter, ty).map(|written| format!("::hgraph::TS<::hgraph::Optional<{written}>>"))
+    }
+
+    fn wiring(&self, emitter: &mut Emitter<'_>, scope: &mut Scope, value: &Expr) -> Option<String> {
+        let (tested, equal) = null_test(value)?;
+        let Type::Nullable(inner) = &tested.ty else {
+            return None;
+        };
+        if !tested.is_connection() || !matches!(inner.as_ref(), Type::Scalar(_)) {
+            return None;
+        }
+        let schema = self.schema(emitter, &tested.ty)?;
+        let input = emitter.wiring_form(scope, tested);
+        scope.acted = true;
+        Some(format!(
+            "::hgraph::wire<::{}::CompareNull<{schema}, {equal}>>({WIRING}, {input})",
+            runtime::NAMESPACE,
+        ))
     }
 
     // TIME-1: "A payload read requires admission/readability", checked
@@ -185,17 +223,8 @@ impl Family for Nullables {
             }
             // ERR-12: a test of a nullable input against `null` reads its
             // payload, and asks whether it holds a value.
-            ExprKind::Binary {
-                operator: operator @ (BinaryOperator::Equal | BinaryOperator::NotEqual),
-                left,
-                right,
-            } => {
-                let null = |side: &Expr| matches!(side.kind, ExprKind::Literal(Value::Null));
-                let tested = match (null(left), null(right)) {
-                    (true, false) => right,
-                    (false, true) => left,
-                    _ => return None,
-                };
+            ExprKind::Binary { .. } => {
+                let (tested, equal) = null_test(value)?;
                 let local = nullable_input(emitter, scope, tested)?;
                 let declared = &scope.body.locals[local];
                 scope.read = true;
@@ -206,7 +235,7 @@ impl Family for Nullables {
                         let view = identifier(&declared.name);
                         format!("::{}::nullable_value({view})", runtime::NAMESPACE)
                     });
-                Some(if *operator == BinaryOperator::Equal {
+                Some(if equal {
                     format!("(!{read}.has_value())")
                 } else {
                     format!("{read}.has_value()")
