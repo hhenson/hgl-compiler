@@ -534,14 +534,7 @@ impl<'a> Typer<'a> {
                 value: self.expression(&value, Some(&Type::Unknown)),
             })
             .collect();
-        let kind = ExprKind::Call {
-            callee: Callee::Unread,
-            arguments,
-            form: Form::Named,
-            braced: Vec::new(),
-            lifted: false,
-        };
-        (kind, Type::Unknown)
+        (unread_call_kind(arguments), Type::Unknown)
     }
 
     /// A call of the value function `declaration` of `module`.
@@ -577,7 +570,19 @@ impl<'a> Typer<'a> {
             Detail::Callable(signature) => signature.result.as_ref(),
             _ => None,
         };
-        if let Some(call) = self.defer_pack_call(list, result, expected) {
+        if let Some(call) = self.defer_pack_call_with(list, result, expected, |typer| {
+            let evaluating = std::mem::take(&mut typer.evaluating);
+            typer
+                .call_function_with(
+                    name,
+                    list,
+                    (module, declaration),
+                    expected,
+                    given,
+                    evaluating,
+                )
+                .0
+        }) {
             return call;
         }
         // The call an `eval` stands for is this one, and not one among
@@ -705,6 +710,7 @@ impl<'a> Typer<'a> {
         else {
             return self.unread_call(list);
         };
+        let computed = super::forwarded_packs::has_computed_spread(list);
         // What a parameter takes: its type, or in an eval a trace for
         // one that is not `const`. TST-5: "Each cell is one cycle's
         // publication: it is read as the `delta<T>` (TYPE-16) of its
@@ -774,6 +780,9 @@ impl<'a> Typer<'a> {
             let reported = self.diagnostics.len();
             let arguments = self.bind(name, list, &slots, Takes::Parameters);
             let ty = signature.result.as_ref().map_or(Type::Unknown, known);
+            if computed {
+                return (unread_call_kind(arguments), ty);
+            }
             // GEN-3: a function with no generic parameter may state a
             // `requires` too, of types it names itself, and a call of
             // it is held to that. Not where something else was
@@ -857,7 +866,7 @@ impl<'a> Typer<'a> {
             slots: &slots,
             patterns: patterns.iter().collect(),
             generics,
-            settled: !expected.is_some_and(open),
+            settled: !computed && !expected.is_some_and(open),
             aside: &value_names,
             values: &named,
             written_pack: written_pack
@@ -879,6 +888,9 @@ impl<'a> Typer<'a> {
             missing_pack_context,
             type_packs: reflected,
         } = self.infer_arguments(name, list, &places, found, Takes::Parameters);
+        if computed {
+            return (unread_call_kind(arguments), Type::Unknown);
+        }
         let mut type_packs = vec![None; generics.len()];
         // FN-8 and GEN-10: collect the individual types in capture order.
         for (slot, parameter) in slots.iter().enumerate() {
@@ -1583,6 +1595,16 @@ impl<'a> Typer<'a> {
             ),
             _ => None,
         }
+    }
+}
+
+fn unread_call_kind(arguments: Vec<hir::Argument>) -> ExprKind {
+    ExprKind::Call {
+        callee: Callee::Unread,
+        arguments,
+        form: Form::Named,
+        braced: Vec::new(),
+        lifted: false,
     }
 }
 

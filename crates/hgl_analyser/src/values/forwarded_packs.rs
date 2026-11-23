@@ -53,10 +53,21 @@ impl Typer<'_> {
         result: Option<&Type>,
         expected: Option<&Type>,
     ) -> Option<(ExprKind, Type)> {
+        self.defer_pack_call_with(list, result, expected, |typer| typer.unread_call(list).0)
+    }
+
+    /// A computed pack leaves its entries unread. A known callee can
+    /// still supply the types for the arguments the call writes (FN-19).
+    pub(super) fn defer_pack_call_with(
+        &mut self,
+        list: &SyntaxNode,
+        result: Option<&Type>,
+        expected: Option<&Type>,
+        read_written: impl FnOnce(&mut Self) -> ExprKind,
+    ) -> Option<(ExprKind, Type)> {
         let mut spreads = spread_operands(list).peekable();
         spreads.peek()?;
-        let computed = spread_operands(list)
-            .any(|spread| ungrouped(spread).kind() == SyntaxKind::PackComprehension);
+        let computed = has_computed_spread(list);
         if self.pack_inputs.is_some() && !computed {
             return None;
         }
@@ -92,7 +103,7 @@ impl Typer<'_> {
         if computed {
             // FN-19: this spread is an inline pack. Keep the call for
             // the target to decline without instantiating its passes.
-            return Some((self.unread_call(list).0, ty));
+            return Some((read_written(self), ty));
         }
         Some((
             ExprKind::Call {
@@ -392,6 +403,11 @@ pub(super) fn spread_operands(list: &SyntaxNode) -> impl Iterator<Item = SyntaxN
     list.children()
         .filter(|argument| argument.kind() == SyntaxKind::PackSpreadArg)
         .filter_map(|argument| argument.children().next())
+}
+
+/// Whether this call's written slots can be read while its spread stays deferred.
+pub(super) fn has_computed_spread(list: &SyntaxNode) -> bool {
+    spread_operands(list).any(|spread| ungrouped(spread).kind() == SyntaxKind::PackComprehension)
 }
 
 /// Whether the shape of a parameter pack still needs to be applied.

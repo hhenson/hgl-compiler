@@ -284,6 +284,7 @@ analyser: partial
 - A forwarded name that binds a generic value parameter or a selecting operator option reports `generic.argument_constant` at the runtime entry (GEN-6, GEN-8). Generic value names take priority over a callee's ordinary named pack.
 - Follows concrete calls in parameter and field defaults and anonymous bodies. Struct fields bind by name, and positional entries reject (TYPE-5). An enum constructor with a spread reports the argument during analysis (TYPE-7).
 - Checks where a pack comprehension is held and requires its iterable to name a type pack's keys. Checks condition chains for runtime bindings, assignments to the iteration key, and ordinary reads of a type pack or callback. A computed spread retains the call for the target to decline while the generic passes remain unread.
+- Reads a declared function's written arguments, including its configuration, through their parameter types before the computed entries are known.
 
 transpiler: partial
 
