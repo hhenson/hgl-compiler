@@ -45,8 +45,14 @@ impl<'a> Typer<'a> {
         used: bool,
     ) -> Expr {
         self.expressing += 1;
-        let value = self.expression_read(node, expected, used);
+        let mut value = self.expression_read(node, expected, used);
         self.expressing -= 1;
+        if self
+            .unsettled_results
+            .is_some_and(|calls| calls.contains(&value.at))
+        {
+            value.ty = Type::Unknown;
+        }
         match expected {
             Some(expected) => self.endpoint_read_form(value, expected),
             None => value,
