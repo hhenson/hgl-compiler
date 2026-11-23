@@ -61,6 +61,8 @@ mod arguments;
 mod call_checks;
 // A call by name: of a value function, a form, or an enum's member (FN-4, EXPR-2).
 mod calls;
+mod candidate_contracts;
+pub(crate) use candidate_contracts::check_candidate_contracts;
 // The candidate of an operator a call selects (GEN-5).
 mod candidates;
 // Capabilities, and the uses of one that reject (TIME-8).
