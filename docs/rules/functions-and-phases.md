@@ -222,11 +222,11 @@ analyser: partial
 transpiler: partial
 
 - Writes node `ref` inputs and results. A return can sample a ref-parameter designation,
-  designate a whole ordinary input or designate a child of a fixed-list input.
+  designate a whole ordinary input, a fixed-list position or a dictionary entry.
+  Nodes with a scheduler or an alarm can make these designations.
 - Left: Reports designations of other children and list forms, simultaneous whole and
-  positional designation of one input, designation in a node with scheduler or alarm,
-  and unsupported assignments to a `ref` result. Graph and source `ref` forms have
-  defensive reports.
+  positional designation of one input, and unsupported assignments to a `ref` result.
+  Graph and source `ref` forms have defensive reports.
 
 ## FN-17
 

@@ -170,7 +170,8 @@ Alarm::Alarm(hgraph::NodeScheduler view, Hook hook, DroppedWakeLog drop_log)
         return;
     }
     // hgraph keeps the wake it delivers until the node has run.
-    if (view_.tag_is_scheduled_now(alarm_tag)) {
+    was_due_ = view_.tag_is_scheduled_now(alarm_tag);
+    if (was_due_) {
         view_.un_schedule(alarm_tag);
     }
 }

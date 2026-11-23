@@ -452,10 +452,11 @@ analyser: done
 
 transpiler: partial
 
-- A reader observes the designated input or fixed-list child through the reference port,
-  including changes caused by rebinding or removing the target.
-- A scheduler can wake a node that forwards a `ref` parameter.
-- Left: designating a dictionary child and designating an ordinary input in a node with a timer (FN-16).
+- A reader observes the designated input, fixed-list child or dictionary entry through
+  the reference port, including changes caused by rebinding or removing the target.
+- A timer can wake a node that designates an ordinary input. A follower-only wake refreshes
+  the result without running the node's handlers.
+- Left: Unsupported reference destinations follow FN-16.
 
 ## CAP-1
 

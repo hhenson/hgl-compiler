@@ -16,21 +16,21 @@
 //! | `return low` of a whole `ref` parameter | `out_.set(::hglrt::designation(low));`: what it designates as the `return` runs, which the result keeps until the node writes it again |
 //! | `return price` of an input that is no `ref` parameter | the input is given to the node again, as a `REF` input it is active on (`designated_00_`); the node keeps which it designates in its state (`designates_`), publishes what that `REF` holds, and, where it ticks while the result designates it, publishes it again and runs no handler for that wake |
 //! | `return items[idx]` of a position of a fixed list that is no `ref` parameter | each position given to the node again, `::hglrt::element_port(items, 0)`, as a `REF` input it follows as it follows an input (`designated_01_0_`); the index checked (`::hglrt::designated_position`), and the position it names published (`::hglrt::designation_of`) |
+//! | `return book[key]` of an ordinary dictionary input | a structural view of the input and the selected key in node state (`::hglrt::designate_key`); membership and binding changes refresh the designation (FN-16) |
 //! | `out = ...` of a `ref` result | as the `return`, and the evaluation goes on |
 //! | `invalidate(out)` of a `ref` result that follows an input | the result follows none, then is invalidated |
 //! | `prices[key]` of a dictionary connection in a graph (EXPR-7), the key a connection or a value | a node of its own, `selected_00_`, written in the graph's struct as a lifted call's is, whose `REF` result designates the entry the key names (`::hglrt::select_entry`, hgraph's own form of an entry by key: the dictionary observed for its membership), given as a connection of the entry |
 //!
 //! Not written yet, and reported: a designation of any other child, of a
 //! `ref` parameter's (`xs[i]`), of a field, of a growing list's position;
-//! an input designated whole and by a position in one node; a `ref` result
-//! of a source; and a designation of an input that is no `ref` parameter
-//! in a node that injects a scheduler or an alarm.
+//! an input designated whole and by a position in one node; and a `ref`
+//! result of a source.
 
 use hgl_analyser::hir::{Body, EndpointOperation, Expr, ExprKind, Hook, Local, Stmt};
 use hgl_analyser::{ConstantValue, Signature, Type};
 use hgl_diagnostics::Location;
 use hgl_lower::nodes::{
-    Designated, Handler, Timer, designated, designates, designations, is_out, is_reference,
+    Designated, Handler, designated, designates, designations, is_out, is_reference,
 };
 
 use super::Emitter;
@@ -160,14 +160,22 @@ pub(super) fn admission(handler: &mut Handler, locals: &[Local], signature: &Sig
 }
 
 /// What a node follows of an input that is no `ref` parameter, which its
-/// `ref` result designates (FN-16): the input whole, or one position of
-/// it, a fixed list.
+/// `ref` result designates (FN-16): the input whole, a fixed list position,
+/// or the entry of a dictionary selected by a key held in node state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Place {
     /// The input, by its place among the body's locals.
     local: usize,
-    /// The position, where it is one of a fixed list.
-    position: Option<i64>,
+    /// How this follower projects the input.
+    projection: Projection,
+}
+
+/// A follower's view of its input (FN-16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Projection {
+    Whole,
+    Position(i64),
+    Key,
 }
 
 impl Place {
@@ -177,9 +185,10 @@ impl Place {
     /// keeps for itself.
     fn follower(self) -> String {
         let input = names::temporary("designated", self.local);
-        match self.position {
-            None => input,
-            Some(position) => format!("{input}{position}_"),
+        match self.projection {
+            Projection::Whole => input,
+            Projection::Position(position) => format!("{input}{position}_"),
+            Projection::Key => format!("{input}key_"),
         }
     }
 }
@@ -201,7 +210,7 @@ fn fixed_size(ty: &Type) -> Option<i64> {
 /// designates of its inputs that are no `ref` parameter, each once, in
 /// the order first designated: an input designated whole, and each
 /// position of a fixed list one of whose positions is designated
-/// (`items[idx]`), which is known only when it runs. The node follows each
+/// (`items[idx]`), and each dictionary with a selected key. The node follows each
 /// (FN-16: "Readers follow a later rebinding of that endpoint without
 /// waking the node for it"). None for a node whose result is not `ref`.
 fn followed(signature: &Signature, body: &Body) -> Vec<Place> {
@@ -216,14 +225,18 @@ fn followed(signature: &Signature, body: &Body) -> Vec<Place> {
         let places: Vec<Place> = match how {
             Designated::Whole => vec![Place {
                 local,
-                position: None,
+                projection: Projection::Whole,
             }],
             Designated::Position => (0..fixed_size(&body.locals[local].ty).unwrap_or(0))
                 .map(|position| Place {
                     local,
-                    position: Some(position),
+                    projection: Projection::Position(position),
                 })
                 .collect(),
+            Designated::Key => vec![Place {
+                local,
+                projection: Projection::Key,
+            }],
         };
         for place in places {
             if !found.contains(&place) {
@@ -236,12 +249,11 @@ fn followed(signature: &Signature, body: &Body) -> Vec<Place> {
 
 /// What a node adds for the inputs that are no `ref` parameter which its
 /// `ref` result designates (FN-16): each is given to it a second time, as
-/// a `REF` input it is active on, and its state keeps which one the
-/// result follows.
+/// a `REF` input or a structural dictionary input it is active on. Its
+/// state keeps which one the result follows and the selected dictionary key.
 #[derive(Default)]
 pub(super) struct Designations {
-    /// Each input or position followed, in the order of [`followed`], and
-    /// the `eval` parameter it is followed through.
+    /// Follower inputs in the order [`followed`] supplies them.
     followed: Vec<(Place, String)>,
 }
 
@@ -272,11 +284,21 @@ impl Designations {
         if self.followed.is_empty() {
             return String::new();
         }
-        format!(
+        let mut state = format!(
             "{INDENT}{INDENT}// FN-16: the input or position the `ref` result follows, by its\n\
              {INDENT}{INDENT}// place among those it designates, or -1 for none.\n\
              {INDENT}{INDENT}::hgraph::Int {DESIGNATES}{{-1}};\n"
-        )
+        );
+        for (place, _) in &self.followed {
+            if place.projection == Projection::Key {
+                let name = place.follower();
+                let lib = runtime::NAMESPACE;
+                state.push_str(&format!(
+                    "{INDENT}{INDENT}::{lib}::KeyDesignation {name}{{}};\n"
+                ));
+            }
+        }
+        state
     }
 
     /// True where the node keeps a designation in its state.
@@ -305,14 +327,13 @@ impl Emitter<'_> {
     }
 
     /// The inputs that are no `ref` parameter which the `ref` result of
-    /// the node of `signature`, whose body is `body` and which injects
-    /// `injected`, designates (FN-16), as [`Designations`]. `None` where
+    /// the node of `signature`, whose body is `body`, designates (FN-16),
+    /// as [`Designations`]. `None` where
     /// one is not written yet, which is reported.
     pub(super) fn designated_inputs(
         &mut self,
         signature: &Signature,
         body: &Body,
-        injected: &[usize],
     ) -> Option<Designations> {
         if !signature.reference {
             return Some(Designations::default());
@@ -321,13 +342,17 @@ impl Emitter<'_> {
         for &(local, how, at) in &found {
             // The list's own form first, so that a list not written yet is
             // reported as that.
-            if how == Designated::Position {
+            if how != Designated::Whole {
                 self.temporal_schema(&body.locals[local].ty, at)?;
             }
-            if found
-                .iter()
-                .any(|&(other, again, _)| other == local && again != how)
-            {
+            if found.iter().any(|&(other, again, _)| {
+                other == local
+                    && matches!(
+                        (how, again),
+                        (Designated::Whole, Designated::Position)
+                            | (Designated::Position, Designated::Whole)
+                    )
+            }) {
                 self.unsupported(
                     at,
                     "an input designated whole and by a position in one node",
@@ -336,43 +361,37 @@ impl Emitter<'_> {
             }
         }
         let followed = followed(signature, body);
-        if !followed.is_empty()
-            && let Some(&timer) = injected
-                .iter()
-                .find(|&&local| Timer::of(&body.locals[local].name).is_some())
-        {
-            // What wakes the node beside its inputs is the timers' to
-            // say: a follower's own wake runs no handler.
-            self.unsupported(
-                body.locals[timer].at,
-                "a designation of an input in a node that injects a scheduler or an alarm",
-            );
-            return None;
-        }
         let mut following = Vec::new();
         for place in followed {
             let declared = &body.locals[place.local];
-            // A position is of the list's element's form.
-            let (ty, label) = match (place.position, &declared.ty) {
-                (None, ty) => (ty, format!("designated:{}", declared.name)),
-                (Some(position), Type::List { element, .. }) => (
-                    &**element,
+            let (schema, label) = match (place.projection, &declared.ty) {
+                (Projection::Whole, ty) => (
+                    self.endpoint_schema(ty, true, declared.at)?,
+                    format!("designated:{}", declared.name),
+                ),
+                (Projection::Position(position), Type::List { element, .. }) => (
+                    self.endpoint_schema(element, true, declared.at)?,
                     format!("designated:{}[{position}]", declared.name),
                 ),
-                (Some(_), _) => {
-                    self.unsupported(declared.at, "a designation of a position of this");
-                    return None;
-                }
+                (Projection::Key, Type::Dict { .. }) => (
+                    self.temporal_schema(&declared.ty, declared.at)?,
+                    format!("designated:{}[key]", declared.name),
+                ),
+                _ => unreachable!("a designation projects its input's form"),
             };
-            let schema = self.temporal_schema(ty, declared.at)?;
             // A label no HGL name is: hgraph names the node's inputs by
-            // their labels.
+            // their labels. Only dictionary followers watch membership.
             let label = names::string(&label);
+            let activity = if place.projection == Projection::Key {
+                ", ::hgraph::InputActivity::Structural"
+            } else {
+                ""
+            };
+            let name = place.follower();
             following.push((
                 place,
                 format!(
-                    "::hgraph::In<{label}, ::hgraph::REF<{schema}>, ::hgraph::InputValidity::Unchecked> {}",
-                    place.follower()
+                    "::hgraph::In<{label}, {schema}{activity}, ::hgraph::InputValidity::Unchecked> {name}"
                 ),
             ));
         }
@@ -395,6 +414,7 @@ impl Emitter<'_> {
         body: &Body,
         inputs: &[usize],
         active: &[usize],
+        has_timer: bool,
     ) -> String {
         if designated.followed.is_empty() {
             return String::new();
@@ -407,13 +427,20 @@ impl Emitter<'_> {
              {indent}// FN-16: \"Readers follow a later rebinding of that endpoint without\n\
              {indent}// waking the node for it\".\n"
         );
+        let lib = runtime::NAMESPACE;
         for (place, (followed, _)) in designated.followed.iter().enumerate() {
             let view = followed.follower();
-            text.push_str(&format!(
-                "{indent}if ({DESIGNATES} == {place} && {view}.modified())\n{indent}{{\n\
-                 {inner}{OUT}.set(::{}::designation({view}));\n{indent}}}\n",
-                runtime::NAMESPACE
-            ));
+            if followed.projection == Projection::Key {
+                text.push_str(&format!(
+                    "{indent}if ({DESIGNATES} == {place})\n{indent}{{\n\
+                     {inner}::{lib}::refresh_key_designation({view}, {STATE}.modify().{view}, {OUT});\n{indent}}}\n"
+                ));
+            } else {
+                text.push_str(&format!(
+                    "{indent}if ({DESIGNATES} == {place} && {view}.modified())\n{indent}{{\n\
+                     {inner}{OUT}.set(::{lib}::designation({view}));\n{indent}}}\n"
+                ));
+            }
         }
         // An input wakes the node where it is active and publishes, or is
         // invalidated (END-4: "The transition to invalid notifies active
@@ -429,7 +456,7 @@ impl Emitter<'_> {
                 }
             );
         });
-        let woken: Vec<String> = inputs
+        let mut woken: Vec<String> = inputs
             .iter()
             .filter(|local| changes || active.contains(local))
             .map(|&local| {
@@ -441,6 +468,9 @@ impl Emitter<'_> {
                 }
             })
             .collect();
+        if has_timer {
+            woken.push(super::scheduling::TIMER_WOKE.to_string());
+        }
         let woken = if woken.is_empty() {
             "false".to_string()
         } else {
@@ -462,9 +492,9 @@ impl Emitter<'_> {
             .into_iter()
             .map(|place| {
                 let port = identifier(&body.locals[place.local].name);
-                match place.position {
-                    None => port,
-                    Some(position) => {
+                match place.projection {
+                    Projection::Whole | Projection::Key => port,
+                    Projection::Position(position) => {
                         format!("::{}::element_port({port}, {position})", runtime::NAMESPACE)
                     }
                 }
@@ -604,7 +634,7 @@ impl Emitter<'_> {
                 // follows.
                 let whole = Place {
                     local,
-                    position: None,
+                    projection: Projection::Whole,
                 };
                 let Some(place) = following.iter().position(|&followed| followed == whole) else {
                     self.unsupported(value.at, "this designation");
@@ -631,7 +661,7 @@ impl Emitter<'_> {
                 };
                 let first = Place {
                     local,
-                    position: Some(0),
+                    projection: Projection::Position(0),
                 };
                 let Some(base) = following.iter().position(|&followed| followed == first) else {
                     self.unsupported(value.at, "this designation");
@@ -641,7 +671,7 @@ impl Emitter<'_> {
                     .map(|position| {
                         Place {
                             local,
-                            position: Some(position),
+                            projection: Projection::Position(position),
                         }
                         .follower()
                     })
@@ -655,6 +685,25 @@ impl Emitter<'_> {
                      {indent}{DESIGNATES} = {base} + {held};\n\
                      {indent}{OUT}.set(::{namespace}::designation_of({held}, {}));\n",
                     views.join(", ")
+                ))
+            }
+            Some((local, Designated::Key)) => {
+                let ExprKind::ChildEndpointOf(child) = &value.kind else {
+                    unreachable!("a key designates a dictionary child");
+                };
+                let ExprKind::Index { index, .. } = &child.kind else {
+                    unreachable!("a dictionary child has an index");
+                };
+                let endpoint = Place {
+                    local,
+                    projection: Projection::Key,
+                };
+                let place = following.iter().position(|&item| item == endpoint)?;
+                let view = endpoint.follower();
+                let key = self.expression(scope, index);
+                Some(format!(
+                    "{indent}::{namespace}::designate_key({view}, {key}, {STATE}.modify().{view}, {OUT});\n\
+                     {indent}{DESIGNATES} = {place};\n"
                 ))
             }
             None => {
