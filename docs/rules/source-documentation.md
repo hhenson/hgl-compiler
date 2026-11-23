@@ -23,7 +23,9 @@ analyser: partial
 
 docs: partial
 
-- Recognized headings, prose and Args/Type Args entries in JSON and HTML
+- Recognized headings, including `Options:`, `Rules:` and `Status:`, in JSON and HTML
+- Authored headings with an indented body keep their headings in HTML and remain unrecognized in JSON, including when the body starts after a blank line
+- `Args:` and `Type Args:` descriptions remove their common continuation indent for Markdown while preserving relative indentation
 - Fenced Markdown preserves literal text in headings and entries
 - Left: key spelling of Requires, Properties and a struct’s Args
 
@@ -32,6 +34,7 @@ docs: partial
 docs: done
 
 - JSON and HTML keep interfaces, candidates and members distinct, with their own signatures, comments and source parts
+- HTML signatures include block initializers of constants and fields
 
 ## SDOC-5
 
