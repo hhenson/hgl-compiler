@@ -297,7 +297,14 @@ impl Emitter<'_> {
             let instances = self.instances;
             match instances.find_call(program, callee, arguments) {
                 Some(instance) => Some(instance),
-                None => return self.missing(value.at, "a call of an instance that is not written"),
+                None => {
+                    return self.missing_instance(
+                        value.at,
+                        callee,
+                        arguments,
+                        "a call of an instance that is not written",
+                    );
+                }
             }
         } else {
             None
