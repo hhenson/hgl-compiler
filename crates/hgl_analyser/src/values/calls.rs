@@ -85,7 +85,7 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         used: bool,
     ) -> (ExprKind, Type) {
-        let (Some(callee), Some(list)) = (node.children().next(), child(node, SyntaxKind::ArgList))
+        let (Some(callee), Some(list)) = (call_callee(node), child(node, SyntaxKind::ArgList))
         else {
             return (ExprKind::Unread, Type::Unknown);
         };
@@ -495,6 +495,28 @@ impl<'a> Typer<'a> {
                     .map(|(name, value)| (false, name, value)),
             )
             .collect()
+    }
+
+    /// Whether a name occupies a call's callee or a written argument
+    /// position. The argument reader owns both parentheses and braces.
+    pub(super) fn is_call_operand(&self, node: &SyntaxNode) -> bool {
+        let Some(parent) = crate::syntax::parent_outside_grouping(node) else {
+            return false;
+        };
+        if call_callee(&parent).map(ungrouped).as_ref() == Some(node) {
+            return true;
+        }
+        // The value's parent is its entry. The parentheses or braces
+        // containing that entry are a direct child of their call.
+        parent
+            .parent()
+            .and_then(|entries| entries.parent())
+            .and_then(|call| child(&call, SyntaxKind::ArgList))
+            .is_some_and(|list| {
+                self.call_entries(&list)
+                    .into_iter()
+                    .any(|(_, _, value)| ungrouped(value) == *node)
+            })
     }
 
     /// The names and expressions in a call's configuration (EXPR-10).
@@ -1605,6 +1627,15 @@ fn unread_call_kind(arguments: Vec<hir::Argument>) -> ExprKind {
         form: Form::Named,
         braced: Vec::new(),
         lifted: false,
+    }
+}
+
+/// The callable expression, as it is written before the arguments.
+fn call_callee(node: &SyntaxNode) -> Option<SyntaxNode> {
+    if node.kind() == SyntaxKind::CallExpr {
+        node.children().next()
+    } else {
+        None
     }
 }
 

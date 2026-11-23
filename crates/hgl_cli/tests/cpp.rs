@@ -2260,6 +2260,85 @@ fn a_computed_pack_spread_can_read_a_graph_range_binding_in_a_guard() {
     assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
 }
 
+/// FN-17, FN-19 and GEN-17: an entry recognizes the same direct
+/// callback operands and written member types as an ordinary expression.
+#[test]
+fn computed_pack_entries_preserve_call_operands_and_type_places() {
+    let cases = [
+        ("positional_callback", "apply(1, cb)", true),
+        ("named_callback", "apply(x: 1, cb: cb)", true),
+        ("braced_callback", "apply{cb: cb}(1)", true),
+        ("callback_callee", "(cb)(1)", true),
+        ("callback_in_list", "{ let stored = [cb]\n 1 }", false),
+        (
+            "callback_called_in_lambda",
+            "apply(1, fn(v) => cb(v))",
+            true,
+        ),
+        ("callback_read_in_lambda", "apply(1, fn(v) => cb)", false),
+        ("callback_forwarded_twice", "relay{cb: cb}(1)", true),
+        (
+            "member_annotation",
+            "{ let value: Ps[key] = args[key]\n 1 }",
+            true,
+        ),
+        (
+            "member_argument",
+            "{ let value = exact<Ps[key]>(args[key])\n 1 }",
+            true,
+        ),
+        (
+            "nested_member_argument",
+            "{ let values = exact<list<Ps[key]>>([])\n 1 }",
+            true,
+        ),
+        (
+            "lambda_member_annotation",
+            "apply_typed<Ps[key]>(args[key], fn(v: Ps[key]) => 1)",
+            true,
+        ),
+    ];
+    for (name, expression, valid) in cases {
+        for in_entry in [false, true] {
+            let root = scratch(&format!("computed-pack-{name}-{in_entry}"));
+            let (generics, expression) = if in_entry {
+                (
+                    "...Ps, ...As",
+                    format!("shape(...{{for key in arg_keys(Ps): {expression}}})"),
+                )
+            } else {
+                ("...Ps, ...As, const key: str", expression.to_string())
+            };
+            let file = write(
+                &root,
+                "m.hgl",
+                &format!(
+                    "module m\n\
+                     const fn apply(x: i64, cb: const fn(i64) -> i64) -> i64 => cb(x)\n\
+                     const fn relay(x: i64, cb: const fn(i64) -> i64) -> i64 => apply{{cb: cb}}(x)\n\
+                     const fn exact<T>(value: T) -> T => value\n\
+                     const fn apply_typed<T>(value: T, cb: const fn(T) -> i64) -> i64 => cb(value)\n\
+                     const fn compare<{generics}>(cb: const fn(i64) -> i64,\n\
+                         shape: const fn(...{{Ps}}) -> i64, args: ...{{As for shape}}) -> i64 => {expression}\n"
+                ),
+            );
+            let checked = hgl_in(&["check", &file], &[], &[]);
+            let stderr = text(&checked.stderr);
+            assert_eq!(
+                checked.status.code(),
+                Some(i32::from(!valid)),
+                "{name} in entry {in_entry}: {stderr}"
+            );
+            if !valid {
+                assert!(
+                    stderr.contains("error[type/function.value]"),
+                    "{name} in entry {in_entry}: {stderr}"
+                );
+            }
+        }
+    }
+}
+
 /// FN-19, FN-17 and EXPR-3: invalid places, iterables and declaration-bound
 /// reads are diagnosed without unrolling the computed pack.
 #[test]
@@ -2271,7 +2350,7 @@ fn a_computed_pack_spread_rejects_invalid_declaration_uses() {
             "a pack loop must be bound",
         ),
         (
-            "{ let xs = [({for k in arg_keys(Ps): 1})]; 1 }",
+            "{ let xs = [({for k in arg_keys(Ps): 1})]\n return 1 }",
             "type/type.mismatch",
             "a pack loop must be bound",
         ),
@@ -2296,7 +2375,7 @@ fn a_computed_pack_spread_rejects_invalid_declaration_uses() {
             "a function parameter can be invoked or passed",
         ),
         (
-            "f(...{for k in arg_keys(Ps): { k = \"x\"; 1 }})",
+            "f(...{for k in arg_keys(Ps): { k = \"x\"\n 1 }})",
             "name/binding.immutable",
             "is a pack key and cannot be assigned",
         ),
@@ -2306,12 +2385,12 @@ fn a_computed_pack_spread_rejects_invalid_declaration_uses() {
             "a pack loop condition must be constant",
         ),
         (
-            "{ let flag = x > 1; return f(...{for k in arg_keys(Ps): if flag { 1 } else { 2 }}) }",
+            "{ let flag = x > 1\n return f(...{for k in arg_keys(Ps): if flag { 1 } else { 2 }}) }",
             "type/type.mismatch",
             "a pack loop condition must be constant",
         ),
         (
-            "{ var t = 0; for i in [1, 2] { t += f(...{for k in arg_keys(Ps): if i == 1 { 1 } else { 2 }}) }; return t }",
+            "{ var t = 0\n for i in [1, 2] { t += f(...{for k in arg_keys(Ps): if i == 1 { 1 } else { 2 }}) }\n return t }",
             "type/type.mismatch",
             "a pack loop condition must be constant",
         ),

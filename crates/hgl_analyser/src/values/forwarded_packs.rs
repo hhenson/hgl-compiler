@@ -10,10 +10,7 @@ use super::requirements::pack_view;
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey};
 use crate::program::{Binding, LocalKind};
-use crate::syntax::{
-    child, has_token, is_arg_keys_call, name_token, pack_member_names, parent_outside_grouping,
-    ungrouped,
-};
+use crate::syntax::{child, has_token, is_arg_keys_call, name_token, pack_member_names, ungrouped};
 use crate::types::{GenericKind, Scalar, Type};
 use crate::{codes, error};
 
@@ -264,18 +261,8 @@ impl Typer<'_> {
                 ),
                 "FN-19",
             ));
-        } else if self
-            .local_of(node)
-            .is_some_and(|local| matches!(self.locals[local].ty, Type::Function(_)))
-            && !parent_outside_grouping(node).is_some_and(|parent| {
-                parent.kind() == SyntaxKind::Arg
-                    || (parent.kind() == SyntaxKind::CallExpr
-                        && parent.children().next().map(ungrouped).as_ref() == Some(node))
-            })
-        {
-            // FN-17: invocation and forwarding as a callback are read
-            // when the call is checked in a pass.
-            self.function_value(self.at(node));
+        } else if let Some(local) = self.local_of(node) {
+            self.reject_function_value(local, self.at(node), Some(node));
         }
     }
 
