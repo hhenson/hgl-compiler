@@ -776,7 +776,9 @@ impl<'a> Typer<'a> {
         if children {
             self.dynamic = Some(outside);
         }
+        let range_scope = self.enter_range_bindings(&sequence, &names);
         let body = self.loop_body(child(node, SyntaxKind::Block).as_ref());
+        self.unrolled_range_bindings.truncate(range_scope);
         self.dynamic = outer;
         Stmt::For {
             names,
@@ -784,6 +786,20 @@ impl<'a> Typer<'a> {
             body,
             at,
         }
+    }
+
+    /// CTRL-16: a graph range with fixed bounds gives each pass a
+    /// constant name. Track it only while reading that pass's body.
+    fn enter_range_bindings(&mut self, sequence: &Expr, names: &[LocalId]) -> usize {
+        let scope = self.unrolled_range_bindings.len();
+        if self.graph
+            && let ExprKind::Range { lower, upper } = &sequence.kind
+            && self.is_fixed(lower, &self.unrolled_range_bindings)
+            && self.is_fixed(upper, &self.unrolled_range_bindings)
+        {
+            self.unrolled_range_bindings.extend_from_slice(names);
+        }
+        scope
     }
 
     /// An iterable has the ordinary collection rules (CTRL-12), or is a
@@ -868,7 +884,9 @@ impl<'a> Typer<'a> {
         let before = self.assigned.clone();
         let returned = self.returned;
         let present = self.present.len();
+        let range_scope = self.enter_range_bindings(&sequence, &[binding]);
         let value = self.expression(&entry, element);
+        self.unrolled_range_bindings.truncate(range_scope);
         let value = match element {
             Some(element) => self.fit_input(value, element, "this list entry"),
             None => value,

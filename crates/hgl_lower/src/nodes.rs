@@ -9,6 +9,8 @@ use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Header, Local, Stmt};
 use hgl_analyser::{LocalKind, Signature, Type};
 use hgl_diagnostics::Location;
 
+use crate::types::fixed_list_size;
+
 /// What wakes a node beside its inputs (TIME-9): the scheduler or the
 /// alarm it injects.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -237,8 +239,9 @@ pub fn designated(
         }
         ExprKind::ChildEndpointOf(child) => match &child.kind {
             ExprKind::Index { base, .. } => match (&base.kind, &base.ty) {
-                (ExprKind::Local(local), Type::List { size: Some(_), .. })
-                    if is_input(locals, signature, *local)
+                (ExprKind::Local(local), Type::List { size, .. })
+                    if fixed_list_size(size.as_ref()).is_some()
+                        && is_input(locals, signature, *local)
                         && !is_reference(locals, signature, *local) =>
                 {
                     Some((*local, Designated::Position))

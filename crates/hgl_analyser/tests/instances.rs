@@ -10,6 +10,46 @@ use hgl_analyser::{Argument, Detail, Signature};
 /// No lines.
 const NONE: [&str; 0] = [];
 
+/// GEN-7, FN-15: each route to the same instance checks its candidate's
+/// `var` argument even when every candidate gives the same result type.
+#[test]
+fn selected_arguments_are_checked_through_functions_and_forwarded_packs() {
+    let definitions = concat!(
+        "operator update<T>(value: T) -> i64\n",
+        "impl const fn update<T>(value: T) -> i64 => 1\n",
+        "impl const fn update(var value: i64) -> i64 {\n",
+        "    value = value + 1\n",
+        "    return 2\n",
+        "}\n",
+        "const fn checked<T>(value: T) -> i64 => update(value)\n",
+        "const fn apply(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+        "const fn relay<...Args>(values: ...Args) -> i64 => checked(...values)\n",
+    );
+    for call in [
+        "checked(1)",
+        "apply(checked<i64>, 1)",
+        "apply(fn(value) => checked(value), 1)",
+        "relay(1)",
+    ] {
+        let checked = module(&format!("{definitions}test invoke {{ {call} }}\n"));
+        assert_eq!(checked.findings.len(), 1, "{call}: {}", checked.report);
+        let finding = &checked.findings[0];
+        assert_eq!(
+            (finding.code.as_str(), finding.rule),
+            ("name/binding.immutable", "FN-15"),
+            "{call}: {}",
+            checked.report,
+        );
+        if call == "relay(1)" {
+            assert_eq!(finding.at, "m.hgl:11:15", "{}", checked.report);
+        }
+    }
+    let accepted = module(&format!(
+        "{definitions}test invoke {{\n    assert checked(\"value\") == 1\n    assert relay(\"value\") == 1\n}}\n"
+    ));
+    assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+}
+
 /// What a call calls, as the instance of it: the declaration, what its
 /// generic parameters stand for, and what answers its requirements.
 type Called = (usize, usize, Vec<Argument>, Vec<Answer>);

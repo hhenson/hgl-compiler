@@ -97,6 +97,7 @@ transpiler: done
 analyser: partial
 
 - In a value function a named call is matched against each value candidate's own signature
+- Outside a generic body, literals in named and symbolic operator calls are fitted independently by each candidate, with or without a selecting option. A typed argument still fixes its generic in a requested result; another literal argument does not erase that type. Public generic defaults, result requirements and reflected-pack checks keep their complete inference; inherited configuration defaults use the fitted input type (GEN-2, GEN-8, GEN-13, UNIT-8). Calls written in generic bodies retain the existing output request pending the GEN-7 result/literal work.
 - Each value or temporal candidate supplies the function type of a fixed callback, including its phase (FN-17).
 - An option that selects is a generic value parameter, given by name or by its default, and the candidate's `requires` is checked against its value; one that does not select is a parameter, by name or position
 - An option's name is one kind across an operator's candidates
@@ -116,6 +117,7 @@ analyser: partial
 - The call records the position of the requirement it is (`Callee::Required`), so that a call of the declaration says which candidate it calls
 - "It is judged once, where it is declared, by what its `requires` states, and never again for the generic arguments a call of it gives": a call of an operator in it is admitted where a candidate takes every generic argument the requirements admit, where a named operator requirement states it, or under a membership where each listed type has one (GEN-3), and otherwise the declaration rejects (`operator.no_candidate`, with a note), by name and by symbol, in a value function and a graph: the fragments `less` and `wrap` with no `requires`
 - Each instance selects again for an operator call whose operand types use the enclosing declaration's generic parameters, including when a generic candidate admitted the body. The new selection uses the instance's operands and the operator binding at the call (GEN-5), including private operators, symbols, and calls in nodes and graphs.
+- Instance checks reach named function references, calls in anonymous bodies, and concrete calls produced by pack forwarding. The same checks enforce a selected candidate's `var` place (FN-15).
 - A generic body reads a fixed list's inferred size `N` as an `i64` constant (GEN-13, TYPE-10). The C++ target executes it in arithmetic, range bounds, subscripts and local initializers in value code, node handlers and graph composition.
 - Left: a requirement met by widening an argument, and checking misuse of a type or size parameter as a runtime value
 
@@ -141,7 +143,7 @@ analyser: partial
 analyser: done
 
 - Property domains are ordinary concrete value types. A generic domain rejects with local `property.domain`.
-- Each domain in a clause gets its laws and expects its own identity type (EXPR-5). A later clause naming an earlier domain rejects at that domain with the proposed `property.duplicate` code. The proposed checks for repeated domains or properties within one clause are pending.
+- Each domain in a clause gets its laws and expects its own identity type (EXPR-5). A later clause naming an earlier domain rejects at that domain with `property.duplicate`. Checks for repeated domains or properties within one clause are pending.
 - Law queries read the public operator's metadata for the concrete operand type; an ordinary or anonymous function declares no guarantee. Metadata performs no arithmetic transformation.
 
 optimiser: planned
@@ -246,12 +248,14 @@ transpiler: partial
 parser: partial
 
 - Reads a function type's named pack and `arg_keys` and member types in requirements. `Ps[arg]` has a type form, with an index tree in positions that also allow values.
-- Left: pack key membership in a body, alongside pack values and unrolled loops (#368).
+- Reads `key in arg_keys(Ps)` at comparison precedence in a body.
+- Left: pack-key iteration outside the computed spread slice (#368).
 
 analyser: partial
 
 - Reflects the selected callback's fixed suffix and its supplied positional and named pack entries. A dependent pack keeps the callback parameter keys and the types written at the call.
 - Evaluates `each` over `arg_keys`, constant key membership, and keyed type projection. Candidate requirements can compare bare pack members. A missing member of a known pack reports `pack.name`.
+- In a pack comprehension, `arg_keys` names a declared type pack and the iteration name is a compile-time key. A membership condition reads those bindings and has type `bool`. Generic unrolling and the value of that condition in a pass await the GEN-7 decision (#368).
 - A generic call that receives another function parameter checks its pack requirements when the caller supplies the reflected types. The receiver's fixed positions determine which original inputs its pack reflects.
 - An operator callback reflects the public declaration's parameter names and the selected candidate's types (FN-17).
 - Specializes a pack-member type written as a function call's generic argument (GEN-8), including within another type. A missing key reports `pack.name`. A positive member-type equality, including one stated for each key of a pack, can admit a constrained call under GEN-7. A call with an untold member type remains unsupported in the target.

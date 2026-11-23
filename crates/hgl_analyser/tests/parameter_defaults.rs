@@ -106,7 +106,7 @@ fn an_omitted_default_fits_the_concrete_parameter_type() {
     );
 }
 
-/// UNIT-8, ERR-9: the catalogue's proposed constant.failure code also
+/// UNIT-8, ERR-9: the catalogued constant.failure code also
 /// covers field defaults; an operand skipped by EXPR-6 does not fail.
 #[test]
 fn field_defaults_use_the_catalogued_constant_failure_code() {

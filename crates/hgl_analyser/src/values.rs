@@ -87,7 +87,7 @@ mod fit;
 // The form a result takes from its place, and a `T?` read where a T is expected (ERR-12, ERR-15).
 mod forms;
 mod forwarded_packs;
-pub(crate) use forwarded_packs::has_forwarded_calls;
+pub(crate) use forwarded_packs::{ForwardingInstance, has_forwarded_calls};
 mod function_arguments;
 // Fits destinations whose graph values become known only in an instance (GEN-7).
 mod graph_instance;
@@ -357,9 +357,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
     operators::inherit_configuration_defaults(program);
-    let default_calls = operator_defaults::check(program, diagnostics);
-    requirements::instances_hold(program, default_calls, diagnostics);
-    forwarded_packs::check_instances(program, diagnostics);
+    let mut instance_calls = operator_defaults::check(program, diagnostics);
+    forwarded_packs::check_instances(program, &mut instance_calls, diagnostics);
+    requirements::instances_hold(program, instance_calls, diagnostics);
     // TYPE-10, TYPE-11: the sizes each struct application written in a
     // type gives the struct's lists and windows.
     sizes::applied_sizes(program, diagnostics);
@@ -584,6 +584,8 @@ struct Typer<'a> {
     /// how many locals there were where the outermost such loop began:
     /// a `var` before that is declared outside it (CTRL-15).
     dynamic: Option<usize>,
+    /// Names of active graph range passes with constant bounds (CTRL-16).
+    unrolled_range_bindings: Vec<LocalId>,
     /// The hook of a node being read; `None` in a value function, and
     /// between a node's hooks.
     hook: Option<Hook>,
@@ -793,6 +795,7 @@ impl<'a> Typer<'a> {
             must_return: false,
             returning_tails: HashMap::new(),
             dynamic: None,
+            unrolled_range_bindings: Vec::new(),
             hook: None,
             out: None,
             present: Vec::new(),

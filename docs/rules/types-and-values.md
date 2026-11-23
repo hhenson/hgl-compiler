@@ -157,7 +157,7 @@ analyser: partial
 
 transpiler: partial
 
-- Writes growing lists and positive fixed-size lists in value code and as connections.
+- Writes growing lists (`list<T>` and `list<T, unbounded>`) and positive fixed-size lists in value code and as connections.
 - Left: Zero-size and unresolved sizes have no C++ representation. Temporal element
   forms follow TYPE-9.
 

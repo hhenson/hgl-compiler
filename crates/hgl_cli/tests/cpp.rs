@@ -744,6 +744,38 @@ fn generic_null_defaults_run_on_the_sdk() {
     );
 }
 
+/// GEN-2, GEN-6 and UNIT-8: concrete operator calls read literals at
+/// each candidate; generic-body calls retain main's existing behavior.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn direct_operator_literal_options_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("direct_operator_literal_options");
+    let file = write(
+        &root,
+        "demo.operator_literal_options.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.operator_literal_options.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 15 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// TIME-5, END-3 and END-4: hook mutations reject at source checking,
 /// and admitted checked deltas handle publication and silence.
 #[test]
@@ -860,6 +892,34 @@ fn list_code_runs_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// TYPE-10: the explicit unbounded sentinel uses the growing-list
+/// representation in value code, node and graph connections, and bundles.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn explicit_unbounded_lists_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("explicit-unbounded");
+    let file = write(
+        &root,
+        "src/demo.explicit_unbounded.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.explicit_unbounded.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2283,6 +2343,300 @@ fn an_unread_reflected_membership_preserves_the_operator_error() {
             && stderr.contains("no value candidate of operator `add_` takes `Ps[item_key]`"),
         "{stderr}"
     );
+}
+
+/// FN-19 and GEN-17: a computed spread is read through its pack-key
+/// expressions. C++ declines it while the generic passes remain unread.
+/// A function inside an entry may capture its iteration key (FN-14).
+#[test]
+fn a_computed_pack_spread_checks_and_declines_cpp_emission() {
+    let root = scratch("computed-pack-spread");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn identity(x: i64) -> i64 => x\n",
+            "const fn apply(f: const fn() -> i64) -> i64 => f()\n",
+            "const fn forward<...Ps, ...As>(f: const fn(...{Ps}) -> i64, args: ...{As for f}) -> i64 =>\n",
+            "    f(...{for key in arg_keys(Ps):\n",
+            "        if key == \"unused\" { apply(fn() => if key == \"unused\" { 0 } else { 1 }) }\n",
+            "        else if key in arg_keys(As) { args[key] }})\n",
+            "test example { assert forward(identity, 3) == 3 }\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
+    let out = root.join("out");
+    let emitted = hgl_in(
+        &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
+        &[],
+        &[],
+    );
+    let stderr = text(&emitted.stderr);
+    assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("error[build/target.unsupported]")
+            && stderr.contains("f(...{for key in arg_keys(Ps)"),
+        "{stderr}"
+    );
+}
+
+/// GEN-17 and FN-19: the keys in a computed spread are those of a type pack.
+#[test]
+fn a_computed_pack_spread_reports_a_value_pack_used_as_a_type_pack() {
+    let root = scratch("computed-spread-value-pack");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn pair(a: i64, b: i64) -> i64 => a + b\n",
+            "const fn forward(items: ...i64{2}) -> i64 =>\n",
+            "    pair(...{for key in arg_keys(items): items[key]})\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    let stderr = text(&checked.stderr);
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("error[type/type.mismatch]")
+            && stderr.contains("`arg_keys` needs a type pack, and `items` is not one"),
+        "{stderr}"
+    );
+}
+
+/// GEN-17 and FN-19: a written member type in a deferred entry keeps its
+/// type reading in calls, nested types and binding or parameter annotations.
+#[test]
+fn a_computed_pack_spread_preserves_written_pack_member_types() {
+    let root = scratch("computed-pack-entry-types");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn exact<T>(value: T) -> T => value\n",
+            "const fn apply<T>(f: const fn(T) -> T, value: T) -> T => f(value)\n",
+            "operator pick_value<T>(value: T) -> T\n",
+            "impl const fn pick_value<T>(value: T) -> T => value\n",
+            "const fn forward<...Ps, ...As>(f: const fn(...{Ps}) -> i64, args: ...{As for f}) -> i64 =>\n",
+            "    f(...{for key in arg_keys(Ps): {\n",
+            "        let value: Ps[key] = args[key]\n",
+            "        let values: list<Ps[key]> = [value]\n",
+            "        let picked = pick_value<Ps[key]>(value)\n",
+            "        apply<Ps[key]>(fn(item: Ps[key]) => item, exact<Ps[key]>(picked))\n",
+            "    }})\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
+}
+
+/// CTRL-16 and FN-19: a constant range's pass gives the computed entry
+/// a compile-time name in both a graph statement and a list comprehension.
+#[test]
+fn a_computed_pack_spread_can_read_a_graph_range_binding_in_a_guard() {
+    let root = scratch("computed-pack-graph-range-guard");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn looped<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}) -> f64 {\n",
+            "    var out = 0.0\n",
+            "    for i in 0..<2 {\n",
+            "        out = f(...{for key in arg_keys(Ps): if i == 0 { args[key] } else { 1.0 }})\n",
+            "    }\n",
+            "    return out\n",
+            "}\n",
+            "fn nested<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}) -> f64 {\n",
+            "    var out = 0.0\n",
+            "    for i in 0..<2 {\n",
+            "        for j in 0..<(i + 1) {\n",
+            "            out = f(...{for key in arg_keys(Ps): if j == 0 { args[key] } else { 1.0 }})\n",
+            "        }\n",
+            "    }\n",
+            "    return out\n",
+            "}\n",
+            "fn listed<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}) -> list<f64, 2> =>\n",
+            "    [for i in 0..<2: f(...{for key in arg_keys(Ps): if i == 0 { args[key] } else { 1.0 }})]\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
+}
+
+/// FN-17, FN-19 and GEN-17: an entry recognizes the same direct
+/// callback operands and written member types as an ordinary expression.
+#[test]
+fn computed_pack_entries_preserve_call_operands_and_type_places() {
+    let cases = [
+        ("positional_callback", "apply(1, cb)", true),
+        ("named_callback", "apply(x: 1, cb: cb)", true),
+        ("braced_callback", "apply{cb: cb}(1)", true),
+        ("callback_callee", "(cb)(1)", true),
+        ("callback_in_list", "{ let stored = [cb]\n 1 }", false),
+        (
+            "callback_called_in_lambda",
+            "apply(1, fn(v) => cb(v))",
+            true,
+        ),
+        ("callback_read_in_lambda", "apply(1, fn(v) => cb)", false),
+        ("callback_forwarded_twice", "relay{cb: cb}(1)", true),
+        (
+            "member_annotation",
+            "{ let value: Ps[key] = args[key]\n 1 }",
+            true,
+        ),
+        (
+            "member_argument",
+            "{ let value = exact<Ps[key]>(args[key])\n 1 }",
+            true,
+        ),
+        (
+            "nested_member_argument",
+            "{ let values = exact<list<Ps[key]>>([])\n 1 }",
+            true,
+        ),
+        (
+            "lambda_member_annotation",
+            "apply_typed<Ps[key]>(args[key], fn(v: Ps[key]) => 1)",
+            true,
+        ),
+    ];
+    for (name, expression, valid) in cases {
+        for in_entry in [false, true] {
+            let root = scratch(&format!("computed-pack-{name}-{in_entry}"));
+            let (generics, expression) = if in_entry {
+                (
+                    "...Ps, ...As",
+                    format!("shape(...{{for key in arg_keys(Ps): {expression}}})"),
+                )
+            } else {
+                ("...Ps, ...As, const key: str", expression.to_string())
+            };
+            let file = write(
+                &root,
+                "m.hgl",
+                &format!(
+                    "module m\n\
+                     const fn apply(x: i64, cb: const fn(i64) -> i64) -> i64 => cb(x)\n\
+                     const fn relay(x: i64, cb: const fn(i64) -> i64) -> i64 => apply{{cb: cb}}(x)\n\
+                     const fn exact<T>(value: T) -> T => value\n\
+                     const fn apply_typed<T>(value: T, cb: const fn(T) -> i64) -> i64 => cb(value)\n\
+                     const fn compare<{generics}>(cb: const fn(i64) -> i64,\n\
+                         shape: const fn(...{{Ps}}) -> i64, args: ...{{As for shape}}) -> i64 => {expression}\n"
+                ),
+            );
+            let checked = hgl_in(&["check", &file], &[], &[]);
+            let stderr = text(&checked.stderr);
+            assert_eq!(
+                checked.status.code(),
+                Some(i32::from(!valid)),
+                "{name} in entry {in_entry}: {stderr}"
+            );
+            if !valid {
+                assert!(
+                    stderr.contains("error[type/function.value]"),
+                    "{name} in entry {in_entry}: {stderr}"
+                );
+            }
+        }
+    }
+}
+
+/// FN-19, FN-17 and EXPR-3: invalid places, iterables and declaration-bound
+/// reads are diagnosed without unrolling the computed pack.
+#[test]
+fn a_computed_pack_spread_rejects_invalid_declaration_uses() {
+    let cases = [
+        (
+            "pair(item: {for k in arg_keys(Ps): 1}, other: 2)",
+            "type/type.mismatch",
+            "a pack loop must be bound",
+        ),
+        (
+            "{ let xs = [({for k in arg_keys(Ps): 1})]\n return 1 }",
+            "type/type.mismatch",
+            "a pack loop must be bound",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): {for j in arg_keys(Ps): 1}})",
+            "type/type.mismatch",
+            "a pack loop must be bound",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): Ps})",
+            "type/type.mismatch",
+            "is a type pack and cannot be read as a value",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): Ps[k]})",
+            "type/type.mismatch",
+            "is a type pack and cannot be read as a value",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): f})",
+            "type/function.value",
+            "a function parameter can be invoked or passed",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): { k = \"x\"\n 1 }})",
+            "name/binding.immutable",
+            "is a pack key and cannot be assigned",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): if b { 1 } else { 2 }})",
+            "type/type.mismatch",
+            "a pack loop condition must be constant",
+        ),
+        (
+            "{ let flag = x > 1\n return f(...{for k in arg_keys(Ps): if flag { 1 } else { 2 }}) }",
+            "type/type.mismatch",
+            "a pack loop condition must be constant",
+        ),
+        (
+            "{ var t = 0\n for i in [1, 2] { t += f(...{for k in arg_keys(Ps): if i == 1 { 1 } else { 2 }}) }\n return t }",
+            "type/type.mismatch",
+            "a pack loop condition must be constant",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): if false { 1 } else if k in arg_keys(Ps) && b { 2 }})",
+            "type/type.mismatch",
+            "a pack loop condition must be constant",
+        ),
+        (
+            "f(...{for i in 0..<3: i})",
+            "type/type.mismatch",
+            "a pack loop needs `arg_keys` of a type pack",
+        ),
+        (
+            "f(...{for i in [1, 2]: i})",
+            "type/type.mismatch",
+            "a pack loop needs `arg_keys` of a type pack",
+        ),
+    ];
+    for (index, (entry, code, message)) in cases.into_iter().enumerate() {
+        let root = scratch(&format!("computed-pack-rejection-{index}"));
+        let body = if entry.starts_with('{') { "" } else { "=> " };
+        let file = write(
+            &root,
+            "m.hgl",
+            &format!(
+                "module m\n\
+                 const fn pair(item: i64, other: i64) -> i64 => item + other\n\
+                 const fn g<...Ps>(f: const fn(...{{Ps}}) -> i64, b: bool, x: i64) -> i64 {body}{entry}\n"
+            ),
+        );
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        let stderr = text(&checked.stderr);
+        assert_eq!(checked.status.code(), Some(1), "{entry}\n{stderr}");
+        assert!(
+            stderr.contains(&format!("error[{code}]")) && stderr.contains(message),
+            "{entry}\n{stderr}",
+        );
+    }
 }
 
 /// FN-18 and EXPR-10: brace arguments reach their ordinary, generic,

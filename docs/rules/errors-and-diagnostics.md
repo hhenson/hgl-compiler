@@ -119,7 +119,7 @@ analyser: partial
 
 - A type that is not known is reported once, and nothing is reported of its uses
 - A module constant whose evaluation fails is rejected where it is declared (`constant.failure`, UNIT-13), and nothing is reported of its uses
-- Known required-constant failures in parameter and field defaults use `constant.failure` (UNIT-8); the catalogue row remains proposed
+- Known required-constant failures in parameter and field defaults use `constant.failure` (UNIT-8)
 - A generic value argument a generic body works out from its own parameters, `times<(M * 2)>`, whose evaluation fails, or that this compiler does not work out, with what an instance gives them is `generic.argument_constant` at the call that makes the instance, as the same argument written in place is, and the callee's `requires` is then not told ("Failure during argument evaluation precedes later admission checks"); one fault is reported once at each such call
 - Left: required failures the constant reader cannot establish, including calls it cannot evaluate (#240); generic value arguments retain `generic.argument_constant`
 

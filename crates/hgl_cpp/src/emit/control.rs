@@ -60,6 +60,7 @@ use hgl_lower::graphs::{
     alternative_statements, always_returns, assigned_outside, continued, key_read_as_value,
     label_value, may_return, named_in, nested_return, taken,
 };
+use hgl_lower::types::fixed_list_size;
 
 use super::Emitter;
 use super::calls::may_fail;
@@ -611,35 +612,25 @@ impl Emitter<'_> {
         // The key hgraph gives each child, and the member's own connection.
         let (key, member, element) = match (&sequence.ty, names) {
             (Type::Dict { value, .. }, [key, member]) => (Some(*key), *member, &**value),
-            (
-                Type::List {
-                    element,
-                    size: None,
-                },
-                [member],
-            ) => (None, *member, &**element),
-            (
-                Type::List {
-                    element,
-                    size: Some(size),
-                },
-                [item],
-            ) => {
-                // TYPE-4: a fixed list holds exactly its size.
-                let hgl_analyser::ConstantValue::Int(count) = size.value else {
-                    self.unsupported(at, "a `for` over a connection of a list of this size");
+            (Type::List { element, size }, [member]) => {
+                if let Some(size) = fixed_list_size(size.as_ref()) {
+                    // TYPE-4: a fixed list holds exactly its size.
+                    let hgl_analyser::ConstantValue::Int(count) = size.value else {
+                        self.unsupported(at, "a `for` over a connection of a list of this size");
+                        return;
+                    };
+                    let count = u64::try_from(count).unwrap_or(0);
+                    self.unrolled_each(
+                        scope,
+                        (*member, sequence, element, count),
+                        body,
+                        at,
+                        depth,
+                        text,
+                    );
                     return;
-                };
-                let count = u64::try_from(count).unwrap_or(0);
-                self.unrolled_each(
-                    scope,
-                    (*item, sequence, element, count),
-                    body,
-                    at,
-                    depth,
-                    text,
-                );
-                return;
+                }
+                (None, *member, &**element)
             }
             // hgraph's `compiled::map_` makes its children for the keys of
             // a dictionary or the positions of a list it multiplexes, and
