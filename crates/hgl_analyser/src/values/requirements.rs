@@ -807,7 +807,7 @@ impl<'a> Typer<'a> {
                 callee,
                 generics: generics.to_vec(),
                 type_packs: type_packs.to_vec(),
-                constants: Ok(Vec::new()),
+                constants: ConstArguments::default(),
                 answers: Vec::new(),
                 required: None,
                 at,
@@ -2181,7 +2181,7 @@ pub(super) struct Made {
     via: Option<Box<[MakingCall]>>,
 }
 
-type ConstArguments = Result<Vec<crate::ConstInput>, crate::ConstInputFault>;
+type ConstArguments = crate::const_inputs::ReadInputs;
 
 /// How many instances one call is followed to ([`crate::INSTANCES`]). A
 /// recursion that gives new arguments each time, `grow<N * 2>` and
@@ -2375,7 +2375,7 @@ pub(super) fn instances_hold(
                     passed.entry((index, position)).or_default().push(call);
                 } else {
                     let checks_const_inputs =
-                        !matches!(&call.constants, Ok(values) if values.is_empty());
+                        call.constants.over_budget || !call.constants.values.is_empty();
                     // A concrete reread checks the calls whose inputs changed.
                     // This call already has its own independent checking root.
                     if call_index < body_calls && (independent.is_some() || checks_const_inputs) {
@@ -2468,10 +2468,8 @@ pub(super) fn instances_hold(
         .into_iter()
         .filter(|made| reaching.contains(&made.callee))
     {
-        if matches!(made.constants, Err(crate::ConstInputFault::Limit)) {
-            past_the_limit(&[made.at], made.callee, program, diagnostics);
-            continue;
-        }
+        // A root whose input could not be read can still check the inputs
+        // already known. Only exhaustion while following instances is a limit.
         let key = instance_key(
             made.callee,
             &made.generics,
@@ -2527,7 +2525,7 @@ pub(super) fn instances_hold(
             let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
             let recheck_results = selecting.iter().any(|call| call.result.is_some());
             let recheck_indices = dependent_indices.contains(&made.callee);
-            let constants = made.constants.as_deref().unwrap_or_default();
+            let constants = made.constants.values.as_slice();
             let recheck_format = dependent_patterns.contains(&made.callee) || !constants.is_empty();
             let inputs = crate::InstanceInputs {
                 constants,
@@ -2877,7 +2875,7 @@ pub(super) fn instances_hold(
                                 ExprKind::Call {
                                     callee, arguments, ..
                                 } => program.known_const_inputs(callee, arguments),
-                                _ => Ok(Vec::new()),
+                                _ => ConstArguments::default(),
                             };
                             typer.fit_selected_result(
                                 call,
@@ -2937,12 +2935,12 @@ pub(super) fn instances_hold(
                     exhausted = true;
                     break;
                 }
-                let key = instance_key(callee, &generics, &type_packs, &answers, &constants);
-                if key.len() > ARGUMENTS || matches!(constants, Err(crate::ConstInputFault::Limit))
-                {
+                let key = generic_instance_key(callee, &generics, &type_packs, &answers);
+                if key.len() > ARGUMENTS || constants.over_budget {
                     exhausted = true;
                     break;
                 }
+                let key = with_const_inputs(key, &constants);
                 // GEN-7: a call of a function or a candidate in a generic
                 // body was judged where the body is declared, under what
                 // it states. Struct applications and forwarded parameter
@@ -3253,6 +3251,18 @@ fn instance_key(
     answers: &[hir::Answer],
     constants: &ConstArguments,
 ) -> String {
+    with_const_inputs(
+        generic_instance_key(callee, generics, type_packs, answers),
+        constants,
+    )
+}
+
+fn generic_instance_key(
+    callee: (usize, usize),
+    generics: &[Argument],
+    type_packs: &[hir::TypePackArgument],
+    answers: &[hir::Answer],
+) -> String {
     let generics: Vec<String> = generics
         .iter()
         .map(|argument| match argument {
@@ -3279,18 +3289,20 @@ fn instance_key(
             )
         })
         .collect::<Vec<_>>();
-    let mut key = format!("{callee:?}{generics:?}{packs:?}{answers:?}");
-    if let Ok(constants) = constants {
-        use std::fmt::Write;
-        for input in constants {
-            let _ = write!(
-                key,
-                "const[{}]:{}:{}",
-                input.slot,
-                input.key.len(),
-                input.key
-            );
-        }
+    format!("{callee:?}{generics:?}{packs:?}{answers:?}")
+}
+
+fn with_const_inputs(mut key: String, constants: &ConstArguments) -> String {
+    use std::fmt::Write;
+
+    for input in &constants.values {
+        let _ = write!(
+            key,
+            "const[{}]:{}:{}",
+            input.slot,
+            input.key.len(),
+            input.key
+        );
     }
     key
 }
@@ -3534,7 +3546,7 @@ fn applied_in(ty: &Type, at: Location, made: &mut Vec<Made>) {
                 callee,
                 generics,
                 type_packs: Vec::new(),
-                constants: Ok(Vec::new()),
+                constants: ConstArguments::default(),
                 answers: Vec::new(),
                 required: None,
                 at,
@@ -3917,7 +3929,7 @@ fn made_at(program: &Program, expression: &Expr, made: &mut Vec<Made>) {
                 callee: (*module, *declaration),
                 generics: arguments.clone(),
                 type_packs: Vec::new(),
-                constants: Ok(Vec::new()),
+                constants: ConstArguments::default(),
                 answers: Vec::new(),
                 required: None,
                 at: expression.at,
@@ -3931,7 +3943,7 @@ fn made_at(program: &Program, expression: &Expr, made: &mut Vec<Made>) {
 /// Record the instance reached by a concrete call or static reference (GEN-7).
 /// A call exposed by forwarding carries the supplying call's location.
 pub(super) fn made_callee(callee: &Callee, at: Location, made: &mut Vec<Made>) {
-    make_call(callee, at, Ok(Vec::new()), made);
+    make_call(callee, at, ConstArguments::default(), made);
 }
 
 fn make_call(callee: &Callee, at: Location, constants: ConstArguments, made: &mut Vec<Made>) {
@@ -3953,7 +3965,8 @@ fn make_call(callee: &Callee, at: Location, constants: ConstArguments, made: &mu
             ..
         } if !generics.is_empty()
             || !requirements.is_empty()
-            || !matches!(&constants, Ok(values) if values.is_empty()) =>
+            || constants.over_budget
+            || !constants.values.is_empty() =>
         {
             made.push(Made {
                 callee: (*module, *declaration),
@@ -3972,7 +3985,7 @@ fn make_call(callee: &Callee, at: Location, constants: ConstArguments, made: &mu
             callee: (usize::MAX, usize::MAX),
             generics: Vec::new(),
             type_packs: Vec::new(),
-            constants: Ok(Vec::new()),
+            constants: ConstArguments::default(),
             answers: Vec::new(),
             required: Some(*requirement),
             at,

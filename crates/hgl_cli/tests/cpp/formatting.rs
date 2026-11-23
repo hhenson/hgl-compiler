@@ -117,6 +117,55 @@ test t {
     );
 }
 
+/// FMT-2 and GEN-13: a root can exceed the pattern reader's budget without
+/// making an unbounded set of instances. Keys count the decoded text.
+#[test]
+fn bounds_const_format_patterns_at_a_single_call() {
+    let root = scratch("const-format-pattern-budget");
+    let mut chain = "const C0: str = \"<{}>\"\n".to_owned();
+    for level in 1..=70 {
+        writeln!(chain, "const C{level}: str = C{}", level - 1).unwrap();
+    }
+    let cases = [
+        ("long", "", format!("\"{{}}{}\"", "a".repeat(69_998)), false),
+        (
+            "escaped",
+            "",
+            format!("\"{{}}{}\"", "\\n".repeat(33_000)),
+            true,
+        ),
+        ("deep", chain.as_str(), "C70".to_owned(), false),
+        ("shallow", chain.as_str(), "C60".to_owned(), true),
+    ];
+    for (name, declarations, pattern, supported) in cases {
+        let source = format!(
+            "module {name}\n{declarations}\n\
+             const fn show(const pattern: str, value: f64) -> str => format(pattern, value)\n\
+             test t {{ assert show({pattern}, 1.5) != \"\" }}\n"
+        );
+        let file = write(&root, &format!("{name}.hgl"), &source);
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        assert!(
+            checked.status.success(),
+            "{name}: {}",
+            text(&checked.stderr)
+        );
+        let output = root.join(name);
+        let emitted = emit_format_program(&file, &output);
+        let stderr = text(&emitted.stderr);
+        if supported {
+            assert!(emitted.status.success(), "{name}: {stderr}");
+        } else {
+            assert_eq!(emitted.status.code(), Some(1), "{name}: {stderr}");
+            assert!(
+                stderr.contains("build/target.unsupported"),
+                "{name}: {stderr}"
+            );
+            assert!(!output.exists());
+        }
+    }
+}
+
 /// Each declaration doubles its predecessor's text without doubling the
 /// analyser's work. Programs beyond the reader's budget still check cleanly.
 #[test]

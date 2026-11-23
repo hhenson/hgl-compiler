@@ -30,6 +30,13 @@ pub struct ConstInput {
     pub key: String,
 }
 
+/// The values analysis can use, and whether reading another hit its budget.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ReadInputs {
+    pub(crate) values: Vec<ConstInput>,
+    pub(crate) over_budget: bool,
+}
+
 /// Why a call's compile-time inputs could not be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConstInputFault {
@@ -56,13 +63,16 @@ impl Program {
         callee: &Callee,
         arguments: &[Argument],
     ) -> Result<Vec<ConstInput>, ConstInputFault> {
-        let known = self.known_const_inputs(callee, arguments)?;
+        let known = self.known_const_inputs(callee, arguments);
+        if known.over_budget {
+            return Err(ConstInputFault::Limit);
+        }
         let expected = callee
             .declaration()
             .and_then(|declaration| self.const_demands.get(&declaration))
             .map_or(0, BTreeSet::len);
-        if known.len() == expected {
-            Ok(known)
+        if known.values.len() == expected {
+            Ok(known.values)
         } else {
             Err(ConstInputFault::Unread)
         }
@@ -70,31 +80,29 @@ impl Program {
 
     /// Analysis can check the known inputs even when another input remains
     /// unread. Lowering requires the complete set through `call_const_inputs`.
-    pub(crate) fn known_const_inputs(
-        &self,
-        callee: &Callee,
-        arguments: &[Argument],
-    ) -> Result<Vec<ConstInput>, ConstInputFault> {
-        use ConstInputFault::Unread;
+    pub(crate) fn known_const_inputs(&self, callee: &Callee, arguments: &[Argument]) -> ReadInputs {
+        use ConstInputFault::{Limit, Unread};
 
         let Some((module, declaration)) = callee.declaration() else {
-            return Ok(Vec::new());
+            return ReadInputs::default();
         };
         let Some(demand) = self.const_demands.get(&(module, declaration)) else {
-            return Ok(Vec::new());
+            return ReadInputs::default();
         };
         let owner = &self.modules[module];
         let Some(Detail::Callable(signature)) = owner.details.get(declaration) else {
-            return Err(Unread);
+            return ReadInputs::default();
         };
         let mut reader = Reader {
             program: self,
-            remaining: INPUT_BUDGET,
+            steps_left: INPUT_BUDGET,
+            text_left: INPUT_BUDGET,
             reading: Vec::new(),
         };
-        demand
-            .iter()
-            .map(|&slot| {
+        let mut known = ReadInputs::default();
+        for &slot in demand {
+            let text_before = reader.text_left;
+            let input = (|| {
                 let parameter = signature.parameters.get(slot).ok_or(Unread)?;
                 let given = arguments
                     .iter()
@@ -143,19 +151,31 @@ impl Program {
                 };
                 let mut key = String::new();
                 key_value(&value, &mut key)?;
-                if key.len() > INPUT_BUDGET {
-                    return Err(ConstInputFault::Limit);
+                // A string already spent its text budget before key framing.
+                // Keep a separate bound on composite and scalar key metadata.
+                if key.len() > INPUT_BUDGET
+                    && !matches!(value.kind, ExprKind::Literal(Value::Str(_)))
+                {
+                    return Err(Limit);
                 }
                 Ok(ConstInput { slot, value, key })
-            })
-            .filter(|input| !matches!(input, Err(Unread)))
-            .collect()
+            })();
+            match input {
+                Ok(input) => known.values.push(input),
+                Err(fault) => {
+                    known.over_budget |= fault == Limit;
+                    reader.text_left = text_before;
+                }
+            }
+        }
+        known
     }
 }
 
 struct Reader<'a> {
     program: &'a Program,
-    remaining: usize,
+    steps_left: usize,
+    text_left: usize,
     reading: Vec<(Declaration, Option<usize>)>,
 }
 
@@ -188,11 +208,11 @@ impl Reader<'_> {
         use ConstInputFault::{Limit, Unread};
 
         let next = depth.checked_sub(1).ok_or(Limit)?;
-        self.remaining = self.remaining.checked_sub(1).ok_or(Limit)?;
+        self.steps_left = self.steps_left.checked_sub(1).ok_or(Limit)?;
         let kind = match &expression.kind {
             ExprKind::Literal(value) => {
                 if let Value::Str(text) = value {
-                    self.remaining = self.remaining.checked_sub(text.len()).ok_or(Limit)?;
+                    self.text_left = self.text_left.checked_sub(text.len()).ok_or(Limit)?;
                 }
                 ExprKind::Literal(value.clone())
             }
@@ -215,7 +235,7 @@ impl Reader<'_> {
                 };
                 let value = given.value.literal().ok_or(Unread)?;
                 if let Value::Str(text) = &value {
-                    self.remaining = self.remaining.checked_sub(text.len()).ok_or(Limit)?;
+                    self.text_left = self.text_left.checked_sub(text.len()).ok_or(Limit)?;
                 }
                 ExprKind::Literal(value)
             }
@@ -460,8 +480,8 @@ impl Reader<'_> {
                 && self.builtin_operation(piece)
                 && let Some((BinaryOperator::Add, left, right)) = piece.kind.binary()
             {
-                self.remaining = self
-                    .remaining
+                self.steps_left = self
+                    .steps_left
                     .checked_sub(1)
                     .ok_or(ConstInputFault::Limit)?;
                 pending.extend([right, left]);
@@ -483,6 +503,11 @@ fn key_value(value: &Expr, output: &mut String) -> Result<(), ConstInputFault> {
     use std::fmt::Write;
 
     let parts = match &value.kind {
+        ExprKind::Literal(Value::Str(text)) => {
+            let _ = write!(output, "str:{}:", text.len());
+            output.push_str(text);
+            return Ok(());
+        }
         ExprKind::Literal(Value::Float(value)) => {
             let _ = write!(output, "f64:{:016x}", value.to_bits());
             return Ok(());
@@ -670,7 +695,8 @@ const C: Settings = Settings(part: ("a", -0.0), count: 1)
             let constant = module.constants[declaration].as_ref().unwrap();
             let mut reader = Reader {
                 program: &program,
-                remaining: INPUT_BUDGET,
+                steps_left: INPUT_BUDGET,
+                text_left: INPUT_BUDGET,
                 reading: Vec::new(),
             };
             let value = reader.read(&constant.value, INPUT_DEPTH, &[]).unwrap();
