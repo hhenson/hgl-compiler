@@ -58,11 +58,6 @@
 
 namespace hglrt {
 
-namespace codes {
-/// ERR-6: "Strict ordinary dictionary lookup has no member".
-inline constexpr std::string_view missing_key = "value.missing_key";
-} // namespace codes
-
 /// What a struct `S` the compiler writes tells the library: `members`, a
 /// `std::tuple` of a pointer to each of its members, in the order the struct
 /// has them (a parent's fields first). The compiler specializes it for each

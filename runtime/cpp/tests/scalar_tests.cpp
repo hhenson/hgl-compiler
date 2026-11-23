@@ -198,11 +198,11 @@ TEST_CASE("numeric equality within tolerances is exact (NUM-4, NUM-5)") {
     CHECK(hglrt::ne__i64_f64_f64_f64(0, 1.5, 1.0));
 }
 
-TEST_CASE("a tolerance that is not finite and nonnegative fails, with no code (NUM-4)") {
-    CHECK(code_raised([] { (void)hglrt::eq__f64_f64_f64_f64(1.0, 1.0, -1.0); }) == "(no code)");
-    CHECK(code_raised([] { (void)hglrt::eq__f64_f64_f64_f64(1.0, 1.0, 0.0, infinity); }) == "(no code)");
-    CHECK(code_raised([] { (void)hglrt::ne__i64_i64_f64_f64(1, 1, not_a_number); }) == "(no code)");
-    CHECK(code_raised([] { (void)hglrt::eq__i64_f64_f64_f64(1, 1.0, 0.0, -0.5); }) == "(no code)");
+TEST_CASE("a negative or non-finite tolerance fails with numeric.invalid_tolerance (NUM-4)") {
+    CHECK(code_raised([] { (void)hglrt::eq__f64_f64_f64_f64(1.0, 1.0, -1.0); }) == "numeric.invalid_tolerance");
+    CHECK(code_raised([] { (void)hglrt::eq__f64_f64_f64_f64(1.0, 1.0, 0.0, infinity); }) == "numeric.invalid_tolerance");
+    CHECK(code_raised([] { (void)hglrt::ne__i64_i64_f64_f64(1, 1, not_a_number); }) == "numeric.invalid_tolerance");
+    CHECK(code_raised([] { (void)hglrt::eq__i64_f64_f64_f64(1, 1.0, 0.0, -0.5); }) == "numeric.invalid_tolerance");
     CHECK(hglrt::eq__f64_f64_f64_f64(1.0, 1.0, -0.0));
 }
 

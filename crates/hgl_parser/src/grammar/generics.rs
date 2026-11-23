@@ -219,7 +219,7 @@ impl Parser<'_> {
     ///                 | constraint_call
     ///                 | IDENTIFIER
     ///                 | ( "each" | "any" ), IDENTIFIER, "in", constraint_operand, "{", constraint_expression, "}" ;
-    /// constraint_relation = constraint_operand, ( "==" | "in" | "is" ), constraint_operand ;
+    /// constraint_relation = constraint_operand, ( "==" | "!=" | "in" | "is" ), constraint_operand ;
     /// ```
     fn constraint_term(&mut self) {
         if !self.goes_on("a constraint") || !self.enter() {
@@ -285,7 +285,7 @@ impl Parser<'_> {
     }
 
     /// True when a relation starts at the cursor: an operand, then `==`,
-    /// `in` or `is`.
+    /// `!=`, `in` or `is`.
     ///
     /// A relation, a call and a parenthesised constraint can all begin
     /// with the same tokens (`f(T) == 1`, `f(T)`), so the operand is read

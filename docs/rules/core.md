@@ -30,12 +30,12 @@ transpiler: done
 
 ## NUM-4
 
-transpiler: partial
+transpiler: done
 
 - Passes absolute and relative tolerances to the selected numeric equality native, which
   applies the exact and configured comparisons.
-- The execution catalogue registers `numeric.invalid_tolerance`. Emitting it for a
-  negative or nonfinite tolerance is planned in #516.
+- The runtime raises `numeric.invalid_tolerance` for a negative or non-finite
+  tolerance on `==` or `!=`.
 
 ## NUM-5
 
@@ -487,11 +487,13 @@ analyser: done
 
 - A scheduler's three properties, `is_scheduled_now` among them; `schedule` with a `duration` or a `datetime`, a `tag` and `on_wall_clock`; `un_schedule`, with a tag or without, and `reset`
 
-transpiler: partial
+transpiler: done
 
 - Supplies scheduler state and writes schedule, cancellation and reset using the SDK
   adapter. Distinguishes due scheduler wakes from input ticks.
-- Dropped datetime wake requests and their run-log warning are planned in #516 (TIME-8).
+- Drops a nonfuture dated request in graph time, except for the node's first
+  evaluation when asked at the current time in `start`. Logs the first drop
+  per node and counts later ones at stop (TIME-8).
 
 ## CAP-5
 
@@ -500,11 +502,11 @@ analyser: done
 - An alarm has no property, and a node injects it or `scheduler` (TIME-8)
 - `schedule` on it takes a `duration` or a `datetime`, and neither a tag nor a clock
 
-transpiler: partial
+transpiler: done
 
 - Supplies the alarm adapter and emits duration or datetime scheduling, retaining the
   earliest outstanding wake.
-- Dropped datetime wake requests and their run-log warning are planned in #516 (TIME-8).
+- Uses the same dated-wake rules and per-node warning as the scheduler (TIME-8).
 
 ## CAP-6
 
@@ -519,7 +521,8 @@ transpiler: partial
 
 - Reads a store entry as a whole result before applying the recorded form, and writes
   supported ordinary payloads before a run, at graph build and in hooks.
-- Returning `value.missing_key` for an absent store entry is planned in #516.
+- Reading an absent store key gives `value.missing_key`, the same code as a
+  strict dictionary lookup (ERR-6).
 - Left: an explicitly typed nullable store write and a temporal child graph using the surrounding store are declined (CRUN-7).
 
 ## CAP-7

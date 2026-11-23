@@ -50,12 +50,16 @@ inline constexpr std::string_view null_read = "value.null";
 /// An index outside an ordinary list, below zero or at or past its size,
 /// where a read or an assignment evaluates it (EXPR-3, EXPR-7).
 inline constexpr std::string_view index_out_of_range = "value.index_out_of_range";
+/// A strict dictionary lookup or a read of an absent global store key (ERR-6, CAP-6).
+inline constexpr std::string_view missing_key = "value.missing_key";
 /// A result outside its type's range (NUM-2, OPS-10), and text repeated a
 /// count below zero (OPS-1).
 inline constexpr std::string_view out_of_range = "numeric.out_of_range";
 /// A zero divisor under `.fail`, or `?` on the `err` of one under `.error`
 /// (NUM-3, NUM-9).
 inline constexpr std::string_view division_by_zero = "numeric.division_by_zero";
+/// A tolerance for `==` or `!=` is negative or non-finite (NUM-4).
+inline constexpr std::string_view invalid_tolerance = "numeric.invalid_tolerance";
 /// A conversion that cannot be made (OPS-7, OPS-8).
 inline constexpr std::string_view invalid_conversion = "convert.invalid";
 /// A sum or a difference of a tenor of business days and one of months and

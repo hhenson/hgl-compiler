@@ -1223,6 +1223,53 @@ fn timing_runs_on_the_sdk() {
     );
 }
 
+/// TIME-8 and CAP-4: a node logs its first dropped wake during a run and
+/// reports later drops even when the scheduler is passed to a value helper
+/// and the HGL node has no explicit stop hook.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn dropped_wake_counts_reach_the_run_log_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("wake-logs");
+    let node = write(
+        &root,
+        "wakes.hgl",
+        "module wakes\n\
+         const fn ask(scheduler: Scheduler, at: datetime) { schedule(scheduler, at) }\n\
+         export fn requests() -> bool {\n\
+             inject scheduler, clock\n\
+             start { schedule(scheduler, 0us) }\n\
+             when scheduled() {\n\
+                 ask(scheduler, clock.evaluation_time)\n\
+                 ask(scheduler, clock.evaluation_time - 1us)\n\
+                 return true\n\
+             }\n\
+         }\n",
+    );
+    let app = write(
+        &root,
+        "wakes.app.hgl",
+        "application wakes.main\nuse wakes::{requests}\neval requests()\n",
+    );
+    let output = hgl_in(&["run", &node, &app, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains(": 1 publication"), "{stdout}");
+    assert_eq!(
+        stderr.matches("Dropped wake requested").count(),
+        1,
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("Additional dropped wakes totaled 1").count(),
+        1,
+        "{stderr}"
+    );
+}
+
 /// SOURCE-2, GEN-7. A generic yield time uses its instance's duration
 /// or datetime, including when the source is wired from another graph.
 #[test]
@@ -3930,7 +3977,7 @@ fn store_values_and_failure_places_on_the_sdk() {
         text(&output.stderr)
     );
     // The failing `l[3]` is on line 7 of the application's file; the `get`
-    // of a key put nowhere on line 80 of the module's, in the graph.
+    // of a key put nowhere on line 80 of the module's, in the graph (CAP-6).
     let failing = root.join("demo.store.failing.hgl").display().to_string();
     for (application, said) in [
         (
@@ -3943,7 +3990,7 @@ fn store_values_and_failure_places_on_the_sdk() {
         (
             "demo.store.unbuilt",
             format!(
-                "hgl: demo.store.unbuilt failed: the global store holds nothing under 'by', \
+                "hgl: demo.store.unbuilt failed: value.missing_key: the global store holds nothing under 'by', \
                  raised at {module}:80"
             ),
         ),

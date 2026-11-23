@@ -308,7 +308,7 @@ detail::divided<f64, zero> mod__f64_i64(f64 lhs, i64 rhs,
 // `==` accepts absolute (`abs`) and relative (`rel`) tolerance, each
 // defaulting to zero", and for finite operands closeness is
 // `abs(a - b) <= max(abs, rel * max(abs(a), abs(b)))`, decided here exactly.
-// A tolerance that is not finite and nonnegative fails, with no code.
+// A negative or non-finite tolerance fails with `numeric.invalid_tolerance` (NUM-4).
 // NUM-5: NaN is close to nothing, an infinity only to the same infinity, and
 // the two zeros are equal. NUM-2: an `i64` is never rounded to an `f64` to be
 // compared with one. The order `f64` then `i64` is core's own HGL candidate.

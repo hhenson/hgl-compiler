@@ -211,14 +211,14 @@ TEST_CASE("the global store keeps a copy of each value under its key (CAP-6)") {
     CHECK(hglrt::get_GlobalState_str<decltype(entries)>(store, "entries").size() == 1);
 }
 
-TEST_CASE("an absent key, and a value of another type, fail with no code (CAP-6)") {
+TEST_CASE("an absent key fails with value.missing_key (CAP-6)") {
     hgraph::GlobalState state;
     const hglrt::GlobalState store{state.view()};
     try {
         (void)hglrt::get_GlobalState_str<hglrt::i64>(store, "absent");
         FAIL("nothing was raised");
     } catch (const hglrt::Failure& failure) {
-        CHECK_FALSE(failure.error().code.has_value());
+        CHECK(failure.error().code == "value.missing_key");
         CHECK(failure.error().message == "the global store holds nothing under 'absent'");
     }
     hglrt::put_GlobalState_str_V(store, "limit", hglrt::i64{3});
