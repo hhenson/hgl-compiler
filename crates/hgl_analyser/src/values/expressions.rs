@@ -100,6 +100,11 @@ impl<'a> Typer<'a> {
             SyntaxKind::TupleExpr => self.tuple(node, expected),
             SyntaxKind::SequenceExpr => self.sequence(node, expected),
             SyntaxKind::ListComprehension => self.list_comprehension(node, expected),
+            SyntaxKind::PackComprehension => {
+                self.check_pack_comprehension(node);
+                (ExprKind::Unread, Type::Unknown)
+            }
+            SyntaxKind::PackKeyMembership => self.pack_key_membership(node),
             SyntaxKind::UnaryExpr => self.unary(node, expected),
             SyntaxKind::BinaryExpr => self.binary(node, expected),
             SyntaxKind::CallExpr => self.call(node, expected, used),
@@ -298,8 +303,7 @@ impl<'a> Typer<'a> {
             category: ValueCategory::Unsettled,
         };
         if let Some(local) = self.local_of(node) {
-            if matches!(self.locals[local].ty, Type::Function(_)) {
-                self.function_value(at);
+            if self.reject_function_value(local, at, None) {
                 return unread;
             }
             return self.read_local(local, node);

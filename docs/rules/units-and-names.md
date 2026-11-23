@@ -70,7 +70,7 @@ analyser: partial
 - A bool generic law default is evaluated from the static function supplied at the call; an explicit bool value overrides it (GEN-18).
 - A default on a `ref` parameter is checked against the type after its mode (FN-16).
 - Known required-constant failures reject at the parameter or field default (ERR-9). A window default is checked as an arrival and an atomic default as its whole payload (TYPE-9, TYPE-11).
-- Required-constant failures in parameter and field defaults use `constant.failure`; the catalogue row remains proposed (ERR-9).
+- Required-constant failures in parameter and field defaults use `constant.failure` (ERR-9).
 - Omitted parameter defaults are checked against the concrete parameter type after generic selection, including in a call made by a generic body.
 
 transpiler: partial
@@ -130,12 +130,13 @@ analyser: partial
 - One the reader does not work out, a datetime moved by a duration, is no value a generic value argument is given (`generic.argument_constant`), as the same expression written in place is not
 - An expression is read in a loop along a chain of operators, `1 + 1 + ... + 1`, of any length the parser builds a tree for
 - One whose value depends on itself is `constant.cycle`: through another constant, the definition a call selected, an operator's candidate a symbol or a name selected, or a parameter or field default selected for an omitted argument (UNIT-8, TYPE-5).
+- For a constructor given a pack, the constant dependency check follows the defaults of fields the concrete pack and any written arguments leave out (FN-19, TYPE-5).
 - Left: evaluating constants computed by a `const fn` (#240), including required-constant failures. Source formatting is pending and must preserve constant spellings.
 
 transpiler: partial
 
 - Emits one module constant value and reuses it at its reads.
-- Left: reports a constant whose value runs statements. Defensive reports remain for a constant without a typed value or whose emitted evaluation needs failure-handling statements.
+- A checked statement-block initializer runs in its own cold scope while the constant's one stored value is initialized (EXPR-5). Defensive reports remain for a constant without a typed value or whose emitted evaluation needs failure-handling statements.
 
 ## UNIT-14
 

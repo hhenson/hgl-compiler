@@ -24,6 +24,7 @@
 //! | wrapped | `::hglrt::configured<T>` | `::hglrt::configured<T>{value}` | `name.value().held` |
 
 use hgl_analyser::{DeclarationKind, Program, Scalar, Type};
+use hgl_lower::types::fixed_list_size;
 
 use crate::runtime;
 
@@ -37,10 +38,9 @@ pub(super) fn direct(program: &Program, ty: &Type) -> bool {
     match ty {
         Type::Scalar(_) => true,
         Type::Named { .. } => is_enum(program, ty),
-        Type::List {
-            element,
-            size: None,
-        } => named(program, element),
+        Type::List { element, size } => {
+            fixed_list_size(size.as_ref()).is_none() && named(program, element)
+        }
         Type::Nullable(payload) => hashed(payload) && named(program, payload),
         _ => false,
     }
@@ -73,14 +73,11 @@ fn named(program: &Program, ty: &Type) -> bool {
 /// to each of which the runtime library or the compiler gives one. A
 /// tuple and a fixed list have none.
 fn hashed(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Scalar(_)
-            | Type::List { size: None, .. }
-            | Type::Set(_)
-            | Type::Dict { .. }
-            | Type::Named { .. }
-    )
+    match ty {
+        Type::List { size, .. } => fixed_list_size(size.as_ref()).is_none(),
+        Type::Scalar(_) | Type::Set(_) | Type::Dict { .. } | Type::Named { .. } => true,
+        _ => false,
+    }
 }
 
 /// True where `ty` names an enum.

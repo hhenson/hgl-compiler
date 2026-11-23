@@ -7,7 +7,7 @@ use super::declarations::cardinality;
 use super::{Reader, type_child};
 use crate::constant::{self, Fault};
 use crate::program::{Binding, DependentPack, LocalKind};
-use crate::syntax::{child, name_token, pack_for_names, tokens};
+use crate::syntax::{child, name_token, pack_for_names, pack_member_names};
 use crate::types::{Constant, GenericKind, Parameter, ReflectedPack, Scalar, Type};
 use crate::{codes, error};
 
@@ -98,7 +98,7 @@ impl Reader<'_> {
     /// operand. It denotes a type here when its base names a type pack.
     pub(super) fn indexed_pack(&self, node: &SyntaxNode) -> bool {
         node.kind() == SyntaxKind::IndexExpr
-            && member_names(node).is_some_and(|(pack, _)| self.pack_binding(&pack).is_some())
+            && pack_member_names(node).is_some_and(|(pack, _)| self.pack_binding(&pack).is_some())
     }
 
     /// GEN-17: a key by itself in a constraint is a value, as in
@@ -126,7 +126,7 @@ impl Reader<'_> {
     /// GEN-17: before specialization a member type carries its pack
     /// binding and key. The key's value can be a name or a position.
     pub(super) fn pack_member(&mut self, node: &SyntaxNode) -> Type {
-        let Some((name, key)) = member_names(node) else {
+        let Some((name, key)) = pack_member_names(node) else {
             return Type::Unknown;
         };
         let Some(pack) = self.pack_binding(&name) else {
@@ -210,21 +210,4 @@ impl Reader<'_> {
             rule,
         ));
     }
-}
-
-/// The two bare names of a member in either parser representation.
-fn member_names(node: &SyntaxNode) -> Option<(SyntaxToken, SyntaxToken)> {
-    if node.kind() == SyntaxKind::PackMemberType {
-        let mut identifiers = tokens(node).filter(|token| token.kind() == SyntaxKind::Ident);
-        return Some((identifiers.next()?, identifiers.next()?));
-    }
-    let mut operands = node.children();
-    let bare_name = |operand: SyntaxNode| {
-        if operand.kind() == SyntaxKind::NameExpr && operand.children().next().is_none() {
-            name_token(&operand)
-        } else {
-            None
-        }
-    };
-    Some((bare_name(operands.next()?)?, bare_name(operands.next()?)?))
 }

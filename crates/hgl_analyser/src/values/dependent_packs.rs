@@ -331,10 +331,14 @@ impl Typer<'_> {
     ) -> Vec<TypePackArgument> {
         let program = self.program;
         let declared = &program.modules[module];
-        let dependent = dependent.map(|slot| {
-            let parameter = &signature.parameters[slot];
-            (slot, &declared.dependent_packs[&parameter.at])
-        });
+        // The computed entries can still fill this callback's inputs.
+        // Its written reference can be read against its template.
+        let dependent = dependent
+            .filter(|_| !super::forwarded_packs::has_computed_spread(list))
+            .map(|slot| {
+                let parameter = &signature.parameters[slot];
+                (slot, &declared.dependent_packs[&parameter.at])
+            });
         let mut packs = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let Type::Function(template) = &parameter.ty else {

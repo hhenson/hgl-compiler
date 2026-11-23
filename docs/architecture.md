@@ -135,7 +135,7 @@ that began with it would have no effect. `\` before a line break joins the
 two lines whatever the next one begins with (LEX-26): the lexer makes the
 `\` and its line break one token, and the parser sees no line break there. A comment that holds a
 line break counts as one (LEX-21), and a line that holds only a comment is
-a line. A body's opening brace stays with its header.
+a line. A body's opening brace may follow its header across one line break.
 
 An opening bracket touches what it applies to (LEX-27; owner decisions,
 2026-11-14): the `(` of a call or a parameter list, the `[` of an index,
@@ -1332,13 +1332,25 @@ So `requires window(T) -> list<T, 5>` neither is the body's bare
 `window(value)`, which asks for the default, nor meets a candidate's
 `requires window(T)`.
 
-A requirement and a call ask the candidates through one function,
-`Typer::output_requested`: what the place expects, the types supplied
+Named requirements and calls written in generic bodies keep the
+complete request through `Typer::output_requested`: what the place
+expects, the types supplied
 in the operator's parameter order with an abstract struct widening what
 an earlier one decided (GEN-2), the operator's defaults, each of its
 parameter's type as resolved (GEN-13), and the operator's own
-requirement of its result. So a requirement holds exactly where the
-call it names would select one candidate.
+requirement of its result.
+
+Outside a generic body, a value call uses
+`Typer::argument_output_requested`: its result request keeps written and
+contextual types, generic value options and types fixed by typed inputs,
+while literal-derived types remain open for candidate-local fitting (GEN-5, GEN-6, GEN-8).
+The complete public inference still checks dependent defaults (GEN-13),
+result membership and reflected packs. Separate call metadata lets
+`Typer::called` resolve inherited configuration defaults from the fitted
+arguments (UNIT-8): fitting to `f64?` yields the `f64` payload type.
+Named requirements and calls written in generic bodies keep the existing
+complete request; this change neither rereads an instance nor changes
+the held GEN-7 result/literal behavior.
 
 Where two requirements name one operator with the same types and
 different results, the call is the one that gives what its place
@@ -1770,7 +1782,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 | `timezone`, `zoned_time` (TYPE-2) | hgraph's `ZoneId` and `ZonedTime`. A literal of either, and of a `zoned_datetime`, is `hglrt::zone_literal`, `zoned_time_literal`, `zoned_datetime_literal`, which check the zone against the catalogue of hgraph's time-zone provider for the process, and a `zoned_datetime`'s offset against the zone, where it is evaluated (LEX-12), failing uncoded: such a literal is one that may fail |
 | `T?`, `tuple<A, B>`, `list<T>`, `list<T, N>` | `std::optional<T>`, `std::tuple<A, B>`, `hglrt::list<T>`, `std::array<T, N>` |
 | `error`, `result<T, error>`, `?` (ERR-2 to ERR-5) | `hglrt::error`, `hglrt::result<T>`; the result held before its statement, the function left with its failure; a `?` only where it is the first thing its statement evaluates, and reported anywhere else |
-| A constant (UNIT-13) | A function giving a reference to one `static` value, made where it is first read; a read of one whose value may fail is one that may fail, which a `?` after it is not run before |
+| A constant (UNIT-13) | A function giving a reference to one `static` value, made where it is first read; a checked statement block uses its own cold local scope inside that initializer (EXPR-5); a read of one whose value may fail is one that may fail, which a `?` after it is not run before |
 | `let`, `var` (EXPR-3) | `const T` or `const T&` as the copy rule says (`hgl_lower::copies`), `T` |
 | `if`, `switch`, `while`, `for` over a list (CTRL-6, CTRL-10, CTRL-12) | `if`, a chain of `if`s on the selector held once, each case a block (a case's binding read after the `switch`, which UNIT-12 binds in the block around it, is reported), `while`, a range `for` over the list or a copy of it |
 | A native candidate or function of core | The runtime library's function, named by its operation and its parameters' types ("The C++ runtime library" below): `::hglrt::add__i64_i64`, a generic one's arguments its template's, `::hglrt::div__f64_f64<::hglrt::ZeroPolicy::nan>`; `convert`'s, of one value, given the type it gives first, `::hglrt::convert_i64<::hgraph::Float>` |
