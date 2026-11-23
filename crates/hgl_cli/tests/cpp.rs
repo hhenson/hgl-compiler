@@ -891,6 +891,34 @@ fn endpoint_read_forms_run_on_the_sdk() {
     );
 }
 
+/// EXPR-6 and ERR-12: nested scalar guards in a graph short-circuit
+/// in order, and a guard still admits the nullable read it protects.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn nested_scalar_guards_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("nested-scalar-guards");
+    let file = write(
+        &root,
+        "demo.nested_scalar_guards.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.nested_scalar_guards.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// ERR-3 and ERR-14: observe validity separately from the tag of a bound
 /// result child, and use the matching success or error payload. ERR-12:
 /// a present nullable child refines only the alias named in the guard.
