@@ -125,19 +125,32 @@ impl<'p> PackTypes<'p> {
         };
         let span = declared.syntax.span();
         let requires = child(&declared.syntax, hgl_parser::SyntaxKind::RequiresClause);
-        unit.written
+        let in_body = |at: Location| {
+            at.file == declared.at.file
+                && contains(span, at.span)
+                && !requires
+                    .as_ref()
+                    .is_some_and(|condition| contains(condition.span(), at.span))
+        };
+        let written = unit
+            .written
             .iter()
-            .filter(|written| {
-                written.at.file == declared.at.file
-                    && contains(span, written.at.span)
-                    && !requires
-                        .as_ref()
-                        .is_some_and(|condition| contains(condition.span(), written.at.span))
-                    && written
-                        .ty
-                        .any_part(&|ty| matches!(ty, Type::PackMember { .. }), &|_| false)
-            })
-            .find_map(|written| self.project(&written.ty, map).err())
+            .filter(|written| in_body(written.at))
+            .map(|written| &written.ty);
+        // GEN-8 writes the call's type arguments in the separate call table.
+        let call_types = unit
+            .call_arguments
+            .iter()
+            .filter(|call| in_body(call.at))
+            .flat_map(|call| call.arguments.iter())
+            .filter_map(|(_, argument)| match argument {
+                GenericArgument::Type(ty) => Some(ty),
+                GenericArgument::Constant(_) => None,
+            });
+        written
+            .chain(call_types)
+            .filter(|ty| ty.any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false))
+            .find_map(|ty| self.project(ty, map).err())
     }
 }
 

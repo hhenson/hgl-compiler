@@ -224,6 +224,7 @@ impl<'a> Typer<'a> {
             generics,
             type_packs,
             requirements,
+            defer_pack_members: false,
             contextual: Vec::new(),
         };
         Some((callee, actual))

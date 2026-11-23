@@ -611,7 +611,7 @@ impl Program {
             self.place_body(&mut function.body, instance, &functions);
             crate::values::record(self, &mut function.body, !function.template.value);
         } else {
-            place_callee(callee, instance.types, instance.requirements, functions);
+            place_callee(callee, instance, functions);
             if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } =
                 callee
             {
@@ -906,7 +906,11 @@ fn required_uses(callee: &Callee, at: Location, uses: &mut Vec<(usize, Location)
 /// operation the declaration requires becomes the call of the candidate
 /// that answers the requirement (GEN-16); one nothing answers is left
 /// as it is.
-fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &[(usize, Callee)]) {
+fn place_callee(
+    callee: &mut Callee,
+    instance: &InstanceArguments<'_>,
+    functions: &[(usize, Callee)],
+) {
     if let Callee::Parameter { parameter, .. } = callee
         && let Some((_, target)) = functions.iter().find(|(index, _)| index == parameter)
     {
@@ -914,9 +918,30 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
         // The argument belongs to the caller's context, which was already placed.
         return;
     }
+    // GEN-17: written type arguments can mention a reflected pack
+    // member, which needs the enclosing instance's keys and types.
+    // An untold member requirement keeps those arguments symbolic.
+    let defer_pack_members = matches!(
+        callee,
+        Callee::Function {
+            defer_pack_members: true,
+            ..
+        }
+    );
+    let place_type = |ty: &Type| {
+        if defer_pack_members {
+            substitute_within(ty, instance.types)
+        } else {
+            instance.project(ty)
+        }
+    };
+    let place = |argument: &Argument| match argument {
+        Argument::Type(ty) => Argument::Type(place_type(ty)),
+        Argument::Constant(_) => placed(argument, instance.types),
+    };
     if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } = callee {
         for pack in type_packs {
-            pack.place_types(|ty| substitute_within(ty, map));
+            pack.place_types(place_type);
         }
     }
     if let Callee::Candidate {
@@ -927,7 +952,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
     } = callee
     {
         for argument in operator_generics {
-            *argument = placed(argument, map);
+            *argument = place(argument);
         }
     }
     match callee {
@@ -942,10 +967,10 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
             ..
         } => {
             for argument in generics {
-                *argument = placed(argument, map);
+                *argument = place(argument);
             }
             for answer in requirements {
-                place_answer(answer, map, answers);
+                place_answer(answer, instance.types, instance.requirements);
             }
         }
         Callee::Required {
@@ -959,7 +984,7 @@ fn place_callee(callee: &mut Callee, map: &Map, answers: &[Answer], functions: &
                 declaration,
                 generics,
                 requirements,
-            }) = answers.get(*requirement)
+            }) = instance.requirements.get(*requirement)
             {
                 *callee = Callee::Candidate {
                     operator: *operator,
