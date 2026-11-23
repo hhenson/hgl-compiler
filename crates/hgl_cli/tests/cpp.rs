@@ -680,6 +680,38 @@ fn block(path: &Path) {
     fs::create_dir(path).unwrap();
 }
 
+/// UNIT-13, EXPR-5: module statement-block initializers use their
+/// checked cold scope and retain the constant's one stored value.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn block_constants_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("block_constants");
+    let file = write(
+        &root,
+        "demo.block_constants.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.block_constants.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 0 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// EXPR-5, TYPE-14, UNIT-8: a generic null default is written using
 /// the selected nullable value parameter's concrete type.
 #[test]
