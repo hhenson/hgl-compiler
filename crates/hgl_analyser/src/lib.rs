@@ -83,6 +83,7 @@ mod cycles;
 mod declare;
 mod declared;
 mod documentation;
+pub mod formatting;
 mod forms;
 pub mod hir;
 mod imports;
@@ -518,6 +519,14 @@ pub mod codes {
     /// In a hook or a value function, a `const` parameter given what is
     /// no constant expression (FN-1).
     pub const ARGUMENT_CONSTANT: &str = "argument.constant";
+    /// A format-string brace opens or closes no place (FMT-3).
+    pub const FORMAT_SYNTAX: &str = "format.syntax";
+    /// A format place has no argument (FMT-3, FMT-9).
+    pub const FORMAT_ARGUMENT: &str = "format.argument";
+    /// No format place takes the argument (FMT-3).
+    pub const FORMAT_UNUSED: &str = "format.unused";
+    /// The value type does not admit the specifier or mark (FMT-3, FMT-4, FMT-9).
+    pub const FORMAT_SPECIFIER: &str = "format.specifier";
     /// A `var` parameter is given what is no place (FN-15).
     pub const ARGUMENT_PLACE: &str = "argument.place";
     /// A `var` parameter of a temporal function, an operator or a
@@ -745,7 +754,7 @@ fn warning(
 /// `include_str!` puts a file's text in the compiler when the compiler
 /// is built, so the module is the one at the `spec/hgl_core` pin. A
 /// test fails when the pin adds a file this list does not have.
-pub const CORE_FILES: [(&str, &str); 7] = [
+pub const CORE_FILES: [(&str, &str); 9] = [
     (
         "<core>/core/calendar.hgl",
         include_str!("../../../spec/hgl_core/hgl/core/calendar.hgl"),
@@ -763,8 +772,16 @@ pub const CORE_FILES: [(&str, &str); 7] = [
         include_str!("../../../spec/hgl_core/hgl/native/endpoints.hgl"),
     ),
     (
+        "<core>/native/formatting.hgl",
+        include_str!("../../../spec/hgl_core/hgl/native/formatting.hgl"),
+    ),
+    (
         "<core>/native/lists.hgl",
         include_str!("../../../spec/hgl_core/hgl/native/lists.hgl"),
+    ),
+    (
+        "<core>/native/output.hgl",
+        include_str!("../../../spec/hgl_core/hgl/native/output.hgl"),
     ),
     (
         "<core>/native/scalar_operators.hgl",

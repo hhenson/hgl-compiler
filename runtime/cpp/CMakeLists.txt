@@ -54,8 +54,10 @@ add_library(hglrt SHARED
     src/collections.cpp
     src/conversions.cpp
     src/failure.cpp
+    src/formatting.cpp
     src/host.cpp
     src/list_endpoints.cpp
+    src/output.cpp
     src/scalar.cpp
     src/temporal.cpp
     src/tenors.cpp
@@ -70,7 +72,7 @@ target_include_directories(hglrt PUBLIC
 target_compile_features(hglrt PUBLIC cxx_std_23)
 # Only hgraph's runtime and wiring: `hgraph::core` would bring its standard
 # library, which generated code does not use (docs/cpp-target.md).
-target_link_libraries(hglrt PUBLIC hgraph::runtime hgraph::wiring)
+target_link_libraries(hglrt PUBLIC hgraph::runtime hgraph::wiring fmt::fmt)
 # Installed, the library finds the SDK and its dependencies where it was
 # built against them. (The SDK's own libraries find theirs in the
 # dependency prefix: the provisioning script gives them that path.)
