@@ -434,8 +434,18 @@ impl Emitter<'_> {
                     let Some(value) = value else {
                         return "0".to_string();
                     };
-                    let Some(ty) = self.named_type(&default.ty) else {
-                        return self.missing(default.at, &format!("the type `{}`", default.ty));
+                    // EXPR-5, TYPE-14, UNIT-8: null takes the selected
+                    // nullable parameter's type. Its generic source type
+                    // need not have a concrete C++ name here.
+                    let ty = if matches!(default.kind, ExprKind::Literal(Value::Null))
+                        && matches!(parameter.ty, Type::Nullable(_))
+                    {
+                        &parameter.ty
+                    } else {
+                        &default.ty
+                    };
+                    let Some(ty) = self.named_type(ty) else {
+                        return self.missing(default.at, &format!("the type `{ty}`"));
                     };
                     defaulted.push((index, value, may_fail(&default), Held::Value(ty)));
                 }
