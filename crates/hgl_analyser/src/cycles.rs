@@ -1,4 +1,4 @@
-//! Constants whose value depends on itself (UNIT-13).
+//! Constants and defaults that depend on themselves (UNIT-8, UNIT-13).
 //!
 //! > It is referenced forward as any module declaration is (UNIT-6), and
 //! > its value depends on no constant that depends on it.
@@ -20,19 +20,19 @@
 //!
 //! Each such thing is a node of a graph, with an edge to every other it
 //! reads, and a constant depends on itself when it is in a cycle of that
-//! graph. The graph is of the whole program. Modules do not import one
-//! another (UNIT-3), and a value may still be worked out through one
-//! that does not import it back: an operator's candidates are found
-//! wherever they are declared (GEN-5), so a function of one module may
-//! select a candidate of a module that imports it.
+//! graph. A default that needs itself without relying on a constant
+//! is reported at its expression. The graph is of the whole program.
+//! Modules do not import one another (UNIT-3), and a value may still
+//! be worked out through one that does not import it back. An operator's
+//! candidates are found wherever they are declared (GEN-5), so a function
+//! of one module may select a candidate of a module that imports it.
 //!
 //! A constant is also read where the typed program has only its value:
 //! in a type, as a size or a generic value argument, given in angle
 //! brackets or by name. So every name that is bound to a constant is an
 //! edge to it too, from the part it is written in.
 //!
-//! What the typed program does not hold, the body of an anonymous
-//! function, is followed only to the constants it names.
+//! An anonymous function body is followed only to the constants it names.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -41,6 +41,7 @@ use hgl_parser::HasSpan;
 use hgl_source::{FileId, Span};
 use petgraph::algo::kosaraju_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::NodeFiltered;
 
 use crate::hir::{Callee, Expr, ExprKind, walk_statements};
 use crate::program::{Binding, DeclarationKind, Program, Role};
@@ -49,9 +50,8 @@ use crate::types::{Detail, Type};
 use crate::values::{ForwardingInstance, has_forwarded_calls};
 use crate::{codes, error};
 
-/// Reports each constant whose value depends on itself
-/// (`constant.cycle`), at its name. It reads the typed program, so it
-/// runs after the pass that types it.
+/// Reports cyclic constants at their names and cyclic defaults at their
+/// expressions. It reads the typed program, after the pass that types it.
 pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
     let has_constant = program.modules.iter().any(|module| {
         module
@@ -59,8 +59,12 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
             .iter()
             .any(|declaration| declaration.kind == DeclarationKind::Constant)
     });
-    if has_constant {
-        cycles(program, diagnostics);
+    let has_default = program
+        .modules
+        .iter()
+        .any(|module| module.defaults.iter().flatten().any(Option::is_some));
+    if has_constant || has_default {
+        cycles(program, diagnostics, has_constant, has_default);
     }
 }
 
@@ -430,7 +434,7 @@ fn parts_of(
 }
 
 /// The cycles of `program`.
-fn cycles(program: &Program, diagnostics: &mut Diagnostics) {
+fn cycles(program: &Program, diagnostics: &mut Diagnostics, has_constant: bool, has_default: bool) {
     let mut packs = PackBodies::default();
     // The value pass has already bounded this instantiation walk. Do not
     // repeat a walk that it rejected for exceeding the instance limit.
@@ -464,51 +468,83 @@ fn cycles(program: &Program, diagnostics: &mut Diagnostics) {
         }
     }
 
+    if has_constant {
+        report_constants(program, &graph, diagnostics);
+    }
+    if has_default {
+        report_defaults(program, &graph, diagnostics);
+    }
+}
+
+/// A one-node component cycles only when it has an edge to itself.
+fn cyclic(graph: &DiGraph<Part, ()>, group: &[NodeIndex]) -> bool {
+    group.len() > 1 || graph.contains_edge(group[0], group[0])
+}
+
+/// Each declaration on a cycle, in declaration order.
+fn declarations_on(graph: &DiGraph<Part, ()>, group: &[NodeIndex]) -> Vec<Declared> {
+    let mut declarations: Vec<_> = group
+        .iter()
+        .map(|&part| graph[part].declaration())
+        .collect();
+    declarations.sort_unstable();
+    declarations.dedup();
+    declarations
+}
+
+/// Name the other declarations on the path. Give an imported
+/// declaration's module when its name is outside the subject's module.
+fn cycle_message(
+    program: &Program,
+    subject: String,
+    own: Declared,
+    declarations: &[Declared],
+) -> String {
+    let through: Vec<_> = declarations
+        .iter()
+        .filter(|&&other| other != own)
+        .map(|&(module, declaration)| {
+            let other = &program.modules[module];
+            let name = &other.declarations[declaration].name;
+            if module == own.0 {
+                format!("`{name}`")
+            } else {
+                format!("`{name}` of `{}`", other.path)
+            }
+        })
+        .collect();
+    if through.is_empty() {
+        format!("{subject} depends on itself")
+    } else {
+        format!(
+            "{subject} depends on itself, through {}",
+            through.join(" and ")
+        )
+    }
+}
+
+/// UNIT-13: a constant may not depend on itself, even through a default.
+fn report_constants(program: &Program, graph: &DiGraph<Part, ()>, diagnostics: &mut Diagnostics) {
     // Parts that read one another are a strongly connected group of the
     // graph. The findings are gathered and then given in the order the
     // constants are declared, whatever order the groups are found in.
     let mut findings: Vec<(Declared, String)> = Vec::new();
-    for group in kosaraju_scc(&graph) {
-        // One part is a cycle only when it reads itself.
-        let cyclic = group.len() > 1 || graph.contains_edge(group[0], group[0]);
-        if !cyclic {
+    for group in kosaraju_scc(graph) {
+        if !cyclic(graph, &group) {
             continue;
         }
-        // The declarations the group's parts belong to.
-        let mut members: Vec<Declared> = group
-            .iter()
-            .map(|&part| graph[part].declaration())
-            .collect();
-        members.sort_unstable();
-        members.dedup();
+        let declarations = declarations_on(graph, &group);
         for &part in &group {
             let Part::Constant(member) = graph[part] else {
                 continue;
             };
             let name = &program.modules[member.0].declarations[member.1].name;
-            // Another declaration of the constant's module is given by
-            // its name, and one of another module with that module's.
-            let through: Vec<String> = members
-                .iter()
-                .filter(|&&other| other != member)
-                .map(|&(module, declaration)| {
-                    let other = &program.modules[module];
-                    let name = &other.declarations[declaration].name;
-                    if module == member.0 {
-                        format!("`{name}`")
-                    } else {
-                        format!("`{name}` of `{}`", other.path)
-                    }
-                })
-                .collect();
-            let message = if through.is_empty() {
-                format!("the value of `{name}` depends on itself")
-            } else {
-                format!(
-                    "the value of `{name}` depends on itself, through {}",
-                    through.join(" and ")
-                )
-            };
+            let message = cycle_message(
+                program,
+                format!("the value of `{name}`"),
+                member,
+                &declarations,
+            );
             findings.push((member, message));
         }
     }
@@ -520,6 +556,61 @@ fn cycles(program: &Program, diagnostics: &mut Diagnostics) {
             program.modules[module].declarations[declaration].at,
             message,
             "UNIT-13",
+        ));
+    }
+}
+
+/// UNIT-8: a default may not require itself. Follow the default's
+/// dependencies independently of named-constant cycles (UNIT-13).
+fn report_defaults(program: &Program, graph: &DiGraph<Part, ()>, diagnostics: &mut Diagnostics) {
+    let defaults = NodeFiltered::from_fn(graph, |part| !matches!(graph[part], Part::Constant(_)));
+    let mut findings = Vec::new();
+    for group in kosaraju_scc(&defaults) {
+        if !cyclic(graph, &group) {
+            continue;
+        }
+        let declarations = declarations_on(graph, &group);
+        for part in group {
+            let (member, position) = match graph[part] {
+                Part::Default(member, position) | Part::FieldDefault(member, position) => {
+                    (member, position)
+                }
+                _ => continue,
+            };
+            let module = &program.modules[member.0];
+            let Some(default) = module
+                .defaults
+                .get(member.1)
+                .and_then(|defaults| defaults.get(position))
+                .and_then(Option::as_ref)
+            else {
+                continue;
+            };
+            let name = match module.details.get(member.1) {
+                Some(Detail::Callable(signature)) => signature
+                    .parameters
+                    .get(position)
+                    .map(|parameter| &parameter.name),
+                Some(Detail::Struct(structure)) => {
+                    structure.fields.get(position).map(|field| &field.name)
+                }
+                _ => None,
+            };
+            let Some(name) = name else { continue };
+            let owner = &module.declarations[member.1].name;
+            let subject = format!("the default of `{name}` in `{owner}`");
+            let message = cycle_message(program, subject, member, &declarations);
+            findings.push((member, position, default.value.at, message));
+        }
+    }
+    findings.sort_by_key(|&(member, position, ..)| (member, position));
+    for (_, _, at, message) in findings {
+        diagnostics.emit(error(
+            Category::Name,
+            codes::DEFAULT_CYCLE,
+            at,
+            message,
+            "UNIT-8",
         ));
     }
 }
