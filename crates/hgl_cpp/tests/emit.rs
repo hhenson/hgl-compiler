@@ -777,41 +777,25 @@ fn activity_and_enums_are_written() {
     );
 }
 
-/// A change of an input's activity in `stop` is reported: hgraph makes
-/// passive at stop only the inputs a node declares active, so an input
-/// it activated would stay subscribed. `is_active` there is written.
+/// TIME-5: an activity query remains metadata in stop. Activity
+/// mutations are source rejections, covered by endpoint_hooks.
 #[test]
-fn a_change_of_activity_in_stop_is_reported() {
+fn an_activity_query_in_stop_is_written() {
     let emitted = emit_with(
         &[(
             "m.hgl",
             concat!(
                 "module m\n",
-                "\n",
-                "fn stopping(value: i64) -> i64 {\n",
-                "    when { return value }\n",
-                "    stop { passivate(value) }\n",
-                "}\n",
-                "\n",
                 "fn asking(value: i64) -> i64 {\n",
                 "    when { return value }\n",
                 "    stop { let active = is_active(value) }\n",
                 "}\n",
-                "\n",
-                "test a_change {\n",
-                "    assert eval stopping(value: [1]) == [1]\n",
-                "}\n",
-                "\n",
                 "test a_read {\n",
                 "    assert eval asking(value: [1]) == [1]\n",
                 "}\n",
             ),
         )],
         &hgl_cpp::runtime::provides,
-    );
-    assert_eq!(
-        emitted.blocked("a_change").as_deref(),
-        Some("m.hgl:5:12 the cpp target does not write `passivate` here yet")
     );
     assert_eq!(emitted.blocked("a_read"), None);
 }

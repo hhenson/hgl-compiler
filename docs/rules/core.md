@@ -352,7 +352,8 @@ analyser: partial
 - For a nullable scalar it is the optional TYPE-16 gives it, and for a window the V that arrived
 - A result place takes `CheckedDelta`, including in a generic body such as core's `record`. A nullable place takes the same checked delta and discards its error (ERR-14, ERR-15).
 - A child's `delta_value` needs the child's admission (TIME-1)
-- Left: proof that `x` is valid and modified
+- A direct input's delta read needs its validity admission (TIME-1, TIME-4), as a child's does. This reads no whole collection payload, so it does not require every child to be valid.
+- An admitted result or nullable form needs no static proof of a tick; it handles a cycle with no delta (ERR-14, ERR-15).
 
 transpiler: partial
 
@@ -363,18 +364,26 @@ transpiler: partial
 
 ## END-4
 
+analyser: done
+
+- `invalidate` takes only the node's own `out`; a direct value or reference input is `endpoint.argument`.
+
 transpiler: partial
 
 - Emits result invalidation, including clearing collection results and reference
   designations, and permits observation of the transition without a modified guard.
-- Left: `invalidate(input)` passes source checking and is declined by the target. The Core operation clears the node's own `out`. Unsupported output shapes follow TYPE-9.
+- Left: unsupported output shapes follow TYPE-9.
 
 ## END-5
+
+analyser: partial
+
+- `activate` and `passivate` in `stop` reject as `input.lifecycle` (TIME-5); the input binding is passive there.
 
 transpiler: partial
 
 - Writes input activity control and suppresses silent no-change collection updates. A window result holds its last arrival until the handler's evaluation finishes (END-9).
-- Left: `activate` and `passivate` in `stop` pass source checking and are declined by the target. TIME-5 specifies a source `input.lifecycle` rejection.
+- Left: unsupported temporal shapes follow TYPE-9.
 
 ## END-6
 
