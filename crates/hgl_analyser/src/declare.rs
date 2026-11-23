@@ -14,6 +14,7 @@ use hgl_parser::ast::{AstNode, Item, TestDecl, UseDecl};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
+use crate::hir::EndpointOperation;
 use crate::program::{
     Declaration, DeclarationKind, Import, ImportKind, Module, Program, Role, RunStatement,
     StoreStatement, Test,
@@ -113,10 +114,29 @@ pub(crate) fn declare(module: &mut Module, inputs: &[&ParsedFile], diagnostics: 
     module.declarations.extend(walk.test_declarations);
     module.tests = walk.tests;
     module.instantiations = walk.instantiations;
+    check_reserved_function_names(module, diagnostics);
     bind_declarations(module, diagnostics);
     bind_native_implementations(module, diagnostics);
     bind_native_candidates(module, diagnostics);
     check_tests(module, diagnostics);
+}
+
+/// UNIT-10 reserves an activation form's name on a function declaration.
+fn check_reserved_function_names(module: &Module, diagnostics: &mut Diagnostics) {
+    let name = EndpointOperation::Scheduled.name();
+    for declaration in &module.declarations {
+        if declaration.name == name && declaration.kind.binding_role().is_some() {
+            diagnostics.emit(error(
+                Category::Name,
+                codes::NAME_RESERVED,
+                declaration.at,
+                format!(
+                    "the function name `{name}` is reserved for the activation form `{name}()`"
+                ),
+                "UNIT-10",
+            ));
+        }
+    }
 }
 
 /// The declaration label in a documentation test selector.

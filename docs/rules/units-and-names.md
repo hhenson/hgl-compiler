@@ -95,6 +95,7 @@ analyser: partial
 - Every name in a signature, body, type and constraint resolved to its one binding, and one that nothing binds is `name.unknown`
 - Clock properties resolve on the capability, and `types(Ts)` supplies the selections in an `each` constraint (GEN-10).
 - An unqualified call of `scheduled()` retains the wake selector's meaning when a binding has the same name (TIME-9).
+- A function named `scheduled` reports `name.reserved` at the declaration. Reserving the name for other declaration kinds remains proposed.
 
 ## UNIT-11
 
