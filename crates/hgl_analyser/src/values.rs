@@ -86,6 +86,7 @@ mod evals;
 mod expressions;
 // What a place expects of a value, and the values that fit it (EXPR-5, TYPE-14).
 mod fit;
+mod format_calls;
 // The form a result takes from its place, and a `T?` read where a T is expected (ERR-12, ERR-15).
 mod forms;
 mod forwarded_packs;

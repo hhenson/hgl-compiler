@@ -863,7 +863,7 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
         "struct Whole : Base<rolling_window<i64, 5>> { whole: Base<rolling_window<i64, 5, 5>> }\n",
         // LEX-20: a float is the number it denotes, however written.
         "struct Mark<const N: f64> { width: i64 }\n",
-        "struct Marked : Base<Mark<1.0>> { marked: Base<Mark<1.00>> }\n",
+        "struct Marker : Base<Mark<1.0>> { marked: Base<Mark<1.00>> }\n",
         "struct Unmarked : Base<Mark<1.0>> { other: Base<Mark<2.0>> }\n",
         // LEX-2: and a string is its contents.
         "struct Named<const S: str> { width: i64 }\n",

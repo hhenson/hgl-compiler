@@ -25,6 +25,138 @@ fn with_core(text: &str) -> Checked {
     check(&[("m.hgl", &format!("module m\n{text}"))])
 }
 
+/// FMT-4 implementation gate pending #434: fmt's integer character
+/// formatter can emit bytes that are outside UTF-8.
+#[test]
+fn integer_character_formatting_is_temporarily_unavailable() {
+    let checked = with_core(concat!(
+        "const fn character() -> str => format(\"{:c}\", 233)\n",
+        "const fn padded_character() -> str => format(\"{:>3c}\", 256)\n",
+        "const fn number() -> str => format(\"{:+d} {:04x}\", 233, 233)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:42 type/format.specifier FMT-4",
+            "m.hgl:3:49 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// FMT-1, FMT-3, FMT-4 and FMT-9: check a generic format pattern
+/// against the argument types of the same instance.
+#[test]
+fn formatting_checks_a_generic_pattern_and_argument_together() {
+    let checked = with_core(concat!(
+        "const fn show<const P: str, T>(value: T) -> str => format(P, value)\n",
+        "test mark { assert show<\"{*}\">(1) == \"1\" }\n",
+        "test hex { assert show<\"{:x}\">(1.5) == \"1.5\" }\n",
+        "test character { assert show<\"{:c}\">(65) == \"A\" }\n",
+        "test clock { assert show<\"{engine_time}\">(1) == \"1\" }\n",
+        "test unused { assert show<\"none\">(1) == \"none\" }\n",
+        "test valid { assert show<\"{:x}\">(42) == \"2a\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:20 type/format.specifier FMT-9",
+            "m.hgl:4:19 type/format.specifier FMT-4",
+            "m.hgl:5:25 type/format.specifier FMT-4",
+            "m.hgl:6:21 type/format.argument FMT-9",
+            "m.hgl:7:22 type/format.unused FMT-3",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// FMT-5: the selected conversion must consume the whole value and
+/// yield `str`, including when a native collection converts its parts.
+#[test]
+fn formatting_requires_a_conversion_of_the_whole_argument_to_text() {
+    let checked = with_core(concat!(
+        "const fn number(x: i64?) -> str => format(\"{}\", x)\n",
+        "const fn optional_list(x: list<i64>?) -> str => format(\"{}\", x)\n",
+        "const fn failed() -> str => format(\"{}\", convert<i64>(\"3\"))\n",
+        "const fn bytes_text(x: bytes) -> str => format(\"{}\", x)\n",
+        "const fn byte_parts(x: list<bytes>) -> str => format(\"{}\", x)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:49 operator/operator.no_candidate FMT-5",
+            "m.hgl:3:62 operator/operator.no_candidate FMT-5",
+            "m.hgl:4:42 operator/operator.no_candidate FMT-5",
+            "m.hgl:5:54 operator/operator.no_candidate FMT-5",
+            "m.hgl:6:60 operator/operator.no_candidate FMT-5",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// UNIT-13, FMT-4: a pattern returned by a value function is checked
+/// when the module constant supplies it to a formatting call.
+#[test]
+fn formatting_checks_a_pattern_returned_to_a_module_constant() {
+    let checked = with_core(concat!(
+        "const fn pattern() -> str => \"{:x}\"\n",
+        "const P: str = pattern()\n",
+        "const fn display() -> str => format(P, 1.5)\n",
+        "const fn prefix() -> str => \"{:\"\n",
+        "const Q: str = prefix() + \"x}\"\n",
+        "const fn joined() -> str => format(Q, 1.5)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:37 type/format.specifier FMT-4",
+            "m.hgl:7:36 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// FMT-5: an implicit conversion reaches the same instance and
+/// dependency checks as a written call (GEN-7, UNIT-13).
+#[test]
+fn formatting_checks_implicit_conversion_instances_and_dependencies() {
+    let checked = check(&[
+        (
+            "generic.hgl",
+            r#"module formatting_instance
+struct Wrapper<T> { field: T }
+impl const fn convert<T>(value: Wrapper<T>) -> str => format("{:x}", value.field)
+test t {
+    let wrapped = Wrapper<f64>(field: 1.5)
+    assert format("{}", wrapped) == "1.5"
+}
+"#,
+        ),
+        (
+            "constant.hgl",
+            r#"module formatting_dependency
+struct Wrapper<T> { field: T }
+impl const fn convert<T>(value: Wrapper<T>) -> str => A
+const A: str = format("{}", Wrapper<i64>(field: 1))
+test t { assert A == "first" }
+"#,
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "constant.hgl:4:7 name/constant.cycle UNIT-13",
+            "generic.hgl:6:25 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 /// The module the compiler supplies is the pinned core's, whole: every
 /// `.hgl` file under `spec/hgl_core/hgl`, with its text as it stands
 /// there. A pin that adds a file fails this until

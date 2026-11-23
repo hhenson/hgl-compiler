@@ -915,6 +915,7 @@ impl<'a> Typer<'a> {
                 callee: Callee::Unread,
                 arguments,
                 form,
+                text: None,
                 braced: Vec::new(),
                 lifted: false,
             };
@@ -1069,7 +1070,7 @@ impl<'a> Typer<'a> {
             }
         }
         let requirements = self.answers(module, declaration, &generics);
-        let kind = ExprKind::Call {
+        let mut kind = ExprKind::Call {
             callee: Callee::Candidate {
                 operator: (operator.module, operator.declaration),
                 operator_generics,
@@ -1081,10 +1082,11 @@ impl<'a> Typer<'a> {
             },
             arguments,
             form,
+            text: None,
             braced,
             lifted: false,
         };
-        self.finished_call(&kind, false);
+        self.finished_call(&mut kind, false);
         let kind = if let Some(selecting) = selecting {
             if self.graph {
                 self.constants_of(&kind);
@@ -1129,6 +1131,7 @@ impl<'a> Typer<'a> {
                 },
                 form,
                 arguments,
+                text: None,
                 braced,
                 lifted: false,
             }

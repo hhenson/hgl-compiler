@@ -1376,6 +1376,66 @@ impl<'a> Typer<'a> {
             .map(|answered| !matches!(answered, Answered::Unmet))
     }
 
+    /// FMT-5 asks for the normal value conversion to `str` for a type
+    /// that the native formatter does not directly format.
+    pub(super) fn text_converter(&mut self, operand: SyntaxNode, ty: &Type) -> Option<Callee> {
+        let program = self.program;
+        let module = program.core()?;
+        let core = &program.modules[module];
+        let declaration = core
+            .scope
+            .get("convert")?
+            .iter()
+            .copied()
+            .find(|&index| core.declarations[index].kind == DeclarationKind::Operator)?;
+        let operator = OperatorRef {
+            module,
+            declaration,
+        };
+        let result = Type::Scalar(crate::Scalar::Str);
+        let Answered::Selected {
+            module,
+            declaration,
+            generics,
+        } = self.answered(
+            operator,
+            (self.file, vec![(operand, ty.clone())]),
+            Some(&result),
+        )?
+        else {
+            return None;
+        };
+        let Detail::Callable(signature) = &program.modules[module].details[declaration] else {
+            return None;
+        };
+        let given: Vec<_> = fixed(&signature.generics).zip(&generics).collect();
+        let supplied = signature
+            .parameters
+            .iter()
+            .find(|parameter| !parameter.configuration)?;
+        // The formatter holds the whole argument and needs the text
+        // itself. Ordinary deferred reads may admit either payload.
+        if !self.admits(&substitute_within(&supplied.ty, &given), ty)
+            || substitute_within(signature.result.as_ref()?, &given) != result
+        {
+            return None;
+        }
+        let requirements = self.answers(module, declaration, &generics);
+        Some(Callee::Candidate {
+            operator: (operator.module, operator.declaration),
+            operator_generics: vec![
+                Argument::Type(result.clone()),
+                Argument::Type(ty.clone()),
+                Argument::Type(result),
+            ],
+            module,
+            declaration,
+            generics,
+            type_packs: Vec::new(),
+            requirements,
+        })
+    }
+
     /// What answers a requirement that `operator` is callable with
     /// values of the types `operands`, to give `result` where one is
     /// stated: see [`Typer::callable`], which says when it holds.
@@ -1911,6 +1971,7 @@ impl<'a> Typer<'a> {
             },
             arguments,
             form,
+            text: None,
             braced: Vec::new(),
             lifted: false,
         };
@@ -2222,6 +2283,7 @@ pub(super) fn instances_hold(
     let mut configured = std::collections::HashSet::new();
     let mut endpoint_reads = std::collections::HashSet::new();
     let mut dependent_indices = std::collections::HashSet::new();
+    let mut dependent_patterns = std::collections::HashSet::new();
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let mut made = Vec::new();
@@ -2273,6 +2335,15 @@ pub(super) fn instances_hold(
                     .is_some_and(super::has_dependent_index)
             {
                 dependent_indices.insert((index, position));
+            }
+            if !declared.is_empty()
+                && module
+                    .bodies
+                    .get(position)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|body| crate::formatting::has_dependent_formatting(program, body))
+            {
+                dependent_patterns.insert((index, position));
             }
             for (call_index, call) in made.into_iter().enumerate() {
                 // ERR-9: a generic argument the body works out from its
@@ -2347,6 +2418,7 @@ pub(super) fn instances_hold(
         .chain(configured.iter().copied())
         .chain(endpoint_reads.iter().copied())
         .chain(dependent_indices.iter().copied())
+        .chain(dependent_patterns.iter().copied())
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -2435,6 +2507,7 @@ pub(super) fn instances_hold(
             let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
             let recheck_results = selecting.iter().any(|call| call.result.is_some());
             let recheck_indices = dependent_indices.contains(&made.callee);
+            let recheck_format = dependent_patterns.contains(&made.callee);
             let declared = own(made.callee);
             let map: Vec<(Location, &Argument)> =
                 declared.iter().copied().zip(&made.generics).collect();
@@ -2465,7 +2538,12 @@ pub(super) fn instances_hold(
                     diagnostics,
                     &mut body_reports,
                 )
-            } else if recheck_graph || recheck_endpoints || recheck_results || recheck_indices {
+            } else if recheck_graph
+                || recheck_endpoints
+                || recheck_results
+                || recheck_indices
+                || recheck_format
+            {
                 program.checked_instance(
                     made.callee,
                     &made.generics,
@@ -2513,7 +2591,7 @@ pub(super) fn instances_hold(
                     made_after_inference(declared_body, instance, &mut instance_calls);
                 }
             }
-            if recheck_indices && !recheck_graph && !recheck_endpoints {
+            if (recheck_indices || recheck_format) && !recheck_graph && !recheck_endpoints {
                 let paths = chain.paths(program, &root_calls);
                 for report in body_reports.as_slice() {
                     emit_instance_report(report.clone(), &paths, diagnostics);
