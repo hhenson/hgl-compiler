@@ -229,6 +229,19 @@ fn a_concrete_candidate_honours_its_operators_requires() {
     );
 }
 
+/// GEN-6 and TYPE-10: both growing-list spellings give one type in a
+/// result or in a requires set.
+#[test]
+fn growing_list_spelling_does_not_change_a_candidate_contract() {
+    let checked = module(concat!(
+        "operator values(value: i64) -> list<i64>\n",
+        "impl const fn values(value: i64) -> list<i64, unbounded> => [value]\n",
+        "operator allowed<T>(value: T) requires T in {list<i64>}\n",
+        "impl const fn allowed(value: list<i64, unbounded>) {}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
 /// FN-8 and GEN-10: capture in written order, keeping the pack slot,
 /// positional indexes or named keys, and the resolved argument types.
 #[test]

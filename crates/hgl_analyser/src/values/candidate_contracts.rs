@@ -9,6 +9,7 @@ use crate::program::{Program, Role};
 use crate::read::type_child;
 use crate::syntax::child;
 use crate::types::{Argument, Detail, Signature, Type};
+use crate::{codes, error};
 
 use super::inference::infer;
 use super::requirements::declared_type_requirement;
@@ -47,9 +48,9 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
                 let expected = substitute_within(expected, &bindings);
                 if mismatched_result(&expected, actual) {
                     diagnostics.emit(
-                        crate::error(
+                        error(
                             Category::Operator,
-                            "impl.result",
+                            codes::IMPL_RESULT,
                             Location::new(candidate.at.file, written.span()),
                             format!(
                                 "this candidate declares result `{actual}` where the operator gives these parameters result `{expected}`"
@@ -67,9 +68,9 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
             ) == Some(false)
             {
                 diagnostics.emit(
-                    crate::error(
+                    error(
                         Category::Operator,
-                        "impl.requires",
+                        codes::IMPL_REQUIRES,
                         candidate.at,
                         "the declared parameter types lie outside the operator's `requires` set"
                             .to_string(),

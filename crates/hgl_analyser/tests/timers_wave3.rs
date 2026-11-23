@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::module;
+use common::{check, module};
 
 /// TIME-9: "A node that injects neither rejects it (`inject.no_scheduler`),
 /// and so do `start` and `stop` (`scheduled.lifecycle`)." Wherever it
@@ -177,16 +177,20 @@ fn a_duration_known_only_as_the_program_runs_is_accepted() {
         ["m.hgl:23:25 type/schedule.duration_bounds TIME-8"]
     );
 
-    let local = module(concat!(
-        "struct Ticket { n: i64 }\n",
-        "operator schedule_ticket(capability: Ticket, at: duration)\n",
-        "impl const fn schedule_ticket(capability: Ticket, at: duration) {}\n",
-        "fn locally(value: i64) -> i64 {\n",
-        "    when modified(value) {\n",
-        "        schedule_ticket(Ticket(n: value), 0s)\n",
-        "        return value\n",
-        "    }\n",
-        "}\n",
-    ));
+    let local = check(&[
+        ("core.hgl", "module core\n"),
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "struct Ticket { n: i64 }\n",
+                "operator schedule(capability: Ticket, at: duration)\n",
+                "impl const fn schedule(capability: Ticket, at: duration) {}\n",
+                "const fn locally(value: i64) {\n",
+                "    schedule(Ticket(n: value), -1s)\n",
+                "}\n",
+            ),
+        ),
+    ]);
     assert!(local.summary().is_empty(), "{}", local.report);
 }
