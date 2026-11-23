@@ -1,15 +1,18 @@
 //! FMT-1 to FMT-5, FMT-7 and FMT-9 at a selected native value call.
 
-use hgl_diagnostics::{Category, Location};
+use std::cell::RefCell;
+
+use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_lexer::literal::string_source_range;
-use hgl_parser::HasSpan;
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::Span;
 
-use super::Typer;
+use super::{Tables, Typer, calls::call_callee, tables};
 use crate::declared::names_parameter;
 use crate::formatting::{self, Piece};
 use crate::hir::{Argument, Expr, ExprKind, Form, Value, ValueCategory};
-use crate::{ConstantValue, Detail, Scalar, Type, codes, error};
+use crate::syntax::{child, name_token, ungrouped};
+use crate::{ConstantValue, DeclarationKind, Detail, Role, Scalar, Signature, Type, codes, error};
 
 impl Typer<'_> {
     /// Check the argument slots and each type's specifier (FMT-3).
@@ -28,13 +31,19 @@ impl Typer<'_> {
                 && let Some(members) =
                     formatting::collection_members(self.program, callee, &argument.value.ty)
             {
-                *text_conversions = self.member_conversions(&members, argument.value.at);
+                *text_conversions = self
+                    .member_conversions(&members, argument.value.at)
+                    .unwrap_or_default();
             }
             return;
         };
         let Some(pattern) = formatting::argument(signature, arguments, "fmt_str") else {
             return;
         };
+        let pattern_index = arguments
+            .iter()
+            .position(|given| std::ptr::eq(given, pattern))
+            .expect("the pattern is a given argument");
         if pattern.value.ty == Type::Unknown || matches!(pattern.value.kind, ExprKind::Unread) {
             return;
         }
@@ -67,7 +76,15 @@ impl Typer<'_> {
             // typed argument even after the instance has bound it.
             _ => formatting::constant_pattern_in(self.program, &pattern.value, &self.instance),
         };
-        let Some(text) = text else {
+        let folded = if text.is_none() {
+            written
+                .as_ref()
+                .and_then(|source| self.fold_source_pattern(source, 64))
+        } else {
+            None
+        };
+        let folded_call = folded.is_some();
+        let Some(text) = text.or(folded) else {
             if (self.graph || self.value_code) && !self.is_fixed(&pattern.value, &[]) {
                 self.diagnostics.emit(error(
                     Category::Type,
@@ -184,6 +201,104 @@ impl Typer<'_> {
             }
         }
         *text_conversions = conversions.into_boxed_slice();
+        if folded_call {
+            arguments[pattern_index].value.kind = ExprKind::Literal(Value::Str(text));
+        }
+    }
+
+    /// A string pattern may name a module constant whose initializer
+    /// calls a value function (FMT-1, UNIT-13). Read a pure return
+    /// expression in that declaration's scope with a bounded call chain.
+    fn fold_source_pattern(&self, source: &SyntaxNode, remaining: usize) -> Option<String> {
+        let next = remaining.checked_sub(1)?;
+        let source = if source.kind() == SyntaxKind::Arg {
+            source.children().last()?
+        } else {
+            source.clone()
+        };
+        let source = ungrouped(source);
+        let text = Type::Scalar(Scalar::Str);
+        let (module, declaration, is_call) = match self.read_constant(&source, Some(&text)) {
+            Ok(ConstantValue::Str(text)) => return Some(text),
+            Ok(ConstantValue::Named {
+                module,
+                declaration,
+            }) => (module, declaration, false),
+            _ => {
+                let callee = call_callee(&source)?;
+                if callee.kind() != SyntaxKind::NameExpr
+                    || child(&source, SyntaxKind::ArgList)?
+                        .children()
+                        .next()
+                        .is_some()
+                {
+                    return None;
+                }
+                let (module, declarations) = self.declarations(&name_token(&callee)?)?;
+                let [declaration] = declarations else {
+                    return None;
+                };
+                (module, *declaration, true)
+            }
+        };
+        let unit = &self.program.modules[module];
+        let owner = &unit.declarations[declaration];
+        let empty = Signature {
+            generics: Vec::new(),
+            parameters: Vec::new(),
+            result: None,
+            reference: false,
+        };
+        let (expression, signature) = if is_call {
+            let Detail::Callable(signature) = &unit.details[declaration] else {
+                return None;
+            };
+            if owner.kind != DeclarationKind::Function(Role::Value)
+                || !signature.generics.is_empty()
+                || !signature.parameters.is_empty()
+                || signature.result.as_ref() != Some(&text)
+            {
+                return None;
+            }
+            let expression = if let Some(arrow) = child(&owner.syntax, SyntaxKind::ArrowBody) {
+                arrow.children().next()?
+            } else {
+                let block = child(&owner.syntax, SyntaxKind::Block)?;
+                let mut statements = block.children();
+                let only = statements.next()?;
+                if statements.next().is_some()
+                    || !matches!(only.kind(), SyntaxKind::ReturnStmt | SyntaxKind::ExprStmt)
+                {
+                    return None;
+                }
+                only.children().next()?
+            };
+            (expression, signature)
+        } else {
+            let written = crate::read::type_child(&owner.syntax);
+            let expression = owner
+                .syntax
+                .children()
+                .find(|node| Some(node) != written.as_ref())?;
+            (expression, &empty)
+        };
+        let (bindings, written, calls) = tables(unit);
+        let selecting = RefCell::new(Vec::new());
+        let mut diagnostics = Diagnostics::new();
+        let typer = Typer::bare(
+            self.program,
+            unit,
+            owner,
+            signature,
+            Tables {
+                bindings: &bindings,
+                written: &written,
+                calls: &calls,
+                selecting: &selecting,
+            },
+            &mut diagnostics,
+        );
+        typer.fold_source_pattern(&expression, next)
     }
 
     /// Record the selected ordinary call, with an input supplied by
@@ -199,10 +314,10 @@ impl Typer<'_> {
             .parameters
             .iter()
             .position(|parameter| !parameter.configuration)?;
-        let text_conversions = formatting::collection_members(self.program, &callee, ty)
-            .map_or_else(Box::default, |members| {
-                self.member_conversions(&members, at)
-            });
+        let text_conversions = match formatting::collection_members(self.program, &callee, ty) {
+            Some(members) => self.member_conversions(&members, at)?,
+            None => Box::default(),
+        };
         Some(Expr {
             kind: ExprKind::Call {
                 callee,
@@ -227,7 +342,11 @@ impl Typer<'_> {
         })
     }
 
-    fn member_conversions(&mut self, members: &[&Type], at: Location) -> Box<[Option<Expr>]> {
+    fn member_conversions(
+        &mut self,
+        members: &[&Type],
+        at: Location,
+    ) -> Option<Box<[Option<Expr>]>> {
         members
             .iter()
             .map(|ty| {
@@ -239,9 +358,9 @@ impl Typer<'_> {
                     && !names_parameter(ty)
                     && *ty != Type::Unknown
                 {
-                    self.text_conversion(ty, at)
+                    Some(Some(self.text_conversion(ty, at)?))
                 } else {
-                    None
+                    Some(None)
                 }
             })
             .collect()

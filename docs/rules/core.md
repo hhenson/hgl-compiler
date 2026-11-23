@@ -889,7 +889,7 @@ analyser: done
 analyser: partial
 
 - A direct value call is checked for braces, missing and unused arguments, and specifiers. A dependent string is checked in its concrete instance. Diagnostics use `format.syntax`, `format.argument`, `format.unused` and `format.specifier`.
-- Left: checks reached through ordinary pattern parameters and forwarded packs (#368, #434).
+- Left: patterns supplied through ordinary `const` parameters and options (#695), and patterns reached through forwarded packs (#368, #434).
 
 ## FMT-4
 

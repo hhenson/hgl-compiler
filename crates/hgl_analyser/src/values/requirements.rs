@@ -1405,6 +1405,21 @@ impl<'a> Typer<'a> {
         else {
             return None;
         };
+        let Detail::Callable(signature) = &program.modules[module].details[declaration] else {
+            return None;
+        };
+        let given: Vec<_> = fixed(&signature.generics).zip(&generics).collect();
+        let supplied = signature
+            .parameters
+            .iter()
+            .find(|parameter| !parameter.configuration)?;
+        // The formatter holds the whole argument and needs the text
+        // itself. Ordinary deferred reads may admit either payload.
+        if !self.admits(&substitute_within(&supplied.ty, &given), ty)
+            || substitute_within(signature.result.as_ref()?, &given) != result
+        {
+            return None;
+        }
         let requirements = self.answers(module, declaration, &generics);
         Some(Callee::Candidate {
             operator: (operator.module, operator.declaration),

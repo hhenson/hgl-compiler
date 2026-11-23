@@ -10,6 +10,8 @@ const SOURCE: &str = r#"module demo.formatting
 const fn display<const Pattern: str>(value: f64) -> str => format(Pattern, value)
 const fn display_value<const Pattern: str, T>(value: T) -> str =>
     format("value " + Pattern, value)
+const fn hex_pattern() -> str { return "{:x}" }
+const HEX: str = hex_pattern()
 
 struct FormatMember { number: i64 }
 impl const fn convert(value: FormatMember) -> str => convert<str>(value.number)
@@ -34,6 +36,7 @@ test stream_bytes {
 test typed_formats {
     assert display<"{:.2f}">(1.25) == "1.25"
     assert display_value<"{:x}">(42) == "value 2a"
+    assert format(HEX, 255) == "ff"
     let least = -9223372036854775807us - 1us
     assert format("{:%[S].9}", least) == "-9223372036854.775808000"
     let boundary = @0001-01-01T19:59:05.224192Z
@@ -50,6 +53,56 @@ test selected_converters {
     assert display_value<"{}">(nested) == "value [specific members]"
 }
 "#;
+
+/// FMT-3, #695: ordinary constant parameters need specialization
+/// before the target can write the format call.
+#[test]
+fn target_declines_unresolved_ordinary_constant_patterns() {
+    let root = scratch("ordinary-format-constants");
+    let cases = [
+        (
+            "positional",
+            "const fn show(const p: str, v: f64) -> str => format(p, v)",
+            "show(\"{:x}\", 1.5)",
+        ),
+        (
+            "default_option",
+            "const fn show{const p: str = \"{:x}\"}(v: f64) -> str => format(p, v)",
+            "show(1.5)",
+        ),
+        (
+            "given_option",
+            "const fn show{const p: str = \"{}\"}(v: i64) -> str => format(p, v)",
+            "show{p: \"{:c}\"}(65)",
+        ),
+    ];
+    for (name, declaration, call) in cases {
+        let source = format!("module {name}\n{declaration}\ntest t {{ assert {call} == \"\" }}\n");
+        let file = write(&root, &format!("{name}.hgl"), &source);
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        assert!(checked.status.success(), "{}", text(&checked.stderr));
+        let output = root.join(name);
+        let emitted = hgl_in(
+            &[
+                "emit",
+                &file,
+                "--target",
+                "cpp",
+                "--out",
+                &argument(&output),
+            ],
+            &[],
+            &[],
+        );
+        let stderr = text(&emitted.stderr);
+        assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+        assert!(
+            stderr.contains("does not write a format pattern whose text is not known here yet"),
+            "{stderr}"
+        );
+        assert!(!output.exists());
+    }
+}
 
 /// OUT-1, OUT-2, FMT-4: keep the process streams independent of the test
 /// host's publications, and format clock fractions for a minimum duration

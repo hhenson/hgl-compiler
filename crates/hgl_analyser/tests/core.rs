@@ -72,6 +72,48 @@ fn formatting_checks_a_generic_pattern_and_argument_together() {
     );
 }
 
+/// FMT-5: the selected conversion must consume the whole value and
+/// yield `str`, including when a native collection converts its parts.
+#[test]
+fn formatting_requires_a_conversion_of_the_whole_argument_to_text() {
+    let checked = with_core(concat!(
+        "const fn number(x: i64?) -> str => format(\"{}\", x)\n",
+        "const fn optional_list(x: list<i64>?) -> str => format(\"{}\", x)\n",
+        "const fn failed() -> str => format(\"{}\", convert<i64>(\"3\"))\n",
+        "const fn bytes_text(x: bytes) -> str => format(\"{}\", x)\n",
+        "const fn byte_parts(x: list<bytes>) -> str => format(\"{}\", x)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:49 operator/operator.no_candidate FMT-5",
+            "m.hgl:3:62 operator/operator.no_candidate FMT-5",
+            "m.hgl:4:42 operator/operator.no_candidate FMT-5",
+            "m.hgl:5:54 operator/operator.no_candidate FMT-5",
+            "m.hgl:6:60 operator/operator.no_candidate FMT-5",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// UNIT-13, FMT-4: a pattern returned by a value function is checked
+/// when the module constant supplies it to a formatting call.
+#[test]
+fn formatting_checks_a_pattern_returned_to_a_module_constant() {
+    let checked = with_core(concat!(
+        "const fn pattern() -> str => \"{:x}\"\n",
+        "const P: str = pattern()\n",
+        "const fn display() -> str => format(P, 1.5)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:37 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+}
+
 /// The module the compiler supplies is the pinned core's, whole: every
 /// `.hgl` file under `spec/hgl_core/hgl`, with its text as it stands
 /// there. A pin that adds a file fails this until
