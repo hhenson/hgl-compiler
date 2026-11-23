@@ -19,8 +19,8 @@
 //! a type that is no ordinary value marks a parameter that may be left
 //! out (TYPE-14), and is the type under it (`Type::omission_removed`).
 
-use hgl_analyser::hir::{BinaryOperator, Callee, Expr, ExprKind, LocalId, Value};
-use hgl_analyser::{Argument as GenericArgument, DeclarationKind, Detail, Scalar, Type};
+use hgl_analyser::hir::{BinaryOperator, Expr, ExprKind, LocalId, Value};
+use hgl_analyser::{DeclarationKind, Detail, Scalar, Type};
 
 use super::Emitter;
 use super::forms::Family;
@@ -91,20 +91,6 @@ fn null_test(value: &Expr) -> Option<(&Expr, bool)> {
         _ => return None,
     };
     Some((tested, *operator == BinaryOperator::Equal))
-}
-
-/// The name of the declaration the call `value` calls, where it is one.
-fn callee_name<'p>(emitter: &Emitter<'p>, value: &Expr) -> Option<&'p str> {
-    let ExprKind::Call { callee, .. } = &value.kind else {
-        return None;
-    };
-    let (module, declaration) = callee.declaration()?;
-    let program = emitter.program;
-    Some(
-        program.modules[module].declarations[declaration]
-            .name
-            .as_str(),
-    )
 }
 
 impl Family for Nullables {
@@ -240,30 +226,6 @@ impl Family for Nullables {
                 } else {
                     format!("{read}.has_value()")
                 })
-            }
-            // CAP-6: a nullable put in the run's store is read back by a
-            // `get`, which the analyser gives the type written after its
-            // name (`get<i64?>(...)` is an `i64?`), but, read through a
-            // nullable place, `let saved: i64? = get(...)`, the payload's,
-            // `i64`, so that a stored null would be read as a value of
-            // another type, which fails. Until the specification says which
-            // (hgl_spec issue 165), such a `put` is not written.
-            ExprKind::Call {
-                callee:
-                    Callee::Candidate {
-                        module, generics, ..
-                    },
-                ..
-            } if Some(*module) == emitter.program.core()
-                && callee_name(emitter, value) == Some("put")
-                && generics.iter().any(|argument| {
-                    matches!(argument, GenericArgument::Type(Type::Nullable(_)))
-                }) =>
-            {
-                Some(emitter.missing(
-                    value.at,
-                    "a nullable value put in the run's store (hgl_spec issue 165)",
-                ))
             }
             _ => None,
         }

@@ -6,9 +6,5 @@
 # until it is taken off. `check_core.py --target cpp --write-list` writes
 # the list from a run; read the difference before it is committed.
 
-"a nullable value put in the run's store (hgl_spec issue 165)" = [
-    "conformance::a_stored_null_is_distinct_from_an_absent_key",
-]
-
 # Rejection cases the compiler does not yet reject: none.
 [rejections]

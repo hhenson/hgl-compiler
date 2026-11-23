@@ -2236,6 +2236,34 @@ fn function_parameters_run_on_the_sdk() {
     );
 }
 
+/// FN-17: a finite chain of static wrappers and a recursive call that
+/// forwards the same target both specialize and run.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn bounded_callable_specializations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("bounded_callable_specializations");
+    let file = write(
+        &root,
+        "demo.callable_specialization.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.callable_specialization.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-17 and GEN-6: the selected candidate supplies the callback type and
 /// kind. GEN-18 still reads the law of the selected static argument.
 #[test]
@@ -4437,11 +4465,10 @@ fn an_interrupt_of_hgl_alone_stops_a_run_in_real_time() {
 }
 
 /// CAP-6 on the SDK: every ordinary value put in the run's store is got
-/// back as itself, a struct, a tuple, a dictionary, a set and a delta among
-/// them, in a node, where a graph is built and by an application. A failure
-/// where a graph is built or in an application's store statements names the
-/// HGL file and line it was raised at, which the generated code sets with
-/// `#line`, and no place of the generated C++.
+/// back as itself, including nullables, structs, tuples, dictionaries,
+/// sets and deltas. Values are written in a node, where a graph is built,
+/// and by an application. Generated `#line` directives give failures
+/// in the graph build and application statements their HGL file and line.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn store_values_and_failure_places_on_the_sdk() {
@@ -4454,7 +4481,7 @@ fn store_values_and_failure_places_on_the_sdk() {
         "demo.store.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.store.hgl"),
     );
-    for (name, application) in [
+    for (name, source) in [
         (
             "demo.store.quotes.hgl",
             include_str!("../../hgl_cpp/tests/fixtures/demo.store.quotes.hgl"),
@@ -4467,14 +4494,26 @@ fn store_values_and_failure_places_on_the_sdk() {
             "demo.store.unbuilt.hgl",
             include_str!("../../hgl_cpp/tests/fixtures/demo.store.unbuilt.hgl"),
         ),
+        (
+            "demo.store.nullable.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.store.nullable.hgl"),
+        ),
     ] {
-        write(&root, name, application);
+        write(&root, name, source);
     }
+    // Include the rejected source only in the test harness. The ordinary
+    // application runs reject a program with an invalid test context.
+    let rejection = write(
+        &scratch("store_inferred_nullable"),
+        "demo.store.inferred_nullable.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.store.inferred_nullable.hgl"),
+    );
     let kept = root.join("build");
     let output = hgl_in(
         &[
             "test",
             &argument(&root),
+            &rejection,
             "--target",
             "cpp",
             "--keep",
@@ -4491,7 +4530,13 @@ fn store_values_and_failure_places_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "passed   rejection   demo.store.inferred_nullable::an_unwritten_store_read_rejects\n"
+        ),
         "{stdout}"
     );
     let run = |application: &str| {

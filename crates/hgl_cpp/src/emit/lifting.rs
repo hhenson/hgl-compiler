@@ -233,7 +233,12 @@ impl Emitter<'_> {
                 parameter.pack.is_some() || matches!(parameter.ty, Type::Function(_))
             }) {
             let Some(instance) = self.instances.find_call(program, callee, arguments) else {
-                return self.missing(value.at, "a lifted call of an instance that is not written");
+                return self.missing_instance(
+                    value.at,
+                    callee,
+                    arguments,
+                    "a lifted call of an instance that is not written",
+                );
             };
             Some(instance)
         } else {
@@ -707,18 +712,22 @@ impl Emitter<'_> {
         else {
             return self.missing(value.at, "a `capture` of this");
         };
-        let concrete = if declared
-            .parameters
-            .iter()
-            .any(|parameter| parameter.pack.is_some() || matches!(parameter.ty, Type::Function(_)))
-        {
-            let Some(instance) = self.instances.find_call(program, callee, arguments) else {
-                return self.missing(value.at, "a `capture` of an instance that is not written");
+        let concrete =
+            if declared.parameters.iter().any(|parameter| {
+                parameter.pack.is_some() || matches!(parameter.ty, Type::Function(_))
+            }) {
+                let Some(instance) = self.instances.find_call(program, callee, arguments) else {
+                    return self.missing_instance(
+                        value.at,
+                        callee,
+                        arguments,
+                        "a `capture` of an instance that is not written",
+                    );
+                };
+                Some(instance)
+            } else {
+                None
             };
-            Some(instance)
-        } else {
-            None
-        };
         let signature = concrete.map_or(declared, |instance| &instance.signature);
         let lifted = call.is_lifted();
         let temporal = matches!(
