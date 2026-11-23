@@ -25,7 +25,7 @@
 //!   comment that contains a line break counts as one line break where it
 //!   stands. The comment is one token with its text; the parser looks
 //!   inside when it weighs line breaks.
-//! * **Contextual names (LEX-9, LEX-10).** `const`, `list`, `switch` and
+//! * **Contextual names (LEX-9, LEX-10).** `const`, `case`, `default` and
 //!   the like are special only in certain positions. They are
 //!   [`TokenKind::Ident`] tokens; the parser checks their text.
 //! * **The sign of a number (LEX-7).** `-5` is two tokens. Whether a
