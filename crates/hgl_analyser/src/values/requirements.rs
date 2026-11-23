@@ -12,6 +12,7 @@ use hgl_source::FileId;
 
 use super::candidates::{AtInstance, Given, Wanted};
 use super::fit::{open, whole};
+use super::forwarded_packs::{visit_anonymous_bodies, walk_nested_calls};
 use super::inference::{fixed, mentions, placed, unsaid};
 use super::operators::{Requested, from_place, has_generic_configuration_default, unreadable};
 use super::{REQUIRING, Typer};
@@ -3139,7 +3140,7 @@ fn given_in(argument: &Argument, map: &[(Location, &Argument)], declared: &[Loca
 
 /// The calls of generic declarations `statements` make, at any depth.
 fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
-    hir::walk_statements(statements, &mut |expression| made_at(expression, made));
+    walk_nested_calls(statements, &mut |expression| made_at(expression, made));
 }
 
 /// Follow calls that graph settlement has made concrete through the same
@@ -3179,7 +3180,9 @@ fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<
 
 /// The calls of generic declarations `expression` makes, at any depth.
 fn made_by(expression: &Expr, made: &mut Vec<Made>) {
-    expression.walk(&mut |expression| made_at(expression, made));
+    expression.walk(&mut |expression| {
+        visit_anonymous_bodies(expression, &mut |part| made_at(part, made));
+    });
 }
 
 /// The calls an omitted, specialized default makes with resolved arguments
@@ -3207,77 +3210,69 @@ pub(super) fn concrete_default_calls(expression: &Expr, made: &mut Vec<Made>) {
     }));
 }
 
-/// The call `expression` is, where it is one of a function, an
-/// operator's candidate or a struct it gives generic arguments.
+/// The instance a call, function reference, or struct construction makes.
 fn made_at(expression: &Expr, made: &mut Vec<Made>) {
-    let (callee, generics, type_packs, answers) = match &expression.kind {
-        // A function, or the candidate a call of an operator selected
-        // (GEN-5), whose body may pass its parameters on as any does.
-        ExprKind::Call {
-            callee:
-                Callee::Function {
-                    module,
-                    declaration,
-                    generics,
-                    type_packs,
-                    requirements,
-                    ..
-                }
-                | Callee::Candidate {
-                    module,
-                    declaration,
-                    generics,
-                    type_packs,
-                    requirements,
-                    ..
-                },
-            ..
-        } => (
-            (*module, *declaration),
-            generics.clone(),
-            type_packs.clone(),
-            requirements.clone(),
-        ),
-        // GEN-16: an operation the enclosing declaration requires, whose
-        // candidate a call of that declaration answers.
-        ExprKind::Call {
-            callee: Callee::Required { requirement, .. },
-            ..
-        } => {
-            made.push(Made {
-                callee: (usize::MAX, usize::MAX),
-                generics: Vec::new(),
-                type_packs: Vec::new(),
-                answers: Vec::new(),
-                required: Some(*requirement),
-                at: expression.at,
-            });
-            return;
-        }
+    match &expression.kind {
+        ExprKind::Call { callee, .. } => made_callee(callee, expression.at, made),
+        ExprKind::StaticCallable(callee) => made_callee(callee, expression.at, made),
         ExprKind::Construct {
             module,
             declaration,
             ..
-        } => match &expression.ty {
-            Type::Named { arguments, .. } => (
-                (*module, *declaration),
-                arguments.clone(),
-                Vec::new(),
-                Vec::new(),
-            ),
-            _ => return,
-        },
-        _ => return,
-    };
-    if !generics.is_empty() || !answers.is_empty() {
-        made.push(Made {
-            callee,
+        } if let Type::Named { arguments, .. } = &expression.ty
+            && !arguments.is_empty() =>
+        {
+            made.push(Made {
+                callee: (*module, *declaration),
+                generics: arguments.clone(),
+                type_packs: Vec::new(),
+                answers: Vec::new(),
+                required: None,
+                at: expression.at,
+            });
+        }
+        _ => {}
+    }
+}
+
+/// Record the instance reached by a concrete call or static reference (GEN-7).
+/// A call exposed by forwarding carries the supplying call's location.
+pub(super) fn made_callee(callee: &Callee, at: Location, made: &mut Vec<Made>) {
+    match callee {
+        Callee::Function {
+            module,
+            declaration,
             generics,
             type_packs,
-            answers,
+            requirements,
+            ..
+        }
+        | Callee::Candidate {
+            module,
+            declaration,
+            generics,
+            type_packs,
+            requirements,
+            ..
+        } if !generics.is_empty() || !requirements.is_empty() => made.push(Made {
+            callee: (*module, *declaration),
+            generics: generics.clone(),
+            type_packs: type_packs.clone(),
+            answers: requirements.clone(),
             required: None,
-            at: expression.at,
-        });
+            at,
+        }),
+        // GEN-16: an operation the enclosing declaration requires, whose
+        // candidate a call of that declaration answers.
+        Callee::Required { requirement, .. } => made.push(Made {
+            callee: (usize::MAX, usize::MAX),
+            generics: Vec::new(),
+            type_packs: Vec::new(),
+            answers: Vec::new(),
+            required: Some(*requirement),
+            at,
+        }),
+        _ => {}
     }
 }
 

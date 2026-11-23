@@ -295,7 +295,7 @@ impl ForwardingInstance {
 
 /// Include anonymous bodies, which have their own local tables and
 /// are separate from an ordinary HIR expression walk (FN-14).
-fn visit_anonymous_bodies(value: &Expr, visit: &mut dyn FnMut(&Expr)) {
+pub(super) fn visit_anonymous_bodies(value: &Expr, visit: &mut dyn FnMut(&Expr)) {
     visit(value);
     let callee = match &value.kind {
         ExprKind::Call { callee, .. } => callee,
@@ -307,7 +307,8 @@ fn visit_anonymous_bodies(value: &Expr, visit: &mut dyn FnMut(&Expr)) {
     }
 }
 
-fn walk_nested_calls(statements: &[crate::hir::Stmt], visit: &mut dyn FnMut(&Expr)) {
+/// Walk expressions in the body and its nested anonymous functions.
+pub(super) fn walk_nested_calls(statements: &[crate::hir::Stmt], visit: &mut dyn FnMut(&Expr)) {
     crate::hir::walk_statements(statements, &mut |value| {
         visit_anonymous_bodies(value, visit)
     });
@@ -315,13 +316,16 @@ fn walk_nested_calls(statements: &[crate::hir::Stmt], visit: &mut dyn FnMut(&Exp
 
 /// Check forwarded calls under the concrete shapes that reach them (FN-19).
 /// A forwarding error belongs to the call that supplies that pack shape.
+/// Record the concrete calls it reaches for the ordinary GEN-7 checks.
 pub(super) fn check_instances(
     program: &crate::Program,
+    discovered: &mut Vec<super::requirements::Made>,
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = HashSet::new();
+    let mut deferred_at = HashSet::new();
     let mut callers = HashMap::<_, Vec<_>>::new();
     for (module, unit) in program.modules.iter().enumerate() {
         for (declaration, body) in unit.bodies.iter().enumerate() {
@@ -331,6 +335,7 @@ pub(super) fn check_instances(
                 if let ExprKind::Call { callee, .. } = &value.kind {
                     if matches!(callee, Callee::DeferredPackCall) {
                         forwarding.insert(owner);
+                        deferred_at.insert(value.at);
                     } else if let Some(called) = callee.declaration() {
                         callers.entry(called).or_default().push(owner);
                     }
@@ -426,9 +431,17 @@ pub(super) fn check_instances(
             }
             if let Some((_, body)) = checked {
                 walk_nested_calls(&body.statements, &mut |value| {
-                    if let Some(child) = ForwardingInstance::of(program, value)
-                        && forwarding.contains(&child.declaration)
+                    let Some(child) = ForwardingInstance::of(program, value) else {
+                        return;
+                    };
+                    // The ordinary walk already sees calls that were resolved
+                    // in the declaration. Only a forwarded call adds an edge.
+                    if deferred_at.contains(&value.at)
+                        && let ExprKind::Call { callee, .. } = &value.kind
                     {
+                        super::requirements::made_callee(callee, at, discovered);
+                    }
+                    if forwarding.contains(&child.declaration) {
                         waiting.push_back(child);
                     }
                 });
