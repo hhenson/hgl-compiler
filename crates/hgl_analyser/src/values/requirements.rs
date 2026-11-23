@@ -20,7 +20,9 @@ use crate::declared::{
     names_parameter, same_type, substitute_with_members, substitute_within, weight,
 };
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
-use crate::program::{Binding, Declaration, DeclarationKind, OperatorRef, Phase, Program, Role};
+use crate::program::{
+    Binding, Declaration, DeclarationKind, LocalKind, OperatorRef, Phase, Program, Role,
+};
 use crate::read::is_type;
 use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
 use crate::types::{
@@ -2401,6 +2403,7 @@ pub(super) fn instances_hold(
             let unit = &program.modules[made.callee.0];
             let graph = unit.phases.get(made.callee.1) == Some(&Some(Phase::Graph));
             let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
+            let recheck_results = selecting.iter().any(|call| call.result.is_some());
             let declared = own(made.callee);
             let map: Vec<(Location, &Argument)> =
                 declared.iter().copied().zip(&made.generics).collect();
@@ -2425,7 +2428,7 @@ pub(super) fn instances_hold(
                     diagnostics,
                     &mut body_reports,
                 )
-            } else if recheck_graph || recheck_endpoints {
+            } else if recheck_graph || recheck_endpoints || recheck_results {
                 program.checked_instance(
                     made.callee,
                     &made.generics,
@@ -2437,12 +2440,35 @@ pub(super) fn instances_hold(
             } else {
                 None
             };
-            if recheck_graph && let Some((_, body)) = instance {
-                if let Some(Some(source)) = program.modules[made.callee.0].bodies.get(made.callee.1)
-                {
-                    made_after_inference(source, &body, &mut instance_calls);
+            let mut reread_calls = HashSet::new();
+            if let Some(instance) = &instance
+                && let Some(result_uses) = &instance.result_uses
+            {
+                report_instance_result_uses(
+                    program,
+                    (made.callee, &made.generics),
+                    result_uses,
+                    &from,
+                    diagnostics,
+                );
+                if result_uses.reports.has_errors() {
+                    continue;
                 }
-                super::lifting::check_instance_constants(program, &body, &from, diagnostics);
+                reread_calls = made_after_result_recheck(&instance.body, &mut instance_calls);
+            }
+            if recheck_graph && let Some(instance) = &instance {
+                if instance.result_uses.is_none()
+                    && let Some(Some(source)) =
+                        program.modules[made.callee.0].bodies.get(made.callee.1)
+                {
+                    made_after_inference(source, &instance.body, &mut instance_calls);
+                }
+                super::lifting::check_instance_constants(
+                    program,
+                    &instance.body,
+                    &from,
+                    diagnostics,
+                );
                 super::lifting::report_instance_checks(
                     &body_reports,
                     &from,
@@ -2482,7 +2508,7 @@ pub(super) fn instances_hold(
             };
             let enclosing_packs =
                 super::dependent_packs::PackTypes::new(enclosing_packs, &made.type_packs);
-            for call in inner {
+            for call in inner.iter().filter(|call| !reread_calls.contains(&call.at)) {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with
                 // (GEN-16); any other has the instance's arguments and
@@ -2608,9 +2634,10 @@ pub(super) fn instances_hold(
                     .iter()
                     .enumerate()
                     .filter(|(index, call)| {
-                        !selecting[index + 1..]
-                            .iter()
-                            .any(|later| later.at == call.at)
+                        !reread_calls.contains(&call.at)
+                            && !selecting[index + 1..]
+                                .iter()
+                                .any(|later| later.at == call.at)
                     })
                     .map(|(_, call)| call);
                 for call in standing {
@@ -3143,6 +3170,114 @@ fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
     walk_nested_calls(statements, &mut |expression| made_at(expression, made));
 }
 
+/// GEN-7: a failure in a selected result's use points at its call and
+/// retains the ordinary diagnostic code and the concrete instance.
+pub(super) fn report_instance_result_uses(
+    program: &Program,
+    ((module, declaration), generics): ((usize, usize), &[Argument]),
+    result_uses: &crate::instance::ResultUseChecks,
+    callers: &[Location],
+    diagnostics: &mut Diagnostics,
+) {
+    if result_uses.reports.is_empty() {
+        return;
+    }
+    let unit = &program.modules[module];
+    let name = &unit.declarations[declaration].name;
+    let arguments = generics.iter().map(Argument::to_string).collect::<Vec<_>>();
+    let instance = format!("GEN-7: in `{name}<{}>`", arguments.join(", "));
+    let calls = &result_uses.changed_results;
+    for report in result_uses.reports.as_slice() {
+        let mut report = report.clone().with_note(&instance);
+        let changed = unique_location(calls.iter().copied()).or_else(|| {
+            changed_result_source(unit.bodies[declaration].as_ref()?, report.primary, calls)
+        });
+        if let Some(changed) = changed {
+            if report.primary != changed {
+                let use_at = report.primary;
+                report = report.with_related(use_at, "this use checks the selected result");
+                report.primary = changed;
+            }
+        } else {
+            for &call in calls {
+                report = report.with_related(call, "this call selected a different result type");
+            }
+        }
+        for &caller in callers {
+            report = report.with_related(caller, "this call makes the instance");
+        }
+        if !diagnostics.as_slice().contains(&report) {
+            diagnostics.emit(report);
+        }
+    }
+}
+
+/// Locate a changed call inside this use or its immutable initializer.
+fn changed_result_source(
+    body: &hir::Body,
+    use_at: Location,
+    calls: &[Location],
+) -> Option<Location> {
+    let within = |outer: Location| {
+        unique_location(calls.iter().copied().filter(|call| {
+            call.file == outer.file
+                && call.span.start >= outer.span.start
+                && call.span.end <= outer.span.end
+        }))
+    };
+    if let Some(call) = within(use_at) {
+        return Some(call);
+    }
+    let mut local = None;
+    hir::walk_statements(&body.statements, &mut |expression| {
+        if expression.at == use_at
+            && let ExprKind::Local(read) = expression.kind
+            && body.locals[read].kind == LocalKind::Let
+        {
+            local = Some(read);
+        }
+    });
+    let local = local?;
+    let mut source = None;
+    hir::walk_statement_nodes(&body.statements, &mut |node| {
+        if let hir::Node::Statement(hir::Stmt::Declare {
+            local: declared,
+            value: Some(value),
+        }) = node
+            && *declared == local
+        {
+            source = within(value.at);
+        }
+    });
+    source
+}
+
+/// The only distinct source location, if the locations identify one.
+fn unique_location(mut locations: impl Iterator<Item = Location>) -> Option<Location> {
+    let first = locations.next()?;
+    locations.all(|location| location == first).then_some(first)
+}
+
+/// Use the concrete calls found by the result reread instead of following
+/// their edges in the original body (GEN-7).
+fn made_after_result_recheck(body: &hir::Body, made: &mut Vec<Made>) -> HashSet<Location> {
+    let mut reread = HashSet::new();
+    walk_nested_calls(&body.statements, &mut |expression| {
+        if let Some(callee @ (Callee::Function { .. } | Callee::Candidate { .. })) =
+            called_or_referenced(expression)
+            && callee.generics().iter().all(resolved_default_argument)
+            && callee
+                .type_packs()
+                .iter()
+                .all(|pack| pack.forwarded_from.is_none())
+        {
+            reread.insert(expression.at);
+            made_at(expression, made);
+        }
+    });
+    reread
+}
+
 /// Follow calls that graph settlement has made concrete through the same
 /// bounded admission traversal as other calls. A source call already
 /// concrete there does not create a new edge here (GEN-3, GEN-13).
@@ -3208,6 +3343,15 @@ pub(super) fn concrete_default_calls(expression: &Expr, made: &mut Vec<Made>) {
             && call.generics.iter().all(resolved_default_argument)
             && call.answers.iter().all(concrete)
     }));
+}
+
+/// The callable reached by a call or a function reference.
+fn called_or_referenced(expression: &Expr) -> Option<&Callee> {
+    match &expression.kind {
+        ExprKind::Call { callee, .. } => Some(callee),
+        ExprKind::StaticCallable(callee) => Some(callee),
+        _ => None,
+    }
 }
 
 /// The instance a call, function reference, or struct construction makes.

@@ -159,6 +159,165 @@ fn first_instance(checked: &Checked, name: &str) -> (Signature, Body) {
         .expect("the callee has a body")
 }
 
+/// GEN-7: a selected result reaches inferred bindings and calls that
+/// use the binding's whole type.
+#[test]
+fn an_instance_uses_the_selected_candidates_result() {
+    let checked = module(concat!(
+        "operator items<T, C>(value: T) -> C\n",
+        "impl const fn items<T>(value: T) -> list<i64, 2> => [1, 2]\n",
+        "impl const fn items(value: i64) -> list<i64, 3> => [1, 2, 3]\n",
+        "operator count<C>(values: C) -> i64\n",
+        "impl const fn count(values: list<i64, 2>) -> i64 => 2\n",
+        "impl const fn count(values: list<i64, 3>) -> i64 => 3\n",
+        "const fn size<T>(value: T) -> i64 {\n",
+        "    let values = items(value)\n",
+        "    return count(values)\n",
+        "}\n",
+        "const fn concrete() -> i64 => size(5)\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    let (_, instance) = first_instance(&checked, "concrete");
+    assert_eq!(instance.locals[1].ty.to_string(), "list<i64, 3>");
+    assert_eq!(
+        called(&checked, &instance),
+        ["items(i64)", "count(list<i64, 3>)"]
+    );
+}
+
+/// GEN-7 and EXPR-7: when the instance chooses a set, its bracket read
+/// rejects where the body calls the operator and names the instance.
+#[test]
+fn an_instance_rejects_an_index_into_its_selected_set() {
+    let checked = module(concat!(
+        "operator items<T, C>(value: T) -> C\n",
+        "impl const fn items<T>(value: T) -> list<i64, 2> => [1, 2]\n",
+        "impl const fn items(value: bool) -> set<i64> => [3]\n",
+        "const fn first<T>(value: T) -> i64 => items(value)[0]\n",
+        "const fn concrete() -> i64 => first(true)\n",
+    ));
+    assert!(checked.rejected, "{}", checked.report);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.summary(), ["m.hgl:5:39 type/type.mismatch EXPR-7"]);
+    assert!(checked.report.contains("first<bool>"), "{}", checked.report);
+}
+
+/// GEN-7 and EXPR-5: a return checks the selected type of an inferred
+/// local. The local has no annotation to guide the earlier selection.
+#[test]
+fn an_instance_rejects_a_return_of_its_selected_result() {
+    let checked = module(concat!(
+        "operator get_value<T, R>(value: T) -> R\n",
+        "impl const fn get_value<T>(value: T) -> i64 => 5\n",
+        "impl const fn get_value(value: i64) -> str => \"different\"\n",
+        "const fn inferred<T>(value: T) -> i64 {\n",
+        "    let answer = get_value(value)\n",
+        "    return answer\n",
+        "}\n",
+        "const fn concrete() -> i64 => inferred(3)\n",
+    ));
+    assert!(checked.rejected, "{}", checked.report);
+    assert_eq!(checked.summary(), ["m.hgl:6:18 type/type.mismatch EXPR-5"]);
+    assert!(
+        checked.report.contains("inferred<i64>"),
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7: a changed result can make a new instance of its consumer.
+/// Checking the original consumer's instance does not check that call.
+#[test]
+fn an_instance_checks_the_consumer_of_its_selected_result() {
+    let checked = module(concat!(
+        "operator items<T, C>(value: T) -> C\n",
+        "impl const fn items<T>(value: T) -> list<i64, 2> => [1, 2]\n",
+        "impl const fn items(value: i64) -> list<i64, 3> => [1, 2, 3]\n",
+        "operator marker<T, C>(value: T) -> C\n",
+        "impl const fn marker<T>(value: T) -> list<i64, 2> => [1, 2]\n",
+        "impl const fn marker(value: list<i64, 3>) -> set<i64> => [3]\n",
+        "const fn first<T>(value: T) -> i64 => marker(value)[0]\n",
+        "const fn outer<T>(value: T) -> i64 {\n",
+        "    let values = items(value)\n",
+        "    return first(values)\n",
+        "}\n",
+        "const fn concrete() -> i64 => outer(5)\n",
+    ));
+    assert!(checked.rejected, "{}", checked.report);
+    assert_eq!(checked.summary(), ["m.hgl:8:39 type/type.mismatch EXPR-7"]);
+    assert!(
+        checked.report.contains("first<list<i64, 3>>"),
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7: a changed result is checked also through a function reference,
+/// an anonymous body, or a forwarded pack.
+#[test]
+fn instances_reached_through_functions_or_packs_check_the_selected_result() {
+    let definitions = concat!(
+        "operator fetch<T, R>(value: T) -> R\n",
+        "impl const fn fetch<T>(value: T) -> i64 => 5\n",
+        "impl const fn fetch(value: i64) -> str => \"other\"\n",
+        "const fn checked<T>(value: T) -> i64 {\n",
+        "    let answer = fetch(value)\n",
+        "    return answer\n",
+        "}\n",
+    );
+    for call in [
+        "apply(checked<i64>, 1)",
+        "apply(fn(value) => checked(value), 1)",
+        "relay(1)",
+    ] {
+        let checked = module(&format!(
+            "{definitions}{}{}test invoke {{ {call} }}\n",
+            "const fn apply(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+            "const fn relay<...Args>(values: ...Args) -> i64 => checked(...values)\n",
+        ));
+        assert_eq!(checked.findings.len(), 1, "{call}: {}", checked.report);
+        let finding = &checked.findings[0];
+        assert_eq!(
+            (finding.code.as_str(), finding.rule),
+            ("type/type.mismatch", "EXPR-5")
+        );
+        assert!(
+            checked.report.contains("checked<i64>"),
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// GEN-7: a failing use of an inferred binding points to its initializer
+/// when another selected call in the body also changed its result type.
+#[test]
+fn an_instance_reports_the_changed_call_that_its_local_reads() {
+    let checked = module(concat!(
+        "operator fetch<T, R>(value: T) -> R\n",
+        "impl const fn fetch<T>(value: T) -> i64 => 5\n",
+        "impl const fn fetch(value: i64) -> str => \"other\"\n",
+        "operator items_of<T, R>(value: T) -> R\n",
+        "impl const fn items_of<T>(value: T) -> list<i64, 2> => [1, 2]\n",
+        "impl const fn items_of(value: i64) -> list<i64, 3> => [1, 2, 3]\n",
+        "const fn two<T>(value: T) -> i64 {\n",
+        "    let answer = fetch(value)\n",
+        "    let items = items_of(value)\n",
+        "    return answer\n",
+        "}\n",
+        "test invoke { two(1) }\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:9:18 type/type.mismatch EXPR-5"]);
+    assert!(checked.report.contains("two<i64>"), "{}", checked.report);
+    assert!(
+        !checked
+            .report
+            .contains("this call selected a different result type"),
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-2: a call resolves each generic parameter of its callee, and
 /// the instance has what each stands for in place: in the signature, in
 /// the locals, and in each expression's type. GEN-16: an operation the

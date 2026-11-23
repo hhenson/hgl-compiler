@@ -416,7 +416,6 @@ pub(super) fn check_instances(
                 &reports,
                 &mut graph_reports,
             );
-            seen.push(instance);
             for report in graph_reports.as_slice() {
                 if diagnostics.as_slice().contains(report) {
                     continue;
@@ -429,8 +428,17 @@ pub(super) fn check_instances(
                     diagnostics.emit(report);
                 }
             }
-            if let Some((_, body)) = checked {
-                walk_nested_calls(&body.statements, &mut |value| {
+            if let Some(checked) = checked {
+                if let Some(result_uses) = &checked.result_uses {
+                    super::requirements::report_instance_result_uses(
+                        program,
+                        (instance.declaration, &instance.generics),
+                        result_uses,
+                        &[at],
+                        diagnostics,
+                    );
+                }
+                walk_nested_calls(&checked.body.statements, &mut |value| {
                     let Some(child) = ForwardingInstance::of(program, value) else {
                         return;
                     };
@@ -446,6 +454,7 @@ pub(super) fn check_instances(
                     }
                 });
             }
+            seen.push(instance);
         }
     }
 }
