@@ -28,6 +28,8 @@
 //! Duration arithmetic (OPS-10) and tenor arithmetic, comparison,
 //! movement primitives and text (TEN-1, TEN-2, TEN-3, TEN-4, TEN-9)
 //! use the selected binding in the same way.
+//! Core's `write` uses the ordinary native function binding, with its
+//! stream and flush arguments (OUT-1, OUT-2).
 //!
 //! EXPR-2: the arguments are evaluated in the order written, and then
 //! the defaults of those left out. C++ evaluates a call's arguments in

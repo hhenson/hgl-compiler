@@ -891,15 +891,24 @@ analyser: partial
 
 ## FMT-4
 
-analyser and transpiler: done
+analyser: done
 
-- A specifier is checked against the argument's type at compile time. The C++ target gives primitive fields to pinned fmt with compiled specifiers. It emits checked chrono directives with fractional truncation on `%S`, `%T` and `%[S]`, duration totals and padding on the whole field.
+- A specifier is checked against the argument's type at compile time.
+
+transpiler: done
+
+- The C++ target gives primitive fields to pinned fmt with compiled specifiers. It emits checked chrono directives with fractional truncation on `%S`, `%T` and `%[S]`, duration totals and padding on the whole field.
 
 ## FMT-5
 
-analyser and transpiler: partial
+analyser: partial
 
-- Value defaults are written in Core's scalar forms. A user type uses its selected `convert<str>`. The growing list, fixed list, set and dictionary candidates use each member's conversion and traversal order, and quote and escape strings and render absent members as `null`.
+- A user type uses its selected `convert<str>` and rejects if there is no candidate.
+- Left: tuple and struct text candidates (#434, #512).
+
+transpiler: partial
+
+- Value defaults are written in Core's scalar forms. The growing list, fixed list, set and dictionary candidates use each member's conversion and traversal order, quote and escape strings and render absent members as `null`.
 - Left: tuple and struct text candidates (#434, #512).
 
 ## FMT-6
@@ -922,9 +931,14 @@ transpiler: planned
 
 ## FMT-9
 
-analyser and transpiler: partial
+analyser: partial
 
-- Value calls admit `{wall_time}` and reject `{engine_time}` with `format.argument`. A marked place accepts `Marked<T>` and writes the configured tick prefix when its argument ticked.
+- Value calls admit `{wall_time}` and reject `{engine_time}` with `format.argument`. A marked place accepts `Marked<T>`.
+- Left: a graph supplies evaluation time and the arguments' tick state (#434).
+
+transpiler: partial
+
+- `{wall_time}` reads the process clock. A marked place writes the configured tick prefix when its argument ticked.
 - Left: a graph supplies evaluation time and the arguments' tick state (#434).
 
 ## DBG-1
