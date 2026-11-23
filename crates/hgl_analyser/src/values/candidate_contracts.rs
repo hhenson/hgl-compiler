@@ -91,6 +91,7 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
 fn parameter_types(public: &Signature, candidate: &Signature, role: Role) -> Option<Vec<Argument>> {
     let mut arguments = vec![None; public.generics.len()];
     let mut from_parameter = arguments.clone();
+    let mut inputs = Vec::new();
     for (parameter, slot) in public
         .parameters
         .iter()
@@ -110,20 +111,6 @@ fn parameter_types(public: &Signature, candidate: &Signature, role: Role) -> Opt
             &public.generics,
             &mut from_parameter,
         );
-        let inferred: Vec<_> = public
-            .generics
-            .iter()
-            .zip(&from_parameter)
-            .filter_map(|(generic, argument)| Some((generic.at, argument.as_ref()?)))
-            .collect();
-        // Inference retains the first binding within a parameter. Check
-        // that the known parts agree when a binding is used more than
-        // once before using it for a declaration diagnostic.
-        if repeated_binding(&parameter.ty, &inferred)
-            && same_type(&substitute_within(&parameter.ty, &inferred), &given.ty) != Some(true)
-        {
-            return None;
-        }
         for (known, next) in arguments.iter_mut().zip(&mut from_parameter) {
             if let Some(next) = next.take() {
                 match (&*known, &next) {
@@ -136,6 +123,27 @@ fn parameter_types(public: &Signature, candidate: &Signature, role: Role) -> Opt
                 }
             }
         }
+        inputs.push((&parameter.ty, &given.ty));
+    }
+    let bindings: Vec<_> = public
+        .generics
+        .iter()
+        .zip(&arguments)
+        .filter_map(|(generic, argument)| Some((generic.at, argument.as_ref()?)))
+        .collect();
+    let values: Vec<_> = bindings
+        .iter()
+        .filter_map(|&(at, argument)| matches!(argument, Argument::Constant(_)).then_some(at))
+        .collect();
+    // Inference retains the first binding within an input and does not
+    // solve equations. Once all inputs have contributed, check repeats
+    // and expressions before trusting the bindings for diagnostics.
+    for (pattern, given) in inputs {
+        if needs_binding_check(pattern, &bindings, &values)
+            && same_type(&substitute_within(pattern, &bindings), given) != Some(true)
+        {
+            return None;
+        }
     }
     Some(
         arguments
@@ -145,25 +153,31 @@ fn parameter_types(public: &Signature, candidate: &Signature, role: Role) -> Opt
     )
 }
 
-fn repeated_binding(ty: &Type, inferred: &[(Location, &Argument)]) -> bool {
+/// True where an input repeats an inferred binding or computes a constant
+/// from a bound value parameter (GEN-2, GEN-6).
+fn needs_binding_check(ty: &Type, inferred: &[(Location, &Argument)], values: &[Location]) -> bool {
     let seen = RefCell::new(HashSet::new());
     let repeated =
         |at| inferred.iter().any(|&(known, _)| known == at) && !seen.borrow_mut().insert(at);
     ty.any_part(
         &|part| matches!(part, Type::Parameter { at, .. } if repeated(*at)),
-        &|constant| repeated_constant_binding(&constant.value, &repeated),
+        &|constant| constant_needs_binding_check(&constant.value, &repeated, values),
     )
 }
 
-/// The declaration's value parameters can be inferred inside list and
-/// tuple constants as well as from a constant used on its own (GEN-2).
-fn repeated_constant_binding(value: &ConstantValue, repeated: &dyn Fn(Location) -> bool) -> bool {
+/// A literal composite can contain direct bindings as well as expressions
+/// that use a binding inferred elsewhere.
+fn constant_needs_binding_check(
+    value: &ConstantValue,
+    repeated: &dyn Fn(Location) -> bool,
+    values: &[Location],
+) -> bool {
     match value {
         ConstantValue::Parameter { at, .. } => repeated(*at),
         ConstantValue::List(elements) | ConstantValue::Tuple(elements) => elements
             .iter()
-            .any(|element| repeated_constant_binding(element, repeated)),
-        _ => false,
+            .any(|element| constant_needs_binding_check(element, repeated, values)),
+        _ => value.names_one_of(values),
     }
 }
 

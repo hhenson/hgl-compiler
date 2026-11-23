@@ -263,13 +263,15 @@ fn a_result_contract_needs_consistent_input_bindings() {
     );
 }
 
-/// GEN-6: a value binding inside a list or tuple constant needs the
-/// same consistency check before it gives a declared result type.
+/// GEN-6: repeats and expressions inside composite constants must
+/// agree with the binding before it gives a declared result type.
 #[test]
-fn a_result_contract_checks_repeated_bindings_in_composite_constants() {
+fn a_result_contract_checks_inferred_values_in_composite_constants() {
     for (constant_type, pattern, conflicting, consistent) in [
         ("list<i64>", "[N, N]", "[1, 2]", "[1, 1]"),
         ("tuple<i64, i64>", "(N, N)", "(1, 2)", "(1, 1)"),
+        ("list<i64>", "[N, N + 1]", "[1, 4]", "[1, 2]"),
+        ("list<i64>", "[N, N * 2]", "[1, 4]", "[1, 2]"),
     ] {
         let checked = module(&format!(
             "struct Box<const X: {constant_type}> {{}}\n\
@@ -288,6 +290,27 @@ fn a_result_contract_checks_repeated_bindings_in_composite_constants() {
             checked.report
         );
     }
+}
+
+/// GEN-6: a value inferred from one input also has to agree with an
+/// expression in another input before it gives a declared result type.
+#[test]
+fn a_result_contract_checks_values_used_across_inputs() {
+    let checked = module(concat!(
+        "operator pick<const N: i64>(a: list<i64, N>, b: list<i64, N + 1>) -> list<i64, N>\n",
+        "impl const fn pick(a: list<i64, 2>, b: list<i64, 4>) -> list<i64, 3> => [1, 2, 3]\n",
+        "impl const fn pick(a: list<i64, 2>, b: list<i64, 3>) -> list<i64, 3> => [1, 2, 3]\n",
+    ));
+    assert_eq!(
+        checked
+            .summary()
+            .into_iter()
+            .filter(|report| report.contains("operator/impl.result"))
+            .collect::<Vec<_>>(),
+        ["m.hgl:4:57 operator/impl.result GEN-6"],
+        "{}",
+        checked.report
+    );
 }
 
 /// FN-8 and GEN-10: capture in written order, keeping the pack slot,
