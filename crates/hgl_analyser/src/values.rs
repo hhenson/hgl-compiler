@@ -584,6 +584,8 @@ struct Typer<'a> {
     /// how many locals there were where the outermost such loop began:
     /// a `var` before that is declared outside it (CTRL-15).
     dynamic: Option<usize>,
+    /// Names of active graph range passes with constant bounds (CTRL-16).
+    unrolled_range_bindings: Vec<LocalId>,
     /// The hook of a node being read; `None` in a value function, and
     /// between a node's hooks.
     hook: Option<Hook>,
@@ -793,6 +795,7 @@ impl<'a> Typer<'a> {
             must_return: false,
             returning_tails: HashMap::new(),
             dynamic: None,
+            unrolled_range_bindings: Vec::new(),
             hook: None,
             out: None,
             present: Vec::new(),

@@ -202,23 +202,35 @@ impl Typer<'_> {
             SyntaxKind::ParenExpr | SyntaxKind::UnaryExpr | SyntaxKind::BinaryExpr => expression
                 .children()
                 .any(|operand| self.reads_runtime_binding(&operand)),
-            SyntaxKind::NameExpr => name_token(expression).is_some_and(|name| {
-                matches!(
-                    self.bindings.get(&(self.file, name.span().start)),
-                    Some(Binding::Local {
-                        kind: LocalKind::Parameter
-                            | LocalKind::Var
-                            | LocalKind::State
-                            | LocalKind::Cache
-                            | LocalKind::Inject
-                            | LocalKind::Iteration,
-                        ..
-                    })
-                ) && !self
-                    .local_of(expression)
-                    .and_then(|local| self.signature.parameters.get(local))
-                    .is_some_and(|parameter| parameter.constant)
+            SyntaxKind::NameExpr => self.is_runtime_guard_name(expression),
+            _ => false,
+        }
+    }
+
+    fn is_runtime_guard_name(&self, expression: &SyntaxNode) -> bool {
+        let Some(name) = name_token(expression) else {
+            return false;
+        };
+        let Some(Binding::Local { kind, .. }) = self.bindings.get(&(self.file, name.span().start))
+        else {
+            return false;
+        };
+        let local = self.local_of(expression);
+        match kind {
+            LocalKind::Parameter => !local
+                .and_then(|local| self.signature.parameters.get(local))
+                .is_some_and(|parameter| parameter.constant),
+            // A loop without a known iterable is judged where it is
+            // written. Its iteration binding does not settle a guard.
+            LocalKind::Iteration => local.is_some_and(|local| {
+                self.locals[local].ty != Type::Unknown
+                    && !self.unrolled_range_bindings.contains(&local)
             }),
+            LocalKind::Let
+            | LocalKind::Var
+            | LocalKind::State
+            | LocalKind::Cache
+            | LocalKind::Inject => true,
             _ => false,
         }
     }

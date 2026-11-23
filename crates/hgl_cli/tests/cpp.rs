@@ -2226,6 +2226,40 @@ fn a_computed_pack_spread_preserves_written_pack_member_types() {
     assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
 }
 
+/// CTRL-16 and FN-19: a constant range's pass gives the computed entry
+/// a compile-time name in both a graph statement and a list comprehension.
+#[test]
+fn a_computed_pack_spread_can_read_a_graph_range_binding_in_a_guard() {
+    let root = scratch("computed-pack-graph-range-guard");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn looped<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}) -> f64 {\n",
+            "    var out = 0.0\n",
+            "    for i in 0..<2 {\n",
+            "        out = f(...{for key in arg_keys(Ps): if i == 0 { args[key] } else { 1.0 }})\n",
+            "    }\n",
+            "    return out\n",
+            "}\n",
+            "fn nested<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}) -> f64 {\n",
+            "    var out = 0.0\n",
+            "    for i in 0..<2 {\n",
+            "        for j in 0..<(i + 1) {\n",
+            "            out = f(...{for key in arg_keys(Ps): if j == 0 { args[key] } else { 1.0 }})\n",
+            "        }\n",
+            "    }\n",
+            "    return out\n",
+            "}\n",
+            "fn listed<...Ps, ...As>(f: const fn(...{Ps}) -> f64, args: ...{As for f}) -> list<f64, 2> =>\n",
+            "    [for i in 0..<2: f(...{for key in arg_keys(Ps): if i == 0 { args[key] } else { 1.0 }})]\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
+}
+
 /// FN-19, FN-17 and EXPR-3: invalid places, iterables and declaration-bound
 /// reads are diagnosed without unrolling the computed pack.
 #[test]
@@ -2272,6 +2306,16 @@ fn a_computed_pack_spread_rejects_invalid_declaration_uses() {
             "a pack loop condition must be constant",
         ),
         (
+            "{ let flag = x > 1; return f(...{for k in arg_keys(Ps): if flag { 1 } else { 2 }}) }",
+            "type/type.mismatch",
+            "a pack loop condition must be constant",
+        ),
+        (
+            "{ var t = 0; for i in [1, 2] { t += f(...{for k in arg_keys(Ps): if i == 1 { 1 } else { 2 }}) }; return t }",
+            "type/type.mismatch",
+            "a pack loop condition must be constant",
+        ),
+        (
             "f(...{for k in arg_keys(Ps): if false { 1 } else if k in arg_keys(Ps) && b { 2 }})",
             "type/type.mismatch",
             "a pack loop condition must be constant",
@@ -2296,7 +2340,7 @@ fn a_computed_pack_spread_rejects_invalid_declaration_uses() {
             &format!(
                 "module m\n\
                  const fn pair(item: i64, other: i64) -> i64 => item + other\n\
-                 const fn g<...Ps>(f: const fn(...{{Ps}}) -> i64, b: bool) -> i64 {body}{entry}\n"
+                 const fn g<...Ps>(f: const fn(...{{Ps}}) -> i64, b: bool, x: i64) -> i64 {body}{entry}\n"
             ),
         );
         let checked = hgl_in(&["check", &file], &[], &[]);
