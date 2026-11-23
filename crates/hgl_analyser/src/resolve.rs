@@ -32,7 +32,8 @@ use crate::program::{
     Program, RUN_CONFIG,
 };
 use crate::syntax::{
-    child, has_token, is_arg_keys_call, leads_its_test, pack_for_names, ungrouped,
+    child, has_token, is_arg_keys_call, leads_its_test, pack_for_names, parent_outside_grouping,
+    ungrouped,
 };
 use crate::{INJECTABLES, RESULT_FORMS, codes, error};
 
@@ -674,6 +675,21 @@ impl Resolver<'_> {
     /// A loop's name is bound only in its entry expression (EXPR-17, FN-19).
     fn comprehension(&mut self, node: &SyntaxNode) {
         let pack = node.kind() == SyntaxKind::PackComprehension;
+        if pack
+            && !parent_outside_grouping(node).is_some_and(|parent| {
+                parent.kind() == SyntaxKind::PackSpreadArg
+                    || (parent.kind() == SyntaxKind::LocalDecl
+                        && has_token(&parent, SyntaxKind::KwLet))
+            })
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                Location::new(self.file_id, node.span()),
+                "a pack loop must be bound with `let` or spread into a call".to_string(),
+                "FN-19",
+            ));
+        }
         let mut parts = node.children();
         let mut kind = LocalKind::Iteration;
         if let Some(sequence) = parts.next() {
@@ -686,6 +702,15 @@ impl Resolver<'_> {
                     self.children(&arguments);
                 }
             } else {
+                if pack {
+                    self.diagnostics.emit(error(
+                        Category::Type,
+                        codes::TYPE_MISMATCH,
+                        Location::new(self.file_id, sequence.span()),
+                        "a pack loop needs `arg_keys` of a type pack".to_string(),
+                        "FN-19",
+                    ));
+                }
                 self.walk(&sequence);
             }
         }

@@ -60,6 +60,13 @@ pub(crate) fn is_arg_keys_call(node: &SyntaxNode) -> bool {
         })
 }
 
+/// The first enclosing node that does more than group this expression (EXPR-1).
+pub(crate) fn parent_outside_grouping(node: &SyntaxNode) -> Option<SyntaxNode> {
+    node.ancestors()
+        .skip(1)
+        .find(|parent| parent.kind() != SyntaxKind::ParenExpr)
+}
+
 /// What `node` is with the parentheses around it taken off. EXPR-1:
 /// "parentheses group", so `((a))` is `a`.
 pub(crate) fn ungrouped(mut node: SyntaxNode) -> SyntaxNode {

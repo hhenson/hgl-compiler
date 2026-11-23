@@ -10,7 +10,9 @@ use super::requirements::pack_view;
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey};
 use crate::program::{Binding, LocalKind};
-use crate::syntax::{child, has_token, is_arg_keys_call, name_token, ungrouped};
+use crate::syntax::{
+    child, has_token, is_arg_keys_call, name_token, parent_outside_grouping, ungrouped,
+};
 use crate::types::{GenericKind, Scalar, Type};
 use crate::{codes, error};
 
@@ -28,7 +30,17 @@ impl Typer<'_> {
     /// A form that does not implement pack forwarding must not discard
     /// the spread and emit a call using only its written arguments.
     pub(super) fn unread_pack_call(&mut self, list: &SyntaxNode) -> Option<(ExprKind, Type)> {
-        spread_operands(list).next()?;
+        let mut spreads = spread_operands(list).peekable();
+        spreads.peek()?;
+        let before = self.diagnostics.len();
+        for spread in spreads.map(ungrouped) {
+            if spread.kind() == SyntaxKind::PackComprehension {
+                self.check_pack_comprehension(&spread);
+            }
+        }
+        if self.diagnostics.len() != before {
+            return Some((ExprKind::Unread, Type::Unknown));
+        }
         Some(self.unread_call(list))
     }
 
@@ -93,12 +105,39 @@ impl Typer<'_> {
         ))
     }
 
-    /// Check the declaration-time shape of a pack comprehension (FN-19).
-    /// Its generic passes and their branch values stay unread.
+    /// Check the declaration-time shape and bindings of a pack comprehension.
+    /// Its generic passes and their branch values stay unread (FN-19).
     pub(super) fn check_pack_comprehension(&mut self, node: &SyntaxNode) {
+        self.check_pack_iterable(node);
+        let Some(entry) = node.children().nth(1) else {
+            return;
+        };
+        self.check_pack_conditions(ungrouped(entry.clone()));
+        self.check_pack_entry(&entry);
+    }
+
+    fn check_pack_entry(&mut self, node: &SyntaxNode) {
+        match node.kind() {
+            SyntaxKind::PackComprehension => return self.check_pack_comprehension(node),
+            SyntaxKind::PackKeyMembership => {
+                // GEN-17: these operands name a key and a type pack.
+                self.pack_key_membership(node);
+                return;
+            }
+            SyntaxKind::NameExpr => self.check_pack_entry_name(node),
+            SyntaxKind::AssignStmt => self.check_pack_key_assignment(node),
+            _ => {}
+        }
+        for part in node.children() {
+            self.check_pack_entry(&part);
+        }
+    }
+
+    fn check_pack_iterable(&mut self, node: &SyntaxNode) {
         let Some(iterable) = node.children().next().map(ungrouped) else {
             return;
         };
+        // The resolver checks the required iterable syntax (FN-19).
         if !is_arg_keys_call(&iterable) {
             return;
         }
@@ -120,15 +159,120 @@ impl Typer<'_> {
                 "GEN-17",
             ));
         }
-        // Membership syntax says which names are compile-time keys and
-        // type packs. Neither the truth value nor a branch is selected here.
-        if let Some(entry) = node.children().nth(1) {
-            for membership in entry
-                .descendants()
-                .filter(|part| part.kind() == SyntaxKind::PackKeyMembership)
+    }
+
+    /// The pack's condition chain reads fixed values only (FN-19). A
+    /// condition that depends on a pack pass stays symbolic here.
+    fn check_pack_conditions(&mut self, mut entry: SyntaxNode) {
+        while entry.kind() == SyntaxKind::IfExpr {
+            if let Some(condition) = entry.children().next()
+                && self.reads_runtime_binding(&condition)
             {
-                self.pack_key_membership(&membership);
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    self.at(&condition),
+                    "a pack loop condition must be constant".to_string(),
+                    "FN-19",
+                ));
             }
+            let Some(next) = child(&entry, SyntaxKind::IfExpr) else {
+                break;
+            };
+            entry = next;
+        }
+    }
+
+    /// Recognize a known runtime name through grouping or operators.
+    /// Calls and per-key reads still need the selected pass to type them.
+    fn reads_runtime_binding(&self, expression: &SyntaxNode) -> bool {
+        match expression.kind() {
+            SyntaxKind::ParenExpr | SyntaxKind::UnaryExpr | SyntaxKind::BinaryExpr => expression
+                .children()
+                .any(|operand| self.reads_runtime_binding(&operand)),
+            SyntaxKind::NameExpr => name_token(expression).is_some_and(|name| {
+                matches!(
+                    self.bindings.get(&(self.file, name.span().start)),
+                    Some(Binding::Local {
+                        kind: LocalKind::Parameter
+                            | LocalKind::Var
+                            | LocalKind::State
+                            | LocalKind::Cache
+                            | LocalKind::Inject
+                            | LocalKind::Iteration,
+                        ..
+                    })
+                ) && !self
+                    .local_of(expression)
+                    .and_then(|local| self.signature.parameters.get(local))
+                    .is_some_and(|parameter| parameter.constant)
+            }),
+            _ => false,
+        }
+    }
+
+    /// Names in a deferred entry still have the declaration's binding.
+    fn check_pack_entry_name(&mut self, node: &SyntaxNode) {
+        let Some(name) = name_token(node) else {
+            return;
+        };
+        if let Some(binding) = self.bindings.get(&(self.file, name.span().start))
+            && self.is_type_pack(binding)
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                self.at(node),
+                format!(
+                    "`{}` is a type pack and cannot be read as a value",
+                    name.text()
+                ),
+                "FN-19",
+            ));
+        } else if self
+            .local_of(node)
+            .is_some_and(|local| matches!(self.locals[local].ty, Type::Function(_)))
+            && !parent_outside_grouping(node).is_some_and(|parent| {
+                parent.kind() == SyntaxKind::Arg
+                    || (parent.kind() == SyntaxKind::CallExpr
+                        && parent.children().next().map(ungrouped).as_ref() == Some(node))
+            })
+        {
+            // FN-17: invocation and forwarding as a callback are read
+            // when the call is checked in a pass.
+            self.function_value(self.at(node));
+        }
+    }
+
+    /// EXPR-3: an iteration binding is read-only before it has a key.
+    fn check_pack_key_assignment(&mut self, assignment: &SyntaxNode) {
+        let Some(mut place) = assignment.children().next().map(ungrouped) else {
+            return;
+        };
+        let at = self.at(&place);
+        while matches!(place.kind(), SyntaxKind::MemberExpr | SyntaxKind::IndexExpr) {
+            let Some(base) = place.children().next().map(ungrouped) else {
+                return;
+            };
+            place = base;
+        }
+        if place.kind() == SyntaxKind::NameExpr
+            && let Some(name) = name_token(&place)
+            && let Some(Binding::Local {
+                at: key,
+                kind: LocalKind::PackIterationKey,
+            }) = self.bindings.get(&(self.file, name.span().start))
+        {
+            self.diagnostics.emit(
+                error(
+                    Category::Name,
+                    codes::BINDING_IMMUTABLE,
+                    at,
+                    format!("`{}` is a pack key and cannot be assigned", name.text()),
+                    "EXPR-3",
+                )
+                .with_related(*key, "declared here"),
+            );
         }
     }
 
@@ -164,10 +308,7 @@ impl Typer<'_> {
         let Some(binding) = self.bindings.get(&(self.file, name.span().start)) else {
             return;
         };
-        let type_pack = matches!(binding, Binding::Local { at, kind: LocalKind::GenericParameter }
-            if self.signature.generics.iter().any(|generic| generic.at == *at
-                && matches!(generic.kind, GenericKind::Pack { .. })));
-        if !type_pack {
+        if !self.is_type_pack(binding) {
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::TYPE_MISMATCH,
@@ -179,6 +320,12 @@ impl Typer<'_> {
                 "GEN-17",
             ));
         }
+    }
+
+    fn is_type_pack(&self, binding: &Binding) -> bool {
+        matches!(binding, Binding::Local { at, kind: LocalKind::GenericParameter }
+            if self.signature.generics.iter().any(|generic| generic.at == *at
+                && matches!(generic.kind, GenericKind::Pack { .. })))
     }
 
     /// The entries the instance gives to this call. Bind names before

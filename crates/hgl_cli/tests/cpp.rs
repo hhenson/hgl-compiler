@@ -2199,6 +2199,84 @@ fn a_computed_pack_spread_reports_a_value_pack_used_as_a_type_pack() {
     );
 }
 
+/// FN-19, FN-17 and EXPR-3: invalid places, iterables and declaration-bound
+/// reads are diagnosed without unrolling the computed pack.
+#[test]
+fn a_computed_pack_spread_rejects_invalid_declaration_uses() {
+    let cases = [
+        (
+            "pair(item: {for k in arg_keys(Ps): 1}, other: 2)",
+            "type/type.mismatch",
+            "a pack loop must be bound",
+        ),
+        (
+            "{ let xs = [({for k in arg_keys(Ps): 1})]; 1 }",
+            "type/type.mismatch",
+            "a pack loop must be bound",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): {for j in arg_keys(Ps): 1}})",
+            "type/type.mismatch",
+            "a pack loop must be bound",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): Ps})",
+            "type/type.mismatch",
+            "is a type pack and cannot be read as a value",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): f})",
+            "type/function.value",
+            "a function parameter can be invoked or passed",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): { k = \"x\"; 1 }})",
+            "name/binding.immutable",
+            "is a pack key and cannot be assigned",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): if b { 1 } else { 2 }})",
+            "type/type.mismatch",
+            "a pack loop condition must be constant",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): if false { 1 } else if k in arg_keys(Ps) && b { 2 }})",
+            "type/type.mismatch",
+            "a pack loop condition must be constant",
+        ),
+        (
+            "f(...{for i in 0..<3: i})",
+            "type/type.mismatch",
+            "a pack loop needs `arg_keys` of a type pack",
+        ),
+        (
+            "f(...{for i in [1, 2]: i})",
+            "type/type.mismatch",
+            "a pack loop needs `arg_keys` of a type pack",
+        ),
+    ];
+    for (index, (entry, code, message)) in cases.into_iter().enumerate() {
+        let root = scratch(&format!("computed-pack-rejection-{index}"));
+        let body = if entry.starts_with('{') { "" } else { "=> " };
+        let file = write(
+            &root,
+            "m.hgl",
+            &format!(
+                "module m\n\
+                 const fn pair(item: i64, other: i64) -> i64 => item + other\n\
+                 const fn g<...Ps>(f: const fn(...{{Ps}}) -> i64, b: bool) -> i64 {body}{entry}\n"
+            ),
+        );
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        let stderr = text(&checked.stderr);
+        assert_eq!(checked.status.code(), Some(1), "{entry}\n{stderr}");
+        assert!(
+            stderr.contains(&format!("error[{code}]")) && stderr.contains(message),
+            "{entry}\n{stderr}",
+        );
+    }
+}
+
 /// FN-18 and EXPR-10: brace arguments reach their ordinary, generic,
 /// value and temporal slots. Graphs pass const values and connections
 /// on to a node, and configuration defaults are used when omitted.
