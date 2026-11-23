@@ -11,7 +11,7 @@
 //! | `enum Side { buy, sell }` | `enum class Side { buy, sell }` of the module's namespace; an enum of core's the runtime library declares, `ZeroPolicy`, is the library's |
 //! | `T?` | `std::optional<T>` |
 //! | `tuple<A, B>` | `std::tuple<A, B>` |
-//! | `list<T>`, `list<T, N>` | the library's `hglrt::list<T>`, a `std::vector<T>` hgraph can hash; `std::array<T, N>` |
+//! | `list<T>`, `list<T, unbounded>`, `list<T, N>` | growing lists use `hglrt::list<T>`, a `std::vector<T>` hgraph can hash; fixed lists use `std::array<T, N>` |
 //! | `error`, `result<T, error>` | the library's `hglrt::error`, hgraph's `CanonicalError`; `hglrt::result<T>`, a `std::expected<T, error>` (ERR-2, ERR-4) |
 //! | An error's `.context` (ERR-4) | hgraph's `ErrorContext` |
 //! | A struct, a set, a dictionary, a delta | `composites`' |
@@ -21,6 +21,7 @@
 
 use hgl_analyser::{ConstantValue, DeclarationKind, Detail, Program, Scalar, Type};
 use hgl_diagnostics::Location;
+use hgl_lower::types::fixed_list_size;
 
 use super::Emitter;
 use super::composites;
@@ -70,33 +71,29 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
                 .collect();
             format!("::std::tuple<{}>", positions?.join(", "))
         }
-        Type::List {
-            element,
-            size: None,
-        } => format!(
-            "::{}::list<{}>",
-            runtime::NAMESPACE,
-            cpp_type_in(program, element, generic)?
-        ),
-        // TYPE-4: a fixed list holds exactly its size.
-        Type::List {
-            element,
-            size: Some(size),
-        } => match &size.value {
-            ConstantValue::Int(count) if *count >= 0 => {
-                format!(
-                    "::std::array<{}, {count}>",
+        Type::List { element, size } => {
+            match fixed_list_size(size.as_ref()).map(|size| &size.value) {
+                None => format!(
+                    "::{}::list<{}>",
+                    runtime::NAMESPACE,
                     cpp_type_in(program, element, generic)?
-                )
+                ),
+                // TYPE-4: a fixed list holds exactly its size.
+                Some(ConstantValue::Int(count)) if *count >= 0 => {
+                    format!(
+                        "::std::array<{}, {count}>",
+                        cpp_type_in(program, element, generic)?
+                    )
+                }
+                // The size of a generic struct's own (GEN-13).
+                Some(ConstantValue::Parameter { name, .. }) if generic => format!(
+                    "::std::array<{}, {}>",
+                    cpp_type_in(program, element, generic)?,
+                    names::template_parameter(name)
+                ),
+                _ => return None,
             }
-            // The size of a generic struct's own (GEN-13).
-            ConstantValue::Parameter { name, .. } if generic => format!(
-                "::std::array<{}, {}>",
-                cpp_type_in(program, element, generic)?,
-                names::template_parameter(name)
-            ),
-            _ => return None,
-        },
+        }
         Type::Error => format!("::{}::error", runtime::NAMESPACE),
         // ERR-4: an error's `.context`, "a read-only nullable record of
         // `.node: str`, `.phase: str` ... and `.evaluation_time`", is

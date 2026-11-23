@@ -3,7 +3,7 @@
 //! read whole only where it is all valid. Part of lowering: a transpiler
 //! asks it what a type is before it writes the type's form.
 
-use hgl_analyser::{Detail, Member, NamedKind, Program, Type};
+use hgl_analyser::{Constant, ConstantValue, Detail, Member, NamedKind, Program, Type};
 
 /// True where another struct of the program inherits from the struct
 /// `declaration` of `module`: a value of that type may be of the other
@@ -43,10 +43,16 @@ pub fn is_nullable(ty: &Type) -> bool {
     matches!(ty, Type::Nullable(_))
 }
 
+/// The size a fixed list supplies to lowering, possibly still unresolved.
+/// An omitted size and TYPE-10's `unbounded` sentinel both grow.
+pub fn fixed_list_size(size: Option<&Constant>) -> Option<&Constant> {
+    size.filter(|size| !matches!(size.value, ConstantValue::Unbounded))
+}
+
 /// True for a temporal value of `ty` that is read whole only where it is
 /// all valid (TIME-1: "A read of a struct, a tuple or a fixed list whole
 /// ... requires `all_valid` of it"): a struct with a field, a tuple and a
-/// list of a size. A struct with none publishes its one value whole
+/// fixed list. A struct with no fields publishes its one value whole
 /// (`empty_struct`).
 pub fn read_whole_all_valid(program: &Program, ty: &Type) -> bool {
     match ty {
@@ -54,7 +60,8 @@ pub fn read_whole_all_valid(program: &Program, ty: &Type) -> bool {
             kind: NamedKind::Struct,
             ..
         } => !empty_struct(program, ty),
-        Type::Tuple(_) | Type::List { size: Some(_), .. } => true,
+        Type::Tuple(_) => true,
+        Type::List { size, .. } => fixed_list_size(size.as_ref()).is_some(),
         _ => false,
     }
 }

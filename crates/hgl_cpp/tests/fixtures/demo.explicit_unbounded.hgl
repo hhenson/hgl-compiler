@@ -1,0 +1,54 @@
+module demo.explicit_unbounded
+
+# TYPE-10: the explicit size sentinel uses the target's growing list.
+const fn ordinary(values: list<i64, unbounded>) -> list<i64, unbounded> => values
+
+fn scaled(value: i64, const factors: list<i64, unbounded>) -> i64 {
+    return value * factors[0]
+}
+
+fn with_literal(value: i64) -> i64 => scaled(value, [2, 3])
+
+fn relay(values: list<i64, unbounded>) -> list<i64, unbounded> {
+    when all_valid(values) { return ordinary(values) }
+}
+
+fn through_graph(values: list<i64, unbounded>) -> list<i64, unbounded> => relay(values)
+
+test ordinary_growing_list_configuration {
+    assert eval with_literal([1, 2]) == [2, 4]
+}
+
+test growing_node_input_and_output {
+    assert eval relay(values: [[1], _, [2, 3], []]) == [[1], _, [2, 3], []]
+}
+
+test growing_graph_input_and_output {
+    assert eval through_graph(values: [[1, 2], [], [3]]) == [[1, 2], [], [3]]
+}
+
+struct Container {
+    values: list<i64, unbounded>
+}
+
+fn bundled(item: Container) -> Container {
+    when all_valid(item) { return item }
+}
+
+test growing_list_as_bundle_field {
+    assert eval bundled(item: [Container(values: [1, 2]), Container(values: [])]) ==
+        [Container(values: [1, 2]), Container(values: [])]
+}
+
+fn consume(value: i64) {
+    when { let read = value }
+}
+
+fn with_a_loop(values: list<i64, unbounded>) -> list<i64, unbounded> {
+    for value in values { consume(value) }
+    return relay(values)
+}
+
+test growing_connections_in_a_graph_loop {
+    assert eval with_a_loop(values: [[1], [], [2, 3]]) == [[1], [], [2, 3]]
+}

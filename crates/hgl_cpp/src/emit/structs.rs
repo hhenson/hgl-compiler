@@ -37,7 +37,7 @@
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Hook, Stmt, Value};
 use hgl_analyser::{DeclarationKind, Detail, NamedKind, Program, Scalar, Type};
-use hgl_lower::types::{fields_of, inherited};
+use hgl_lower::types::{fields_of, fixed_list_size, inherited};
 
 use super::Emitter;
 use super::forms::Family;
@@ -127,7 +127,7 @@ fn bundle_field(program: &Program, ty: &Type, depth: usize) -> Option<String> {
         // (structs.h, `list_value`), which the bundle's field must be.
         Type::List { element, size } => {
             let element = bundle_field(program, element, depth)?;
-            match size {
+            match fixed_list_size(size.as_ref()) {
                 None => Some(format!("::{}::list_value<{element}>", runtime::NAMESPACE)),
                 Some(size) => match size.value {
                     hgl_analyser::ConstantValue::Int(count) if count > 0 => Some(format!(
