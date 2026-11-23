@@ -65,8 +65,10 @@ const fn structures<...Ts>(value: tuple<Ts>) -> bool
     requires each T in types(Ts) { T in struct } => true
 const fn bounded<...Us>(value: tuple<Us>) -> bool
     requires each U in types(Us) { U in struct } => structures(value)
+const fn empty_tail<...Us{0}>(value: tuple<Label, Us>) -> bool => structures(value)
 test tuple_category_requirements {
     assert bounded((Label(text: "a"), Point(x: 1.0, y: 2.0)))
+    assert empty_tail((Label(text: "a"),))
 }
 
 # GEN-10 and FN-1: the same pack types specialize a temporal function.

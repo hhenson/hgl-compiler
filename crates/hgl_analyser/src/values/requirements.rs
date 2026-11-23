@@ -4718,6 +4718,14 @@ fn each_holds(
         return held;
     }
     for ty in &pack.types {
+        // GEN-10: a zero-length forwarded pack contributes no element
+        // to an each/any view, even while its tuple marker is symbolic.
+        if let Type::Parameter { at, .. } = ty
+            && pack.forwarded_from == Some(*at)
+            && empty_type_pack(of.program, *at)
+        {
+            continue;
+        }
         let mut nested = keys.to_vec();
         nested.push(ConstraintKey {
             name: bound.text(),
@@ -4750,6 +4758,31 @@ fn each_holds(
         }
     }
     held
+}
+
+/// A declared empty pack has no category to test (GEN-10).
+fn empty_type_pack(program: &Program, at: Location) -> bool {
+    program
+        .modules
+        .iter()
+        .flat_map(|module| &module.details)
+        .any(|detail| {
+            let generics = match detail {
+                Detail::Callable(signature) => &signature.generics,
+                Detail::Struct(structure) => &structure.generics,
+                _ => return false,
+            };
+            generics.iter().any(|generic| {
+                generic.at == at
+                    && matches!(
+                        generic.kind,
+                        GenericKind::Pack {
+                            maximum: Some(0),
+                            ..
+                        }
+                    )
+            })
+        })
 }
 
 /// The view name and pack name in a `types(Ts)` or `arg_keys(Ps)` form.

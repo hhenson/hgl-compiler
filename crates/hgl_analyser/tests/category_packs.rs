@@ -215,3 +215,11 @@ fn forwarded_tuple_cardinality_uses_the_enclosing_bounds() {
         "type/pack.cardinality",
     );
 }
+
+#[test]
+fn an_empty_forwarded_pack_contributes_no_category_test() {
+    // GEN-10: an empty conjunction is true; the fixed struct remains.
+    accepts(
+        "module m\nstruct Label { text: str }\nconst fn structures<...Ts>(x: tuple<Ts>) -> bool requires each T in types(Ts) { T in struct } => true\nconst fn outer<...Us{0}>(x: tuple<Label, Us>) -> bool => structures(x)\ntest checks { assert outer((Label(text: \"a\"),)) }",
+    );
+}
