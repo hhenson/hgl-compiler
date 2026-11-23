@@ -891,6 +891,21 @@ impl<'a> Typer<'a> {
                 ));
             }
         }
+        let mut operator_generics = operator_generics;
+        // The GEN-7 portion is held: generic-body calls keep their original
+        // metadata even when this pass is reading a concrete instance.
+        let public = (self.signature.generics.is_empty() && !operator_generics.is_empty())
+            .then(|| {
+                program.modules[operator.module]
+                    .details
+                    .get(operator.declaration)
+            })
+            .flatten()
+            .and_then(|detail| match detail {
+                Detail::Callable(public) => Some(public),
+                _ => None,
+            });
+        let mut fitted_inputs = vec![None; public.map_or(0, |public| public.parameters.len())];
         let mut braced = Vec::new();
         // GEN-7: when an instance has to select again, keep the input
         // expressions before the provisional candidate fits them. In
@@ -959,6 +974,9 @@ impl<'a> Typer<'a> {
                 } else {
                     self.fit(input, ty, &place)
                 };
+                if let Some(index) = public.and_then(|public| given.key.public_parameter(public)) {
+                    fitted_inputs[index] = Some(value.ty.clone());
+                }
                 if from_braces {
                     braced.push(value.at);
                 }
@@ -969,6 +987,25 @@ impl<'a> Typer<'a> {
                 })
             })
             .collect();
+        // GEN-2, GEN-6, UNIT-8: inherited configuration defaults
+        // receive the fitted argument's type, not the parameter's.
+        // Fitting a literal to f64? gives f64; it does not make it nullable.
+        if let Some(public) = public {
+            let mut found: Vec<_> = operator_generics
+                .iter()
+                .map(|argument| match argument {
+                    Argument::Type(Type::Unknown) => None,
+                    argument => Some(argument.clone()),
+                })
+                .collect();
+            let supplied: Vec<_> = fitted_inputs.iter().map(Option::as_ref).collect();
+            self.infer_operator_inputs(public, &mut found, &supplied);
+            for (argument, resolved) in operator_generics.iter_mut().zip(found) {
+                if let Some(resolved) = resolved {
+                    *argument = resolved;
+                }
+            }
+        }
         let requirements = self.answers(module, declaration, &generics);
         let kind = ExprKind::Call {
             callee: Callee::Candidate {
