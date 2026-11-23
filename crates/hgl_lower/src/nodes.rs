@@ -215,13 +215,15 @@ pub fn designates(value: &Expr) -> bool {
 
 /// How a node designates a temporal input (FN-16: "A parameter that is
 /// not `ref` may be designated too"): whole, or by a position of it, a
-/// fixed list.
+/// fixed list, or by a dictionary key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Designated {
     /// `return value`
     Whole,
     /// `return items[idx]`, of a `list<T, N>`.
     Position,
+    /// `return dictionary[key]`.
+    Key,
 }
 
 /// What `value`, a designation (`designates`), designates of a temporal
@@ -245,6 +247,12 @@ pub fn designated(
                         && !is_reference(locals, signature, *local) =>
                 {
                     Some((*local, Designated::Position))
+                }
+                (ExprKind::Local(local), Type::Dict { .. })
+                    if is_input(locals, signature, *local)
+                        && !is_reference(locals, signature, *local) =>
+                {
+                    Some((*local, Designated::Key))
                 }
                 _ => None,
             },

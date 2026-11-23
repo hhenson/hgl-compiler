@@ -582,7 +582,7 @@ impl Emitter<'_> {
         // FN-16: the ordinary inputs a `ref` result designates, which the
         // node follows (`references`), and the validity that leaves the
         // node's own.
-        let Some(designated) = self.designated_inputs(signature, body, &injected) else {
+        let Some(designated) = self.designated_inputs(signature, body) else {
             return;
         };
         let valid = designated.validity(valid);
@@ -766,13 +766,20 @@ impl Emitter<'_> {
             return;
         };
         written.push_str(&made);
-        let woken = super::scheduling::woken(&context, body, &inputs);
-        let designation = self.designation_prologue(&designated, body, &inputs, &active);
-        if watched.is_empty() {
-            written.push_str(&designation);
-            written.push_str(&woken);
-        } else {
-            written.push_str(&woken);
+        written.push_str(&super::scheduling::woken(
+            &context,
+            body,
+            &inputs,
+            designated.holds(),
+        ));
+        written.push_str(&self.designation_prologue(
+            &designated,
+            body,
+            &inputs,
+            &active,
+            context.timer.is_some(),
+        ));
+        if !watched.is_empty() {
             let library = runtime::NAMESPACE;
             let mut wakes = Vec::new();
             if context.timer.is_some() {
@@ -785,7 +792,6 @@ impl Emitter<'_> {
                 ));
             }
             written.push_str(&format!("{indent}if (!({})) return;\n", wakes.join(" || ")));
-            written.push_str(&designation);
         }
         context.kind = Kind::Hook(Hook::When);
         let mut handlers = String::new();

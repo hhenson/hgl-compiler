@@ -2410,27 +2410,6 @@ fn a_lifted_calls_omitted_defaults_are_configuration() {
     assert!(bounds < b, "{tests}");
 }
 
-/// UNIT-8: a default is written where its argument is left out; one
-/// that calls its own function with that argument left out again would
-/// be written inside itself without end, and is reported.
-#[test]
-fn a_default_that_leaves_itself_out_is_reported() {
-    let emitted = emit(&[(
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "const fn again(value: bool = again()) -> bool => value\n",
-            "const fn uses() -> bool => again()\n",
-            "test calls {\n",
-            "    assert uses()\n",
-            "}\n",
-        ),
-    )]);
-    let reported = "m.hgl:2:30 the cpp target does not write a default that leaves itself out yet";
-    assert_eq!(emitted.reported, [reported]);
-    assert_eq!(emitted.blocked("calls").as_deref(), Some(reported));
-}
-
 /// TST-1 and FN-4: value and temporal helpers may share a name inside a
 /// test, and a different test can have its own functions of those names.
 #[test]

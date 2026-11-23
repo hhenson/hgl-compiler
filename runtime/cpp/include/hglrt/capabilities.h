@@ -281,6 +281,9 @@ class Alarm {
     /// The hook it is used in.
     [[nodiscard]] Hook hook() const noexcept { return hook_; }
 
+    /// Whether the alarm's wake was due on entry to this evaluation.
+    [[nodiscard]] bool was_due() const noexcept { return was_due_; }
+
     /// Record a stale dated request.
     void record_drop() const;
 
@@ -288,6 +291,7 @@ class Alarm {
     hgraph::NodeScheduler view_;
     Hook hook_;
     DroppedWakeLog drop_log_;
+    bool was_due_{};
 };
 
 /// `schedule(capability: Alarm, at: duration)` (CAP-5): asks for a wake `at`
