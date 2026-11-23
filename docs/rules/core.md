@@ -376,10 +376,14 @@ transpiler: partial
 
 ## END-5
 
+analyser: partial
+
+- `activate` and `passivate` in `stop` reject as `input.lifecycle` (TIME-5); the input binding is passive there.
+
 transpiler: partial
 
 - Writes input activity control and suppresses silent no-change collection updates. A window result holds its last arrival until the handler's evaluation finishes (END-9).
-- Left: `activate` and `passivate` in `stop` pass source checking and are declined by the target. TIME-5 specifies a source `input.lifecycle` rejection.
+- Left: unsupported temporal shapes follow TYPE-9.
 
 ## END-6
 
