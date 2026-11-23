@@ -3266,9 +3266,9 @@ fn growing_callable_specializations_are_reported_at_the_call() {
         ),
     ];
     for (function, at, source) in cases {
-        let emitted = emit_with(&[("m.hgl", source)], &hgl_cpp::runtime::provides);
+        let emitted = emit_on_analysis_stack(source);
         let expected = format!(
-            "m.hgl:{at} the cpp target does not write a function argument to `{function}` with more than 8 deeper specializations on one call chain yet"
+            "m.hgl:{at} the cpp target does not write a function argument to `{function}` with more than 64 deeper specializations on one call chain yet"
         );
         assert_eq!(emitted.reported, std::slice::from_ref(&expected));
         assert_eq!(
@@ -3279,16 +3279,32 @@ fn growing_callable_specializations_are_reported_at_the_call() {
     }
 }
 
-/// FN-17: a deep argument alone is fine. Reusing `apply` across a
-/// chain allows eight requests for deeper arguments and declines the ninth.
+/// As in `hgl emit`, give nested and synthesized bodies the analyser's
+/// stack budget. The libtest worker's default stack is smaller.
+fn emit_on_analysis_stack(source: &str) -> Emitted {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(hgl_analyser::stack_size(Limits::default()))
+            .spawn_scoped(scope, || {
+                emit_with(&[("m.hgl", source)], &hgl_cpp::runtime::provides)
+            })
+            .expect("allocate the compiler stack")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+/// FN-17: reusing `apply` across a chain allows 64 requests for deeper
+/// arguments and declines the next. A shorter chain checks key growth.
 #[test]
 fn callable_growth_limit_counts_requests_on_one_chain() {
     for (wrappers, expected) in [
         (10, None),
+        (66, None),
         (
-            11,
+            67,
             Some(
-                "m.hgl:12:61 the cpp target does not write a function argument to `apply` with more than 8 deeper specializations on one call chain yet",
+                "m.hgl:68:61 the cpp target does not write a function argument to `apply` with more than 64 deeper specializations on one call chain yet",
             ),
         ),
     ] {
@@ -3311,10 +3327,10 @@ fn callable_growth_limit_counts_requests_on_one_chain() {
              test chain {{ assert w1(identity, 0) == {wrappers} }}"
         )
         .unwrap();
-        let emitted = emit_with(&[("m.hgl", &source)], &hgl_cpp::runtime::provides);
+        let emitted = emit_on_analysis_stack(&source);
         assert_eq!(emitted.reported, expected.into_iter().collect::<Vec<_>>());
         assert_eq!(emitted.blocked("chain").as_deref(), expected);
-        if expected.is_none() {
+        if wrappers == 10 {
             let module = emitted
                 .output
                 .files
@@ -3328,35 +3344,70 @@ fn callable_growth_limit_counts_requests_on_one_chain() {
     }
 }
 
-/// FN-17: each invocation of the same anonymous callback contributes
-/// to the wrapper's size. One wrapper plus 127 invocations still fits.
+/// FN-17: every occurrence of the same named target costs space in a
+/// copied anonymous callback. One more local makes the request too large.
 #[test]
 fn callable_size_limit_counts_repeated_targets() {
-    for (invocations, expected) in [
-        (127, None),
+    for (locals, expected) in [
+        (2, None),
         (
-            128,
+            3,
             Some(
-                "m.hgl:4:5 the cpp target does not write a function argument to `apply` with more than 128 anonymous targets yet",
+                "m.hgl:10:12 the cpp target does not write a function argument to `apply` whose specialization copies more than 200000 nodes yet",
             ),
         ),
     ] {
         let mut source = String::from(concat!(
             "module m\n",
-            "const fn apply(f: const fn(i64) -> i64, value: i64) -> i64 => f(value)\n",
-            "const fn repeat_in_wrapper(f: const fn(i64) -> i64, value: i64) -> i64 =>\n",
-            "    apply(fn(x) {\n",
+            "const fn apply(f: const fn(i64) -> i64, value: i64) -> i64 {\n",
         ));
-        for index in 1..=invocations {
-            writeln!(source, "        let a{index} = f(x)").unwrap();
+        let mut previous = "value".to_string();
+        for index in 0..locals {
+            writeln!(source, "    let v{index} = {previous}").unwrap();
+            previous = format!("v{index}");
         }
-        writeln!(source, "        return a{invocations}").unwrap();
+        writeln!(source, "    return f({previous})\n}}").unwrap();
         source.push_str(concat!(
-            "    }, value)\n",
-            "test tree { assert repeat_in_wrapper(fn(x) => x, 3) == 3 }\n",
+            "const fn identity(value: i64) -> i64 => value\n",
+            "test wide {\n",
+            "    assert apply(fn(x) {\n",
+        ));
+        for index in 1..=19_998 {
+            writeln!(source, "        let a{index} = identity(x)").unwrap();
+        }
+        source.push_str(concat!(
+            "        return a19998\n",
+            "    }, 3) == 3\n",
+            "}\n",
         ));
         let emitted = emit_with(&[("m.hgl", &source)], &hgl_cpp::runtime::provides);
         assert_eq!(emitted.reported, expected.into_iter().collect::<Vec<_>>());
-        assert_eq!(emitted.blocked("tree").as_deref(), expected);
+        assert_eq!(emitted.blocked("wide").as_deref(), expected);
     }
+}
+
+/// FN-17: instancing a wide wrapper would copy the callback into each of
+/// its calls. Check the copy budget before creating another such instance.
+#[test]
+fn callable_size_limit_checks_wide_growth_before_copying() {
+    let mut source = String::from(concat!(
+        "module m\n",
+        "const fn grow(f: const fn(i64) -> i64, step: i64) -> i64 =>\n",
+        "    if step == 0 { f(1) } else { grow(fn(n) {\n",
+    ));
+    for index in 1..=127 {
+        writeln!(source, "        let a{index} = f(n)").unwrap();
+    }
+    source.push_str(concat!(
+        "        return a127\n",
+        "    }, step - 1) }\n",
+        "const fn identity(value: i64) -> i64 => value\n",
+        "test growing { assert grow(identity, 2) == 1 }\n",
+        "test independent { assert 2 + 2 == 4 }\n",
+    ));
+    let emitted = emit_with(&[("m.hgl", &source)], &hgl_cpp::runtime::provides);
+    let expected = "m.hgl:3:34 the cpp target does not write a function argument to `grow` whose specialization copies more than 200000 nodes yet";
+    assert_eq!(emitted.reported, [expected]);
+    assert_eq!(emitted.blocked("growing").as_deref(), Some(expected));
+    assert_eq!(emitted.blocked("independent"), None);
 }

@@ -46,8 +46,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 
 use hgl_analyser::hir::{
-    Answer, Argument, Body, Callee, Expr, ExprKind, Local, Run, Stmt, TypePackArgument,
-    ValueCategory, walk_statements,
+    Answer, Argument, Body, Callee, Expr, ExprKind, Local, Node, Run, Stmt, TypePackArgument,
+    ValueCategory, walk_statement_nodes, walk_statements,
 };
 use hgl_analyser::{
     Argument as GenericArgument, DeclarationKind, Detail, GenericKind, LocalKind, Pack, Program,
@@ -175,15 +175,15 @@ pub struct Instances {
 /// The target's resource limits for instancing static function arguments.
 #[derive(Default)]
 pub struct CallableLimits {
-    /// Anonymous targets allowed in one request, counting every occurrence.
-    pub targets: usize,
+    /// Copied targets, statements, expressions and locals allowed in one request.
+    pub size: usize,
     /// Deeper requests for the same declaration allowed on one request chain.
     pub growth: usize,
 }
 
 /// Which limit prevented the target from writing an instance.
 pub enum CallableLimit {
-    /// The request holds too many anonymous targets to copy and key.
+    /// The request would copy too many nodes to specialize its body.
     Size,
     /// The same declaration was requested too often with a deeper argument.
     Growth,
@@ -408,26 +408,70 @@ fn called_or_supplied(value: &Expr) -> Option<&Callee> {
     }
 }
 
-/// Count repeated targets too: each call or supplied argument holds its
-/// own copy when a wrapper uses the same callable more than once.
-fn callable_depth(target: &Callee, remaining: &mut usize) -> Option<usize> {
-    let Callee::Anonymous(function) = target else {
-        return Some(0);
+/// Spend the cost of one callee and its owned body. A named callee owns
+/// its identity and an anonymous callee owns the nodes of its body.
+fn callable_depth(
+    target: &Callee,
+    remaining: &mut usize,
+    arguments: &[(usize, usize)],
+) -> Option<usize> {
+    let cost = match target {
+        Callee::Parameter { parameter, .. } => arguments
+            .iter()
+            .find(|(slot, _)| slot == parameter)
+            .map_or(1, |(_, cost)| *cost),
+        _ => 1,
     };
-    *remaining = remaining.checked_sub(1)?;
-    let mut deepest = Some(0);
-    walk_statements(&function.body.statements, &mut |value| {
-        if let (Some(depth), Some(callee)) = (deepest, called_or_supplied(value)) {
-            deepest = callable_depth(callee, remaining).map(|child| depth.max(child));
-        }
-    });
-    deepest.map(|depth| depth + 1)
+    *remaining = remaining.checked_sub(cost)?;
+    match target {
+        Callee::Anonymous(function) => Some(body_depth(&function.body, remaining, arguments)? + 1),
+        _ => Some(0),
+    }
 }
 
-fn callable_depths(arguments: &[Argument], mut remaining: usize) -> Option<Vec<(usize, usize)>> {
-    function_arguments(arguments)
-        .map(|(slot, target)| Some((slot, callable_depth(target, &mut remaining)?)))
-        .collect()
+/// Walk an owned body. When `arguments` is given, forecast each copy the
+/// instancing pass makes at a call or forwarding use of a static parameter.
+fn body_depth(body: &Body, remaining: &mut usize, arguments: &[(usize, usize)]) -> Option<usize> {
+    *remaining = remaining.checked_sub(body.locals.len())?;
+    let mut deepest = Some(0);
+    walk_statement_nodes(&body.statements, &mut |node| {
+        deepest = deepest.and_then(|depth| {
+            *remaining = remaining.checked_sub(1)?;
+            let Node::Expression(expression) = node else {
+                return Some(depth);
+            };
+            let Some(callee) = called_or_supplied(expression) else {
+                return Some(depth);
+            };
+            callable_depth(callee, remaining, arguments).map(|child| depth.max(child))
+        });
+    });
+    deepest
+}
+
+/// Read argument depths and size before owning a request. Then bound the
+/// copies its instance will create, including uses inside source lambdas.
+/// Otherwise one wide wrapper can exhaust memory before its next request
+/// is available for inspection.
+fn callable_depths(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    arguments: &[Argument],
+    mut remaining: usize,
+) -> Option<Vec<(usize, usize)>> {
+    let mut weights = Vec::new();
+    let mut depths = Vec::new();
+    for (slot, target) in function_arguments(arguments) {
+        let before = remaining;
+        depths.push((slot, callable_depth(target, &mut remaining, &[])?));
+        weights.push((slot, before - remaining));
+    }
+    if !weights.is_empty()
+        && let Some(body) = &program.modules[module].bodies[declaration]
+    {
+        body_depth(body, &mut remaining, &weights)?;
+    }
+    Some(depths)
 }
 
 fn exceeds_growth(
@@ -945,7 +989,12 @@ impl Instances {
         let mut found = Vec::new();
         // Check the borrowed arguments before cloning them into a request.
         if self.instanced(program, *module, *declaration)
-            && let Some(depths) = callable_depths(arguments, self.callable_limits.targets)
+            && let Some(depths) = callable_depths(
+                program,
+                (*module, *declaration),
+                arguments,
+                self.callable_limits.size,
+            )
         {
             found.push(Asked {
                 module: *module,
@@ -1056,7 +1105,12 @@ impl Instances {
         arguments: &[Argument],
     ) -> Option<&Instance> {
         let (module, declaration) = callee.declaration()?;
-        callable_depths(arguments, self.callable_limits.targets)?;
+        callable_depths(
+            program,
+            (module, declaration),
+            arguments,
+            self.callable_limits.size,
+        )?;
         let key = call_key(program, callee, arguments)?;
         self.declared(module, declaration)
             .iter()
@@ -1070,13 +1124,20 @@ impl Instances {
         callee: &Callee,
         arguments: &[Argument],
     ) -> Option<CallableLimit> {
-        if callable_depths(arguments, self.callable_limits.targets).is_none() {
+        let (module, declaration) = callee.declaration()?;
+        if callable_depths(
+            program,
+            (module, declaration),
+            arguments,
+            self.callable_limits.size,
+        )
+        .is_none()
+        {
             return Some(CallableLimit::Size);
         }
         if self.growing.is_empty() {
             return None;
         }
-        let (module, declaration) = callee.declaration()?;
         let key = call_key(program, callee, arguments)?;
         self.growing
             .contains(&(module, declaration, key))

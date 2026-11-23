@@ -78,8 +78,8 @@ impl Emitter<'_> {
             let name = &self.program.modules[module].declarations[declaration].name;
             let reason = match limit {
                 CallableLimit::Size => format!(
-                    "a function argument to `{name}` with more than {} anonymous targets",
-                    crate::CALLABLE_LIMITS.targets,
+                    "a function argument to `{name}` whose specialization copies more than {} nodes",
+                    crate::CALLABLE_LIMITS.size,
                 ),
                 CallableLimit::Growth => format!(
                     "a function argument to `{name}` with more than {} deeper specializations on one call chain",

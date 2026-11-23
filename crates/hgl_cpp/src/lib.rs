@@ -48,11 +48,11 @@ use hgl_lower::instances::CallableLimits;
 /// The name `hgl emit --target` takes for this target.
 pub const TARGET: &str = "cpp";
 
-/// FN-17: bound the storage for anonymous wrappers and the number of
+/// FN-17: bound the copied callable bodies and the number of
 /// deeper specializations of the same declaration on a request chain.
 const CALLABLE_LIMITS: CallableLimits = CallableLimits {
-    targets: 128,
-    growth: 8,
+    size: 200_000,
+    growth: 64,
 };
 
 /// The codes of this target's own diagnostics. They are local to the
