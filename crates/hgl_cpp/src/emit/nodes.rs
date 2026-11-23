@@ -33,6 +33,7 @@ use super::Emitter;
 use super::forms::Family;
 use super::names::{self, identifier};
 use super::readers::{Reading, watches_failure};
+use super::scheduling::{DROPPED_WAKES, WAKE_NODE, add_wake_node};
 use super::statements::{Scope, statement_at};
 use super::values::INDENT;
 use crate::runtime;
@@ -57,7 +58,7 @@ const RESULT_FORM_LABEL: &str = "hgl.result.form";
 pub(super) const STATE: &str = "state_";
 
 /// The name of the node's state as a hook changes it.
-const KEPT: &str = "kept_";
+pub(super) const KEPT: &str = "kept_";
 
 /// What the code being written is part of, where it is temporal: the
 /// emitter holds one while it writes a node's hook, a source's body, a
@@ -622,7 +623,8 @@ impl Emitter<'_> {
                 None => None,
             }
         };
-        // The one struct of the node's `state` and `cache` (TIME-6).
+        // The one struct of the node's persistent state (TIME-6, TIME-8).
+        let tracks_drops = context.timer.is_some();
         let mut members = String::new();
         for (local, _) in &states {
             let declared = &body.locals[*local];
@@ -635,7 +637,13 @@ impl Emitter<'_> {
             ));
         }
         members.push_str(&designated.members());
-        let held = !states.is_empty() || designated.holds();
+        if tracks_drops {
+            let library = runtime::NAMESPACE;
+            members.push_str(&format!(
+                "{indent}::{library}::DroppedWakes {DROPPED_WAKES}{{}};\n"
+            ));
+        }
+        let held = !states.is_empty() || designated.holds() || tracks_drops;
         let mut placed = Placed::of(program, self.module, index, instance);
         if let Some((number, _)) = readers {
             placed.add_input_variant(number);
@@ -668,7 +676,7 @@ impl Emitter<'_> {
                 hook.push(state_parameter.clone());
                 written.push_str(&format!("{INDENT}{INDENT}{STATE}.set(state_type_{{}});\n"));
             }
-            written.push_str(&prologue(body, &states));
+            written.push_str(&prologue(body, &states, tracks_drops));
             // TIME-6: "Cache is reconstructible node-local value data,
             // initialized on every start"; a `state` is given its first
             // value as the node starts too, since no state is restored.
@@ -711,7 +719,7 @@ impl Emitter<'_> {
             hook.push(output.clone());
         }
         let mut written = checks;
-        written.push_str(&prologue(body, &states));
+        written.push_str(&prologue(body, &states, tracks_drops));
         if forms.is_some() {
             hook.push(ResultForms::mode_parameter());
             let declared = ResultForms::view(ResultForm::Whole);
@@ -798,7 +806,8 @@ impl Emitter<'_> {
         // `stop` (TIME-5), given the node's parameters, its state, and
         // its output where it reads it (TIME-7: "`out` is read in a `when`
         // and in `stop`").
-        if let Some((statements, at)) = stop {
+        if stop.is_some() || tracks_drops {
+            let statements = stop.map_or(&[][..], |(statements, _)| statements);
             let mut hook = parameters.clone();
             if held {
                 hook.push(state_parameter.clone());
@@ -809,7 +818,7 @@ impl Emitter<'_> {
             {
                 hook.push(output.clone());
             }
-            let mut written = prologue(body, &states);
+            let mut written = prologue(body, &states, tracks_drops);
             if forms.is_some() && reads_output {
                 let declared = ResultForms::view(ResultForm::Whole);
                 written.push_str(&format!(
@@ -822,12 +831,22 @@ impl Emitter<'_> {
                 return;
             };
             written.push_str(&made);
+            if tracks_drops {
+                add_wake_node(&mut hook);
+                let library = runtime::NAMESPACE;
+                written.push_str(&format!(
+                    "{indent}const ::{library}::DroppedWakeReport wake_report_{{{KEPT}.{DROPPED_WAKES}, {WAKE_NODE}}};\n"
+                ));
+            }
             context.kind = Kind::Hook(Hook::Stop);
             let mut scope = Scope::cold(program, body);
             self.in_context(&mut context, |emitter| {
                 emitter.statements(&mut scope, statements, 2, &mut written);
             });
-            let closing = self.debug_end(at, at.span.end, format!("{INDENT}}}\n"));
+            let mut closing = format!("{INDENT}}}\n");
+            if let Some((_, at)) = stop {
+                closing = self.debug_end(at, at.span.end, closing);
+            }
             text.push_str(&format!(
                 "\n{INDENT}static void stop({})\n{INDENT}{{\n{written}{closing}",
                 maybe_unused(&hook)
@@ -938,12 +957,10 @@ impl Emitter<'_> {
             };
             let parameter = names::temporary("capability", local);
             parameters.push(format!("{view} {parameter}"));
-            // A scheduler and an alarm are made with the hook they are
-            // used in (`scheduling`).
             written.push_str(&format!(
                 "{INDENT}{INDENT}[[maybe_unused]] const {made} {}{{{parameter}{}}};\n",
                 identifier(name),
-                super::scheduling::made_in(name, hook)
+                super::scheduling::made_in(name, hook, parameters)
             ));
         }
         Some(written)
@@ -1411,13 +1428,11 @@ pub(super) fn unique(
     text
 }
 
-/// What every hook of a node with `states` starts with: the node's
-/// state, changed in place, and each `state` and `cache` bound to its
-/// place in it, by its name.
-fn prologue(body: &Body, states: &[(usize, Option<&Expr>)]) -> String {
+/// A hook's access to its persistent state and the names of its HGL fields.
+fn prologue(body: &Body, states: &[(usize, Option<&Expr>)], tracks_drops: bool) -> String {
     let indent = INDENT.repeat(2);
     let mut text = String::new();
-    if !states.is_empty() {
+    if !states.is_empty() || tracks_drops {
         text.push_str(&format!(
             "{indent}state_type_& {KEPT} = {STATE}.modify();\n"
         ));

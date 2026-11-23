@@ -34,7 +34,7 @@ use hgl_lower::nodes::{Handler, Timer};
 use super::Emitter;
 use super::forms::Family;
 use super::names::{self, identifier};
-use super::nodes::{Context, Kind, Role, uses};
+use super::nodes::{Context, KEPT, Kind, Role, uses};
 use super::statements::Scope;
 use super::values::INDENT;
 use crate::runtime;
@@ -42,6 +42,12 @@ use crate::runtime;
 /// The name of what says that the node's scheduler or alarm woke it in
 /// the evaluation, read as `eval` is entered (TIME-9).
 pub(super) const TIMER_WOKE: &str = "timer_woke_";
+
+/// The field holding the timer's dropped-wake count in the node's state.
+pub(super) const DROPPED_WAKES: &str = "dropped_wakes_";
+
+/// The borrowed node used to obtain its logger and clock mode on demand.
+pub(super) const WAKE_NODE: &str = "wake_node_";
 
 /// The name of what says that one of the node's inputs woke it in the
 /// evaluation.
@@ -131,12 +137,17 @@ pub(super) fn capability(name: &str) -> Option<(&'static str, &'static str)> {
     })
 }
 
-/// What the library's capability `name` is made from beside its view in
-/// the hook `hook`: for the scheduler and the alarm, the hook, since what
-/// may be asked of them depends on it (TIME-8: "A wake asked for with a
-/// `duration` takes one more than zero, but in `start`"); nothing for any
-/// other.
-pub(super) fn made_in(name: &str, hook: Hook) -> String {
+/// Add the timer's lightweight node view once, even when stop also schedules.
+pub(super) fn add_wake_node(parameters: &mut Vec<String>) {
+    let view = format!("::hgraph::NodeView {WAKE_NODE}");
+    if !parameters.contains(&view) {
+        parameters.push(view);
+    }
+}
+
+/// The extra arguments for a scheduler or alarm in `hook` (TIME-8): the
+/// hook and the node's drop log. Other capabilities take only their own view.
+pub(super) fn made_in(name: &str, hook: Hook, parameters: &mut Vec<String>) -> String {
     if Timer::of(name).is_none() {
         return String::new();
     }
@@ -145,7 +156,11 @@ pub(super) fn made_in(name: &str, hook: Hook) -> String {
         Hook::When => "evaluation",
         Hook::Stop => "stop",
     };
-    format!(", ::{}::Hook::{hook}", runtime::NAMESPACE)
+    add_wake_node(parameters);
+    format!(
+        ", ::{}::Hook::{hook}, {{&{KEPT}.{DROPPED_WAKES}, &{WAKE_NODE}}}",
+        runtime::NAMESPACE
+    )
 }
 
 /// What a node with a scheduler or an alarm, as `context` says, of

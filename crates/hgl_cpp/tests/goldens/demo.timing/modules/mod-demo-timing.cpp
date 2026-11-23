@@ -91,23 +91,24 @@ struct impl_
     struct state_type_
     {
         ::hgraph::Int count{};
+        ::hglrt::DroppedWakes dropped_wakes_{};
     };
 
-    static void start([[maybe_unused]] ::hgraph::Scalar<"every", ::hgraph::TimeDelta> every, [[maybe_unused]] ::hgraph::Scalar<"times", ::hgraph::Int> times, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_03_)
+    static void start([[maybe_unused]] ::hgraph::Scalar<"every", ::hgraph::TimeDelta> every, [[maybe_unused]] ::hgraph::Scalar<"times", ::hgraph::Int> times, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_03_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
         state_.set(state_type_{});
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& count = kept_.count;
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_03_, ::hglrt::Hook::start};
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_03_, ::hglrt::Hook::start, {&kept_.dropped_wakes_, &wake_node_}};
         count = 0;
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, every.value(), ::hgraph::Str{"tick"}, false);
     }
 
-    static void eval([[maybe_unused]] ::hgraph::Scalar<"every", ::hgraph::TimeDelta> every, [[maybe_unused]] ::hgraph::Scalar<"times", ::hgraph::Int> times, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_03_)
+    static void eval([[maybe_unused]] ::hgraph::Scalar<"every", ::hgraph::TimeDelta> every, [[maybe_unused]] ::hgraph::Scalar<"times", ::hgraph::Int> times, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_03_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& count = kept_.count;
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_03_, ::hglrt::Hook::evaluation};
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_03_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = scheduler.is_scheduled_now();
         [[maybe_unused]] const bool input_woke_ = false;
@@ -122,6 +123,13 @@ struct impl_
             out_.set(count);
             return;
         }
+    }
+
+    static void stop([[maybe_unused]] ::hgraph::Scalar<"every", ::hgraph::TimeDelta> every, [[maybe_unused]] ::hgraph::Scalar<"times", ::hgraph::Int> times, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] auto& count = kept_.count;
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
     }
 };
 }  // namespace n_::ticker
@@ -156,16 +164,25 @@ struct impl_
 {
     static constexpr auto name = "demo.timing::cause_of_wake";
 
-    static void start([[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
     {
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start};
+        ::hglrt::DroppedWakes dropped_wakes_{};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start, {&kept_.dropped_wakes_, &wake_node_}};
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{2}, ::hgraph::Str{"with input"}, false);
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{4}, ::hgraph::Str{"alone"}, false);
     }
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation};
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = scheduler.is_scheduled_now();
         [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
@@ -187,8 +204,29 @@ struct impl_
             return;
         }
     }
+
+    static void stop([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
+    }
 };
 }  // namespace n_::cause_of_wake
+}  // namespace hgl::demo::timing::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::cause_of_wake::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::cause_of_wake::impl_::state_type_>("hgl:demo.timing::cause_of_wake.state");
+    }
+};
+
+namespace hgl::demo::timing::m_
+{
 namespace w_
 {
 // cause_of_wake(value: i64) -> str (node), module demo.timing, line 23
@@ -205,15 +243,24 @@ struct impl_
 {
     static constexpr auto name = "demo.timing::empty_selected";
 
-    static void start([[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
     {
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start};
+        ::hglrt::DroppedWakes dropped_wakes_{};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start, {&kept_.dropped_wakes_, &wake_node_}};
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{2}, ::std::nullopt, false);
     }
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation};
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = scheduler.is_scheduled_now();
         [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
@@ -224,8 +271,29 @@ struct impl_
             return;
         }
     }
+
+    static void stop([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
+    }
 };
 }  // namespace n_::empty_selected
+}  // namespace hgl::demo::timing::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::empty_selected::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::empty_selected::impl_::state_type_>("hgl:demo.timing::empty_selected.state");
+    }
+};
+
+namespace hgl::demo::timing::m_
+{
 namespace w_
 {
 // empty_selected(value: i64) -> bool (node), module demo.timing, line 37
@@ -242,16 +310,25 @@ struct impl_
 {
     static constexpr auto name = "demo.timing::empty_elsewhere";
 
-    static void start([[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
     {
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start};
+        ::hglrt::DroppedWakes dropped_wakes_{};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start, {&kept_.dropped_wakes_, &wake_node_}};
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{2}, ::hgraph::Str{"with input"}, false);
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{4}, ::hgraph::Str{"alone"}, false);
     }
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation};
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = scheduler.is_scheduled_now();
         [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
@@ -262,8 +339,29 @@ struct impl_
             return;
         }
     }
+
+    static void stop([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
+    }
 };
 }  // namespace n_::empty_elsewhere
+}  // namespace hgl::demo::timing::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::empty_elsewhere::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::empty_elsewhere::impl_::state_type_>("hgl:demo.timing::empty_elsewhere.state");
+    }
+};
+
+namespace hgl::demo::timing::m_
+{
 namespace w_
 {
 // empty_elsewhere(value: i64) -> bool (node), module demo.timing, line 44
@@ -280,15 +378,24 @@ struct impl_
 {
     static constexpr auto name = "demo.timing::scheduled_on_input";
 
-    static void start([[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
     {
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start};
+        ::hglrt::DroppedWakes dropped_wakes_{};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start, {&kept_.dropped_wakes_, &wake_node_}};
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{2}, ::std::nullopt, false);
     }
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation};
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = scheduler.is_scheduled_now();
         [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
@@ -299,8 +406,29 @@ struct impl_
             return;
         }
     }
+
+    static void stop([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
+    }
 };
 }  // namespace n_::scheduled_on_input
+}  // namespace hgl::demo::timing::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::scheduled_on_input::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::scheduled_on_input::impl_::state_type_>("hgl:demo.timing::scheduled_on_input.state");
+    }
+};
+
+namespace hgl::demo::timing::m_
+{
 namespace w_
 {
 // scheduled_on_input(value: i64) -> bool (node), module demo.timing, line 54
@@ -317,16 +445,25 @@ struct impl_
 {
     static constexpr auto name = "demo.timing::pending";
 
-    static void start([[maybe_unused]] ::hgraph::NodeScheduler capability_00_)
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
     {
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_00_, ::hglrt::Hook::start};
+        ::hglrt::DroppedWakes dropped_wakes_{};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_00_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_00_, ::hglrt::Hook::start, {&kept_.dropped_wakes_, &wake_node_}};
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{1}, ::std::nullopt, false);
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{3}, ::std::nullopt, false);
     }
 
-    static void eval([[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_00_)
+    static void eval([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_00_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_00_, ::hglrt::Hook::evaluation};
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_00_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = scheduler.is_scheduled_now();
         [[maybe_unused]] const bool input_woke_ = false;
@@ -337,8 +474,29 @@ struct impl_
             return;
         }
     }
+
+    static void stop([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
+    }
 };
 }  // namespace n_::pending
+}  // namespace hgl::demo::timing::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::pending::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::pending::impl_::state_type_>("hgl:demo.timing::pending.state");
+    }
+};
+
+namespace hgl::demo::timing::m_
+{
 namespace w_
 {
 // pending() -> bool (node), module demo.timing, line 62
@@ -359,25 +517,26 @@ struct impl_
     struct state_type_
     {
         ::hgraph::Int woken{};
+        ::hglrt::DroppedWakes dropped_wakes_{};
     };
 
-    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
         state_.set(state_type_{});
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& woken = kept_.woken;
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start};
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::start, {&kept_.dropped_wakes_, &wake_node_}};
         woken = 0;
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{1}, ::std::nullopt, false);
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{3}, ::std::nullopt, false);
         ::hglrt::schedule_Scheduler_duration_str__bool(scheduler, ::hgraph::TimeDelta{5}, ::std::nullopt, false);
     }
 
-    static void eval([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    static void eval([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& woken = kept_.woken;
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation};
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = scheduler.is_scheduled_now();
         [[maybe_unused]] const bool input_woke_ = false;
@@ -392,6 +551,13 @@ struct impl_
             out_.set((scheduler).is_scheduled_now());
             return;
         }
+    }
+
+    static void stop([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] auto& woken = kept_.woken;
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
     }
 };
 }  // namespace n_::cancel_next
@@ -426,9 +592,22 @@ struct impl_
 {
     static constexpr auto name = "demo.timing::wake_in_the_past";
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
     {
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation};
+        ::hglrt::DroppedWakes dropped_wakes_{};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_)
+    {
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
+    }
+
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = scheduler.is_scheduled_now();
         [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
@@ -446,8 +625,29 @@ struct impl_
             return;
         }
     }
+
+    static void stop([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
+    }
 };
 }  // namespace n_::wake_in_the_past
+}  // namespace hgl::demo::timing::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::wake_in_the_past::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::wake_in_the_past::impl_::state_type_>("hgl:demo.timing::wake_in_the_past.state");
+    }
+};
+
+namespace hgl::demo::timing::m_
+{
 namespace w_
 {
 // wake_in_the_past(value: i64) -> str (node), module demo.timing, line 88
@@ -464,9 +664,22 @@ struct impl_
 {
     static constexpr auto name = "demo.timing::wake_after";
 
-    static void eval([[maybe_unused]] ::hgraph::In<"delay", ::hgraph::TS<::hgraph::TimeDelta>> delay, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
     {
-        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation};
+        ::hglrt::DroppedWakes dropped_wakes_{};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_)
+    {
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
+    }
+
+    static void eval([[maybe_unused]] ::hgraph::In<"delay", ::hgraph::TS<::hgraph::TimeDelta>> delay, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Scheduler scheduler{capability_01_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = scheduler.is_scheduled_now();
         [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(delay);
@@ -478,8 +691,29 @@ struct impl_
             return;
         }
     }
+
+    static void stop([[maybe_unused]] ::hgraph::In<"delay", ::hgraph::TS<::hgraph::TimeDelta>> delay, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
+    }
 };
 }  // namespace n_::wake_after
+}  // namespace hgl::demo::timing::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::wake_after::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::wake_after::impl_::state_type_>("hgl:demo.timing::wake_after.state");
+    }
+};
+
+namespace hgl::demo::timing::m_
+{
 namespace w_
 {
 // wake_after(delay: duration) -> bool (node), module demo.timing, line 99
@@ -496,15 +730,24 @@ struct impl_
 {
     static constexpr auto name = "demo.timing::alarm_or_input";
 
-    static void start([[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
     {
-        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::start};
+        ::hglrt::DroppedWakes dropped_wakes_{};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::start, {&kept_.dropped_wakes_, &wake_node_}};
         ::hglrt::schedule_Alarm_duration(alarm, ::hgraph::TimeDelta{2});
     }
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
-        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::evaluation};
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = !(::hglrt::ticked(value));
         [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
@@ -521,8 +764,29 @@ struct impl_
             return;
         }
     }
+
+    static void stop([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
+    }
 };
 }  // namespace n_::alarm_or_input
+}  // namespace hgl::demo::timing::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::alarm_or_input::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::alarm_or_input::impl_::state_type_>("hgl:demo.timing::alarm_or_input.state");
+    }
+};
+
+namespace hgl::demo::timing::m_
+{
 namespace w_
 {
 // alarm_or_input(value: i64) -> str (node), module demo.timing, line 108
@@ -543,23 +807,24 @@ struct impl_
     struct state_type_
     {
         ::hgraph::Int count{};
+        ::hglrt::DroppedWakes dropped_wakes_{};
     };
 
-    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
         state_.set(state_type_{});
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& count = kept_.count;
-        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::start};
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::start, {&kept_.dropped_wakes_, &wake_node_}};
         count = 0;
         ::hglrt::schedule_Alarm_duration(alarm, ::hgraph::TimeDelta{1});
     }
 
-    static void eval([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    static void eval([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& count = kept_.count;
-        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::evaluation};
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = true;
         [[maybe_unused]] const bool input_woke_ = false;
@@ -574,6 +839,13 @@ struct impl_
             out_.set(count);
             return;
         }
+    }
+
+    static void stop([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] auto& count = kept_.count;
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
     }
 };
 }  // namespace n_::alarmed
@@ -608,15 +880,24 @@ struct impl_
 {
     static constexpr auto name = "demo.timing::alarm_asked_in_start";
 
-    static void start([[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
     {
-        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::start};
+        ::hglrt::DroppedWakes dropped_wakes_{};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::start, {&kept_.dropped_wakes_, &wake_node_}};
         ::hglrt::schedule_Alarm_duration(alarm, ::hgraph::TimeDelta{3});
     }
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
-        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::evaluation};
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = !(::hglrt::ticked(value));
         [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
@@ -633,8 +914,29 @@ struct impl_
             return;
         }
     }
+
+    static void stop([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
+    }
 };
 }  // namespace n_::alarm_asked_in_start
+}  // namespace hgl::demo::timing::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::alarm_asked_in_start::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::alarm_asked_in_start::impl_::state_type_>("hgl:demo.timing::alarm_asked_in_start.state");
+    }
+};
+
+namespace hgl::demo::timing::m_
+{
 namespace w_
 {
 // alarm_asked_in_start(value: i64) -> str (node), module demo.timing, line 131
@@ -655,6 +957,7 @@ struct impl_
     struct state_type_
     {
         ::hgraph::Bool asked{};
+        ::hglrt::DroppedWakes dropped_wakes_{};
     };
 
     static void start([[maybe_unused]] ::hgraph::State<state_type_> state_)
@@ -665,11 +968,11 @@ struct impl_
         asked = false;
     }
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_02_)
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_02_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& asked = kept_.asked;
-        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_02_, ::hglrt::Hook::evaluation};
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_02_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = !(::hglrt::ticked(value));
         [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
@@ -690,6 +993,13 @@ struct impl_
             out_.set(::hgraph::Str{"input"});
             return;
         }
+    }
+
+    static void stop([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] auto& asked = kept_.asked;
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
     }
 };
 }  // namespace n_::alarm_asked_once
@@ -724,9 +1034,22 @@ struct impl_
 {
     static constexpr auto name = "demo.timing::alarm_asked_on_each";
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_)
+    // The node's `state` and `cache` (TIME-6).
+    struct state_type_
     {
-        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::evaluation};
+        ::hglrt::DroppedWakes dropped_wakes_{};
+    };
+
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_)
+    {
+        state_.set(state_type_{});
+        state_type_& kept_ = state_.modify();
+    }
+
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_01_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_01_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = !(::hglrt::ticked(value));
         [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
@@ -744,8 +1067,29 @@ struct impl_
             return;
         }
     }
+
+    static void stop([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
+    }
 };
 }  // namespace n_::alarm_asked_on_each
+}  // namespace hgl::demo::timing::m_
+
+// The state of the node, as hgraph holds it (TIME-6).
+template <>
+struct hgraph::scalar_descriptor<::hgl::demo::timing::m_::n_::alarm_asked_on_each::impl_::state_type_>
+{
+    [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
+    [[nodiscard]] static const ValueTypeMetaData* value_meta()
+    {
+        return TypeRegistry::instance().register_scalar<::hgl::demo::timing::m_::n_::alarm_asked_on_each::impl_::state_type_>("hgl:demo.timing::alarm_asked_on_each.state");
+    }
+};
+
+namespace hgl::demo::timing::m_
+{
 namespace w_
 {
 // alarm_asked_on_each(value: i64) -> str (node), module demo.timing, line 151
@@ -766,23 +1110,24 @@ struct impl_
     struct state_type_
     {
         ::hgraph::Int woken{};
+        ::hglrt::DroppedWakes dropped_wakes_{};
     };
 
-    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_02_)
+    static void start([[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeScheduler capability_02_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
         state_.set(state_type_{});
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& woken = kept_.woken;
-        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_02_, ::hglrt::Hook::start};
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_02_, ::hglrt::Hook::start, {&kept_.dropped_wakes_, &wake_node_}};
         woken = 0;
         ::hglrt::schedule_Alarm_duration(alarm, ::hgraph::TimeDelta{3});
     }
 
-    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_02_)
+    static void eval([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_, [[maybe_unused]] ::hgraph::NodeScheduler capability_02_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
     {
         state_type_& kept_ = state_.modify();
         [[maybe_unused]] auto& woken = kept_.woken;
-        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_02_, ::hglrt::Hook::evaluation};
+        [[maybe_unused]] const ::hglrt::Alarm alarm{capability_02_, ::hglrt::Hook::evaluation, {&kept_.dropped_wakes_, &wake_node_}};
         // TIME-9: what woke the node, read as it is entered.
         [[maybe_unused]] const bool timer_woke_ = !(::hglrt::ticked(value));
         [[maybe_unused]] const bool input_woke_ = ::hglrt::ticked(value);
@@ -793,6 +1138,13 @@ struct impl_
             out_.set(woken);
             return;
         }
+    }
+
+    static void stop([[maybe_unused]] ::hgraph::In<"value", ::hgraph::TS<::hgraph::Int>, ::hgraph::InputActivity::Passive, ::hgraph::InputValidity::Unchecked> value, [[maybe_unused]] ::hgraph::State<state_type_> state_, [[maybe_unused]] ::hgraph::NodeView wake_node_)
+    {
+        state_type_& kept_ = state_.modify();
+        [[maybe_unused]] auto& woken = kept_.woken;
+        const ::hglrt::DroppedWakeReport wake_report_{kept_.dropped_wakes_, wake_node_};
     }
 };
 }  // namespace n_::alarm_beside_a_passive_input

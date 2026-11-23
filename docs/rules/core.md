@@ -487,11 +487,13 @@ analyser: done
 
 - A scheduler's three properties, `is_scheduled_now` among them; `schedule` with a `duration` or a `datetime`, a `tag` and `on_wall_clock`; `un_schedule`, with a tag or without, and `reset`
 
-transpiler: partial
+transpiler: done
 
 - Supplies scheduler state and writes schedule, cancellation and reset using the SDK
   adapter. Distinguishes due scheduler wakes from input ticks.
-- Dropped datetime wake requests and their run-log warning are planned in #516 (TIME-8).
+- Drops a nonfuture dated request in graph time, except for the node's first
+  evaluation when asked at the current time in `start`. Logs the first drop
+  per node and counts later ones at stop (TIME-8).
 
 ## CAP-5
 
@@ -500,11 +502,11 @@ analyser: done
 - An alarm has no property, and a node injects it or `scheduler` (TIME-8)
 - `schedule` on it takes a `duration` or a `datetime`, and neither a tag nor a clock
 
-transpiler: partial
+transpiler: done
 
 - Supplies the alarm adapter and emits duration or datetime scheduling, retaining the
   earliest outstanding wake.
-- Dropped datetime wake requests and their run-log warning are planned in #516 (TIME-8).
+- Uses the same dated-wake rules and per-node warning as the scheduler (TIME-8).
 
 ## CAP-6
 

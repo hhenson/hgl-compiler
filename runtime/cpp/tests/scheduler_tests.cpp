@@ -241,8 +241,8 @@ struct WallClockLate {
     }
 
     static void eval(hgraph::NodeScheduler view, hgraph::EvaluationClockView clock_view,
-                     hgraph::EngineControlView engine, hgraph::DateTime now) {
-        const hglrt::Scheduler scheduler{view, Hook::evaluation, {}, clock_view};
+                     hgraph::EngineControlView engine, hgraph::DateTime now, hgraph::NodeView node) {
+        const hglrt::Scheduler scheduler{view, Hook::evaluation, {nullptr, &node}};
         const hglrt::Clock clock{clock_view};
         woken.push_back(Woken{now, scheduler.is_scheduled_now(), false, std::nullopt});
         if (woken.size() == 1) {
@@ -277,33 +277,30 @@ struct RecordedDrops {
 
     using DropState = hgraph::State<hglrt::DroppedWakes>;
 
-    static void ask(hgraph::NodeScheduler view, Hook hook, hglrt::DroppedWakeLog log,
-                    hgraph::EvaluationClockView clock, datetime at) {
+    static void ask(hgraph::NodeScheduler view, Hook hook, hglrt::DroppedWakeLog log, datetime at) {
         if constexpr (uses_alarm) {
             hglrt::schedule_Alarm_datetime(hglrt::Alarm{view, hook, log}, at);
         } else {
-            hglrt::schedule_Scheduler_datetime_str__bool(hglrt::Scheduler{view, hook, log, clock}, at);
+            hglrt::schedule_Scheduler_datetime_str__bool(hglrt::Scheduler{view, hook, log}, at);
         }
     }
 
-    static void start(DropState drops, hgraph::NodeScheduler view,
-                      hgraph::EvaluationClockView clock, hgraph::LoggerView logger) {
+    static void start(DropState drops, hgraph::NodeScheduler view, hgraph::NodeView node) {
         drops.set(hglrt::DroppedWakes{});
-        ask(view, Hook::start, {&drops.modify(), logger}, clock, view.now());
+        ask(view, Hook::start, {&drops.modify(), &node}, view.now());
     }
 
     static void eval(hgraph::Scalar<"requests", i64> requests,
                      [[maybe_unused]] hgraph::Scalar<"instance", i64> instance,
-                     DropState drops, hgraph::NodeScheduler view,
-                     hgraph::EvaluationClockView clock, hgraph::LoggerView logger) {
+                     DropState drops, hgraph::NodeScheduler view, hgraph::NodeView node) {
         for (i64 index = 0; index < requests.value(); ++index) {
             const datetime at = index % 2 == 0 ? view.now() : view.now() - 1us;
-            ask(view, Hook::evaluation, {&drops.modify(), logger}, clock, at);
+            ask(view, Hook::evaluation, {&drops.modify(), &node}, at);
         }
     }
 
-    static void stop(DropState drops, hgraph::LoggerView logger) {
-        const hglrt::DroppedWakeReport report{drops.modify(), logger};
+    static void stop(DropState drops, hgraph::NodeView node) {
+        const hglrt::DroppedWakeReport report{drops.modify(), node};
     }
 };
 

@@ -122,9 +122,9 @@ class Clock {
 class DroppedWakes {
   public:
     /// Warn on the first drop and count any further drops.
-    void record(hgraph::LoggerView logger) noexcept;
+    void record(const hgraph::NodeView& node) noexcept;
     /// At stop, report the count of drops after the initial warning.
-    void finish(hgraph::LoggerView logger) const noexcept;
+    void finish(const hgraph::NodeView& node) const noexcept;
 
   private:
     std::size_t count_{0};
@@ -134,21 +134,21 @@ class DroppedWakes {
 /// early return. The report includes wakes requested by the hook itself.
 class DroppedWakeReport {
   public:
-    DroppedWakeReport(const DroppedWakes& wakes, hgraph::LoggerView logger) noexcept
-        : wakes_(wakes), logger_(logger) {}
+    DroppedWakeReport(const DroppedWakes& wakes, const hgraph::NodeView& node) noexcept
+        : wakes_(wakes), node_(node) {}
     DroppedWakeReport(const DroppedWakeReport&) = delete;
     DroppedWakeReport& operator=(const DroppedWakeReport&) = delete;
-    ~DroppedWakeReport() { wakes_.finish(logger_); }
+    ~DroppedWakeReport() { wakes_.finish(node_); }
 
   private:
     const DroppedWakes& wakes_;
-    hgraph::LoggerView logger_;
+    const hgraph::NodeView& node_;
 };
 
-/// Access to the node's drop count and run logger from a scheduler or alarm hook.
+/// The node and its drop count, borrowed for one scheduler or alarm hook.
 struct DroppedWakeLog {
     DroppedWakes* wakes{nullptr};
-    hgraph::LoggerView logger{};
+    const hgraph::NodeView* node{nullptr};
 
     /// Record a drop where the timer is bound to the node's state.
     void record() const noexcept;
@@ -172,8 +172,7 @@ struct DroppedWakeLog {
 /// the generated code runs no handler in it.
 class Scheduler {
   public:
-    Scheduler(hgraph::NodeScheduler view, Hook hook, DroppedWakeLog drop_log = {},
-              hgraph::EvaluationClockView clock = {});
+    Scheduler(hgraph::NodeScheduler view, Hook hook, DroppedWakeLog drop_log = {});
 
     /// `scheduler.next_scheduled_time` (CAP-4): the time of the earliest
     /// pending wake, and null with none.
@@ -200,7 +199,6 @@ class Scheduler {
     hgraph::NodeScheduler view_;
     Hook hook_;
     DroppedWakeLog drop_log_;
-    hgraph::EvaluationClockView clock_;
 };
 
 // The wall-clock option, `on_wall_clock: true`, is hgraph's own, as CAP-4

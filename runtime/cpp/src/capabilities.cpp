@@ -48,6 +48,13 @@ bool dropped(datetime at, datetime now, Hook hook) {
     return hook == Hook::start ? at < now : at <= now;
 }
 
+/// Borrow the run's logger with this node's provenance, as a LoggerView
+/// injection does. A timer only needs it to issue a drop diagnostic.
+hgraph::LoggerView logger_of(const hgraph::NodeView& node) {
+    const auto graph = node.graph();
+    return hgraph::LoggerView{graph.logger(), node.pointer(), graph.logger_ops()};
+}
+
 } // namespace
 
 // ---- The logger ----------------------------------------------------------------
@@ -72,20 +79,20 @@ void fn_log(const Logger& logger, LogLevel level, std::string_view message) {
 
 // ---- The scheduler -------------------------------------------------------------
 
-void DroppedWakes::record(hgraph::LoggerView logger) noexcept {
+void DroppedWakes::record(const hgraph::NodeView& node) noexcept {
     if (count_++ == 0) {
         try {
-            logger.warn("Dropped wake requested at or before the evaluation time");
+            logger_of(node).warn("Dropped wake requested at or before the evaluation time");
         } catch (...) {
             // A dropped wake is never a failure (TIME-8).
         }
     }
 }
 
-void DroppedWakes::finish(hgraph::LoggerView logger) const noexcept {
+void DroppedWakes::finish(const hgraph::NodeView& node) const noexcept {
     if (count_ > 1) {
         try {
-            logger.info("Additional dropped wakes totaled {}", count_ - 1);
+            logger_of(node).info("Additional dropped wakes totaled {}", count_ - 1);
         } catch (...) {
             // Preserve any failure already raised by the stop hook.
         }
@@ -93,17 +100,16 @@ void DroppedWakes::finish(hgraph::LoggerView logger) const noexcept {
 }
 
 void DroppedWakeLog::record() const noexcept {
-    if (wakes != nullptr) {
-        wakes->record(logger);
+    if (wakes != nullptr && node != nullptr) {
+        wakes->record(*node);
     }
 }
 
-Scheduler::Scheduler(hgraph::NodeScheduler view, Hook hook, DroppedWakeLog drop_log,
-                     hgraph::EvaluationClockView clock)
-    : view_(view), hook_(hook), drop_log_(drop_log), clock_(clock) {}
+Scheduler::Scheduler(hgraph::NodeScheduler view, Hook hook, DroppedWakeLog drop_log)
+    : view_(view), hook_(hook), drop_log_(drop_log) {}
 
 bool Scheduler::record_drop(bool on_wall_clock) const {
-    if (on_wall_clock && (!clock_.valid() || clock_.supports_wall_clock())) {
+    if (on_wall_clock && (drop_log_.node == nullptr || drop_log_.node->evaluation_clock().supports_wall_clock())) {
         return false; // Let hgraph handle real-time requests or an unbound view.
     }
     drop_log_.record();
