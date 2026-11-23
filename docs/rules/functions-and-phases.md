@@ -249,6 +249,7 @@ analyser: partial
 transpiler: partial
 
 - A static target specializes the called body. The C++ target emits ordinary value helpers and composed graph calls; anonymous functions carry their permitted lexical captures as inputs.
+- The C++ target writes static callable arguments up to eight nested anonymous targets. It reports a call beyond that depth as unsupported.
 - The C++ target specializes reflected templates by the static callback and the dependent argument shape. It does not yet write `valid` on a temporal input captured by a value callback (#397).
 
 ## FN-18

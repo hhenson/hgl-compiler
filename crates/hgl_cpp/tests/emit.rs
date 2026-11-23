@@ -3221,3 +3221,50 @@ fn a_struct_of_another_module_is_named_through_its_types_header() {
     // A generic parameter of another module's enum.
     assert!(file("modules/type-demo-c.h").contains("#include \"type-demo-b.h\""));
 }
+
+/// FN-17: the checker accepts the callable arguments. The target must
+/// finish when specializing a call keeps wrapping its current argument.
+#[test]
+fn growing_callable_specializations_are_reported_at_the_call() {
+    let cases = [
+        (
+            "grow",
+            "4:34",
+            concat!(
+                "module m\n",
+                "struct Harmless { a: i64 = grow(identity, 2) }\n",
+                "const fn grow(f: const fn(i64) -> i64, step: i64) -> i64 =>\n",
+                "    if step == 0 { f(1) } else { grow(fn(n) => f(n + 1), step - 1) }\n",
+                "const fn identity(value: i64) -> i64 => value\n",
+                "test growing { assert Harmless().a == 3 }\n",
+                "test independent { assert 2 + 2 == 4 }\n",
+            ),
+        ),
+        (
+            "second",
+            "3:34",
+            concat!(
+                "module m\n",
+                "const fn first(f: const fn(i64) -> i64, step: i64) -> i64 =>\n",
+                "    if step == 0 { f(1) } else { second(fn(n) => f(n + 1), step - 1) }\n",
+                "const fn second(f: const fn(i64) -> i64, step: i64) -> i64 =>\n",
+                "    if step == 0 { f(1) } else { first(fn(n) => f(n + 1), step - 1) }\n",
+                "const fn identity(value: i64) -> i64 => value\n",
+                "test growing { assert first(identity, 2) == 3 }\n",
+                "test independent { assert 2 + 2 == 4 }\n",
+            ),
+        ),
+    ];
+    for (function, at, source) in cases {
+        let emitted = emit_with(&[("m.hgl", source)], &hgl_cpp::runtime::provides);
+        let expected = format!(
+            "m.hgl:{at} the cpp target does not write a function argument to `{function}` specialized beyond depth 8 yet"
+        );
+        assert_eq!(emitted.reported, std::slice::from_ref(&expected));
+        assert_eq!(
+            emitted.blocked("growing").as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(emitted.blocked("independent"), None);
+    }
+}

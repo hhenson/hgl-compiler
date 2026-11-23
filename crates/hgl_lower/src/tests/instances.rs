@@ -10,6 +10,8 @@ use crate::packs::Captures;
 
 use super::{body, declaration, program, returned};
 
+const TEST_CALLABLE_DEPTH: usize = 16;
+
 fn call(body: &hgl_analyser::hir::Body) -> (&Callee, &[Argument]) {
     let ExprKind::Call {
         callee, arguments, ..
@@ -43,7 +45,7 @@ test second {
     )]);
     let module = program.module_index("m").expect("fixture module");
     let keep = declaration(&program.modules[module], "keep");
-    let instances = Instances::typed(&program);
+    let instances = Instances::typed(&program, TEST_CALLABLE_DEPTH);
     let keys: Vec<_> = instances
         .declared(module, keep)
         .iter()
@@ -94,7 +96,7 @@ const fn three() -> i64 => lib::keep(8, left: 9, right: false)
     let Detail::Callable(signature) = &program.modules[module].details[index] else {
         panic!("keep is a function");
     };
-    let instances = Instances::typed(&program);
+    let instances = Instances::typed(&program, TEST_CALLABLE_DEPTH);
     assert_eq!(instances.declared(module, index).len(), 3);
 
     let (callee, arguments) = call(body(&program, "first", "one"));
@@ -153,7 +155,7 @@ const fn shorter() -> i64 => gather(4)
     let Detail::Callable(signature) = &program.modules[module].details[index] else {
         panic!("gather is a function");
     };
-    let instances = Instances::typed(&program);
+    let instances = Instances::typed(&program, TEST_CALLABLE_DEPTH);
     assert_eq!(instances.declared(module, index).len(), 3);
 
     let (callee, arguments) = call(body(&program, "m", "inferred"));
@@ -212,7 +214,7 @@ const fn also_two() -> i64 => gather(4, 5)
     )]);
     let module = program.module_index("m").expect("fixture module");
     let index = declaration(&program.modules[module], "gather");
-    let instances = Instances::typed(&program);
+    let instances = Instances::typed(&program, TEST_CALLABLE_DEPTH);
     assert_eq!(instances.declared(module, index).len(), 3);
 
     for (name, arity) in [("empty", 0), ("one", 1), ("two", 2), ("also_two", 2)] {

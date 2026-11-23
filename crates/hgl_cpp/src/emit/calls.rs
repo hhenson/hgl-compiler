@@ -61,6 +61,26 @@ struct ValueTarget<'a> {
 }
 
 impl Emitter<'_> {
+    /// Reports the missing instance at the call that asks for it.
+    pub(super) fn missing_instance(
+        &mut self,
+        at: Location,
+        callee: &Callee,
+        arguments: &[Argument],
+        otherwise: &str,
+    ) -> String {
+        if let Some(depth) = self.instances.exceeded_callable_depth(arguments)
+            && let Some((module, declaration)) = callee.declaration()
+        {
+            let name = &self.program.modules[module].declarations[declaration].name;
+            return self.missing(
+                at,
+                &format!("a function argument to `{name}` specialized beyond depth {depth}"),
+            );
+        }
+        self.missing(at, otherwise)
+    }
+
     /// Respect expression order when an apparent local read is a
     /// contextual connection read in the consuming handler (EXPR-2).
     pub(super) fn may_fail_here(&self, value: &Expr) -> bool {
@@ -166,7 +186,12 @@ impl Emitter<'_> {
                 } else {
                     let instances = self.instances;
                     let Some(instance) = instances.find_call(program, callee, arguments) else {
-                        return self.missing(at, "a call of an instance that is not written");
+                        return self.missing_instance(
+                            at,
+                            callee,
+                            arguments,
+                            "a call of an instance that is not written",
+                        );
                     };
                     self.piece.reach.uses.insert((
                         module,

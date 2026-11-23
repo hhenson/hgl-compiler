@@ -166,6 +166,8 @@ pub struct Instances {
     /// The value functions and value candidates that are written by
     /// instance: each with generic parameters and a body.
     requiring: BTreeSet<(usize, usize)>,
+    /// How deeply the target expands nested static callable arguments.
+    callable_depth: usize,
 }
 
 /// One call's request for an instance.
@@ -366,6 +368,30 @@ fn functions_of(arguments: &[Argument]) -> Vec<(usize, Callee)> {
     functions
 }
 
+fn called_or_supplied(value: &Expr) -> Option<&Callee> {
+    match &value.kind {
+        ExprKind::Call { callee, .. } => Some(callee),
+        ExprKind::StaticCallable(callee) => Some(callee),
+        _ => None,
+    }
+}
+
+fn exceeds_callable_depth(target: &Callee, remaining: usize) -> bool {
+    let Callee::Anonymous(function) = target else {
+        return false;
+    };
+    if remaining == 0 {
+        return true;
+    }
+    let mut exceeded = false;
+    walk_statements(&function.body.statements, &mut |value| {
+        if !exceeded && let Some(callee) = called_or_supplied(value) {
+            exceeded = exceeds_callable_depth(callee, remaining - 1);
+        }
+    });
+    exceeded
+}
+
 /// Identify the candidate that answers a callable's requirement, with
 /// constants keyed by their value (GEN-13, GEN-16).
 fn answer_key(program: &Program, answer: &Answer) -> Option<String> {
@@ -447,12 +473,9 @@ fn function_key(program: &Program, target: &Callee) -> Option<String> {
         // functions when its enclosing function is specialized.
         let mut targets = Vec::new();
         walk_statements(&function.body.statements, &mut |expression| {
-            let target = match &expression.kind {
-                ExprKind::Call { callee, .. } => callee,
-                ExprKind::StaticCallable(callee) => callee.as_ref(),
-                _ => return,
-            };
-            if !matches!(target, Callee::Unread) {
+            if let Some(target) = called_or_supplied(expression)
+                && !matches!(target, Callee::Unread)
+            {
                 targets.push(function_key(program, target));
             }
         });
@@ -597,9 +620,13 @@ impl Instances {
     /// The target's values are typed, so every value function and value
     /// candidate with generic parameters is written by instance, one for
     /// each set of generic arguments it is called with (GEN-2), as a
-    /// temporal one is.
-    pub fn typed(program: &Program) -> Instances {
-        let mut instances = Instances::default();
+    /// temporal one is. `callable_depth` bounds nested anonymous targets
+    /// when the target specializes static function arguments (FN-17).
+    pub fn typed(program: &Program, callable_depth: usize) -> Instances {
+        let mut instances = Instances {
+            callable_depth,
+            ..Instances::default()
+        };
         for (index, module) in program.modules.iter().enumerate() {
             for (declaration, body) in module.bodies.iter().enumerate() {
                 let value = module.declarations[declaration].kind.role() == Some(Role::Value);
@@ -816,7 +843,9 @@ impl Instances {
             return Vec::new();
         };
         let mut found = Vec::new();
-        if self.instanced(program, *module, *declaration) {
+        if self.instanced(program, *module, *declaration)
+            && self.exceeded_callable_depth(arguments).is_none()
+        {
             found.push(Asked {
                 module: *module,
                 declaration: *declaration,
@@ -924,6 +953,9 @@ impl Instances {
         callee: &Callee,
         arguments: &[Argument],
     ) -> Option<&Instance> {
+        if self.exceeded_callable_depth(arguments).is_some() {
+            return None;
+        }
         let (module, declaration) = callee.declaration()?;
         let Detail::Callable(signature) = program.modules[module].details.get(declaration)? else {
             return None;
@@ -947,5 +979,20 @@ impl Instances {
         self.declared(module, declaration)
             .iter()
             .find(|instance| instance.key == key)
+    }
+
+    /// The target's callable specialization depth limit, when the call
+    /// exceeds it. Inspect borrowed targets before cloning or keying them.
+    pub fn exceeded_callable_depth(&self, arguments: &[Argument]) -> Option<usize> {
+        arguments
+            .iter()
+            .filter(|argument| argument.parameter.is_some())
+            .any(|argument| match &argument.value.kind {
+                ExprKind::StaticCallable(target) => {
+                    exceeds_callable_depth(target, self.callable_depth)
+                }
+                _ => false,
+            })
+            .then_some(self.callable_depth)
     }
 }
