@@ -31,6 +31,7 @@ parser: done
 parser: done
 
 - A line break is ignored in a list, in an incomplete statement, and before a token that cannot begin one; two or more always separate
+- A body's opening brace may follow its incomplete header across one line break. A brace after a complete statement begins a separate statement.
 
 ## LEX-6
 

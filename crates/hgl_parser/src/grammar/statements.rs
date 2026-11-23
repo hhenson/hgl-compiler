@@ -63,20 +63,20 @@ impl Parser<'_> {
     /// A block that is the body of the declaration or statement before it.
     pub(crate) fn body_block(&mut self) {
         if self.at(LBrace) {
-            self.header_brace();
+            self.check_body_brace();
             self.block();
         } else {
             self.expected("`{`");
         }
     }
 
-    /// Reports the `{` under the cursor when it is not on the line of the
-    /// header it belongs to. LEX-5: "A body's opening brace stays with its
-    /// header."
-    pub(crate) fn header_brace(&mut self) {
-        if self.broken() {
+    /// LEX-5: a body continues its incomplete header across one line
+    /// break. After a separating blank line, report it and read the body
+    /// for recovery.
+    pub(crate) fn check_body_brace(&mut self) {
+        if self.cut() {
             self.error(
-                "a body's opening brace stays on its header's line",
+                "a blank line separates a body's opening brace from its header",
                 "LEX-5",
                 None,
             );
@@ -338,17 +338,27 @@ impl Parser<'_> {
         // a statement of this form. `switch = 1` assigns to a variable.
         if self.at_word("switch") {
             let switch = self.choose(Choice::Switch, |parser| {
+                let start = parser.snapshot();
                 let errors = parser.errors;
                 parser.bump();
                 if parser.nl() {
                     return Verdict::No;
                 }
                 parser.expression();
-                if parser.errors == errors && parser.at(LBrace) && !parser.nl() {
-                    Verdict::Yes
-                } else {
-                    Verdict::No
+                if parser.errors != errors || !parser.at(LBrace) {
+                    return Verdict::No;
                 }
+                // LEX-5: `switch(x)` can already be a complete call when
+                // the brace is on a later line.
+                if parser.broken() {
+                    let brace = parser.position;
+                    parser.rollback(&start);
+                    parser.expression();
+                    if parser.errors == errors && parser.position == brace {
+                        return Verdict::No;
+                    }
+                }
+                Verdict::Yes
             });
             if switch == Verdict::Yes {
                 self.switch_stmt();
@@ -430,7 +440,7 @@ impl Parser<'_> {
             self.finish();
             return;
         }
-        self.header_brace();
+        self.check_body_brace();
         self.bump();
         self.nested(Context::BLOCK, |parser| {
             let mut default_seen = false;

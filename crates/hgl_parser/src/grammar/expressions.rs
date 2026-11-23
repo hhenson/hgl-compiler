@@ -876,11 +876,11 @@ impl Parser<'_> {
         }
         if self.at(FatArrow) && !self.nl() {
             self.arrow_body();
-        } else if self.at(LBrace) && !self.nl() {
+        } else if self.at(LBrace) {
             if in_condition {
                 self.braces_in_condition();
             }
-            self.block();
+            self.body_block();
         } else {
             self.expected("`=>` or `{`");
         }
