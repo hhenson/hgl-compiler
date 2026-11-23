@@ -50,8 +50,24 @@ fn plan(output: Output) -> Value {
     plan
 }
 
-/// The launch maps graph entry, HGL function ends and bundled Core to
-/// readable source. A warm launch repairs the bundled copies.
+fn has_stamped_value_opening(cpp: &str, signature: &str, line: usize, file: &str) -> bool {
+    let prefix = format!("#line {line} ");
+    let suffix = format!("{file}\"");
+    let matches = |directive: &str| {
+        directive.trim_start().starts_with(&prefix) && directive.ends_with(&suffix)
+    };
+    let lines: Vec<_> = cpp.lines().collect();
+    lines.windows(5).any(|opening| {
+        matches(opening[0])
+            && opening[1].contains(signature)
+            && matches(opening[3])
+            && opening[4].trim() == "{"
+    })
+}
+
+/// The launch maps graph and value entry, HGL function ends and bundled
+/// Core to readable source, including a value instance (FN-1, GEN-2).
+/// A warm launch repairs the bundled copies.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn debug_launch_maps_closing_braces_and_eval_wiring() {
@@ -95,6 +111,16 @@ test calendar_steps {
     let next_day = @2026-01-02 + 1B
     assert next_day == @2026-01-05
 }
+
+const fn shift(day: date, by: tenor) -> date {
+    let shifted = day + by
+    return shifted
+}
+
+test value_entry_steps {
+    let next_day = shift(@2026-01-02, 1D)
+    assert next_day == @2026-01-03
+}
 "#;
     write(&root, "stepping.hgl", source);
     let workspace = root.join("debug workspace");
@@ -116,10 +142,23 @@ test calendar_steps {
         json!([
             "debug.stepping::value_steps",
             "debug.stepping::eval_steps",
-            "debug.stepping::calendar_steps"
+            "debug.stepping::calendar_steps",
+            "debug.stepping::value_entry_steps"
         ])
     );
     let module = fs::read_to_string(workspace.join("modules/mod-debug-stepping.cpp")).unwrap();
+    let source_line = |text: &str, starts: &str| {
+        text.lines()
+            .position(|line| line.starts_with(starts))
+            .unwrap()
+            + 1
+    };
+    assert!(has_stamped_value_opening(
+        &module,
+        " shift(",
+        source_line(source, "const fn shift("),
+        "stepping.hgl"
+    ));
     assert!(
         module
             .lines()
@@ -186,6 +225,12 @@ test calendar_steps {
     let calendar_path = workspace.join("debug-sources/calendar.hgl.source");
     let calendar_source = bundled("<core>/core/calendar.hgl");
     assert!(fs::read_to_string(&calendar_path).unwrap() == calendar_source);
+    assert!(has_stamped_value_opening(
+        &core_module,
+        " of_1core_1_1Weekdays_(",
+        source_line(calendar_source, "const fn moved_on<"),
+        "debug-sources/calendar.hgl.source"
+    ));
     let executable = Path::new(launch["launches"][0]["executable"].as_str().unwrap());
     let built = || fs::metadata(executable).unwrap().modified().unwrap();
     let modification = built();

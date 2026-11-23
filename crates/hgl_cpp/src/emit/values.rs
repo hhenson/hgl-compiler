@@ -105,7 +105,10 @@ impl Emitter<'_> {
         let Some((prototype, head)) = self.head(&name, signature, declaration.at) else {
             return;
         };
-        let mut text = format!("{head}\n{{\n");
+        // Depending on how the native parameters are passed, a debugger
+        // may enter on the signature or on the opening brace.
+        let mut text = self.debug_stamp(declaration.at, format!("{head}\n"));
+        text.push_str(&self.debug_stamp(declaration.at, "{\n".to_string()));
         if self
             .value_body(body, signature.result.as_ref(), declaration.at, &mut text)
             .is_none()
