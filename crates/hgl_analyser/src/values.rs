@@ -357,9 +357,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
     operators::inherit_configuration_defaults(program);
-    let default_calls = operator_defaults::check(program, diagnostics);
-    requirements::instances_hold(program, default_calls, diagnostics);
-    forwarded_packs::check_instances(program, diagnostics);
+    let mut instance_calls = operator_defaults::check(program, diagnostics);
+    forwarded_packs::check_instances(program, &mut instance_calls, diagnostics);
+    requirements::instances_hold(program, instance_calls, diagnostics);
     // TYPE-10, TYPE-11: the sizes each struct application written in a
     // type gives the struct's lists and windows.
     sizes::applied_sizes(program, diagnostics);
