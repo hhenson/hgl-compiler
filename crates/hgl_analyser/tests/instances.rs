@@ -47,7 +47,13 @@ fn selected_arguments_are_checked_through_functions_and_forwarded_packs() {
             "{call}: {}",
             checked.report,
         );
-        assert_eq!(finding.at, "m.hgl:8:41", "{}", checked.report);
+        let column = 15 + call.find("checked").unwrap_or(0);
+        assert_eq!(
+            finding.at,
+            format!("m.hgl:11:{column}"),
+            "{}",
+            checked.report
+        );
         assert!(
             checked.report.contains("`checked<i64>`"),
             "{}",
@@ -65,9 +71,9 @@ fn selected_arguments_are_checked_through_functions_and_forwarded_packs() {
     assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
 }
 
-/// GEN-7: distinct callers of the same rejected instance appear in one report.
+/// GEN-7: each distinct outer caller gets one report with its call chain.
 #[test]
-fn a_rejected_instance_reports_each_making_call_together() {
+fn a_rejected_instance_reports_each_making_call() {
     let checked = module(concat!(
         "operator update<T>(value: T) -> i64\n",
         "impl const fn update<T>(value: T) -> i64 => 1\n",
@@ -83,7 +89,11 @@ fn a_rejected_instance_reports_each_making_call_together() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:5:41 name/binding.immutable FN-15"],
+        [
+            "m.hgl:9:5 name/binding.immutable FN-15",
+            "m.hgl:10:5 name/binding.immutable FN-15",
+            "m.hgl:11:5 name/binding.immutable FN-15",
+        ],
         "{}",
         checked.report
     );
@@ -121,9 +131,9 @@ fn selected_constants_are_checked_through_functions_and_forwarded_packs() {
         "impl const fn update<T>(value: T) -> i64 => 1\n",
         "impl const fn update(const value: i64) -> i64 => value\n",
     );
-    for (phase, expected) in [
-        ("const ", "m.hgl:5:41 type/argument.constant FN-1"),
-        ("", "m.hgl:5:35 phase/connection.as_constant FN-3"),
+    for (phase, diagnosis) in [
+        ("const ", "type/argument.constant FN-1"),
+        ("", "phase/connection.as_constant FN-3"),
     ] {
         for call in INSTANCE_CALLS {
             let checked = module(&format!(
@@ -133,7 +143,13 @@ fn selected_constants_are_checked_through_functions_and_forwarded_packs() {
                  {phase}fn relay<...Args>(values: ...Args) -> i64 => checked(...values)\n\
                  {phase}fn invoke(value: i64) -> i64 => {call}\n"
             ));
-            assert_eq!(checked.summary(), [expected], "{call}: {}", checked.report);
+            let column = 33 + phase.len() + call.find("checked").unwrap_or(0);
+            assert_eq!(
+                checked.summary(),
+                [format!("m.hgl:8:{column} {diagnosis}")],
+                "{call}: {}",
+                checked.report
+            );
             assert!(
                 checked.report.contains("`checked<i64>`"),
                 "{}",
@@ -168,9 +184,12 @@ fn selected_settings_are_checked_through_functions_and_forwarded_packs() {
         let checked = module(&format!(
             "{definitions}fn invoke(value: i64) -> bool => {call}\n"
         ));
+        let column = 34 + call.find("checked").unwrap_or(0);
         assert_eq!(
             checked.summary(),
-            ["m.hgl:8:22 phase/connection.as_constant EXPR-14"],
+            [format!(
+                "m.hgl:12:{column} phase/connection.as_constant EXPR-14"
+            )],
             "{call}: {}",
             checked.report
         );
@@ -323,7 +342,7 @@ fn an_instance_uses_the_selected_candidates_result() {
 }
 
 /// GEN-7 and EXPR-7: when the instance chooses a set, its bracket read
-/// rejects where the body calls the operator and names the instance.
+/// rejects at the making call and names the operator call in the body.
 #[test]
 fn an_instance_rejects_an_index_into_its_selected_set() {
     let checked = module(concat!(
@@ -335,7 +354,7 @@ fn an_instance_rejects_an_index_into_its_selected_set() {
     ));
     assert!(checked.rejected, "{}", checked.report);
     assert_eq!(checked.findings.len(), 1, "{}", checked.report);
-    assert_eq!(checked.summary(), ["m.hgl:5:39 type/type.mismatch EXPR-7"]);
+    assert_eq!(checked.summary(), ["m.hgl:6:31 type/type.mismatch EXPR-7"]);
     assert!(checked.report.contains("first<bool>"), "{}", checked.report);
 }
 
@@ -354,7 +373,7 @@ fn an_instance_rejects_a_return_of_its_selected_result() {
         "const fn concrete() -> i64 => inferred(3)\n",
     ));
     assert!(checked.rejected, "{}", checked.report);
-    assert_eq!(checked.summary(), ["m.hgl:6:18 type/type.mismatch EXPR-5"]);
+    assert_eq!(checked.summary(), ["m.hgl:9:31 type/type.mismatch EXPR-5"]);
     assert!(
         checked.report.contains("inferred<i64>"),
         "{}",
@@ -381,7 +400,7 @@ fn an_instance_checks_the_consumer_of_its_selected_result() {
         "const fn concrete() -> i64 => outer(5)\n",
     ));
     assert!(checked.rejected, "{}", checked.report);
-    assert_eq!(checked.summary(), ["m.hgl:8:39 type/type.mismatch EXPR-7"]);
+    assert_eq!(checked.summary(), ["m.hgl:13:31 type/type.mismatch EXPR-7"]);
     assert!(
         checked.report.contains("first<list<i64, 3>>"),
         "{}",
@@ -454,7 +473,7 @@ fn an_instance_reports_the_changed_call_that_its_local_reads() {
         "}\n",
         "test invoke { two(1) }\n",
     ));
-    assert_eq!(checked.summary(), ["m.hgl:9:18 type/type.mismatch EXPR-5"]);
+    assert_eq!(checked.summary(), ["m.hgl:14:15 type/type.mismatch EXPR-5"]);
     assert!(checked.report.contains("two<i64>"), "{}", checked.report);
     assert!(
         !checked

@@ -2934,24 +2934,47 @@ impl InstanceChain<'_> {
     }
 }
 
-/// Attach each call chain, retaining its inner-to-outer order and showing
-/// a shared step only once.
-fn with_making_calls(mut report: Diagnostic, paths: &[Vec<MakingCall>]) -> Diagnostic {
-    for call in paths.iter().flatten() {
-        let message = format!("this call makes the instance `{}`", call.instance);
-        if !report
-            .related
-            .iter()
-            .any(|label| label.location == call.at && label.message == message)
-        {
-            report = report.with_related(call.at, message);
+/// Report the instance's rejection once at each outer making call.
+/// Keep the failing body location and the intermediate calls beside it.
+fn emit_instance_report(
+    report: Diagnostic,
+    paths: &[Vec<MakingCall>],
+    diagnostics: &mut Diagnostics,
+) {
+    let mut groups = HashMap::<Location, Vec<&[MakingCall]>>::new();
+    for path in paths {
+        if let Some(outer) = path.last() {
+            groups.entry(outer.at).or_default().push(path);
         }
     }
-    report
+    let mut groups: Vec<_> = groups.into_iter().collect();
+    groups.sort_by_key(|(at, _)| (at.file, at.span.start, at.span.end));
+    for (at, paths) in groups {
+        let mut here = report
+            .clone()
+            .with_related(report.primary, "the instance's body rejects here");
+        here.primary = at;
+        for call in paths.into_iter().flatten() {
+            let message = format!("this call makes the instance `{}`", call.instance);
+            if call.at == at {
+                if !here.notes.contains(&message) {
+                    here = here.with_note(message);
+                }
+            } else if !here
+                .related
+                .iter()
+                .any(|label| label.location == call.at && label.message == message)
+            {
+                here = here.with_related(call.at, message);
+            }
+        }
+        if !diagnostics.as_slice().contains(&here) {
+            diagnostics.emit(here);
+        }
+    }
 }
 
-/// GEN-7: a rejected operator call is reported once for its concrete
-/// instance, with each distinct call that made the instance beside it.
+/// Gather the paths that make each instance and give it this rejection.
 #[derive(Default)]
 struct InstanceCallRejections {
     by_instance: HashMap<String, Vec<usize>>,
@@ -3007,7 +3030,7 @@ impl InstanceCallRejections {
 
     fn emit(self, diagnostics: &mut Diagnostics) {
         for (report, paths) in self.reports {
-            diagnostics.emit(with_making_calls(report, &paths));
+            emit_instance_report(report, &paths, diagnostics);
         }
     }
 }
@@ -3413,10 +3436,7 @@ pub(super) fn report_instance_result_uses(
                 report = report.with_related(call, "this call selected a different result type");
             }
         }
-        report = with_making_calls(report, paths);
-        if !diagnostics.as_slice().contains(&report) {
-            diagnostics.emit(report);
-        }
+        emit_instance_report(report, paths, diagnostics);
     }
 }
 
