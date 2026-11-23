@@ -417,8 +417,8 @@ fn instances_reached_through_functions_or_packs_check_the_selected_result() {
     }
 }
 
-/// GEN-7: a failing use of an inferred binding points to its initializer
-/// when another selected call in the body also changed its result type.
+/// GEN-7: a failing use of an inferred binding points through an alias
+/// to its initializer when another call also changed its result type.
 #[test]
 fn an_instance_reports_the_changed_call_that_its_local_reads() {
     let checked = module(concat!(
@@ -430,8 +430,9 @@ fn an_instance_reports_the_changed_call_that_its_local_reads() {
         "impl const fn items_of(value: i64) -> list<i64, 3> => [1, 2, 3]\n",
         "const fn two<T>(value: T) -> i64 {\n",
         "    let answer = fetch(value)\n",
+        "    let alias = answer\n",
         "    let items = items_of(value)\n",
-        "    return answer\n",
+        "    return alias\n",
         "}\n",
         "test invoke { two(1) }\n",
     ));

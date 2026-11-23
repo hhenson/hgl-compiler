@@ -3299,7 +3299,7 @@ fn instance_note(
     format!("GEN-7: in `{name}<{}>`", arguments.join(", "))
 }
 
-/// Locate a changed call inside this use or its immutable initializer.
+/// Locate a changed call inside this use or through immutable bindings.
 fn changed_result_source(
     body: &hir::Body,
     use_at: Location,
@@ -3316,28 +3316,33 @@ fn changed_result_source(
     if let Some(call) = within(use_at) {
         return Some(call);
     }
-    let mut local = None;
-    hir::walk_statements(&body.statements, &mut |expression| {
-        if expression.at == use_at
-            && let ExprKind::Local(read) = expression.kind
-            && body.locals[read].kind == LocalKind::Let
-        {
-            local = Some(read);
+    let mut reads = HashMap::new();
+    let mut initializers = HashMap::new();
+    hir::walk_statement_nodes(&body.statements, &mut |node| match node {
+        hir::Node::Expression(Expr {
+            kind: ExprKind::Local(local),
+            at,
+            ..
+        }) if body.locals[*local].kind == LocalKind::Let => {
+            reads.insert(*at, *local);
         }
-    });
-    let local = local?;
-    let mut source = None;
-    hir::walk_statement_nodes(&body.statements, &mut |node| {
-        if let hir::Node::Statement(hir::Stmt::Declare {
+        hir::Node::Statement(hir::Stmt::Declare {
             local: declared,
             value: Some(value),
-        }) = node
-            && *declared == local
-        {
-            source = within(value.at);
+        }) if body.locals[*declared].kind == LocalKind::Let => {
+            initializers.insert(*declared, value.at);
         }
+        _ => {}
     });
-    source
+    let mut at = use_at;
+    let mut seen = HashSet::new();
+    while seen.insert(at) {
+        at = *initializers.get(reads.get(&at)?)?;
+        if let Some(call) = within(at) {
+            return Some(call);
+        }
+    }
+    None
 }
 
 fn contains_location(outer: Location, inner: Location) -> bool {
