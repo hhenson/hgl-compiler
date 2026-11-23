@@ -592,6 +592,8 @@ struct Typer<'a> {
     hook: Option<Hook>,
     /// The local that is a node's injected `out`, its result (TIME-7).
     out: Option<LocalId>,
+    /// The callee read only to diagnose a value given to a ref result.
+    designating: Option<Location>,
     /// What tests have proved where the pass is reading: a binding is
     /// not null (ERR-12), or a temporal input is valid (TIME-4). A
     /// binding that is refined is immutable, and an input's validity
@@ -799,6 +801,7 @@ impl<'a> Typer<'a> {
             unrolled_range_bindings: Vec::new(),
             hook: None,
             out: None,
+            designating: None,
             present: Vec::new(),
             aliases: HashMap::new(),
             bound_children: HashMap::new(),

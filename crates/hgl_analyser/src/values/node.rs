@@ -7,14 +7,17 @@ use hgl_diagnostics::{Category, Location};
 use hgl_lexer::literal::decode_string;
 use hgl_parser::{HasSpan, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
+use super::calls::call_callee;
+use super::control::value_of_branch;
 use super::endpoints::endpoint_argument;
 use super::fit::{accepts_float, is_integer_literal, open, whole};
+use super::symbols::symbol_span;
 use super::{Fact, Typer, children};
 use crate::hir::{
     self, Body, ConfigEntry, EndpointOperation, Expr, ExprKind, Hook, LocalId, Stmt, ValueCategory,
 };
 use crate::program::{Binding, LocalKind, RUN_CONFIG};
-use crate::syntax::{child, leads_its_test, tokens};
+use crate::syntax::{child, leads_its_test, name_token, tokens, ungrouped};
 use crate::types::{Detail, Scalar, Type};
 use crate::{codes, error, warning};
 
@@ -873,6 +876,12 @@ impl<'a> Typer<'a> {
         let mark = self.mark();
         let value = self.expression(node, Some(&whole));
         let clean = self.diagnostics.len() == mark.diagnostics;
+        if !clean
+            && matches!(whole, Type::Nullable(_))
+            && self.unresolved_publication_result(node, &value, mark.diagnostics)
+        {
+            return value;
+        }
         // A delta, read as one whatever was expected of it:
         // `delta_value(input)`, `delta<set<i64>>(added: [1])`.
         let given_whole = self.admits(result, &value.ty);
@@ -909,6 +918,60 @@ impl<'a> Typer<'a> {
             return self.fit(value, &whole, what);
         }
         self.fit(value, &whole, what)
+    }
+
+    /// GEN-2 and TIME-7: keep a nullable publication's unresolved bare
+    /// call result. A delta retry still supplies context to a call whose
+    /// own result has a delta shape.
+    fn unresolved_publication_result(
+        &self,
+        node: &SyntaxNode,
+        value: &Expr,
+        reported: usize,
+    ) -> bool {
+        let node = ungrouped(node.clone());
+        match &value.kind {
+            ExprKind::Block {
+                value: Some(tail), ..
+            } => {
+                return value_of_branch(&node).is_some_and(|source| {
+                    self.unresolved_publication_result(&source, tail, reported)
+                });
+            }
+            ExprKind::If {
+                then, otherwise, ..
+            } => {
+                return node
+                    .children()
+                    .skip(1)
+                    .zip(std::iter::once(then.as_ref()).chain(otherwise.as_deref()))
+                    .any(|(source, value)| {
+                        self.unresolved_publication_result(&source, value, reported)
+                    });
+            }
+            _ => {}
+        }
+        let bare = match &value.ty {
+            Type::Result { value, error } if **error == Type::Error => value.as_ref(),
+            other => other,
+        };
+        if *bare != Type::Unknown {
+            return false;
+        }
+        let Some(span) = call_callee(&node)
+            .map(|callee| callee.span())
+            .or_else(|| symbol_span(&node))
+        else {
+            return false;
+        };
+        self.diagnostics.as_slice()[reported..]
+            .iter()
+            .any(|report| {
+                report.code.as_str() == codes::GENERIC_UNRESOLVED
+                    && report.primary.file == self.file
+                    && span.start <= report.primary.span.start
+                    && report.primary.span.end <= span.end
+            })
     }
 
     /// True when `value` is one the place of type `whole` takes: of that
@@ -982,7 +1045,15 @@ impl<'a> Typer<'a> {
             return endpoint;
         }
         if self.diagnostics.len() == reported {
+            let previous = self.designating;
+            let source = ungrouped(node.clone());
+            self.designating = call_callee(&source)
+                .and_then(|callee| name_token(&callee))
+                .map(|name| name.span())
+                .or_else(|| symbol_span(&source))
+                .map(|span| Location::new(self.file, span));
             let value = self.expression(node, Some(result));
+            self.designating = previous;
             if self.diagnostics.len() == reported {
                 self.diagnostics.emit(
                     error(
