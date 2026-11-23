@@ -121,6 +121,17 @@ mod statements;
 // `-`, `!` and the operators with two operands, as calls of core's (NUM-1, EXPR-6).
 mod symbols;
 
+/// Walk calls and constructions in a body, including static references
+/// and the independently scoped bodies of anonymous functions.
+pub(crate) fn walk_body_calls(body: &hir::Body, visit: &mut dyn FnMut(&hir::Expr)) {
+    forwarded_packs::walk_nested_calls(&body.statements, &mut |value| {
+        if requirements::called_or_referenced(value).is_some()
+            || matches!(value.kind, hir::ExprKind::Construct { .. })
+        {
+            visit(value);
+        }
+    });
+}
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
 pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {

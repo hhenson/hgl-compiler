@@ -499,24 +499,28 @@ fn an_indexed_type_parameter_reaches_its_instances() {
     }
 }
 
+const PROVISIONAL_RESULTS: &str = concat!(
+    "operator items_of<T, C>(value: T) -> C\n",
+    "impl const fn items_of<T>(value: T) -> list<i64, 2> => [1, 2]\n",
+    "impl const fn items_of(value: i64) -> list<i64, 3> => [1, 2, 3]\n",
+    "operator marker<T, C>(value: T) -> C\n",
+    "impl const fn marker<T>(value: T) -> list<i64, 1> => [9]\n",
+    "impl const fn marker(value: list<i64, 2>) -> set<i64> => [3]\n",
+    "const fn first<T>(value: T) -> i64 => marker(value)[0]\n",
+);
+
 /// GEN-7: a provisional result supplies a consumer only in the instance
 /// that selects it. Independent concrete calls still make instances.
 #[test]
 fn a_provisional_result_does_not_make_an_independent_instance() {
-    let definitions = concat!(
-        "operator items_of<T, C>(value: T) -> C\n",
-        "impl const fn items_of<T>(value: T) -> list<i64, 2> => [1, 2]\n",
-        "impl const fn items_of(value: i64) -> list<i64, 3> => [1, 2, 3]\n",
-        "operator marker<T, C>(value: T) -> C\n",
-        "impl const fn marker<T>(value: T) -> list<i64, 1> => [9]\n",
-        "impl const fn marker(value: list<i64, 2>) -> set<i64> => [3]\n",
-        "const fn first<T>(value: T) -> i64 => marker(value)[0]\n",
+    let outer = concat!(
         "const fn outer<T>(value: T) -> i64 {\n",
         "    let items = items_of(value)\n",
         "    let alias = items\n",
         "    return first(alias)\n",
         "}\n",
     );
+    let definitions = format!("{PROVISIONAL_RESULTS}{outer}");
     for suffix in [
         "",
         "test invoke { assert outer(5) == 9 }\n",
@@ -609,6 +613,70 @@ fn a_provisional_result_does_not_make_an_independent_instance() {
         "{}",
         rejected.report
     );
+
+    let node = format!(
+        "{definitions}\
+         fn with_endpoint<T, U>(value: T, extra: U) -> i64 {{\n\
+             when all_valid(extra) {{\n\
+                 let read = extra\n\
+                 let items = items_of(value)\n\
+                 return first(items)\n\
+             }}\n\
+         }}\n"
+    );
+    let entry = |value_type| {
+        module(&format!(
+            "{node}fn entry(value: {value_type}, extra: tuple<i64, i64>) -> i64 => with_endpoint(value, extra)\n"
+        ))
+    };
+    let accepted = entry("i64");
+    assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+    let rejected = entry("str");
+    assert_eq!(rejected.findings.len(), 1, "{}", rejected.report);
+    assert_eq!(rejected.findings[0].rule, "EXPR-7", "{}", rejected.report);
+    assert!(rejected.report.contains("`first<list<i64, 2>>`"));
+    assert!(
+        rejected
+            .report
+            .contains("`with_endpoint<str, tuple<i64, i64>>`")
+    );
+}
+
+/// GEN-7 and FN-19: the final body supplies types through captures,
+/// iteration bindings and a call that consumes a forwarded pack's result.
+#[test]
+fn a_reread_follows_the_types_it_gives_to_consumers() {
+    for route in [
+        concat!(
+            "const fn apply<T>(f: const fn(T) -> i64, input: T) -> i64 => f(input)\n",
+            "const fn visit<T>(value: T) -> i64 {\n",
+            "    let items = items_of(value)\n",
+            "    return apply(fn(input) => first(items), value)\n",
+            "}\n",
+        ),
+        concat!(
+            "operator rows_of<T, C>(value: T) -> C\n",
+            "impl const fn rows_of<T>(value: T) -> list<list<i64, 2>, 1> => [[1, 2]]\n",
+            "impl const fn rows_of(value: i64) -> list<list<i64, 3>, 1> => [[value, value, value]]\n",
+            "const fn visit<T>(value: T) -> i64 {\n",
+            "    var total = 0\n",
+            "    for row in rows_of(value) { total = total + first(row) }\n",
+            "    return total\n",
+            "}\n",
+        ),
+        "const fn visit<...A>(input: ...A) -> i64 => first(items_of(...input))\n",
+    ] {
+        let accepted = module(&format!(
+            "{PROVISIONAL_RESULTS}{route}test invoke {{ assert visit(5) == 9 }}\n"
+        ));
+        assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+        let rejected = module(&format!(
+            "{PROVISIONAL_RESULTS}{route}test invoke {{ visit(\"s\") }}\n"
+        ));
+        assert_eq!(rejected.findings.len(), 1, "{}", rejected.report);
+        assert_eq!(rejected.findings[0].rule, "EXPR-7", "{}", rejected.report);
+        assert!(rejected.report.contains("`first<list<i64, 2>>`"));
+    }
 }
 
 /// GEN-7: non-generic bodies make instances where they write the calls or

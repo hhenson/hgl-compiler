@@ -209,8 +209,10 @@ pub(super) fn check_instance(
         graph_diagnostics,
     )?;
     let mut reports = reports.into_inner();
-    hir::walk_statements(&instance.body.statements, &mut |value| {
-        check_expression(program, value, made, &mut reports)
+    instance.walk_calls(&mut |value| {
+        if matches!(value.kind, ExprKind::Call { .. }) {
+            check_expression(program, value, made, &mut reports);
+        }
     });
     for report in reports.as_slice() {
         if !diagnostics.as_slice().contains(report) {

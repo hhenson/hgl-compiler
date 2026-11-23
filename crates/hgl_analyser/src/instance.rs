@@ -77,7 +77,16 @@ struct InstanceArguments<'a> {
 
 impl InstanceArguments<'_> {
     fn project(&self, ty: &Type) -> Type {
-        self.packs.project(ty, self.types).unwrap_or(Type::Unknown)
+        if ty.any_part(
+            &|part| matches!(part, Type::Parameter { .. } | Type::PackMember { .. }),
+            &|constant| constant.value.key().is_none(),
+        ) {
+            self.packs.project(ty, self.types).unwrap_or(Type::Unknown)
+        } else {
+            // A reread can already supply a concrete type. Substitution's
+            // growth bound applies only when there is something to place.
+            ty.clone()
+        }
     }
 }
 
@@ -88,7 +97,7 @@ pub(crate) struct CheckedInstance {
     pub(crate) signature: Signature,
     /// The body with its concrete types and callees.
     pub(crate) body: Body,
-    /// The syntax was read with concrete inputs before placing the body.
+    /// The instance read the body from its syntax with concrete types.
     pub(crate) reread_body: bool,
     /// Checks made when a selected result differs from the admitting result.
     pub(crate) result_uses: Option<ResultUseChecks>,
@@ -100,6 +109,13 @@ pub(crate) struct ResultUseChecks {
     pub(crate) changed_results: Vec<Location>,
     /// Type checks from reading the body with the selected results.
     pub(crate) reports: Diagnostics,
+}
+
+impl CheckedInstance {
+    /// Visit calls and references in the final body, including nested functions.
+    pub(crate) fn walk_calls(&self, visit: &mut dyn FnMut(&crate::hir::Expr)) {
+        crate::values::walk_body_calls(&self.body, visit);
+    }
 }
 
 impl Program {
@@ -407,6 +423,7 @@ impl Program {
             ) {
                 diagnostics.borrow_mut().truncate(before);
                 body = reread;
+                reread_body = true;
                 destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
                 self.place_body(&mut body, &arguments, &functions);
             }

@@ -2,13 +2,11 @@
 //! (FN-19). Argument placement uses each entry's key and reads the input
 //! slot that holds it.
 
-use std::collections::HashSet;
-
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
-use super::requirements::{called_or_referenced, pack_view};
+use super::requirements::{ProvisionalCalls, called_or_referenced, pack_view};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey};
 use crate::program::{Binding, LocalKind};
@@ -648,11 +646,11 @@ pub(super) fn walk_nested_calls(statements: &[crate::hir::Stmt], visit: &mut dyn
 pub(super) fn check_instances(
     program: &crate::Program,
     discovered: &mut Vec<super::requirements::Made>,
-    provisional: &HashSet<Location>,
+    provisional: &ProvisionalCalls,
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
     use super::requirements::{MakingCall, emit_instance_report, making_path};
-    use std::collections::{HashMap, VecDeque};
+    use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = HashSet::new();
     let mut deferred_at = HashSet::new();
@@ -788,14 +786,15 @@ pub(super) fn check_instances(
                     }
                 }
                 let mut link = None;
-                walk_nested_calls(&checked.body.statements, &mut |value| {
+                checked.walk_calls(&mut |value| {
                     let Some(child) = ForwardingInstance::for_check(program, value) else {
                         return;
                     };
-                    // The ordinary walk already sees calls that were resolved
-                    // in the declaration. Only a forwarded call adds an edge.
-                    if deferred_at.contains(&value.at)
-                        && let ExprKind::Call { callee, .. } = &value.kind
+                    // Calls that need the forwarded entries, directly or
+                    // through a result, are supplied by this concrete body.
+                    if (deferred_at.contains(&value.at)
+                        || checked.reread_body && provisional.forwarded.contains(&value.at))
+                        && let Some(callee) = called_or_referenced(value)
                     {
                         let mut path = vec![MakingCall::new(
                             program,

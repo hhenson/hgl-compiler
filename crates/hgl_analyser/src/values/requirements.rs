@@ -2198,7 +2198,7 @@ fn nesting<'t>(ty: &'t Type) -> usize {
 pub(super) fn instances_hold(
     program: &Program,
     mut given: Vec<Made>,
-    provisional: &HashSet<Location>,
+    provisional: &ProvisionalCalls,
     diagnostics: &mut Diagnostics,
 ) {
     // The generic parameters of `(module, declaration)`, by where each
@@ -2459,7 +2459,6 @@ pub(super) fn instances_hold(
             } else {
                 None
             };
-            let mut reread_calls = HashSet::new();
             if let Some(instance) = &instance
                 && let Some(result_uses) = &instance.result_uses
             {
@@ -2475,19 +2474,22 @@ pub(super) fn instances_hold(
                 if result_uses.reports.has_errors() {
                     continue;
                 }
-                reread_calls = made_after_result_recheck(&instance.body, &mut instance_calls);
             }
-            if (recheck_graph || recheck_indices)
-                && let Some(instance) = &instance
-                && instance.result_uses.is_none()
+            let mut replaced = HashSet::new();
+            let reread_body = instance
+                .as_ref()
+                .is_some_and(|instance| instance.reread_body);
+            if let Some(instance) = &instance
                 && let Some(Some(source)) = unit.bodies.get(made.callee.1)
             {
-                reread_calls = made_after_inference(
-                    source,
-                    &instance.body,
-                    instance.reread_body.then_some(provisional),
-                    &mut instance_calls,
-                );
+                if reread_body {
+                    super::walk_body_calls(source, &mut |call| {
+                        replaced.insert(call.at);
+                    });
+                    concrete_body_calls(instance, &mut instance_calls);
+                } else if recheck_graph || recheck_indices {
+                    made_after_inference(source, instance, &mut instance_calls);
+                }
             }
             if recheck_indices && !recheck_graph && !recheck_endpoints {
                 let paths = chain.paths(program, &root_calls);
@@ -2561,7 +2563,7 @@ pub(super) fn instances_hold(
             };
             let enclosing_packs =
                 super::dependent_packs::PackTypes::new(enclosing_packs, &made.type_packs);
-            for call in inner.iter().filter(|call| !reread_calls.contains(&call.at)) {
+            for call in inner.iter().filter(|call| !replaced.contains(&call.at)) {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with
                 // (GEN-16); any other has the instance's arguments and
@@ -2644,7 +2646,7 @@ pub(super) fn instances_hold(
             // GEN-5: a call whose candidate a generic parameter of the
             // body selects is selected here, with this instance's types
             // ([`Typer::select_at_instance`]).
-            if !selecting.is_empty() {
+            if !reread_body && !selecting.is_empty() {
                 let (module, declaration) = made.callee;
                 let unit = &program.modules[module];
                 // GEN-13: the body is read as the instance has it, each
@@ -2687,10 +2689,9 @@ pub(super) fn instances_hold(
                     .iter()
                     .enumerate()
                     .filter(|(index, call)| {
-                        !reread_calls.contains(&call.at)
-                            && !selecting[index + 1..]
-                                .iter()
-                                .any(|later| later.at == call.at)
+                        !selecting[index + 1..]
+                            .iter()
+                            .any(|later| later.at == call.at)
                     })
                     .map(|(_, call)| call);
                 for call in standing {
@@ -3435,8 +3436,8 @@ fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
 /// A source call supplied by a result that an instance selects is an
 /// edge of that body, even if the admitting result gave it concrete
 /// generic arguments. Only the instance determines the callee's types.
-pub(super) fn provisional_result_calls(program: &Program) -> HashSet<Location> {
-    let mut provisional = HashSet::new();
+pub(super) fn provisional_result_calls(program: &Program) -> ProvisionalCalls {
+    let mut provisional = ProvisionalCalls::default();
     for module in &program.modules {
         for (body, selecting) in module.bodies.iter().zip(&module.selecting) {
             let Some(body) = body else { continue };
@@ -3446,11 +3447,48 @@ pub(super) fn provisional_result_calls(program: &Program) -> HashSet<Location> {
                 .map(|call| call.at)
                 .collect();
             if !results.is_empty() {
-                collect_provisional_result_calls(program, module, body, &results, &mut provisional);
+                collect_provisional_result_calls(
+                    program,
+                    module,
+                    body,
+                    &results,
+                    &HashSet::new(),
+                    &mut provisional.selected,
+                );
+            }
+            let mut forwarded = HashSet::new();
+            super::walk_body_calls(body, &mut |value| {
+                if matches!(called_or_referenced(value), Some(Callee::DeferredPackCall)) {
+                    forwarded.insert(value.at);
+                }
+            });
+            if !forwarded.is_empty() {
+                collect_provisional_result_calls(
+                    program,
+                    module,
+                    body,
+                    &forwarded,
+                    &HashSet::new(),
+                    &mut provisional.forwarded,
+                );
             }
         }
     }
     provisional
+}
+
+/// Sites whose types depend on an enclosing instance. The forwarding
+/// walk supplies the ones that need its actual pack entries.
+#[derive(Default)]
+pub(super) struct ProvisionalCalls {
+    selected: HashSet<Location>,
+    pub(super) forwarded: HashSet<Location>,
+}
+
+impl ProvisionalCalls {
+    pub(super) fn contains(&self, at: &Location) -> bool {
+        self.selected.contains(at) || self.forwarded.contains(at)
+    }
 }
 
 /// Keep each anonymous body's locals separate from its enclosing body.
@@ -3459,18 +3497,26 @@ fn collect_provisional_result_calls(
     module: &crate::Module,
     body: &hir::Body,
     results: &HashSet<Location>,
+    captured: &HashSet<hir::LocalId>,
     provisional: &mut HashSet<Location>,
 ) {
     let mut initializers = HashMap::new();
-    hir::walk_statement_nodes(&body.statements, &mut |node| {
-        if let hir::Node::Statement(hir::Stmt::Declare {
+    hir::walk_statement_nodes(&body.statements, &mut |node| match node {
+        hir::Node::Statement(hir::Stmt::Declare {
             local,
             value: Some(value),
-        }) = node
-        {
+        }) => {
             initializers.insert(*local, value);
         }
+        hir::Node::Statement(hir::Stmt::For {
+            names, sequence, ..
+        }) => {
+            initializers.extend(names.iter().map(|local| (*local, sequence)));
+        }
+        _ => {}
     });
+    let reads_result =
+        |value: &Expr| reads_provisional_result(value, results, &initializers, captured);
     hir::walk_statements(&body.statements, &mut |value| {
         if let ExprKind::Call {
             callee, arguments, ..
@@ -3478,9 +3524,7 @@ fn collect_provisional_result_calls(
         {
             let affected: Vec<_> = arguments
                 .iter()
-                .filter(|argument| {
-                    reads_provisional_result(&argument.value, results, &initializers)
-                })
+                .filter(|argument| reads_result(&argument.value))
                 .collect();
             if !affected.is_empty() {
                 provisional.insert(value.at);
@@ -3498,7 +3542,26 @@ fn collect_provisional_result_calls(
             }
         }
         if let Some(Callee::Anonymous(function)) = called_or_referenced(value) {
-            collect_provisional_result_calls(program, module, &function.body, results, provisional);
+            let captures = function
+                .captures
+                .iter()
+                .enumerate()
+                .filter_map(|(index, local)| {
+                    (captured.contains(local)
+                        || initializers
+                            .get(local)
+                            .is_some_and(|value| reads_result(value)))
+                    .then_some(function.template.parameters.len() + index)
+                })
+                .collect();
+            collect_provisional_result_calls(
+                program,
+                module,
+                &function.body,
+                results,
+                &captures,
+                provisional,
+            );
         }
     });
 }
@@ -3548,6 +3611,7 @@ fn reads_provisional_result(
     source: &Expr,
     results: &HashSet<Location>,
     initializers: &HashMap<hir::LocalId, &Expr>,
+    captured: &HashSet<hir::LocalId>,
 ) -> bool {
     let mut waiting = vec![source];
     let mut seen = HashSet::new();
@@ -3555,11 +3619,13 @@ fn reads_provisional_result(
         let mut found = false;
         value.walk(&mut |part| {
             found |= results.contains(&part.at);
-            if let ExprKind::Local(local) = part.kind
-                && seen.insert(local)
-                && let Some(initializer) = initializers.get(&local)
-            {
-                waiting.push(initializer);
+            if let ExprKind::Local(local) = part.kind {
+                found |= captured.contains(&local);
+                if seen.insert(local)
+                    && let Some(initializer) = initializers.get(&local)
+                {
+                    waiting.push(initializer);
+                }
             }
         });
         if found {
@@ -3695,34 +3761,37 @@ fn unique_location(mut locations: impl Iterator<Item = Location>) -> Option<Loca
     locations.all(|location| location == first).then_some(first)
 }
 
-/// Use the concrete calls found by the result reread instead of following
-/// their edges in the original body (GEN-7).
-fn made_after_result_recheck(body: &hir::Body, made: &mut Vec<Made>) -> HashSet<Location> {
-    let mut reread = HashSet::new();
-    walk_nested_calls(&body.statements, &mut |expression| {
-        if let Some(callee @ (Callee::Function { .. } | Callee::Candidate { .. })) =
-            called_or_referenced(expression)
-            && callee.generics().iter().all(resolved_default_argument)
-            && callee
-                .type_packs()
+/// A reread makes its own calls. The same final HIR is used regardless
+/// of what caused the reread (GEN-7).
+fn concrete_body_calls(instance: &crate::instance::CheckedInstance, made: &mut Vec<Made>) {
+    let mut calls = Vec::new();
+    instance.walk_calls(&mut |expression| made_at(expression, &mut calls));
+    made.extend(calls.into_iter().filter(|call| {
+        call.required.is_none()
+            && call.type_packs.iter().all(|pack| {
+                pack.forwarded_from.is_none() && pack.types_with_prefix().all(super::fit::whole)
+            })
+            && call
+                .generics
                 .iter()
-                .all(|pack| pack.forwarded_from.is_none())
-        {
-            reread.insert(expression.at);
-            made_at(expression, made);
-        }
-    });
-    reread
+                .enumerate()
+                .all(|(position, argument)| {
+                    resolved_default_argument(argument)
+                        || call
+                            .type_packs
+                            .iter()
+                            .any(|pack| pack.parameter == position)
+                })
+    }));
 }
 
-/// Follow calls whose inference has settled. A body read from its source
-/// under concrete inputs also replaces its provisionally typed edges.
+/// Graph settlement can finish an unresolved call without rereading
+/// the body. The source's already-resolved calls still stand there.
 fn made_after_inference(
     source: &hir::Body,
-    settled: &hir::Body,
-    provisional: Option<&HashSet<Location>>,
+    settled: &crate::instance::CheckedInstance,
     made: &mut Vec<Made>,
-) -> HashSet<Location> {
+) {
     let mut pending = HashSet::new();
     walk_nested_calls(&source.statements, &mut |expression| {
         if super::calls::pending_function_inference(&expression.kind)
@@ -3738,24 +3807,18 @@ fn made_after_inference(
             pending.insert(expression.at);
         }
     });
-    let mut replaced = HashSet::new();
-    if pending.is_empty() && provisional.is_none_or(HashSet::is_empty) {
-        return replaced;
+    if pending.is_empty() {
+        return;
     }
-    walk_nested_calls(&settled.statements, &mut |expression| {
-        let replace = provisional.is_some_and(|calls| calls.contains(&expression.at));
-        if (replace || pending.contains(&expression.at))
+    settled.walk_calls(&mut |expression| {
+        if pending.contains(&expression.at)
             && let Some(callee @ (Callee::Function { .. } | Callee::Candidate { .. })) =
                 called_or_referenced(expression)
             && callee.generics().iter().all(resolved_default_argument)
         {
             made_at(expression, made);
-            if replace {
-                replaced.insert(expression.at);
-            }
         }
     });
-    replaced
 }
 
 /// The calls of generic declarations `expression` makes, at any depth.
