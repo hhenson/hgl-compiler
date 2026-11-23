@@ -151,8 +151,20 @@ fn repeated_binding(ty: &Type, inferred: &[(Location, &Argument)]) -> bool {
         |at| inferred.iter().any(|&(known, _)| known == at) && !seen.borrow_mut().insert(at);
     ty.any_part(
         &|part| matches!(part, Type::Parameter { at, .. } if repeated(*at)),
-        &|constant| matches!(&constant.value, ConstantValue::Parameter { at, .. } if repeated(*at)),
+        &|constant| repeated_constant_binding(&constant.value, &repeated),
     )
+}
+
+/// The declaration's value parameters can be inferred inside list and
+/// tuple constants as well as from a constant used on its own (GEN-2).
+fn repeated_constant_binding(value: &ConstantValue, repeated: &dyn Fn(Location) -> bool) -> bool {
+    match value {
+        ConstantValue::Parameter { at, .. } => repeated(*at),
+        ConstantValue::List(elements) | ConstantValue::Tuple(elements) => elements
+            .iter()
+            .any(|element| repeated_constant_binding(element, repeated)),
+        _ => false,
+    }
 }
 
 fn mismatched_result(expected: &Type, actual: &Type) -> bool {

@@ -252,11 +252,42 @@ fn a_result_contract_needs_consistent_input_bindings() {
         "impl const fn pick(pair: tuple<i64, i64>) -> str => \"wrong\"\n",
     ));
     assert_eq!(
-        checked.summary(),
+        checked
+            .summary()
+            .into_iter()
+            .filter(|report| report.contains("operator/impl.result"))
+            .collect::<Vec<_>>(),
         ["m.hgl:4:46 operator/impl.result GEN-6"],
         "{}",
         checked.report
     );
+}
+
+/// GEN-6: a value binding inside a list or tuple constant needs the
+/// same consistency check before it gives a declared result type.
+#[test]
+fn a_result_contract_checks_repeated_bindings_in_composite_constants() {
+    for (constant_type, pattern, conflicting, consistent) in [
+        ("list<i64>", "[N, N]", "[1, 2]", "[1, 1]"),
+        ("tuple<i64, i64>", "(N, N)", "(1, 2)", "(1, 1)"),
+    ] {
+        let checked = module(&format!(
+            "struct Box<const X: {constant_type}> {{}}\n\
+             operator pick<const N: i64>(boxed: Box<{pattern}>) -> list<i64, N>\n\
+             impl const fn pick(boxed: Box<{conflicting}>) -> list<i64, 2> => [1, 2]\n\
+             impl const fn pick(boxed: Box<{consistent}>) -> list<i64, 2> => [1, 2]\n"
+        ));
+        assert_eq!(
+            checked
+                .summary()
+                .into_iter()
+                .filter(|report| report.contains("operator/impl.result"))
+                .collect::<Vec<_>>(),
+            ["m.hgl:5:43 operator/impl.result GEN-6"],
+            "{}",
+            checked.report
+        );
+    }
 }
 
 /// FN-8 and GEN-10: capture in written order, keeping the pack slot,
