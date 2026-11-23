@@ -855,12 +855,19 @@ impl Emitter<'_> {
         text.push_str("};\n");
         let mut whole = nested(&placed.structs, &text);
         if held {
-            let registered = match readers {
-                Some((number, _)) => format!(
-                    "{}.state.reader{number}",
-                    placed.display(program, self.module)
-                ),
-                None => format!("{}.state", placed.display(program, self.module)),
+            let module = &program.modules[self.module];
+            let registered = if tracks_drops && module.declarations[index].test_owner.is_some() {
+                // Test-local nodes of the same name share a display name.
+                // Their emitted helper namespaces keep the timer state distinct.
+                format!("{}::{}.state", module.path, placed.structs)
+            } else {
+                match readers {
+                    Some((number, _)) => format!(
+                        "{}.state.reader{number}",
+                        placed.display(program, self.module)
+                    ),
+                    None => format!("{}.state", placed.display(program, self.module)),
+                }
             };
             whole.push_str(&registration(
                 program,
