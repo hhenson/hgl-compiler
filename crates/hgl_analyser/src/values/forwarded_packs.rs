@@ -6,7 +6,7 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
-use super::requirements::pack_view;
+use super::requirements::{called_or_referenced, pack_view};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey};
 use crate::program::{Binding, LocalKind};
@@ -510,6 +510,18 @@ impl ForwardingInstance {
     /// A static reference can reach a forwarding body even without its own
     /// pack arguments, through the ordinary calls the referenced body makes.
     fn for_check(program: &crate::Program, expression: &Expr) -> Option<Self> {
+        let (module, declaration) = called_or_referenced(expression)?.declaration()?;
+        if let crate::Detail::Callable(signature) = &program.modules[module].details[declaration]
+            && signature.generics.is_empty()
+            && signature
+                .parameters
+                .iter()
+                .all(|parameter| parameter.pack.is_none())
+        {
+            // Concrete bodies supply their own forwarding roots. A call
+            // of one does not make those same instances a second time.
+            return None;
+        }
         match &expression.kind {
             ExprKind::StaticCallable(callee) => Self::from_callee(program, callee, None),
             _ => Self::of(program, expression),
@@ -636,9 +648,7 @@ pub(super) fn check_instances(
     discovered: &mut Vec<super::requirements::Made>,
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
-    use super::requirements::{
-        MakingCall, called_or_referenced, emit_instance_report, making_path,
-    };
+    use super::requirements::{MakingCall, emit_instance_report, making_path};
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = HashSet::new();

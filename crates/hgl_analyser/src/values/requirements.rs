@@ -2228,7 +2228,7 @@ pub(super) fn instances_hold(
                     .selecting
                     .get(position)
                     .map_or(&[][..], Vec::as_slice);
-                provisional_result_calls(body, selecting)
+                provisional_result_calls(program, module, body, selecting)
             } else {
                 HashSet::new()
             };
@@ -2494,6 +2494,11 @@ pub(super) fn instances_hold(
                 let paths = chain.paths(program, &root_calls);
                 for report in body_reports.as_slice() {
                     emit_instance_report(report.clone(), &paths, diagnostics);
+                }
+                if body_reports.has_errors() {
+                    // An ill-typed value body does not make calls its
+                    // reread could only partially type (ERR-9).
+                    continue;
                 }
             }
             if recheck_graph && let Some(instance) = &instance {
@@ -3432,6 +3437,8 @@ fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
 /// edge of that body, even if the admitting result gave it concrete
 /// generic arguments. Only the instance determines the callee's types.
 fn provisional_result_calls(
+    program: &Program,
+    module: &crate::Module,
     body: &hir::Body,
     selecting: &[super::candidates::Selecting],
 ) -> HashSet<Location> {
@@ -3442,13 +3449,15 @@ fn provisional_result_calls(
         .collect();
     let mut provisional = HashSet::new();
     if !results.is_empty() {
-        collect_provisional_result_calls(body, &results, &mut provisional);
+        collect_provisional_result_calls(program, module, body, &results, &mut provisional);
     }
     provisional
 }
 
 /// Keep each anonymous body's locals separate from its enclosing body.
 fn collect_provisional_result_calls(
+    program: &Program,
+    module: &crate::Module,
     body: &hir::Body,
     results: &HashSet<Location>,
     provisional: &mut HashSet<Location>,
@@ -3464,17 +3473,75 @@ fn collect_provisional_result_calls(
         }
     });
     hir::walk_statements(&body.statements, &mut |value| {
-        if let ExprKind::Call { arguments, .. } = &value.kind
-            && arguments
-                .iter()
-                .any(|argument| reads_provisional_result(&argument.value, results, &initializers))
+        if let ExprKind::Call {
+            callee, arguments, ..
+        } = &value.kind
         {
-            provisional.insert(value.at);
+            let affected: Vec<_> = arguments
+                .iter()
+                .filter(|argument| {
+                    reads_provisional_result(&argument.value, results, &initializers)
+                })
+                .collect();
+            if !affected.is_empty() {
+                provisional.insert(value.at);
+                if let Some((unit, declaration)) = callee.declaration()
+                    && let Detail::Callable(signature) = &program.modules[unit].details[declaration]
+                {
+                    provisional_result_references(
+                        module,
+                        signature,
+                        arguments,
+                        &affected,
+                        provisional,
+                    );
+                }
+            }
         }
         if let Some(Callee::Anonymous(function)) = called_or_referenced(value) {
-            collect_provisional_result_calls(&function.body, results, provisional);
+            collect_provisional_result_calls(program, module, &function.body, results, provisional);
         }
     });
+}
+
+/// A sibling's provisional result may also infer the template of a
+/// static reference, through a generic parameter shared by both slots.
+fn provisional_result_references(
+    module: &crate::Module,
+    signature: &Signature,
+    arguments: &[hir::Argument],
+    affected: &[&hir::Argument],
+    provisional: &mut HashSet<Location>,
+) {
+    let parameter_type = |argument: &hir::Argument| {
+        argument
+            .parameter
+            .and_then(|position| signature.parameters.get(position))
+            .map(|parameter| &parameter.ty)
+    };
+    let dependent: Vec<_> = signature
+        .generics
+        .iter()
+        .map(|generic| generic.at)
+        .filter(|at| {
+            affected
+                .iter()
+                .filter_map(|argument| parameter_type(argument))
+                .any(|ty| mentions(ty, &[*at]))
+        })
+        .collect();
+    for argument in arguments {
+        if let ExprKind::StaticCallable(target) = &argument.value.kind
+            && !target.generics().is_empty()
+            && parameter_type(argument).is_some_and(|ty| mentions(ty, &dependent))
+            && !module.call_arguments.iter().any(|written| {
+                contains_location(argument.value.at, written.at)
+                    && written.arguments.len() == target.generics().len()
+            })
+        {
+            provisional.insert(argument.value.at);
+        }
+    }
 }
 
 /// Follow initializer reads without repeatedly visiting the same binding.
@@ -3571,7 +3638,7 @@ fn instance_name(
     format!("{name}<{}>", arguments.join(", "))
 }
 
-/// Locate a changed call inside this use or through immutable bindings.
+/// Locate a changed call inside this use or through a local's initializer.
 fn changed_result_source(
     body: &hir::Body,
     use_at: Location,
@@ -3595,13 +3662,13 @@ fn changed_result_source(
             kind: ExprKind::Local(local),
             at,
             ..
-        }) if body.locals[*local].kind == LocalKind::Let => {
+        }) if matches!(body.locals[*local].kind, LocalKind::Let | LocalKind::Var) => {
             reads.insert(*at, *local);
         }
         hir::Node::Statement(hir::Stmt::Declare {
             local: declared,
             value: Some(value),
-        }) if body.locals[*declared].kind == LocalKind::Let => {
+        }) if matches!(body.locals[*declared].kind, LocalKind::Let | LocalKind::Var) => {
             initializers.insert(*declared, value.at);
         }
         _ => {}

@@ -27,6 +27,11 @@ const fn first_marker<T>(value: T) -> i64 {
     let items = items_of(value)
     return marker_at_first(items)
 }
+const fn apply_marker<T>(reference: const fn(T) -> i64, items: T) -> i64 => reference(items)
+const fn first_marker_by_reference<T>(value: T) -> i64 {
+    let items = items_of(value)
+    return apply_marker(marker_at_first, items)
+}
 
 const fn first_of<T>(value: T) -> i64 => items_of(value)[0]
 const fn first_from_index<T>(values: T) -> i64 => first_of(values[0])
@@ -69,6 +74,7 @@ test indexed {
     assert first_from_index(["string"]) == 1
     assert call_first(relay_instance<i64>, 5) == 5
     assert first_marker(5) == 9
+    assert first_marker_by_reference(5) == 9
 }
 test whole {
     assert extent(5) == 3

@@ -546,6 +546,76 @@ fn a_provisional_result_does_not_make_an_independent_instance() {
         independent.summary(),
         ["m.hgl:16:12 type/type.mismatch EXPR-7"]
     );
+    let callbacks = format!(
+        "{definitions}\
+         const fn apply<T>(f: const fn(T) -> i64, items: T) -> i64 => f(items)\n\
+         const fn by_reference<T>(value: T) -> i64 {{\n\
+             let items = items_of(value)\n\
+             return apply(first, items)\n\
+         }}\n"
+    );
+    for suffix in ["", "test invoke { assert by_reference(5) == 9 }\n"] {
+        let accepted = module(&format!("{callbacks}{suffix}"));
+        assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+    }
+    let rejected = module(&format!(
+        "{callbacks}test invoke {{ by_reference(\"s\") }}\n"
+    ));
+    assert_eq!(
+        rejected.summary(),
+        ["m.hgl:19:15 type/type.mismatch EXPR-7"],
+        "{}",
+        rejected.report
+    );
+}
+
+/// GEN-7: non-generic bodies make instances where they write the calls or
+/// references. Calling those bodies does not make those instances again.
+#[test]
+fn forwarding_through_a_non_generic_body_reports_only_its_making_site() {
+    let checked = module(concat!(
+        "operator fetch<T, R>(value: T) -> R\n",
+        "impl const fn fetch<T>(value: T) -> i64 => 5\n",
+        "impl const fn fetch(value: i64) -> str => \"other\"\n",
+        "const fn inferred<T>(value: T) -> i64 {\n",
+        "    let answer = fetch(value)\n",
+        "    return answer\n",
+        "}\n",
+        "const fn relay<...A>(values: ...A) -> i64 => inferred(...values)\n",
+        "const fn via<T>(value: T) -> i64 => relay(value)\n",
+        "const fn apply(f: const fn(i64) -> i64, value: i64) -> i64 => f(value)\n",
+        "const fn reference(value: i64) -> i64 => apply(via<i64>, value)\n",
+        "const fn named(value: i64) -> i64 => relay(value)\n",
+        "test invoke { reference(3)\n reference(4)\n named(5) }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:48 type/type.mismatch EXPR-5",
+            "m.hgl:13:38 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7, ERR-9: the type error in this instance precedes the recursive
+/// call's admission and confines the error to the making site.
+#[test]
+fn an_ill_typed_indexed_instance_does_not_make_a_recursive_call() {
+    let checked = module(concat!(
+        "const fn repeat<T>(items: T, n: i64) -> i64 {\n",
+        "    if n <= 0 { return 0 }\n",
+        "    return repeat([items, items[0]], n - 1)\n",
+        "}\n",
+        "test invoke { assert repeat([7], 3) == 0 }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:22 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
 }
 
 /// GEN-7: an unrelated changed result does not move a call's rejection.
@@ -613,6 +683,28 @@ fn an_instance_reports_the_changed_call_that_its_local_reads() {
         "{}",
         checked.report
     );
+}
+
+/// GEN-7: the inferred type of a mutable local originates at its initializer.
+#[test]
+fn a_changed_result_keeps_the_label_on_a_var_initializer() {
+    let checked = module(concat!(
+        "operator fetch<T, R>(value: T) -> R\n",
+        "impl const fn fetch<T>(value: T) -> i64 => 5\n",
+        "impl const fn fetch(value: i64) -> str => \"other\"\n",
+        "const fn read<T>(value: T) -> i64 {\n",
+        "    var answer = fetch(value)\n",
+        "    return answer\n",
+        "}\n",
+        "test invoke { read(3) }\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:9:15 type/type.mismatch EXPR-5"]);
+    let lines: Vec<_> = checked.report.lines().collect();
+    let label = lines
+        .iter()
+        .position(|line| line.contains("the instance's body rejects here"))
+        .unwrap();
+    assert!(lines[label - 1].contains("var answer = fetch(value)"));
 }
 
 /// GEN-2: a call resolves each generic parameter of its callee, and
