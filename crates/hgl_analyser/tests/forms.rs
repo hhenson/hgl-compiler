@@ -170,6 +170,332 @@ fn a_candidate_keeps_the_operator_pack_slot() {
     );
 }
 
+/// GEN-6: the candidate's declaration reports the result it contradicts
+/// even when a generic caller or an explicit argument could select it.
+#[test]
+fn a_candidate_result_honours_its_operator() {
+    let checked = module(concat!(
+        "operator fixed<T>(value: T, flag: bool) -> T\n",
+        "impl const fn fixed(value: i64, flag: bool) -> f64 => 2.5\n",
+        "const fn through<T>(v: T) -> T requires fixed(T, bool) => fixed(v, true)\n",
+        "test direct {\n    let value: i64 = 3\n    let x = fixed(value, true)\n}\n",
+        "test generic {\n    let value: i64 = through(3)\n    assert value == 2\n}\n",
+        "operator fx2<U, T>(flag: U, value: T) -> T\n",
+        "impl const fn fx2(flag: bool, value: i64) -> f64 => 2.5\n",
+        "test explicit {\n    let value: i64 = 3\n    let x = fx2<bool>(true, value)\n}\n",
+        "operator element<T>(values: list<T>) -> T\n",
+        "impl const fn element(values: list<str>) -> i64 => 0\n",
+        "impl const fn element(values: list<i64>) -> i64 => 0\n",
+    ));
+    assert_eq!(
+        checked
+            .summary()
+            .into_iter()
+            .filter(|report| report.contains("operator/impl.result"))
+            .collect::<Vec<_>>(),
+        [
+            "m.hgl:3:48 operator/impl.result GEN-6",
+            "m.hgl:14:46 operator/impl.result GEN-6",
+            "m.hgl:20:45 operator/impl.result GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+    assert!(checked.rejected);
+}
+
+/// GEN-6: a candidate has a result when its operator has one.
+#[test]
+fn a_candidate_declares_a_result_exactly_when_its_operator_does() {
+    let checked = module(concat!(
+        "operator missing<T>(value: T) -> T\n",
+        "impl const fn missing(value: i64) {}\n",
+        "operator extra<T>(value: T)\n",
+        "impl const fn extra(value: i64) -> i64 => value\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:15 operator/impl.result GEN-6",
+            "m.hgl:5:36 operator/impl.result GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked.findings[0].message.contains("declares no result")
+            && checked.findings[0].message.ends_with("result `i64`"),
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6: a concrete candidate outside the operator's type set rejects
+/// at its declaration even without a call. A generic candidate can remain
+/// conditional, and a concrete member of the set is admitted.
+#[test]
+fn a_concrete_candidate_honours_its_operators_requires() {
+    let checked = module(concat!(
+        "operator admitted<T>(value: T) requires T in {i64, bool}\n",
+        "impl const fn admitted(value: str) {}\n",
+        "impl const fn admitted(value: bool) {}\n",
+        "impl const fn admitted<T>(value: T) requires T in {i64, bool} {}\n",
+        "operator items<T>(values: list<T>) requires T in {i64, bool}\n",
+        "impl const fn items(values: list<str>) {}\n",
+        "impl const fn items(values: list<i64>) {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:15 operator/impl.requires GEN-6",
+            "m.hgl:7:15 operator/impl.requires GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6: a condition can test a value the candidate's input type binds.
+#[test]
+fn a_candidate_honours_requires_on_inferred_values() {
+    let checked = module(concat!(
+        "operator member<const N: i64>(x: list<i64, N>) requires N in {1, 2}\n",
+        "impl const fn member(x: list<i64, 3>) {}\n",
+        "impl const fn member(x: list<i64, 2>) {}\n",
+        "operator equal<const N: i64>(x: list<i64, N>) requires N == 2\n",
+        "impl const fn equal(x: list<i64, 3>) {}\n",
+        "enum Zero { ieee, nan }\n",
+        "struct Z<const z: Zero> {}\n",
+        "operator choose<const z: Zero>(x: Z<z>) requires z == .nan\n",
+        "impl const fn choose(x: Z<.ieee>) {}\n",
+        "impl const fn choose(x: Z<.nan>) {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:15 operator/impl.requires GEN-6",
+            "m.hgl:6:15 operator/impl.requires GEN-6",
+            "m.hgl:10:15 operator/impl.requires GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6 and TYPE-10: both growing-list spellings give one type in a
+/// result or in a requires set.
+#[test]
+fn growing_list_spelling_does_not_change_a_candidate_contract() {
+    let checked = module(concat!(
+        "operator values(value: i64) -> list<i64>\n",
+        "impl const fn values(value: i64) -> list<i64, unbounded> => [value]\n",
+        "operator allowed<T>(value: T) requires T in {list<i64>}\n",
+        "impl const fn allowed(value: list<i64, unbounded>) {}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// GEN-6: repeated bindings inside one parameter must agree before its
+/// inferred type is used to report a result contradiction.
+#[test]
+fn a_result_contract_needs_consistent_input_bindings() {
+    let checked = module(concat!(
+        "operator pick<T>(pair: tuple<T, T>) -> T\n",
+        "impl const fn pick(pair: tuple<i64, str>) -> str => \"chosen\"\n",
+        "impl const fn pick(pair: tuple<i64, i64>) -> str => \"wrong\"\n",
+    ));
+    assert_eq!(
+        checked
+            .summary()
+            .into_iter()
+            .filter(|report| report.contains("operator/impl.result"))
+            .collect::<Vec<_>>(),
+        ["m.hgl:4:46 operator/impl.result GEN-6"],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6: repeats and expressions inside composite constants must
+/// agree with the binding before it gives a declared result type.
+#[test]
+fn a_result_contract_checks_inferred_values_in_composite_constants() {
+    for (constant_type, pattern, conflicting, consistent) in [
+        ("list<i64>", "[N, N]", "[1, 2]", "[1, 1]"),
+        ("tuple<i64, i64>", "(N, N)", "(1, 2)", "(1, 1)"),
+        ("list<i64>", "[N, N + 1]", "[1, 4]", "[1, 2]"),
+        ("list<i64>", "[N, N * 2]", "[1, 4]", "[1, 2]"),
+    ] {
+        let checked = module(&format!(
+            "struct Box<const X: {constant_type}> {{}}\n\
+             operator pick<const N: i64>(boxed: Box<{pattern}>) -> list<i64, N>\n\
+             impl const fn pick(boxed: Box<{conflicting}>) -> list<i64, 2> => [1, 2]\n\
+             impl const fn pick(boxed: Box<{consistent}>) -> list<i64, 2> => [1, 2]\n"
+        ));
+        assert_eq!(
+            checked
+                .summary()
+                .into_iter()
+                .filter(|report| report.contains("operator/impl.result"))
+                .collect::<Vec<_>>(),
+            ["m.hgl:5:43 operator/impl.result GEN-6"],
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// GEN-6: a value inferred from one input also has to agree with an
+/// expression in another input before it gives a declared result type.
+#[test]
+fn a_result_contract_checks_values_used_across_inputs() {
+    let checked = module(concat!(
+        "operator pick<const N: i64>(a: list<i64, N>, b: list<i64, N + 1>) -> list<i64, N>\n",
+        "impl const fn pick(a: list<i64, 2>, b: list<i64, 4>) -> list<i64, 3> => [1, 2, 3]\n",
+        "impl const fn pick(a: list<i64, 2>, b: list<i64, 3>) -> list<i64, 3> => [1, 2, 3]\n",
+    ));
+    assert_eq!(
+        checked
+            .summary()
+            .into_iter()
+            .filter(|report| report.contains("operator/impl.result"))
+            .collect::<Vec<_>>(),
+        ["m.hgl:4:57 operator/impl.result GEN-6"],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6: an unresolved extent leaves just that part of the result open.
+#[test]
+fn a_result_contract_leaves_unbound_sizes_open() {
+    let checked = module(concat!(
+        "operator by_argument<const N: i64>(x: list<i64, N>) -> list<i64, N>\n",
+        "impl const fn by_argument(x: list<i64>) -> list<i64> => x\n",
+        "operator by_result<const N: i64>(x: i64) -> list<i64, N>\n",
+        "impl const fn by_result(x: i64) -> list<i64> => [x]\n",
+        "operator generic<const N: i64>(x: list<i64, N>) -> list<i64, N>\n",
+        "impl const fn generic<const M: i64>(x: list<i64, M>) -> list<i64> => []\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// GEN-6: an unresolved parameter does not hide a known contradiction
+/// in another part of the candidate's result.
+#[test]
+fn a_result_contract_compares_known_parts_of_a_generic_result() {
+    let checked = module(concat!(
+        "operator pair<T, U>(x: T) -> tuple<T, U>\n",
+        "impl const fn pair(x: i64) -> tuple<str, f64> => (\"a\", 1.5)\n",
+        "operator admitted<T, U>(x: T) -> tuple<T, U>\n",
+        "impl const fn admitted(x: i64) -> tuple<i64, f64> => (x, 1.5)\n",
+        "operator unbound<T, const N: i64>(x: T) -> list<T, N>\n",
+        "impl const fn unbound(x: i64) -> list<str, 1> => [\"a\"]\n",
+        "operator generic<const N: i64>(x: list<i64, N>) -> list<i64, N>\n",
+        "impl const fn generic<const M: i64>(x: list<i64, M>) -> list<str, M> => []\n",
+        "operator dictionary<T, U>(x: T) -> dict<T, U>\n",
+        "impl const fn dictionary(x: i64) -> dict<str, bool> => [\"a\": true]\n",
+        "operator fixed<const N: i64>(x: list<i64, N>) -> list<i64, N>\n",
+        "impl const fn fixed(x: list<i64, 2>) -> list<i64> => []\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:31 operator/impl.result GEN-6",
+            "m.hgl:7:34 operator/impl.result GEN-6",
+            "m.hgl:9:57 operator/impl.result GEN-6",
+            "m.hgl:11:37 operator/impl.result GEN-6",
+            "m.hgl:13:41 operator/impl.result GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6 and GEN-17: the operator's reflected result names the same
+/// callback pack as its candidate's. Its known shape is still checked.
+#[test]
+fn a_result_contract_uses_the_candidates_reflected_pack() {
+    let checked = module(concat!(
+        "const item: str = \"item\"\n",
+        "operator reflected<...Ps, const key: str = \"item\">(f: const fn(...{Ps}) -> i64) -> list<Ps[key]>\n",
+        "impl const fn reflected<...Qs, const key: str = \"item\">(f: const fn(...{Qs}) -> i64) -> list<Qs[key]> => []\n",
+        "operator concrete<...Ps>(f: const fn(...{Ps}) -> i64) -> list<Ps[item]>\n",
+        "impl const fn concrete<...Qs>(f: const fn(...{Qs}) -> i64) -> list<str> => []\n",
+        "operator shaped<...Ps>(f: const fn(...{Ps}) -> i64) -> tuple<list<Ps[item]>, i64>\n",
+        "impl const fn shaped<...Qs>(f: const fn(...{Qs}) -> i64) -> tuple<list<Qs[item]>, f64> => ([], 1.5)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:63 operator/impl.result GEN-6",
+            "m.hgl:8:61 operator/impl.result GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6, GEN-17 and TYPE-9: an unbound pack or key leaves its member
+/// open, and an atomic type can normalize when its payload is supplied.
+#[test]
+fn a_result_contract_leaves_unbound_members_and_normalizing_types_open() {
+    let checked = module(concat!(
+        "const item: str = \"item\"\n",
+        "operator from_callback<...Ps>(f: const fn(...{Ps}) -> i64) -> list<Ps[item]>\n",
+        "impl const fn from_callback(f: const fn(item: str) -> i64) -> list<str> => []\n",
+        "operator by_key<...Ps, const key: str = \"item\">(f: const fn(...{Ps}) -> i64) -> list<Ps[key]>\n",
+        "impl const fn by_key<...Qs>(f: const fn(...{Qs}) -> i64) -> list<Qs[item]> => []\n",
+        "operator by_sibling<...Ps>(f: const fn(...{Ps}) -> i64) -> tuple<list<Ps[item]>, i64>\n",
+        "impl const fn by_sibling(f: const fn(item: str) -> i64) -> tuple<list<str>, f64> => ([], 1.5)\n",
+        "operator atomic_open<T>(x: i64) -> atomic<T>\n",
+        "impl const fn atomic_open(x: i64) -> i64 => x\n",
+        "operator atomic_fixed(x: i64) -> atomic<list<i64>>\n",
+        "impl const fn atomic_fixed(x: i64) -> list<i64> => [x]\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:60 operator/impl.result GEN-6",
+            "m.hgl:12:39 operator/impl.result GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6: a contract comparison needs a valid candidate and operator.
+/// An invalid binding in a named test is already reported by TST-2.
+#[test]
+fn a_result_contract_does_not_repeat_an_earlier_declaration_error() {
+    let checked = module(concat!(
+        "operator tp2<...Ts>(values: ...Ts) -> tuple<Ts>\n",
+        "impl const fn tp2(values: ...i64{2}) -> tuple<i64, i64> => (1, 2)\n",
+        "operator list_size<const N: i64>(x: list<i64, N>) -> list<i64, N>\n",
+        "impl const fn list_size(x: list<i64, -1>) -> list<i64, 2> => [1, 2]\n",
+        "operator fixed<T>(value: T) -> T\n",
+        "test local {\n",
+        "    operator fixed<T>(value: T) -> list<T>\n",
+        "    impl const fn fixed(value: i64) -> list<i64> => [value]\n",
+        "}\n",
+    ));
+    let codes: Vec<_> = checked
+        .findings
+        .iter()
+        .map(|item| item.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "type/type.not_a_type",
+            "type/list.size",
+            "name/name.duplicate"
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// FN-8 and GEN-10: capture in written order, keeping the pack slot,
 /// positional indexes or named keys, and the resolved argument types.
 #[test]

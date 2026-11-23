@@ -2069,7 +2069,7 @@ fn differs(parent: &Introduced, ty: &Type) -> bool {
     }
     // A constant whose value is not known differs from nothing here: a
     // field is in conflict only where its type is known to be another.
-    !agree_as(&parent.ty, ty, true)
+    !agree_as(&parent.ty, ty, Agreement::Possible)
 }
 
 /// True when two types are the same as far as each is known. A constant
@@ -2077,7 +2077,7 @@ fn differs(parent: &Introduced, ty: &Type) -> bool {
 /// ([`ConstantValue::same`]): a type that holds one is not known to be
 /// any type.
 pub(crate) fn agree(left: &Type, right: &Type) -> bool {
-    agree_as(left, right, false)
+    agree_as(left, right, Agreement::Known)
 }
 
 /// Whether two types are one: `Some(true)` where they are known to be,
@@ -2090,13 +2090,38 @@ pub(crate) fn agree(left: &Type, right: &Type) -> bool {
 /// `i64` is not known to be it or to differ from it, while `list<U>`
 /// beside `set<i64>` is known to differ whatever `U` is.
 pub(crate) fn same_type(left: &Type, right: &Type) -> Option<bool> {
-    if agree_as(left, right, false) {
+    if agree_as(left, right, Agreement::Known) {
         Some(true)
-    } else if !agree_as(&opened(left), &opened(right), true) {
+    } else if !agree_as(&opened(left), &opened(right), Agreement::Possible) {
         Some(false)
     } else {
         None
     }
+}
+
+/// GEN-6: a declared result contradicts its operator if a known part
+/// differs. An expected list extent that depends on an unresolved value
+/// leaves that extent open, even when the candidate writes no extent.
+pub(crate) fn result_types_differ(expected: &Type, actual: &Type) -> bool {
+    !agree_as(
+        &opened(expected),
+        &opened(actual),
+        Agreement::CandidateResult,
+    )
+}
+
+/// These forms cannot be judged by outer shape alone. An atomic or a
+/// delta can normalize when its payload is known (TYPE-9, TYPE-16), and
+/// structural equality does not compare an open callback slot on its own.
+fn open_result_form(ty: &Type) -> bool {
+    matches!(ty, Type::Atomic(_) | Type::Delta(_) | Type::Function(_))
+        && ty.any_part(
+            &|part| {
+                matches!(part, Type::Unknown)
+                    || matches!(part, Type::Function(template) if template.named_pack.is_some())
+            },
+            &|constant| constant.value.key().is_none(),
+        )
 }
 
 /// `ty` with each generic type parameter it names replaced by a type
@@ -2127,19 +2152,27 @@ fn opened(ty: &Type) -> Type {
     substitute(ty, &map, &|_, _, _| None)
 }
 
-/// [`agree`], with `unknown` what two constants count as where whether
-/// they are one value is not known: false where the question is whether
-/// two types are known to be one, true where it is whether they are
-/// known to differ.
-fn agree_as(left: &Type, right: &Type, unknown: bool) -> bool {
-    let agree = |left: &Type, right: &Type| agree_as(left, right, unknown);
+#[derive(Clone, Copy)]
+enum Agreement {
+    Known,
+    Possible,
+    CandidateResult,
+}
+
+/// Compare the known parts, deciding whether an unresolved constant
+/// can agree according to the kind of comparison.
+fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
+    let agree = |left: &Type, right: &Type| agree_as(left, right, agreement);
     // A constant not known agrees with any, as a type not known does:
     // what is wrong with it has been reported, or it is still to be
     // said (ERR-9).
     let constants_agree = |left: &Constant, right: &Constant| {
         matches!(left.value, ConstantValue::Unknown)
             || matches!(right.value, ConstantValue::Unknown)
-            || left.value.same(&right.value).unwrap_or(unknown)
+            || left
+                .value
+                .same(&right.value)
+                .unwrap_or(!matches!(agreement, Agreement::Known))
     };
     // Two lists of types agree when they are as long as each other and
     // agree place by place.
@@ -2194,6 +2227,9 @@ fn agree_as(left: &Type, right: &Type, unknown: bool) -> bool {
                         || size.value.same_extent(&other_size.value)
                         || other_size.value.same_extent(&size.value)
                 }
+                (Some(size), None) if matches!(agreement, Agreement::CandidateResult) => {
+                    size.value.key().is_none()
+                }
                 (size, other_size) => size == other_size,
             };
             sizes && agree(element, other_element)
@@ -2240,6 +2276,10 @@ fn agree_as(left: &Type, right: &Type, unknown: bool) -> bool {
                 error: other_error,
             },
         ) => agree(value, other_value) && agree(error, other_error),
-        (left, right) => left == right,
+        (left, right) => {
+            left == right
+                || (matches!(agreement, Agreement::CandidateResult)
+                    && (open_result_form(left) || open_result_form(right)))
+        }
     }
 }
