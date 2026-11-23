@@ -262,12 +262,7 @@ fn reads_of(
             for (target, supplied) in callbacks.of_call(called, arguments) {
                 if let Some(target) = target.declaration() {
                     callback_reads.push(Part::Body(target));
-                    read_parameter_defaults(
-                        program,
-                        target,
-                        |position| supplied.contains(&position),
-                        &mut callback_reads,
-                    );
+                    read_callback_defaults(program, target, supplied, &mut callback_reads);
                 } else if let Callee::Anonymous(function) = target {
                     walk_statements(&function.body.statements, &mut |value| {
                         reads_of(program, value, callbacks, packs, &mut callback_reads);
@@ -323,6 +318,34 @@ fn reads_of(
         }
         _ => {}
     }
+}
+
+/// FN-18: a callback invocation supplies only ordinary parameters. Map
+/// its argument slots to the declaration positions used by UNIT-8 defaults.
+fn read_callback_defaults(
+    program: &Program,
+    called: Declared,
+    supplied: &[usize],
+    reads: &mut Vec<Part>,
+) {
+    let Some(Detail::Callable(signature)) = program.modules[called.0].details.get(called.1) else {
+        return;
+    };
+    let ordinary = signature
+        .parameters
+        .iter()
+        .enumerate()
+        .filter(|(_, parameter)| !parameter.configuration);
+    let supplied_positions: Vec<_> = ordinary
+        .enumerate()
+        .filter_map(|(slot, (position, _))| supplied.contains(&slot).then_some(position))
+        .collect();
+    read_parameter_defaults(
+        program,
+        called,
+        |position| supplied_positions.contains(&position),
+        reads,
+    );
 }
 
 /// UNIT-8: a call reads the default of each parameter it leaves out.

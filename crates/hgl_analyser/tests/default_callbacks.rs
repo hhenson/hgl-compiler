@@ -85,6 +85,76 @@ const fn read_x(value: i64? = Point().x) -> i64 => 17
     );
 }
 
+/// FN-18 and UNIT-8: callback argument positions skip configuration defaults.
+#[test]
+fn callback_arguments_use_ordinary_parameter_slots() {
+    let checked = check(&[
+        (
+            "given.hgl",
+            r#"module given_ordinary_slots
+struct Point { x: i64 = apply(read_x) }
+const fn apply(f: const fn(i64?) -> i64) -> i64 => f(3)
+const fn read_x{cfg: i64 = 0}(value: i64? = Point().x) -> i64 => 17
+"#,
+        ),
+        (
+            "omitted.hgl",
+            r#"module omitted_ordinary_slot
+struct Point { x: i64 = apply(read_x) }
+const fn apply(f: const fn(i64?) -> i64) -> i64 => f()
+const fn read_x{cfg: i64 = 0}(value: i64? = Point().x) -> i64 => 17
+"#,
+        ),
+        (
+            "configuration.hgl",
+            r#"module omitted_configuration_slot
+struct Point { x: i64 = apply(read_x) }
+const fn apply(f: const fn(i64?) -> i64) -> i64 => f(3)
+const fn read_x{cfg: i64 = Point().x}(value: i64?) -> i64 => 17
+"#,
+        ),
+        (
+            "second.hgl",
+            r#"module second_ordinary_slot
+struct Point { x: i64 = apply(read_x) }
+const fn apply(f: const fn(i64?, i64?) -> i64) -> i64 => f(3)
+const fn read_x{first: i64 = 0, second: i64 = 1}(a: i64? = Point().x, b: i64? = Point().x) -> i64 => 17
+"#,
+        ),
+        (
+            "two.hgl",
+            r#"module second_configuration_slot
+struct Point { x: i64 = apply(read_x) }
+const fn apply(f: const fn(i64?, i64?) -> i64) -> i64 => f(3, 4)
+const fn read_x{first: i64 = 0, second: i64 = Point().x}(a: i64?, b: i64?) -> i64 => 17
+"#,
+        ),
+        (
+            "both.hgl",
+            r#"module both_ordinary_slots
+struct Point { x: i64 = apply(read_x) }
+const fn apply(f: const fn(i64?, i64?) -> i64) -> i64 => f(3, 4)
+const fn read_x{first: i64 = 0, second: i64 = 1}(a: i64? = Point().x, b: i64? = Point().x) -> i64 => 17
+"#,
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "configuration.hgl:2:25 name/default.cycle UNIT-8",
+            "configuration.hgl:4:28 name/default.cycle UNIT-8",
+            "omitted.hgl:2:25 name/default.cycle UNIT-8",
+            "omitted.hgl:4:45 name/default.cycle UNIT-8",
+            "second.hgl:2:25 name/default.cycle UNIT-8",
+            "second.hgl:4:81 name/default.cycle UNIT-8",
+            "two.hgl:2:25 name/default.cycle UNIT-8",
+            "two.hgl:4:47 name/default.cycle UNIT-8",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 #[test]
 fn a_callback_dependency_belongs_to_the_call_that_invokes_it() {
     let checked = check(&[(
