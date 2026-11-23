@@ -712,6 +712,38 @@ fn generic_null_defaults_run_on_the_sdk() {
     );
 }
 
+/// UNIT-13, EXPR-5: module statement-block initializers use their
+/// checked cold scope and retain the constant's one stored value.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn block_constants_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("block_constants");
+    let file = write(
+        &root,
+        "demo.block_constants.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.block_constants.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 0 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// Value code over the scalars and the plain composites, the emitter's
 /// own test program: constants, an enum, `if`, `switch`, `while` and
 /// `for`, places, defaults, a generic function by instance, tuples,

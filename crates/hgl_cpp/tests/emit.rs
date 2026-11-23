@@ -2775,17 +2775,17 @@ fn a_case_binding_read_after_its_switch_is_reported() {
     );
 }
 
-/// A callable default can have block locals (UNIT-7, UNIT-8). A module
-/// constant that runs statements retains its target report (UNIT-13).
+/// UNIT-13 and EXPR-5: a module constant can run statements in its
+/// checked initializer. Callable defaults keep their own locals (UNIT-7).
 #[test]
-fn a_constant_that_runs_statements_keeps_its_target_report() {
+fn statement_blocks_in_constants_and_callable_defaults_are_written() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
             "module m\n",
             "const made: i64 = {\n",
             "    let a = 20\n",
-            "    a + 1\n",
+            "    21\n",
             "}\n",
             "const fn offset(x: i64, by: i64 = {\n",
             "    let b = 2\n",
@@ -2795,10 +2795,7 @@ fn a_constant_that_runs_statements_keeps_its_target_report() {
             "const fn supplied() -> i64 => offset(1, 9)\n",
         ),
     )]);
-    assert_eq!(
-        emitted.reported,
-        ["m.hgl:2:7 the cpp target does not write a constant whose value runs statements yet"]
-    );
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
     let unit = &emitted
         .output
         .files
@@ -2806,7 +2803,13 @@ fn a_constant_that_runs_statements_keeps_its_target_report() {
         .find(|file| file.path == "modules/mod-m.cpp")
         .unwrap()
         .text;
-    // Only the call that leaves `by` out evaluates the block.
+    // UNIT-13: the block initializes the one stored constant value.
+    assert!(
+        unit.contains("static const ::hgraph::Int value ="),
+        "{unit}"
+    );
+    assert!(unit.contains("const ::hgraph::Int a = 20;"), "{unit}");
+    // Only the call that leaves `by` out evaluates the default block.
     assert_eq!(
         unit.matches("const ::hgraph::Int b = 2;").count(),
         1,

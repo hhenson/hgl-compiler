@@ -135,7 +135,7 @@ analyser: partial
 transpiler: partial
 
 - Emits one module constant value and reuses it at its reads.
-- Left: reports a constant whose value runs statements. Defensive reports remain for a constant without a typed value or whose emitted evaluation needs failure-handling statements.
+- A checked statement-block initializer runs in its own cold scope while the constant's one stored value is initialized (EXPR-5). Defensive reports remain for a constant without a typed value or whose emitted evaluation needs failure-handling statements.
 
 ## UNIT-14
 
