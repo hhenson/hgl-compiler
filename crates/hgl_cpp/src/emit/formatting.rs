@@ -1,5 +1,5 @@
-//! Emit the checked places of Core's native value-format call (FMT-2
-//! to FMT-5, FMT-7 and FMT-9). C++ sees individual compiled fmt patterns
+//! Emit the checked places of Core's native value-format call (FMT-2,
+//! FMT-4, FMT-5, FMT-7 and FMT-9). C++ sees individual compiled fmt patterns
 //! and typed values. Argument expressions run once in source order.
 
 use std::fmt::Write;

@@ -121,8 +121,6 @@ pub enum ChronoPart<'a> {
 /// Validate a fmt 12.1 scalar specifier, with FMT-4's locale restriction.
 pub fn scalar_specifier(scalar: Scalar, text: &str) -> bool {
     let rest = alignment(text);
-    let aligned = rest.len() != text.len();
-    let explicit_sign = rest.starts_with(['+', ' ']);
     let signed = rest.starts_with(['+', '-', ' ']);
     let rest = if signed { &rest[1..] } else { rest };
     let alternate = rest.starts_with('#');
@@ -146,11 +144,8 @@ pub fn scalar_specifier(scalar: Scalar, text: &str) -> bool {
         rest
     };
     match scalar {
-        Scalar::I64 => {
-            !precision
-                && matches!(rest, "" | "d" | "x" | "X" | "o" | "b" | "B" | "c")
-                && (rest != "c" || !(explicit_sign || alternate || (zero && !aligned)))
-        }
+        // Hold fmt's byte-oriented `c` pending the FMT-4 decision (#434).
+        Scalar::I64 => !precision && matches!(rest, "" | "d" | "x" | "X" | "o" | "b" | "B"),
         Scalar::F64 => matches!(rest, "" | "a" | "A" | "e" | "E" | "f" | "F" | "g" | "G"),
         Scalar::Bool => {
             !signed && !precision && matches!(rest, "" | "s" | "d" | "x" | "X" | "o" | "b" | "B")

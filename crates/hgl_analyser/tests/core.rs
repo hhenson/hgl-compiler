@@ -25,6 +25,26 @@ fn with_core(text: &str) -> Checked {
     check(&[("m.hgl", &format!("module m\n{text}"))])
 }
 
+/// FMT-4 implementation gate pending #434: fmt's integer character
+/// formatter can emit bytes that are outside UTF-8.
+#[test]
+fn integer_character_formatting_is_temporarily_unavailable() {
+    let checked = with_core(concat!(
+        "const fn character() -> str => format(\"{:c}\", 233)\n",
+        "const fn padded_character() -> str => format(\"{:>3c}\", 256)\n",
+        "const fn number() -> str => format(\"{:+d} {:04x}\", 233, 233)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:42 type/format.specifier FMT-4",
+            "m.hgl:3:49 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 /// The module the compiler supplies is the pinned core's, whole: every
 /// `.hgl` file under `spec/hgl_core/hgl`, with its text as it stands
 /// there. A pin that adds a file fails this until
