@@ -31,15 +31,9 @@ struct Pending {
     reason: &'static str,
 }
 
-const GENERICS: &str = "hgl_spec/spec/language/generics-and-operators.md";
 const DIAGNOSTICS: &str = "hgl_core/spec/diagnostics.md";
 
 const PENDING: &[Pending] = &[
-    Pending {
-        file: GENERICS,
-        opening: "module examples.categories",
-        reason: "GEN-3 type category and GEN-10 tuple type pack (#512)",
-    },
     Pending {
         file: "hgl_core/spec/formatting.md",
         opening: "export operator format<...As, ...Ks>(",
