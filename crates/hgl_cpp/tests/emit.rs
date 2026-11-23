@@ -2959,12 +2959,9 @@ fn temporal_structs_and_nullables_are_written() {
     assert!(unit.contains("::hglrt::field_port<0>("), "{unit}");
 }
 
-/// What the target does not write of temporal structs, tuples and
-/// nullables yet is reported, and nothing is miswritten: a struct whose
-/// field has a form the library does not read as a part (a set), a struct
-/// with generic value arguments, a nullable put in the run's store (a `get`
-/// through a nullable place has the payload's type: hgl_spec issue 165),
-/// and a tuple with an atomic position.
+/// Report temporal shapes still beyond the target: a struct whose field
+/// has a form the library does not read as a part (a set), a struct with
+/// generic value arguments, and a tuple with an atomic position.
 #[test]
 fn temporal_structs_not_written_yet_are_reported() {
     let emitted = emit(&[(
@@ -2983,13 +2980,6 @@ fn temporal_structs_not_written_yet_are_reported() {
             "fn boxed(value: Box<2>) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
-            "fn stored(value: i64?) -> bool {\n",
-            "    inject global_state\n",
-            "    when {\n",
-            "        put(global_state, \"kept\", value)\n",
-            "        return true\n",
-            "    }\n",
-            "}\n",
             "struct Plain {\n",
             "    value: i64\n",
             "}\n",
@@ -3003,8 +2993,7 @@ fn temporal_structs_not_written_yet_are_reported() {
         [
             "m.hgl:8:11 the cpp target does not write a temporal value of `Listed` yet",
             "m.hgl:11:10 the cpp target does not write a temporal value of `Box<2>` yet",
-            "m.hgl:17:9 the cpp target does not write a nullable value put in the run's store (hgl_spec issue 165) yet",
-            "m.hgl:24:11 the cpp target does not write a temporal value of `tuple<atomic<Plain>, i64>` yet",
+            "m.hgl:17:11 the cpp target does not write a temporal value of `tuple<atomic<Plain>, i64>` yet",
         ]
     );
 }

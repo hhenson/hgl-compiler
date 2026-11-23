@@ -4334,11 +4334,10 @@ fn an_interrupt_of_hgl_alone_stops_a_run_in_real_time() {
 }
 
 /// CAP-6 on the SDK: every ordinary value put in the run's store is got
-/// back as itself, a struct, a tuple, a dictionary, a set and a delta among
-/// them, in a node, where a graph is built and by an application. A failure
-/// where a graph is built or in an application's store statements names the
-/// HGL file and line it was raised at, which the generated code sets with
-/// `#line`, and no place of the generated C++.
+/// back as itself, including nullables, structs, tuples, dictionaries,
+/// sets and deltas. Values are written in a node, where a graph is built,
+/// and by an application. Generated `#line` directives give failures
+/// in the graph build and application statements their HGL file and line.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn store_values_and_failure_places_on_the_sdk() {
@@ -4351,7 +4350,7 @@ fn store_values_and_failure_places_on_the_sdk() {
         "demo.store.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.store.hgl"),
     );
-    for (name, application) in [
+    for (name, source) in [
         (
             "demo.store.quotes.hgl",
             include_str!("../../hgl_cpp/tests/fixtures/demo.store.quotes.hgl"),
@@ -4364,8 +4363,12 @@ fn store_values_and_failure_places_on_the_sdk() {
             "demo.store.unbuilt.hgl",
             include_str!("../../hgl_cpp/tests/fixtures/demo.store.unbuilt.hgl"),
         ),
+        (
+            "demo.store.nullable.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.store.nullable.hgl"),
+        ),
     ] {
-        write(&root, name, application);
+        write(&root, name, source);
     }
     let kept = root.join("build");
     let output = hgl_in(
@@ -4388,7 +4391,7 @@ fn store_values_and_failure_places_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
     let run = |application: &str| {
