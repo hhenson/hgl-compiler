@@ -532,3 +532,74 @@ fn only_omitted_fields_contribute_constructor_default_dependencies() {
         checked.report
     );
 }
+
+/// UNIT-13, TYPE-5, FN-19: each concrete constructor call reads the
+/// defaults of the fields its written and forwarded arguments leave out.
+#[test]
+fn packed_constructors_follow_omitted_field_defaults() {
+    let checked = check(&[
+        (
+            "direct.hgl",
+            concat!(
+                "module direct\n",
+                "struct Pt {\n    a: i64 = A\n    b: i64 = 0\n}\n",
+                "const fn make<...Vs>(values: ...{Vs}) -> i64 => Pt(...values).a\n",
+                "const A: i64 = make(b: 1)\n",
+            ),
+        ),
+        (
+            "forwarded.hgl",
+            concat!(
+                "module forwarded\n",
+                "struct Pt {\n    a: i64 = A\n    b: i64 = 0\n}\n",
+                "const fn make<...Vs>(values: ...{Vs}) -> i64 => Pt(...values).a\n",
+                "const fn relay<...Vs>(values: ...{Vs}) -> i64 => make(...values)\n",
+                "const A: i64 = relay(b: 2)\n",
+            ),
+        ),
+        (
+            "mixed.hgl",
+            concat!(
+                "module mixed\n",
+                "struct Trio {\n    a: i64 = 8\n    b: i64 = B\n    c: i64 = 0\n}\n",
+                "const fn choose<...Vs>(values: ...{Vs}) -> i64 => Trio(a: 1, ...values).b\n",
+                "const fn relay<T>(value: T) -> i64 => choose(c: value)\n",
+                "const B: i64 = relay(3)\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "direct.hgl:7:7 name/constant.cycle UNIT-13",
+            "forwarded.hgl:8:7 name/constant.cycle UNIT-13",
+            "mixed.hgl:9:7 name/constant.cycle UNIT-13",
+        ],
+        "{}",
+        checked.report
+    );
+    for path in [
+        "through `Pt` and `make`",
+        "through `Pt` and `make` and `relay`",
+        "through `Trio` and `choose` and `relay`",
+    ] {
+        assert!(checked.report.contains(path), "{}", checked.report);
+    }
+}
+
+/// TYPE-5: giving a field bypasses its default even when another call of
+/// the same function uses that default through a different pack shape.
+#[test]
+fn a_supplied_field_keeps_its_pack_shape_away_from_the_default() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Pt {\n    a: i64 = Provided\n    b: i64 = 0\n}\n",
+            "const fn make<...Vs>(values: ...{Vs}) -> i64 => Pt(...values).a\n",
+            "const Provided: i64 = make(a: 5, b: 1)\n",
+            "const UsesDefault: i64 = make(b: 2)\n",
+        ),
+    )]);
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
