@@ -1936,38 +1936,61 @@ fn written_pack_member_types_run_on_the_sdk() {
     );
 }
 
-/// GEN-10 and GEN-17: an existential proof cannot tell the type of an
-/// arbitrary key. Analysis leaves it untold and C++ reports the call.
+/// GEN-10 and GEN-17: an existential or cross-pack relation can leave a
+/// member's type untold. Analysis preserves that judgment and C++ reports the call.
 #[test]
 fn an_unproved_reflected_type_declines_cpp_emission() {
     let root = scratch("unproved-reflected-type");
-    let file = write(
-        &root,
-        "m.hgl",
-        concat!(
-            "module m\n",
-            "const key: str = \"item\"\n",
-            "const fn shape(item: str, other: i64) -> i64 => other\n",
-            "const fn exact<T>(value: T) -> T requires T == i64 => value\n",
-            "const fn choose<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key]\n",
-            "    requires any arg in arg_keys(Ps) { Ps[arg] == i64 } => exact<Ps[key]>(item)\n",
-            "test chosen_member { assert choose(shape, \"text\") == \"text\" }\n",
+    let cases = [
+        (
+            "existential",
+            concat!(
+                "const fn shape(item: str, other: i64) -> i64 => other\n",
+                "const fn choose<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key]\n",
+                "    requires any arg in arg_keys(Ps) { Ps[arg] == i64 } => exact<Ps[key]>(item)\n",
+                "test chosen_member { assert choose(shape, \"text\") == \"text\" }\n",
+            ),
         ),
-    );
-    let checked = hgl_in(&["check", &file], &[], &[]);
-    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
-    let out = root.join("out");
-    let emitted = hgl_in(
-        &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
-        &[],
-        &[],
-    );
-    let stderr = text(&emitted.stderr);
-    assert_eq!(emitted.status.code(), Some(1), "{stderr}");
-    assert!(
-        stderr.contains("error[build/target.unsupported]"),
-        "{stderr}"
-    );
+        (
+            "cross_pack",
+            concat!(
+                "const fn shape(item: i64) -> i64 => item\n",
+                "const fn choose<...Ps, ...Qs>(f: const fn(...{Ps}) -> i64, g: const fn(...{Qs}) -> i64,\n",
+                "    item: Ps[key]) -> Ps[key]\n",
+                "    requires each arg in arg_keys(Ps) { Ps[arg] == Qs[arg] } => exact<Ps[key]>(item)\n",
+                "test chosen_member { assert choose(shape, shape, 3) == 3 }\n",
+            ),
+        ),
+    ];
+    for (name, body) in cases {
+        let file = write(
+            &root,
+            &format!("{name}.hgl"),
+            &format!(
+                "module {name}\nconst key: str = \"item\"\n\
+                 const fn exact<T>(value: T) -> T requires T == i64 => value\n{body}"
+            ),
+        );
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        assert_eq!(
+            checked.status.code(),
+            Some(0),
+            "{name}: {}",
+            text(&checked.stderr)
+        );
+        let out = root.join(name);
+        let emitted = hgl_in(
+            &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
+            &[],
+            &[],
+        );
+        let stderr = text(&emitted.stderr);
+        assert_eq!(emitted.status.code(), Some(1), "{name}: {stderr}");
+        assert!(
+            stderr.contains("error[build/target.unsupported]"),
+            "{name}: {stderr}"
+        );
+    }
 }
 
 /// FN-18 and EXPR-10: brace arguments reach their ordinary, generic,

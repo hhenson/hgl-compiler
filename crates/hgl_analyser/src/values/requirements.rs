@@ -948,11 +948,15 @@ impl<'a> Typer<'a> {
         let right_at = operands.next()?.span().start;
         let left = self.written.get(&(self.file, left_at))?;
         let right = self.written.get(&(self.file, right_at))?;
+        // A relation to another member does not read either member's type.
+        let readable = |given| {
+            whole(given) && !given.any_part(&|ty| matches!(ty, Type::PackMember { .. }), &|_| false)
+        };
         let (pack, key, given, site) = match (*left, *right) {
-            (Type::PackMember { pack, key, .. }, given) if whole(given) => {
+            (Type::PackMember { pack, key, .. }, given) if readable(given) => {
                 (pack, key, given, left_at)
             }
-            (given, Type::PackMember { pack, key, .. }) if whole(given) => {
+            (given, Type::PackMember { pack, key, .. }) if readable(given) => {
                 (pack, key, given, right_at)
             }
             _ => return None,
@@ -966,7 +970,7 @@ impl<'a> Typer<'a> {
     }
 
     /// Packs named by a stated member expression for which we read no
-    /// positive equality, such as an existential `any` or a membership.
+    /// usable equality, such as an existential `any` or a relation to another member.
     fn unread_stated_packs(&self, members: &[StatedPackMember]) -> HashSet<Location> {
         let Some(clause) = child(&self.declaration.syntax, SyntaxKind::RequiresClause) else {
             return HashSet::new();
