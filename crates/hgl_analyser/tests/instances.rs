@@ -97,10 +97,19 @@ fn a_rejected_instance_reports_each_making_call_together() {
             .report
             .matches("this call makes the instance")
             .count(),
-        3,
+        5,
         "{}",
         checked.report
     );
+    for instance in ["forward<i64>", "relay<[i64]>"] {
+        assert!(
+            checked
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            checked.report
+        );
+    }
 }
 
 /// GEN-7, FN-1 and FN-3: the selected candidate can require a constant
@@ -378,6 +387,15 @@ fn an_instance_checks_the_consumer_of_its_selected_result() {
         "{}",
         checked.report
     );
+    for instance in ["first<list<i64, 3>>", "outer<i64>"] {
+        assert!(
+            checked
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            checked.report
+        );
+    }
 }
 
 /// GEN-7: a changed result is checked also through a function reference,

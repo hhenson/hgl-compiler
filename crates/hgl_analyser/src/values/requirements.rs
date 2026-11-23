@@ -809,6 +809,7 @@ impl<'a> Typer<'a> {
                 answers: Vec::new(),
                 required: None,
                 at,
+                via: None,
             };
             if let Some(report) = argument_fails(program, &made, &given, &own) {
                 self.diagnostics.emit(if combination.is_empty() {
@@ -2112,6 +2113,8 @@ pub(super) struct Made {
     /// `generics` and `answers` say nothing then.
     required: Option<usize>,
     at: Location,
+    /// A concrete forwarding path that exposed this call to the walk.
+    via: Option<Box<[MakingCall]>>,
 }
 
 /// How many instances one call is followed to ([`crate::INSTANCES`]). A
@@ -2347,24 +2350,28 @@ pub(super) fn instances_hold(
     // The instances the calls that give every argument make, each once
     // with every call it is made from: two calls of `wrap<1>` are one
     // instance of it.
-    let mut roots: Vec<(Made, Vec<Location>)> = Vec::new();
+    let mut roots: Vec<(Made, Vec<InstanceRoot>)> = Vec::new();
     let mut root_of: HashMap<String, usize> = HashMap::new();
-    for made in given
+    for mut made in given
         .into_iter()
         .filter(|made| reaching.contains(&made.callee))
     {
         let key = instance_key(made.callee, &made.generics, &made.type_packs, &made.answers);
+        let from = InstanceRoot {
+            at: made.at,
+            via: made.via.take(),
+        };
         match root_of.get(&key) {
-            Some(&root) => roots[root].1.push(made.at),
+            Some(&root) => roots[root].1.push(from),
             None => {
                 root_of.insert(key, roots.len());
-                let at = made.at;
-                roots.push((made, vec![at]));
+                roots.push((made, vec![from]));
             }
         }
     }
     let mut rejected_calls = InstanceCallRejections::default();
-    for (root, from) in roots {
+    for (root, root_calls) in roots {
+        let from: Vec<_> = root_calls.iter().map(|call| call.at).collect();
         // Each instance this one makes followed once, by what it is: its
         // callee and its arguments, the root's own among them.
         let mut seen: std::collections::HashSet<String> =
@@ -2374,12 +2381,12 @@ pub(super) fn instances_hold(
                 &root.type_packs,
                 &root.answers,
             )]);
-        let mut waiting: std::collections::VecDeque<Made> =
-            std::collections::VecDeque::from([root]);
+        let mut waiting = std::collections::VecDeque::from([(root, None)]);
+        let mut parents = Vec::new();
         // How many instances of each declaration this one has made.
         let mut followed: HashMap<(usize, usize), usize> = HashMap::new();
         let mut exhausted = false;
-        while let Some(made) = waiting.pop_front() {
+        while let Some((made, parent)) = waiting.pop_front() {
             let count = followed.entry(made.callee).or_insert(0);
             *count += 1;
             if *count > INSTANCES {
@@ -2399,6 +2406,12 @@ pub(super) fn instances_hold(
             let declared = own(made.callee);
             let map: Vec<(Location, &Argument)> =
                 declared.iter().copied().zip(&made.generics).collect();
+            let chain = InstanceChain {
+                made: &made,
+                from: &root_calls,
+                parent,
+                parents: &parents,
+            };
             let recheck_endpoints = endpoint_reads.contains(&made.callee)
                 && matches!(
                     unit.details.get(made.callee.1),
@@ -2436,13 +2449,15 @@ pub(super) fn instances_hold(
             if let Some(instance) = &instance
                 && let Some(result_uses) = &instance.result_uses
             {
-                report_instance_result_uses(
-                    program,
-                    (made.callee, &made.generics),
-                    result_uses,
-                    &from,
-                    diagnostics,
-                );
+                if !result_uses.reports.is_empty() {
+                    report_instance_result_uses(
+                        program,
+                        (made.callee, &made.generics, &made.type_packs),
+                        result_uses,
+                        &chain.paths(program, &root_calls),
+                        diagnostics,
+                    );
+                }
                 if result_uses.reports.has_errors() {
                     continue;
                 }
@@ -2471,10 +2486,9 @@ pub(super) fn instances_hold(
                         if let Some(call) = selected_call_for_connection(selecting, report) {
                             rejected_calls.record(
                                 program,
-                                &made,
+                                &chain,
                                 call,
                                 vec![report.clone()],
-                                &from,
                                 diagnostics,
                             );
                         } else {
@@ -2668,10 +2682,9 @@ pub(super) fn instances_hold(
                         |typer: &mut super::Typer, reports: Vec<hgl_diagnostics::Diagnostic>| {
                             rejected_calls.record(
                                 program,
-                                &made,
+                                &chain,
                                 call.name,
                                 reports,
-                                &from,
                                 typer.diagnostics,
                             );
                         };
@@ -2731,6 +2744,7 @@ pub(super) fn instances_hold(
                     }
                 }
             }
+            let mut link = None;
             for Resolved {
                 callee,
                 generics,
@@ -2798,14 +2812,32 @@ pub(super) fn instances_hold(
                     }
                 }
                 if reaching.contains(&callee) && seen.insert(key) {
-                    waiting.push_back(Made {
-                        callee,
-                        generics,
-                        type_packs,
-                        answers,
-                        required: None,
-                        at: made.at,
+                    let caller = *link.get_or_insert_with(|| {
+                        let index = parents.len();
+                        parents.push((
+                            MakingCall::new(
+                                program,
+                                made.callee,
+                                &made.generics,
+                                &made.type_packs,
+                                made.at,
+                            ),
+                            parent,
+                        ));
+                        index
                     });
+                    waiting.push_back((
+                        Made {
+                            callee,
+                            generics,
+                            type_packs,
+                            answers,
+                            required: None,
+                            at,
+                            via: None,
+                        },
+                        Some(caller),
+                    ));
                 }
             }
             if exhausted {
@@ -2817,22 +2849,122 @@ pub(super) fn instances_hold(
     rejected_calls.emit(diagnostics);
 }
 
+/// One call in a chain of concrete instances, shown with the instance it makes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct MakingCall {
+    at: Location,
+    instance: String,
+}
+
+/// A non-generic making site and the concrete forwarding path it exposes.
+struct InstanceRoot {
+    at: Location,
+    via: Option<Box<[MakingCall]>>,
+}
+
+impl MakingCall {
+    pub(super) fn new(
+        program: &Program,
+        callee: (usize, usize),
+        generics: &[Argument],
+        packs: &[hir::TypePackArgument],
+        at: Location,
+    ) -> Self {
+        Self {
+            at,
+            instance: instance_name(program, callee, generics, packs),
+        }
+    }
+}
+
+/// Walk the saved parent indices from the innermost call to the root.
+pub(super) fn making_path(
+    current: MakingCall,
+    mut parent: Option<usize>,
+    parents: &[(MakingCall, Option<usize>)],
+) -> Vec<MakingCall> {
+    let mut path = vec![current];
+    while let Some(index) = parent {
+        let (caller, previous) = &parents[index];
+        path.push(caller.clone());
+        parent = *previous;
+    }
+    path
+}
+
+/// The route to this instance, recorded as parent links in the bounded walk.
+struct InstanceChain<'a> {
+    made: &'a Made,
+    from: &'a [InstanceRoot],
+    parent: Option<usize>,
+    parents: &'a [(MakingCall, Option<usize>)],
+}
+
+impl InstanceChain<'_> {
+    /// One path per supplying call, starting at the innermost instance.
+    fn paths<'a>(
+        &self,
+        program: &Program,
+        from: impl IntoIterator<Item = &'a InstanceRoot>,
+    ) -> Vec<Vec<MakingCall>> {
+        let current = MakingCall::new(
+            program,
+            self.made.callee,
+            &self.made.generics,
+            &self.made.type_packs,
+            self.made.at,
+        );
+        let path = making_path(current, self.parent, self.parents);
+        let (root, inner) = path
+            .split_last()
+            .expect("the path contains its current call");
+        from.into_iter()
+            .map(|from| {
+                let mut path = inner.to_vec();
+                match &from.via {
+                    Some(via) => path.extend_from_slice(via),
+                    None => path.push(MakingCall {
+                        at: from.at,
+                        instance: root.instance.clone(),
+                    }),
+                }
+                path
+            })
+            .collect()
+    }
+}
+
+/// Attach each call chain, retaining its inner-to-outer order and showing
+/// a shared step only once.
+fn with_making_calls(mut report: Diagnostic, paths: &[Vec<MakingCall>]) -> Diagnostic {
+    for call in paths.iter().flatten() {
+        let message = format!("this call makes the instance `{}`", call.instance);
+        if !report
+            .related
+            .iter()
+            .any(|label| label.location == call.at && label.message == message)
+        {
+            report = report.with_related(call.at, message);
+        }
+    }
+    report
+}
+
 /// GEN-7: a rejected operator call is reported once for its concrete
 /// instance, with each distinct call that made the instance beside it.
 #[derive(Default)]
 struct InstanceCallRejections {
     by_instance: HashMap<String, Vec<usize>>,
-    reports: Vec<(Diagnostic, Vec<Location>)>,
+    reports: Vec<(Diagnostic, Vec<Vec<MakingCall>>)>,
 }
 
 impl InstanceCallRejections {
     fn record(
         &mut self,
         program: &Program,
-        made: &Made,
+        chain: &InstanceChain,
         call: Location,
         reports: Vec<Diagnostic>,
-        from: &[Location],
         diagnostics: &Diagnostics,
     ) {
         if reports.is_empty() {
@@ -2840,17 +2972,19 @@ impl InstanceCallRejections {
         }
         // A call rejected for a `requires` makes no instance to judge
         // further (ERR-9: "Do not demand cascaded diagnostics").
-        let callers: Vec<_> = from
+        let callers: Vec<_> = chain
+            .from
             .iter()
-            .copied()
-            .filter(|&root| !unmet_reported(diagnostics, root))
+            .filter(|root| !unmet_reported(diagnostics, root.at))
             .collect();
         if callers.is_empty() {
             return;
         }
+        let made = chain.made;
         let key = instance_key(made.callee, &made.generics, &made.type_packs, &made.answers);
         let reports_of = self.by_instance.entry(key).or_default();
-        let instance = instance_note(program, made.callee, &made.generics);
+        let instance = instance_note(program, made.callee, &made.generics, &made.type_packs);
+        let paths = chain.paths(program, callers);
         for report in reports {
             let mut report = report.with_note(&instance);
             if report.primary != call {
@@ -2863,22 +2997,17 @@ impl InstanceCallRejections {
                 .copied()
                 .find(|&index| self.reports[index].0 == report)
             {
-                self.reports[index].1.extend_from_slice(&callers);
+                self.reports[index].1.extend_from_slice(&paths);
             } else {
                 reports_of.push(self.reports.len());
-                self.reports.push((report, callers.clone()));
+                self.reports.push((report, paths.clone()));
             }
         }
     }
 
     fn emit(self, diagnostics: &mut Diagnostics) {
-        for (mut report, mut callers) in self.reports {
-            callers.sort_by_key(|at| (at.file, at.span.start, at.span.end));
-            callers.dedup();
-            for caller in callers {
-                report = report.with_related(caller, "this call makes the instance");
-            }
-            diagnostics.emit(report);
+        for (report, paths) in self.reports {
+            diagnostics.emit(with_making_calls(report, &paths));
         }
     }
 }
@@ -3186,6 +3315,7 @@ fn applied_in(ty: &Type, at: Location, made: &mut Vec<Made>) {
                 answers: Vec::new(),
                 required: None,
                 at,
+                via: None,
             });
         }
     }
@@ -3252,16 +3382,20 @@ fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
 /// retains the ordinary diagnostic code and the concrete instance.
 pub(super) fn report_instance_result_uses(
     program: &Program,
-    ((module, declaration), generics): ((usize, usize), &[Argument]),
+    ((module, declaration), generics, packs): (
+        (usize, usize),
+        &[Argument],
+        &[hir::TypePackArgument],
+    ),
     result_uses: &crate::instance::ResultUseChecks,
-    callers: &[Location],
+    paths: &[Vec<MakingCall>],
     diagnostics: &mut Diagnostics,
 ) {
     if result_uses.reports.is_empty() {
         return;
     }
     let unit = &program.modules[module];
-    let instance = instance_note(program, (module, declaration), generics);
+    let instance = instance_note(program, (module, declaration), generics, packs);
     let calls = &result_uses.changed_results;
     for report in result_uses.reports.as_slice() {
         let mut report = report.clone().with_note(&instance);
@@ -3279,9 +3413,7 @@ pub(super) fn report_instance_result_uses(
                 report = report.with_related(call, "this call selected a different result type");
             }
         }
-        for &caller in callers {
-            report = report.with_related(caller, "this call makes the instance");
-        }
+        report = with_making_calls(report, paths);
         if !diagnostics.as_slice().contains(&report) {
             diagnostics.emit(report);
         }
@@ -3293,10 +3425,32 @@ fn instance_note(
     program: &Program,
     (module, declaration): (usize, usize),
     generics: &[Argument],
+    packs: &[hir::TypePackArgument],
+) -> String {
+    format!(
+        "GEN-7: in `{}`",
+        instance_name(program, (module, declaration), generics, packs)
+    )
+}
+
+fn instance_name(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    generics: &[Argument],
+    packs: &[hir::TypePackArgument],
 ) -> String {
     let name = &program.modules[module].declarations[declaration].name;
-    let arguments = generics.iter().map(Argument::to_string).collect::<Vec<_>>();
-    format!("GEN-7: in `{name}<{}>`", arguments.join(", "))
+    let mut arguments = generics.iter().map(Argument::to_string).collect::<Vec<_>>();
+    for pack in packs {
+        if let Some(argument) = arguments.get_mut(pack.parameter) {
+            let types = pack.types.iter().map(Type::to_string).collect::<Vec<_>>();
+            *argument = format!("[{}]", types.join(", "));
+        }
+    }
+    if arguments.is_empty() {
+        return name.to_owned();
+    }
+    format!("{name}<{}>", arguments.join(", "))
 }
 
 /// Locate a changed call inside this use or through immutable bindings.
@@ -3472,6 +3626,7 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
                 answers: Vec::new(),
                 required: None,
                 at: expression.at,
+                via: None,
             });
         }
         _ => {}
@@ -3504,6 +3659,7 @@ pub(super) fn made_callee(callee: &Callee, at: Location, made: &mut Vec<Made>) {
             answers: requirements.clone(),
             required: None,
             at,
+            via: None,
         }),
         // GEN-16: an operation the enclosing declaration requires, whose
         // candidate a call of that declaration answers.
@@ -3514,8 +3670,24 @@ pub(super) fn made_callee(callee: &Callee, at: Location, made: &mut Vec<Made>) {
             answers: Vec::new(),
             required: Some(*requirement),
             at,
+            via: None,
         }),
         _ => {}
+    }
+}
+
+/// A deferred call resolved by forwarding carries the path from its
+/// own location to the call that supplied the pack.
+pub(super) fn made_forwarded_callee(
+    callee: &Callee,
+    at: Location,
+    via: Vec<MakingCall>,
+    made: &mut Vec<Made>,
+) {
+    let index = made.len();
+    made_callee(callee, at, made);
+    if let Some(call) = made.get_mut(index) {
+        call.via = Some(via.into_boxed_slice());
     }
 }
 

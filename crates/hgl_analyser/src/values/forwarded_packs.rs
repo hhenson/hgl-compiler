@@ -675,10 +675,13 @@ pub(super) fn check_instances(
         }
     }
     for (initial, at) in roots {
-        let mut waiting = VecDeque::from([initial]);
+        use super::requirements::{MakingCall, making_path};
+
+        let mut waiting = VecDeque::from([(initial, at, None)]);
+        let mut parents = Vec::new();
         let mut seen = Vec::new();
         let mut counts = HashMap::new();
-        while let Some(instance) = waiting.pop_front() {
+        while let Some((instance, written, parent)) = waiting.pop_front() {
             if seen.contains(&instance) {
                 continue;
             }
@@ -716,15 +719,31 @@ pub(super) fn check_instances(
                 }
             }
             if let Some(checked) = checked {
-                if let Some(result_uses) = &checked.result_uses {
+                let making = || {
+                    MakingCall::new(
+                        program,
+                        instance.declaration,
+                        &instance.generics,
+                        &instance.type_packs,
+                        written,
+                    )
+                };
+                if let Some(result_uses) = &checked.result_uses
+                    && !result_uses.reports.is_empty()
+                {
                     super::requirements::report_instance_result_uses(
                         program,
-                        (instance.declaration, &instance.generics),
+                        (
+                            instance.declaration,
+                            &instance.generics,
+                            &instance.type_packs,
+                        ),
                         result_uses,
-                        &[at],
+                        &[making_path(making(), parent, &parents)],
                         diagnostics,
                     );
                 }
+                let mut link = None;
                 walk_nested_calls(&checked.body.statements, &mut |value| {
                     let Some(child) = ForwardingInstance::of(program, value) else {
                         return;
@@ -734,10 +753,23 @@ pub(super) fn check_instances(
                     if deferred_at.contains(&value.at)
                         && let ExprKind::Call { callee, .. } = &value.kind
                     {
-                        super::requirements::made_callee(callee, at, discovered);
+                        let mut path = vec![MakingCall::new(
+                            program,
+                            child.declaration,
+                            &child.generics,
+                            &child.type_packs,
+                            value.at,
+                        )];
+                        path.extend(making_path(making(), parent, &parents));
+                        super::requirements::made_forwarded_callee(callee, at, path, discovered);
                     }
                     if forwarding.contains(&child.declaration) {
-                        waiting.push_back(child);
+                        let caller = *link.get_or_insert_with(|| {
+                            let index = parents.len();
+                            parents.push((making(), parent));
+                            index
+                        });
+                        waiting.push_back((child, value.at, Some(caller)));
                     }
                 });
             }
