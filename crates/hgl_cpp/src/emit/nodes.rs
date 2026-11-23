@@ -441,7 +441,9 @@ impl Emitter<'_> {
         readers: Option<(usize, &[Reading])>,
     ) {
         let program = self.program;
-        let placed_at = program.modules[self.module].declarations[index].at;
+        let declaration = &program.modules[self.module].declarations[index];
+        let placed_at = declaration.at;
+        let end = declaration.syntax.text_range().end().into();
         let mut context = Context::new(Kind::Hook(Hook::When), body.locals.len());
         context.result = signature.result.clone();
         // FN-16: a reference result publishes a designation. Its
@@ -484,8 +486,8 @@ impl Emitter<'_> {
         let mut states: Vec<(usize, Option<&Expr>)> = Vec::new();
         let mut injected: Vec<usize> = Vec::new();
         let mut timed: Vec<usize> = Vec::new();
-        let mut start: Option<&[Stmt]> = None;
-        let mut stop: Option<&[Stmt]> = None;
+        let mut start: Option<(&[Stmt], Location)> = None;
+        let mut stop: Option<(&[Stmt], Location)> = None;
         let mut running: Vec<Handler> = Vec::new();
         let mut places: Vec<Location> = Vec::new();
         for statement in &body.statements {
@@ -518,13 +520,15 @@ impl Emitter<'_> {
                 Stmt::Hook {
                     hook: Hook::Start,
                     body: statements,
+                    at,
                     ..
-                } => start = Some(statements),
+                } => start = Some((statements.as_slice(), *at)),
                 Stmt::Hook {
                     hook: Hook::Stop,
                     body: statements,
+                    at,
                     ..
-                } => stop = Some(statements),
+                } => stop = Some((statements.as_slice(), *at)),
                 Stmt::Hook {
                     hook: Hook::When,
                     condition,
@@ -657,7 +661,7 @@ impl Emitter<'_> {
         // `start`: the state's first values, then the hook's statements
         // (TIME-5: "Start follows initialization").
         if held || start.is_some() {
-            let statements = start.unwrap_or(&[]);
+            let (statements, at) = start.unwrap_or((&[], placed_at));
             let mut hook = configs;
             let mut written = String::new();
             if held {
@@ -692,8 +696,9 @@ impl Emitter<'_> {
                 emitter.statements(&mut scope, &initialized, 2, &mut written);
                 emitter.statements(&mut scope, statements, 2, &mut written);
             });
+            let closing = self.debug_end(at, at.span.end, format!("{INDENT}}}\n"));
             text.push_str(&format!(
-                "\n{INDENT}static void start({})\n{INDENT}{{\n{written}{INDENT}}}\n",
+                "\n{INDENT}static void start({})\n{INDENT}{{\n{written}{closing}",
                 maybe_unused(&hook)
             ));
         }
@@ -785,14 +790,15 @@ impl Emitter<'_> {
             }
             None => written.push_str(&handlers),
         }
+        let closing = self.debug_end(placed_at, end, format!("{INDENT}}}\n"));
         text.push_str(&format!(
-            "\n{INDENT}static void eval({})\n{INDENT}{{\n{written}{INDENT}}}\n",
+            "\n{INDENT}static void eval({})\n{INDENT}{{\n{written}{closing}",
             maybe_unused(&hook)
         ));
         // `stop` (TIME-5), given the node's parameters, its state, and
         // its output where it reads it (TIME-7: "`out` is read in a `when`
         // and in `stop`").
-        if let Some(statements) = stop {
+        if let Some((statements, at)) = stop {
             let mut hook = parameters.clone();
             if held {
                 hook.push(state_parameter.clone());
@@ -821,8 +827,9 @@ impl Emitter<'_> {
             self.in_context(&mut context, |emitter| {
                 emitter.statements(&mut scope, statements, 2, &mut written);
             });
+            let closing = self.debug_end(at, at.span.end, format!("{INDENT}}}\n"));
             text.push_str(&format!(
-                "\n{INDENT}static void stop({})\n{INDENT}{{\n{written}{INDENT}}}\n",
+                "\n{INDENT}static void stop({})\n{INDENT}{{\n{written}{closing}",
                 maybe_unused(&hook)
             ));
         }
@@ -1031,11 +1038,12 @@ impl Emitter<'_> {
         }
         let line = self.line_of(at);
         text.push_str(&format!("{indent}// when, line {line} (TIME-3)\n"));
+        let closing = self.debug_end(at, at.span.end, format!("{indent}}}\n"));
         if guards.is_empty() {
-            text.push_str(&format!("{indent}{{\n{written}{indent}}}\n"));
+            text.push_str(&format!("{indent}{{\n{written}{closing}"));
         } else {
             let guarded = format!(
-                "{indent}if ({})\n{indent}{{\n{written}{indent}}}\n",
+                "{indent}if ({})\n{indent}{{\n{written}{closing}",
                 guards.join(" && ")
             );
             // The HGL file and line of the handler, which a failure of its
@@ -1240,10 +1248,13 @@ impl Emitter<'_> {
         // FN-16: "a `ref` result is a connection of T to whoever reads it".
         let called = self.result_port(signature, schema.as_deref(), called);
         let declaration = nested(&placed.wiring, &format!("// {shown}\n{prototype};\n"));
-        let definition = nested(
-            &placed.wiring,
-            &format!("// {shown}\n{prototype}\n{{\n{INDENT}{gives}{called};\n}}\n"),
+        // Wiring has no separate HGL body. In a debug build step into
+        // the declaration it wires, including Core's replay and record.
+        let definition = self.debug_stamp(
+            placed.at,
+            format!("// {shown}\n{prototype}\n{{\n{INDENT}{gives}{called};\n}}\n"),
         );
+        let definition = nested(&placed.wiring, &definition);
         Some((declaration, definition))
     }
 
