@@ -10,6 +10,13 @@ use hgl_analyser::{Argument, Detail, Signature};
 /// No lines.
 const NONE: [&str; 0] = [];
 
+const INSTANCE_CALLS: [&str; 4] = [
+    "checked(value)",
+    "apply(checked<i64>, value)",
+    "apply(fn(inner) => checked(inner), value)",
+    "relay(value)",
+];
+
 /// GEN-7, FN-15: each route to the same instance checks its candidate's
 /// `var` argument even when every candidate gives the same result type.
 #[test]
@@ -40,14 +47,135 @@ fn selected_arguments_are_checked_through_functions_and_forwarded_packs() {
             "{call}: {}",
             checked.report,
         );
-        if call == "relay(1)" {
-            assert_eq!(finding.at, "m.hgl:11:15", "{}", checked.report);
-        }
+        assert_eq!(finding.at, "m.hgl:8:41", "{}", checked.report);
+        assert!(
+            checked.report.contains("`checked<i64>`"),
+            "{}",
+            checked.report
+        );
+        assert!(
+            checked.report.contains("this call makes the instance"),
+            "{}",
+            checked.report
+        );
     }
     let accepted = module(&format!(
         "{definitions}test invoke {{\n    assert checked(\"value\") == 1\n    assert relay(\"value\") == 1\n}}\n"
     ));
     assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+}
+
+/// GEN-7: distinct callers of the same rejected instance appear in one report.
+#[test]
+fn a_rejected_instance_reports_each_making_call_together() {
+    let checked = module(concat!(
+        "operator update<T>(value: T) -> i64\n",
+        "impl const fn update<T>(value: T) -> i64 => 1\n",
+        "impl const fn update(var value: i64) -> i64 => value\n",
+        "const fn checked<T>(value: T) -> i64 => update(value)\n",
+        "const fn forward<T>(value: T) -> i64 => checked(value)\n",
+        "const fn relay<...Args>(values: ...Args) -> i64 => checked(...values)\n",
+        "test invoke {\n",
+        "    checked(1)\n",
+        "    forward(2)\n",
+        "    relay(3)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:41 name/binding.immutable FN-15"],
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked.report.contains("`checked<i64>`"),
+        "{}",
+        checked.report
+    );
+    assert_eq!(
+        checked
+            .report
+            .matches("this call makes the instance")
+            .count(),
+        3,
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-7, FN-1 and FN-3: the selected candidate can require a constant
+/// in value code or a fixed value in composition.
+#[test]
+fn selected_constants_are_checked_through_functions_and_forwarded_packs() {
+    let candidates = concat!(
+        "operator update<T>(value: T) -> i64\n",
+        "impl const fn update<T>(value: T) -> i64 => 1\n",
+        "impl const fn update(const value: i64) -> i64 => value\n",
+    );
+    for (phase, expected) in [
+        ("const ", "m.hgl:5:41 type/argument.constant FN-1"),
+        ("", "m.hgl:5:35 phase/connection.as_constant FN-3"),
+    ] {
+        for call in INSTANCE_CALLS {
+            let checked = module(&format!(
+                "{candidates}\
+                 {phase}fn checked<T>(value: T) -> i64 => update(value)\n\
+                 {phase}fn apply(f: {phase}fn(i64) -> i64, value: i64) -> i64 => f(value)\n\
+                 {phase}fn relay<...Args>(values: ...Args) -> i64 => checked(...values)\n\
+                 {phase}fn invoke(value: i64) -> i64 => {call}\n"
+            ));
+            assert_eq!(checked.summary(), [expected], "{call}: {}", checked.report);
+            assert!(
+                checked.report.contains("`checked<i64>`"),
+                "{}",
+                checked.report
+            );
+            assert!(
+                checked.report.contains("this call makes the instance"),
+                "{}",
+                checked.report
+            );
+        }
+    }
+}
+
+/// GEN-7 and EXPR-14: a configuration can lose its fixed value when its
+/// deferred call selects a temporal candidate.
+#[test]
+fn selected_settings_are_checked_through_functions_and_forwarded_packs() {
+    let definitions = concat!(
+        "operator helper<T>(input: list<T>) -> f64\n",
+        "impl const fn helper<T>(input: list<T>) -> f64 => 0.1\n",
+        "impl fn helper(input: list<i64>) -> f64 { when { return 0.1 } }\n",
+        "const fn near{abs: f64}(a: f64, b: f64) -> bool => a =={abs: abs} b\n",
+        "fn checked<T>(value: T) -> bool {\n",
+        "    let fixed: list<T> = []\n",
+        "    return near{abs: helper(fixed)}(2.5, 2.55)\n",
+        "}\n",
+        "fn apply(f: fn(i64) -> bool, value: i64) -> bool => f(value)\n",
+        "fn relay<...Args>(values: ...Args) -> bool => checked(...values)\n",
+    );
+    for call in INSTANCE_CALLS {
+        let checked = module(&format!(
+            "{definitions}fn invoke(value: i64) -> bool => {call}\n"
+        ));
+        assert_eq!(
+            checked.summary(),
+            ["m.hgl:8:22 phase/connection.as_constant EXPR-14"],
+            "{call}: {}",
+            checked.report
+        );
+        assert!(
+            checked.report.contains("`checked<i64>`"),
+            "{}",
+            checked.report
+        );
+        assert!(
+            checked.report.contains("this call makes the instance"),
+            "{}",
+            checked.report
+        );
+    }
 }
 
 /// What a call calls, as the instance of it: the declaration, what its

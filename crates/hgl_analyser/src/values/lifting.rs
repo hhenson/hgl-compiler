@@ -196,12 +196,7 @@ fn check_const_arguments(
 /// GEN-7: a selected temporal candidate can make a formerly unsettled
 /// argument or a loop condition a connection. Check the graph's
 /// constant places after recording the instance.
-pub(super) fn check_instance_constants(
-    program: &Program,
-    body: &Body,
-    from: &[Location],
-    diagnostics: &mut Diagnostics,
-) {
+pub(super) fn instance_constants(program: &Program, body: &Body) -> Diagnostics {
     let mut reports = Diagnostics::new();
     walk_statement_nodes(&body.statements, &mut |node| match node {
         Node::Expression(value) => {
@@ -217,12 +212,7 @@ pub(super) fn check_instance_constants(
         }
         _ => {}
     });
-    report_instance_checks(
-        &reports,
-        from,
-        diagnostics,
-        "this place in the generic body needs a value",
-    );
+    reports
 }
 
 pub(super) fn report_instance_checks(

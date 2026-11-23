@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use hgl_diagnostics::{Category, Code, Diagnostics, Location};
+use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
@@ -498,7 +498,7 @@ impl<'a> Typer<'a> {
         // A construction that writes its generic arguments,
         // `Sized<str>(value: "x")`, writes a type, of which the same
         // has been reported ([`applications`]).
-        if self.unmet_reported(at) {
+        if unmet_reported(self.diagnostics, at) {
             return true;
         }
         let program = self.program;
@@ -557,7 +557,7 @@ impl<'a> Typer<'a> {
             self.pack_member_fault(at, &fault);
             return true;
         }
-        if self.unmet_reported(at) {
+        if unmet_reported(self.diagnostics, at) {
             return true;
         }
         let program = self.program;
@@ -630,7 +630,7 @@ impl<'a> Typer<'a> {
         else {
             return false;
         };
-        if !self.unmet_reported(at) {
+        if !unmet_reported(self.diagnostics, at) {
             self.diagnostics
                 .emit(unmet(self.program, callee, at, &condition));
         }
@@ -1015,7 +1015,7 @@ impl<'a> Typer<'a> {
         let Some((condition, held, unvalued)) = self.requires_told(callee, generics) else {
             return;
         };
-        if self.unmet_reported(at) {
+        if unmet_reported(self.diagnostics, at) {
             return;
         }
         let program = self.program;
@@ -1032,15 +1032,6 @@ impl<'a> Typer<'a> {
                  function it calls"
             ),
         ));
-    }
-
-    /// True where a `requires.unmet` has been reported at `at` already.
-    fn unmet_reported(&self, at: Location) -> bool {
-        self.diagnostics.as_slice().iter().any(|earlier| {
-            earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
-                && earlier.primary.file == at.file
-                && earlier.primary.span.start == at.span.start
-        })
     }
 
     /// Whether the `requires` of `callee` holds with `generics` for its
@@ -1080,7 +1071,7 @@ impl<'a> Typer<'a> {
         else {
             return true;
         };
-        if self.unmet_reported(at) {
+        if unmet_reported(self.diagnostics, at) {
             return true;
         }
         if held == Some(false) {
@@ -1340,7 +1331,7 @@ impl<'a> Typer<'a> {
                     }
                     Some(Answered::Unmet) if report_unmet => {
                         for &(_, at) in uses.iter().filter(|(used, _)| *used == index) {
-                            if !self.unmet_reported(at) {
+                            if !unmet_reported(self.diagnostics, at) {
                                 self.diagnostics.emit(unmet(
                                     program,
                                     (module, declaration),
@@ -2372,6 +2363,7 @@ pub(super) fn instances_hold(
             }
         }
     }
+    let mut rejected_calls = InstanceCallRejections::default();
     for (root, from) in roots {
         // Each instance this one makes followed once, by what it is: its
         // callee and its arguments, the root's own among them.
@@ -2463,18 +2455,34 @@ pub(super) fn instances_hold(
                 {
                     made_after_inference(source, &instance.body, &mut instance_calls);
                 }
-                super::lifting::check_instance_constants(
-                    program,
-                    &instance.body,
-                    &from,
-                    diagnostics,
-                );
-                super::lifting::report_instance_checks(
-                    &body_reports,
-                    &from,
-                    diagnostics,
-                    "this destination in the generic graph is checked for this instance",
-                );
+                let constants = super::lifting::instance_constants(program, &instance.body);
+                for (reports, message) in [
+                    (&constants, "this place in the generic body needs a value"),
+                    (
+                        &body_reports,
+                        "this destination in the generic graph is checked for this instance",
+                    ),
+                ] {
+                    let mut elsewhere = Diagnostics::new();
+                    for report in reports.as_slice() {
+                        if diagnostics.as_slice().contains(report) {
+                            continue;
+                        }
+                        if let Some(call) = selected_call_for_connection(selecting, report) {
+                            rejected_calls.record(
+                                program,
+                                &made,
+                                call,
+                                vec![report.clone()],
+                                &from,
+                                diagnostics,
+                            );
+                        } else {
+                            elsewhere.emit(report.clone());
+                        }
+                    }
+                    super::lifting::report_instance_checks(&elsewhere, &from, diagnostics, message);
+                }
             }
             if recheck_endpoints {
                 super::lifting::report_instance_checks(
@@ -2656,40 +2664,16 @@ pub(super) fn instances_hold(
                         );
                         current_locals = Some(locals);
                     }
-                    let name = &program.modules[call.operator.module].declarations
-                        [call.operator.declaration]
-                        .name;
-                    // What is rejected of the call in this instance is
-                    // reported at each call that makes the instance, with
-                    // the call in the body, and where it points there,
-                    // beside it.
-                    let rejected =
+                    let mut rejected =
                         |typer: &mut super::Typer, reports: Vec<hgl_diagnostics::Diagnostic>| {
-                            for report in reports {
-                                for &root in &from {
-                                    let mut report = report.clone();
-                                    let within = report.primary;
-                                    report.primary = root;
-                                    let mut report = report.with_related(
-                                        call.name,
-                                        format!(
-                                            "`{name}` is called here, with the generic arguments \
-                                         this call gives the function it calls"
-                                        ),
-                                    );
-                                    if within != call.name {
-                                        report = report.with_related(within, "here, in that call");
-                                    }
-                                    // A call rejected for a `requires` makes
-                                    // no instance to judge further (ERR-9:
-                                    // "Do not demand cascaded diagnostics").
-                                    if !typer.unmet_reported(root)
-                                        && !typer.diagnostics.as_slice().contains(&report)
-                                    {
-                                        typer.diagnostics.emit(report);
-                                    }
-                                }
-                            }
+                            rejected_calls.record(
+                                program,
+                                &made,
+                                call.name,
+                                reports,
+                                &from,
+                                typer.diagnostics,
+                            );
                         };
                     // ERR-9: "Failure during argument evaluation precedes
                     // later admission checks."
@@ -2741,8 +2725,7 @@ pub(super) fn instances_hold(
                             });
                         }
                         // GEN-5: "No match rejects; tied most-specific
-                        // candidates are ambiguous", at each call that
-                        // makes the instance.
+                        // candidates are ambiguous."
                         AtInstance::Rejected(report) => rejected(&mut typer, vec![report]),
                         AtInstance::Untold => {}
                     }
@@ -2831,6 +2814,101 @@ pub(super) fn instances_hold(
             }
         }
     }
+    rejected_calls.emit(diagnostics);
+}
+
+/// GEN-7: a rejected operator call is reported once for its concrete
+/// instance, with each distinct call that made the instance beside it.
+#[derive(Default)]
+struct InstanceCallRejections {
+    by_instance: HashMap<String, Vec<usize>>,
+    reports: Vec<(Diagnostic, Vec<Location>)>,
+}
+
+impl InstanceCallRejections {
+    fn record(
+        &mut self,
+        program: &Program,
+        made: &Made,
+        call: Location,
+        reports: Vec<Diagnostic>,
+        from: &[Location],
+        diagnostics: &Diagnostics,
+    ) {
+        if reports.is_empty() {
+            return;
+        }
+        // A call rejected for a `requires` makes no instance to judge
+        // further (ERR-9: "Do not demand cascaded diagnostics").
+        let callers: Vec<_> = from
+            .iter()
+            .copied()
+            .filter(|&root| !unmet_reported(diagnostics, root))
+            .collect();
+        if callers.is_empty() {
+            return;
+        }
+        let key = instance_key(made.callee, &made.generics, &made.type_packs, &made.answers);
+        let reports_of = self.by_instance.entry(key).or_default();
+        let instance = instance_note(program, made.callee, &made.generics);
+        for report in reports {
+            let mut report = report.with_note(&instance);
+            if report.primary != call {
+                let within = report.primary;
+                report.primary = call;
+                report = report.with_related(within, "here, in that call");
+            }
+            if let Some(index) = reports_of
+                .iter()
+                .copied()
+                .find(|&index| self.reports[index].0 == report)
+            {
+                self.reports[index].1.extend_from_slice(&callers);
+            } else {
+                reports_of.push(self.reports.len());
+                self.reports.push((report, callers.clone()));
+            }
+        }
+    }
+
+    fn emit(self, diagnostics: &mut Diagnostics) {
+        for (mut report, mut callers) in self.reports {
+            callers.sort_by_key(|at| (at.file, at.span.start, at.span.end));
+            callers.dedup();
+            for caller in callers {
+                report = report.with_related(caller, "this call makes the instance");
+            }
+            diagnostics.emit(report);
+        }
+    }
+}
+
+/// An argument or setting that became a connection can point at the
+/// selected call that supplies it. Other graph checks keep their own
+/// destinations.
+fn selected_call_for_connection(
+    selecting: &[super::candidates::Selecting],
+    report: &Diagnostic,
+) -> Option<Location> {
+    if report.code != Code::Catalogued(codes::CONNECTION_AS_CONSTANT)
+        || !matches!(report.rule, Some("FN-3" | "FN-15" | "EXPR-14"))
+    {
+        return None;
+    }
+    selecting
+        .iter()
+        .filter(|call| contains_location(call.at, report.primary))
+        .min_by_key(|call| call.at.span.end - call.at.span.start)
+        .map(|call| call.name)
+}
+
+/// True where a `requires.unmet` has been reported at `at` already.
+fn unmet_reported(diagnostics: &Diagnostics, at: Location) -> bool {
+    diagnostics.as_slice().iter().any(|earlier| {
+        earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
+            && earlier.primary.file == at.file
+            && earlier.primary.span.start == at.span.start
+    })
 }
 
 /// What an instance is, written out: its declaration, its generic
@@ -3183,9 +3261,7 @@ pub(super) fn report_instance_result_uses(
         return;
     }
     let unit = &program.modules[module];
-    let name = &unit.declarations[declaration].name;
-    let arguments = generics.iter().map(Argument::to_string).collect::<Vec<_>>();
-    let instance = format!("GEN-7: in `{name}<{}>`", arguments.join(", "));
+    let instance = instance_note(program, (module, declaration), generics);
     let calls = &result_uses.changed_results;
     for report in result_uses.reports.as_slice() {
         let mut report = report.clone().with_note(&instance);
@@ -3212,6 +3288,17 @@ pub(super) fn report_instance_result_uses(
     }
 }
 
+/// GEN-7: identify the enclosing declaration and its concrete arguments.
+fn instance_note(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    generics: &[Argument],
+) -> String {
+    let name = &program.modules[module].declarations[declaration].name;
+    let arguments = generics.iter().map(Argument::to_string).collect::<Vec<_>>();
+    format!("GEN-7: in `{name}<{}>`", arguments.join(", "))
+}
+
 /// Locate a changed call inside this use or its immutable initializer.
 fn changed_result_source(
     body: &hir::Body,
@@ -3219,11 +3306,12 @@ fn changed_result_source(
     calls: &[Location],
 ) -> Option<Location> {
     let within = |outer: Location| {
-        unique_location(calls.iter().copied().filter(|call| {
-            call.file == outer.file
-                && call.span.start >= outer.span.start
-                && call.span.end <= outer.span.end
-        }))
+        unique_location(
+            calls
+                .iter()
+                .copied()
+                .filter(|&call| contains_location(outer, call)),
+        )
     };
     if let Some(call) = within(use_at) {
         return Some(call);
@@ -3250,6 +3338,12 @@ fn changed_result_source(
         }
     });
     source
+}
+
+fn contains_location(outer: Location, inner: Location) -> bool {
+    inner.file == outer.file
+        && inner.span.start >= outer.span.start
+        && inner.span.end <= outer.span.end
 }
 
 /// The only distinct source location, if the locations identify one.

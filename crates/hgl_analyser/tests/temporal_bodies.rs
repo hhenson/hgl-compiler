@@ -488,14 +488,17 @@ fn instances_check_the_category_of_braced_configuration() {
     assert_eq!(
         checked.summary(),
         [
+            "m.hgl:6:15 phase/connection.as_constant EXPR-14",
+            "m.hgl:8:14 phase/connection.as_constant EXPR-14",
+            "m.hgl:11:15 phase/connection.as_constant EXPR-14",
             "m.hgl:14:22 phase/connection.as_constant EXPR-14",
-            "m.hgl:16:36 phase/connection.as_constant EXPR-14",
-            "m.hgl:17:49 phase/connection.as_constant EXPR-14",
-            "m.hgl:19:45 phase/connection.as_constant EXPR-14",
         ],
         "{}",
         checked.report
     );
+    for instance in ["braced<i64>", "named_braced<i64>", "named<i64>"] {
+        assert!(checked.report.contains(instance), "{}", checked.report);
+    }
 }
 
 // ---- A hook's and a graph's expressions ----
