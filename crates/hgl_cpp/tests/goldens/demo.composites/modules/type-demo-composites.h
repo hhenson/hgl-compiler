@@ -1017,6 +1017,27 @@ struct std::hash<::hgl::demo::composites::m_::d_::Box<T_p_>>
 {
     ::std::size_t operator()(const ::hgl::demo::composites::m_::d_::Box<T_p_>& value) const { return ::hglrt::key_hash_of(value); }
 };
+// TYPE-9: `Box` as hgraph's nominal bundle, its fields as `fields` names them.
+template <class T_p_>
+struct hgraph::native_bundle<::hgl::demo::composites::m_::Box<T_p_>>
+{
+    using schema = ::hgraph::NominalBundle<"demo.composites", "Box", false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<::hglrt::bundle_value<T_p_>>, ::hgraph::Field<"value", ::hglrt::bundle_value<T_p_>>, ::hgraph::Field<"count", ::hglrt::bundle_value<::hgraph::Int>>>;
+    static constexpr auto members = ::hglrt::fields<::hgl::demo::composites::m_::Box<T_p_>>::members;
+};
+template <class T_p_>
+struct hglrt::type_named<::hgl::demo::composites::m_::Box<T_p_>>
+{
+    static ::std::string name() { return ::hglrt::applied_struct_name<T_p_>("demo.composites::Box"); }
+    static constexpr ::std::array<::std::string_view, 2> fields{"value", "count"};
+    static constexpr bool delta = false;
+};
+template <class T_p_>
+struct hglrt::type_named<::hgl::demo::composites::m_::d_::Box<T_p_>>
+{
+    static ::std::string name() { return "delta<" + ::hglrt::applied_struct_name<T_p_>("demo.composites::Box") + ">"; }
+    static constexpr ::std::array<::std::string_view, 2> fields{"value", "count"};
+    static constexpr bool delta = true;
+};
 template <>
 struct hglrt::fields<::hgl::demo::composites::m_::Empty>
 {
@@ -1208,6 +1229,27 @@ template <class T_p_>
 struct std::hash<::hgl::demo::composites::m_::d_::Tagged<T_p_>>
 {
     ::std::size_t operator()(const ::hgl::demo::composites::m_::d_::Tagged<T_p_>& value) const { return ::hglrt::key_hash_of(value); }
+};
+// TYPE-9: `Tagged` as hgraph's nominal bundle, its fields as `fields` names them.
+template <class T_p_>
+struct hgraph::native_bundle<::hgl::demo::composites::m_::Tagged<T_p_>>
+{
+    using schema = ::hgraph::NominalBundle<"demo.composites", "Tagged", false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<::hglrt::bundle_value<T_p_>>, ::hgraph::Field<"id", ::hglrt::bundle_value<::hgraph::Int>>, ::hgraph::Field<"name", ::hglrt::bundle_value<::hgraph::Str>>, ::hgraph::Field<"tag", ::hglrt::bundle_value<T_p_>>>;
+    static constexpr auto members = ::hglrt::fields<::hgl::demo::composites::m_::Tagged<T_p_>>::members;
+};
+template <class T_p_>
+struct hglrt::type_named<::hgl::demo::composites::m_::Tagged<T_p_>>
+{
+    static ::std::string name() { return ::hglrt::applied_struct_name<T_p_>("demo.composites::Tagged"); }
+    static constexpr ::std::array<::std::string_view, 3> fields{"id", "name", "tag"};
+    static constexpr bool delta = false;
+};
+template <class T_p_>
+struct hglrt::type_named<::hgl::demo::composites::m_::d_::Tagged<T_p_>>
+{
+    static ::std::string name() { return "delta<" + ::hglrt::applied_struct_name<T_p_>("demo.composites::Tagged") + ">"; }
+    static constexpr ::std::array<::std::string_view, 3> fields{"id", "name", "tag"};
+    static constexpr bool delta = true;
 };
 template <>
 struct hglrt::fields<::hgl::demo::composites::m_::d_::Noted>
@@ -1416,6 +1458,27 @@ template <class T_p_>
 struct std::hash<::hgl::demo::composites::m_::d_::Shelf<T_p_>>
 {
     ::std::size_t operator()(const ::hgl::demo::composites::m_::d_::Shelf<T_p_>& value) const { return ::hglrt::key_hash_of(value); }
+};
+// TYPE-9: `Shelf` as hgraph's nominal bundle, its fields as `fields` names them.
+template <class T_p_>
+struct hgraph::native_bundle<::hgl::demo::composites::m_::Shelf<T_p_>>
+{
+    using schema = ::hgraph::NominalBundle<"demo.composites", "Shelf", false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<::hglrt::bundle_value<T_p_>>, ::hgraph::Field<"items", ::hglrt::bundle_value<::std::optional<::hglrt::list<T_p_>>>>>;
+    static constexpr auto members = ::hglrt::fields<::hgl::demo::composites::m_::Shelf<T_p_>>::members;
+};
+template <class T_p_>
+struct hglrt::type_named<::hgl::demo::composites::m_::Shelf<T_p_>>
+{
+    static ::std::string name() { return ::hglrt::applied_struct_name<T_p_>("demo.composites::Shelf"); }
+    static constexpr ::std::array<::std::string_view, 1> fields{"items"};
+    static constexpr bool delta = false;
+};
+template <class T_p_>
+struct hglrt::type_named<::hgl::demo::composites::m_::d_::Shelf<T_p_>>
+{
+    static ::std::string name() { return "delta<" + ::hglrt::applied_struct_name<T_p_>("demo.composites::Shelf") + ">"; }
+    static constexpr ::std::array<::std::string_view, 1> fields{"items"};
+    static constexpr bool delta = true;
 };
 template <class T_p_>
 struct hglrt::fields<::hgl::demo::composites::m_::d_::Slot<T_p_>>
