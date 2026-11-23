@@ -412,6 +412,30 @@ fn a_result_contract_compares_known_parts_of_a_generic_result() {
     );
 }
 
+/// GEN-6 and GEN-17: the operator's reflected result names the same
+/// callback pack as its candidate's. Its known shape is still checked.
+#[test]
+fn a_result_contract_uses_the_candidates_reflected_pack() {
+    let checked = module(concat!(
+        "const item: str = \"item\"\n",
+        "operator reflected<...Ps, const key: str = \"item\">(f: const fn(...{Ps}) -> i64) -> list<Ps[key]>\n",
+        "impl const fn reflected<...Qs, const key: str = \"item\">(f: const fn(...{Qs}) -> i64) -> list<Qs[key]> => []\n",
+        "operator concrete<...Ps>(f: const fn(...{Ps}) -> i64) -> list<Ps[item]>\n",
+        "impl const fn concrete<...Qs>(f: const fn(...{Qs}) -> i64) -> list<str> => []\n",
+        "operator shaped<...Ps>(f: const fn(...{Ps}) -> i64) -> tuple<list<Ps[item]>, i64>\n",
+        "impl const fn shaped<...Qs>(f: const fn(...{Qs}) -> i64) -> tuple<list<Qs[item]>, f64> => ([], 1.5)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:63 operator/impl.result GEN-6",
+            "m.hgl:8:61 operator/impl.result GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-6: a contract comparison needs a valid candidate and operator.
 /// An invalid binding in a named test is already reported by TST-2.
 #[test]

@@ -9,11 +9,13 @@ use hgl_parser::{HasSpan, SyntaxKind};
 use hgl_source::FileId;
 
 use crate::constant::{Constants, Scope};
-use crate::declared::{result_types_differ, same_type, substitute_within};
+use crate::declared::{result_types_differ, same_type, substitute_with_members, substitute_within};
 use crate::program::{Declaration, DeclarationKind, Program, Role};
 use crate::read::type_child;
 use crate::syntax::child;
-use crate::types::{Argument, ConstantValue, Detail, GenericKind, Signature, Type};
+use crate::types::{
+    Argument, Constant, ConstantValue, Detail, GenericKind, ReflectedPack, Signature, Type,
+};
 use crate::{codes, error};
 
 use super::inference::infer;
@@ -57,16 +59,19 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
             {
                 continue;
             }
-            let Some(arguments) = parameter_types(public, signature, role) else {
+            let Some(parameters) = parameter_types(public, signature, role) else {
                 continue;
             };
             let bindings: Vec<_> = public
                 .generics
                 .iter()
-                .zip(&arguments)
+                .zip(&parameters.arguments)
                 .map(|(parameter, argument)| (parameter.at, argument))
                 .collect();
-            if let Some(message) = result_error(&public.result, &signature.result, &bindings) {
+            let expected = public.result.as_ref().map(|result| {
+                result_in_candidate(result, public, signature, &bindings, &parameters.packs)
+            });
+            if let Some(message) = result_error(&expected, &signature.result) {
                 let at = child(&candidate.syntax, SyntaxKind::ReturnType)
                     .as_ref()
                     .and_then(type_child)
@@ -94,8 +99,11 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
                 arguments: &bindings,
                 constants: &constants,
             };
-            if declared_requirement(&scope, (operator.module, operator.declaration), &arguments)
-                == Some(false)
+            if declared_requirement(
+                &scope,
+                (operator.module, operator.declaration),
+                &parameters.arguments,
+            ) == Some(false)
             {
                 diagnostics.emit(
                     error(
@@ -115,31 +123,57 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
 
 /// GEN-6: a candidate declares the operator's result, when this
 /// declaration determines it, and declares one only if the operator does.
-fn result_error(
-    expected: &Option<Type>,
-    actual: &Option<Type>,
-    bindings: &[(Location, &Argument)],
-) -> Option<String> {
+fn result_error(expected: &Option<Type>, actual: &Option<Type>) -> Option<String> {
     match (expected, actual) {
-        (Some(expected), Some(actual)) => {
-            let expected = substitute_within(expected, bindings);
-            mismatched_result(&expected, actual).then(|| {
-                format!(
-                    "this candidate declares result `{actual}` where the operator gives these parameters result `{expected}`"
-                )
-            })
-        }
-        (Some(expected), None) => {
-            let expected = substitute_within(expected, bindings);
-            Some(format!(
-                "this candidate declares no result where the operator gives these parameters result `{expected}`"
-            ))
-        }
+        (Some(expected), Some(actual)) => mismatched_result(expected, actual).then(|| {
+            format!(
+                "this candidate declares result `{actual}` where the operator gives these parameters result `{expected}`"
+            )
+        }),
+        (Some(expected), None) => Some(format!(
+            "this candidate declares no result where the operator gives these parameters result `{expected}`"
+        )),
         (None, Some(actual)) => Some(format!(
             "this candidate declares result `{actual}` where the operator declares no result"
         )),
         _ => None,
     }
+}
+
+/// GEN-6 and GEN-17: a reflected result uses the corresponding pack
+/// in the candidate's callback parameter, including a shared option key.
+fn result_in_candidate(
+    result: &Type,
+    public: &Signature,
+    candidate: &Signature,
+    bindings: &[(Location, &Argument)],
+    packs: &HashMap<Location, &ReflectedPack>,
+) -> Type {
+    let member = |at, _: &str, key: &Constant| {
+        let pack = packs.get(&at)?;
+        let mut key = key.clone();
+        if let ConstantValue::Parameter { at, name } = &key.value
+            && let Some(option) = public.generics.iter().find(|option| option.at == *at)
+            && let Some(given) = candidate
+                .generics
+                .iter()
+                .find(|option| option.name == *name)
+            && let (GenericKind::Value(ty), GenericKind::Value(given_ty)) =
+                (&option.kind, &given.kind)
+            && same_type(ty, given_ty) == Some(true)
+        {
+            key.value = ConstantValue::Parameter {
+                name: given.name.clone(),
+                at: given.at,
+            };
+        }
+        Some(Type::PackMember {
+            pack: pack.at,
+            name: pack.name.clone(),
+            key,
+        })
+    };
+    substitute_with_members(result, bindings, &member, 1)
 }
 
 /// An earlier error in either declaration can invalidate the comparison.
@@ -154,10 +188,15 @@ fn declaration_has_error(declaration: &Declaration, diagnostics: &Diagnostics) -
 
 /// Bind the operator's generics from the corresponding candidate parameters.
 /// Conflicting bindings leave the contract unresolved for this declaration.
-fn parameter_types(public: &Signature, candidate: &Signature, role: Role) -> Option<Vec<Argument>> {
+fn parameter_types<'a>(
+    public: &Signature,
+    candidate: &'a Signature,
+    role: Role,
+) -> Option<ParameterTypes<'a>> {
     let mut arguments = vec![None; public.generics.len()];
     let mut from_parameter = arguments.clone();
     let mut inputs = Vec::new();
+    let mut packs = HashMap::new();
     for (parameter, slot) in public
         .parameters
         .iter()
@@ -170,6 +209,16 @@ fn parameter_types(public: &Signature, candidate: &Signature, role: Role) -> Opt
         // The type reader has reported this non-ordinary input (TYPE-12).
         if matches!(given.ty, Type::Signal) && (role == Role::Value || given.configuration) {
             continue;
+        }
+        // Both templates reflect the same suffix of this callback.
+        if let (Type::Function(parameter), Type::Function(given)) = (&parameter.ty, &given.ty)
+            && parameter.parameters.len() == given.parameters.len()
+            && let (Some(expected), Some(actual)) = (&parameter.named_pack, &given.named_pack)
+            && packs
+                .insert(expected.at, actual)
+                .is_some_and(|previous: &ReflectedPack| previous.at != actual.at)
+        {
+            return None;
         }
         infer(
             &parameter.ty,
@@ -211,12 +260,18 @@ fn parameter_types(public: &Signature, candidate: &Signature, role: Role) -> Opt
             return None;
         }
     }
-    Some(
-        arguments
+    Some(ParameterTypes {
+        arguments: arguments
             .into_iter()
             .map(|argument| argument.unwrap_or(Argument::Type(Type::Unknown)))
             .collect(),
-    )
+        packs,
+    })
+}
+
+struct ParameterTypes<'a> {
+    arguments: Vec<Argument>,
+    packs: HashMap<Location, &'a ReflectedPack>,
 }
 
 /// True where an input repeats an inferred binding or computes a constant
