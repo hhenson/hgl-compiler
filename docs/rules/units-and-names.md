@@ -130,6 +130,7 @@ analyser: partial
 - One the reader does not work out, a datetime moved by a duration, is no value a generic value argument is given (`generic.argument_constant`), as the same expression written in place is not
 - An expression is read in a loop along a chain of operators, `1 + 1 + ... + 1`, of any length the parser builds a tree for
 - One whose value depends on itself is `constant.cycle`: through another constant, the definition a call selected, an operator's candidate a symbol or a name selected, or a parameter or field default selected for an omitted argument (UNIT-8, TYPE-5).
+- For a constructor given a pack, the constant dependency check follows the defaults of fields the concrete pack and any written arguments leave out (FN-19, TYPE-5).
 - Left: evaluating constants computed by a `const fn` (#240), including required-constant failures. Source formatting is pending and must preserve constant spellings.
 
 transpiler: partial

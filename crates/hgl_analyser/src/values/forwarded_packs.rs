@@ -143,7 +143,7 @@ fn is_forwarded_call(value: &Expr) -> bool {
 
 /// One concrete specialization reached by a call with a forwarding path.
 #[derive(Debug, Clone, PartialEq)]
-struct ForwardingInstance {
+pub(crate) struct ForwardingInstance {
     declaration: (usize, usize),
     generics: Vec<crate::Argument>,
     requirements: Vec<crate::hir::Answer>,
@@ -221,7 +221,8 @@ impl crate::Program {
 }
 
 impl ForwardingInstance {
-    fn of(program: &crate::Program, expression: &Expr) -> Option<Self> {
+    /// The declaration and fully known argument shape supplied by a call.
+    pub(crate) fn of(program: &crate::Program, expression: &Expr) -> Option<Self> {
         use crate::types::Argument;
         let ExprKind::Call {
             callee, arguments, ..
@@ -282,6 +283,17 @@ impl ForwardingInstance {
             type_packs: type_packs.to_vec(),
             pack_inputs,
         })
+    }
+
+    /// The checked body with this caller's pack keys bound to arguments.
+    pub(crate) fn body(&self, program: &crate::Program) -> Option<crate::hir::Body> {
+        let (_, body) = program.instance_with_inputs(
+            self.declaration,
+            &self.generics,
+            &self.requirements,
+            self.inputs(),
+        )?;
+        Some(body)
     }
 
     fn inputs(&self) -> crate::InstanceInputs<'_> {
