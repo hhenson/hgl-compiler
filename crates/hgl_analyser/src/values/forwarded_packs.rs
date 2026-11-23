@@ -6,7 +6,7 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
-use super::requirements::pack_view;
+use super::requirements::{IndependentSourceBodies, called_or_referenced, pack_view};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey};
 use crate::program::{Binding, LocalKind};
@@ -498,19 +498,58 @@ impl crate::Program {
 impl ForwardingInstance {
     /// The declaration and fully known argument shape supplied by a call.
     pub(crate) fn of(program: &crate::Program, expression: &Expr) -> Option<Self> {
-        use crate::types::Argument;
         let ExprKind::Call {
             callee, arguments, ..
         } = &expression.kind
         else {
             return None;
         };
+        Self::from_callee(program, callee, Some(arguments))
+    }
+
+    /// A static reference can reach a forwarding body even without its own
+    /// pack arguments, through the ordinary calls the referenced body makes.
+    fn for_check(program: &crate::Program, expression: &Expr) -> Option<Self> {
+        let (module, declaration) = called_or_referenced(expression)?.declaration()?;
+        if let crate::Detail::Callable(signature) = &program.modules[module].details[declaration]
+            && signature.generics.is_empty()
+            && signature
+                .parameters
+                .iter()
+                .all(|parameter| parameter.pack.is_none())
+        {
+            // Concrete bodies supply their own forwarding roots. A call
+            // of one does not make those same instances a second time.
+            return None;
+        }
+        match &expression.kind {
+            ExprKind::StaticCallable(callee) => Self::from_callee(program, callee, None),
+            _ => Self::of(program, expression),
+        }
+    }
+
+    fn from_callee(
+        program: &crate::Program,
+        callee: &Callee,
+        arguments: Option<&[crate::hir::Argument]>,
+    ) -> Option<Self> {
+        use crate::types::Argument;
         let declaration = callee.declaration()?;
         let crate::Detail::Callable(signature) =
             &program.modules[declaration.0].details[declaration.1]
         else {
             return None;
         };
+        // The call of a pack-taking reference must supply its entries.
+        if arguments.is_none()
+            && signature
+                .parameters
+                .iter()
+                .any(|parameter| parameter.pack.is_some())
+        {
+            return None;
+        }
+        let arguments = arguments.unwrap_or_default();
         let type_packs = callee.type_packs();
         let known = |ty: &Type| super::fit::whole(ty) && !names_parameter(ty);
         if !callee
@@ -607,22 +646,22 @@ pub(super) fn walk_nested_calls(statements: &[crate::hir::Stmt], visit: &mut dyn
 pub(super) fn check_instances(
     program: &crate::Program,
     discovered: &mut Vec<super::requirements::Made>,
+    source: &IndependentSourceBodies,
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
+    use super::requirements::{MakingCall, emit_instance_report, making_path};
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = HashSet::new();
-    let mut deferred_at = HashSet::new();
     let mut callers = HashMap::<_, Vec<_>>::new();
     for (module, unit) in program.modules.iter().enumerate() {
         for (declaration, body) in unit.bodies.iter().enumerate() {
             let Some(body) = body else { continue };
             let owner = (module, declaration);
             walk_nested_calls(&body.statements, &mut |value| {
-                if let ExprKind::Call { callee, .. } = &value.kind {
+                if let Some(callee) = called_or_referenced(value) {
                     if matches!(callee, Callee::DeferredPackCall) {
                         forwarding.insert(owner);
-                        deferred_at.insert(value.at);
                     } else if let Some(called) = callee.declaration() {
                         callers.entry(called).or_default().push(owner);
                     }
@@ -642,43 +681,52 @@ pub(super) fn check_instances(
         }
     }
     let mut roots = Vec::new();
-    for unit in &program.modules {
-        let mut record = |value: &Expr| {
-            if let Some(instance) = ForwardingInstance::of(program, value)
-                && forwarding.contains(&instance.declaration)
-            {
-                roots.push((instance, value.at));
+    let mut independent = HashMap::<Location, Vec<ForwardingInstance>>::new();
+    for (module, unit) in program.modules.iter().enumerate() {
+        let mut record = |value: &Expr, in_forwarding_body: bool| {
+            if let Some(instance) = ForwardingInstance::for_check(program, value) {
+                if in_forwarding_body {
+                    independent
+                        .entry(value.at)
+                        .or_default()
+                        .push(instance.clone());
+                }
+                if forwarding.contains(&instance.declaration) {
+                    roots.push((instance, value.at));
+                }
             }
         };
-        for body in unit
-            .bodies
-            .iter()
-            .flatten()
-            .chain(unit.test_bodies.iter().flatten())
-            .chain(&unit.store_body)
-        {
-            walk_nested_calls(&body.statements, &mut record);
+        for (declaration, body) in unit.bodies.iter().enumerate() {
+            let owner = (module, declaration);
+            if let Some(body) = source.body(owner).or(body.as_ref()) {
+                let in_forwarding_body = forwarding.contains(&owner);
+                super::walk_body_calls(body, &mut |value| record(value, in_forwarding_body));
+            }
+        }
+        for body in unit.test_bodies.iter().flatten().chain(&unit.store_body) {
+            super::walk_body_calls(body, &mut |value| record(value, false));
         }
         if let Some(run) = &unit.run_body {
             run.call
-                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut |part| record(part, false)));
         }
         for constant in unit.constants.iter().flatten() {
             constant
                 .value
-                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut |part| record(part, false)));
         }
         for default in unit.defaults.iter().flatten().flatten() {
             default
                 .value
-                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut |part| record(part, false)));
         }
     }
     for (initial, at) in roots {
-        let mut waiting = VecDeque::from([initial]);
+        let mut waiting = VecDeque::from([(initial, at, None)]);
+        let mut parents = Vec::new();
         let mut seen = Vec::new();
         let mut counts = HashMap::new();
-        while let Some(instance) = waiting.pop_front() {
+        while let Some((instance, written, parent)) = waiting.pop_front() {
             if seen.contains(&instance) {
                 continue;
             }
@@ -703,36 +751,78 @@ pub(super) fn check_instances(
                 &reports,
                 &mut graph_reports,
             );
-            seen.push(instance);
+            let making = || {
+                MakingCall::new(
+                    program,
+                    instance.declaration,
+                    &instance.generics,
+                    &instance.type_packs,
+                    written,
+                )
+            };
             for report in graph_reports.as_slice() {
                 if diagnostics.as_slice().contains(report) {
                     continue;
                 }
-                let mut report = report
-                    .clone()
-                    .with_related(report.primary, "the forwarded call is written here");
-                report.primary = at;
-                if !diagnostics.as_slice().contains(&report) {
-                    diagnostics.emit(report);
-                }
+                emit_instance_report(
+                    report.clone(),
+                    &[making_path(making(), parent, &parents)],
+                    diagnostics,
+                );
             }
-            if let Some((_, body)) = checked {
-                walk_nested_calls(&body.statements, &mut |value| {
-                    let Some(child) = ForwardingInstance::of(program, value) else {
+            if let Some(checked) = checked {
+                if let Some(result_uses) = &checked.result_uses
+                    && !result_uses.reports.is_empty()
+                {
+                    super::requirements::report_instance_result_uses(
+                        program,
+                        (
+                            instance.declaration,
+                            &instance.generics,
+                            &instance.type_packs,
+                        ),
+                        result_uses,
+                        &[making_path(making(), parent, &parents)],
+                        diagnostics,
+                    );
+                    if result_uses.reports.has_errors() {
+                        seen.push(instance);
+                        continue;
+                    }
+                }
+                let mut link = None;
+                checked.walk_calls(&mut |value| {
+                    let Some(child) = ForwardingInstance::for_check(program, value) else {
                         return;
                     };
-                    // The ordinary walk already sees calls that were resolved
-                    // in the declaration. Only a forwarded call adds an edge.
-                    if deferred_at.contains(&value.at)
-                        && let ExprKind::Call { callee, .. } = &value.kind
+                    // The final body can make new calls wherever the
+                    // entries affect a type, including in a callback.
+                    if !independent
+                        .get(&value.at)
+                        .is_some_and(|calls| calls.contains(&child))
+                        && let Some(callee) = called_or_referenced(value)
                     {
-                        super::requirements::made_callee(callee, at, discovered);
+                        let mut path = vec![MakingCall::new(
+                            program,
+                            child.declaration,
+                            &child.generics,
+                            &child.type_packs,
+                            value.at,
+                        )];
+                        path.extend(making_path(making(), parent, &parents));
+                        super::requirements::made_forwarded_callee(callee, at, path, discovered);
                     }
                     if forwarding.contains(&child.declaration) {
-                        waiting.push_back(child);
+                        let caller = *link.get_or_insert_with(|| {
+                            let index = parents.len();
+                            parents.push((making(), parent));
+                            index
+                        });
+                        waiting.push_back((child, value.at, Some(caller)));
                     }
                 });
             }
+            seen.push(instance);
         }
     }
 }
