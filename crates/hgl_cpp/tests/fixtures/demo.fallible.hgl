@@ -302,6 +302,17 @@ fn store_forms(value: i64) -> bool {
     }
 }
 
+fn nullable_store_publication(value: i64) -> i64? {
+    inject global_state
+    when { return get<i64>(global_state, "absent publication") }
+}
+
+fn typed_delta_publication(value: i64) -> i64? {
+    when { return delta<i64?>(value: value) }
+}
+
 test store_result_forms {
     assert eval store_forms(value: [7, 0]) == [true, true]
+    assert eval nullable_store_publication(value: [7]) == [null]
+    assert eval typed_delta_publication(value: [7]) == [7]
 }

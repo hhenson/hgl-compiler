@@ -244,6 +244,70 @@ fn a_nullable_store_read_with_an_invalid_key_has_no_candidate() {
     );
 }
 
+/// GEN-2, GEN-8 and TIME-7: a node's nullable result supplies the
+/// same whole-value place, including the value of a block or branch.
+#[test]
+fn a_nullable_publication_checks_an_unresolved_store_read() {
+    let checked = module(concat!(
+        "const fn save(store: GlobalState, const key: str, value: i64) -> i64 {\n",
+        "    put(store, key, value)\n",
+        "    return value\n",
+        "}\n",
+        "fn absent(value: i64) -> i64? {\n",
+        "    inject global_state\n",
+        "    when { return get(global_state, \"absent\") }\n",
+        "}\n",
+        "fn visible(value: i64) -> i64? {\n",
+        "    inject global_state\n",
+        "    when {\n",
+        "        put(global_state, \"visible\", value)\n",
+        "        return get(global_state, \"visible\")\n",
+        "    }\n",
+        "}\n",
+        "fn hidden(value: i64) -> i64? {\n",
+        "    inject global_state\n",
+        "    when {\n",
+        "        let saved = save(global_state, \"hidden\", value)\n",
+        "        return (get(global_state, \"hidden\"))\n",
+        "    }\n",
+        "}\n",
+        "fn nested(value: i64) -> i64? {\n",
+        "    inject global_state\n",
+        "    when {\n",
+        "        return { if value > 0 { get(global_state, \"branch\") } else { null } }\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:19 type/generic.unresolved GEN-8",
+            "m.hgl:14:16 type/generic.unresolved GEN-8",
+            "m.hgl:21:17 type/generic.unresolved GEN-8",
+            "m.hgl:27:33 type/generic.unresolved GEN-8",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// TIME-7 and TYPE-16: a call whose declared result is a delta can
+/// still infer its parameter from a nullable result's delta place.
+#[test]
+fn a_nullable_publication_can_infer_the_type_of_a_delta() {
+    let checked = module(concat!(
+        "const fn changed<V>() -> delta<V?> => delta<V?>()\n",
+        "fn changed_node(value: i64) -> i64? {\n",
+        "    when { return changed() }\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    assert_eq!(
+        called(&checked, body(&checked, "changed_node")),
+        ["changed<i64>: delta<i64?>"]
+    );
+}
+
 /// Ordinary calls of a generic function whose result is its type
 /// parameter, in a nullable place, with arguments that say the parameter
 /// is not nullable: a binding, a function's result and a parameter, and

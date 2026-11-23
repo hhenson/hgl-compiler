@@ -1631,7 +1631,7 @@ fn unread_call_kind(arguments: Vec<hir::Argument>) -> ExprKind {
 }
 
 /// The callable expression, as it is written before the arguments.
-fn call_callee(node: &SyntaxNode) -> Option<SyntaxNode> {
+pub(super) fn call_callee(node: &SyntaxNode) -> Option<SyntaxNode> {
     if node.kind() == SyntaxKind::CallExpr {
         node.children().next()
     } else {
