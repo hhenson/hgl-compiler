@@ -388,10 +388,7 @@ impl Reader<'_> {
             .children()
             .find(|part| !is_type(part.kind()) && part.kind() != SyntaxKind::Error)
             .map(|size| self.list_size(&size));
-        Type::List {
-            element: Box::new(element),
-            size,
-        }
+        Type::list(element, size)
     }
 
     /// TYPE-10: "fixed sizes are nonnegative constants. `unbounded` is

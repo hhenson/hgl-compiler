@@ -186,11 +186,11 @@ pub enum Type {
     },
     /// `tuple<i64, str>`
     Tuple(Vec<Type>),
-    /// `list<f64>`, `list<f64, 3>` or `list<f64, unbounded>` (TYPE-10).
+    /// A growing or fixed-size list (TYPE-10).
     List {
         /// What the list holds.
         element: Box<Type>,
-        /// Its size; `None` for `list<T>`, which grows.
+        /// Its size. Both growing-list spellings use `None`.
         size: Option<Constant>,
     },
     /// `set<str>`
@@ -354,6 +354,14 @@ impl FunctionType {
 }
 
 impl Type {
+    /// TYPE-10: `list<T>` and `list<T, unbounded>` are one type.
+    pub(crate) fn list(element: Type, size: Option<Constant>) -> Self {
+        Self::List {
+            element: Box::new(element),
+            size: size.filter(|size| !matches!(size.value, ConstantValue::Unbounded)),
+        }
+    }
+
     /// True when `test` holds of this type or of a type inside it, at
     /// any depth: an element, a key, a value, a cell, a generic
     /// argument. `constant` is asked of each constant inside it: a
