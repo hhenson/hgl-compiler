@@ -875,7 +875,7 @@ transpiler: done
 
 analyser: partial
 
-- Direct native calls take a constant `str` pattern followed by positional and named packs. A generic value pattern is checked at its concrete call.
+- Direct native calls take a constant `str` pattern followed by positional and named packs. A generic value pattern and dependent argument types are checked together at their concrete call.
 - Left: passing an ordinary `const` parameter through as a pattern, and forwarding both packs through the graph and diagnostic candidates (#368, #434).
 
 ## FMT-2

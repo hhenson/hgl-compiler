@@ -55,7 +55,13 @@ impl Typer<'_> {
                     })
                 })
         };
-        let Some(ConstantValue::Str(text)) = constant else {
+        let text = match constant {
+            Some(ConstantValue::Str(text)) => Some(text),
+            // Deferred selection can retain a generic value in its
+            // typed argument even after the instance has bound it.
+            _ => formatting::constant_pattern_in(self.program, &pattern.value, &self.instance),
+        };
+        let Some(text) = text else {
             if (self.graph || self.value_code) && !self.is_fixed(&pattern.value, &[]) {
                 self.diagnostics.emit(error(
                     Category::Type,

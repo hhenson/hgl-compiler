@@ -8,6 +8,8 @@ use super::{argument, hgl_in, scratch, sdk_named, text, write};
 const SOURCE: &str = r#"module demo.formatting
 
 const fn display<const Pattern: str>(value: f64) -> str => format(Pattern, value)
+const fn display_value<const Pattern: str, T>(value: T) -> str =>
+    format("value " + Pattern, value)
 
 fn counted(value: i64) -> i64 {
     when {
@@ -27,6 +29,7 @@ test stream_bytes {
 
 test typed_formats {
     assert display<"{:.2f}">(1.25) == "1.25"
+    assert display_value<"{:x}">(42) == "value 2a"
     let least = -9223372036854775807us - 1us
     assert format("{:%[S].9}", least) == "-9223372036854.775808000"
     let boundary = @0001-01-01T19:59:05.224192Z

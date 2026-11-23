@@ -45,6 +45,33 @@ fn integer_character_formatting_is_temporarily_unavailable() {
     );
 }
 
+/// FMT-1, FMT-3, FMT-4 and FMT-9: check a generic format pattern
+/// against the argument types of the same instance.
+#[test]
+fn formatting_checks_a_generic_pattern_and_argument_together() {
+    let checked = with_core(concat!(
+        "const fn show<const P: str, T>(value: T) -> str => format(P, value)\n",
+        "test mark { assert show<\"{*}\">(1) == \"1\" }\n",
+        "test hex { assert show<\"{:x}\">(1.5) == \"1.5\" }\n",
+        "test character { assert show<\"{:c}\">(65) == \"A\" }\n",
+        "test clock { assert show<\"{engine_time}\">(1) == \"1\" }\n",
+        "test unused { assert show<\"none\">(1) == \"none\" }\n",
+        "test valid { assert show<\"{:x}\">(42) == \"2a\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:20 type/format.specifier FMT-9",
+            "m.hgl:4:19 type/format.specifier FMT-4",
+            "m.hgl:5:25 type/format.specifier FMT-4",
+            "m.hgl:6:21 type/format.argument FMT-9",
+            "m.hgl:7:22 type/format.unused FMT-3",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 /// The module the compiler supplies is the pinned core's, whole: every
 /// `.hgl` file under `spec/hgl_core/hgl`, with its text as it stands
 /// there. A pin that adds a file fails this until

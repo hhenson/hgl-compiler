@@ -5,9 +5,12 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
+use hgl_diagnostics::Location;
+
 use crate::hir::{Argument, BinaryOperator, Callee, Expr, ExprKind, PackKey, Value};
 use crate::{
-    Argument as GenericArgument, DeclarationKind, Detail, Program, Role, Scalar, Signature, Type,
+    Argument as GenericArgument, ConstantValue, DeclarationKind, Detail, Program, Role, Scalar,
+    Signature, Type,
 };
 
 /// A literal piece or a place in a Core format string.
@@ -320,14 +323,35 @@ pub fn marked_payload<'a>(program: &Program, ty: &'a Type) -> Option<&'a Type> {
 /// A format pattern already known in the typed program. Named constants
 /// and additions of constant strings have the same text as their literals.
 pub fn constant_pattern(program: &Program, value: &Expr) -> Option<String> {
+    constant_pattern_in(program, value, &[])
+}
+
+/// The pattern in an instance, including its bound generic values (FMT-1).
+pub(crate) fn constant_pattern_in(
+    program: &Program,
+    value: &Expr,
+    instance: &[(Location, GenericArgument)],
+) -> Option<String> {
     fn append(
         program: &Program,
         value: &Expr,
+        instance: &[(Location, GenericArgument)],
         text: &mut String,
         seen: &mut HashSet<(usize, usize)>,
     ) -> Option<()> {
         match &value.kind {
             ExprKind::Literal(Value::Str(value)) => text.push_str(value),
+            ExprKind::GenericValue { at, .. } => {
+                let (_, GenericArgument::Constant(given)) =
+                    instance.iter().find(|(parameter, _)| parameter == at)?
+                else {
+                    return None;
+                };
+                let ConstantValue::Str(value) = &given.value else {
+                    return None;
+                };
+                text.push_str(value);
+            }
             ExprKind::Constant {
                 module,
                 declaration,
@@ -340,22 +364,22 @@ pub fn constant_pattern(program: &Program, value: &Expr) -> Option<String> {
                     .constants
                     .get(*declaration)?
                     .as_ref()?;
-                append(program, &defined.value, text, seen)?;
+                append(program, &defined.value, instance, text, seen)?;
                 seen.remove(&key);
             }
             _ => {
                 let (BinaryOperator::Add, left, right) = value.kind.binary()? else {
                     return None;
                 };
-                append(program, left, text, seen)?;
-                append(program, right, text, seen)?;
+                append(program, left, instance, text, seen)?;
+                append(program, right, instance, text, seen)?;
             }
         }
         Some(())
     }
 
     let mut pattern = String::new();
-    append(program, value, &mut pattern, &mut HashSet::new())?;
+    append(program, value, instance, &mut pattern, &mut HashSet::new())?;
     Some(pattern)
 }
 
