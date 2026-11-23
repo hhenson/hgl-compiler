@@ -43,17 +43,20 @@
 #undef key
 #undef lhs
 #undef lifted_calls_and_branches_are_given_any_value
+#undef lifted_signs
 #undef looked
 #undef m
 #undef member
 #undef member_of
 #undef members
 #undef n
+#undef native_signs
 #undef nodes_are_given_any_value
 #undef note
 #undef noted_bid
 #undef nudged
 #undef over
+#undef over_value
 #undef pair_or
 #undef paired
 #undef probe
@@ -663,8 +666,7 @@ namespace w_
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> above(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Float>> x, const ::std::tuple<::hgraph::Float, ::hgraph::Float>& by)
 {
     return [&]() {
-        // hgraph issue 1866: wired as a node of its own, since hgraph would take
-        // two whose configurations hold `0.0` and `-0.0` for one.
+        // Keep signed zeros in opaque configurations distinct (NUM-2).
         ::hgraph::Value scalars_{::hgraph::value_type_for_wiring(::hgraph::StaticNodeSignature<::hgl::demo::configurations::m_::n_::above::impl_>::scalar_schema(), wiring_.realization_options())};
         {
             auto configured_ = scalars_.as_bundle().begin_mutation();
@@ -726,14 +728,14 @@ namespace w_
 
 namespace n_::over
 {
-// over(x: f64, const by: f64) -> bool (node), module demo.configurations, line 124
+// over(x: f64, const by: f64) -> bool (node), module demo.configurations, line 122
 struct impl_
 {
     static constexpr auto name = "demo.configurations::over";
 
     static void eval([[maybe_unused]] ::hgraph::In<"x", ::hgraph::TS<::hgraph::Float>> x, [[maybe_unused]] ::hgraph::Scalar<"by", ::hgraph::Float> by, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_)
     {
-        // when, line 125 (TIME-3)
+        // when, line 123 (TIME-3)
         {
             out_.set(::hglrt::gt__T_T<::hgraph::Float>(::hglrt::div__f64_f64<::hglrt::ZeroPolicy::ieee>(::hglrt::checked_value(x), by.value()), 0.0));
             return;
@@ -743,31 +745,87 @@ struct impl_
 }  // namespace n_::over
 namespace w_
 {
-// over(x: f64, const by: f64) -> bool (node), module demo.configurations, line 124
+// over(x: f64, const by: f64) -> bool (node), module demo.configurations, line 122
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> over(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Float>> x, ::hgraph::Float by)
 {
-    return [&]() {
-        // hgraph issue 1866: wired as a node of its own, since hgraph would take
-        // two whose configurations hold `0.0` and `-0.0` for one.
-        ::hgraph::Value scalars_{::hgraph::value_type_for_wiring(::hgraph::StaticNodeSignature<::hgl::demo::configurations::m_::n_::over::impl_>::scalar_schema(), wiring_.realization_options())};
+    return ::hgraph::wire<::hgl::demo::configurations::m_::n_::over::impl_>(wiring_, x, by);
+}
+}  // namespace w_
+
+namespace n_::native_signs
+{
+// native_signs(x: f64) -> bool (graph), module demo.configurations, line 127
+struct impl_
+{
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Float>> x)
+    {
+        return [&] { const auto argument_00_ = ::hgl::demo::configurations::m_::w_::over(wiring_, x, 0.0); const auto argument_01_ = ::hgl::demo::configurations::m_::w_::over(wiring_, x, ::hglrt::neg__f64(0.0)); return ::hgl::demo::configurations::m_::w_::differ(wiring_, argument_00_, argument_01_); }();
+    }
+};
+}  // namespace n_::native_signs
+namespace w_
+{
+// native_signs(x: f64) -> bool (graph), module demo.configurations, line 127
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> native_signs(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Float>> x)
+{
+    return ::hgl::demo::configurations::m_::n_::native_signs::impl_::compose(wiring_, x);
+}
+}  // namespace w_
+
+// over_value(x: f64, by: f64) -> bool (`const fn`), module demo.configurations, line 129
+::hgraph::Bool over_value([[maybe_unused]] ::hgraph::Float x, [[maybe_unused]] ::hgraph::Float by)
+{
+    return ::hglrt::gt__T_T<::hgraph::Float>(::hglrt::div__f64_f64<::hglrt::ZeroPolicy::ieee>(x, by), 0.0);
+}
+
+namespace n_::lifted_signs
+{
+// lifted_signs(x: f64) -> bool (graph), module demo.configurations, line 131
+struct impl_
+{
+    // The call of `over_value` on line 131, lifted (FN-6).
+    struct lifted_00_
+    {
+        static constexpr auto name = "demo.configurations:over_value";
+        static void eval([[maybe_unused]] ::hgraph::In<"x", ::hgraph::TS<::hgraph::Float>> x, [[maybe_unused]] ::hgraph::Scalar<"by", ::hgraph::Float> by, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_)
         {
-            auto configured_ = scalars_.as_bundle().begin_mutation();
-            configured_["by"].set(by);
+            out_.set(::hgl::demo::configurations::m_::over_value(::hglrt::checked_value(x), by.value()));
+            return;
         }
-        ::hgraph::NodeBuilder builder_;
-        builder_.implementation<::hgl::demo::configurations::m_::n_::over::impl_>();
-        const ::std::array<::hgraph::WiringPortRef, 1> inputs_{x.erased()};
-        return ::hgraph::Port<::hgraph::TS<::hgraph::Bool>>{wiring_, wiring_.add_unique_node(typeid(::hgl::demo::configurations::m_::n_::over::impl_), ::std::move(builder_), ::std::span<const ::hgraph::WiringPortRef>{inputs_}, ::std::move(scalars_))};
-    }();
+    };
+
+    // The call of `over_value` on line 131, lifted (FN-6).
+    struct lifted_01_
+    {
+        static constexpr auto name = "demo.configurations:over_value";
+        static void eval([[maybe_unused]] ::hgraph::In<"x", ::hgraph::TS<::hgraph::Float>> x, [[maybe_unused]] ::hgraph::Scalar<"by", ::hgraph::Float> by, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out_)
+        {
+            out_.set(::hgl::demo::configurations::m_::over_value(::hglrt::checked_value(x), by.value()));
+            return;
+        }
+    };
+
+    static ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Float>> x)
+    {
+        return [&] { const auto argument_02_ = ::hgraph::wire<lifted_00_>(wiring_, x, static_cast<::hgraph::Float>(::hglrt::neg__f64(0.0))); const auto argument_03_ = ::hgraph::wire<lifted_01_>(wiring_, x, static_cast<::hgraph::Float>(0.0)); return ::hgl::demo::configurations::m_::w_::differ(wiring_, argument_02_, argument_03_); }();
+    }
+};
+}  // namespace n_::lifted_signs
+namespace w_
+{
+// lifted_signs(x: f64) -> bool (graph), module demo.configurations, line 131
+::hgraph::Port<::hgraph::TS<::hgraph::Bool>> lifted_signs(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Float>> x)
+{
+    return ::hgl::demo::configurations::m_::n_::lifted_signs::impl_::compose(wiring_, x);
 }
 }  // namespace w_
 
 namespace n_::captured_over
 {
-// captured_over(x: f64, const by: f64) -> bool (graph), module demo.configurations, line 128
+// captured_over(x: f64, const by: f64) -> bool (graph), module demo.configurations, line 134
 struct impl_
 {
-    // The `capture` of `over` on line 128 (ERR-7): the graph hgraph's
+    // The `capture` of `over` on line 134 (ERR-7): the graph hgraph's
     // `try_except_` evaluates as its child.
     struct captured_02_
     {
@@ -786,7 +844,7 @@ struct impl_
 }  // namespace n_::captured_over
 namespace w_
 {
-// captured_over(x: f64, const by: f64) -> bool (graph), module demo.configurations, line 128
+// captured_over(x: f64, const by: f64) -> bool (graph), module demo.configurations, line 134
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> captured_over(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Float>> x, ::hgraph::Float by)
 {
     return ::hgl::demo::configurations::m_::n_::captured_over::impl_::compose(wiring_, x, by);
@@ -795,7 +853,7 @@ namespace w_
 
 namespace n_::captured_signs
 {
-// captured_signs(x: f64) -> bool (graph), module demo.configurations, line 130
+// captured_signs(x: f64) -> bool (graph), module demo.configurations, line 136
 struct impl_
 {
     static ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Float>> x)
@@ -806,14 +864,14 @@ struct impl_
 }  // namespace n_::captured_signs
 namespace w_
 {
-// captured_signs(x: f64) -> bool (graph), module demo.configurations, line 130
+// captured_signs(x: f64) -> bool (graph), module demo.configurations, line 136
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> captured_signs(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Float>> x)
 {
     return ::hgl::demo::configurations::m_::n_::captured_signs::impl_::compose(wiring_, x);
 }
 }  // namespace w_
 
-// member_of(x: i64, members: set<i64>) -> bool (`const fn`), module demo.configurations, line 133
+// member_of(x: i64, members: set<i64>) -> bool (`const fn`), module demo.configurations, line 139
 ::hgraph::Bool member_of([[maybe_unused]] ::hgraph::Int x, [[maybe_unused]] const ::hglrt::set<::hgraph::Int>& members)
 {
     for ([[maybe_unused]] const ::hgraph::Int& m : members)
@@ -828,10 +886,10 @@ namespace w_
 
 namespace n_::checked
 {
-// checked(x: i64) -> bool (graph), module demo.configurations, line 140
+// checked(x: i64) -> bool (graph), module demo.configurations, line 146
 struct impl_
 {
-    // The call of `member_of` on line 140, lifted (FN-6).
+    // The call of `member_of` on line 146, lifted (FN-6).
     struct lifted_00_
     {
         static constexpr auto name = "demo.configurations:member_of";
@@ -850,14 +908,14 @@ struct impl_
 }  // namespace n_::checked
 namespace w_
 {
-// checked(x: i64) -> bool (graph), module demo.configurations, line 140
+// checked(x: i64) -> bool (graph), module demo.configurations, line 146
 ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> checked(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x)
 {
     return ::hgl::demo::configurations::m_::n_::checked::impl_::compose(wiring_, x);
 }
 }  // namespace w_
 
-// looked(x: str, book: dict<str, i64>) -> i64 (`const fn`), module demo.configurations, line 142
+// looked(x: str, book: dict<str, i64>) -> i64 (`const fn`), module demo.configurations, line 148
 ::hgraph::Int looked([[maybe_unused]] const ::hgraph::Str& x, [[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Int>& book)
 {
     [[maybe_unused]] const ::std::optional<::hgraph::Int> found = ::hglrt::result_or_null(::hglrt::get_dict_result<::hgraph::Str, ::hgraph::Int>(book, x));
@@ -870,10 +928,10 @@ namespace w_
 
 namespace n_::booked
 {
-// booked(x: str) -> i64 (graph), module demo.configurations, line 148
+// booked(x: str) -> i64 (graph), module demo.configurations, line 154
 struct impl_
 {
-    // The call of `looked` on line 148, lifted (FN-6).
+    // The call of `looked` on line 154, lifted (FN-6).
     struct lifted_00_
     {
         static constexpr auto name = "demo.configurations:looked";
@@ -892,7 +950,7 @@ struct impl_
 }  // namespace n_::booked
 namespace w_
 {
-// booked(x: str) -> i64 (graph), module demo.configurations, line 148
+// booked(x: str) -> i64 (graph), module demo.configurations, line 154
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> booked(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> x)
 {
     return ::hgl::demo::configurations::m_::n_::booked::impl_::compose(wiring_, x);
@@ -901,14 +959,14 @@ namespace w_
 
 namespace n_::summed
 {
-// summed(key: str, const members: set<i64>) -> i64 (node), module demo.configurations, line 151
+// summed(key: str, const members: set<i64>) -> i64 (node), module demo.configurations, line 157
 struct impl_
 {
     static constexpr auto name = "demo.configurations::summed";
 
     static void eval([[maybe_unused]] ::hgraph::In<"key", ::hgraph::TS<::hgraph::Str>> key, [[maybe_unused]] ::hgraph::Scalar<"members", ::hglrt::configured<::hglrt::set<::hgraph::Int>>> members, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        // when, line 152 (TIME-3)
+        // when, line 158 (TIME-3)
         {
             [[maybe_unused]] ::hgraph::Int n = 0;
             for ([[maybe_unused]] const ::hgraph::Int& m : members.value().held)
@@ -923,7 +981,7 @@ struct impl_
 }  // namespace n_::summed
 namespace w_
 {
-// summed(key: str, const members: set<i64>) -> i64 (node), module demo.configurations, line 151
+// summed(key: str, const members: set<i64>) -> i64 (node), module demo.configurations, line 157
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> summed(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key, const ::hglrt::set<::hgraph::Int>& members)
 {
     return ::hgraph::wire<::hgl::demo::configurations::m_::n_::summed::impl_>(wiring_, key, ::hglrt::configured<::hglrt::set<::hgraph::Int>>{members});
@@ -932,14 +990,14 @@ namespace w_
 
 namespace n_::fallback
 {
-// fallback(key: str, const values: list<i64>) -> i64 (node), module demo.configurations, line 159
+// fallback(key: str, const values: list<i64>) -> i64 (node), module demo.configurations, line 165
 struct impl_
 {
     static constexpr auto name = "demo.configurations::fallback";
 
     static void eval([[maybe_unused]] ::hgraph::In<"key", ::hgraph::TS<::hgraph::Str>> key, [[maybe_unused]] ::hgraph::Scalar<"values", ::hglrt::list<::hgraph::Int>> values, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        // when, line 160 (TIME-3)
+        // when, line 166 (TIME-3)
         {
             out_.set(::hglrt::item(values.value(), 0));
             return;
@@ -949,7 +1007,7 @@ struct impl_
 }  // namespace n_::fallback
 namespace w_
 {
-// fallback(key: str, const values: list<i64>) -> i64 (node), module demo.configurations, line 159
+// fallback(key: str, const values: list<i64>) -> i64 (node), module demo.configurations, line 165
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> fallback(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key, const ::hglrt::list<::hgraph::Int>& values)
 {
     return ::hgraph::wire<::hgl::demo::configurations::m_::n_::fallback::impl_>(wiring_, key, values);
@@ -958,17 +1016,17 @@ namespace w_
 
 namespace n_::branch
 {
-// branch(flag: bool, key: str, const members: set<i64>) -> i64 (graph), module demo.configurations, line 163
+// branch(flag: bool, key: str, const members: set<i64>) -> i64 (graph), module demo.configurations, line 169
 struct impl_
 {
-    // The `if` on line 164 over a connection (CTRL-2, CTRL-13 to CTRL-15): a child
+    // The `if` on line 170 over a connection (CTRL-2, CTRL-13 to CTRL-15): a child
     // graph for each branch, of which hgraph's `switch_` runs the one selected.
     struct switch_00_
     {
         // The branch selected while the condition is `true`.
         struct branch_00_
         {
-            static constexpr auto name = "demo.configurations:if on line 164";
+            static constexpr auto name = "demo.configurations:if on line 170";
             static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key, [[maybe_unused]] ::hgraph::Scalar<"members", ::hglrt::configured<::hglrt::set<::hgraph::Int>>> members)
             {
                 return ::hgl::demo::configurations::m_::w_::summed(wiring_, key, members.value().held);
@@ -978,7 +1036,7 @@ struct impl_
         // The branch selected while the condition is `false`.
         struct branch_01_
         {
-            static constexpr auto name = "demo.configurations:if on line 164";
+            static constexpr auto name = "demo.configurations:if on line 170";
             static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose([[maybe_unused]] ::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key, [[maybe_unused]] ::hgraph::Scalar<"members", ::hglrt::configured<::hglrt::set<::hgraph::Int>>> members)
             {
                 return ::hgl::demo::configurations::m_::w_::fallback(wiring_, key, ::hglrt::list<::hgraph::Int>{7});
@@ -1003,7 +1061,7 @@ struct impl_
 }  // namespace n_::branch
 namespace w_
 {
-// branch(flag: bool, key: str, const members: set<i64>) -> i64 (graph), module demo.configurations, line 163
+// branch(flag: bool, key: str, const members: set<i64>) -> i64 (graph), module demo.configurations, line 169
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> branch(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TS<::hgraph::Bool>> flag, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key, const ::hglrt::set<::hgraph::Int>& members)
 {
     return ::hgl::demo::configurations::m_::n_::branch::impl_::compose(wiring_, flag, key, members);
@@ -1231,10 +1289,28 @@ void configurations_that_differ_are_two_nodes()
     [&] {
         const auto left_010_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         const ::hgraph::Port<::hgraph::TS<::hgraph::Float>> input_09_ = ::hgl::core::m_::w_::i_::replay::of_f64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Float>{1.0}, start_));
-        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::configurations::m_::w_::captured_signs(wiring_, input_09_), ::hgraph::Str{::hglrt::testing::run_output});
+        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::configurations::m_::w_::native_signs(wiring_, input_09_), ::hgraph::Str{::hglrt::testing::run_output});
     });
         const auto right_011_ = ::hglrt::testing::Dense<::hgraph::Bool>{true};
         ::hglrt::testing::expect_same(left_010_, right_011_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_013_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Float>> input_012_ = ::hgl::core::m_::w_::i_::replay::of_f64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Float>{1.0}, start_));
+        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::configurations::m_::w_::lifted_signs(wiring_, input_012_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_014_ = ::hglrt::testing::Dense<::hgraph::Bool>{true};
+        ::hglrt::testing::expect_same(left_013_, right_014_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_016_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Float>> input_015_ = ::hgl::core::m_::w_::i_::replay::of_f64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Float>{1.0}, start_));
+        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::configurations::m_::w_::captured_signs(wiring_, input_015_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_017_ = ::hglrt::testing::Dense<::hgraph::Bool>{true};
+        ::hglrt::testing::expect_same(left_016_, right_017_);
     }();
 }
 

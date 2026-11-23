@@ -1220,8 +1220,8 @@ fn reflected_eval_inputs_are_replayed_on_the_sdk() {
 /// that holds a list, one that holds a set, one with an optional field,
 /// nullables and lists of them, and a nullable tested
 /// against null (ERR-12), given to sources, nodes, lifted calls and a
-/// branch; and two nodes of one input whose configurations differ, by a
-/// value or by the sign of a zero (hgraph issue 1866), which stay two.
+/// branch. It also checks that a native Float and an opaque tuple each
+/// preserve both zero signs in separate nodes (NUM-2).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn configurations_run_on_the_sdk() {
