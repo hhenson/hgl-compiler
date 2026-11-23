@@ -139,7 +139,17 @@ impl Reader<'_> {
             SyntaxKind::TupleType => Type::Tuple(
                 node.children()
                     .filter(|element| is_type(element.kind()))
-                    .map(|element| self.type_(&element, position.part()))
+                    // GEN-10: a tuple's element list expands type packs.
+                    // Its nested element types still require one type.
+                    .map(|element| {
+                        self.type_(
+                            &element,
+                            Position {
+                                pack: true,
+                                ..position.part()
+                            },
+                        )
+                    })
                     .collect(),
             ),
             SyntaxKind::ListType => self.list(node, position),

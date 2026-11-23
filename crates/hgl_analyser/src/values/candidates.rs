@@ -450,6 +450,14 @@ impl<'a> Typer<'a> {
                         (whole(&read.ty) && !names_parameter(&read.ty)).then(|| read.ty.clone())
                     },
                     callable: &|_| None,
+                    category: &|node, category| {
+                        (node.kind() == SyntaxKind::NamedType
+                            && node.text().to_string().trim() == generic.name)
+                            .then(|| {
+                                super::requirements::category_holds(self.program, ty, category)
+                            })
+                            .flatten()
+                    },
                     unvalued: &std::cell::Cell::new(false),
                 };
                 holds(condition, &partial) == Some(false)
@@ -1388,6 +1396,12 @@ impl<'a> Typer<'a> {
             type_of: &type_of,
             written: &written,
             callable: &callable,
+            category: &|node, category| {
+                let ty = crate::syntax::name_token(node)
+                    .and_then(|name| type_of(name.text()))
+                    .or_else(|| written(node))?;
+                super::requirements::category_holds(self.program, &ty, category)
+            },
             unvalued: &unvalued,
         };
         match holds(&condition, &condition_of) {
@@ -3036,10 +3050,11 @@ fn instance<'s>(
         }
     }
     let map: Vec<(Location, &Argument)> = own.iter().copied().zip(&resolved).collect();
+    let pack_types = PackTypes::new(generics, &type_packs);
     let mut taken = signature.clone();
     for parameter in &mut taken.parameters {
         if type_pack(parameter, generics).is_none() {
-            parameter.ty = placed(substitute_within(&parameter.ty, &map), &own);
+            parameter.ty = placed(pack_types.project(&parameter.ty, &map).ok()?, &own);
         }
     }
     // A generic value parameter's type may name another generic
@@ -3052,7 +3067,9 @@ fn instance<'s>(
     taken.result = taken
         .result
         .as_ref()
-        .map(|result| placed(substitute_within(result, &map), &own));
+        .map(|result| pack_types.project(result, &map).map(|ty| placed(ty, &own)))
+        .transpose()
+        .ok()?;
     Some((
         std::borrow::Cow::Owned(taken),
         resolved,
@@ -3215,6 +3232,18 @@ fn candidate_bindings(
                 by_argument[generic] |= !was && found[generic].is_some();
             }
         }
+    }
+    for pack in
+        super::inference::tuple_pack_bindings(generics, &mut found, &typer.signature.generics)
+    {
+        if let GenericKind::Pack { minimum, maximum } = generics[pack.parameter].kind {
+            let count = pack.types.len() as u64;
+            if count < minimum || maximum.is_some_and(|upper| count > upper) {
+                return None;
+            }
+        }
+        type_packs.retain(|other| other.parameter != pack.parameter);
+        type_packs.push(pack);
     }
     type_packs.sort_by_key(|pack| pack.parameter);
     // A generic value parameter's own type may name a type parameter:

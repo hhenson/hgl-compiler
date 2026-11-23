@@ -10,7 +10,7 @@ use super::arguments::{Assigned, Slot, Takes};
 use super::candidates::Given;
 use super::function_arguments::CallbackInputs;
 use super::inference::{pack_bounds, type_pack};
-use crate::declared::{substitute_with_members, weight};
+use crate::declared::{substitute_with_packs, weight};
 use crate::hir::{Callee, Expr, ExprKind, PackKey, ReflectedInputs, TypePackArgument};
 use crate::syntax::child;
 use crate::types::{
@@ -36,8 +36,11 @@ impl<'p> PackTypes<'p> {
                 .collect(),
             heaviest: packs
                 .iter()
-                .flat_map(|pack| &pack.types)
-                .map(weight)
+                .map(|pack| {
+                    pack.types
+                        .iter()
+                        .fold(1usize, |sum, ty| sum.saturating_add(weight(ty)))
+                })
                 .max()
                 .unwrap_or(1),
         }
@@ -49,6 +52,30 @@ impl<'p> PackTypes<'p> {
             return;
         };
         if let Some((_, given)) = self.bindings.iter().find(|(at, _)| *at == source) {
+            if pack
+                .types
+                .iter()
+                .any(|ty| matches!(ty, Type::Parameter { at, .. } if *at == source))
+            {
+                // GEN-10: the marker gives a tuple capture's splice point;
+                // unlike a reflected suffix, it can have entries after it.
+                pack.types = pack
+                    .types
+                    .iter()
+                    .flat_map(|ty| {
+                        if matches!(ty, Type::Parameter { at, .. } if *at == source) {
+                            given.types.clone()
+                        } else {
+                            vec![ty.clone()]
+                        }
+                    })
+                    .collect();
+                pack.keys = (0..pack.types.len())
+                    .map(crate::hir::PackKey::Position)
+                    .collect();
+                pack.forwarded_from = given.forwarded_from;
+                return;
+            }
             if let (Some(receiving), Some(original)) = (&mut pack.reflected, &given.reflected) {
                 // The original fixed inputs and the reflected suffix are
                 // one sequence. GEN-17 takes the suffix left by this template.
@@ -104,7 +131,24 @@ impl<'p> PackTypes<'p> {
             fault.borrow_mut().get_or_insert(fault_here);
             Some(Type::Unknown)
         };
-        let ty = substitute_with_members(ty, map, &member, self.heaviest);
+        let sequence = |at| {
+            let (_, pack) = self.bindings.iter().find(|(declared, _)| *declared == at)?;
+            let mut types = pack.types.clone();
+            if let Some(source) = pack.forwarded_from
+                && !types
+                    .iter()
+                    .any(|ty| matches!(ty, Type::Parameter { at, .. } if *at == source))
+            {
+                // A forwarded suffix remains symbolic until its caller
+                // supplies it; the known prefix keeps its order.
+                types.push(Type::Parameter {
+                    name: "types".to_string(),
+                    at: source,
+                });
+            }
+            Some(types)
+        };
+        let ty = substitute_with_packs(ty, map, &member, &sequence, self.heaviest);
         fault.into_inner().map_or(Ok(ty), Err)
     }
 

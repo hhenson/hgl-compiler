@@ -370,7 +370,20 @@ impl<'a> Typer<'a> {
             .parameters
             .iter()
             .find(|parameter| parameter.pack == Some(Pack::Positional))
-            .and_then(|parameter| type_pack(parameter, generics));
+            .and_then(|parameter| type_pack(parameter, generics))
+            .or_else(|| {
+                first_pack.filter(|&index| {
+                    signature.parameters.iter().any(|parameter| {
+                        parameter.ty.any_part(
+                            &|part| {
+                                matches!(part, Type::Tuple(elements) if elements.iter()
+                    .any(|ty| bare_parameter(ty, generics) == Some(index)))
+                            },
+                            &|_| false,
+                        )
+                    })
+                })
+            });
         let written = given.map(|given| given.arguments.as_slice());
         let prefix = written.map(|written| {
             if positional.is_some() {
@@ -578,6 +591,10 @@ impl<'a> Typer<'a> {
         // The parameters being resolved. A place's type that still
         // names one once what was found is in place is not known.
         let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
+        if let Some((parameter, types)) = written_pack {
+            found[*parameter] = Some(Argument::Type(Type::Tuple(types.to_vec())));
+        }
+
         let dependent = callable.and_then(|(module, signature)| {
             dependent_slot(&self.program.modules[module], signature)
         });
@@ -859,7 +876,7 @@ impl<'a> Typer<'a> {
         }
         // A resolved callback determines its reflected types before
         // another place can use a keyed member of those types (GEN-17).
-        let type_packs = callable.map_or_else(Vec::new, |(module, signature)| {
+        let mut type_packs = callable.map_or_else(Vec::new, |(module, signature)| {
             let unresolved = Argument::Type(Type::Unknown);
             let map: Vec<_> = generics
                 .iter()
@@ -880,6 +897,37 @@ impl<'a> Typer<'a> {
             {
                 infer(patterns[index], &value.ty, generics, &mut found);
             }
+        }
+        for pack in tuple_pack_bindings(generics, &mut found, &self.signature.generics) {
+            if pack.forwarded_from.is_none()
+                && let GenericKind::Pack { minimum, maximum } = generics[pack.parameter].kind
+            {
+                self.check_pack_count_at(
+                    Location::new(self.file, name.span()),
+                    &generics[pack.parameter].name,
+                    (minimum, maximum),
+                    pack.types.len() as u64,
+                );
+            }
+            if written_pack.is_none_or(|(parameter, _)| parameter != pack.parameter) {
+                for (slot, input) in slots.iter().enumerate() {
+                    if input.type_pack == Some(pack.parameter) {
+                        let count = assigned
+                            .iter()
+                            .filter(|entry| entry.slot == Some(slot))
+                            .count() as u64;
+                        let length = pack.types.len() as u64;
+                        self.check_pack_count_at(
+                            Location::new(self.file, name.span()),
+                            &generics[pack.parameter].name,
+                            (length, Some(length)),
+                            count,
+                        );
+                    }
+                }
+            }
+            type_packs.retain(|other| other.parameter != pack.parameter);
+            type_packs.push(pack);
         }
         let pack_types = PackTypes::new(generics, &type_packs);
         // Each argument now takes its place with the resolved parameters.
@@ -932,7 +980,15 @@ impl<'a> Typer<'a> {
                 };
                 let written_type = written_pack
                     .filter(|(generic, _)| slots[index].type_pack == Some(*generic))
-                    .and_then(|(_, types)| types.get(pack.as_ref()?.0));
+                    .and_then(|(_, types)| types.get(pack.as_ref()?.0))
+                    .or_else(|| {
+                        let generic = slots[index].type_pack?;
+                        type_packs
+                            .iter()
+                            .find(|bound| bound.parameter == generic)?
+                            .types
+                            .get(pack.as_ref()?.0)
+                    });
                 let ty = match (written_type, pattern) {
                     (Some(ty), Type::Trace { .. }) => trace_input_type(ty.clone()),
                     (Some(ty), _) => ty.clone(),
@@ -981,7 +1037,7 @@ impl<'a> Typer<'a> {
                 // captured or reflected eval input stays a trace while
                 // its cells' type is settled (TST-5).
                 let unfound_type = match slot.type_pack {
-                    Some(parameter) => written_pack.is_none_or(|(given, _)| given != parameter),
+                    Some(_) => written_type.is_none(),
                     None => mentions(patterns[index], &unfound),
                 };
                 let placeless = *settled
@@ -1273,6 +1329,101 @@ pub(super) fn bare_parameter(ty: &Type, generics: &[GenericParameter]) -> Option
     }
 }
 
+/// GEN-10: a pack in a tuple captures a sequence, while an ordinary
+/// type parameter captures one element. A repeated pack keeps one length
+/// and one binding; unresolved distinct packs do not guess a partition.
+fn infer_tuple(
+    patterns: &[Type],
+    actuals: &[Type],
+    generics: &[GenericParameter],
+    found: &mut [Option<Argument>],
+) {
+    let pack = |ty: &Type| {
+        bare_parameter(ty, generics)
+            .filter(|&index| matches!(generics[index].kind, GenericKind::Pack { .. }))
+    };
+    let mut unknown = Vec::new();
+    let mut fixed = 0usize;
+    for pattern in patterns {
+        if let Some(index) = pack(pattern) {
+            if let Some(Argument::Type(Type::Tuple(types))) = &found[index] {
+                fixed = fixed.saturating_add(types.len());
+            } else {
+                unknown.push(index);
+            }
+        } else {
+            fixed = fixed.saturating_add(1);
+        }
+    }
+    let count = match unknown.first() {
+        Some(first)
+            if unknown.iter().all(|index| index == first)
+                && actuals.len() >= fixed
+                && (actuals.len() - fixed).is_multiple_of(unknown.len()) =>
+        {
+            (actuals.len() - fixed) / unknown.len()
+        }
+        None if actuals.len() == fixed => 0,
+        _ => return,
+    };
+    let mut position = 0;
+    for pattern in patterns {
+        if let Some(index) = pack(pattern) {
+            let length = match &found[index] {
+                Some(Argument::Type(Type::Tuple(types))) => types.len(),
+                _ => count,
+            };
+            let Some(types) = actuals.get(position..position + length) else {
+                return;
+            };
+            if found[index].is_none() {
+                found[index] = Some(Argument::Type(Type::Tuple(types.to_vec())));
+            }
+            position += length;
+        } else {
+            let Some(actual) = actuals.get(position) else {
+                return;
+            };
+            infer(pattern, actual, generics, found);
+            position += 1;
+        }
+    }
+}
+
+/// Move tuple-captured sequences into the same pack table used by value
+/// packs and reflection. Generic argument slots retain the existing unknown
+/// marker: a pack is never substituted as a single tuple-valued type.
+pub(super) fn tuple_pack_bindings(
+    generics: &[GenericParameter],
+    found: &mut [Option<Argument>],
+    enclosing: &[GenericParameter],
+) -> Vec<hir::TypePackArgument> {
+    let mut packs = Vec::new();
+    for (index, generic) in generics.iter().enumerate() {
+        if matches!(generic.kind, GenericKind::Pack { .. })
+            && let Some(Argument::Type(Type::Tuple(types))) = &mut found[index]
+        {
+            let forwarded = types.iter().find_map(|ty| {
+                let Type::Parameter { at, .. } = ty else {
+                    return None;
+                };
+                enclosing
+                    .iter()
+                    .any(|generic| {
+                        generic.at == *at && matches!(generic.kind, GenericKind::Pack { .. })
+                    })
+                    .then_some(*at)
+            });
+            let types = std::mem::take(types);
+            let mut captured = hir::TypePackArgument::positional(index, types);
+            captured.forwarded_from = forwarded;
+            packs.push(captured);
+            found[index] = Some(Argument::Type(Type::Unknown));
+        }
+    }
+    packs
+}
+
 /// Finds what generic parameters stand for from a field's type,
 /// `pattern`, and the type of the value the field is given, `actual`:
 /// `T` is `i64` when `list<T>` is given a `list<i64>`, and `N` is 2
@@ -1332,10 +1483,8 @@ pub(super) fn infer(
                 }
             }
         }
-        (Type::Tuple(patterns), Type::Tuple(actuals)) if patterns.len() == actuals.len() => {
-            for (pattern, actual) in patterns.iter().zip(actuals) {
-                infer(pattern, actual, generics, found);
-            }
+        (Type::Tuple(patterns), Type::Tuple(actuals)) => {
+            infer_tuple(patterns, actuals, generics, found);
         }
         (
             Type::List { element, size },

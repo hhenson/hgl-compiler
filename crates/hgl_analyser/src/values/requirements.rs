@@ -3314,6 +3314,109 @@ fn answered_in(
     }
 }
 
+/// GEN-3: only a nominal declaration has a category. An unresolved
+/// parameter can use facts stated by its own declaration's requirement.
+pub(super) fn category_holds(program: &Program, ty: &Type, category: SyntaxKind) -> Option<bool> {
+    if let Some(known) = known_category(ty, category) {
+        return Some(known);
+    }
+    let Type::Parameter { at, .. } = ty else {
+        return None;
+    };
+    for (index, module) in program.modules.iter().enumerate() {
+        for position in 0..module.declarations.len() {
+            let Some((parameters, condition)) = required(program, (index, position)) else {
+                continue;
+            };
+            if parameters.iter().any(|generic| generic.at == *at) {
+                let file = module.declarations[position].at.file;
+                return category_facts(&condition, module, file, *at, true)
+                    .into_iter()
+                    .find_map(|(stated, positive)| {
+                        if stated == category {
+                            Some(positive)
+                        } else if positive {
+                            Some(false)
+                        } else {
+                            None
+                        }
+                    });
+            }
+        }
+    }
+    None
+}
+
+fn known_category(ty: &Type, category: SyntaxKind) -> Option<bool> {
+    match ty {
+        Type::Unknown | Type::Parameter { .. } | Type::PackMember { .. } => None,
+        Type::Named { kind, .. } => Some(matches!(
+            (kind, category),
+            (NamedKind::Struct, SyntaxKind::KwStruct) | (NamedKind::Enum, SyntaxKind::KwEnum)
+        )),
+        _ => Some(false),
+    }
+}
+
+/// Facts implied by a true clause. Conjunction collects facts; a
+/// disjunction keeps only facts shared by both alternatives. Negation
+/// reverses these operations rather than turning a non-struct into an enum.
+fn category_facts(
+    node: &SyntaxNode,
+    module: &crate::Module,
+    file: FileId,
+    at: Location,
+    positive: bool,
+) -> Vec<(SyntaxKind, bool)> {
+    match node.kind() {
+        SyntaxKind::ConstraintParen => node.children().next().map_or_else(Vec::new, |inner| {
+            category_facts(&inner, module, file, at, positive)
+        }),
+        SyntaxKind::ConstraintNot => node.children().next().map_or_else(Vec::new, |inner| {
+            category_facts(&inner, module, file, at, !positive)
+        }),
+        SyntaxKind::ConstraintBinary => {
+            let mut children = node.children();
+            let (Some(left), Some(right)) = (children.next(), children.next()) else {
+                return Vec::new();
+            };
+            let mut left = category_facts(&left, module, file, at, positive);
+            let right = category_facts(&right, module, file, at, positive);
+            if has_token(node, SyntaxKind::AmpAmp) == positive {
+                left.extend(right);
+            } else {
+                left.retain(|fact| right.contains(fact));
+            }
+            left
+        }
+        SyntaxKind::ConstraintRelation if tokens(node).any(|token| token.text() == "in") => {
+            let mut children = node.children();
+            let (Some(left), Some(right)) = (children.next(), children.next()) else {
+                return Vec::new();
+            };
+            if right.kind() != SyntaxKind::ConstraintCategory {
+                return Vec::new();
+            }
+            let Some(name) = name_token(&left) else {
+                return Vec::new();
+            };
+            if !module.uses.iter().any(|used| used.at == Location::new(file, name.span())
+                && matches!(&used.binding, Binding::Local { at: declared, .. } if *declared == at)) {
+                return Vec::new();
+            }
+            vec![(
+                if has_token(&right, SyntaxKind::KwStruct) {
+                    SyntaxKind::KwStruct
+                } else {
+                    SyntaxKind::KwEnum
+                },
+                positive,
+            )]
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// What a candidate's condition is checked against at a call.
 pub(super) struct Condition<'c> {
     /// The value an option has at the call: what the call gives it, or
@@ -3333,6 +3436,8 @@ pub(super) struct Condition<'c> {
     /// Whether a named operator requirement written in the condition
     /// holds at the call (GEN-16). `None` when it cannot be told.
     pub(super) callable: &'c dyn Fn(&SyntaxNode) -> Option<bool>,
+    /// A category fact, including a caller's stated generic requirement.
+    pub(super) category: &'c dyn Fn(&SyntaxNode, SyntaxKind) -> Option<bool>,
     /// Set where a comparison is not told because a value it compares
     /// is one this compiler does not work out: a constant held by its
     /// name, or one not worked out. Such a constant is not taken as
@@ -3548,6 +3653,29 @@ fn requires_holds(
         };
         (place.constant)(node, Some(&ty))
     };
+    let category = |node: &SyntaxNode, category| {
+        let raw = (node.kind() == SyntaxKind::NamedType)
+            .then(|| name_token(node))
+            .flatten()
+            .and_then(|name| {
+                parameters
+                    .iter()
+                    .position(|generic| generic.name == name.text())
+            })
+            .and_then(|index| generics.get(index))
+            .and_then(|argument| match argument {
+                Argument::Type(ty) => Some(ty.clone()),
+                Argument::Constant(_) => None,
+            })
+            .or_else(|| {
+                let read = declared_in
+                    .written
+                    .iter()
+                    .find(|read| read.at.file == file && read.at.span.start == node.span().start)?;
+                Some(pack_types.project(&read.ty, &map).ok()?)
+            })?;
+        category_holds(program, &raw, category)
+    };
     holds_with_packs(
         condition,
         &Condition {
@@ -3556,6 +3684,7 @@ fn requires_holds(
             type_of: &type_of,
             written: &written,
             callable: place.callable,
+            category: &category,
             unvalued: place.unvalued,
         },
         Some(&PackScope {
@@ -3800,6 +3929,29 @@ fn holds_with_packs(
                     .then(|| operand.text().to_string().trim().to_string())
             };
             let within = tokens(node).any(|token| token.text() == "in");
+            if within && right.kind() == SyntaxKind::ConstraintCategory {
+                let category = if has_token(right, SyntaxKind::KwStruct) {
+                    SyntaxKind::KwStruct
+                } else {
+                    SyntaxKind::KwEnum
+                };
+                if option(left).and_then(|name| (of.value_of)(&name)).is_some()
+                    || (left.kind() != SyntaxKind::NamedType
+                        && !is_type(left.kind())
+                        && scope.is_some_and(|scope| (scope.constant)(left, None).is_some()))
+                {
+                    return Some(false);
+                }
+                let ty = option(left)
+                    .and_then(|name| (of.type_of)(&name))
+                    .or_else(|| (scope?.written)(left, keys));
+                if let Some(ty) = ty
+                    && let Some(held) = known_category(&ty, category)
+                {
+                    return Some(held);
+                }
+                return (of.category)(left, category);
+            }
             let key = |operand: &SyntaxNode| {
                 let name = option(operand)?;
                 keys.iter()

@@ -198,7 +198,19 @@ impl<'a> Typer<'a> {
             .filter(|(generic, _)| !matches!(generic.kind, GenericKind::Pack { .. }))
             .map(|(generic, argument)| (generic.at, argument))
             .collect::<Vec<_>>();
-        let taken = in_instance(signature, &map);
+        let mut taken = in_instance(signature, &map);
+        // GEN-10: ordinary specialization above keeps each scalar
+        // generic as one type; pack projection expands tuple sequences.
+        let packs = PackTypes::new(&signature.generics, &type_packs);
+        for parameter in &mut taken.parameters {
+            parameter.ty = packs.project(&parameter.ty, &map).ok()?;
+        }
+        taken.result = taken
+            .result
+            .as_ref()
+            .map(|ty| packs.project(ty, &map))
+            .transpose()
+            .ok()?;
         let actual = function_type(&taken, declared.kind.role() == Some(Role::Value));
         if matches_template(template, &actual) {
             let target = (module, declaration);
@@ -614,6 +626,22 @@ impl<'a> Typer<'a> {
             return None;
         }
         let mut type_packs: Vec<_> = pack.into_iter().collect();
+        for captured in super::inference::tuple_pack_bindings(
+            &signature.generics,
+            &mut found,
+            &self.signature.generics,
+        ) {
+            if let Some(written) = type_packs
+                .iter()
+                .find(|pack| pack.parameter == captured.parameter)
+            {
+                if written.types != captured.types {
+                    return None;
+                }
+            } else {
+                type_packs.push(captured);
+            }
+        }
         if template.named_pack.is_some() {
             // FN-8, GEN-8: the callback's own supplied entries determine
             // its type packs. A named pack with none supplied is empty.
@@ -659,6 +687,15 @@ impl<'a> Typer<'a> {
         }
         type_packs.sort_by_key(|pack| pack.parameter);
         for pack in &type_packs {
+            if let GenericKind::Pack { minimum, maximum } = signature.generics[pack.parameter].kind
+            {
+                self.check_pack_count_at(
+                    self.at(node),
+                    &signature.generics[pack.parameter].name,
+                    (minimum, maximum),
+                    pack.types.len() as u64,
+                );
+            }
             // The sequence is separate from the generic slot (GEN-8).
             found[pack.parameter] = Some(Argument::Type(Type::Unknown));
         }

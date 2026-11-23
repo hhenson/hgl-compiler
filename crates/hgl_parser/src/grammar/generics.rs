@@ -260,8 +260,15 @@ impl Parser<'_> {
         } else if self.is_relation() {
             self.start(ConstraintRelation);
             self.constraint_operand();
+            let membership = self.at_word("in");
             self.bump();
-            self.constraint_operand();
+            if membership && matches!(self.current(), KwStruct | KwEnum) {
+                // GEN-3: category keywords are no types or values, and
+                // are admitted only on this side of a membership.
+                self.leaf(ConstraintCategory);
+            } else {
+                self.constraint_operand();
+            }
             self.finish();
         } else if self.at(LParen) {
             self.start(ConstraintParen);

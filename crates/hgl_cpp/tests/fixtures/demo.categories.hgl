@@ -1,0 +1,61 @@
+module demo.categories
+
+struct Point {
+    x: f64
+    y: f64
+}
+
+struct Label {
+    text: str
+}
+
+operator shown<T>(value: T) -> str
+impl const fn shown<T>(value: T) -> str requires T in struct => "a struct"
+impl const fn shown(value: Point) -> str => "a point"
+impl const fn shown<...Ts>(value: tuple<Ts>) -> str => "a tuple"
+
+test selection {
+    assert shown(Label(text: "a")) == "a struct"
+    assert shown(Point(x: 1.0, y: 2.0)) == "a point"
+    assert shown((1, "a")) == "a tuple"
+}
+
+# GEN-3: enum membership is distinct from struct membership.
+enum Tag { first, second }
+operator kind<T>(value: T) -> str
+impl const fn kind<T>(value: T) -> str requires T in enum => "enum"
+impl const fn kind<T>(value: T) -> str requires T in struct => "struct"
+test nominal_categories {
+    assert kind(Tag.first) == "enum"
+    assert kind(Label(text: "a")) == "struct"
+}
+
+# GEN-10: ordinary specialization and an independently typed callback
+# retain the whole tuple sequence, with no extra tuple nesting.
+const fn echo<...Ts>(value: tuple<Ts>) -> tuple<Ts> => value
+const fn forward<...Us>(value: tuple<Us>) -> tuple<Us> => echo(value)
+const fn suffix<...Us>(value: tuple<Us, str>) -> tuple<Us, str> => echo(value)
+const fn prefix<...Us>(value: tuple<i64, Us>) -> tuple<i64, Us> => echo(value)
+const fn repeated<...Us>(value: tuple<Us, Us>) -> tuple<Us, Us> => echo(value)
+const fn apply(f: const fn(tuple<i64, str>) -> tuple<i64, str>, value: tuple<i64, str>) -> tuple<i64, str> => f(value)
+test specialized_tuples {
+    let direct: tuple<i64, str> = echo((1, "a"))
+    let forwarded: tuple<i64, str> = forward((2, "b"))
+    let callback: tuple<i64, str> = apply(echo, (3, "c"))
+    let last: tuple<i64, str> = suffix((4, "d"))
+    let first: tuple<i64, str, bool> = prefix((5, "e", true))
+    let twice: tuple<i64, str, i64, str> = repeated((6, "f", 7, "g"))
+    assert direct[0] == 1
+    assert forwarded[0] == 2
+    assert callback[0] == 3
+    assert last[0] == 4
+    assert first[1] == "e"
+    assert twice[2] == 7
+}
+
+# GEN-3 and GEN-5: concrete specialization still outranks a category.
+const fn forwarded_category<T>(value: T) -> str requires T in struct => shown(value)
+test category_instances {
+    assert forwarded_category(Label(text: "a")) == "a struct"
+    assert forwarded_category(Point(x: 1.0, y: 2.0)) == "a point"
+}
