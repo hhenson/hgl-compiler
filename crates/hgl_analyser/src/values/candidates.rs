@@ -915,7 +915,7 @@ impl<'a> Typer<'a> {
                 callee: Callee::Unread,
                 arguments,
                 form,
-                text_conversions: Box::default(),
+                text: None,
                 braced: Vec::new(),
                 lifted: false,
             };
@@ -1082,7 +1082,7 @@ impl<'a> Typer<'a> {
             },
             arguments,
             form,
-            text_conversions: Box::default(),
+            text: None,
             braced,
             lifted: false,
         };
@@ -1131,7 +1131,7 @@ impl<'a> Typer<'a> {
                 },
                 form,
                 arguments,
-                text_conversions: Box::default(),
+                text: None,
                 braced,
                 lifted: false,
             }

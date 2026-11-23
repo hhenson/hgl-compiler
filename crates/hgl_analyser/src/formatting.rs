@@ -320,13 +320,8 @@ pub fn marked_payload<'a>(program: &Program, ty: &'a Type) -> Option<&'a Type> {
     }
 }
 
-/// A format pattern already known in the typed program. Named constants
-/// and additions of constant strings have the same text as their literals.
-pub fn constant_pattern(program: &Program, value: &Expr) -> Option<String> {
-    constant_pattern_in(program, value, &[])
-}
-
-/// The pattern in an instance, including its bound generic values (FMT-1).
+/// A pattern known in the typed program, including its bound generic
+/// values and additions of constant strings (FMT-1).
 pub(crate) fn constant_pattern_in(
     program: &Program,
     value: &Expr,

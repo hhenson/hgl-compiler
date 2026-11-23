@@ -128,14 +128,12 @@ impl Emitter<'_> {
         let at = whole.at;
         // True for the call that is the whole of a statement.
         let statement = std::mem::take(&mut scope.statement_call);
-        let conversions = match &whole.kind {
-            ExprKind::Call {
-                text_conversions, ..
-            } => text_conversions.as_ref(),
-            _ => &[],
+        let text = match &whole.kind {
+            ExprKind::Call { text, .. } => text.as_deref(),
+            _ => None,
         };
         if let Some(signature) = hgl_analyser::formatting::value_signature(self.program, callee) {
-            return self.format_call(scope, callee, signature, arguments, conversions, whole);
+            return self.format_call(scope, callee, signature, arguments, text, whole);
         }
         if let [argument] = arguments
             && let Some(members) = hgl_analyser::formatting::collection_members(
@@ -144,6 +142,7 @@ impl Emitter<'_> {
                 &argument.value.ty,
             )
         {
+            let conversions = text.map_or(&[][..], |text| text.conversions.as_ref());
             return self.collection_text(scope, &argument.value, &members, conversions);
         }
         if let Callee::Anonymous(function) = callee {

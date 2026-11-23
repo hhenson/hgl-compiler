@@ -105,10 +105,16 @@ fn formatting_checks_a_pattern_returned_to_a_module_constant() {
         "const fn pattern() -> str => \"{:x}\"\n",
         "const P: str = pattern()\n",
         "const fn display() -> str => format(P, 1.5)\n",
+        "const fn prefix() -> str => \"{:\"\n",
+        "const Q: str = prefix() + \"x}\"\n",
+        "const fn joined() -> str => format(Q, 1.5)\n",
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:4:37 type/format.specifier FMT-4"],
+        [
+            "m.hgl:4:37 type/format.specifier FMT-4",
+            "m.hgl:7:36 type/format.specifier FMT-4",
+        ],
         "{}",
         checked.report,
     );

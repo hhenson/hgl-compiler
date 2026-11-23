@@ -227,7 +227,7 @@ impl Typer<'_> {
             callee: Callee::Unread,
             arguments,
             form: Form::Named,
-            text_conversions: Box::default(),
+            text: None,
             braced: Vec::new(),
             lifted: false,
         };

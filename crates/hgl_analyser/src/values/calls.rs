@@ -834,7 +834,7 @@ impl<'a> Typer<'a> {
                 callee,
                 arguments,
                 form: Form::Named,
-                text_conversions: Box::default(),
+                text: None,
                 braced: Vec::new(),
                 lifted: false,
             };
@@ -1136,7 +1136,7 @@ impl<'a> Typer<'a> {
             callee,
             arguments,
             form: Form::Named,
-            text_conversions: Box::default(),
+            text: None,
             braced: Vec::new(),
             lifted: false,
         };
@@ -1636,7 +1636,7 @@ fn unread_call_kind(arguments: Vec<hir::Argument>) -> ExprKind {
         callee: Callee::Unread,
         arguments,
         form: Form::Named,
-        text_conversions: Box::default(),
+        text: None,
         braced: Vec::new(),
         lifted: false,
     }

@@ -5,7 +5,7 @@
 use std::fmt::Write;
 
 use hgl_analyser::formatting::{self, ChronoPart, Piece};
-use hgl_analyser::hir::{Argument, Callee, Expr, ExprKind};
+use hgl_analyser::hir::{Argument, Callee, Expr, ExprKind, TextCall};
 use hgl_analyser::{Scalar, Signature, Type};
 use hgl_diagnostics::Location;
 use hgl_lower::calls::{LeftOut, left_out};
@@ -22,19 +22,23 @@ impl Emitter<'_> {
         callee: &Callee,
         signature: &Signature,
         arguments: &[Argument],
-        conversions: &[Option<Expr>],
+        text: Option<&TextCall>,
         whole: &Expr,
     ) -> String {
         let Some(pattern) = formatting::argument(signature, arguments, "fmt_str") else {
             return self.missing(whole.at, "a format call without a pattern");
         };
-        let Some(text) = formatting::constant_pattern(self.program, &pattern.value) else {
+        let Some(TextCall {
+            pattern: Some(text),
+            conversions,
+        }) = text
+        else {
             return self.missing(
                 pattern.value.at,
                 "a format pattern whose text is not known here",
             );
         };
-        let Ok(parts) = formatting::places(&text) else {
+        let Ok(parts) = formatting::places(text) else {
             return self.missing(pattern.value.at, "an unchecked format pattern");
         };
         self.piece.formatting = true;

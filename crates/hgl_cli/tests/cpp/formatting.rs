@@ -10,8 +10,8 @@ const SOURCE: &str = r#"module demo.formatting
 const fn display<const Pattern: str>(value: f64) -> str => format(Pattern, value)
 const fn display_value<const Pattern: str, T>(value: T) -> str =>
     format("value " + Pattern, value)
-const fn hex_pattern() -> str { return "{:x}" }
-const HEX: str = hex_pattern()
+const fn hex_prefix() -> str { return "{:" }
+const HEX: str = hex_prefix() + "x}"
 
 struct FormatMember { number: i64 }
 impl const fn convert(value: FormatMember) -> str => convert<str>(value.number)
@@ -54,10 +54,9 @@ test selected_converters {
 }
 "#;
 
-/// FMT-3, #695: ordinary constant parameters need specialization
-/// before the target can write the format call.
+/// FMT-3, #695: the target needs the analyser's checked pattern text.
 #[test]
-fn target_declines_unresolved_ordinary_constant_patterns() {
+fn target_declines_unresolved_format_patterns() {
     let root = scratch("ordinary-format-constants");
     let cases = [
         (
@@ -74,6 +73,16 @@ fn target_declines_unresolved_ordinary_constant_patterns() {
             "given_option",
             "const fn show{const p: str = \"{}\"}(v: i64) -> str => format(p, v)",
             "show{p: \"{:c}\"}(65)",
+        ),
+        (
+            "constant_from_input",
+            "const fn pattern(s: str) -> str => s\nconst P: str = pattern(\"{:x}\")",
+            "format(P, 1.5)",
+        ),
+        (
+            "constant_from_block",
+            "const fn pattern() -> str {\n    let s = \"{:x}\"\n    return s\n}\nconst P: str = pattern()",
+            "format(P, 1.5)",
         ),
     ];
     for (name, declaration, call) in cases {

@@ -10,7 +10,7 @@ use hgl_source::Span;
 use super::{Tables, Typer, calls::call_callee, tables};
 use crate::declared::names_parameter;
 use crate::formatting::{self, Piece};
-use crate::hir::{Argument, Expr, ExprKind, Form, Value, ValueCategory};
+use crate::hir::{Argument, Expr, ExprKind, Form, TextCall, Value, ValueCategory};
 use crate::syntax::{child, name_token, ungrouped};
 use crate::{ConstantValue, DeclarationKind, Detail, Role, Scalar, Signature, Type, codes, error};
 
@@ -20,30 +20,32 @@ impl Typer<'_> {
         let ExprKind::Call {
             callee,
             arguments,
-            text_conversions,
+            text: planned,
             ..
         } = kind
         else {
             return;
         };
+        *planned = None;
         let Some(signature) = formatting::value_signature(self.program, callee) else {
             if let [argument] = arguments.as_slice()
                 && let Some(members) =
                     formatting::collection_members(self.program, callee, &argument.value.ty)
             {
-                *text_conversions = self
-                    .member_conversions(&members, argument.value.at)
-                    .unwrap_or_default();
+                *planned =
+                    self.member_conversions(&members, argument.value.at)
+                        .map(|conversions| {
+                            Box::new(TextCall {
+                                pattern: None,
+                                conversions,
+                            })
+                        });
             }
             return;
         };
         let Some(pattern) = formatting::argument(signature, arguments, "fmt_str") else {
             return;
         };
-        let pattern_index = arguments
-            .iter()
-            .position(|given| std::ptr::eq(given, pattern))
-            .expect("the pattern is a given argument");
         if pattern.value.ty == Type::Unknown || matches!(pattern.value.kind, ExprKind::Unread) {
             return;
         }
@@ -83,7 +85,6 @@ impl Typer<'_> {
         } else {
             None
         };
-        let folded_call = folded.is_some();
         let Some(text) = text.or(folded) else {
             if (self.graph || self.value_code) && !self.is_fixed(&pattern.value, &[]) {
                 self.diagnostics.emit(error(
@@ -200,10 +201,10 @@ impl Typer<'_> {
                 }
             }
         }
-        *text_conversions = conversions.into_boxed_slice();
-        if folded_call {
-            arguments[pattern_index].value.kind = ExprKind::Literal(Value::Str(text));
-        }
+        *planned = Some(Box::new(TextCall {
+            pattern: Some(text),
+            conversions: conversions.into_boxed_slice(),
+        }));
     }
 
     /// A string pattern may name a module constant whose initializer
@@ -225,6 +226,20 @@ impl Typer<'_> {
                 declaration,
             }) => (module, declaration, false),
             _ => {
+                if source.kind() == SyntaxKind::BinaryExpr
+                    && source.children_with_tokens().any(|child| {
+                        child
+                            .into_token()
+                            .is_some_and(|token| token.kind() == SyntaxKind::Plus)
+                    })
+                    && child(&source, SyntaxKind::OperatorConfig).is_none()
+                {
+                    let mut operands = source.children();
+                    let mut left = self.fold_source_pattern(&operands.next()?, next)?;
+                    let right = self.fold_source_pattern(&operands.next()?, next)?;
+                    left.push_str(&right);
+                    return Some(left);
+                }
                 let callee = call_callee(&source)?;
                 if callee.kind() != SyntaxKind::NameExpr
                     || child(&source, SyntaxKind::ArgList)?
@@ -314,9 +329,14 @@ impl Typer<'_> {
             .parameters
             .iter()
             .position(|parameter| !parameter.configuration)?;
-        let text_conversions = match formatting::collection_members(self.program, &callee, ty) {
-            Some(members) => self.member_conversions(&members, at)?,
-            None => Box::default(),
+        let text = if let Some(members) = formatting::collection_members(self.program, &callee, ty)
+        {
+            Some(Box::new(TextCall {
+                pattern: None,
+                conversions: self.member_conversions(&members, at)?,
+            }))
+        } else {
+            None
         };
         Some(Expr {
             kind: ExprKind::Call {
@@ -332,7 +352,7 @@ impl Typer<'_> {
                     },
                 }],
                 form: Form::Named,
-                text_conversions,
+                text,
                 braced: Vec::new(),
                 lifted: false,
             },
