@@ -1055,10 +1055,8 @@ impl Instances {
         callee: &Callee,
         arguments: &[Argument],
     ) -> Option<&Instance> {
-        if callable_depths(arguments, self.callable_limits.targets).is_none() {
-            return None;
-        }
         let (module, declaration) = callee.declaration()?;
+        callable_depths(arguments, self.callable_limits.targets)?;
         let key = call_key(program, callee, arguments)?;
         self.declared(module, declaration)
             .iter()
