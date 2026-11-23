@@ -706,6 +706,10 @@ pub enum ExprKind {
         arguments: Vec<Argument>,
         /// How the call is written.
         form: Form,
+        /// Selected FMT-5 conversion calls, indexed by the arguments
+        /// of native `format` or the members of a native collection
+        /// conversion. Other calls leave this empty.
+        text_conversions: Box<[Option<Expr>]>,
         /// Values explicitly supplied in braces (EXPR-10), by source
         /// location, for the instance's wiring-time check (EXPR-14).
         braced: Vec<Location>,

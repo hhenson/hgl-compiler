@@ -11,6 +11,10 @@ const fn display<const Pattern: str>(value: f64) -> str => format(Pattern, value
 const fn display_value<const Pattern: str, T>(value: T) -> str =>
     format("value " + Pattern, value)
 
+struct FormatMember { number: i64 }
+impl const fn convert(value: FormatMember) -> str => convert<str>(value.number)
+impl const fn convert<N>(value: list<FormatMember, N>) -> str => "specific members"
+
 fn counted(value: i64) -> i64 {
     when {
         write(format("tick {}\n", value), flush: true)
@@ -35,6 +39,16 @@ test typed_formats {
     let boundary = @0001-01-01T19:59:05.224192Z
     assert format("{:%T.9}", boundary) == "19:59:05.224192000"
 }
+
+test selected_converters {
+    let members: list<FormatMember, 1> = [FormatMember(number: 7)]
+    let nested: list<list<FormatMember, 1>> = [members]
+    let marked = Marked<list<list<FormatMember, 1>>>(value: nested, ticked: true)
+    assert convert<str>(nested) == "[specific members]"
+    assert format("{}", nested) == "[specific members]"
+    assert format("{*}", marked) == "*[specific members]"
+    assert display_value<"{}">(nested) == "value [specific members]"
+}
 "#;
 
 /// OUT-1, OUT-2, FMT-4: keep the process streams independent of the test
@@ -56,7 +70,7 @@ fn core_format_and_write_run_on_the_sdk() {
     );
     let stdout = text(&report.stdout);
     assert!(report.status.success(), "{stdout}{}", text(&report.stderr));
-    for test in ["stream_bytes", "typed_formats"] {
+    for test in ["stream_bytes", "typed_formats", "selected_converters"] {
         assert!(
             stdout.contains(&format!("passed   executable  demo.formatting::{test}")),
             "{stdout}"

@@ -388,7 +388,7 @@ impl Program {
             || pending_forwards.is_some()
             || (!generics.is_empty()
                 && (crate::values::has_dependent_index(&body)
-                    || crate::formatting::has_dependent_pattern(self, &body))))
+                    || crate::formatting::has_dependent_formatting(self, &body))))
             && let Some(reread) = crate::values::reread_instance_body(
                 self,
                 (module, declaration),

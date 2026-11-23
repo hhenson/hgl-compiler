@@ -22,6 +22,7 @@ impl Emitter<'_> {
         callee: &Callee,
         signature: &Signature,
         arguments: &[Argument],
+        conversions: &[Option<Expr>],
         whole: &Expr,
     ) -> String {
         let Some(pattern) = formatting::argument(signature, arguments, "fmt_str") else {
@@ -78,7 +79,7 @@ impl Emitter<'_> {
             match part {
                 Piece::Text(text) => append_text(&mut statements, &output, text),
                 Piece::Place(place) => {
-                    let (held, ty, at) = if place.name == "wall_time" {
+                    let (held, ty, at, conversion) = if place.name == "wall_time" {
                         let held = wall_time.get_or_insert_with(|| {
                             let name = temporary("wall_time", self.temporary());
                             let _ = write!(
@@ -91,6 +92,7 @@ impl Emitter<'_> {
                             held.as_str(),
                             &Type::Scalar(Scalar::Datetime),
                             pattern.value.at,
+                            None,
                         )
                     } else {
                         let position = next_position;
@@ -104,6 +106,7 @@ impl Emitter<'_> {
                             held[index].as_str(),
                             &arguments[index].value.ty,
                             arguments[index].value.at,
+                            conversions.get(index).and_then(Option::as_ref),
                         )
                     };
                     if let Some(payload) = formatting::marked_payload(self.program, ty) {
@@ -119,7 +122,7 @@ impl Emitter<'_> {
                             &mut statements,
                             &output,
                             &format!("(*{held}.value)"),
-                            (payload, at),
+                            (payload, at, conversion),
                             place.specifier,
                         );
                         let _ = write!(statements, "}} else {{ {output} += {not_valid}; }} ");
@@ -129,7 +132,7 @@ impl Emitter<'_> {
                             &mut statements,
                             &output,
                             held,
-                            (ty, at),
+                            (ty, at, conversion),
                             place.specifier,
                         );
                     }
@@ -175,7 +178,7 @@ impl Emitter<'_> {
         text: &mut String,
         output: &str,
         value: &str,
-        (ty, at): (&Type, Location),
+        (ty, at, conversion): (&Type, Location, Option<&Expr>),
         specifier: &str,
     ) {
         match ty {
@@ -235,7 +238,7 @@ impl Emitter<'_> {
                 format_scalar(text, output, value, specifier);
             }
             _ => {
-                let converted = self.convert_to_text(scope, value, ty, at);
+                let converted = self.convert_to_text(scope, value, ty, at, conversion);
                 let _ = write!(text, "{output} += {converted}; ");
             }
         }
@@ -248,15 +251,18 @@ impl Emitter<'_> {
         scope: &mut Scope,
         value: &Expr,
         members: &[&Type],
+        conversions: &[Option<Expr>],
     ) -> String {
         self.piece.formatting = true;
         scope.acted = true;
         let rendered = self.expression(scope, value);
         let renderers: Vec<_> = members
             .iter()
-            .map(|ty| {
+            .enumerate()
+            .map(|(index, ty)| {
                 let part = temporary("collection_member", self.temporary());
-                let content = self.collection_member(scope, &part, ty, value.at);
+                let conversion = conversions.get(index).and_then(Option::as_ref);
+                let content = self.collection_member(scope, &part, ty, value.at, conversion);
                 format!("[&](const auto& {part}) -> ::hglrt::str {{ return {content}; }}")
             })
             .collect();
@@ -277,10 +283,12 @@ impl Emitter<'_> {
         value: &str,
         ty: &Type,
         at: Location,
+        conversion: Option<&Expr>,
     ) -> String {
         match ty {
             Type::Nullable(inner) => {
-                let text = self.collection_member(scope, &format!("(*{value})"), inner, at);
+                let text =
+                    self.collection_member(scope, &format!("(*{value})"), inner, at, conversion);
                 format!("({value} ? {text} : ::hglrt::str{{\"null\"}})")
             }
             Type::Scalar(Scalar::Str) => format!("::hglrt::format_quoted({value})"),
@@ -290,7 +298,7 @@ impl Emitter<'_> {
             Type::Scalar(Scalar::Date | Scalar::Time | Scalar::Datetime | Scalar::Duration) => {
                 format!("::hglrt::format_default({value})")
             }
-            _ => self.convert_to_text(scope, value, ty, at),
+            _ => self.convert_to_text(scope, value, ty, at, conversion),
         }
     }
 
@@ -300,8 +308,9 @@ impl Emitter<'_> {
         value: &str,
         ty: &Type,
         at: Location,
+        conversion: Option<&Expr>,
     ) -> String {
-        let Some(call) = formatting::text_call(self.program, ty, at) else {
+        let Some(call) = conversion else {
             return self.missing(at, &format!("the text conversion of `{ty}`"));
         };
         let ExprKind::Call { arguments, .. } = &call.kind else {
@@ -313,7 +322,7 @@ impl Emitter<'_> {
         let previous = scope
             .read_as
             .replace((arguments[0].value.clone(), value.to_string()));
-        let written = self.expression(scope, &call);
+        let written = self.expression(scope, call);
         scope.read_as = previous;
         written
     }

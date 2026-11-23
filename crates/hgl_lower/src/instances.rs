@@ -45,7 +45,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 
-use hgl_analyser::formatting;
 use hgl_analyser::hir::{
     Answer, Argument, Body, Callee, Expr, ExprKind, Local, Node, Run, Stmt, TypePackArgument,
     ValueCategory, walk_statement_nodes_at, walk_statements,
@@ -1017,7 +1016,10 @@ impl Instances {
                 .collect();
         }
         let ExprKind::Call {
-            callee, arguments, ..
+            callee,
+            arguments,
+            text_conversions,
+            ..
         } = &value.kind
         else {
             return Vec::new();
@@ -1051,7 +1053,9 @@ impl Instances {
             return Vec::new();
         };
         let mut found = Vec::new();
-        self.ask_text_converters(program, callee, arguments, expanding, &mut found);
+        for conversion in text_conversions.iter().flatten() {
+            found.extend(self.asks(program, conversion, expanding));
+        }
         // Check the borrowed arguments before cloning them into a request.
         if self.instanced(program, *module, *declaration)
             && let Ok(depths) = request_depths(
@@ -1101,44 +1105,6 @@ impl Instances {
             }
         }
         found
-    }
-
-    /// FMT-5: formatting and the native collection candidates can name
-    /// ordinary HGL conversions. Collect them like any other value call.
-    fn ask_text_converters(
-        &self,
-        program: &Program,
-        callee: &Callee,
-        arguments: &[Argument],
-        expanding: &mut Vec<(usize, usize, usize)>,
-        found: &mut Vec<Asked>,
-    ) {
-        let mut ask = |ty: &Type, at| {
-            if formatting::needs_text_conversion(ty)
-                && let Some(call) = formatting::text_call(program, ty, at)
-            {
-                found.extend(self.asks(program, &call, expanding));
-            }
-        };
-        if formatting::value_signature(program, callee).is_some() {
-            for argument in arguments.iter().filter(|argument| argument.pack.is_some()) {
-                let value = &argument.value;
-                let ty = formatting::marked_payload(program, &value.ty).unwrap_or(&value.ty);
-                ask(ty, value.at);
-            }
-        } else if let [argument] = arguments
-            && let Some(members) =
-                formatting::collection_members(program, callee, &argument.value.ty)
-        {
-            for member in members {
-                let ty = if let Type::Nullable(payload) = member {
-                    payload
-                } else {
-                    member
-                };
-                ask(ty, argument.value.at);
-            }
-        }
     }
 
     /// The instances the calls in `statements` ask for, in the order

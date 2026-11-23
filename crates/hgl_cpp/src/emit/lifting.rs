@@ -198,6 +198,7 @@ impl Emitter<'_> {
             callee,
             arguments,
             form,
+            text_conversions,
             ..
         } = &value.kind
         else {
@@ -579,6 +580,7 @@ impl Emitter<'_> {
                 callee: callee.clone(),
                 arguments: synthetic,
                 form: *form,
+                text_conversions: text_conversions.clone(),
                 braced: Vec::new(),
                 lifted: false,
             },

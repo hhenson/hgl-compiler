@@ -1,29 +1,35 @@
 //! FMT-1 to FMT-5, FMT-7 and FMT-9 at a selected native value call.
 
-use std::cell::RefCell;
-
-use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_diagnostics::{Category, Location};
 use hgl_lexer::literal::string_source_range;
 use hgl_parser::HasSpan;
-use hgl_parser::ast::AstNode;
 use hgl_source::Span;
 
-use super::{Tables, Typer, tables};
+use super::Typer;
 use crate::declared::names_parameter;
 use crate::formatting::{self, Piece};
-use crate::hir::{Callee, Expr, ExprKind, Value};
-use crate::{ConstantValue, Declaration, Program, Scalar, Signature, Type, codes, error};
+use crate::hir::{Argument, Expr, ExprKind, Form, Value, ValueCategory};
+use crate::{ConstantValue, Detail, Scalar, Type, codes, error};
 
 impl Typer<'_> {
     /// Check the argument slots and each type's specifier (FMT-3).
-    pub(super) fn format_arguments(&mut self, kind: &ExprKind) {
+    pub(super) fn format_arguments(&mut self, kind: &mut ExprKind) {
         let ExprKind::Call {
-            callee, arguments, ..
+            callee,
+            arguments,
+            text_conversions,
+            ..
         } = kind
         else {
             return;
         };
         let Some(signature) = formatting::value_signature(self.program, callee) else {
+            if let [argument] = arguments.as_slice()
+                && let Some(members) =
+                    formatting::collection_members(self.program, callee, &argument.value.ty)
+            {
+                *text_conversions = self.member_conversions(&members, argument.value.at);
+            }
             return;
         };
         let Some(pattern) = formatting::argument(signature, arguments, "fmt_str") else {
@@ -77,6 +83,7 @@ impl Typer<'_> {
             return;
         };
         let mut used = vec![false; arguments.len()];
+        let mut conversions = vec![None; arguments.len()];
         let mut next_position = 0;
         let mut missing = false;
         for part in parts {
@@ -117,7 +124,7 @@ impl Typer<'_> {
                     continue;
                 };
                 used[index] = true;
-                (&arguments[index].value.ty, Some(&arguments[index].value))
+                (&arguments[index].value.ty, Some(index))
             };
             let payload = formatting::marked_payload(self.program, ty);
             let effective = payload.unwrap_or(ty);
@@ -147,17 +154,20 @@ impl Typer<'_> {
                     "FMT-4",
                 );
             } else if formatting::needs_text_conversion(effective)
-                && let Some(operand) = operand
-                && let Some(written) = self.node_at(operand.at)
-                && self.text_converter(written, effective).is_none()
+                && let Some(index) = operand
+                && conversions[index].is_none()
             {
-                self.diagnostics.emit(error(
-                    Category::Operator,
-                    codes::OPERATOR_NO_CANDIDATE,
-                    operand.at,
-                    format!("no value candidate of `convert<str>` takes `{effective}`"),
-                    "FMT-5",
-                ));
+                let at = arguments[index].value.at;
+                conversions[index] = self.text_conversion(effective, at);
+                if conversions[index].is_none() {
+                    self.diagnostics.emit(error(
+                        Category::Operator,
+                        codes::OPERATOR_NO_CANDIDATE,
+                        at,
+                        format!("no value candidate of `convert<str>` takes `{effective}`"),
+                        "FMT-5",
+                    ));
+                }
             }
         }
         if !missing {
@@ -173,6 +183,68 @@ impl Typer<'_> {
                 }
             }
         }
+        *text_conversions = conversions.into_boxed_slice();
+    }
+
+    /// Record the selected ordinary call, with an input supplied by
+    /// the formatter or collection renderer when it uses the call.
+    fn text_conversion(&mut self, ty: &Type, at: Location) -> Option<Expr> {
+        let written = self.node_at(at)?;
+        let callee = self.text_converter(written, ty)?;
+        let (module, declaration) = callee.declaration()?;
+        let Detail::Callable(signature) = &self.program.modules[module].details[declaration] else {
+            return None;
+        };
+        let parameter = signature
+            .parameters
+            .iter()
+            .position(|parameter| !parameter.configuration)?;
+        let text_conversions = formatting::collection_members(self.program, &callee, ty)
+            .map_or_else(Box::default, |members| {
+                self.member_conversions(&members, at)
+            });
+        Some(Expr {
+            kind: ExprKind::Call {
+                callee,
+                arguments: vec![Argument {
+                    parameter: Some(parameter),
+                    pack: None,
+                    value: Expr {
+                        kind: ExprKind::Unread,
+                        ty: ty.clone(),
+                        at,
+                        category: ValueCategory::Value,
+                    },
+                }],
+                form: Form::Named,
+                text_conversions,
+                braced: Vec::new(),
+                lifted: false,
+            },
+            ty: Type::Scalar(Scalar::Str),
+            at,
+            category: ValueCategory::Value,
+        })
+    }
+
+    fn member_conversions(&mut self, members: &[&Type], at: Location) -> Box<[Option<Expr>]> {
+        members
+            .iter()
+            .map(|ty| {
+                let ty = match ty {
+                    Type::Nullable(inner) => inner.as_ref(),
+                    ty => *ty,
+                };
+                if formatting::needs_text_conversion(ty)
+                    && !names_parameter(ty)
+                    && *ty != Type::Unknown
+                {
+                    self.text_conversion(ty, at)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     fn checked_places<'s>(&mut self, pattern: &Expr, text: &'s str) -> Option<Vec<Piece<'s>>> {
@@ -215,52 +287,6 @@ impl Typer<'_> {
         self.diagnostics
             .emit(error(Category::Type, code, at, message, rule));
     }
-}
-
-/// Select in the source scope of a typed conversion. A test's private
-/// candidates remain visible to its own formatting and collection calls.
-pub(crate) fn text_converter(program: &Program, ty: &Type, at: Location) -> Option<Callee> {
-    let (module, file, source) = program.modules.iter().find_map(|module| {
-        let (file, source) = module
-            .files
-            .iter()
-            .enumerate()
-            .find(|(_, source)| source.file == at.file)?;
-        Some((module, file, source))
-    })?;
-    let syntax = source.syntax.syntax();
-    let mut declaration = Declaration::stand_in("format conversion", at, file, syntax, false);
-    declaration.test_owner = module.tests.iter().position(|test| {
-        let span = test.syntax.span();
-        test.file == file && span.start <= at.span.start && at.span.end <= span.end
-    });
-    let signature = Signature {
-        generics: Vec::new(),
-        parameters: Vec::new(),
-        result: None,
-        reference: false,
-    };
-    let (bindings, written, calls) = tables(module);
-    let selecting = RefCell::new(Vec::new());
-    let mut diagnostics = Diagnostics::new();
-    let mut typer = Typer::bare(
-        program,
-        module,
-        &declaration,
-        &signature,
-        Tables {
-            bindings: &bindings,
-            written: &written,
-            calls: &calls,
-            selecting: &selecting,
-        },
-        &mut diagnostics,
-    );
-    let written = syntax
-        .descendants()
-        .find(|node| node.span() == at.span)
-        .unwrap_or_else(|| syntax.clone());
-    typer.text_converter(written, ty)
 }
 
 fn admits_specifier(ty: &Type, specifier: &str) -> bool {

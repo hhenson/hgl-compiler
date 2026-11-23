@@ -426,45 +426,8 @@ pub fn collection_members<'a>(
     }
 }
 
-/// A conversion that the native formatting path asks for (FMT-5).
-/// The caller supplies the input's value where it evaluates the call.
-pub fn text_call(program: &Program, ty: &Type, at: hgl_diagnostics::Location) -> Option<Expr> {
-    use crate::hir::{Form, ValueCategory};
-
-    let callee = crate::values::text_converter(program, ty, at)?;
-    let (module, declaration) = callee.declaration()?;
-    let Detail::Callable(signature) = &program.modules[module].details[declaration] else {
-        return None;
-    };
-    let index = signature
-        .parameters
-        .iter()
-        .position(|parameter| !parameter.configuration)?;
-    Some(Expr {
-        kind: ExprKind::Call {
-            callee,
-            arguments: vec![Argument {
-                parameter: Some(index),
-                pack: None,
-                value: Expr {
-                    kind: ExprKind::Unread,
-                    ty: ty.clone(),
-                    at,
-                    category: ValueCategory::Value,
-                },
-            }],
-            form: Form::Named,
-            braced: Vec::new(),
-            lifted: false,
-        },
-        ty: Type::Scalar(Scalar::Str),
-        at,
-        category: ValueCategory::Value,
-    })
-}
-
-/// Whether a declared format pattern becomes a string only in an instance.
-pub(crate) fn has_dependent_pattern(program: &Program, body: &crate::hir::Body) -> bool {
+/// Whether a pattern or text conversion needs an instance's arguments.
+pub(crate) fn has_dependent_formatting(program: &Program, body: &crate::hir::Body) -> bool {
     let mut dependent = false;
     crate::values::walk_body_calls(body, &mut |call| {
         if dependent {
@@ -476,12 +439,19 @@ pub(crate) fn has_dependent_pattern(program: &Program, body: &crate::hir::Body) 
         else {
             return;
         };
-        if let Some(signature) = value_signature(program, callee)
-            && let Some(pattern) = argument(signature, arguments, "fmt_str")
-        {
-            pattern.value.walk(&mut |value| {
-                dependent |= matches!(value.kind, ExprKind::GenericValue { .. });
+        if let Some(signature) = value_signature(program, callee) {
+            dependent = arguments.iter().any(|argument| {
+                argument.pack.is_some() && crate::declared::names_parameter(&argument.value.ty)
             });
+            if let Some(pattern) = argument(signature, arguments, "fmt_str") {
+                pattern.value.walk(&mut |value| {
+                    dependent |= matches!(value.kind, ExprKind::GenericValue { .. });
+                });
+            }
+        } else if let [argument] = arguments.as_slice()
+            && let Some(members) = collection_members(program, callee, &argument.value.ty)
+        {
+            dependent = members.into_iter().any(crate::declared::names_parameter);
         }
     });
     dependent

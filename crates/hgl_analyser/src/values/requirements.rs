@@ -1956,6 +1956,7 @@ impl<'a> Typer<'a> {
             },
             arguments,
             form,
+            text_conversions: Box::default(),
             braced: Vec::new(),
             lifted: false,
         };
@@ -2325,7 +2326,7 @@ pub(super) fn instances_hold(
                     .bodies
                     .get(position)
                     .and_then(Option::as_ref)
-                    .is_some_and(|body| crate::formatting::has_dependent_pattern(program, body))
+                    .is_some_and(|body| crate::formatting::has_dependent_formatting(program, body))
             {
                 dependent_patterns.insert((index, position));
             }

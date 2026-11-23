@@ -49,7 +49,7 @@ impl<'a> Typer<'a> {
     /// a call of an operator's candidate are built, and so for a call
     /// written by name, with generic arguments, by a symbol, as a link
     /// of a chain `a + b + c`, or by a compound assignment.
-    pub(super) fn finished_call(&mut self, kind: &ExprKind, evaluating: bool) {
+    pub(super) fn finished_call(&mut self, kind: &mut ExprKind, evaluating: bool) {
         let connected =
             |typer: &Self, value: &Expr| typer.category(value) == ValueCategory::Connection;
         // A call of a function or a candidate: an operation a
@@ -76,10 +76,10 @@ impl<'a> Typer<'a> {
         self.configuration_connections(&selected, connected);
         self.capabilities_given(&selected);
         self.fixed_arguments(&selected);
-        self.format_arguments(kind);
         self.traces_given(&selected, evaluating);
         self.store_keys(&selected);
         self.wake_durations(&selected);
+        self.format_arguments(kind);
     }
 
     /// EXPR-14: in composition, a value function's declared configuration

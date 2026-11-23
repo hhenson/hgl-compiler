@@ -107,6 +107,7 @@ impl Typer<'_> {
                 callee: Callee::DeferredPackCall,
                 arguments: Vec::new(),
                 form: Form::Named,
+                text_conversions: Box::default(),
                 braced: Vec::new(),
                 lifted: false,
             },
