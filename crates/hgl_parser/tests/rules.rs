@@ -444,6 +444,24 @@ fn a_bodys_opening_brace_can_follow_its_header_by_one_line() {
 }
 
 #[test]
+fn reserved_switch_and_raises_take_a_body_on_the_next_line() {
+    // LEX-5, LEX-10: the keyword determines the form before its body.
+    for selector in ["(k)", " -k", " .buy", "(k).a", "(a, b)"] {
+        let text = format!("switch{selector}\n{{ default: step() }}");
+        let plain = format!("switch{selector} {{ default: step() }}");
+        same_tree(Entry::Statements, &text, &plain);
+        assert!(statements(&text).starts_with("SwitchStmt["), "{text}");
+    }
+    let text = "assert raises(\"value.missing_key\")\n{ lookup(key) }";
+    same_tree(
+        Entry::Statements,
+        text,
+        "assert raises(\"value.missing_key\") { lookup(key) }",
+    );
+    assert!(statements(text).starts_with("AssertStmt[\"assert\" RaisesAssertion["));
+}
+
+#[test]
 fn two_line_breaks_separate_a_body_from_its_header() {
     let message =
         "LEX-5 3:1: two or more line breaks separate a body's opening brace from its header";
@@ -456,7 +474,11 @@ fn two_line_breaks_separate_a_body_from_its_header() {
         ),
         (Entry::Declarations, "fn f() /* first\nsecond */\n{}"),
         (Entry::Statements, "if ready\n\n{ step() }"),
-        (Entry::Statements, "switch value\n\n{ default: step() }"),
+        (Entry::Statements, "switch(k)\n\n{ default: step() }"),
+        (
+            Entry::Statements,
+            "assert raises(\"value.missing_key\")\n\n{ lookup(key) }",
+        ),
         (Entry::Statements, "let f = fn()\n\n{ step() }"),
     ] {
         assert_eq!(rejected(entry, text), [message]);
@@ -735,22 +757,38 @@ fn a_contextual_name_is_an_ordinary_name_elsewhere() {
          LocalDecl[\"let\" \"each\" \"=\" NameExpr[\"case\"]] \
          LocalDecl[\"let\" \"in\" \"=\" NameExpr[\"default\"]]"
     );
-    // `switch` and `raises` begin a statement form only when the rest of
-    // the form follows.
-    assert_eq!(
-        statements("switch = 3"),
-        "AssignStmt[NameExpr[\"switch\"] \"=\" Literal[\"3\"]]"
-    );
-    assert_eq!(
-        statements("assert raises(x) == 1"),
-        "AssertStmt[\"assert\" BinaryExpr[CallExpr[NameExpr[\"raises\"] \
-         ArgList[\"(\" Arg[NameExpr[\"x\"]] \")\"]] \"==\" Literal[\"1\"]]]"
-    );
     // In its position the same spelling has its meaning.
     assert_eq!(
         declarations("native type type"),
         "NativeTypeDecl[\"native\" \"type\" \"type\"]"
     );
+}
+
+#[test]
+fn switch_and_raises_are_reserved_except_as_member_names() {
+    // LEX-9, LEX-10: keywords may name members and argument labels.
+    for word in ["switch", "raises"] {
+        declarations(&format!("struct S {{ {word}: i64 }}"));
+        declarations(&format!("enum E {{ {word} }}"));
+        statements(&format!("f({word}: value.{word})"));
+        for (entry, text) in [
+            (Entry::Statements, format!("let {word} = 1")),
+            (Entry::Declarations, format!("fn f({word}: i64) {{}}")),
+            (Entry::Declarations, format!("fn {word}() {{}}")),
+            (Entry::Declarations, format!("struct {word} {{}}")),
+        ] {
+            assert!(!rejected(entry, &text).is_empty(), "{text}");
+        }
+    }
+    for text in ["switch(k)", "assert raises(x) == 1"] {
+        let findings = rejected(Entry::Statements, text);
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.contains("expected `{`")),
+            "{text}: {findings:?}"
+        );
+    }
 }
 
 #[test]
