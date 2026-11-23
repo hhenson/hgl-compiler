@@ -181,5 +181,5 @@ analyser: done
 transpiler: partial
 
 - Uses hgraph reference ports to follow endpoint rebinding without re-evaluating the
-  designating node. Supports sampled, whole-input and fixed-list child designations.
+  designating node. Supports sampled, whole-input, fixed-list child and dictionary entry designations.
 - Left: Unsupported targets and output combinations are listed under FN-16.

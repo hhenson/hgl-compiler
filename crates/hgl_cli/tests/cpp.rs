@@ -1312,6 +1312,34 @@ fn references_run_on_the_sdk() {
     );
 }
 
+/// A node designates a dictionary key across membership changes and can
+/// designate an ordinary input on a timer wake (FN-16, END-10, TIME-9).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn reference_designations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("reference-designations");
+    let file = write(
+        &root,
+        "src/demo.reference_designations.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.reference_designations.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The timing of nodes and sources on the SDK (`demo.timing`): nodes woken
 /// by a scheduler or an alarm, alone or with an input's tick, `scheduled()`
 /// and `modified([])` read as values, a wake dropped and one that fails,
