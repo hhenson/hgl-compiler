@@ -14,3 +14,17 @@ fn stored_nullable(value: i64?) -> bool {
 test a_written_null_is_a_success {
     assert eval stored_nullable(value: [null, 7]) == [true, false]
 }
+
+# GEN-2 and GEN-8: the key does not supply the result's type parameter.
+test an_unwritten_store_read_rejects {
+    fn inferred_read(value: i64?) -> bool {
+        inject global_state
+        when {
+            put(global_state, "k", value)
+            # expect-error(type, "generic.unresolved")
+            let saved: i64? = get(global_state, "k")
+            return saved == null
+        }
+    }
+    assert eval inferred_read(value: [7]) == [false]
+}

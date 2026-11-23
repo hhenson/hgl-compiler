@@ -4460,6 +4460,12 @@ fn store_values_and_failure_places_on_the_sdk() {
         stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains(
+            "passed   rejection   demo.store.nullable::an_unwritten_store_read_rejects\n"
+        ),
+        "{stdout}"
+    );
     let run = |application: &str| {
         hgl_in(
             &[
