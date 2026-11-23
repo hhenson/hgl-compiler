@@ -712,6 +712,38 @@ fn generic_null_defaults_run_on_the_sdk() {
     );
 }
 
+/// TIME-5, END-3 and END-4: hook mutations reject at source checking,
+/// and admitted checked deltas handle publication and silence.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn endpoint_hook_checks_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("endpoint_hook_checks");
+    let file = write(
+        &root,
+        "demo.endpoint_hook_checks.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.endpoint_hook_checks.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 5 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// Value code over the scalars and the plain composites, the emitter's
 /// own test program: constants, an enum, `if`, `switch`, `while` and
 /// `for`, places, defaults, a generic function by instance, tuples,
@@ -823,7 +855,7 @@ fn explicit_unbounded_lists_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2545,6 +2577,34 @@ fn temporal_structs_run_on_the_sdk() {
     );
 }
 
+/// A concrete generic struct is replayed and recorded using its applied
+/// nominal schema (TYPE-3, TYPE-9, CEVAL-3, CEVAL-4).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn concrete_generic_struct_traces_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic-struct-traces");
+    let file = write(
+        &root,
+        "src/demo.generic-struct-traces.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.generic-struct-traces.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// `demo.keyed`, the temporal form of a set and of a dictionary (TYPE-9,
 /// TIME-7, TIME-9, END-3, END-4, TST-9): every test of it passes on the
 /// SDK, and under the sanitizers where `HGL_CPP_FLAGS` names them.
@@ -2570,6 +2630,34 @@ fn keyed_temporal_code_runs_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// Nested dictionary entry observations retain the final child's validity,
+/// modification and delta, including where an intermediate key is absent (END-8).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn nested_dictionary_entry_observations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("nested-dictionary-observations");
+    let file = write(
+        &root,
+        "src/demo.nested_dictionary_observations.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.nested_dictionary_observations.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

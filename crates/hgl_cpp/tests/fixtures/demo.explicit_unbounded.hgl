@@ -40,6 +40,15 @@ test growing_list_as_bundle_field {
         [Container(values: [1, 2]), Container(values: [])]
 }
 
+struct Packet<T> { value: T }
+
+fn through_packet(item: Packet<list<i64, unbounded>>) -> Packet<list<i64, unbounded>> => item
+
+test growing_list_as_a_generic_bundle_field {
+    assert eval through_packet(item: [Packet<list<i64, unbounded>>(value: [1, 2])]) ==
+        [Packet<list<i64, unbounded>>(value: [1, 2])]
+}
+
 fn consume(value: i64) {
     when { let read = value }
 }

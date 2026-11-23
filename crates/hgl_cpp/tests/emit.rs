@@ -777,41 +777,25 @@ fn activity_and_enums_are_written() {
     );
 }
 
-/// A change of an input's activity in `stop` is reported: hgraph makes
-/// passive at stop only the inputs a node declares active, so an input
-/// it activated would stay subscribed. `is_active` there is written.
+/// TIME-5: an activity query remains metadata in stop. Activity
+/// mutations are source rejections, covered by endpoint_hooks.
 #[test]
-fn a_change_of_activity_in_stop_is_reported() {
+fn an_activity_query_in_stop_is_written() {
     let emitted = emit_with(
         &[(
             "m.hgl",
             concat!(
                 "module m\n",
-                "\n",
-                "fn stopping(value: i64) -> i64 {\n",
-                "    when { return value }\n",
-                "    stop { passivate(value) }\n",
-                "}\n",
-                "\n",
                 "fn asking(value: i64) -> i64 {\n",
                 "    when { return value }\n",
                 "    stop { let active = is_active(value) }\n",
                 "}\n",
-                "\n",
-                "test a_change {\n",
-                "    assert eval stopping(value: [1]) == [1]\n",
-                "}\n",
-                "\n",
                 "test a_read {\n",
                 "    assert eval asking(value: [1]) == [1]\n",
                 "}\n",
             ),
         )],
         &hgl_cpp::runtime::provides,
-    );
-    assert_eq!(
-        emitted.blocked("a_change").as_deref(),
-        Some("m.hgl:5:12 the cpp target does not write `passivate` here yet")
     );
     assert_eq!(emitted.blocked("a_read"), None);
 }
@@ -1824,9 +1808,9 @@ fn keyed_temporal_code_is_written() {
 }
 
 /// A dictionary's key of a type the family does not write, a constant
-/// connection of a set, and an entry of a dictionary's entry in a hook are
-/// reported, and block what reaches them. A key's child as a connection of
-/// a graph is written (`references`).
+/// connection of a set, and a direct payload read of a nested dictionary
+/// entry are reported, and block what reaches them. A key's child as a
+/// connection of a graph is written (`references`).
 #[test]
 fn a_keyed_form_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -1878,7 +1862,7 @@ fn a_keyed_form_not_written_yet_is_reported() {
     );
     assert_eq!(
         emitted.blocked("an_entry_of_an_entry").as_deref(),
-        Some("m.hgl:12:21 the cpp target does not write an entry of a dictionary's entry yet")
+        Some("m.hgl:12:46 the cpp target does not write an entry of a dictionary's entry yet")
     );
     assert_eq!(emitted.blocked("a_child_in_a_graph"), None);
 }
@@ -2974,8 +2958,8 @@ fn temporal_structs_and_nullables_are_written() {
 
 /// What the target does not write of temporal structs, tuples and
 /// nullables yet is reported, and nothing is miswritten: a struct whose
-/// field has a form the library does not read as a part (a set), a generic
-/// struct, an abstract one, a nullable put in the run's store (a `get`
+/// field has a form the library does not read as a part (a set), a struct
+/// with generic value arguments, a nullable put in the run's store (a `get`
 /// through a nullable place has the payload's type: hgl_spec issue 165),
 /// and a tuple with an atomic position.
 #[test]
@@ -2987,13 +2971,13 @@ fn temporal_structs_not_written_yet_are_reported() {
             "struct Listed {\n",
             "    values: set<i64>\n",
             "}\n",
-            "struct Box<T> {\n",
-            "    value: T\n",
+            "struct Box<const N: i64> {\n",
+            "    value: i64\n",
             "}\n",
             "fn listed(value: Listed) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
-            "fn boxed(value: Box<i64>) -> i64 {\n",
+            "fn boxed(value: Box<2>) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
             "fn stored(value: i64?) -> bool {\n",
@@ -3015,11 +2999,36 @@ fn temporal_structs_not_written_yet_are_reported() {
         emitted.reported,
         [
             "m.hgl:8:11 the cpp target does not write a temporal value of `Listed` yet",
-            "m.hgl:11:10 the cpp target does not write a temporal value of `Box<i64>` yet",
+            "m.hgl:11:10 the cpp target does not write a temporal value of `Box<2>` yet",
             "m.hgl:17:9 the cpp target does not write a nullable value put in the run's store (hgl_spec issue 165) yet",
             "m.hgl:24:11 the cpp target does not write a temporal value of `tuple<atomic<Plain>, i64>` yet",
         ]
     );
+}
+
+/// Schema identity includes the applied type arguments (TYPE-3), and the
+/// same schema is usable by both sides of a trace (TYPE-9, CEVAL-3, CEVAL-4).
+#[test]
+fn concrete_generic_structs_use_applied_bundle_schemas() {
+    let emitted = emit_with(
+        &[(
+            "demo.generic-struct-traces.hgl",
+            include_str!("fixtures/demo.generic-struct-traces.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    for test in &emitted.output.tests {
+        assert_eq!(emitted.blocked(&test.name), None, "{}", test.name);
+    }
+    let types = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/type-demo-generic_struct_traces.h")
+        .expect("generated types header")
+        .text;
+    assert!(types.contains("::hgraph::BundleArguments<::hglrt::bundle_value<T_p_>>"));
 }
 
 /// Structs, sets, dictionaries and deltas as values (TYPE-3 to TYPE-6,
