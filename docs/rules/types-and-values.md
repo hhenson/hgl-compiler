@@ -72,8 +72,10 @@ transpiler: partial
 
 - Constructs concrete structs by name and in argument order, using inherited defaults
   and implicit nulls.
-- Left: Reports a generic field default the emitter cannot specialize, a default that
-  runs statements or propagates failure, and a default that recursively omits itself.
+- Writes omitted field defaults in their defining scope, including statement blocks
+  and defaults whose type is supplied by a generic struct application.
+- Left: Reports field defaults whose specialization cannot be emitted, defaults
+  that propagate failure, and defaults that recursively omit themselves.
   Unmapped fields and missing required constructor inputs have defensive reports.
 
 ## TYPE-6

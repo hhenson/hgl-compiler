@@ -1,0 +1,54 @@
+module demo.field_defaults
+
+struct WithBlock {
+    value: i64 = {
+        let seed = 7
+        7
+    }
+}
+
+const fn chosen_block() -> i64 {
+    let seed = 100
+    return WithBlock().value + seed
+}
+
+struct Fixed<const N: i64> { values: list<i64, N> = [7] }
+
+abstract struct Parent<const N: i64> {
+    values: list<i64, N> = {
+        let seed = N
+        [seed + 8]
+    }
+}
+
+struct Inherited : Parent<1> {}
+
+struct Widened<T> { value: T = 7 }
+
+const fn fixed_value<const N: i64>() -> i64 => N + 3
+
+struct Instanced<const N: i64> {
+    value: i64 = fixed_value<N>()
+}
+
+test block_default_has_its_own_locals {
+    assert chosen_block() == 107
+    assert WithBlock(value: 12).value == 12
+}
+
+test default_sequence_takes_its_fixed_type {
+    assert Fixed<1>().values[0] == 7
+    assert Fixed<2>(values: [8, 9]).values[1] == 9
+}
+
+test inherited_default_uses_parent_arguments {
+    assert Inherited().values[0] == 9
+}
+
+test generic_field_places_its_literal {
+    assert Widened<f64>().value == 7.0
+}
+
+test specialized_default_reaches_a_function_instance {
+    assert Instanced<7>().value == 10
+}

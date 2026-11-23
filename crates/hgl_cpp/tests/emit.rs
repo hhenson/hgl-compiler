@@ -3139,9 +3139,6 @@ fn composite_forms_not_written_yet_are_reported() {
             "m.hgl:16:5 the cpp target does not write an assignment to this place yet",
             "m.hgl:22:48 the cpp target does not write a dictionary written with keys that may be one yet",
             "m.hgl:25:10 the cpp target does not write this place given to a `var` parameter yet",
-            // Where the default is written, which a construction that
-            // leaves the field out reaches.
-            "m.hgl:7:18 the cpp target does not write a default that runs statements yet",
             // TYPE-14: `T?` of an `i64?` is an `i64?`, where the template's
             // field would be an optional of one.
             "m.hgl:32:15 the cpp target does not write the type `Maybe<i64?>` yet",
