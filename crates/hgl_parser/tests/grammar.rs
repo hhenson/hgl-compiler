@@ -279,6 +279,7 @@ fn body(
     while { yield 1s: count }
     for key, item in d { count += item }
     let squares = [for i in 0..<4: i * i]
+    helper(...{for key in arg_keys(Ps): if key in arg_keys(As) { args[key] }})
     switch x {
         case 1: return 1
         default: return 0

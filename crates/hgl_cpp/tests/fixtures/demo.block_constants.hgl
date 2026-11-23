@@ -1,0 +1,52 @@
+module demo.block_constants
+
+# UNIT-13, EXPR-5: a checked cold initializer may run a statement before
+# yielding its value. These initializers read no enclosing local or input.
+const answer: i64 = {
+    let seed = 7
+    7
+}
+const fn chosen() -> i64 => answer
+
+test a_statement_block_yields_the_literal_value {
+    assert chosen() == 7
+    assert chosen() == 7
+}
+
+struct Answer { value: i64 }
+const values: list<f64> = {
+    let unused = false
+    [1, 2, 3]
+}
+const pair: tuple<i64, str> = {
+    let unused = 0
+    (7, "answer")
+}
+const record: Answer = {
+    let unused = 0
+    Answer(value: 7)
+}
+const absent: i64? = {
+    let unused = 0
+    null
+}
+test composite_values_keep_their_context_and_storage {
+    assert values == [1.0, 2.0, 3.0]
+    assert pair == (7, "answer")
+    assert record.value == 7
+    assert absent == null
+}
+
+# UNIT-6, UNIT-13: another constant is read by its accessor, including
+# where that constant is declared later.
+const forwarded: i64 = {
+    let unused = 0
+    later
+}
+const later: i64 = {
+    let unused = 0
+    23
+}
+test forward_constant_reads_keep_their_own_scope {
+    assert forwarded == 23
+}

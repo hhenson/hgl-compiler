@@ -768,14 +768,14 @@ fn name(node: &SyntaxNode, scope: &Scope) -> Result<Typed, Fault> {
     named(&name_token(node).ok_or(Fault::Reported)?, scope)
 }
 
-/// The constant a name token denotes, including a pack key bound in a requirement.
+/// The constant a name denotes, including a pack key (GEN-17).
 pub(crate) fn named(name: &SyntaxToken, scope: &Scope) -> Result<Typed, Fault> {
     let binding = (scope.binding)(scope.file, name.span().start).ok_or(Fault::Reported)?;
     match binding {
         // "a generic value parameter in scope".
         Binding::Local {
             at,
-            kind: LocalKind::GenericParameter | LocalKind::PackKey,
+            kind: LocalKind::GenericParameter | LocalKind::PackKey | LocalKind::PackIterationKey,
         } => {
             let given = scope.arguments.iter().find_map(|(parameter, argument)| {
                 if parameter == at

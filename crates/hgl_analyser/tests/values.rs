@@ -4412,6 +4412,50 @@ fn function_arguments_select_static_targets() {
     );
 }
 
+/// FN-19: an ordinary function reads its written arguments against the
+/// declared slots before the computed spread supplies its entries.
+#[test]
+fn a_computed_spread_preserves_the_written_function_argument_types() {
+    let checked = module(concat!(
+        "const fn h<...Qs>{bias: f64}(cb: const fn(i64) -> i64, weight: f64, n: i64?, rest: ...{Qs}) -> f64 => weight + bias\n",
+        "const fn forwarded<...Ps>(f: const fn(...{Ps}) -> i64, cb: const fn(i64) -> i64) -> f64 =>\n",
+        "    h{bias: 2}(cb, 3, n: null, ...{for key in arg_keys(Ps): 1})\n",
+        "const fn anonymous<...Ps>(f: const fn(...{Ps}) -> i64) -> f64 =>\n",
+        "    h{bias: 2}(fn(v) => v + 1, weight: 3, n: null, ...{for key in arg_keys(Ps): 1})\n",
+    ));
+    assert!(checked.summary().is_empty(), "{}", checked.report);
+    for name in ["forwarded", "anonymous"] {
+        let [
+            Stmt::Return {
+                value: Some(value), ..
+            },
+        ] = body(&checked, name).statements.as_slice()
+        else {
+            panic!("expected the function to return the call");
+        };
+        let ExprKind::Call {
+            callee: Callee::Unread,
+            arguments,
+            ..
+        } = &value.kind
+        else {
+            panic!("expected the call to retain its deferred spread");
+        };
+        let [bias, callback, weight, nullable] = arguments.as_slice() else {
+            panic!("expected the four written arguments");
+        };
+        assert!(matches!(bias.value.kind, ExprKind::Widen(_)));
+        assert!(matches!(callback.value.kind, ExprKind::StaticCallable(_)));
+        assert!(matches!(weight.value.kind, ExprKind::Widen(_)));
+        assert_eq!(nullable.value.ty.to_string(), "i64?");
+        assert!(
+            arguments
+                .iter()
+                .all(|argument| argument.parameter.is_some())
+        );
+    }
+}
+
 /// FN-17 and GEN-8: the operator's written arguments and the complete
 /// function template together select a static candidate.
 #[test]
