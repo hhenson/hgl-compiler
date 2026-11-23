@@ -1192,6 +1192,34 @@ fn native_parts_keep_accepted_spellings_of_a_signature() {
     assert_eq!(checked.summary(), [] as [&str; 0]);
 }
 
+/// NATIVE-2 compares known callback types. A symbolic size belongs to
+/// the signature that declares it and leaves that comparison deferred.
+#[test]
+fn native_parts_defer_symbolic_callback_sizes() {
+    let checked = check(&[
+        (
+            "interface.hgl",
+            concat!(
+                "module m\n",
+                "native const fn apply<const N: i64>(f: const fn(list<i64, N>) -> i64) -> i64\n",
+                "native const fn concrete(f: const fn(list<i64, 2>) -> i64) -> i64\n",
+            ),
+        ),
+        (
+            "provider.hgl",
+            concat!(
+                "module m part provider\n",
+                "native const fn apply<const N: i64>(f: const fn(list<i64, N>) -> i64) -> i64 {}\n",
+                "native const fn concrete(f: const fn(list<i64, 3>) -> i64) -> i64 {}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        ["provider.hgl:3:17 name/native.missing_declaration NATIVE-2"]
+    );
+}
+
 /// Proposed reading of NATIVE-2 (#517): the complete written result type
 /// includes the failure type of `result<T, E>`.
 #[test]

@@ -107,9 +107,20 @@ fn difference(contract: &Signature, written: &Signature) -> Option<String> {
     let types_differ = |public: &Type, part: &Type| {
         let dependent = |ty: &Type| {
             ty.any_part(
-                &|ty| {
-                    matches!(ty, Type::PackMember { .. })
-                        || matches!(ty, Type::Function(template) if template.named_pack.is_some())
+                &|ty| match ty {
+                    Type::PackMember { .. } => true,
+                    // `same_type` uses structural equality for callbacks.
+                    // It cannot compare symbolic values bound in different
+                    // declarations, so defer those template comparisons.
+                    Type::Function(template) => {
+                        template.named_pack.is_some()
+                            || template.types().any(|ty| {
+                                ty.any_part(&|ty| matches!(ty, Type::Unknown), &|constant| {
+                                    constant.value.key().is_none()
+                                })
+                            })
+                    }
+                    _ => false,
                 },
                 &|_| false,
             )
