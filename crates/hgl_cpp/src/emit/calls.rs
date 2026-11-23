@@ -81,6 +81,10 @@ impl Emitter<'_> {
                     "a function argument to `{name}` whose specialization copies more than {} nodes",
                     crate::CALLABLE_LIMITS.size,
                 ),
+                CallableLimit::Depth => format!(
+                    "a function argument to `{name}` with a specialized body deeper than {} nodes",
+                    crate::CALLABLE_LIMITS.depth,
+                ),
                 CallableLimit::Growth => format!(
                     "a function argument to `{name}` with more than {} deeper specializations on one call chain",
                     crate::CALLABLE_LIMITS.growth,

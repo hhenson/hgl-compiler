@@ -47,7 +47,7 @@ use std::fmt::Write;
 
 use hgl_analyser::hir::{
     Answer, Argument, Body, Callee, Expr, ExprKind, Local, Node, Run, Stmt, TypePackArgument,
-    ValueCategory, walk_statement_nodes, walk_statements,
+    ValueCategory, walk_statement_nodes_at, walk_statements,
 };
 use hgl_analyser::{
     Argument as GenericArgument, DeclarationKind, Detail, GenericKind, LocalKind, Pack, Program,
@@ -177,6 +177,8 @@ pub struct Instances {
 pub struct CallableLimits {
     /// Copied targets, statements, expressions and locals allowed in one request.
     pub size: usize,
+    /// Nested nodes allowed on one path through the specialized body.
+    pub depth: usize,
     /// Deeper requests for the same declaration allowed on one request chain.
     pub growth: usize,
 }
@@ -185,6 +187,8 @@ pub struct CallableLimits {
 pub enum CallableLimit {
     /// The request would copy too many nodes to specialize its body.
     Size,
+    /// The resulting body would nest too deeply to copy or emit safely.
+    Depth,
     /// The same declaration was requested too often with a deeper argument.
     Growth,
 }
@@ -408,70 +412,129 @@ fn called_or_supplied(value: &Expr) -> Option<&Callee> {
     }
 }
 
+struct CopyBudget {
+    remaining: usize,
+    depth_limit: usize,
+}
+
+impl CopyBudget {
+    fn spend(&mut self, nodes: usize, depth: usize) -> Result<(), CallableLimit> {
+        if depth > self.depth_limit {
+            return Err(CallableLimit::Depth);
+        }
+        self.remaining = self
+            .remaining
+            .checked_sub(nodes)
+            .ok_or(CallableLimit::Size)?;
+        Ok(())
+    }
+}
+
+struct CallableShape {
+    /// Deepest HIR node or callee, counting from the whole body's root.
+    deepest: usize,
+    /// The anonymous callee levels, which measure repeated request growth.
+    anonymous: usize,
+}
+
+struct ArgumentCost {
+    nodes: usize,
+    height: usize,
+}
+
 /// Spend the cost of one callee and its owned body. A named callee owns
 /// its identity and an anonymous callee owns the nodes of its body.
-fn callable_depth(
+fn callable_shape(
     target: &Callee,
-    remaining: &mut usize,
-    arguments: &[(usize, usize)],
-) -> Option<usize> {
-    let cost = match target {
-        Callee::Parameter { parameter, .. } => arguments
-            .iter()
-            .find(|(slot, _)| slot == parameter)
-            .map_or(1, |(_, cost)| *cost),
-        _ => 1,
-    };
-    *remaining = remaining.checked_sub(cost)?;
-    match target {
-        Callee::Anonymous(function) => Some(body_depth(&function.body, remaining, arguments)? + 1),
-        _ => Some(0),
+    depth: usize,
+    budget: &mut CopyBudget,
+    arguments: &[(usize, ArgumentCost)],
+) -> Result<CallableShape, CallableLimit> {
+    if let Callee::Parameter { parameter, .. } = target
+        && let Some((_, cost)) = arguments.iter().find(|(slot, _)| slot == parameter)
+    {
+        let deepest = depth + cost.height - 1;
+        budget.spend(cost.nodes, deepest)?;
+        // In the forecast only, the argument's anonymous nesting was
+        // already measured. Its structural depth grows at this use site.
+        return Ok(CallableShape {
+            deepest,
+            anonymous: 0,
+        });
     }
+    budget.spend(1, depth)?;
+    if let Callee::Anonymous(function) = target {
+        let mut shape = body_shape(&function.body, depth + 1, budget, arguments)?;
+        shape.anonymous += 1;
+        return Ok(shape);
+    }
+    Ok(CallableShape {
+        deepest: depth,
+        anonymous: 0,
+    })
 }
 
 /// Walk an owned body. When `arguments` is given, forecast each copy the
 /// instancing pass makes at a call or forwarding use of a static parameter.
-fn body_depth(body: &Body, remaining: &mut usize, arguments: &[(usize, usize)]) -> Option<usize> {
-    *remaining = remaining.checked_sub(body.locals.len())?;
-    let mut deepest = Some(0);
-    walk_statement_nodes(&body.statements, &mut |node| {
-        deepest = deepest.and_then(|depth| {
-            *remaining = remaining.checked_sub(1)?;
-            let Node::Expression(expression) = node else {
-                return Some(depth);
-            };
-            let Some(callee) = called_or_supplied(expression) else {
-                return Some(depth);
-            };
-            callable_depth(callee, remaining, arguments).map(|child| depth.max(child))
-        });
-    });
-    deepest
+fn body_shape(
+    body: &Body,
+    depth: usize,
+    budget: &mut CopyBudget,
+    arguments: &[(usize, ArgumentCost)],
+) -> Result<CallableShape, CallableLimit> {
+    let mut shape = CallableShape {
+        deepest: depth - 1,
+        anonymous: 0,
+    };
+    budget.spend(body.locals.len(), shape.deepest)?;
+    walk_statement_nodes_at(&body.statements, depth, &mut |node, depth| {
+        budget.spend(1, depth)?;
+        shape.deepest = shape.deepest.max(depth);
+        if let Node::Expression(expression) = node
+            && let Some(callee) = called_or_supplied(expression)
+        {
+            let nested = callable_shape(callee, depth + 1, budget, arguments)?;
+            shape.deepest = shape.deepest.max(nested.deepest);
+            shape.anonymous = shape.anonymous.max(nested.anonymous);
+        }
+        Ok(())
+    })?;
+    Ok(shape)
 }
 
-/// Read argument depths and size before owning a request. Then bound the
-/// copies its instance will create, including uses inside source lambdas.
-/// Otherwise one wide wrapper can exhaust memory before its next request
-/// is available for inspection.
-fn callable_depths(
+/// Check the borrowed arguments and the body that their instance would
+/// own. Neither a wide copy nor a deeply nested copy may be constructed
+/// first and checked only when it makes its next request.
+fn request_depths(
     program: &Program,
     (module, declaration): (usize, usize),
     arguments: &[Argument],
-    mut remaining: usize,
-) -> Option<Vec<(usize, usize)>> {
-    let mut weights = Vec::new();
+    limits: &CallableLimits,
+) -> Result<Vec<(usize, usize)>, CallableLimit> {
+    let mut budget = CopyBudget {
+        remaining: limits.size,
+        depth_limit: limits.depth,
+    };
+    let mut costs = Vec::new();
     let mut depths = Vec::new();
     for (slot, target) in function_arguments(arguments) {
-        let before = remaining;
-        depths.push((slot, callable_depth(target, &mut remaining, &[])?));
-        weights.push((slot, before - remaining));
+        let before = budget.remaining;
+        let shape = callable_shape(target, 1, &mut budget, &[])?;
+        depths.push((slot, shape.anonymous));
+        costs.push((
+            slot,
+            ArgumentCost {
+                nodes: before - budget.remaining,
+                height: shape.deepest,
+            },
+        ));
     }
-    if !weights.is_empty()
+    if !costs.is_empty()
         && let Some(body) = &program.modules[module].bodies[declaration]
     {
-        body_depth(body, &mut remaining, &weights)?;
+        body_shape(body, 1, &mut budget, &costs)?;
     }
-    Some(depths)
+    Ok(depths)
 }
 
 fn exceeds_growth(
@@ -732,7 +795,7 @@ impl Instances {
     /// bound, which is then not whole, and no more instances of one
     /// declaration are made from one call than the analyser follows
     /// ([`hgl_analyser::INSTANCES`]). Lowering also applies the target's
-    /// limits to the size and growth of static function arguments
+    /// limits to the size, structural depth and growth of static function arguments
     /// (FN-17). The target reports a call whose instance was declined.
     ///
     /// The target's values are typed, so every value function and value
@@ -989,11 +1052,11 @@ impl Instances {
         let mut found = Vec::new();
         // Check the borrowed arguments before cloning them into a request.
         if self.instanced(program, *module, *declaration)
-            && let Some(depths) = callable_depths(
+            && let Ok(depths) = request_depths(
                 program,
                 (*module, *declaration),
                 arguments,
-                self.callable_limits.size,
+                &self.callable_limits,
             )
         {
             found.push(Asked {
@@ -1105,12 +1168,13 @@ impl Instances {
         arguments: &[Argument],
     ) -> Option<&Instance> {
         let (module, declaration) = callee.declaration()?;
-        callable_depths(
+        request_depths(
             program,
             (module, declaration),
             arguments,
-            self.callable_limits.size,
-        )?;
+            &self.callable_limits,
+        )
+        .ok()?;
         let key = call_key(program, callee, arguments)?;
         self.declared(module, declaration)
             .iter()
@@ -1125,15 +1189,13 @@ impl Instances {
         arguments: &[Argument],
     ) -> Option<CallableLimit> {
         let (module, declaration) = callee.declaration()?;
-        if callable_depths(
+        if let Err(limit) = request_depths(
             program,
             (module, declaration),
             arguments,
-            self.callable_limits.size,
-        )
-        .is_none()
-        {
-            return Some(CallableLimit::Size);
+            &self.callable_limits,
+        ) {
+            return Some(limit);
         }
         if self.growing.is_empty() {
             return None;

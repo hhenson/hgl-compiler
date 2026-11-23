@@ -3345,28 +3345,25 @@ fn callable_growth_limit_counts_requests_on_one_chain() {
 }
 
 /// FN-17: every occurrence of the same named target costs space in a
-/// copied anonymous callback. One more local makes the request too large.
+/// copied anonymous callback. One more block crosses the exact size limit.
 #[test]
 fn callable_size_limit_counts_repeated_targets() {
-    for (locals, expected) in [
-        (2, None),
+    for (returned, expected) in [
+        ("{ f(v1) }", None),
         (
-            3,
+            "{ { f(v1) } }",
             Some(
-                "m.hgl:10:12 the cpp target does not write a function argument to `apply` whose specialization copies more than 200000 nodes yet",
+                "m.hgl:9:12 the cpp target does not write a function argument to `apply` whose specialization copies more than 200000 nodes yet",
             ),
         ),
     ] {
         let mut source = String::from(concat!(
             "module m\n",
             "const fn apply(f: const fn(i64) -> i64, value: i64) -> i64 {\n",
+            "    let v0 = value\n",
+            "    let v1 = v0\n",
         ));
-        let mut previous = "value".to_string();
-        for index in 0..locals {
-            writeln!(source, "    let v{index} = {previous}").unwrap();
-            previous = format!("v{index}");
-        }
-        writeln!(source, "    return f({previous})\n}}").unwrap();
+        writeln!(source, "    return {returned}\n}}").unwrap();
         source.push_str(concat!(
             "const fn identity(value: i64) -> i64 => value\n",
             "test wide {\n",
@@ -3383,6 +3380,44 @@ fn callable_size_limit_counts_repeated_targets() {
         let emitted = emit_with(&[("m.hgl", &source)], &hgl_cpp::runtime::provides);
         assert_eq!(emitted.reported, expected.into_iter().collect::<Vec<_>>());
         assert_eq!(emitted.blocked("wide").as_deref(), expected);
+    }
+}
+
+/// FN-17: a static argument can be copied only if its insertion into the
+/// called body stays within the structural nesting limit.
+#[test]
+fn callable_depth_limit_counts_the_specialized_body() {
+    for (returned, expected) in [
+        ("{ f(value) }", None),
+        (
+            "{ { f(value) } }",
+            Some(
+                "m.hgl:171:62 the cpp target does not write a function argument to `apply` with a specialized body deeper than 512 nodes yet",
+            ),
+        ),
+    ] {
+        let mut source = String::from("module m\n");
+        writeln!(
+            source,
+            "const fn apply(f: const fn(i64) -> i64, value: i64) -> i64 => {returned}"
+        )
+        .unwrap();
+        for index in 1..169 {
+            let next = index + 1;
+            writeln!(
+                source,
+                "const fn w{index}(f: const fn(i64) -> i64, value: i64) -> i64 => w{next}(fn(n) => f(n + 1), value)"
+            )
+            .unwrap();
+        }
+        source.push_str(concat!(
+            "const fn w169(f: const fn(i64) -> i64, value: i64) -> i64 => apply(fn(n) => f(n + 1), value)\n",
+            "const fn identity(value: i64) -> i64 => value\n",
+            "test chain { assert w1(identity, 0) == 169 }\n",
+        ));
+        let emitted = emit_on_analysis_stack(&source);
+        assert_eq!(emitted.reported, expected.into_iter().collect::<Vec<_>>());
+        assert_eq!(emitted.blocked("chain").as_deref(), expected);
     }
 }
 

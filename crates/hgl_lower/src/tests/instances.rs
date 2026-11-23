@@ -10,7 +10,11 @@ use crate::packs::Captures;
 
 use super::{body, declaration, program, returned};
 
-const TEST_CALLABLE_LIMITS: CallableLimits = CallableLimits { size: 1, growth: 1 };
+const TEST_CALLABLE_LIMITS: CallableLimits = CallableLimits {
+    size: 1,
+    depth: 1,
+    growth: 1,
+};
 
 fn call(body: &hgl_analyser::hir::Body) -> (&Callee, &[Argument]) {
     let ExprKind::Call {

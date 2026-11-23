@@ -1690,7 +1690,19 @@ impl Expr {
     /// inside the expression, a block's and a loop's among them: each
     /// before what it holds.
     pub fn walk_nodes<'a>(&'a self, visit: &mut dyn FnMut(Node<'a>)) {
-        visit(Node::Expression(self));
+        let _: Result<(), ()> = self.walk_nodes_at(1, &mut |node, _| {
+            visit(node);
+            Ok(())
+        });
+    }
+
+    fn walk_nodes_at<'a, E>(
+        &'a self,
+        depth: usize,
+        visit: &mut dyn FnMut(Node<'a>, usize) -> Result<(), E>,
+    ) -> Result<(), E> {
+        visit(Node::Expression(self), depth)?;
+        let child = depth + 1;
         match &self.kind {
             ExprKind::Literal(_)
             | ExprKind::Constant { .. }
@@ -1705,9 +1717,9 @@ impl Expr {
             | ExprKind::StaticCallable(_)
             | ExprKind::Unread => {}
             ExprKind::Block { statements, value } => {
-                walk_statement_nodes(statements, visit);
+                walk_statement_nodes_at(statements, child, visit)?;
                 if let Some(value) = value {
-                    value.walk_nodes(visit);
+                    value.walk_nodes_at(child, visit)?;
                 }
             }
             ExprKind::If {
@@ -1716,10 +1728,10 @@ impl Expr {
                 otherwise,
                 ..
             } => {
-                condition.walk_nodes(visit);
-                then.walk_nodes(visit);
+                condition.walk_nodes_at(child, visit)?;
+                then.walk_nodes_at(child, visit)?;
                 if let Some(otherwise) = otherwise {
-                    otherwise.walk_nodes(visit);
+                    otherwise.walk_nodes_at(child, visit)?;
                 }
             }
             ExprKind::DeferredNegation {
@@ -1731,9 +1743,9 @@ impl Expr {
                     .iter()
                     .filter_map(|entry| entry.value.as_ref())
                 {
-                    value.walk_nodes(visit);
+                    value.walk_nodes_at(child, visit)?;
                 }
-                operand.walk_nodes(visit);
+                operand.walk_nodes_at(child, visit)?;
             }
             ExprKind::DeferredBinary {
                 left,
@@ -1741,14 +1753,14 @@ impl Expr {
                 right,
                 ..
             } => {
-                left.walk_nodes(visit);
+                left.walk_nodes_at(child, visit)?;
                 for value in configuration
                     .iter()
                     .filter_map(|entry| entry.value.as_ref())
                 {
-                    value.walk_nodes(visit);
+                    value.walk_nodes_at(child, visit)?;
                 }
-                right.walk_nodes(visit);
+                right.walk_nodes_at(child, visit)?;
             }
             ExprKind::Unary { operand: inner, .. }
             | ExprKind::Widen(inner)
@@ -1773,7 +1785,7 @@ impl Expr {
             | ExprKind::CheckedWindow(inner)
             | ExprKind::CheckedWhole(inner)
             | ExprKind::CheckedDelta(inner)
-            | ExprKind::Publications(inner) => inner.walk_nodes(visit),
+            | ExprKind::Publications(inner) => inner.walk_nodes_at(child, visit)?,
             ExprKind::Binary { left, right, .. }
             | ExprKind::Range {
                 lower: left,
@@ -1789,47 +1801,48 @@ impl Expr {
                 index: right,
             }
             | ExprKind::TraceCompare { left, right, .. } => {
-                left.walk_nodes(visit);
-                right.walk_nodes(visit);
+                left.walk_nodes_at(child, visit)?;
+                right.walk_nodes_at(child, visit)?;
             }
             ExprKind::Call { arguments, .. }
             | ExprKind::Construct { arguments, .. }
             | ExprKind::Delta { arguments } => {
                 for argument in arguments {
-                    argument.value.walk_nodes(visit);
+                    argument.value.walk_nodes_at(child, visit)?;
                 }
             }
             ExprKind::Error { message, code } => {
-                message.walk_nodes(visit);
+                message.walk_nodes_at(child, visit)?;
                 if let Some(code) = code {
-                    code.walk_nodes(visit);
+                    code.walk_nodes_at(child, visit)?;
                 }
             }
             ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => {
                 for entry in entries {
-                    entry.walk_nodes(visit);
+                    entry.walk_nodes_at(child, visit)?;
                 }
             }
             ExprKind::Pairs(entries) => {
                 for (key, value) in entries {
-                    key.walk_nodes(visit);
-                    value.walk_nodes(visit);
+                    key.walk_nodes_at(child, visit)?;
+                    value.walk_nodes_at(child, visit)?;
                 }
             }
             ExprKind::Eval { call, config, .. } => {
-                call.walk_nodes(visit);
+                call.walk_nodes_at(child, visit)?;
                 for entry in config {
-                    entry.value.walk_nodes(visit);
+                    entry.value.walk_nodes_at(child, visit)?;
                 }
             }
             ExprKind::Trace(cells) => {
                 for cell in cells {
                     for part in [&cell.time, &cell.value].into_iter().flatten() {
-                        part.walk_nodes(visit);
+                        part.walk_nodes_at(child, visit)?;
                     }
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -2090,25 +2103,41 @@ pub fn walk_statements(statements: &[Stmt], visit: &mut dyn FnMut(&Expr)) {
 /// expression of each, as [`Expr::walk_nodes`] does for one expression:
 /// each statement before what it holds, a nested statement among them.
 pub fn walk_statement_nodes<'a>(statements: &'a [Stmt], visit: &mut dyn FnMut(Node<'a>)) {
+    let _: Result<(), ()> = walk_statement_nodes_at(statements, 1, &mut |node, _| {
+        visit(node);
+        Ok(())
+    });
+}
+
+/// Walk statements and their descendants in the order of [`walk_statement_nodes`],
+/// giving each node's nesting depth. Each root statement starts at `depth`.
+/// An error from the visitor stops the walk. Callees own their anonymous bodies
+/// separately from this expression and statement tree.
+pub fn walk_statement_nodes_at<'a, E>(
+    statements: &'a [Stmt],
+    depth: usize,
+    visit: &mut dyn FnMut(Node<'a>, usize) -> Result<(), E>,
+) -> Result<(), E> {
+    let child = depth + 1;
     for statement in statements {
-        visit(Node::Statement(statement));
+        visit(Node::Statement(statement), depth)?;
         match statement {
             Stmt::Inject { config, .. } => {
                 for entry in config {
-                    entry.value.walk_nodes(visit);
+                    entry.value.walk_nodes_at(child, visit)?;
                 }
             }
             Stmt::Unread { .. } => {}
             Stmt::Declare { value, .. } | Stmt::Return { value, .. } => {
                 if let Some(value) = value {
-                    value.walk_nodes(visit);
+                    value.walk_nodes_at(child, visit)?;
                 }
             }
-            Stmt::Assign { value, .. } | Stmt::Expr(value) => value.walk_nodes(visit),
-            Stmt::Assert { condition, .. } => condition.walk_nodes(visit),
+            Stmt::Assign { value, .. } | Stmt::Expr(value) => value.walk_nodes_at(child, visit)?,
+            Stmt::Assert { condition, .. } => condition.walk_nodes_at(child, visit)?,
             Stmt::AssignPlace { place, value, .. } => {
-                place.walk_nodes(visit);
-                value.walk_nodes(visit);
+                place.walk_nodes_at(child, visit)?;
+                value.walk_nodes_at(child, visit)?;
             }
             Stmt::Hook {
                 condition, body, ..
@@ -2117,18 +2146,18 @@ pub fn walk_statement_nodes<'a>(statements: &'a [Stmt], visit: &mut dyn FnMut(No
                 condition, body, ..
             } => {
                 if let Some(condition) = condition {
-                    condition.walk_nodes(visit);
+                    condition.walk_nodes_at(child, visit)?;
                 }
-                walk_statement_nodes(body, visit);
+                walk_statement_nodes_at(body, child, visit)?;
             }
-            Stmt::AssertRaises { body, .. } => walk_statement_nodes(body, visit),
+            Stmt::AssertRaises { body, .. } => walk_statement_nodes_at(body, child, visit)?,
             Stmt::Yield { time, value, .. } => {
-                time.walk_nodes(visit);
-                value.walk_nodes(visit);
+                time.walk_nodes_at(child, visit)?;
+                value.walk_nodes_at(child, visit)?;
             }
             Stmt::For { sequence, body, .. } => {
-                sequence.walk_nodes(visit);
-                walk_statement_nodes(body, visit);
+                sequence.walk_nodes_at(child, visit)?;
+                walk_statement_nodes_at(body, child, visit)?;
             }
             Stmt::Switch {
                 selector,
@@ -2136,17 +2165,18 @@ pub fn walk_statement_nodes<'a>(statements: &'a [Stmt], visit: &mut dyn FnMut(No
                 default,
                 ..
             } => {
-                selector.walk_nodes(visit);
+                selector.walk_nodes_at(child, visit)?;
                 for case in cases {
-                    case.label.walk_nodes(visit);
-                    walk_statement_nodes(&case.body, visit);
+                    case.label.walk_nodes_at(child, visit)?;
+                    walk_statement_nodes_at(&case.body, child, visit)?;
                 }
                 if let Some(default) = default {
-                    walk_statement_nodes(default, visit);
+                    walk_statement_nodes_at(default, child, visit)?;
                 }
             }
         }
     }
+    Ok(())
 }
 
 impl Expr {

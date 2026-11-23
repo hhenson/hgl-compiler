@@ -48,10 +48,11 @@ use hgl_lower::instances::CallableLimits;
 /// The name `hgl emit --target` takes for this target.
 pub const TARGET: &str = "cpp";
 
-/// FN-17: bound the copied callable bodies and the number of
-/// deeper specializations of the same declaration on a request chain.
+/// FN-17: bound the copied callable bodies, their nesting and how many
+/// deeper requests a declaration can make along one request chain.
 const CALLABLE_LIMITS: CallableLimits = CallableLimits {
     size: 200_000,
+    depth: 512,
     growth: 64,
 };
 
