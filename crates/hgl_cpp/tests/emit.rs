@@ -2258,11 +2258,10 @@ fn a_trace_held_in_a_let_is_replayed_by_an_eval() {
 
 /// A temporal call that leaves out `const` parameters (UNIT-8): where
 /// more than one default may fail, each is held in the order of the
-/// parameters (EXPR-2); a default that runs statements is reported, as a
-/// value call's is; and a lifted call that leaves one out binds its
-/// default as configuration where the graph is built (FN-6).
+/// parameters (EXPR-2). Defaults may use their own statement blocks, and
+/// lifting binds defaults as configuration where the graph is built (FN-6).
 #[test]
-fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
+fn a_temporal_calls_defaults_are_held_in_order() {
     let emitted = emit_with(
         &[(
             "m.hgl",
@@ -2284,7 +2283,7 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
                 "    when { return value * by }\n",
                 "}\n",
                 "\n",
-                "fn blocked(value: i64) -> i64 => blocky(value)\n",
+                "fn with_block(value: i64) -> i64 => blocky(value)\n",
                 "\n",
                 "const fn add(a: i64, b: i64 = 1) -> i64 => a + b\n",
                 "\n",
@@ -2295,7 +2294,7 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
                 "}\n",
                 "\n",
                 "test block {\n",
-                "    assert eval blocked(value: [1]) == [3]\n",
+                "    assert eval with_block(value: [1]) == [3]\n",
                 "}\n",
                 "\n",
                 "test lifted {\n",
@@ -2325,13 +2324,7 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
         ),
         "{twice}"
     );
-    assert!(
-        emitted.blocked("block").is_some_and(
-            |reason| reason.ends_with("does not write a default that runs statements yet")
-        ),
-        "{:?}",
-        emitted.blocked("block")
-    );
+    assert_eq!(emitted.blocked("block"), None);
     // The lifting family's (`a_lifted_calls_omitted_defaults_are_configuration`).
     assert_eq!(emitted.blocked("lifted"), None);
     assert!(
@@ -2345,8 +2338,8 @@ fn a_temporal_calls_defaults_are_held_in_order_or_reported() {
 /// an `hgraph::Scalar`, evaluated where the graph is built (EXPR-14), after the
 /// arguments written and in the order of the parameters, each held first
 /// where more than one may fail (EXPR-2); one written `T?` with none is
-/// null in the node's call (UNIT-8); a default that runs statements is
-/// reported, as a temporal call's is. An eval of a value function binds
+/// null in the node's call (UNIT-8). A statement block runs when its
+/// default is evaluated. An eval of a value function binds
 /// what it leaves out so too, and holds it before its run's
 /// configuration.
 #[test]
@@ -2420,13 +2413,7 @@ fn a_lifted_calls_omitted_defaults_are_configuration() {
         ),
         "{twice}"
     );
-    assert!(
-        emitted.blocked("block").is_some_and(
-            |reason| reason.ends_with("does not write a default that runs statements yet")
-        ),
-        "{:?}",
-        emitted.blocked("block")
-    );
+    assert_eq!(emitted.blocked("block"), None);
     // The eval holds the run's configuration, written before the call
     // (RUN-6), and then the defaults, `b` before `c`, and gives them to
     // the node.
@@ -2788,11 +2775,10 @@ fn a_case_binding_read_after_its_switch_is_reported() {
     );
 }
 
-/// UNIT-13, UNIT-8: the analyser keeps a constant's value and a default
-/// with no locals of their own, so a block in one that runs statements is
-/// reported, and not written (and the target does not fail on it).
+/// A callable default can have block locals (UNIT-7, UNIT-8). A module
+/// constant that runs statements retains its target report (UNIT-13).
 #[test]
-fn a_constant_or_a_default_that_runs_statements_is_reported() {
+fn a_constant_that_runs_statements_keeps_its_target_report() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
@@ -2806,14 +2792,29 @@ fn a_constant_or_a_default_that_runs_statements_is_reported() {
             "    b + 1\n",
             "}) -> i64 => x + by\n",
             "const fn used() -> i64 => offset(1)\n",
+            "const fn supplied() -> i64 => offset(1, 9)\n",
         ),
     )]);
     assert_eq!(
         emitted.reported,
-        [
-            "m.hgl:2:7 the cpp target does not write a constant whose value runs statements yet",
-            "m.hgl:6:35 the cpp target does not write a default that runs statements yet",
-        ]
+        ["m.hgl:2:7 the cpp target does not write a constant whose value runs statements yet"]
+    );
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/mod-m.cpp")
+        .unwrap()
+        .text;
+    // Only the call that leaves `by` out evaluates the block.
+    assert_eq!(
+        unit.matches("const ::hgraph::Int b = 2;").count(),
+        1,
+        "{unit}"
+    );
+    assert!(
+        unit.contains("return ::hgl::m::m_::offset(1, 9);"),
+        "{unit}"
     );
 }
 

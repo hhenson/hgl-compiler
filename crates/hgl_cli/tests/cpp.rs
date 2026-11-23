@@ -4181,6 +4181,29 @@ fn logical_connections_run_on_the_sdk() {
     );
 }
 
+/// UNIT-7 and UNIT-8: omitted defaults can run their own blocks in
+/// value calls and in graph configuration, including for a lifted call.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn callable_block_defaults_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("callable-block-defaults");
+    let file = write(
+        &root,
+        "demo.callable_block_defaults.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.callable_block_defaults.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// GEN-16, UNIT-8: a required symbol keeps the public generic arguments
 /// that its selected candidate's inherited configuration default reads.
 #[test]

@@ -728,14 +728,9 @@ fn told_apart_by_result(program: &Program, operator: OperatorRef) -> bool {
 }
 
 impl Emitter<'_> {
-    /// Write the omitted parameter's expression in its own lexical scope (UNIT-7).
+    /// Write the omitted parameter's expression in its own lexical scope
+    /// (UNIT-7, UNIT-8), including the locals of a statement block.
     pub(super) fn write_default(&mut self, default: &DefaultValue<'_>) -> Option<String> {
-        // Statement blocks are supported for specialized operator defaults.
-        // Other declaration defaults still have their existing target limit.
-        if matches!(default, DefaultValue::Declared(_)) && changes(default) {
-            self.unsupported(default.at, "a default that runs statements");
-            return None;
-        }
         let body = default.body();
         let mut scope = Scope::cold(self.program, &body);
         // A default's local IDs do not index the caller's temporal readers.
