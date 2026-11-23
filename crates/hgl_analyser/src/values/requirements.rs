@@ -3445,6 +3445,29 @@ struct Told<'t> {
     member_fault: Option<&'t std::cell::RefCell<Option<super::dependent_packs::MemberFault>>>,
 }
 
+/// GEN-6: what the operator's condition says of a candidate's declared
+/// parameter types. Options and callable requirements need call-site facts.
+pub(super) fn declared_type_requirement(
+    program: &Program,
+    operator: (usize, usize),
+    arguments: &[Argument],
+) -> Option<bool> {
+    let (_, condition) = required(program, operator)?;
+    requires_holds(
+        program,
+        operator,
+        arguments,
+        &condition,
+        &Told {
+            constant: &|_, _| None,
+            callable: &|_| None,
+            unvalued: &std::cell::Cell::new(false),
+            type_packs: &[],
+            member_fault: None,
+        },
+    )
+}
+
 /// Whether `condition`, the `requires` of `declaration` of `module`,
 /// holds with `generics` for the declaration's generic parameters
 /// (GEN-3). `None` when it cannot be told: a generic argument is not

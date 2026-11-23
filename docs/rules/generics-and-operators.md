@@ -104,7 +104,8 @@ analyser: partial
 - A value candidate may mark a parameter `var`, which takes no part in selecting it (FN-15)
 - An option given a generic value parameter of the enclosing function, `step(v, mode: M)` in `go<const M: Mode>`, admits a candidate where the function's `requires` binds the parameter, `requires M == .slow` (GEN-3); where it states nothing of it, a default of it included, no candidate is known to admit the call, which is `operator.no_candidate` where the function is declared (GEN-7)
 - A fixed parameter in an operator pack's place reports the proposed `impl.pack` code at the candidate parameter name. A pack with cardinality one is accepted. Bare Boolean requirements await #367.
-- Left: a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidates
+- A candidate whose declared result contradicts the operator's result for its parameters reports `impl.result` at the written result type. A candidate whose concrete parameter types contradict the operator's `requires` reports `impl.requires` at the candidate's name.
+- Left: other checks of a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidate selection
 
 ## GEN-7
 

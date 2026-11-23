@@ -170,6 +170,65 @@ fn a_candidate_keeps_the_operator_pack_slot() {
     );
 }
 
+/// GEN-6: the candidate's declaration reports the result it contradicts
+/// even when a generic caller or an explicit argument could select it.
+#[test]
+fn a_candidate_result_honours_its_operator() {
+    let checked = module(concat!(
+        "operator fixed<T>(value: T, flag: bool) -> T\n",
+        "impl const fn fixed(value: i64, flag: bool) -> f64 => 2.5\n",
+        "const fn through<T>(v: T) -> T requires fixed(T, bool) => fixed(v, true)\n",
+        "test direct {\n    let value: i64 = 3\n    let x = fixed(value, true)\n}\n",
+        "test generic {\n    let value: i64 = through(3)\n    assert value == 2\n}\n",
+        "operator fx2<U, T>(flag: U, value: T) -> T\n",
+        "impl const fn fx2(flag: bool, value: i64) -> f64 => 2.5\n",
+        "test explicit {\n    let value: i64 = 3\n    let x = fx2<bool>(true, value)\n}\n",
+        "operator element<T>(values: list<T>) -> T\n",
+        "impl const fn element(values: list<str>) -> i64 => 0\n",
+        "impl const fn element(values: list<i64>) -> i64 => 0\n",
+    ));
+    assert_eq!(
+        checked
+            .summary()
+            .into_iter()
+            .filter(|report| report.contains("operator/impl.result"))
+            .collect::<Vec<_>>(),
+        [
+            "m.hgl:3:48 operator/impl.result GEN-6",
+            "m.hgl:14:46 operator/impl.result GEN-6",
+            "m.hgl:20:45 operator/impl.result GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+    assert!(checked.rejected);
+}
+
+/// GEN-6: a concrete candidate outside the operator's type set rejects
+/// at its declaration even without a call. A generic candidate can remain
+/// conditional, and a concrete member of the set is admitted.
+#[test]
+fn a_concrete_candidate_honours_its_operators_requires() {
+    let checked = module(concat!(
+        "operator admitted<T>(value: T) requires T in {i64, bool}\n",
+        "impl const fn admitted(value: str) {}\n",
+        "impl const fn admitted(value: bool) {}\n",
+        "impl const fn admitted<T>(value: T) requires T in {i64, bool} {}\n",
+        "operator items<T>(values: list<T>) requires T in {i64, bool}\n",
+        "impl const fn items(values: list<str>) {}\n",
+        "impl const fn items(values: list<i64>) {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:15 operator/impl.requires GEN-6",
+            "m.hgl:7:15 operator/impl.requires GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// FN-8 and GEN-10: capture in written order, keeping the pack slot,
 /// positional indexes or named keys, and the resolved argument types.
 #[test]
