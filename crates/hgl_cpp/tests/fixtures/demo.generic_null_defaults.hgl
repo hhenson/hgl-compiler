@@ -1,0 +1,38 @@
+module demo.generic_null_defaults
+
+# EXPR-5, TYPE-14, UNIT-8: a generic explicit null default takes the
+# concrete selected nullable parameter type, as an implicit null does.
+const fn maybe<T>(value: T, other: T? = null) -> T? => other
+const fn implicit<T>(value: T, other: T?) -> T? => other
+const fn read<T>(value: T, other: T? = null) -> T => other
+struct Record { value: i64 }
+
+test scalar_null_defaults {
+    assert maybe(1) == null
+    assert maybe(1.0) == null
+    assert maybe(true) == null
+    assert maybe("text") == null
+    assert implicit(1) == null
+    assert implicit(1.0) == null
+    assert maybe(1, 7) == 7
+    assert maybe(1.0, 2.5) == 2.5
+}
+test composite_null_defaults {
+    assert maybe([1, 2]) == null
+    assert maybe((1, true)) == null
+    assert maybe(Record(value: 1)) == null
+}
+# ERR-12: supplying an omitted null still fails when its payload is read.
+test nullable_reads {
+    assert raises("value.null") { read(1) }
+    assert raises("value.null") { read(1.0) }
+    assert read(1, 7) == 7
+}
+
+operator maybe_candidate<T>(value: T, other: T? = null) -> T?
+impl const fn maybe_candidate<T>(value: T, other: T? = null) -> T? => other
+test candidate_null_defaults {
+    assert maybe_candidate(1) == null
+    assert maybe_candidate(1.0) == null
+    assert maybe_candidate(1, 7) == 7
+}

@@ -680,6 +680,38 @@ fn block(path: &Path) {
     fs::create_dir(path).unwrap();
 }
 
+/// EXPR-5, TYPE-14, UNIT-8: a generic null default is written using
+/// the selected nullable value parameter's concrete type.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn generic_null_defaults_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic_null_defaults");
+    let file = write(
+        &root,
+        "demo.generic_null_defaults.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.generic_null_defaults.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 0 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// Value code over the scalars and the plain composites, the emitter's
 /// own test program: constants, an enum, `if`, `switch`, `while` and
 /// `for`, places, defaults, a generic function by instance, tuples,

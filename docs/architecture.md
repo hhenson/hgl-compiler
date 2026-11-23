@@ -1066,6 +1066,10 @@ places none of its own before or after them.
 Its rejection is `default.order`, and a tuple's index that is no
 constant or is outside the tuple is `tuple.index`.
 
+The C++ target writes a literal null default using the selected nullable
+value parameter's concrete type, rather than its unresolved generic source
+type (EXPR-5, TYPE-14, UNIT-8).
+
 Control flow in a value function is read as it is written (CTRL-10 to
 CTRL-12, FN-7). A block has the value of its last statement when that is
 an expression, and so has the function's body, which returns it. An `if`
