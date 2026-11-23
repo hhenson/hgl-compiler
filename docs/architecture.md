@@ -1342,8 +1342,8 @@ requirement of its result.
 
 Outside a generic body, a value call uses
 `Typer::argument_output_requested`: its result request keeps written and
-contextual types and generic value options, while input-derived types
-remain open for candidate-local literal fitting (GEN-5, GEN-6, GEN-8).
+contextual types, generic value options and types fixed by typed inputs,
+while literal-derived types remain open for candidate-local fitting (GEN-5, GEN-6, GEN-8).
 The complete public inference still checks dependent defaults (GEN-13),
 result membership and reflected packs. Separate call metadata lets
 `Typer::called` resolve inherited configuration defaults from the fitted

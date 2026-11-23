@@ -14,7 +14,7 @@ use super::constants::{constant_text, generic_default};
 use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
 };
-use super::fit::{open, whole};
+use super::fit::{negated, open, whole};
 use super::function_arguments::CallbackInputs;
 use super::inference::{
     ExplicitGenerics, bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed,
@@ -67,11 +67,11 @@ impl<'a> Typer<'a> {
         supplied: &[Option<&Type>],
         said: bool,
     ) -> Requested {
-        self.request_output(operator, public, found, supplied, said, false)
+        self.request_output(operator, public, found, supplied, said, None)
     }
 
     /// GEN-5, GEN-6, GEN-8: outside a generic body, an option contributes
-    /// its generic value without promoting input-derived type arguments
+    /// its generic value without promoting literal-derived type arguments
     /// into result constraints. Every candidate still checks every input.
     pub(super) fn argument_output_requested(
         &self,
@@ -82,17 +82,25 @@ impl<'a> Typer<'a> {
         said: bool,
     ) -> Requested {
         let supplied = public_inputs(public, given);
-        // This extraction changes only calls written outside a generic
-        // body. GEN-7's result/literal rule is held; retain the existing
-        // complete request within that body and its concrete rereads.
-        self.request_output(
-            operator,
-            public,
-            found,
-            &supplied,
-            said,
-            self.signature.generics.is_empty(),
-        )
+        // GEN-2: a typed argument still decides its generic. Only literal,
+        // contextual and callback readings wait for the candidate; an
+        // unrelated literal flag cannot erase another argument's type.
+        // Generic bodies and their concrete rereads retain the full request.
+        let requested = self.signature.generics.is_empty().then(|| {
+            let mut requested = found.clone();
+            let mut fixed = supplied.clone();
+            for argument in given {
+                if argument.explicit.is_none()
+                    && (argument.by_place || argument.by_function || literal_input(&argument.value))
+                    && let Some(index) = argument.key.public_parameter(public)
+                {
+                    fixed[index] = None;
+                }
+            }
+            self.infer_operator_inputs(public, &mut requested, &fixed);
+            requested
+        });
+        self.request_output(operator, public, found, &supplied, said, requested)
     }
 
     fn request_output(
@@ -102,14 +110,15 @@ impl<'a> Typer<'a> {
         mut found: Vec<Option<Argument>>,
         supplied: &[Option<&Type>],
         said: bool,
-        value_call: bool,
+        requested_types: Option<Vec<Option<Argument>>>,
     ) -> Requested {
         let program = self.program;
         // GEN-5, GEN-6, GEN-8: a generic value default is a request for
         // that value, not for every input-derived type. Public checks below
         // still use every argument. Written types and the expected place
         // constrain a value call's result independently of input spelling.
-        let requested_types = found.clone();
+        let value_call = requested_types.is_some();
+        let requested_types = requested_types.unwrap_or_else(|| found.clone());
         self.infer_operator_inputs(public, &mut found, supplied);
         let operator_declaration =
             &program.modules[operator.module].declarations[operator.declaration];
@@ -1627,6 +1636,12 @@ pub(super) fn public_inputs<'a>(public: &Signature, given: &'a [Given]) -> Vec<O
         }
     }
     inputs
+}
+
+/// A literal's preliminary type is not a requested output (GEN-5).
+/// Parentheses leave no HIR node; a minus retains its literal operand.
+fn literal_input(value: &Expr) -> bool {
+    matches!(value.kind, ExprKind::Literal(_)) || negated(value).is_some_and(literal_input)
 }
 
 /// The note on a call in a generic body that no candidate is known to

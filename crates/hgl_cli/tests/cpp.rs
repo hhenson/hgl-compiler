@@ -735,7 +735,7 @@ fn direct_operator_literal_options_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.contains("rejection cases: 13 passed, 0 failed\n"),
+        stdout.contains("rejection cases: 15 passed, 0 failed\n"),
         "{stdout}"
     );
     assert!(

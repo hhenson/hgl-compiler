@@ -383,3 +383,57 @@ test observed { assert plain(1) == 5
     )]);
     assert!(!checked.rejected, "{}", checked.report);
 }
+
+/// GEN-2, GEN-5: a typed input fixes its generic in an output request,
+/// even beside a literal flag. GEN-6 declaration validation is separate.
+#[test]
+fn typed_inputs_keep_result_requests_with_every_flag_spelling() {
+    for call in [
+        "fixed(value, true)",
+        "fixed(value, flag)",
+        "fixed(flag: true, value: value)",
+        "fixed(value, !flag)",
+        "fixed{on: true}(value, true)",
+        "fixed{on: true}(value, flag)",
+    ] {
+        let source = format!(
+            "module m\noperator fixed<T, const on: bool = true>(value: T, flag: bool) -> T\nimpl const fn fixed(value: i64, flag: bool) -> f64 => 2.5\ntest observed {{ let value: i64 = 3\nlet flag: bool = true\nlet picked = {call} }}\n"
+        );
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(checked.findings.len(), 1, "{call}: {}", checked.report);
+        assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+        assert!(
+            checked.findings[0].message.ends_with("and gives `i64`"),
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// GEN-2, GEN-5, GEN-6: writing one generic leaves a literal open for
+/// candidate fitting, while a typed argument still fixes its own type.
+#[test]
+fn a_partial_written_generic_keeps_typed_requests_and_literal_widening() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+operator fx2<U, T>(flag: U, value: T) -> T
+impl const fn fx2(flag: bool, value: i64) -> f64 => 2.5
+test observed {
+    let value: i64 = 3
+    let picked = fx2<bool>(true, value)
+}
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+operator same2<U, T>(flag: U, value: T) -> T
+impl const fn same2(flag: bool, value: f64) -> f64 => value + 0.5
+test observed { assert same2<bool>(true, 1) == 1.5 }
+"#,
+    )]);
+    assert!(!checked.rejected, "{}", checked.report);
+}
