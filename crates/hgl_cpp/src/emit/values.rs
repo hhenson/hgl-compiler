@@ -26,7 +26,6 @@ use hgl_analyser::{Detail, Signature, Type};
 use hgl_diagnostics::Location;
 
 use super::Emitter;
-use super::calls::changes;
 use super::names::{self, identifier};
 use super::statements::Scope;
 use super::types::by_value;
@@ -245,15 +244,14 @@ impl Emitter<'_> {
             self.unsupported(at, "a constant with no value");
             return;
         };
-        if changes(&value.value) {
-            self.unsupported(at, "a constant whose value runs statements");
-            return;
-        }
         let Some(written) = self.written_type(ty, at) else {
             return;
         };
         let (namespace, name) = names::placed(program, self.module, index, None);
         let body = value.clone().into_body();
+        // UNIT-13, EXPR-5: the checked initializer has its own cold
+        // locals. The ordinary block writer encloses their statements
+        // in an expression, inside this constant's one static value.
         let mut scope = Scope::cold(program, &body);
         let value = self.expression(&mut scope, &value.value);
         if !scope.before.is_empty() {
