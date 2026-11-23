@@ -12,7 +12,7 @@ use hgl_parser::HasSpan;
 
 use super::constants::parameter_default_type;
 use super::fit::{open, whole};
-use super::requirements::{Made, concrete_default_calls};
+use super::requirements::{IndependentSourceBodies, Made, concrete_default_calls};
 use super::{Tables, Typer, lifting};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Body, Callee, ConfigurationRead, Expr, ExprKind, Value};
@@ -21,15 +21,23 @@ use crate::types::{Argument, Detail, Parameter, Type};
 use crate::{codes, error};
 
 /// Visit the selected calls once the declaration pass has read every default.
-pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) -> Vec<Made> {
+pub(super) fn check(
+    program: &Program,
+    source: &IndependentSourceBodies,
+    diagnostics: &mut Diagnostics,
+) -> Vec<Made> {
     let mut made = Vec::new();
-    for module in &program.modules {
+    for (unit, module) in program.modules.iter().enumerate() {
         let mut visit = |value: &Expr| check_expression(program, value, &mut made, diagnostics);
+        for (declaration, body) in module.bodies.iter().enumerate() {
+            if let Some(body) = source.body((unit, declaration)).or(body.as_ref()) {
+                hir::walk_statements(&body.statements, &mut visit);
+            }
+        }
         for body in module
-            .bodies
+            .test_bodies
             .iter()
             .flatten()
-            .chain(module.test_bodies.iter().flatten())
             .chain(&module.store_body)
         {
             hir::walk_statements(&body.statements, &mut visit);

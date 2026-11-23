@@ -6,7 +6,7 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
-use super::requirements::{ProvisionalCalls, called_or_referenced, pack_view};
+use super::requirements::{IndependentSourceBodies, called_or_referenced, pack_view};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey};
 use crate::program::{Binding, LocalKind};
@@ -646,14 +646,13 @@ pub(super) fn walk_nested_calls(statements: &[crate::hir::Stmt], visit: &mut dyn
 pub(super) fn check_instances(
     program: &crate::Program,
     discovered: &mut Vec<super::requirements::Made>,
-    provisional: &ProvisionalCalls,
+    source: &IndependentSourceBodies,
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
     use super::requirements::{MakingCall, emit_instance_report, making_path};
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = HashSet::new();
-    let mut deferred_at = HashSet::new();
     let mut callers = HashMap::<_, Vec<_>>::new();
     for (module, unit) in program.modules.iter().enumerate() {
         for (declaration, body) in unit.bodies.iter().enumerate() {
@@ -663,7 +662,6 @@ pub(super) fn check_instances(
                 if let Some(callee) = called_or_referenced(value) {
                     if matches!(callee, Callee::DeferredPackCall) {
                         forwarding.insert(owner);
-                        deferred_at.insert(value.at);
                     } else if let Some(called) = callee.declaration() {
                         callers.entry(called).or_default().push(owner);
                     }
@@ -683,37 +681,44 @@ pub(super) fn check_instances(
         }
     }
     let mut roots = Vec::new();
-    for unit in &program.modules {
-        let mut record = |value: &Expr| {
-            if !provisional.contains(&value.at)
-                && let Some(instance) = ForwardingInstance::for_check(program, value)
-                && forwarding.contains(&instance.declaration)
-            {
-                roots.push((instance, value.at));
+    let mut independent = HashMap::<Location, Vec<ForwardingInstance>>::new();
+    for (module, unit) in program.modules.iter().enumerate() {
+        let mut record = |value: &Expr, in_forwarding_body: bool| {
+            if let Some(instance) = ForwardingInstance::for_check(program, value) {
+                if in_forwarding_body {
+                    independent
+                        .entry(value.at)
+                        .or_default()
+                        .push(instance.clone());
+                }
+                if forwarding.contains(&instance.declaration) {
+                    roots.push((instance, value.at));
+                }
             }
         };
-        for body in unit
-            .bodies
-            .iter()
-            .flatten()
-            .chain(unit.test_bodies.iter().flatten())
-            .chain(&unit.store_body)
-        {
-            walk_nested_calls(&body.statements, &mut record);
+        for (declaration, body) in unit.bodies.iter().enumerate() {
+            let owner = (module, declaration);
+            if let Some(body) = source.body(owner).or(body.as_ref()) {
+                let in_forwarding_body = forwarding.contains(&owner);
+                super::walk_body_calls(body, &mut |value| record(value, in_forwarding_body));
+            }
+        }
+        for body in unit.test_bodies.iter().flatten().chain(&unit.store_body) {
+            super::walk_body_calls(body, &mut |value| record(value, false));
         }
         if let Some(run) = &unit.run_body {
             run.call
-                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut |part| record(part, false)));
         }
         for constant in unit.constants.iter().flatten() {
             constant
                 .value
-                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut |part| record(part, false)));
         }
         for default in unit.defaults.iter().flatten().flatten() {
             default
                 .value
-                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut |part| record(part, false)));
         }
     }
     for (initial, at) in roots {
@@ -790,10 +795,11 @@ pub(super) fn check_instances(
                     let Some(child) = ForwardingInstance::for_check(program, value) else {
                         return;
                     };
-                    // Calls that need the forwarded entries, directly or
-                    // through a result, are supplied by this concrete body.
-                    if (deferred_at.contains(&value.at)
-                        || checked.reread_body && provisional.forwarded.contains(&value.at))
+                    // The final body can make new calls wherever the
+                    // entries affect a type, including in a callback.
+                    if !independent
+                        .get(&value.at)
+                        .is_some_and(|calls| calls.contains(&child))
                         && let Some(callee) = called_or_referenced(value)
                     {
                         let mut path = vec![MakingCall::new(

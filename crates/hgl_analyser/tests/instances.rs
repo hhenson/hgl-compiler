@@ -550,6 +550,21 @@ fn a_provisional_result_does_not_make_an_independent_instance() {
         independent.summary(),
         ["m.hgl:16:12 type/type.mismatch EXPR-7"]
     );
+    let called = module(&format!(
+        "{definitions}\
+         const fn concrete<T>(value: T) -> i64 {{\n\
+             let changed = items_of(value)\n\
+             let items: list<i64, 2> = [1, 2]\n\
+             return first(items)\n\
+         }}\n\
+         test invoke {{ concrete(5) }}\n"
+    ));
+    assert_eq!(
+        called.summary(),
+        ["m.hgl:17:8 type/type.mismatch EXPR-7"],
+        "{}",
+        called.report
+    );
     let callbacks = format!(
         "{definitions}\
          const fn apply<T>(f: const fn(T) -> i64, items: T) -> i64 => f(items)\n\
@@ -676,6 +691,32 @@ fn a_reread_follows_the_types_it_gives_to_consumers() {
         assert_eq!(rejected.findings.len(), 1, "{}", rejected.report);
         assert_eq!(rejected.findings[0].rule, "EXPR-7", "{}", rejected.report);
         assert!(rejected.report.contains("`first<list<i64, 2>>`"));
+    }
+}
+
+/// GEN-7: a callback's parameter is typed by the final call. This works
+/// for an ordinary call and where the input comes from FN-19 forwarding.
+#[test]
+fn a_callback_parameter_uses_the_type_selected_in_its_instance() {
+    let apply = "const fn apply<T>(f: const fn(T) -> i64, input: T) -> i64 => f(input)\n";
+    for route in [
+        "const fn visit<T>(value: T) -> i64 => apply(fn(input) => first(input), items_of(value))\n",
+        "const fn visit<...A>(values: ...A) -> i64 => apply(fn(input) => first(input), items_of(...values))\n",
+    ] {
+        let call = "test invoke { assert visit(5) == 9 }\n";
+        let accepted = module(&format!("{PROVISIONAL_RESULTS}{apply}{route}{call}"));
+        assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+
+        let definitions = PROVISIONAL_RESULTS
+            .replace("marker(value: list<i64, 2>)", "marker(value: list<i64, 3>)");
+        let rejected = module(&format!("{definitions}{apply}{route}{call}"));
+        assert_eq!(
+            rejected.summary(),
+            ["m.hgl:11:22 type/type.mismatch EXPR-7"],
+            "{}",
+            rejected.report
+        );
+        assert!(rejected.report.contains("`first<list<i64, 3>>`"));
     }
 }
 

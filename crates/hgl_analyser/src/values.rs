@@ -33,7 +33,7 @@
 //! it was found, and never again where it is used (ERR-9).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
@@ -369,10 +369,10 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
     operators::inherit_configuration_defaults(program);
-    let mut instance_calls = operator_defaults::check(program, diagnostics);
-    let provisional = requirements::provisional_result_calls(program);
-    forwarded_packs::check_instances(program, &mut instance_calls, &provisional, diagnostics);
-    requirements::instances_hold(program, instance_calls, &provisional, diagnostics);
+    let source = requirements::independent_source_bodies(program);
+    let mut instance_calls = operator_defaults::check(program, &source, diagnostics);
+    forwarded_packs::check_instances(program, &mut instance_calls, &source, diagnostics);
+    requirements::instances_hold(program, instance_calls, &source, diagnostics);
     // TYPE-10, TYPE-11: the sizes each struct application written in a
     // type gives the struct's lists and windows.
     sizes::applied_sizes(program, diagnostics);
@@ -482,12 +482,38 @@ pub(crate) fn reread_instance_body(
         .collect();
     typer.pack_inputs = pack_inputs.map(|inputs| inputs.to_vec());
     typer.pack_functions = functions.to_vec();
-    match owner.phases[declaration] {
-        Some(Phase::Graph) => typer.graph().0,
-        Some(Phase::Node) if crate::phases::is_source(declared) => typer.source(),
-        Some(Phase::Node) => typer.node(),
-        _ => typer.body(),
-    }
+    typer.body_at_phase(owner.phases[declaration])
+}
+
+/// Read the body as declared, leaving provisional call results unknown.
+/// Any calls still concrete in this reading have independent input types.
+fn independent_source_body(
+    program: &Program,
+    module: &Module,
+    position: usize,
+    unsettled: &HashSet<Location>,
+) -> Option<hir::Body> {
+    let Detail::Callable(signature) = &module.details[position] else {
+        return None;
+    };
+    let (bindings, written, calls) = tables(module);
+    let mut diagnostics = Diagnostics::new();
+    let selecting = RefCell::new(Vec::new());
+    let mut typer = Typer::new(
+        program,
+        module,
+        &module.declarations[position],
+        signature,
+        Tables {
+            bindings: &bindings,
+            written: &written,
+            calls: &calls,
+            selecting: &selecting,
+        },
+        &mut diagnostics,
+    );
+    typer.unsettled_results = Some(unsettled);
+    typer.body_at_phase(module.phases[position])
 }
 
 /// The call an eval or a run statement takes (TST-5, RUN-1).
@@ -554,6 +580,8 @@ struct Typer<'a> {
     calls: &'a HashMap<(FileId, u32), &'a CallArguments>,
     /// The parameters and locals found so far.
     locals: Vec<Local>,
+    /// Call results unavailable when reading a body for independent calls.
+    unsettled_results: Option<&'a HashSet<Location>>,
     /// The local each declaration is, by where its name is declared.
     declared: HashMap<Location, LocalId>,
     /// For each local, whether every path to here has given it a value
@@ -797,6 +825,7 @@ impl<'a> Typer<'a> {
             written: tables.written,
             calls: tables.calls,
             locals: Vec::new(),
+            unsettled_results: None,
             declared: HashMap::new(),
             assigned: Vec::new(),
             rereads: allowance(&declaration.syntax),
@@ -842,6 +871,15 @@ impl<'a> Typer<'a> {
             pack_functions: Vec::new(),
             bound: Vec::new(),
             diagnostics,
+        }
+    }
+
+    fn body_at_phase(self, phase: Option<Phase>) -> Option<hir::Body> {
+        match phase {
+            Some(Phase::Graph) => self.graph().0,
+            Some(Phase::Node) if crate::phases::is_source(self.declaration) => self.source(),
+            Some(Phase::Node) => self.node(),
+            _ => self.body(),
         }
     }
 

@@ -38,6 +38,10 @@ const fn first_marker_by_pack<T>(value: T) -> i64 {
     return relay_marker(items)
 }
 const fn first_marker_of_pack<...Args>(items: ...Args) -> i64 => marker_at_first(items_of(...items))
+const fn first_marker_from_parameter<T>(value: T) -> i64 =>
+    apply_marker(fn(input) => marker_at_first(input), items_of(value))
+const fn first_marker_from_forwarded_parameter<...Args>(values: ...Args) -> i64 =>
+    apply_marker(fn(input) => marker_at_first(input), items_of(...values))
 const fn first_marker_from_capture<T>(value: T) -> i64 {
     let items = items_of(value)
     return apply_marker(fn(input) => marker_at_first(items), value)
@@ -107,6 +111,8 @@ test indexed {
     assert first_marker_by_reference(5) == 9
     assert first_marker_by_pack(5) == 9
     assert first_marker_of_pack(5) == 9
+    assert first_marker_from_parameter(5) == 9
+    assert first_marker_from_forwarded_parameter(5) == 9
     assert first_marker_from_capture(5) == 9
     assert first_marker_in_row(5) == 9
     assert first_marker_with_index(5, [0]) == 9
