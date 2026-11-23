@@ -204,6 +204,8 @@ pub mod codes {
     pub const ALIAS_UNKNOWN: &str = "alias.unknown";
     /// A name that nothing in scope binds (UNIT-10).
     pub const NAME_UNKNOWN: &str = "name.unknown";
+    /// A function declared with a reserved activation form's name (UNIT-10).
+    pub const NAME_RESERVED: &str = "name.reserved";
     /// A generic type's name stands before a `<` that does not open its
     /// arguments (GEN-14).
     pub const GENERIC_INVALID_APPLICATION: &str = "generic.invalid_application";
