@@ -825,14 +825,7 @@ impl<'a> Typer<'a> {
                 self.infer_function_argument(&entry.value, pattern, generics, &mut found);
             }
         }
-        if let Some((result, requested)) = result_fallback {
-            infer(
-                result,
-                not_null(Some(requested)).unwrap_or(requested),
-                generics,
-                &mut found,
-            );
-        }
+        infer_result_fallback(*result_fallback, generics, &mut found);
         // GEN-8: "A generic value parameter the call does not give takes
         // its default, when it has one." Nothing has said what it is,
         // and it is its default before any argument is held to its
@@ -1416,7 +1409,7 @@ pub(super) fn infer(
 /// fallible result can also be read from a nullable success (ERR-12,
 /// ERR-15). In that case a bare success parameter can be decided by
 /// the inputs first, such as a dictionary's value type in `get`.
-/// The returned pair supplies the output constraint during inference.
+/// The returned pair preserves that argument context during inference.
 pub(super) fn infer_from_place<'r, 'p>(
     result: &'r Type,
     requested: &'p Type,
@@ -1432,15 +1425,11 @@ pub(super) fn infer_from_place<'r, 'p>(
         (result, false)
     };
     if !written && matches!(result, Type::Parameter { .. }) {
-        if matches!(requested, Type::Nullable(_)) {
-            // ERR-15 exposes the success to this place. GEN-2 leaves its
-            // bare type parameter to the call's arguments there as well.
-            return None;
-        }
         if fallible {
-            // A plain value place can decide a success type the inputs
-            // do not supply, as in a store read (core CAP-6).
             return Some((result, requested));
+        }
+        if matches!(requested, Type::Nullable(_)) {
+            return None;
         }
     }
     let place = if written || matches!(result, Type::Nullable(_)) {
@@ -1450,6 +1439,21 @@ pub(super) fn infer_from_place<'r, 'p>(
     };
     infer(result, place, generics, found);
     None
+}
+
+/// GEN-2 and ERR-15: after the arguments, a plain place can supply a
+/// fallible call's bare success type. A nullable place leaves it open,
+/// including for a store read (CAP-6).
+pub(super) fn infer_result_fallback(
+    fallback: Option<(&Type, &Type)>,
+    generics: &[GenericParameter],
+    found: &mut [Option<Argument>],
+) {
+    if let Some((result, place)) = fallback
+        && !matches!(place, Type::Nullable(_))
+    {
+        infer(result, place, generics, found);
+    }
 }
 
 /// [`infer`], for a size or a constant argument: a generic value

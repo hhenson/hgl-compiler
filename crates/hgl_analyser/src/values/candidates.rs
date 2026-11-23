@@ -16,11 +16,12 @@ use super::dependent_packs::{
 };
 use super::expressions::takes_its_type;
 use super::fit::{
-    accepts_float, arithmetic, checked_child_result, is_integer_literal, negated, not_null, whole,
+    accepts_float, arithmetic, checked_child_result, is_integer_literal, negated, whole,
 };
 use super::function_arguments::{CallbackInputs, matches_template};
 use super::inference::{
-    bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
+    bare_parameter, infer, infer_from_place, infer_result_fallback, mentions, pack_bounds, placed,
+    type_pack,
 };
 use super::operators::unreadable;
 use super::requirements::{Condition, holds};
@@ -3234,14 +3235,7 @@ fn candidate_bindings(
     // type says anything of takes its default (GEN-2). GEN-6: "a
     // candidate whose option has none is admitted only when the call
     // gives it."
-    if let Some((result, requested)) = result_fallback {
-        infer(
-            result,
-            not_null(Some(requested)).unwrap_or(requested),
-            generics,
-            &mut found,
-        );
-    }
+    infer_result_fallback(result_fallback, generics, &mut found);
     // GEN-10: reflected packs are known before a positive existential
     // equality chooses its first binding. Unresolved non-pack arguments
     // remain placeholders during this projection.
