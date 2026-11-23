@@ -99,6 +99,7 @@ mod law_calls;
 mod lifting;
 // `base.member`, `.member` and `base[index]` (TYPE-7, EXPR-7, ERR-6).
 mod members;
+pub(crate) use members::has_dependent_index;
 // A node's body and a source's: hooks, headers, admission (FN-2, TIME-3).
 mod node;
 // Omitted configuration defaults in selected operator calls (GEN-6, UNIT-8).

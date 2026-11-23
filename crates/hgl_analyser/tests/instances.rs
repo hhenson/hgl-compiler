@@ -430,15 +430,17 @@ fn instances_reached_through_functions_or_packs_check_the_selected_result() {
         "    return answer\n",
         "}\n",
     );
-    for call in [
-        "apply(checked<i64>, 1)",
-        "apply(fn(value) => checked(value), 1)",
-        "relay(1)",
+    for (call, chain) in [
+        ("apply(checked<i64>, 1)", &[][..]),
+        ("apply(fn(value) => checked(value), 1)", &[][..]),
+        ("relay(1)", &["relay<[i64]>"][..]),
+        ("apply(via<i64>, 1)", &["relay<[i64]>", "via<i64>"][..]),
     ] {
         let checked = module(&format!(
-            "{definitions}{}{}test invoke {{ {call} }}\n",
+            "{definitions}{}{}{}test invoke {{ {call} }}\n",
             "const fn apply(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
             "const fn relay<...Args>(values: ...Args) -> i64 => checked(...values)\n",
+            "const fn via<T>(value: T) -> i64 => relay(value)\n",
         ));
         assert_eq!(checked.findings.len(), 1, "{call}: {}", checked.report);
         let finding = &checked.findings[0];
@@ -448,6 +450,86 @@ fn instances_reached_through_functions_or_packs_check_the_selected_result() {
         );
         assert!(
             checked.report.contains("checked<i64>"),
+            "{}",
+            checked.report
+        );
+        for instance in chain {
+            assert!(
+                checked
+                    .report
+                    .contains(&format!("this call makes the instance `{instance}`")),
+                "{}",
+                checked.report
+            );
+        }
+    }
+}
+
+/// GEN-7 and EXPR-7: a concrete bracket result supplies the inner call.
+#[test]
+fn an_indexed_type_parameter_reaches_its_instances() {
+    let definitions = concat!(
+        "operator fetch<T, R>(value: T) -> R\n",
+        "impl const fn fetch<T>(value: T) -> i64 => 5\n",
+        "impl const fn fetch(value: i64) -> str => \"other\"\n",
+        "const fn checked<T>(value: T) -> i64 {\n",
+        "    let answer = fetch(value)\n",
+        "    return answer\n",
+        "}\n",
+        "const fn first<T>(value: T) -> i64 => checked(value[0])\n",
+        "const fn outer<T>(value: T) -> i64 => first([value])\n",
+    );
+    let accepted = module(&format!(
+        "{definitions}test invoke {{ assert outer(\"text\") == 5 }}\n"
+    ));
+    assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+    let rejected = module(&format!("{definitions}test invoke {{ outer(3) }}\n"));
+    assert_eq!(
+        rejected.summary(),
+        ["m.hgl:11:15 type/type.mismatch EXPR-5"]
+    );
+    for instance in ["checked<i64>", "first<list<i64>>", "outer<i64>"] {
+        assert!(
+            rejected
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            rejected.report
+        );
+    }
+}
+
+/// GEN-7: an unrelated changed result does not move a call's rejection.
+#[test]
+fn a_changed_result_does_not_relocate_other_argument_checks() {
+    for (mode, expected) in [
+        ("var", "name/binding.immutable FN-15"),
+        ("const", "type/argument.constant FN-1"),
+    ] {
+        let checked = module(&format!(
+            concat!(
+                "operator fetch<T, R>(value: T) -> R\n",
+                "impl const fn fetch<T>(value: T) -> i64 => 5\n",
+                "impl const fn fetch(value: i64) -> str => \"other\"\n",
+                "operator update<T>(value: T) -> i64\n",
+                "impl const fn update<T>(value: T) -> i64 => 1\n",
+                "impl const fn update({mode} value: i64) -> i64 => value\n",
+                "const fn both<T>(value: T) -> i64 {{\n",
+                "    let answer = fetch(value)\n",
+                "    return update(value)\n",
+                "}}\n",
+                "test invoke {{ both(3) }}\n",
+            ),
+            mode = mode,
+        ));
+        assert_eq!(checked.summary(), [format!("m.hgl:12:15 {expected}")]);
+        let lines: Vec<_> = checked.report.lines().collect();
+        let at = lines
+            .iter()
+            .position(|line| line.contains("the instance's body rejects here"))
+            .unwrap();
+        assert!(
+            lines[at - 1].contains("return update(value)"),
             "{}",
             checked.report
         );
