@@ -142,6 +142,7 @@ fn result_error(expected: &Option<Type>, actual: &Option<Type>) -> Option<String
 
 /// GEN-6 and GEN-17: a reflected result uses the corresponding pack
 /// in the candidate's callback parameter, including a shared option key.
+/// Without the pack or key, only that member's type is still open.
 fn result_in_candidate(
     result: &Type,
     public: &Signature,
@@ -150,22 +151,31 @@ fn result_in_candidate(
     packs: &HashMap<Location, &ReflectedPack>,
 ) -> Type {
     let member = |at, _: &str, key: &Constant| {
-        let pack = packs.get(&at)?;
+        let Some(pack) = packs.get(&at) else {
+            return Some(Type::Unknown);
+        };
         let mut key = key.clone();
         if let ConstantValue::Parameter { at, name } = &key.value
             && let Some(option) = public.generics.iter().find(|option| option.at == *at)
-            && let Some(given) = candidate
-                .generics
-                .iter()
-                .find(|option| option.name == *name)
-            && let (GenericKind::Value(ty), GenericKind::Value(given_ty)) =
-                (&option.kind, &given.kind)
-            && same_type(ty, given_ty) == Some(true)
         {
+            let Some(given) = candidate.generics.iter().find(|given| {
+                given.name == *name
+                    && matches!((&option.kind, &given.kind),
+                        (GenericKind::Value(ty), GenericKind::Value(given_ty))
+                        if same_type(ty, given_ty) == Some(true))
+            }) else {
+                return Some(Type::Unknown);
+            };
             key.value = ConstantValue::Parameter {
                 name: given.name.clone(),
                 at: given.at,
             };
+        }
+        if matches!(
+            key.value,
+            ConstantValue::Unknown | ConstantValue::Unevaluated
+        ) {
+            return Some(Type::Unknown);
         }
         Some(Type::PackMember {
             pack: pack.at,

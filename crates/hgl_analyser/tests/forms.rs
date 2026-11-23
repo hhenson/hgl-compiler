@@ -436,6 +436,34 @@ fn a_result_contract_uses_the_candidates_reflected_pack() {
     );
 }
 
+/// GEN-6, GEN-17 and TYPE-9: an unbound pack or key leaves its member
+/// open, and an atomic type can normalize when its payload is supplied.
+#[test]
+fn a_result_contract_leaves_unbound_members_and_normalizing_types_open() {
+    let checked = module(concat!(
+        "const item: str = \"item\"\n",
+        "operator from_callback<...Ps>(f: const fn(...{Ps}) -> i64) -> list<Ps[item]>\n",
+        "impl const fn from_callback(f: const fn(item: str) -> i64) -> list<str> => []\n",
+        "operator by_key<...Ps, const key: str = \"item\">(f: const fn(...{Ps}) -> i64) -> list<Ps[key]>\n",
+        "impl const fn by_key<...Qs>(f: const fn(...{Qs}) -> i64) -> list<Qs[item]> => []\n",
+        "operator by_sibling<...Ps>(f: const fn(...{Ps}) -> i64) -> tuple<list<Ps[item]>, i64>\n",
+        "impl const fn by_sibling(f: const fn(item: str) -> i64) -> tuple<list<str>, f64> => ([], 1.5)\n",
+        "operator atomic_open<T>(x: i64) -> atomic<T>\n",
+        "impl const fn atomic_open(x: i64) -> i64 => x\n",
+        "operator atomic_fixed(x: i64) -> atomic<list<i64>>\n",
+        "impl const fn atomic_fixed(x: i64) -> list<i64> => [x]\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:60 operator/impl.result GEN-6",
+            "m.hgl:12:39 operator/impl.result GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-6: a contract comparison needs a valid candidate and operator.
 /// An invalid binding in a named test is already reported by TST-2.
 #[test]

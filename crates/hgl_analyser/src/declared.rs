@@ -2110,6 +2110,20 @@ pub(crate) fn result_types_differ(expected: &Type, actual: &Type) -> bool {
     )
 }
 
+/// These forms cannot be judged by outer shape alone. An atomic or a
+/// delta can normalize when its payload is known (TYPE-9, TYPE-16), and
+/// structural equality does not compare an open callback slot on its own.
+fn open_result_form(ty: &Type) -> bool {
+    matches!(ty, Type::Atomic(_) | Type::Delta(_) | Type::Function(_))
+        && ty.any_part(
+            &|part| {
+                matches!(part, Type::Unknown)
+                    || matches!(part, Type::Function(template) if template.named_pack.is_some())
+            },
+            &|constant| constant.value.key().is_none(),
+        )
+}
+
 /// `ty` with each generic type parameter it names replaced by a type
 /// that is not known, which agrees with any ([`agree_as`]).
 fn opened(ty: &Type) -> Type {
@@ -2262,6 +2276,10 @@ fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
                 error: other_error,
             },
         ) => agree(value, other_value) && agree(error, other_error),
-        (left, right) => left == right,
+        (left, right) => {
+            left == right
+                || (matches!(agreement, Agreement::CandidateResult)
+                    && (open_result_form(left) || open_result_form(right)))
+        }
     }
 }
