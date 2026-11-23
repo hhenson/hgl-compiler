@@ -189,9 +189,9 @@ transpiler: partial
 - Writes checked child, dictionary, unsized-list and window reads in the analysed
   value, result or nullable form. A dictionary omits wholly unset entries and a
   partial valid entry fails its whole read.
-- Left: Deltas or window reads outside the supported endpoint forms are reported. List
-  children and nested dictionary entries have the EXPR-7 limits, and reading a node's
-  own window result during its `when` is reported (END-9).
+- Left: Deltas and window reads outside the supported endpoint forms are
+  reported (END-9). List children and nested dictionary entries have the
+  EXPR-7 limits.
 
 ## ERR-15
 

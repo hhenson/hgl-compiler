@@ -182,7 +182,27 @@ class WindowArrival {
 
     /// `return value` or `out = value`: `value` is the cycle's arrival, in
     /// place of any written before it in the evaluation.
-    void hold(const window_value_t<E>& value) { held_ = value; }
+    void hold(const window_value_t<E>& value) {
+        held_ = value;
+        preview_.reset();
+    }
+
+    /// TIME-7 and END-9: observe the retained window with the last
+    /// staged arrival. hgraph applies the arrival to a detached copy,
+    /// leaving the graph output's one push for the end of the evaluation.
+    E observe() {
+        const auto now = window_.evaluation_time();
+        if (!held_) {
+            return E{window_.base().borrowed_ref(), now};
+        }
+        if (!preview_) {
+            hgraph::TSOutput detached{*window_.base().output()};
+            const E view{detached.view(now), now};
+            window_push(view, *held_);
+            preview_.emplace(std::move(detached));
+        }
+        return E{preview_->view(now), now};
+    }
 
     /// END-4: withdraw even a pending first publication, then let a later
     /// write start a fresh history. Repeated withdrawals alone stay silent.
@@ -191,6 +211,7 @@ class WindowArrival {
             arrive();
         }
         held_.reset();
+        preview_.reset();
         window_invalidate(window_);
     }
 
@@ -214,12 +235,14 @@ class WindowArrival {
         if (held_.has_value()) {
             const window_value_t<E> value = std::move(*held_);
             held_.reset();
+            preview_.reset();
             window_push(window_, value);
         }
     }
 
     const E& window_;
     std::optional<window_value_t<E>> held_{};
+    std::optional<hgraph::TSOutput> preview_{};
 };
 
 /// A read of a window's value in a hook or for a lifted helper (TYPE-11,

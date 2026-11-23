@@ -1,0 +1,96 @@
+module demo.own_window_reads
+
+# TIME-7, END-5 and END-9: a node reads the retained window and its own
+# most recently staged arrival. Only the final arrival is published.
+const fn total(values: list<i64>) -> i64 {
+    var sum = 0
+    for value in values { sum += value }
+    return sum
+}
+
+fn tick_writer(reading: i64) -> rolling_window<i64, 2, 1> {
+    inject out
+    when {
+        let before: result<list<i64>, error> = out
+        let retained = if is_ok(before) { total(before.value) } else { 0 }
+        let first = reading + retained
+        out = first
+        let observed: result<list<i64>, error> = out
+        if !is_ok(observed) { return -1 }
+        if delta_value(out) != first { return -2 }
+        let last = total(observed.value) + 10
+        out = last
+        let current: list<i64> = out
+        if total(current) != total(observed.value) - first + last { return -3 }
+        if !valid(out) || !modified(out) || !all_valid(out) || last_modified(out) == null {
+            return -4
+        }
+        if reading == 3 {
+            let left: result<i64, error> = removed_value(out)
+            if !is_ok(left) { return -5 }
+            if left.value != 11 { return -6 }
+        }
+    }
+    stop {
+        let retained: list<i64> = out
+    }
+}
+
+fn tick_observer(window: rolling_window<i64, 2, 1>) -> i64 {
+    when modified(window) { return delta_value(window) }
+}
+
+fn ticks(reading: i64) -> i64 => tick_observer(tick_writer(reading))
+
+test two_writes_are_observed_but_publish_the_last_once {
+    assert eval ticks(reading: [1, 2, 3]) == [11, 34, 92]
+}
+
+fn minimum_writer(reading: i64) -> rolling_window<i64, 2, 2> {
+    inject out
+    when {
+        let before: result<list<i64>, error> = out
+        out = reading
+        let after: list<i64>? = out
+        if !is_ok(before) && after != null { return reading + 10 }
+    }
+}
+
+fn minimum_observer(window: rolling_window<i64, 2, 2>) -> i64 {
+    when modified(window) { return delta_value(window) }
+}
+
+fn minimum(reading: i64) -> i64 => minimum_observer(minimum_writer(reading))
+
+test a_staged_arrival_can_satisfy_the_windows_minimum {
+    assert eval minimum(reading: [1, 2, 3]) == [1, 12, 3]
+}
+
+fn duration_writer(reading: i64) -> rolling_window<i64, 3us, 0us> {
+    inject out
+    when {
+        out = reading
+        let current: result<list<i64>, error> = out
+        let arrival: result<i64, error> = delta_value(out)
+        if !is_ok(current) || !is_ok(arrival) { return -2 }
+        if arrival.value != reading { return -3 }
+        out = total(current.value) + 10
+        let last: list<i64>? = out
+        if last == null { return -4 }
+    }
+}
+
+fn duration_observer(window: rolling_window<i64, 3us, 0us>) -> i64 {
+    when modified(window) {
+        let arrival: result<i64, error> = delta_value(window)
+        if is_ok(arrival) { return arrival.value }
+        return -1
+    }
+}
+
+fn duration_ticks(reading: i64) -> i64 => duration_observer(duration_writer(reading))
+
+test a_duration_exit_and_a_staged_arrival_share_a_cycle {
+    assert eval duration_ticks(reading: [1, 2, _, _, _, 3]) ==
+        [11, 23, _, _, -1, 13, _, _, _, -1]
+}

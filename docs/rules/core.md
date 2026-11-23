@@ -359,8 +359,8 @@ transpiler: partial
 
 - Reads current scalar, nullable, collection and window deltas, with checked result
   and nullable forms where selected.
-- Left: Reports unsupported endpoint deltas and window observations, including a node's
-  own window in its `when`. The temporal forms are under TYPE-9.
+- Left: Reports delta reads outside supported endpoint forms. The temporal
+  forms are under TYPE-9.
 
 ## END-4
 
@@ -441,9 +441,11 @@ transpiler: partial
 
 - Maps rolling windows to the SDK, writes their arrival publication and reads validity,
   deltas and removed values in supported contexts.
-- Left: Reports a handler selecting on its own window result, access to that result
-  inside its `when`, and reads or operations outside the supported window endpoint
-  forms.
+- A node's body observes its latest staged window arrival with the same
+  retention and publication metadata as the arrival it commits (TIME-7).
+- Left: Reports a handler selecting on its own window result, a native
+  call borrowing that result in its `when`, and unsupported window reads
+  and operations.
 
 ## END-10
 

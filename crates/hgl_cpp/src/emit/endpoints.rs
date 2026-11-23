@@ -464,7 +464,13 @@ fn endpoint(
     let named: &[usize] = inputs.unwrap_or(&every);
     let views: Option<Vec<String>> = named
         .iter()
-        .map(|&local| emitter.view(locals, local))
+        .map(|&local| {
+            if operation == EndpointOperation::Invalidate {
+                emitter.view(locals, local)
+            } else {
+                emitter.observation_view(locals, local)
+            }
+        })
         .collect();
     let Some(views) = views else {
         return emitter.missing(value.at, &format!("`{}` of this", operation.name()));
@@ -531,7 +537,7 @@ impl Emitter<'_> {
         checked: bool,
         at: hgl_diagnostics::Location,
     ) -> String {
-        let Some(view) = self.view(locals, local) else {
+        let Some(view) = self.observation_view(locals, local) else {
             return self.missing(at, "`delta_value` of this");
         };
         let ty = match self.role(local) {
