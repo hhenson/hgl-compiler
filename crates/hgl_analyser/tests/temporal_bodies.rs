@@ -104,6 +104,49 @@ fn a_payload_read_needs_admission() {
     );
 }
 
+/// FN-19: a constant key selects a packed input whose payload needs
+/// the same admission and lifecycle checks as an ordinary input
+/// (TIME-4, TIME-5).
+#[test]
+fn a_packed_input_payload_read_needs_admission() {
+    let checked = module(concat!(
+        "fn read(trigger: i64, values: ...i64) -> i64 {\n",
+        "    state seen: i64 = values[0]\n",
+        "    cache kept: i64 = values[0]\n",
+        "    cache counted: i64 = 0\n",
+        "    start { counted = values[0] }\n",
+        "    when modified(trigger) && valid([]) { return values[0] }\n",
+        "    stop { seen = values[0] }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:23 phase/state.input_read TIME-5",
+            "m.hgl:4:23 phase/cache.input_read TIME-5",
+            "m.hgl:6:23 phase/input.lifecycle TIME-5",
+            "m.hgl:7:50 phase/payload.unguarded TIME-4",
+            "m.hgl:8:19 phase/payload.unguarded TIME-5",
+        ]
+    );
+}
+
+/// TIME-1 and GEN-7: a fixed list read whole needs all-valid admission
+/// even when the entry type is supplied by a pack instance.
+#[test]
+fn a_packed_whole_list_needs_all_valid_admission() {
+    let checked = module(concat!(
+        "fn read_pack<...As>(items: ...As) -> list<i64, 2> {\n",
+        "    when { return items[0] }\n",
+        "}\n",
+        "fn via_pack(first: list<i64, 2>) -> list<i64, 2> => read_pack(first)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:53 phase/payload.unguarded TIME-1"]
+    );
+}
+
 /// TIME-1 with TIME-6: a cache is "initialized on every start using
 /// available restored state". Its initializer reads the node's state and
 /// its `const` configuration, which have values then; core's

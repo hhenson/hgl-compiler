@@ -355,14 +355,26 @@ impl<'a> Typer<'a> {
         let (Some(base), Some(index)) = (parts.next(), parts.next()) else {
             return (ExprKind::Unread, Type::Unknown);
         };
-        if let Some(pack) = self.local_of(&ungrouped(base.clone()))
+        let root = ungrouped(base.clone());
+        if let Some(pack) = self.local_of(&root)
             && self
                 .signature
                 .parameters
                 .get(pack)
                 .is_some_and(|parameter| parameter.pack.is_some())
         {
-            return self.pack_entry(pack, &index);
+            let (kind, ty) = self.pack_entry(pack, &index);
+            let at = self.at(node);
+            if !matches!(kind, ExprKind::Unread)
+                && self.is_temporal_input(pack)
+                && self.naming != Some(self.at(&root))
+            {
+                // FN-19 selects one input. In a hook its payload has
+                // the same admission and lifecycle requirements (TIME-1,
+                // TIME-4, TIME-5) as a non-packed input.
+                self.input_read(pack, at, super::children::read_whole_all_valid(&ty));
+            }
+            return (kind, ty);
         }
         let base = self.expression(&base, None);
         // ERR-15, ERR-12: what an index is read from expects the T: a

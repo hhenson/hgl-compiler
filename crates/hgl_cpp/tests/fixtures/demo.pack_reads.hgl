@@ -32,6 +32,20 @@ test graph_connections_keep_their_key {
     assert eval graph_positional([4, 5]) == [4, 5]
 }
 
+# TIME-3 and TIME-4: the default admission includes the fitted pack inputs.
+fn first_when_admitted<...As>(args: ...As) -> i64 {
+    when { return args[0] }
+}
+
+test node_admits_a_pack_entry {
+    assert eval first_when_admitted([_, 7], [2, 3]) == [_, 7]
+}
+
+fn first_with_manual_admission(trigger: i64, args: ...i64) -> i64 {
+    # expect-error(phase, "payload.unguarded")
+    when modified(trigger) && valid([]) { return args[0] }
+}
+
 test absent_positional_key {
     # expect-error(type, "pack.name")
     assert positional(3) == 3

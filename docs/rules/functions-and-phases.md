@@ -279,7 +279,7 @@ parser: partial
 
 analyser: partial
 
-- Reads a parameter pack entry by a constant name or position. The instance supplies the entry type and reports `pack.name` for an absent key (GEN-17).
+- Reads a parameter pack entry by a constant name or position. The instance supplies the entry type and reports `pack.name` for an absent key (GEN-17). In a node the entry follows the temporal input's admission and lifecycle rules (TIME-1, TIME-4, TIME-5).
 - Resolves spreads of parameter packs when the enclosing callable is instantiated. Written arguments bind first, then named entries, then positional entries fill the remaining parameter slots in order.
 - Checks function, operator and static callback arguments with the ordinary call diagnostics (EXPR-2) and uses the names written by a callback template (FN-17).
 - A forwarded name that binds a generic value parameter or a selecting operator option reports `generic.argument_constant` at the runtime entry (GEN-6, GEN-8). Generic value names take priority over a callee's ordinary named pack.
