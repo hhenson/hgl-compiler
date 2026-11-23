@@ -79,29 +79,35 @@ void fn_log(const Logger& logger, LogLevel level, std::string_view message) {
 
 // ---- The scheduler -------------------------------------------------------------
 
-void DroppedWakes::record(const hgraph::NodeView& node) noexcept {
+void DroppedWakes::record(const hgraph::NodeView& node) const {
     if (count_++ == 0) {
+        logger_of(node).warn("Dropped wake requested at or before the evaluation time");
+    }
+}
+
+void DroppedWakes::finish(const hgraph::NodeView& node) const {
+    if (count_ > 1) {
+        logger_of(node).info("Additional dropped wakes totaled {}", count_ - 1);
+    }
+}
+
+void DroppedWakeLog::record() const noexcept {
+    if (read != nullptr) {
         try {
-            logger_of(node).warn("Dropped wake requested at or before the evaluation time");
+            read(*node).record(*node);
         } catch (...) {
             // A dropped wake is never a failure (TIME-8).
         }
     }
 }
 
-void DroppedWakes::finish(const hgraph::NodeView& node) const noexcept {
-    if (count_ > 1) {
+void DroppedWakeLog::finish() const noexcept {
+    if (read != nullptr) {
         try {
-            logger_of(node).info("Additional dropped wakes totaled {}", count_ - 1);
+            read(*node).finish(*node);
         } catch (...) {
             // Preserve any failure already raised by the stop hook.
         }
-    }
-}
-
-void DroppedWakeLog::record() const noexcept {
-    if (wakes != nullptr && node != nullptr) {
-        wakes->record(*node);
     }
 }
 

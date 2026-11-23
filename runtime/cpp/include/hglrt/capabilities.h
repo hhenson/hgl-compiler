@@ -120,38 +120,48 @@ class Clock {
 
 /// The dropped datetime wakes of one node in a run (TIME-8, CAP-4, CAP-5).
 class DroppedWakes {
-  public:
+    friend struct DroppedWakeLog;
+
+  private:
     /// Warn on the first drop and count any further drops.
-    void record(const hgraph::NodeView& node) noexcept;
+    void record(const hgraph::NodeView& node) const;
     /// At stop, report the count of drops after the initial warning.
-    void finish(const hgraph::NodeView& node) const noexcept;
+    void finish(const hgraph::NodeView& node) const;
 
-  private:
-    std::size_t count_{0};
+    // The count is diagnostic state. Updating it needs no hgraph mutation.
+    mutable std::size_t count_{0};
 };
 
-/// Report later dropped wakes on leaving a node's stop hook, even on an
-/// early return. The report includes wakes requested by the hook itself.
-class DroppedWakeReport {
-  public:
-    DroppedWakeReport(const DroppedWakes& wakes, const hgraph::NodeView& node) noexcept
-        : wakes_(wakes), node_(node) {}
-    DroppedWakeReport(const DroppedWakeReport&) = delete;
-    DroppedWakeReport& operator=(const DroppedWakeReport&) = delete;
-    ~DroppedWakeReport() { wakes_.finish(node_); }
-
-  private:
-    const DroppedWakes& wakes_;
-    const hgraph::NodeView& node_;
-};
-
-/// The node and its drop count, borrowed for one scheduler or alarm hook.
+/// Borrowed access to a node's drop count. The state is read only to warn
+/// of an actual drop or report the count at stop.
 struct DroppedWakeLog {
-    DroppedWakes* wakes{nullptr};
     const hgraph::NodeView* node{nullptr};
+    const DroppedWakes& (*read)(const hgraph::NodeView&){nullptr};
+
+    template <class State, DroppedWakes State::*field>
+    [[nodiscard]] static DroppedWakeLog bind(const hgraph::NodeView& node) noexcept {
+        return {&node, [](const hgraph::NodeView& owner) -> const DroppedWakes& {
+                    return hgraph::State<State>{owner.state()}.ref().*field;
+                }};
+    }
 
     /// Record a drop where the timer is bound to the node's state.
     void record() const noexcept;
+    /// Report any further drops at this node's stop.
+    void finish() const noexcept;
+};
+
+/// Report later drops on leaving a user-written stop hook, including drops
+/// requested by that hook before an early return.
+class DroppedWakeReport {
+  public:
+    explicit DroppedWakeReport(DroppedWakeLog log) noexcept : log_(log) {}
+    DroppedWakeReport(const DroppedWakeReport&) = delete;
+    DroppedWakeReport& operator=(const DroppedWakeReport&) = delete;
+    ~DroppedWakeReport() { log_.finish(); }
+
+  private:
+    DroppedWakeLog log_;
 };
 
 /// `Scheduler` (CAP-4), what `inject scheduler` binds: the node's own

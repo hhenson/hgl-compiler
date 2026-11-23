@@ -1139,7 +1139,8 @@ fn timing_runs_on_the_sdk() {
 }
 
 /// TIME-8 and CAP-4: a node logs its first dropped wake during a run and
-/// reports later drops even when the HGL node has no explicit stop hook.
+/// reports later drops even when the scheduler is passed to a value helper
+/// and the HGL node has no explicit stop hook.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn dropped_wake_counts_reach_the_run_log_on_the_sdk() {
@@ -1151,12 +1152,13 @@ fn dropped_wake_counts_reach_the_run_log_on_the_sdk() {
         &root,
         "wakes.hgl",
         "module wakes\n\
+         const fn ask(scheduler: Scheduler, at: datetime) { schedule(scheduler, at) }\n\
          export fn requests() -> bool {\n\
              inject scheduler, clock\n\
-             start { schedule(scheduler, clock.evaluation_time) }\n\
+             start { schedule(scheduler, 0us) }\n\
              when scheduled() {\n\
-                 schedule(scheduler, clock.evaluation_time)\n\
-                 schedule(scheduler, clock.evaluation_time - 1us)\n\
+                 ask(scheduler, clock.evaluation_time)\n\
+                 ask(scheduler, clock.evaluation_time - 1us)\n\
                  return true\n\
              }\n\
          }\n",

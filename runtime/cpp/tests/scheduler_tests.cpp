@@ -17,14 +17,21 @@
 #include <spdlog/logger.h>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
+namespace hglrt_test {
+struct WakeDropState {
+    hglrt::DroppedWakes wakes;
+};
+} // namespace hglrt_test
+
 template <>
-struct hgraph::scalar_descriptor<hglrt::DroppedWakes> {
+struct hgraph::scalar_descriptor<hglrt_test::WakeDropState> {
     [[nodiscard]] static constexpr bool is_concrete() noexcept { return true; }
     [[nodiscard]] static const ValueTypeMetaData* value_meta() {
-        return TypeRegistry::instance().register_scalar<hglrt::DroppedWakes>("hglrt_test:dropped_wakes");
+        return TypeRegistry::instance().register_scalar<hglrt_test::WakeDropState>("hglrt_test:dropped_wakes");
     }
 };
 
@@ -242,7 +249,7 @@ struct WallClockLate {
 
     static void eval(hgraph::NodeScheduler view, hgraph::EvaluationClockView clock_view,
                      hgraph::EngineControlView engine, hgraph::DateTime now, hgraph::NodeView node) {
-        const hglrt::Scheduler scheduler{view, Hook::evaluation, {nullptr, &node}};
+        const hglrt::Scheduler scheduler{view, Hook::evaluation, {&node}};
         const hglrt::Clock clock{clock_view};
         woken.push_back(Woken{now, scheduler.is_scheduled_now(), false, std::nullopt});
         if (woken.size() == 1) {
@@ -275,7 +282,13 @@ template <bool uses_alarm>
 struct RecordedDrops {
     static constexpr auto name = uses_alarm ? "test::alarm_drops" : "test::scheduler_drops";
 
-    using DropState = hgraph::State<hglrt::DroppedWakes>;
+    using DropState = hgraph::State<hglrt_test::WakeDropState>;
+    using signature_args = std::tuple<hgraph::Scalar<"requests", i64>, hgraph::Scalar<"instance", i64>,
+                                      hgraph::NodeScheduler, DropState>;
+
+    static hglrt::DroppedWakeLog log(const hgraph::NodeView& node) {
+        return hglrt::DroppedWakeLog::bind<hglrt_test::WakeDropState, &hglrt_test::WakeDropState::wakes>(node);
+    }
 
     static void ask(hgraph::NodeScheduler view, Hook hook, hglrt::DroppedWakeLog log, datetime at) {
         if constexpr (uses_alarm) {
@@ -286,21 +299,21 @@ struct RecordedDrops {
     }
 
     static void start(DropState drops, hgraph::NodeScheduler view, hgraph::NodeView node) {
-        drops.set(hglrt::DroppedWakes{});
-        ask(view, Hook::start, {&drops.modify(), &node}, view.now());
+        drops.set(hglrt_test::WakeDropState{});
+        ask(view, Hook::start, log(node), view.now());
     }
 
     static void eval(hgraph::Scalar<"requests", i64> requests,
                      [[maybe_unused]] hgraph::Scalar<"instance", i64> instance,
-                     DropState drops, hgraph::NodeScheduler view, hgraph::NodeView node) {
+                     hgraph::NodeScheduler view, hgraph::NodeView node) {
         for (i64 index = 0; index < requests.value(); ++index) {
             const datetime at = index % 2 == 0 ? view.now() : view.now() - 1us;
-            ask(view, Hook::evaluation, {&drops.modify(), &node}, at);
+            ask(view, Hook::evaluation, log(node), at);
         }
     }
 
-    static void stop(DropState drops, hgraph::NodeView node) {
-        const hglrt::DroppedWakeReport report{drops.modify(), node};
+    static void stop(hgraph::NodeView node) {
+        const hglrt::DroppedWakeReport report{log(node)};
     }
 };
 

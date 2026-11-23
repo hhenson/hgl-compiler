@@ -33,7 +33,7 @@ use super::Emitter;
 use super::forms::Family;
 use super::names::{self, identifier};
 use super::readers::{Reading, watches_failure};
-use super::scheduling::{DROPPED_WAKES, WAKE_NODE, add_wake_node};
+use super::scheduling::{DROPPED_WAKES, DatedWakes, dated_wakes, drop_log};
 use super::statements::{Scope, statement_at};
 use super::values::INDENT;
 use crate::runtime;
@@ -58,7 +58,7 @@ const RESULT_FORM_LABEL: &str = "hgl.result.form";
 pub(super) const STATE: &str = "state_";
 
 /// The name of the node's state as a hook changes it.
-pub(super) const KEPT: &str = "kept_";
+const KEPT: &str = "kept_";
 
 /// What the code being written is part of, where it is temporal: the
 /// emitter holds one while it writes a node's hook, a source's body, a
@@ -486,7 +486,6 @@ impl Emitter<'_> {
         // (FN-2).
         let mut states: Vec<(usize, Option<&Expr>)> = Vec::new();
         let mut injected: Vec<usize> = Vec::new();
-        let mut timed: Vec<usize> = Vec::new();
         let mut start: Option<(&[Stmt], Location)> = None;
         let mut stop: Option<(&[Stmt], Location)> = None;
         let mut running: Vec<Handler> = Vec::new();
@@ -514,7 +513,6 @@ impl Emitter<'_> {
                     // node beside its inputs (`scheduling`).
                     if let Some(timer) = Timer::of(name) {
                         context.timer = Some(timer);
-                        timed.push(*local);
                     }
                     injected.push(*local);
                 }
@@ -624,7 +622,19 @@ impl Emitter<'_> {
             }
         };
         // The one struct of the node's persistent state (TIME-6, TIME-8).
-        let tracks_drops = context.timer.is_some();
+        let dated = if context.timer.is_some() {
+            dated_wakes(
+                program,
+                self.instances,
+                &states,
+                start.map_or(&[][..], |(statements, _)| statements),
+                &running,
+                stop.map_or(&[][..], |(statements, _)| statements),
+            )
+        } else {
+            DatedWakes::default()
+        };
+        let tracks_drops = dated.any();
         let mut members = String::new();
         for (local, _) in &states {
             let declared = &body.locals[*local];
@@ -643,7 +653,8 @@ impl Emitter<'_> {
                 "{indent}::{library}::DroppedWakes {DROPPED_WAKES}{{}};\n"
             ));
         }
-        let held = !states.is_empty() || designated.holds() || tracks_drops;
+        let user_state = !states.is_empty() || designated.holds();
+        let held = user_state || tracks_drops;
         let mut placed = Placed::of(program, self.module, index, instance);
         if let Some((number, _)) = readers {
             placed.add_input_variant(number);
@@ -676,7 +687,7 @@ impl Emitter<'_> {
                 hook.push(state_parameter.clone());
                 written.push_str(&format!("{INDENT}{INDENT}{STATE}.set(state_type_{{}});\n"));
             }
-            written.push_str(&prologue(body, &states, tracks_drops));
+            written.push_str(&prologue(body, &states));
             // TIME-6: "Cache is reconstructible node-local value data,
             // initialized on every start"; a `state` is given its first
             // value as the node starts too, since no state is restored.
@@ -693,7 +704,8 @@ impl Emitter<'_> {
                 })
                 .collect();
             let used: Vec<Stmt> = initialized.iter().chain(statements).cloned().collect();
-            let Some(made) = self.capabilities(body, &injected, &[], &used, Hook::Start, &mut hook)
+            let Some(made) =
+                self.capabilities(body, &injected, &used, Hook::Start, dated.start, &mut hook)
             else {
                 return;
             };
@@ -712,14 +724,14 @@ impl Emitter<'_> {
         }
         // `eval`: each handler in source order (TIME-3).
         let mut hook = parameters.clone();
-        if held {
+        if user_state {
             hook.push(state_parameter.clone());
         }
         if let Some(output) = &output {
             hook.push(output.clone());
         }
         let mut written = checks;
-        written.push_str(&prologue(body, &states, tracks_drops));
+        written.push_str(&prologue(body, &states));
         if forms.is_some() {
             hook.push(ResultForms::mode_parameter());
             let declared = ResultForms::view(ResultForm::Whole);
@@ -743,8 +755,14 @@ impl Emitter<'_> {
         // The scheduler or the alarm is made in every evaluation: what woke
         // the node is read from the scheduler, or for an alarm from the
         // inputs (`scheduling`).
-        let Some(made) = self.capabilities(body, &injected, &timed, &all, Hook::When, &mut hook)
-        else {
+        let Some(made) = self.capabilities(
+            body,
+            &injected,
+            &all,
+            Hook::When,
+            dated.evaluation,
+            &mut hook,
+        ) else {
             return;
         };
         written.push_str(&made);
@@ -798,6 +816,24 @@ impl Emitter<'_> {
             }
             None => written.push_str(&handlers),
         }
+        if tracks_drops && !user_state {
+            // hgraph can allocate lifecycle state without supplying a
+            // State argument to eval. Only a confirmed drop reads it.
+            let signature = hook
+                .iter()
+                .map(|parameter| {
+                    parameter
+                        .rsplit_once(' ')
+                        .expect("emitted parameter name")
+                        .0
+                })
+                .chain(std::iter::once("::hgraph::State<state_type_>"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            text.push_str(&format!(
+                "\n{INDENT}using signature_args = ::std::tuple<{signature}>;\n"
+            ));
+        }
         let closing = self.debug_end(placed_at, end, format!("{INDENT}}}\n"));
         text.push_str(&format!(
             "\n{INDENT}static void eval({})\n{INDENT}{{\n{written}{closing}",
@@ -808,8 +844,12 @@ impl Emitter<'_> {
         // and in `stop`").
         if stop.is_some() || tracks_drops {
             let statements = stop.map_or(&[][..], |(statements, _)| statements);
-            let mut hook = parameters.clone();
-            if held {
+            let mut hook = if stop.is_some() {
+                parameters.clone()
+            } else {
+                Vec::new()
+            };
+            if stop.is_some() && user_state {
                 hook.push(state_parameter.clone());
             }
             let reads_output = reads_out(&context, statements);
@@ -818,25 +858,38 @@ impl Emitter<'_> {
             {
                 hook.push(output.clone());
             }
-            let mut written = prologue(body, &states, tracks_drops);
+            let mut written = if stop.is_some() {
+                prologue(body, &states)
+            } else {
+                String::new()
+            };
             if forms.is_some() && reads_output {
                 let declared = ResultForms::view(ResultForm::Whole);
                 written.push_str(&format!(
                     "{INDENT}{INDENT}[[maybe_unused]] const auto {OUT} = {declared};\n"
                 ));
             }
-            let Some(made) =
-                self.capabilities(body, &injected, &[], statements, Hook::Stop, &mut hook)
-            else {
+            let Some(made) = self.capabilities(
+                body,
+                &injected,
+                statements,
+                Hook::Stop,
+                dated.stop,
+                &mut hook,
+            ) else {
                 return;
             };
             written.push_str(&made);
             if tracks_drops {
-                add_wake_node(&mut hook);
-                let library = runtime::NAMESPACE;
-                written.push_str(&format!(
-                    "{indent}const ::{library}::DroppedWakeReport wake_report_{{{KEPT}.{DROPPED_WAKES}, {WAKE_NODE}}};\n"
-                ));
+                let log = drop_log(&mut hook);
+                if stop.is_some() {
+                    let library = runtime::NAMESPACE;
+                    written.push_str(&format!(
+                        "{indent}const ::{library}::DroppedWakeReport wake_report_{{{log}}};\n"
+                    ));
+                } else {
+                    written.push_str(&format!("{indent}{log}.finish();\n"));
+                }
             }
             context.kind = Kind::Hook(Hook::Stop);
             let mut scope = Scope::cold(program, body);
@@ -938,8 +991,8 @@ impl Emitter<'_> {
         self.temporal = outer;
     }
 
-    /// The capabilities of `injected` that `statements` use, and those of
-    /// `always` whether they do or not, each made at the top of its hook,
+    /// The capabilities of `injected` that `statements` use, plus the timer
+    /// in an evaluation, each made at the top of its hook,
     /// `hook`, from the view hgraph gives it, which is added to
     /// `parameters` (TIME-8). `None` where one is not written yet, which
     /// is reported.
@@ -947,17 +1000,17 @@ impl Emitter<'_> {
         &mut self,
         body: &Body,
         injected: &[usize],
-        always: &[usize],
         statements: &[Stmt],
         hook: Hook,
+        dated: bool,
         parameters: &mut Vec<String>,
     ) -> Option<String> {
         let mut written = String::new();
         for &local in injected {
-            if !uses(statements, local) && !always.contains(&local) {
+            let name = &body.locals[local].name;
+            if !uses(statements, local) && !(hook == Hook::When && Timer::of(name).is_some()) {
                 continue;
             }
-            let name = &body.locals[local].name;
             let Some((view, made)) = capability(name) else {
                 self.unsupported(body.locals[local].at, &format!("an injected `{name}`"));
                 return None;
@@ -967,7 +1020,7 @@ impl Emitter<'_> {
             written.push_str(&format!(
                 "{INDENT}{INDENT}[[maybe_unused]] const {made} {}{{{parameter}{}}};\n",
                 identifier(name),
-                super::scheduling::made_in(name, hook, parameters)
+                super::scheduling::made_in(name, hook, dated, parameters)
             ));
         }
         Some(written)
@@ -1436,10 +1489,10 @@ pub(super) fn unique(
 }
 
 /// A hook's access to its persistent state and the names of its HGL fields.
-fn prologue(body: &Body, states: &[(usize, Option<&Expr>)], tracks_drops: bool) -> String {
+fn prologue(body: &Body, states: &[(usize, Option<&Expr>)]) -> String {
     let indent = INDENT.repeat(2);
     let mut text = String::new();
-    if !states.is_empty() || tracks_drops {
+    if !states.is_empty() {
         text.push_str(&format!(
             "{indent}state_type_& {KEPT} = {STATE}.modify();\n"
         ));
