@@ -382,10 +382,10 @@ fn nullable_publications_do_not_infer_a_bare_success() {
 /// when the call is ambiguous, with either concrete result shape.
 #[test]
 fn a_bare_fallible_candidate_does_not_hide_an_ambiguity() {
-    for concrete in ["i64?", "i64"] {
+    for (concrete, condition) in [("i64?", ""), ("i64", ""), ("i64?", " requires T == i64")] {
         let source = format!(
             "operator convert_value<O>(value: i64) -> O\n\
-             impl const fn convert_value<T>(value: i64) -> result<T, error> =>\n\
+             impl const fn convert_value<T>(value: i64) -> result<T, error>{condition} =>\n\
                  err(error(message: \"none\", code: \"sample.none\"))\n\
              impl const fn convert_value(value: i64) -> {concrete} => value\n\
              const fn read() -> i64? => convert_value(1)\n"
@@ -398,6 +398,25 @@ fn a_bare_fallible_candidate_does_not_hide_an_ambiguity() {
             checked.report
         );
     }
+}
+
+/// GEN-5: the payload still admits the constrained candidate. GEN-8
+/// requires a written result when the arguments leave it open.
+#[test]
+fn a_nullable_place_admits_a_fallible_candidate_constrained_to_its_payload() {
+    let checked = module(concat!(
+        "operator convert_value<O>(value: i64) -> O\n",
+        "impl const fn convert_value<T>(value: i64) -> result<T, error> requires T == i64 =>\n",
+        "    err(error(message: \"none\", code: \"sample.none\"))\n",
+        "const fn read() -> i64? => convert_value(1)\n",
+        "const fn written() -> i64? => convert_value<i64>(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:28 type/generic.unresolved GEN-8"],
+        "{}",
+        checked.report
+    );
 }
 
 /// CAP-6 and FN-16: the ordinary faults remain primary when a nullable

@@ -16,7 +16,7 @@ use super::dependent_packs::{
 };
 use super::expressions::takes_its_type;
 use super::fit::{
-    accepts_float, arithmetic, checked_child_result, is_integer_literal, negated, whole,
+    accepts_float, arithmetic, checked_child_result, is_integer_literal, negated, not_null, whole,
 };
 use super::function_arguments::{CallbackInputs, matches_template};
 use super::inference::{
@@ -3256,7 +3256,12 @@ fn candidate_bindings(
     if let Some((result, place)) = result_fallback {
         nullable_result_fallback = matches!(place, Type::Nullable(_))
             && bare_parameter(result, generics).is_some_and(|index| found[index].is_none());
-        infer(result, place, generics, &mut found);
+        infer(
+            result,
+            not_null(Some(place)).unwrap_or(place),
+            generics,
+            &mut found,
+        );
     }
     // GEN-10: reflected packs are known before a positive existential
     // equality chooses its first binding. Unresolved non-pack arguments

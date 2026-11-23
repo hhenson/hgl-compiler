@@ -832,7 +832,12 @@ impl<'a> Typer<'a> {
             && (!matches!(place, Type::Nullable(_))
                 || self.designating == Some(Location::new(self.file, name.span())))
         {
-            infer(result, place, generics, &mut found);
+            infer(
+                result,
+                not_null(Some(place)).unwrap_or(place),
+                generics,
+                &mut found,
+            );
         }
         // GEN-8: "A generic value parameter the call does not give takes
         // its default, when it has one." Nothing has said what it is,
