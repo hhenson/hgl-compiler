@@ -149,7 +149,7 @@ transpiler: partial
 
 analyser: partial
 
-- A size is a count that is not negative; `unbounded`; size in identity, by value; tuples distinct from lists
+- `list<T>` and `list<T, unbounded>` share one type, instance identity and API documentation type name. Fixed sizes are nonnegative counts and participate in list identity. Tuples have positional identity.
 - A size is read by the one reader (`constant`) as an `i64`: a constant of a module, and a constant expression of those, is its value (UNIT-13); a list constant of another length than its place's size is of another type
 - A size a generic value parameter gives is held where the parameter is given (`values::sizes`): by a struct application written in any type, a construction's and a parent's included, its argument written, defaulted, or worked out from a size expression, through the fields of the structs it applies; and by a call of a generic function, in its parameters and result. A negative count, or no count, is `list.size` there
 - Ordinary and generic value functions accept a fixed-size list at an unsized `list<T>` parameter when the element type agrees.

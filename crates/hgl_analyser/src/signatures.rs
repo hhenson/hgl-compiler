@@ -28,7 +28,7 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
     constant_failures(program, diagnostics);
     generic_defaults(program, diagnostics);
     crate::laws::check_requirements(program, diagnostics);
-    crate::laws::check_domains(program, diagnostics);
+    crate::laws::check_properties(program, diagnostics);
     option_kinds(program, diagnostics);
     pack_declarations(program, diagnostics);
     configuration_shapes(program, diagnostics);

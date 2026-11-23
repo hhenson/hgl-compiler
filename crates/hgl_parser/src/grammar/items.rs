@@ -774,7 +774,7 @@ impl Parser<'_> {
             self.requires_clause();
         }
         if self.at(LBrace) {
-            self.header_brace();
+            self.check_body_brace();
             self.bump();
             self.nested(Context::BLOCK, |parser| {
                 // LEX-5: one member to a line.
@@ -829,7 +829,7 @@ impl Parser<'_> {
         self.expect(KwEnum);
         self.expect_name("an enum name");
         if self.at(LBrace) {
-            self.header_brace();
+            self.check_body_brace();
             self.bump();
             // Line breaks count here: the grammar admits one after `{`,
             // after a comma and before `}`, and the list helper asks for
@@ -994,9 +994,9 @@ impl Parser<'_> {
         self.expect_word("native");
         self.expect_word("type");
         self.expect_name("a type name");
-        // The body is on the declaration's line, as a struct's is: a `{`
-        // on a later line begins another statement (LEX-5).
-        if self.at(LBrace) && !self.nl() {
+        // The native type body takes the same layout as a struct (LEX-5).
+        if self.at(LBrace) {
+            self.check_body_brace();
             self.bump();
             self.nested(Context::BLOCK, |parser| {
                 // LEX-5: one property to a line.
@@ -1062,8 +1062,8 @@ impl Parser<'_> {
         self.expect_name("a function name");
         self.callable_header();
         // NATIVE-3: no body is a declaration; `{}` and `{ when; }` are
-        // implementations. Nothing but the body can begin with `{` here,
-        // so one on the next line is a misplaced body (LEX-5).
+        // implementations. A brace on the next line still opens that
+        // body (LEX-5).
         if self.at(LBrace) {
             if exported {
                 // The exported form is the declaration, which has no
@@ -1071,7 +1071,7 @@ impl Parser<'_> {
                 // `export`.
                 self.expected("a line break");
             }
-            self.header_brace();
+            self.check_body_brace();
             self.native_contract_body();
         }
         self.finish();
@@ -1146,7 +1146,7 @@ impl Parser<'_> {
         }
         self.expect_name("a test name");
         if self.at(LBrace) {
-            self.header_brace();
+            self.check_body_brace();
             self.block_with(Self::test_block_contents);
         } else {
             self.expected("`{`");
@@ -1277,7 +1277,7 @@ impl Parser<'_> {
         // A context inside a context is reported (TST-1) and parsed, so
         // this function can call itself; `enter` bounds that.
         if self.at(LBrace) && self.enter() {
-            self.header_brace();
+            self.check_body_brace();
             self.bump();
             self.nested(Context::BLOCK, |parser| {
                 parser.items(true);
