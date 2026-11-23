@@ -38,8 +38,13 @@ transpiler: partial
 
 ## GEN-3
 
+parser: done
+
+- Category keywords `struct` and `enum` occur only after a membership's `in`.
+
 analyser: partial
 
+- Category membership tests the nominal kind, including generic structs, and excludes nullable types, other composites, native types and ordinary constants. Stated category facts are preserved through generic calls; negation and disjunction do not invent positive category evidence. The complete `examples.categories` illustration executes all three selections, with the separate `i64` call rejected.
 - A positive conjunctive `any` equality binds one unresolved generic from the first matching pack entry, with tentative bindings discarded on a failed trial and conjuncts revisited to a fixed point. Negation and disjunction only test supplied bindings.
 - Bare bool generic terms and their negations are checked at calls and candidates; positive terms also state a bool bound in a generic body.
 - Inequality constraints parse and test resolved operands, including named module constants, without binding.
@@ -160,6 +165,7 @@ parser: partial
 
 analyser: partial
 
+- `tuple<Ts>` captures and expands a type pack in element order, including nested types, explicit arguments, cardinalities and repeated captures. Ordinary type parameters remain one element even when their type is itself a tuple. Tuple captures share the existing specialization path with ordinary calls and independently typed callbacks. Forwarded sequences retain their splice position among fixed tuple elements, and must prove the callee's category requirements under the wrapper's stated bounds.
 - A cardinality bounds the arguments a generic type's pack takes, and has its upper bound at least its lower
 - Function and operator calls check the cardinality of captured arguments against the value parameter and its generic type pack. Explicit positional type sequences also constrain the argument count. The HIR records the resolved sequence of types for each captured type pack.
 - A function's `each T in types(Ts)` checks its condition for every resolved type in the pack. An empty capture satisfies it. Equality and membership can test the bound type by name. A verdict the analyser cannot give rejects as untold (GEN-3).

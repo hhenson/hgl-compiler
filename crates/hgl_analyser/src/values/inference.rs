@@ -899,17 +899,14 @@ impl<'a> Typer<'a> {
             }
         }
         for pack in tuple_pack_bindings(generics, &mut found, &self.signature.generics) {
+            self.check_tuple_pack(
+                Location::new(self.file, name.span()),
+                &generics[pack.parameter],
+                &pack,
+            );
             if pack.forwarded_from.is_none()
-                && let GenericKind::Pack { minimum, maximum } = generics[pack.parameter].kind
+                && written_pack.is_none_or(|(parameter, _)| parameter != pack.parameter)
             {
-                self.check_pack_count_at(
-                    Location::new(self.file, name.span()),
-                    &generics[pack.parameter].name,
-                    (minimum, maximum),
-                    pack.types.len() as u64,
-                );
-            }
-            if written_pack.is_none_or(|(parameter, _)| parameter != pack.parameter) {
                 for (slot, input) in slots.iter().enumerate() {
                     if input.type_pack == Some(pack.parameter) {
                         let count = assigned
@@ -1174,6 +1171,37 @@ impl<'a> Typer<'a> {
             type_packs,
         }
     }
+    /// GEN-10: every length the enclosing tuple admits must fit the
+    /// callee's pack, rather than counting one symbolic marker as one type.
+    pub(super) fn check_tuple_pack(
+        &mut self,
+        at: Location,
+        generic: &GenericParameter,
+        pack: &hir::TypePackArgument,
+    ) -> bool {
+        if tuple_pack_fits(pack, generic, &self.signature.generics) {
+            return true;
+        }
+        let GenericKind::Pack { minimum, maximum } = generic.kind else {
+            return true;
+        };
+        let (lower, upper) = tuple_pack_cardinality(pack, &self.signature.generics);
+        if upper == Some(lower) {
+            self.check_pack_count_at(at, &generic.name, (minimum, maximum), lower);
+        } else {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::PACK_CARDINALITY,
+                at,
+                format!(
+                    "the tuple's forwarded pack does not guarantee the cardinality of `{}`",
+                    generic.name
+                ),
+                "GEN-10",
+            ));
+        }
+        false
+    }
 }
 
 /// Whether an argument has no complete type without its expected place.
@@ -1390,6 +1418,47 @@ fn infer_tuple(
     }
 }
 
+/// The length range of a tuple capture, including repeated forwarded packs.
+fn tuple_pack_cardinality(
+    pack: &hir::TypePackArgument,
+    enclosing: &[GenericParameter],
+) -> (u64, Option<u64>) {
+    pack.types
+        .iter()
+        .fold((0u64, Some(0u64)), |(low, high), ty| {
+            let bounds = match ty {
+                Type::Parameter { at, .. } => enclosing
+                    .iter()
+                    .find(|generic| generic.at == *at)
+                    .and_then(|generic| match generic.kind {
+                        GenericKind::Pack { minimum, maximum } => Some((minimum, maximum)),
+                        _ => None,
+                    }),
+                _ => None,
+            }
+            .unwrap_or((1, Some(1)));
+            (
+                low.saturating_add(bounds.0),
+                high.zip(bounds.1)
+                    .map(|(left, right)| left.saturating_add(right)),
+            )
+        })
+}
+
+/// GEN-7 and GEN-10: a tuple capture satisfies the callee's cardinality
+/// for all lengths admitted by the declaration that forwards it.
+pub(super) fn tuple_pack_fits(
+    pack: &hir::TypePackArgument,
+    generic: &GenericParameter,
+    enclosing: &[GenericParameter],
+) -> bool {
+    let GenericKind::Pack { minimum, maximum } = generic.kind else {
+        return true;
+    };
+    let (lower, upper) = tuple_pack_cardinality(pack, enclosing);
+    lower >= minimum && maximum.is_none_or(|maximum| upper.is_some_and(|upper| upper <= maximum))
+}
+
 /// Move tuple-captured sequences into the same pack table used by value
 /// packs and reflection. Generic argument slots retain the existing unknown
 /// marker: a pack is never substituted as a single tuple-valued type.
@@ -1439,7 +1508,13 @@ pub(super) fn infer(
     match (pattern, actual) {
         (_, Type::Unknown) => {}
         (Type::Parameter { at, .. }, actual) => {
-            find(*at, Argument::Type(actual.clone()), generics, found);
+            // GEN-2: a pack is a sequence. Its tuple capture is bound by
+            // infer_tuple; one ordinary type is never its whole binding.
+            if !generics.iter().any(|generic| {
+                generic.at == *at && matches!(generic.kind, GenericKind::Pack { .. })
+            }) {
+                find(*at, Argument::Type(actual.clone()), generics, found);
+            }
         }
         (Type::Function(pattern), Type::Function(actual)) => {
             for (pattern, actual) in pattern

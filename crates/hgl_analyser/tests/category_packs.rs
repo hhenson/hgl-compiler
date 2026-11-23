@@ -188,3 +188,30 @@ fn tuple_packs_forward_through_generic_bodies() {
         "module m\nconst fn echo<...Ts>(x: tuple<Ts>) -> tuple<Ts> => x\nconst fn forward<...Us>(x: tuple<Us>) -> tuple<Us> => echo(x)\ntest checks { let pair: tuple<i64, str> = forward((1, \"a\"))\n assert pair[0] == 1 }",
     );
 }
+
+#[test]
+fn forwarded_tuple_requirements_need_the_stated_category_bound() {
+    // GEN-3, GEN-7, GEN-10: tuple forwarding is not the deferred reflected
+    // callback path. Each admitted element must have the stated category.
+    let inner = "module m\nconst fn inner<...Ts>(value: tuple<Ts>) -> bool requires each T in types(Ts) { T in struct } => true\n";
+    rejects(
+        &format!("{inner}const fn outer<...Us>(value: tuple<Us>) -> bool => inner(value)"),
+        "constraint/requires.unmet",
+    );
+    accepts(&format!(
+        "{inner}const fn outer<...Us>(value: tuple<Us>) -> bool requires each U in types(Us) {{ U in struct }} => inner(value)"
+    ));
+}
+
+#[test]
+fn forwarded_tuple_cardinality_uses_the_enclosing_bounds() {
+    // GEN-7, GEN-10: a symbolic pack marker is not one captured type.
+    let inner = "module m\nconst fn pair<...Ts{2}>(x: tuple<Ts>) -> tuple<Ts> => x\n";
+    accepts(&format!(
+        "{inner}const fn outer<...Us{{2}}>(x: tuple<Us>) -> tuple<Us> => pair(x)"
+    ));
+    rejects(
+        &format!("{inner}const fn outer<...Us>(x: tuple<Us>) -> tuple<Us> => pair(x)"),
+        "type/pack.cardinality",
+    );
+}

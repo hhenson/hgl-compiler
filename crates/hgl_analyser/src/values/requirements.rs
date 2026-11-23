@@ -542,7 +542,16 @@ impl<'a> Typer<'a> {
         generics: &[Argument],
         type_packs: &[hir::TypePackArgument],
     ) -> bool {
-        if type_packs.iter().any(|pack| pack.forwarded_from.is_some()) {
+        if type_packs.iter().any(|pack| {
+            pack.forwarded_from.is_some_and(|source| {
+                !pack
+                    .types
+                    .iter()
+                    .any(|ty| matches!(ty, Type::Parameter { at, .. } if *at == source))
+            })
+        }) {
+            // GEN-10 tuple captures keep a marker and must prove the
+            // callee's requirements under the body's own constraints.
             // GEN-17: a function parameter's reflected shape is supplied
             // by the caller of the enclosing declaration.
             return true;
@@ -3936,6 +3945,27 @@ fn category_facts(
             }
             left
         }
+        SyntaxKind::ConstraintEach if positive => {
+            let mut children = node.children();
+            let (Some(view), Some(body)) = (children.next(), children.next()) else {
+                return Vec::new();
+            };
+            let Some((view, name)) = pack_view(view) else {
+                return Vec::new();
+            };
+            if view.text() != "types" || !module.uses.iter().any(|used|
+                used.at == Location::new(file, name.span())
+                    && matches!(&used.binding, Binding::Local { at: declared, .. } if *declared == at)) {
+                return Vec::new();
+            }
+            let Some(bound) = tokens(node)
+                .filter(|token| token.kind() == SyntaxKind::Ident)
+                .nth(1)
+            else {
+                return Vec::new();
+            };
+            category_facts(&body, module, file, Location::new(file, bound.span()), true)
+        }
         SyntaxKind::ConstraintRelation if tokens(node).any(|token| token.text() == "in") => {
             let mut children = node.children();
             let (Some(left), Some(right)) = (children.next(), children.next()) else {
@@ -3966,6 +3996,8 @@ fn category_facts(
 
 /// What a candidate's condition is checked against at a call.
 pub(super) struct Condition<'c> {
+    /// Declaration identities used to prove category facts of symbolic types.
+    pub(super) program: &'c Program,
     /// The value an option has at the call: what the call gives it, or
     /// its default. `None` when it is no constant this pass reads.
     pub(super) value_of: &'c dyn Fn(&str) -> Option<ConstantValue>,
@@ -4219,13 +4251,14 @@ fn requires_holds(
                     .written
                     .iter()
                     .find(|read| read.at.file == file && read.at.span.start == node.span().start)?;
-                Some(pack_types.project(&read.ty, &map).ok()?)
+                pack_types.project(&read.ty, &map).ok()
             })?;
         category_holds(program, &raw, category)
     };
     holds_with_packs(
         condition,
         &Condition {
+            program,
             value_of: &value_of,
             constant: &constant,
             type_of: &type_of,
@@ -4490,10 +4523,19 @@ fn holds_with_packs(
                     return Some(false);
                 }
                 let ty = option(left)
-                    .and_then(|name| (of.type_of)(&name))
+                    .and_then(|name| {
+                        keys.iter()
+                            .rev()
+                            .find(|key| key.name == name)
+                            .and_then(|key| match &key.argument {
+                                Argument::Type(ty) => Some(ty.clone()),
+                                _ => None,
+                            })
+                    })
+                    .or_else(|| option(left).and_then(|name| (of.type_of)(&name)))
                     .or_else(|| (scope?.written)(left, keys));
                 if let Some(ty) = ty
-                    && let Some(held) = known_category(&ty, category)
+                    && let Some(held) = category_holds(of.program, &ty, category)
                 {
                     return Some(held);
                 }

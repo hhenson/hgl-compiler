@@ -439,6 +439,7 @@ impl<'a> Typer<'a> {
                     return false;
                 };
                 let partial = Condition {
+                    program: self.program,
                     value_of: &|_| None,
                     constant: &|_, _| None,
                     type_of: &|name| (name == generic.name).then(|| ty.clone()),
@@ -1391,6 +1392,7 @@ impl<'a> Typer<'a> {
         // (`Admits::Unknown`), whatever it is not told for.
         let unvalued = std::cell::Cell::new(false);
         let condition_of = Condition {
+            program: self.program,
             value_of: &value_of,
             constant: &constant,
             type_of: &type_of,
@@ -3245,11 +3247,12 @@ fn candidate_bindings(
     for pack in
         super::inference::tuple_pack_bindings(generics, &mut found, &typer.signature.generics)
     {
-        if let GenericKind::Pack { minimum, maximum } = generics[pack.parameter].kind {
-            let count = pack.types.len() as u64;
-            if count < minimum || maximum.is_some_and(|upper| count > upper) {
-                return None;
-            }
+        if !super::inference::tuple_pack_fits(
+            &pack,
+            &generics[pack.parameter],
+            &typer.signature.generics,
+        ) {
+            return None;
         }
         type_packs.retain(|other| other.parameter != pack.parameter);
         type_packs.push(pack);

@@ -631,6 +631,13 @@ impl<'a> Typer<'a> {
             &mut found,
             &self.signature.generics,
         ) {
+            if !self.check_tuple_pack(
+                self.at(node),
+                &signature.generics[captured.parameter],
+                &captured,
+            ) {
+                return None;
+            }
             if let Some(written) = type_packs
                 .iter()
                 .find(|pack| pack.parameter == captured.parameter)
@@ -687,15 +694,6 @@ impl<'a> Typer<'a> {
         }
         type_packs.sort_by_key(|pack| pack.parameter);
         for pack in &type_packs {
-            if let GenericKind::Pack { minimum, maximum } = signature.generics[pack.parameter].kind
-            {
-                self.check_pack_count_at(
-                    self.at(node),
-                    &signature.generics[pack.parameter].name,
-                    (minimum, maximum),
-                    pack.types.len() as u64,
-                );
-            }
             // The sequence is separate from the generic slot (GEN-8).
             found[pack.parameter] = Some(Argument::Type(Type::Unknown));
         }

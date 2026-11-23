@@ -1141,8 +1141,9 @@ writes, then what its place expects, then its arguments, and a default
 where none of them says (GEN-8). The output requested is matched as far
 as it is known, so `window(x)` asks for a list of three of any type.
 
-Not read yet: a function with a type pack or a pack parameter, whose
-generic types are then not known; the type of a generic argument written
+A function's type pack is captured from a value pack or a tuple's element
+sequence (GEN-10); explicit positional types constrain either capture.
+Not read yet: the type of a generic argument written
 after the callee's name, `scale<"wide">(n)`, against its parameter's; an
 operator's own generic value parameter given by name.
 
@@ -1365,8 +1366,8 @@ judged.
 
 A candidate outranks another when it is as specific in every parameter
 and more specific in one. One that nothing outranks is selected; two
-are `operator.ambiguous`. Not read yet: a candidate with a generic value
-parameter or a type pack, which leaves the whole call unread.
+are `operator.ambiguous`. A candidate's generic values and captured type
+sequences specialize its signature before the operands are fitted.
 
 An argument that is read as the type of its place, `null`,
 `.member`, or a sequence or tuple written out, is tried against each
@@ -1391,6 +1392,27 @@ null, an input is valid, a result is a success or a failure. A
 condition gives the facts that hold where it does and where it does
 not, and a branch, the right operand of a connective and what follows a
 branch that returns each read under theirs.
+
+### Categories and tuple type packs
+
+GEN-3 category keywords are separate constraint operands, admitted only
+after `in`. Their predicate tests a nominal struct or enum declaration;
+a nullable type, another composite or a native type has neither category.
+A symbolic parameter uses category facts stated by its own declaration.
+Conjunction collects facts, while disjunction retains only facts common
+to its alternatives; negation does not identify every non-enum as a struct.
+An `each` category bound also authorizes a forwarded tuple's generic call.
+Unstated wrappers reject where declared (GEN-7).
+
+GEN-10 tuple inference captures a sequence of element types into the
+existing `TypePackArgument` table. Ordinary generic slots do not treat that
+sequence as one tuple-valued type. `PackTypes::project` expands tuple
+elements during ordinary and callback specialization, under the existing
+type-size limit. Forwarded tuple captures retain their symbolic splice
+position among fixed elements until the caller supplies the pack; the
+ordinary type-substitution pass preserves that marker. A reflected callback
+with an unknown suffix leaves the tuple's arity unresolved. Tuple forwarding
+proves its requirements, separately from the deferred reflected-pack path.
 
 ### Compile-time laws and existential constraints
 

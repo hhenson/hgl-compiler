@@ -59,3 +59,42 @@ test category_instances {
     assert forwarded_category(Label(text: "a")) == "a struct"
     assert forwarded_category(Point(x: 1.0, y: 2.0)) == "a point"
 }
+
+# GEN-3 and GEN-10: a forwarded tuple proves its each-category bound.
+const fn structures<...Ts>(value: tuple<Ts>) -> bool
+    requires each T in types(Ts) { T in struct } => true
+const fn bounded<...Us>(value: tuple<Us>) -> bool
+    requires each U in types(Us) { U in struct } => structures(value)
+test tuple_category_requirements {
+    assert bounded((Label(text: "a"), Point(x: 1.0, y: 2.0)))
+}
+
+# GEN-10 and FN-1: the same pack types specialize a temporal function.
+fn temporal_echo<...Ts>(value: tuple<Ts>) -> tuple<Ts> {
+    when all_valid(value) { return value }
+}
+test temporal_tuple {
+    assert eval temporal_echo(value: [(1, "a"), (2, "b")]) == [(1, "a"), (2, "b")]
+}
+
+# GEN-3, GEN-7, GEN-10: rejected forms are checked independently (TST-12).
+const fn only_struct<T>(value: T) -> bool requires T in struct => true
+const fn only_enum<T>(value: T) -> bool requires T in enum => true
+const fn pair<...Ts{2}>(value: tuple<Ts>) -> tuple<Ts> => value
+
+# expect-error(operator, "operator.no_candidate")
+const fn rejected_i64() -> str => shown(1)
+# expect-error(operator, "operator.no_candidate")
+const fn rejected_scalar_category() -> str => kind(1)
+# expect-error(constraint, "requires.unmet")
+const fn rejected_struct() -> bool => only_struct(1)
+# expect-error(constraint, "requires.unmet")
+const fn rejected_enum() -> bool => only_enum(Label(text: "a"))
+# expect-error(constraint, "requires.unmet")
+const fn missing_category_bound<T>(value: T) -> bool => only_struct(value)
+# expect-error(constraint, "requires.unmet")
+const fn missing_pack_bound<...Us>(value: tuple<Us>) -> bool => structures(value)
+# expect-error(type, "pack.cardinality")
+const fn rejected_pack_count() -> tuple<i64> => pair((1,))
+# expect-error(type, "type.not_a_type")
+const fn pack_is_not_one_type<...Ts>(value: list<Ts>) -> bool => true
