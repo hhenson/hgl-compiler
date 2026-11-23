@@ -3249,20 +3249,23 @@ fn candidate_bindings(
     // type says anything of takes its default (GEN-2). GEN-6: "a
     // candidate whose option has none is admitted only when the call
     // gives it."
-    // Keep the contextual success type for admission and ranking. The
-    // named call diagnoses GEN-2 after the ordinary call checks if only
-    // this nullable place could supply its bare result type.
-    let mut nullable_result_fallback = false;
-    if let Some((result, place)) = result_fallback {
-        nullable_result_fallback = matches!(place, Type::Nullable(_))
-            && bare_parameter(result, generics).is_some_and(|index| found[index].is_none());
+    // Keep the payload binding for admission and ranking. A nullable
+    // place alone leaves the bare result unresolved (GEN-2).
+    let provisional_result = result_fallback.and_then(|(result, place)| {
+        let provisional = match place {
+            Type::Nullable(_) => {
+                bare_parameter(result, generics).filter(|&index| found[index].is_none())
+            }
+            _ => None,
+        };
         infer(
             result,
             not_null(Some(place)).unwrap_or(place),
             generics,
             &mut found,
         );
-    }
+        provisional
+    });
     // GEN-10: reflected packs are known before a positive existential
     // equality chooses its first binding. Unresolved non-pack arguments
     // remain placeholders during this projection.
@@ -3286,14 +3289,36 @@ fn candidate_bindings(
         }
         type_packs.sort_by_key(|pack| pack.parameter);
     }
-    super::quantifiers::bind(
-        &typer.program.modules[module],
-        declaration,
-        generics,
-        &type_packs,
-        &mut found,
-    );
-    Some((found, type_packs, nullable_result_fallback))
+    let bind = |found: &mut [Option<Argument>]| {
+        super::quantifiers::bind(
+            &typer.program.modules[module],
+            declaration,
+            generics,
+            &type_packs,
+            found,
+        );
+    };
+    // GEN-3: a positive equality can solve the result without the
+    // nullable place's guess. Keep the original admission bindings
+    // when that trial does not resolve the result.
+    let solved_result = provisional_result.is_some_and(|index| {
+        let mut evidence = found.clone();
+        evidence[index] = None;
+        bind(&mut evidence);
+        if evidence[index].is_none() {
+            return false;
+        }
+        found = evidence;
+        true
+    });
+    if !solved_result {
+        bind(&mut found);
+    }
+    Some((
+        found,
+        type_packs,
+        provisional_result.is_some() && !solved_result,
+    ))
 }
 
 /// ERR-12 and ERR-15: a result of a nullable value can supply the

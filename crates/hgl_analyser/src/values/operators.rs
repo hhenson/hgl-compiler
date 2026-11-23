@@ -628,13 +628,7 @@ impl<'a> Typer<'a> {
         // for the operator's result that is a type parameter and nothing
         // more: the `i64?` of `get<i64?>(global_state, key)` for core's
         // `operator get<V, S, K>(store: S, key: K) -> V` (GEN-8).
-        let result_parameter = public.result.as_ref().and_then(|result| {
-            let result = match result {
-                Type::Result { value, error } if **error == Type::Error => value.as_ref(),
-                other => other,
-            };
-            bare_parameter(result, &public.generics)
-        });
+        let result_parameter = bare_result_parameter(public);
         let result_written = requested.is_some()
             && result_parameter
                 .is_some_and(|index| matches!(explicit[index], Some(Argument::Type(_))));
@@ -754,22 +748,36 @@ impl<'a> Typer<'a> {
                     payload,
                 )
             });
-        let reported = self.diagnostics.len();
-        let (mut kind, ty) = self.called(
+        self.called_with_result_diagnostic(
             operator,
             chosen,
             given,
             operator_generics,
             (Form::Named, at),
-        );
+            unresolved,
+        )
+    }
+
+    /// A diagnostic trial runs the selected call's own checks first.
+    /// Its provisional type creates neither a store key use nor an
+    /// instance when the result remains unresolved.
+    pub(super) fn called_with_result_diagnostic(
+        &mut self,
+        operator: OperatorRef,
+        chosen: Chosen,
+        given: Vec<Given>,
+        operator_generics: Vec<Argument>,
+        form: (Form, Location),
+        unresolved: Option<Diagnostic>,
+    ) -> (ExprKind, Type) {
+        let reported = self.diagnostics.len();
+        let (mut kind, ty) = self.called(operator, chosen, given, operator_generics, form);
         if let Some(diagnostic) = unresolved
             && let ExprKind::Call { callee, .. } = &mut kind
         {
             if self.diagnostics.len() == reported && !open(&ty) {
                 self.diagnostics.emit(diagnostic);
             }
-            // A diagnostic trial cannot create an instance or a store
-            // key use with the provisional type.
             *callee = Callee::Unread;
             return (kind, Type::Unknown);
         }
@@ -778,7 +786,7 @@ impl<'a> Typer<'a> {
 
     /// The result parameter and its written position belong to the
     /// public operator, even when the candidate calls it another name.
-    fn unresolved_operator_result(
+    pub(super) fn unresolved_operator_result(
         &self,
         (name, at): (&str, Location),
         public: &Signature,
@@ -1914,6 +1922,15 @@ pub(super) fn from_place(
     {
         let _ = infer_from_place(result, expected, false, &public.generics, found);
     }
+}
+
+/// The public generic named by a bare result or bare fallible success.
+pub(super) fn bare_result_parameter(public: &Signature) -> Option<usize> {
+    let result = match public.result.as_ref()? {
+        Type::Result { value, error } if **error == Type::Error => value.as_ref(),
+        other => other,
+    };
+    bare_parameter(result, &public.generics)
 }
 
 /// True when the call cannot bind the public or candidate pack slots.

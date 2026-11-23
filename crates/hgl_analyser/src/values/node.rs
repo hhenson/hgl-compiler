@@ -11,6 +11,7 @@ use super::calls::call_callee;
 use super::control::value_of_branch;
 use super::endpoints::endpoint_argument;
 use super::fit::{accepts_float, is_integer_literal, open, whole};
+use super::symbols::symbol_span;
 use super::{Fact, Typer, children};
 use crate::hir::{
     self, Body, ConfigEntry, EndpointOperation, Expr, ExprKind, Hook, LocalId, Stmt, ValueCategory,
@@ -957,10 +958,12 @@ impl<'a> Typer<'a> {
         if *bare != Type::Unknown {
             return false;
         }
-        let Some(callee) = call_callee(&node) else {
+        let Some(span) = call_callee(&node)
+            .map(|callee| callee.span())
+            .or_else(|| symbol_span(&node))
+        else {
             return false;
         };
-        let span = callee.span();
         self.diagnostics.as_slice()[reported..]
             .iter()
             .any(|report| {
@@ -1043,9 +1046,12 @@ impl<'a> Typer<'a> {
         }
         if self.diagnostics.len() == reported {
             let previous = self.designating;
-            self.designating = call_callee(&ungrouped(node.clone()))
+            let source = ungrouped(node.clone());
+            self.designating = call_callee(&source)
                 .and_then(|callee| name_token(&callee))
-                .map(|name| Location::new(self.file, name.span()));
+                .map(|name| name.span())
+                .or_else(|| symbol_span(&source))
+                .map(|span| Location::new(self.file, span));
             let value = self.expression(node, Some(result));
             self.designating = previous;
             if self.diagnostics.len() == reported {

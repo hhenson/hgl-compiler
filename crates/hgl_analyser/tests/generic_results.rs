@@ -400,13 +400,31 @@ fn a_bare_fallible_candidate_does_not_hide_an_ambiguity() {
     }
 }
 
-/// GEN-5: the payload still admits the constrained candidate. GEN-8
-/// requires a written result when the arguments leave it open.
+/// GEN-2 and GEN-3: an equality can decide the bare result of a
+/// candidate read into a nullable place.
 #[test]
-fn a_nullable_place_admits_a_fallible_candidate_constrained_to_its_payload() {
+fn an_equality_can_resolve_a_fallible_candidates_bare_result() {
     let checked = module(concat!(
         "operator convert_value<O>(value: i64) -> O\n",
         "impl const fn convert_value<T>(value: i64) -> result<T, error> requires T == i64 =>\n",
+        "    err(error(message: \"none\", code: \"sample.none\"))\n",
+        "const fn read() -> i64? => convert_value(1)\n",
+        "const fn written() -> i64? => convert_value<i64>(1)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    assert_eq!(
+        called(&checked, body(&checked, "read")),
+        ["convert_value<i64>: result<i64, error>"]
+    );
+}
+
+/// GEN-2, proposed: a membership in several types permits them and
+/// supplies no single type for a bare result in a nullable place.
+#[test]
+fn a_type_membership_leaves_a_nullable_bare_result_unresolved() {
+    let checked = module(concat!(
+        "operator convert_value<O>(value: i64) -> O\n",
+        "impl const fn convert_value<T>(value: i64) -> result<T, error> requires T in {i64, f64} =>\n",
         "    err(error(message: \"none\", code: \"sample.none\"))\n",
         "const fn read() -> i64? => convert_value(1)\n",
         "const fn written() -> i64? => convert_value<i64>(1)\n",
@@ -498,6 +516,38 @@ fn an_unresolved_fallible_call_does_not_cascade_into_a_type_mismatch() {
         [
             "m.hgl:7:27 type/generic.unresolved GEN-8",
             "m.hgl:12:23 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-2 and TIME-7: a symbol's fallible bare result is unresolved in a
+/// nullable value, whether bound locally or published as a node result.
+#[test]
+fn a_symbol_rejects_an_unresolved_bare_result_in_a_nullable_place() {
+    let checked = module(concat!(
+        "struct Room { size: i64 }\n",
+        "impl const fn add_<T>(room: Room, label: str) -> result<T, error> =>\n",
+        "    err(error(message: \"none\", code: \"sample.none\"))\n",
+        "const fn local(value: i64) -> i64? {\n",
+        "    let saved: i64? = Room(size: value) + \"a\"\n",
+        "    return saved\n",
+        "}\n",
+        "fn returned(value: i64) -> i64? {\n",
+        "    when { return Room(size: value) + \"a\" }\n",
+        "}\n",
+        "fn assigned(value: i64) -> i64? {\n",
+        "    inject out\n",
+        "    when { out = Room(size: value) + \"a\" }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:41 type/generic.unresolved GEN-8",
+            "m.hgl:10:37 type/generic.unresolved GEN-8",
+            "m.hgl:14:36 type/generic.unresolved GEN-8",
         ],
         "{}",
         checked.report
