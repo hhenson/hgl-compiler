@@ -43,6 +43,7 @@ use hgl_analyser::{
 use hgl_diagnostics::Location;
 use hgl_lower::calls::{DefaultValue, LeftOut, left_out, runtime_arguments};
 use hgl_lower::copies::place_of;
+use hgl_lower::instances::CallableLimit;
 
 use super::Emitter;
 use super::anonymous::{anonymous_arguments, anonymous_signature};
@@ -69,14 +70,23 @@ impl Emitter<'_> {
         arguments: &[Argument],
         otherwise: &str,
     ) -> String {
-        if let Some(depth) = self.instances.exceeded_callable_depth(arguments)
+        if let Some(limit) = self
+            .instances
+            .callable_limit(self.program, callee, arguments)
             && let Some((module, declaration)) = callee.declaration()
         {
             let name = &self.program.modules[module].declarations[declaration].name;
-            return self.missing(
-                at,
-                &format!("a function argument to `{name}` specialized beyond depth {depth}"),
-            );
+            let reason = match limit {
+                CallableLimit::Size => format!(
+                    "a function argument to `{name}` with more than {} anonymous targets",
+                    crate::CALLABLE_LIMITS.targets,
+                ),
+                CallableLimit::Growth => format!(
+                    "a function argument to `{name}` with more than {} deeper specializations on one call chain",
+                    crate::CALLABLE_LIMITS.growth,
+                ),
+            };
+            return self.missing(at, &reason);
         }
         self.missing(at, otherwise)
     }

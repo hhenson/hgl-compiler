@@ -11,6 +11,7 @@
 //! for, what a type holds, and what a node's handlers and a graph's
 //! branches need. A transpiler asks it, and writes what the answers mean
 //! on its target; no two targets work them out twice.
+//! Lowering applies the instancing limits supplied by the target.
 //!
 //! It reads only the analysed program (`hgl_analyser`) and the
 //! diagnostics model (`hgl_diagnostics`), and depends on no target.

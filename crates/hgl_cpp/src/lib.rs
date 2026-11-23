@@ -43,13 +43,17 @@ use std::time::Duration;
 
 use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Diagnostics, Location};
+use hgl_lower::instances::CallableLimits;
 
 /// The name `hgl emit --target` takes for this target.
 pub const TARGET: &str = "cpp";
 
-/// The C++ target expands callable arguments statically (FN-17). Bound
-/// anonymous target nesting before a recursive wrapper amplifies its key.
-const CALLABLE_DEPTH: usize = 8;
+/// FN-17: bound the storage for anonymous wrappers and the number of
+/// deeper specializations of the same declaration on a request chain.
+const CALLABLE_LIMITS: CallableLimits = CallableLimits {
+    targets: 128,
+    growth: 8,
+};
 
 /// The codes of this target's own diagnostics. They are local to the
 /// compiler: the specification catalogues what source is rejected, and
@@ -371,7 +375,7 @@ fn transpile_with(
     let core = program.core();
     // GEN-2: C++ values are typed, so every generic function is written
     // once for each set of generic arguments it is called with.
-    let instances = hgl_lower::instances::Instances::typed(program, CALLABLE_DEPTH);
+    let instances = hgl_lower::instances::Instances::typed(program, CALLABLE_LIMITS);
     let readers = emit::readers::Readers::of(program, &instances);
     let mut unwritten_in_core = Diagnostics::new();
     let written: Vec<emit::Written> = (0..program.modules.len())

@@ -14,6 +14,7 @@
 //! and read the difference before it is committed. Building and running
 //! the C++ is the build driver's, and is tested with `hgl_cli`.
 
+use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -3250,8 +3251,8 @@ fn growing_callable_specializations_are_reported_at_the_call() {
             ),
         ),
         (
-            "second",
-            "3:34",
+            "first",
+            "5:34",
             concat!(
                 "module m\n",
                 "const fn first(f: const fn(i64) -> i64, step: i64) -> i64 =>\n",
@@ -3267,7 +3268,7 @@ fn growing_callable_specializations_are_reported_at_the_call() {
     for (function, at, source) in cases {
         let emitted = emit_with(&[("m.hgl", source)], &hgl_cpp::runtime::provides);
         let expected = format!(
-            "m.hgl:{at} the cpp target does not write a function argument to `{function}` specialized beyond depth 8 yet"
+            "m.hgl:{at} the cpp target does not write a function argument to `{function}` with more than 8 deeper specializations on one call chain yet"
         );
         assert_eq!(emitted.reported, std::slice::from_ref(&expected));
         assert_eq!(
@@ -3275,5 +3276,87 @@ fn growing_callable_specializations_are_reported_at_the_call() {
             Some(expected.as_str())
         );
         assert_eq!(emitted.blocked("independent"), None);
+    }
+}
+
+/// FN-17: a deep argument alone is fine. Reusing `apply` across a
+/// chain allows eight requests for deeper arguments and declines the ninth.
+#[test]
+fn callable_growth_limit_counts_requests_on_one_chain() {
+    for (wrappers, expected) in [
+        (10, None),
+        (
+            11,
+            Some(
+                "m.hgl:12:61 the cpp target does not write a function argument to `apply` with more than 8 deeper specializations on one call chain yet",
+            ),
+        ),
+    ] {
+        let mut source = String::from(concat!(
+            "module m\n",
+            "const fn apply(f: const fn(i64) -> i64, value: i64) -> i64 => f(value)\n",
+        ));
+        for index in 1..wrappers {
+            let next = index + 1;
+            writeln!(
+                source,
+                "const fn w{index}(f: const fn(i64) -> i64, value: i64) -> i64 => apply(fn(n) => w{next}(fn(m) => f(m + 1), n), value)"
+            )
+            .unwrap();
+        }
+        writeln!(
+            source,
+            "const fn w{wrappers}(f: const fn(i64) -> i64, value: i64) -> i64 => apply(fn(n) => f(n + 1), value)\n\
+             const fn identity(value: i64) -> i64 => value\n\
+             test chain {{ assert w1(identity, 0) == {wrappers} }}"
+        )
+        .unwrap();
+        let emitted = emit_with(&[("m.hgl", &source)], &hgl_cpp::runtime::provides);
+        assert_eq!(emitted.reported, expected.into_iter().collect::<Vec<_>>());
+        assert_eq!(emitted.blocked("chain").as_deref(), expected);
+        if expected.is_none() {
+            let module = emitted
+                .output
+                .files
+                .iter()
+                .find(|file| file.path == "modules/mod-m.cpp")
+                .expect("the accepted wrapper chain is written");
+            // Escaping an already serialized child key at every layer
+            // makes its spelling, and the names derived from it, grow exponentially.
+            assert!(module.text.len() < 128 * 1024);
+        }
+    }
+}
+
+/// FN-17: each invocation of the same anonymous callback contributes
+/// to the wrapper's size. One wrapper plus 127 invocations still fits.
+#[test]
+fn callable_size_limit_counts_repeated_targets() {
+    for (invocations, expected) in [
+        (127, None),
+        (
+            128,
+            Some(
+                "m.hgl:4:5 the cpp target does not write a function argument to `apply` with more than 128 anonymous targets yet",
+            ),
+        ),
+    ] {
+        let mut source = String::from(concat!(
+            "module m\n",
+            "const fn apply(f: const fn(i64) -> i64, value: i64) -> i64 => f(value)\n",
+            "const fn repeat_in_wrapper(f: const fn(i64) -> i64, value: i64) -> i64 =>\n",
+            "    apply(fn(x) {\n",
+        ));
+        for index in 1..=invocations {
+            writeln!(source, "        let a{index} = f(x)").unwrap();
+        }
+        writeln!(source, "        return a{invocations}").unwrap();
+        source.push_str(concat!(
+            "    }, value)\n",
+            "test tree { assert repeat_in_wrapper(fn(x) => x, 3) == 3 }\n",
+        ));
+        let emitted = emit_with(&[("m.hgl", &source)], &hgl_cpp::runtime::provides);
+        assert_eq!(emitted.reported, expected.into_iter().collect::<Vec<_>>());
+        assert_eq!(emitted.blocked("tree").as_deref(), expected);
     }
 }
