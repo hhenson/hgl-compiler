@@ -444,7 +444,7 @@ impl Emitter<'_> {
                         Some(given) => given.written.clone(),
                         None => self.expression(scope, &argument.value),
                     };
-                    unique |= super::nodes::holds_f64(program, &ty, 0);
+                    unique |= super::nodes::opaque_float_configuration(program, &ty);
                     wired.push(super::configuration::given(
                         program,
                         &ty,
@@ -538,7 +538,7 @@ impl Emitter<'_> {
             let held = super::configuration::held(program, &ty, &cpp);
             parameters.push(format!("::hgraph::Scalar<{label}, {held}> {name}"));
             roles.push(Role::Config);
-            unique |= super::nodes::holds_f64(program, &ty, 0);
+            unique |= super::nodes::opaque_float_configuration(program, &ty);
             wired.push(super::configuration::given(
                 program,
                 &ty,

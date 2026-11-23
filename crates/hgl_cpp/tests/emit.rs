@@ -412,9 +412,8 @@ fn temporal_code_is_written() {
     ] {
         assert!(core.contains(instance), "{instance} in\n{core}");
     }
-    // hgraph issue 1866: a node whose configuration holds an `f64` is a
-    // node of its own, `replay<f64>` among them; one with none is
-    // interned, above.
+    // `replay<f64>` takes an opaque list of timestamp/value tuples; its
+    // value's zero sign is hidden from hgraph's comparison (NUM-2).
     assert!(
         core.contains("add_unique_node(typeid(::hgl::core::m_::n_::i_::replay::of_f64::impl_)")
     );
@@ -1590,8 +1589,7 @@ fn lifting_code_is_written() {
 /// A capture whose configuration holds an `f64` is written (ERR-7): every
 /// boundary is a node of its own, hgraph's `compiled::try_except_`, which
 /// it interns with no other, so that two whose configurations are `0.0`
-/// and `-0.0` stay two (hgraph issue 1866 is of interning; the SDK test of
-/// `demo.configurations` runs two such).
+/// and `-0.0` stay two. The SDK test of `demo.configurations` runs two such.
 #[test]
 fn a_capture_given_an_f64_configuration_is_written() {
     let emitted = emit_with(

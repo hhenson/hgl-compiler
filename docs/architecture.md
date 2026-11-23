@@ -1901,10 +1901,10 @@ call of its wiring function (`graphs::temporal_call`), so no other
 unit instantiates hgraph's templates of a node, and a node's struct and
 state never leave its unit. A generic one is written for each instance
 `hgl_lower::instances` collects, `n_::i_::f::of_i64::impl_` and
-`w_::i_::f::of_i64`. A node whose configuration holds an `f64` (at any
-depth, `nodes::holds_f64`) is wired with `Wiring::add_unique_node`
-(`nodes::unique`) and not `hgraph::wire`, until hgraph tells `0.0` from
-`-0.0` in its interning ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866)).
+`w_::i_::f::of_i64`. hgraph 0.9.29 compares native Float zero signs when it
+interns nodes. When an opaque HGL configuration can hide an `f64`,
+`nodes::opaque_float_configuration` selects `Wiring::add_unique_node`
+to preserve the zero signs (NUM-2).
 The target's own names in this code end with `_` after a part that has
 an `_` not followed by `1`, or a plain word: `wiring_`, `state_`,
 `kept_`, `out_`, `state_type_`, `capability_03_`; `names::identifier`
@@ -2355,7 +2355,7 @@ fails where a public header brings it in.
 | `capabilities.h` | `Logger`, `Clock`, `Scheduler`, `Alarm`, `GlobalState`, each made from its hook's hgraph view, a member function for each property; `log`, `schedule` four ways, `un_schedule`, `reset`, the store's `get`, `has`, `put` of every ordinary value; core's `LogLevel` | CAP-1 to CAP-6, TIME-8 |
 | `windows.h` | A window, hgraph's `TSW` and `TSWDuration`: `endpoint_read` of one (its delta the value that arrived, none at an exit alone; `all_valid` at its minimum); `WindowArrival`, what an evaluation writes of its window result, held and pushed once (END-5, TYPE-11), or discarded with the samples and their times on `invalidate(out)` (END-4); `window_push`; its value read checked, `window_value` and `window_value_checked`, which stand for the one read in which hgraph differs, reading the values held below the minimum (`tests/hgraph_window_read.cpp` shows it on hgraph alone); `fn_removed_value_checked` | TYPE-11, END-3, END-9, ERR-14 |
 | `control.h` | What a branch of an `if` or a `switch` over a connection wires where the language gives it nothing: `never`, a connection that never ticks, the branch of no `else`; `unmatched`, the branch of no `default`, which fails with the selector's value as it is selected | CTRL-3, CTRL-6, CTRL-13 |
-| `list_endpoints.h` | The temporal form of a list: what it holds whole (`schema_value`), how it is read whole (`whole`), published (`publisher`, `publish`), and read as its delta and its `all_valid` (`endpoint_read`), each element through its own form's; a child of one (`Child`, `child`) and the port of an element (`element_port`, through `GrowingElement` for a growing list's). A tuple's form is `structs.h`'s. hgraph 0.9.23's `TSL` is built on as it is: none of TIME-7's ticks, TIME-9's validity or TYPE-16's deltas needs an adaptation (hgraph issues 1822, 1827) | TYPE-9, TYPE-10, TYPE-16, TIME-1, TIME-7, TIME-9, END-3, END-7, END-8, ERR-14, TST-5 |
+| `list_endpoints.h` | The temporal form of a list: what it holds whole (`schema_value`), how it is read whole (`whole`), published (`publisher`, `publish`), and read as its delta and its `all_valid` (`endpoint_read`), each element through its own form's; a child of one (`Child`, `child`) and the port of an element (`element_port`, through `GrowingElement` for a growing list's). A tuple's form is `structs.h`'s. hgraph's `TSL` is built on as it is: none of TIME-7's ticks, TIME-9's validity or TYPE-16's deltas needs an adaptation (hgraph issues 1822, 1827) | TYPE-9, TYPE-10, TYPE-16, TIME-1, TIME-7, TIME-9, END-3, END-7, END-8, ERR-14, TST-5 |
 | `sources.h` | `constant`, a node that publishes a value once at the start, each a node of its own (hgraph would intern two whose values are equal under `==`, `0.0` and `-0.0` among them); `resume`, which drives a source's body under the timing of `yield` | FN-3, SOURCE-1 to SOURCE-4 |
 | `references.h` | `designation`, what a `REF` input designates now, or the empty reference: what a `ref` result is given; `designated_position`, an index of a fixed list a `ref` result designates, checked, and `designation_of`, the position it names; `select_entry`, a dictionary's entry a key selects in a graph, designated | FN-16, TIME-10, END-10, EXPR-3, EXPR-7 |
 | `timing.h` | `ticked`, whether an input published or lost its value in the evaluation, by which a node with a timer tells its wakes apart; `Lent` and `Lending`, a capability lent to a source's body for one resumption | TIME-3, TIME-9, SOURCE-1, TIME-8 |
