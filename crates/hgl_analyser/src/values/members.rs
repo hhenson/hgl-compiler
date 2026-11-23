@@ -420,6 +420,11 @@ impl<'a> Typer<'a> {
             {
                 read.value
             }
+            // CTRL-16: the analyser sees a range body before the
+            // target can supply the constant of each unrolled pass.
+            Err(Fault::NotConstant) if self.range_pack_key(index) => {
+                return self.deferred_pack_entry(pack);
+            }
             Err(Fault::Reported | Fault::Failed) => return unread,
             _ => {
                 let key = Constant {
@@ -440,18 +445,14 @@ impl<'a> Typer<'a> {
                 })
         });
         let parameter = &self.signature.parameters[pack];
-        let deferred = || {
-            let ty = if type_pack(parameter, &self.signature.generics).is_some() {
-                Type::Unknown
-            } else {
-                parameter.ty.clone()
-            };
-            (ExprKind::DeferredPackRead, ty)
-        };
         let wanted = match &value {
             ConstantValue::Str(name) => Some(PackKey::Name(name.clone())),
             ConstantValue::Int(position) => usize::try_from(*position).ok().map(PackKey::Position),
             ConstantValue::Unknown => return unread,
+            // UNIT-13: a call can compute a module constant. The
+            // constant reader holds that value by its declaration even
+            // when it cannot work it out for this lookup.
+            _ if named_key(&value) => return self.deferred_pack_entry(pack),
             _ if self.pack_inputs.is_none()
                 && self
                     .signature
@@ -459,7 +460,7 @@ impl<'a> Typer<'a> {
                     .iter()
                     .any(|generic| value.names_one_of(&[generic.at])) =>
             {
-                return deferred();
+                return self.deferred_pack_entry(pack);
             }
             _ => {
                 self.pack_member_fault(
@@ -472,7 +473,7 @@ impl<'a> Typer<'a> {
             }
         };
         let Some(inputs) = &self.pack_inputs else {
-            return deferred();
+            return self.deferred_pack_entry(pack);
         };
         let entry = wanted.as_ref().and_then(|key| {
             inputs
@@ -496,6 +497,33 @@ impl<'a> Typer<'a> {
             },
             entry.ty.clone(),
         )
+    }
+
+    /// A graph range's constant binding can be part of an FN-19 key
+    /// (CTRL-16). The ordinary expression reader still checks its type.
+    fn range_pack_key(&mut self, index: &SyntaxNode) -> bool {
+        if !index.descendants().any(|part| {
+            part.kind() == SyntaxKind::NameExpr
+                && self
+                    .local_of(&part)
+                    .is_some_and(|local| self.unrolled_range_bindings.contains(&local))
+        }) {
+            return false;
+        }
+        let value = self.expression(index, None);
+        matches!(value.ty, Type::Scalar(Scalar::Str | Scalar::I64))
+            && self.is_fixed(&value, &self.unrolled_range_bindings)
+    }
+
+    /// The entry awaits either its concrete pack or its constant key.
+    fn deferred_pack_entry(&self, pack: usize) -> (ExprKind, Type) {
+        let parameter = &self.signature.parameters[pack];
+        let ty = if type_pack(parameter, &self.signature.generics).is_some() {
+            Type::Unknown
+        } else {
+            parameter.ty.clone()
+        };
+        (ExprKind::DeferredPackRead, ty)
     }
 
     /// EXPR-7: brackets read a list, tuple or dictionary. A base whose
@@ -587,6 +615,17 @@ impl<'a> Typer<'a> {
             ));
         }
         Type::Unknown
+    }
+}
+
+/// An FN-19 key can name a module constant that the constant reader
+/// has not evaluated, directly or in arithmetic or string concatenation.
+fn named_key(value: &ConstantValue) -> bool {
+    match value {
+        ConstantValue::Named { .. } => true,
+        ConstantValue::Unary(_, operand) => named_key(operand),
+        ConstantValue::Binary(_, left, right) => named_key(left) || named_key(right),
+        _ => false,
     }
 }
 

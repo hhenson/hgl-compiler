@@ -650,6 +650,7 @@ pub(super) fn check_instances(
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
     use super::requirements::{MakingCall, emit_instance_report, making_path};
+    use hgl_diagnostics::Code;
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = HashSet::new();
@@ -720,6 +721,12 @@ pub(super) fn check_instances(
                 .walk(&mut |value| visit_anonymous_bodies(value, &mut |part| record(part, false)));
         }
     }
+    let rejected_pack_calls: HashSet<_> = diagnostics
+        .as_slice()
+        .iter()
+        .filter(|report| report.code == Code::Catalogued(codes::PACK_NAME))
+        .map(|report| report.primary)
+        .collect();
     for (initial, at) in roots {
         let mut waiting = VecDeque::from([(initial, at, None)]);
         let mut parents = Vec::new();
@@ -760,7 +767,13 @@ pub(super) fn check_instances(
                 )
             };
             for report in graph_reports.as_slice() {
-                if diagnostics.as_slice().contains(report) {
+                // A missing member in the written signature rejects the
+                // making call already. Its body supplies no second pack
+                // diagnostic at the same call (ERR-9).
+                if diagnostics.as_slice().contains(report)
+                    || (report.code == Code::Catalogued(codes::PACK_NAME)
+                        && rejected_pack_calls.contains(&at))
+                {
                     continue;
                 }
                 emit_instance_report(

@@ -2233,6 +2233,82 @@ fn pack_entries_run_on_the_sdk() {
     );
 }
 
+/// FN-19: a range pass supplies a constant key (CTRL-16), and UNIT-13
+/// lets a module constant be computed by a call. Both checks succeed
+/// even when C++ cannot yet write the lookup.
+#[test]
+fn pack_entries_with_unread_constant_keys_decline_cpp_emission() {
+    let root = scratch("unread-pack-keys");
+    let cases = [
+        (
+            "range_key",
+            concat!(
+                "fn summed<...As>(args: ...As) -> i64 {\n",
+                "    var s = args[0]\n",
+                "    for i in 1..<3 { s = s + args[i] }\n",
+                "    return s\n",
+                "}\n",
+                "test example { assert eval summed([1], [10], [100]) == [111] }\n",
+            ),
+        ),
+        (
+            "range_expression_key",
+            concat!(
+                "fn summed(args: ...i64) -> i64 {\n",
+                "    var s = args[0]\n",
+                "    for i in 0..<2 { s = s + args[i + 1] }\n",
+                "    return s\n",
+                "}\n",
+                "test example { assert eval summed([1], [10], [100]) == [111] }\n",
+            ),
+        ),
+        (
+            "module_key",
+            concat!(
+                "const fn name() -> str => \"a\"\n",
+                "const key: str = name()\n",
+                "const fn fetch<...As>(args: ...{As}) -> i64 => args[key + \"b\"]\n",
+                "test example { assert fetch(ab: 1) == 1 }\n",
+            ),
+        ),
+        (
+            "generic_key",
+            concat!(
+                "const fn name() -> str => \"a\"\n",
+                "const key: str = name()\n",
+                "const fn fetch<const given: str, ...As>(args: ...{As}) -> i64 => args[given]\n",
+                "test example { assert fetch<key>(a: 1) == 1 }\n",
+            ),
+        ),
+    ];
+    for (name, body) in cases {
+        let file = write(
+            &root,
+            &format!("{name}.hgl"),
+            &format!("module {name}\n{body}"),
+        );
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        assert_eq!(
+            checked.status.code(),
+            Some(0),
+            "{name}: {}",
+            text(&checked.stderr)
+        );
+        let out = root.join(name);
+        let emitted = hgl_in(
+            &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
+            &[],
+            &[],
+        );
+        let stderr = text(&emitted.stderr);
+        assert_eq!(emitted.status.code(), Some(1), "{name}: {stderr}");
+        assert!(
+            stderr.contains("error[build/target.unsupported]"),
+            "{name}: {stderr}"
+        );
+    }
+}
+
 /// FN-17: named, operator and anonymous targets specialize value and
 /// temporal calls. Captured values and connections reach their bodies
 /// through a node hook, a graph and another static function parameter.
