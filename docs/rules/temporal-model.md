@@ -137,8 +137,9 @@ transpiler: partial
 - Supplies the declared node, source and application capabilities, including timers and
   run configuration. Wires them before initializers that read them.
 - Drops a graph-time `datetime` wake at or before the evaluation time, except
-  for an equal-time request in `start`. The first drop warns once per node,
-  and the node logs the number of further drops at stop.
+  for an equal-time request in `start`. The first drop warns once per node
+  with its display name and the requested time. At stop, the node logs the
+  number of further drops.
 - Left: Unknown or unavailable injections are reported, including graph injections other
   than the store. A nested child graph cannot read capabilities captured from its parent
   (CTRL-2).
@@ -180,5 +181,5 @@ analyser: done
 transpiler: partial
 
 - Uses hgraph reference ports to follow endpoint rebinding without re-evaluating the
-  designating node. Supports sampled, whole-input and fixed-list child designations.
+  designating node. Supports sampled, whole-input, fixed-list child and dictionary entry designations.
 - Left: Unsupported targets and output combinations are listed under FN-16.

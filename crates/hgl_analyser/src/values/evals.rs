@@ -877,9 +877,9 @@ impl<'a> Typer<'a> {
                 // holds what was published: a cell written as a value
                 // is that value, and one written `null` a published
                 // null". A cell written `null`, in parentheses or not,
-                // is that delta. Any other is read as the delta: a
-                // value where one is expected (TYPE-16), or the delta
-                // itself, in a block or a branch as outside one.
+                // is that delta. Read another nullable cell as a
+                // publication so its whole type constrains inference
+                // before considering the delta form (TIME-7, GEN-2).
                 let optional = matches!(cell, Type::Delta(of)
                     if matches!(**of, Type::Nullable(_)));
                 if optional && written_null(&value) {
@@ -892,7 +892,8 @@ impl<'a> Typer<'a> {
                 } else if let Type::Delta(of) = cell
                     && matches!(
                         **of,
-                        Type::List { .. }
+                        Type::Nullable(_)
+                            | Type::List { .. }
                             | Type::Set(_)
                             | Type::Dict { .. }
                             | Type::Tuple(_)

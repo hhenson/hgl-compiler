@@ -318,7 +318,12 @@ pub(super) fn made_in(name: &str, hook: Hook, dated: bool, parameters: &mut Vec<
 /// with neither. It is read once: a handler before another may ask for a
 /// wake under the tag that is due or passivate the input that ticked,
 /// and neither changes what woke the evaluation.
-pub(super) fn woken(context: &Context, body: &Body, inputs: &[usize]) -> String {
+pub(super) fn woken(
+    context: &Context,
+    body: &Body,
+    inputs: &[usize],
+    follows_designations: bool,
+) -> String {
     let Some(timer) = context.timer else {
         return String::new();
     };
@@ -366,10 +371,20 @@ pub(super) fn woken(context: &Context, body: &Body, inputs: &[usize]) -> String 
         Timer::Scheduler => format!("{}.is_scheduled_now()", identifier("scheduler")),
         // TIME-9: "In a node that injects `alarm` it holds where the node
         // is evaluated and no temporal input has ticked."
-        Timer::Alarm => match ticked.as_slice() {
-            [] => "true".to_string(),
-            _ => format!("!({})", ticked.join(" || ")),
-        },
+        Timer::Alarm => {
+            let no_input = match ticked.as_slice() {
+                [] => "true".to_string(),
+                _ => format!("!({})", ticked.join(" || ")),
+            };
+            // FN-16: a hidden follower's wake only refreshes the result.
+            // Where one exists, a wake without an input tick could be
+            // the follower alone, so require a due alarm for the handler.
+            if follows_designations {
+                format!("{}.was_due() && {no_input}", identifier("alarm"))
+            } else {
+                no_input
+            }
+        }
     };
     let indent = INDENT.repeat(2);
     format!(

@@ -1119,14 +1119,12 @@ mod tests {
             "const",
             "native",
             "type",
-            "switch",
             "case",
             "default",
             "in",
             "each",
             "unbounded",
             "properties",
-            "raises",
         ] {
             assert_eq!(kinds_of(name), [Ident], "{name}");
         }

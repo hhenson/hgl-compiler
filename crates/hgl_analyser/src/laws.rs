@@ -4,6 +4,8 @@
 //! independent of the candidate selected to implement its call. Nothing here
 //! proves a law or authorizes an optimizer to regroup arithmetic.
 
+use std::collections::HashSet;
+
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
@@ -308,10 +310,10 @@ pub(crate) fn domains(clause: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> {
         .filter(|node| crate::read::is_type(node.kind()))
 }
 
-/// GEN-9: property domains are concrete ordinary value types, and a
-/// later clause cannot name the same domain. The written-type pass
-/// already enforces the ordinary-value restriction.
-pub(crate) fn check_domains(program: &Program, diagnostics: &mut Diagnostics) {
+/// GEN-9: domains are concrete ordinary value types named once per
+/// operator, and each clause states a property at most once. The
+/// written-type pass already enforces the ordinary-value restriction.
+pub(crate) fn check_properties(program: &Program, diagnostics: &mut Diagnostics) {
     for module in &program.modules {
         for declaration in &module.declarations {
             let mut seen: Vec<&Type> = Vec::new();
@@ -342,19 +344,40 @@ pub(crate) fn check_domains(program: &Program, diagnostics: &mut Diagnostics) {
                     }) {
                         continue;
                     }
-                    if seen[..earlier]
+                    if let Some(first) = seen
                         .iter()
-                        .any(|previous| same_type(previous, ty) == Some(true))
+                        .position(|previous| same_type(previous, ty) == Some(true))
                     {
+                        let clause = if first < earlier {
+                            "an earlier property clause"
+                        } else {
+                            "this property clause"
+                        };
                         diagnostics.emit(error(
                             Category::Operator,
                             codes::PROPERTY_DUPLICATE,
                             at,
-                            format!("an earlier property clause already names `{ty}`"),
+                            format!("{clause} already names `{ty}`"),
                             "GEN-9",
                         ));
                     }
                     seen.push(ty);
+                }
+                let mut properties = HashSet::new();
+                for name in clause
+                    .children()
+                    .filter(|part| part.kind() == SyntaxKind::OperatorProperty)
+                    .filter_map(|property| name_token(&property))
+                {
+                    if !properties.insert(name.text().to_owned()) {
+                        diagnostics.emit(error(
+                            Category::Operator,
+                            codes::PROPERTY_DUPLICATE,
+                            Location::new(declaration.at.file, name.span()),
+                            format!("this property clause already gives `{}`", name.text()),
+                            "GEN-9",
+                        ));
+                    }
                 }
             }
         }

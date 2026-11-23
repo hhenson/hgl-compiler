@@ -456,10 +456,11 @@ analyser: done
 
 transpiler: partial
 
-- A reader observes the designated input or fixed-list child through the reference port,
-  including changes caused by rebinding or removing the target.
-- A scheduler can wake a node that forwards a `ref` parameter.
-- Left: designating a dictionary child and designating an ordinary input in a node with a timer (FN-16).
+- A reader observes the designated input, fixed-list child or dictionary entry through
+  the reference port, including changes caused by rebinding or removing the target.
+- A timer can wake a node that designates an ordinary input. A follower-only wake refreshes
+  the result without running the node's handlers.
+- Left: Unsupported reference destinations follow FN-16.
 
 ## CAP-1
 
@@ -505,8 +506,9 @@ transpiler: done
 - Supplies scheduler state and writes schedule, cancellation and reset using the SDK
   adapter. Distinguishes due scheduler wakes from input ticks.
 - Drops a nonfuture dated request in graph time, except for the node's first
-  evaluation when asked at the current time in `start`. Logs the first drop
-  per node and counts later ones at stop (TIME-8).
+  evaluation when asked at the current time in `start`. Logs the node's
+  display name and the requested time on its first drop, then counts later
+  drops at stop (TIME-8).
 
 ## CAP-5
 
