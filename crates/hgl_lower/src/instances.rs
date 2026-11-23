@@ -1016,10 +1016,7 @@ impl Instances {
                 .collect();
         }
         let ExprKind::Call {
-            callee,
-            arguments,
-            text_conversions,
-            ..
+            callee, arguments, ..
         } = &value.kind
         else {
             return Vec::new();
@@ -1053,9 +1050,6 @@ impl Instances {
             return Vec::new();
         };
         let mut found = Vec::new();
-        for conversion in text_conversions.iter().flatten() {
-            found.extend(self.asks(program, conversion, expanding));
-        }
         // Check the borrowed arguments before cloning them into a request.
         if self.instanced(program, *module, *declaration)
             && let Ok(depths) = request_depths(

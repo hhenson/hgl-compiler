@@ -114,6 +114,43 @@ fn formatting_checks_a_pattern_returned_to_a_module_constant() {
     );
 }
 
+/// FMT-5: an implicit conversion reaches the same instance and
+/// dependency checks as a written call (GEN-7, UNIT-13).
+#[test]
+fn formatting_checks_implicit_conversion_instances_and_dependencies() {
+    let checked = check(&[
+        (
+            "generic.hgl",
+            r#"module formatting_instance
+struct Wrapper<T> { field: T }
+impl const fn convert<T>(value: Wrapper<T>) -> str => format("{:x}", value.field)
+test t {
+    let wrapped = Wrapper<f64>(field: 1.5)
+    assert format("{}", wrapped) == "1.5"
+}
+"#,
+        ),
+        (
+            "constant.hgl",
+            r#"module formatting_dependency
+struct Wrapper<T> { field: T }
+impl const fn convert<T>(value: Wrapper<T>) -> str => A
+const A: str = format("{}", Wrapper<i64>(field: 1))
+test t { assert A == "first" }
+"#,
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "constant.hgl:4:7 name/constant.cycle UNIT-13",
+            "generic.hgl:6:25 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 /// The module the compiler supplies is the pinned core's, whole: every
 /// `.hgl` file under `spec/hgl_core/hgl`, with its text as it stands
 /// there. A pin that adds a file fails this until
