@@ -332,24 +332,15 @@ pub(crate) enum PatternFault {
 
 pub(crate) type PatternText = Result<Rc<str>, PatternFault>;
 
+pub(crate) const PATTERN_DECLARATIONS: usize = 64;
 const PATTERN_BYTES: usize = 64 * 1024;
 
-pub(crate) fn pattern_text(text: &str) -> PatternText {
-    if text.len() > PATTERN_BYTES {
+pub(crate) fn append_pattern(pattern: &mut String, text: &str) -> Result<(), PatternFault> {
+    if text.len() > PATTERN_BYTES - pattern.len() {
         return Err(PatternFault::Limit);
     }
-    Ok(Rc::from(text))
-}
-
-pub(crate) fn joined_pattern(left: Rc<str>, right: Rc<str>) -> PatternText {
-    let length = left.len() + right.len();
-    if length > PATTERN_BYTES {
-        return Err(PatternFault::Limit);
-    }
-    let mut text = String::with_capacity(length);
-    text.push_str(&left);
-    text.push_str(&right);
-    Ok(Rc::from(text))
+    pattern.push_str(text);
+    Ok(())
 }
 
 /// One read per declaration in this fold. Copies of a named result
@@ -361,13 +352,15 @@ impl PatternMemo {
     pub(crate) fn declaration(
         &mut self,
         key: (usize, usize),
-        read: impl FnOnce(&mut Self) -> PatternText,
+        remaining: usize,
+        read: impl FnOnce(&mut Self, usize) -> PatternText,
     ) -> PatternText {
         if let Some(result) = self.0.get(&key) {
             return result.clone();
         }
+        let next = remaining.checked_sub(1).ok_or(PatternFault::Limit)?;
         self.0.insert(key, Err(PatternFault::Unread));
-        let result = read(self);
+        let result = read(self, next);
         self.0.insert(key, result.clone());
         result
     }
@@ -380,7 +373,7 @@ pub(crate) fn constant_pattern_in(
     value: &Expr,
     instance: &[(Location, GenericArgument)],
 ) -> PatternText {
-    use PatternFault::{Limit, Unread};
+    use PatternFault::Unread;
 
     fn read(
         program: &Program,
@@ -389,43 +382,56 @@ pub(crate) fn constant_pattern_in(
         memo: &mut PatternMemo,
         remaining: usize,
     ) -> PatternText {
-        let next = remaining.checked_sub(1).ok_or(Limit)?;
-        match &value.kind {
-            ExprKind::Literal(Value::Str(value)) => pattern_text(value),
-            ExprKind::GenericValue { at, .. } => {
-                let Some((_, GenericArgument::Constant(given))) =
-                    instance.iter().find(|(parameter, _)| parameter == at)
-                else {
-                    return Err(Unread);
-                };
-                match &given.value {
-                    ConstantValue::Str(value) => pattern_text(value),
-                    _ => Err(Unread),
+        let mut text = String::new();
+        let mut pending = vec![value];
+        // Binary operands do not extend the chain of declarations.
+        while let Some(value) = pending.pop() {
+            match &value.kind {
+                ExprKind::Literal(Value::Str(value)) => append_pattern(&mut text, value)?,
+                ExprKind::GenericValue { at, .. } => {
+                    let Some((_, GenericArgument::Constant(given))) =
+                        instance.iter().find(|(parameter, _)| parameter == at)
+                    else {
+                        return Err(Unread);
+                    };
+                    let ConstantValue::Str(value) = &given.value else {
+                        return Err(Unread);
+                    };
+                    append_pattern(&mut text, value)?;
+                }
+                ExprKind::Constant {
+                    module,
+                    declaration,
+                } => {
+                    let value =
+                        memo.declaration((*module, *declaration), remaining, |memo, next| {
+                            let defined = program.modules[*module]
+                                .constants
+                                .get(*declaration)
+                                .and_then(Option::as_ref)
+                                .ok_or(Unread)?;
+                            read(program, &defined.value, instance, memo, next)
+                        })?;
+                    append_pattern(&mut text, &value)?;
+                }
+                _ => {
+                    let Some((BinaryOperator::Add, left, right)) = value.kind.binary() else {
+                        return Err(Unread);
+                    };
+                    pending.extend([right, left]);
                 }
             }
-            ExprKind::Constant {
-                module,
-                declaration,
-            } => memo.declaration((*module, *declaration), |memo| {
-                let defined = program.modules[*module]
-                    .constants
-                    .get(*declaration)
-                    .and_then(Option::as_ref)
-                    .ok_or(Unread)?;
-                read(program, &defined.value, instance, memo, next)
-            }),
-            _ => {
-                let Some((BinaryOperator::Add, left, right)) = value.kind.binary() else {
-                    return Err(Unread);
-                };
-                let left = read(program, left, instance, memo, next)?;
-                let right = read(program, right, instance, memo, next)?;
-                joined_pattern(left, right)
-            }
         }
+        Ok(Rc::from(text))
     }
 
-    read(program, value, instance, &mut PatternMemo::default(), 64)
+    read(
+        program,
+        value,
+        instance,
+        &mut PatternMemo::default(),
+        PATTERN_DECLARATIONS,
+    )
 }
 
 /// True where FMT-5 needs a selected `convert<str>` call.

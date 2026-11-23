@@ -132,6 +132,45 @@ fn bounds_doubling_format_patterns() {
     }
 }
 
+/// Concatenated literals do not consume the declaration depth budget.
+#[test]
+fn reads_long_format_pattern_expressions() {
+    let root = scratch("long-format-pattern-expression");
+    let prefix = std::iter::repeat_n("\"a\"", 199)
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let bad_pattern = format!("{prefix} + \"{{:x}}\"");
+    let cases = [
+        ("inline", String::new(), bad_pattern.clone()),
+        (
+            "constant",
+            format!("const PATTERN: str = {bad_pattern}"),
+            "PATTERN".to_string(),
+        ),
+        (
+            "pure_return",
+            format!(
+                "const fn suffix() -> str => \"{{:x}}\"\nconst PATTERN: str = {prefix} + suffix()"
+            ),
+            "PATTERN".to_string(),
+        ),
+    ];
+    for (name, declarations, pattern) in cases {
+        let source = format!(
+            "module {name}\n{declarations}\nconst fn show() -> str => format({pattern}, 1.5)\n"
+        );
+        let file = write(&root, &format!("{name}.hgl"), &source);
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        let stderr = text(&checked.stderr);
+        assert_eq!(checked.status.code(), Some(1), "{name}: {stderr}");
+        assert!(stderr.contains("format.specifier"), "{name}: {stderr}");
+    }
+    let good = format!("module good\nconst fn show() -> str => format({prefix} + \"{{}}\", 1.5)\n");
+    let file = write(&root, "good.hgl", &good);
+    let emitted = emit_format_program(&file, &root.join("good"));
+    assert!(emitted.status.success(), "{}", text(&emitted.stderr));
+}
+
 fn emit_format_program(file: &str, output: &Path) -> std::process::Output {
     hgl_in(
         &["emit", file, "--target", "cpp", "--out", &argument(output)],

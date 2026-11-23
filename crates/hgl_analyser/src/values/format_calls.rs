@@ -9,7 +9,9 @@ use hgl_source::Span;
 
 use super::{Tables, Typer, calls::call_callee, tables};
 use crate::declared::names_parameter;
-use crate::formatting::{self, PatternFault, PatternMemo, PatternText, Piece};
+use crate::formatting::{
+    self, PATTERN_DECLARATIONS, PatternFault, PatternMemo, PatternText, Piece,
+};
 use crate::hir::{Argument, Expr, ExprKind, Form, TextCall, Value, ValueCategory};
 use crate::syntax::{child, name_token, ungrouped};
 use crate::{ConstantValue, DeclarationKind, Detail, Role, Scalar, Signature, Type, codes, error};
@@ -55,7 +57,11 @@ impl Typer<'_> {
                     .node_at(pattern.value.at)
                     .ok_or(PatternFault::Unread)
                     .and_then(|source| {
-                        self.fold_source_pattern(&source, 64, &mut PatternMemo::default())
+                        self.fold_source_pattern(
+                            &source,
+                            PATTERN_DECLARATIONS,
+                            &mut PatternMemo::default(),
+                        )
                     }),
                 known => known,
             };
@@ -194,43 +200,61 @@ impl Typer<'_> {
         remaining: usize,
         memo: &mut PatternMemo,
     ) -> PatternText {
-        use PatternFault::{Limit, Unread};
+        use PatternFault::Unread;
 
-        let next = remaining.checked_sub(1).ok_or(Limit)?;
-        let source = if source.kind() == SyntaxKind::Arg {
-            source.children().last().ok_or(Unread)?
-        } else {
-            source.clone()
-        };
-        let source = ungrouped(source);
-        if source.kind() == SyntaxKind::Literal {
-            return match self.read_constant(&source, Some(&Type::Scalar(Scalar::Str))) {
-                Ok(ConstantValue::Str(text)) => formatting::pattern_text(&text),
-                _ => Err(Unread),
+        let mut text = String::new();
+        let mut pending = vec![source.clone()];
+        while let Some(source) = pending.pop() {
+            let source = if source.kind() == SyntaxKind::Arg {
+                source.children().last().ok_or(Unread)?
+            } else {
+                source
             };
+            let source = ungrouped(source);
+            match source.kind() {
+                SyntaxKind::Literal => {
+                    let Ok(ConstantValue::Str(value)) =
+                        self.read_constant(&source, Some(&Type::Scalar(Scalar::Str)))
+                    else {
+                        return Err(Unread);
+                    };
+                    formatting::append_pattern(&mut text, &value)?;
+                }
+                SyntaxKind::BinaryExpr
+                    if source.children_with_tokens().any(|child| {
+                        child
+                            .into_token()
+                            .is_some_and(|token| token.kind() == SyntaxKind::Plus)
+                    }) && child(&source, SyntaxKind::OperatorConfig).is_none() =>
+                {
+                    let mut operands = source.children();
+                    let left = operands.next().ok_or(Unread)?;
+                    let right = operands.next().ok_or(Unread)?;
+                    pending.extend([right, left]);
+                }
+                _ => {
+                    let value = self.fold_pattern_reference(&source, remaining, memo)?;
+                    formatting::append_pattern(&mut text, &value)?;
+                }
+            }
         }
-        if source.kind() == SyntaxKind::BinaryExpr
-            && source.children_with_tokens().any(|child| {
-                child
-                    .into_token()
-                    .is_some_and(|token| token.kind() == SyntaxKind::Plus)
-            })
-            && child(&source, SyntaxKind::OperatorConfig).is_none()
-        {
-            let mut operands = source.children();
-            let left = self.fold_source_pattern(&operands.next().ok_or(Unread)?, next, memo)?;
-            let right = self.fold_source_pattern(&operands.next().ok_or(Unread)?, next, memo)?;
-            return formatting::joined_pattern(left, right);
-        }
+        Ok(text.into())
+    }
+
+    fn fold_pattern_reference(
+        &self,
+        source: &SyntaxNode,
+        remaining: usize,
+        memo: &mut PatternMemo,
+    ) -> PatternText {
+        use PatternFault::Unread;
+
         let (name, kind) = if source.kind() == SyntaxKind::NameExpr {
-            (
-                name_token(&source).ok_or(Unread)?,
-                DeclarationKind::Constant,
-            )
+            (name_token(source).ok_or(Unread)?, DeclarationKind::Constant)
         } else {
-            let callee = call_callee(&source).ok_or(Unread)?;
+            let callee = call_callee(source).ok_or(Unread)?;
             if callee.kind() != SyntaxKind::NameExpr
-                || child(&source, SyntaxKind::ArgList)
+                || child(source, SyntaxKind::ArgList)
                     .ok_or(Unread)?
                     .children()
                     .next()
@@ -250,7 +274,7 @@ impl Typer<'_> {
         if self.program.modules[module].declarations[*declaration].kind != kind {
             return Err(Unread);
         }
-        memo.declaration((module, *declaration), |memo| {
+        memo.declaration((module, *declaration), remaining, |memo, next| {
             self.fold_pattern_declaration(module, *declaration, next, memo)
         })
     }
