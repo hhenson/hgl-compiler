@@ -204,6 +204,32 @@ fn a_candidate_result_honours_its_operator() {
     assert!(checked.rejected);
 }
 
+/// GEN-6: a candidate has a result when its operator has one.
+#[test]
+fn a_candidate_declares_a_result_exactly_when_its_operator_does() {
+    let checked = module(concat!(
+        "operator missing<T>(value: T) -> T\n",
+        "impl const fn missing(value: i64) {}\n",
+        "operator extra<T>(value: T)\n",
+        "impl const fn extra(value: i64) -> i64 => value\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:15 operator/impl.result GEN-6",
+            "m.hgl:5:36 operator/impl.result GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked.findings[0].message.contains("declares no result")
+            && checked.findings[0].message.ends_with("result `i64`"),
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-6: a concrete candidate outside the operator's type set rejects
 /// at its declaration even without a call. A generic candidate can remain
 /// conditional, and a concrete member of the set is admitted.
@@ -223,6 +249,33 @@ fn a_concrete_candidate_honours_its_operators_requires() {
         [
             "m.hgl:3:15 operator/impl.requires GEN-6",
             "m.hgl:7:15 operator/impl.requires GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6: a condition can test a value the candidate's input type binds.
+#[test]
+fn a_candidate_honours_requires_on_inferred_values() {
+    let checked = module(concat!(
+        "operator member<const N: i64>(x: list<i64, N>) requires N in {1, 2}\n",
+        "impl const fn member(x: list<i64, 3>) {}\n",
+        "impl const fn member(x: list<i64, 2>) {}\n",
+        "operator equal<const N: i64>(x: list<i64, N>) requires N == 2\n",
+        "impl const fn equal(x: list<i64, 3>) {}\n",
+        "enum Zero { ieee, nan }\n",
+        "struct Z<const z: Zero> {}\n",
+        "operator choose<const z: Zero>(x: Z<z>) requires z == .nan\n",
+        "impl const fn choose(x: Z<.ieee>) {}\n",
+        "impl const fn choose(x: Z<.nan>) {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:15 operator/impl.requires GEN-6",
+            "m.hgl:6:15 operator/impl.requires GEN-6",
+            "m.hgl:10:15 operator/impl.requires GEN-6",
         ],
         "{}",
         checked.report
@@ -308,6 +361,53 @@ fn a_result_contract_checks_values_used_across_inputs() {
             .filter(|report| report.contains("operator/impl.result"))
             .collect::<Vec<_>>(),
         ["m.hgl:4:57 operator/impl.result GEN-6"],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6: a result dependent on an unbound generic value has no one
+/// declared type to compare at the candidate's declaration.
+#[test]
+fn a_result_contract_leaves_unbound_sizes_open() {
+    let checked = module(concat!(
+        "operator by_argument<const N: i64>(x: list<i64, N>) -> list<i64, N>\n",
+        "impl const fn by_argument(x: list<i64>) -> list<i64> => x\n",
+        "operator by_result<const N: i64>(x: i64) -> list<i64, N>\n",
+        "impl const fn by_result(x: i64) -> list<i64> => [x]\n",
+        "operator generic<const N: i64>(x: list<i64, N>) -> list<i64, N>\n",
+        "impl const fn generic<const M: i64>(x: list<i64, M>) -> list<i64> => []\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// GEN-6: a contract comparison needs a valid candidate and operator.
+/// An invalid binding in a named test is already reported by TST-2.
+#[test]
+fn a_result_contract_does_not_repeat_an_earlier_declaration_error() {
+    let checked = module(concat!(
+        "operator tp2<...Ts>(values: ...Ts) -> tuple<Ts>\n",
+        "impl const fn tp2(values: ...i64{2}) -> tuple<i64, i64> => (1, 2)\n",
+        "operator list_size<const N: i64>(x: list<i64, N>) -> list<i64, N>\n",
+        "impl const fn list_size(x: list<i64, -1>) -> list<i64, 2> => [1, 2]\n",
+        "operator fixed<T>(value: T) -> T\n",
+        "test local {\n",
+        "    operator fixed<T>(value: T) -> list<T>\n",
+        "    impl const fn fixed(value: i64) -> list<i64> => [value]\n",
+        "}\n",
+    ));
+    let codes: Vec<_> = checked
+        .findings
+        .iter()
+        .map(|item| item.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "type/type.not_a_type",
+            "type/list.size",
+            "name/name.duplicate"
+        ],
         "{}",
         checked.report
     );

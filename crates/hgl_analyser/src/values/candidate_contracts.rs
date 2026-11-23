@@ -1,24 +1,33 @@
 //! GEN-6 declaration checks for a candidate's result and its operator's
-//! type requirements. The signature pass runs these before bodies are typed.
+//! requirements. The signature pass runs these before bodies are typed.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_diagnostics::{Category, Diagnostics, Location, Severity};
 use hgl_parser::{HasSpan, SyntaxKind};
+use hgl_source::FileId;
 
-use crate::declared::{same_type, substitute_within};
-use crate::program::{Program, Role};
+use crate::constant::{Constants, Scope};
+use crate::declared::{names_one_of, same_type, substitute_within};
+use crate::program::{Declaration, DeclarationKind, Program, Role};
 use crate::read::type_child;
 use crate::syntax::child;
-use crate::types::{Argument, ConstantValue, Detail, Signature, Type};
+use crate::types::{Argument, ConstantValue, Detail, GenericKind, Signature, Type};
 use crate::{codes, error};
 
 use super::inference::infer;
-use super::requirements::declared_type_requirement;
+use super::requirements::declared_requirement;
 
 /// Report contradictions that follow from the candidate's declared types.
 pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Diagnostics) {
+    let uses: HashMap<_, _> = program
+        .modules
+        .iter()
+        .flat_map(|module| &module.uses)
+        .map(|used| ((used.at.file, used.at.span.start), &used.binding))
+        .collect();
+    let constants = Constants::default();
     for module in &program.modules {
         for (candidate, detail) in module.declarations.iter().zip(&module.details) {
             let (Some((role, Some(operator))), Detail::Callable(signature)) =
@@ -32,43 +41,61 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
             else {
                 continue;
             };
+            let shadowed = candidate.test_owner.is_some()
+                && module.declarations.iter().any(|other| {
+                    other.kind == DeclarationKind::Operator
+                        && other.test_owner == candidate.test_owner
+                        && other.name == candidate.name
+                        && diagnostics.as_slice().iter().any(|diagnostic| {
+                            diagnostic.primary == other.at
+                                && diagnostic.code.as_str() == codes::NAME_DUPLICATE
+                        })
+                });
+            if shadowed
+                || declaration_has_error(candidate, diagnostics)
+                || declaration_has_error(declared, diagnostics)
+            {
+                continue;
+            }
             let Some(arguments) = parameter_types(public, signature, role) else {
                 continue;
             };
-            if let (Some(expected), Some(actual), Some(written)) = (
-                &public.result,
-                &signature.result,
-                child(&candidate.syntax, SyntaxKind::ReturnType)
+            let bindings: Vec<_> = public
+                .generics
+                .iter()
+                .zip(&arguments)
+                .map(|(parameter, argument)| (parameter.at, argument))
+                .collect();
+            if let Some(message) = result_error(&public.result, &signature.result, &bindings) {
+                let at = child(&candidate.syntax, SyntaxKind::ReturnType)
                     .as_ref()
-                    .and_then(type_child),
-            ) {
-                let bindings: Vec<_> = public
-                    .generics
-                    .iter()
-                    .zip(&arguments)
-                    .map(|(parameter, argument)| (parameter.at, argument))
-                    .collect();
-                let expected = substitute_within(expected, &bindings);
-                if mismatched_result(&expected, actual) {
-                    diagnostics.emit(
-                        error(
-                            Category::Operator,
-                            codes::IMPL_RESULT,
-                            Location::new(candidate.at.file, written.span()),
-                            format!(
-                                "this candidate declares result `{actual}` where the operator gives these parameters result `{expected}`"
-                            ),
-                            "GEN-6",
-                        )
+                    .and_then(type_child)
+                    .map_or(candidate.at, |ty| {
+                        Location::new(candidate.at.file, ty.span())
+                    });
+                diagnostics.emit(
+                    error(Category::Operator, codes::IMPL_RESULT, at, message, "GEN-6")
                         .with_related(declared.at, "the operator's declaration"),
-                    );
-                }
+                );
             }
-            if declared_type_requirement(
+            let binding = |file: FileId, at: u32| uses.get(&(file, at)).map(|binding| &**binding);
+            let parameter = |at| {
+                let generic = public.generics.iter().find(|generic| generic.at == at)?;
+                match &generic.kind {
+                    GenericKind::Value(ty) => Some(substitute_within(ty, &bindings)),
+                    _ => None,
+                }
+            };
+            let scope = Scope {
                 program,
-                (operator.module, operator.declaration),
-                &arguments,
-            ) == Some(false)
+                file: declared.at.file,
+                binding: &binding,
+                parameter: &parameter,
+                arguments: &bindings,
+                constants: &constants,
+            };
+            if declared_requirement(&scope, (operator.module, operator.declaration), &arguments)
+                == Some(false)
             {
                 diagnostics.emit(
                     error(
@@ -84,6 +111,62 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
             }
         }
     }
+}
+
+/// GEN-6: a candidate declares the operator's result, when this
+/// declaration determines it, and declares one only if the operator does.
+fn result_error(
+    expected: &Option<Type>,
+    actual: &Option<Type>,
+    bindings: &[(Location, &Argument)],
+) -> Option<String> {
+    match (expected, actual) {
+        (Some(expected), Some(actual)) if result_is_bound(expected, bindings) => {
+            let expected = substitute_within(expected, bindings);
+            mismatched_result(&expected, actual).then(|| {
+                format!(
+                    "this candidate declares result `{actual}` where the operator gives these parameters result `{expected}`"
+                )
+            })
+        }
+        (Some(expected), None) => {
+            let expected = substitute_within(expected, bindings);
+            Some(format!(
+                "this candidate declares no result where the operator gives these parameters result `{expected}`"
+            ))
+        }
+        (None, Some(actual)) => Some(format!(
+            "this candidate declares result `{actual}` where the operator declares no result"
+        )),
+        _ => None,
+    }
+}
+
+/// An earlier error in either declaration can invalidate the comparison.
+fn declaration_has_error(declaration: &Declaration, diagnostics: &Diagnostics) -> bool {
+    let span = declaration.syntax.span();
+    diagnostics.as_slice().iter().any(|diagnostic| {
+        diagnostic.severity == Severity::Error
+            && diagnostic.primary.file == declaration.at.file
+            && (span.start..span.end).contains(&diagnostic.primary.span.start)
+    })
+}
+
+/// The operator's generic result can still depend on an argument the
+/// candidate's inputs do not establish, such as an unsized list's extent.
+fn result_is_bound(ty: &Type, bindings: &[(Location, &Argument)]) -> bool {
+    let unbound: Vec<_> = bindings
+        .iter()
+        .filter_map(|&(at, argument)| match argument {
+            Argument::Type(Type::Unknown) => Some(at),
+            Argument::Constant(constant) if constant.value.key().is_none() => Some(at),
+            _ => None,
+        })
+        .collect();
+    !names_one_of(ty, &unbound)
+        && !ty.any_part(&|_| false, &|constant| {
+            constant.value.names_one_of(&unbound)
+        })
 }
 
 /// Bind the operator's generics from the corresponding candidate parameters.

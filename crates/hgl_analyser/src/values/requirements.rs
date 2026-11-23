@@ -16,6 +16,7 @@ use super::forwarded_packs::{visit_anonymous_bodies, walk_nested_calls};
 use super::inference::{fixed, mentions, placed, unsaid};
 use super::operators::{Requested, from_place, has_generic_configuration_default, unreadable};
 use super::{REQUIRING, Typer};
+use crate::constant::Scope;
 use crate::declared::{
     names_parameter, same_type, substitute_with_members, substitute_within, weight,
 };
@@ -3445,21 +3446,22 @@ struct Told<'t> {
     member_fault: Option<&'t std::cell::RefCell<Option<super::dependent_packs::MemberFault>>>,
 }
 
-/// GEN-6: what the operator's condition says of a candidate's declared
-/// parameter types. Options and callable requirements need call-site facts.
-pub(super) fn declared_type_requirement(
-    program: &Program,
+/// GEN-6: what the operator's condition says of the types and values
+/// bound by the candidate's declared parameters. Callability requirements
+/// and options the declaration leaves open still need call-site facts.
+pub(super) fn declared_requirement(
+    scope: &Scope,
     operator: (usize, usize),
     arguments: &[Argument],
 ) -> Option<bool> {
-    let (_, condition) = required(program, operator)?;
+    let (_, condition) = required(scope.program, operator)?;
     requires_holds(
-        program,
+        scope.program,
         operator,
         arguments,
         &condition,
         &Told {
-            constant: &|_, _| None,
+            constant: &|node, ty| crate::constant::read(node, ty, scope).ok(),
             callable: &|_| None,
             unvalued: &std::cell::Cell::new(false),
             type_packs: &[],
