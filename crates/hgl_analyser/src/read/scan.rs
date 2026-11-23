@@ -30,8 +30,14 @@ impl Reader<'_> {
                     // A const option compared in a constraint is a
                     // value: no type is written there. So is a constant
                     // compared with one (UNIT-13).
+                    let category = node.parent().is_some_and(|parent| {
+                        parent.kind() == SyntaxKind::ConstraintRelation
+                            && parent
+                                .children()
+                                .any(|child| child.kind() == SyntaxKind::ConstraintCategory)
+                    });
                     if !inside
-                        && !self.names_an_option(&node)
+                        && (category || !self.names_an_option(&node))
                         && !self.compared_constant(&node)
                         && !self.constraint_pack_key(&node)
                         // GEN-18: this operand names a formal function,
@@ -71,6 +77,24 @@ impl Reader<'_> {
                     // selects them.
                     if let Some(list) = child(&node, SyntaxKind::GenericArgs) {
                         self.arguments(&list, Position::OPEN, None, None);
+                    }
+                }
+                SyntaxKind::ConstraintRelation
+                    if node
+                        .children()
+                        .any(|child| child.kind() == SyntaxKind::ConstraintCategory) =>
+                {
+                    if let Some(left) = node.children().next()
+                        && !is_type(left.kind())
+                        && !(left.kind() == SyntaxKind::IndexExpr && self.indexed_pack(&left))
+                    {
+                        self.diagnostics.emit(crate::error(
+                            hgl_diagnostics::Category::Type,
+                            crate::codes::TYPE_NOT_A_TYPE,
+                            self.at(left.span()),
+                            "a category membership needs a type".to_string(),
+                            "GEN-3",
+                        ));
                     }
                 }
                 _ => {}

@@ -109,7 +109,7 @@ fn a_category_never_holds_for_a_generic_value() {
     // GEN-3: category memberships are of types, not bool constants.
     rejects(
         "module m\nconst fn inner<const flag: bool = true>() -> bool requires flag in struct => true\nconst fn bad() -> bool => inner()",
-        "constraint/requires.unmet",
+        "type/type.not_a_type",
     );
 }
 
@@ -221,5 +221,35 @@ fn an_empty_forwarded_pack_contributes_no_category_test() {
     // GEN-10: an empty conjunction is true; the fixed struct remains.
     accepts(
         "module m\nstruct Label { text: str }\nconst fn structures<...Ts>(x: tuple<Ts>) -> bool requires each T in types(Ts) { T in struct } => true\nconst fn outer<...Us{0}>(x: tuple<Label, Us>) -> bool => structures(x)\ntest checks { assert outer((Label(text: \"a\"),)) }",
+    );
+}
+
+#[test]
+fn a_category_alone_settles_an_otherwise_unused_generic_as_a_type() {
+    // GEN-3 and GEN-13: the constraint determines T's kind without an input.
+    let declaration = "module m\nstruct Label { text: str }\nconst fn category<T>() -> bool requires T in struct => true\n";
+    accepts(&format!(
+        "{declaration}test checks {{ assert category<Label>() }}"
+    ));
+    rejects(
+        &format!("{declaration}test checks {{ assert category<1>() }}"),
+        "type/generic.argument_kind",
+    );
+    rejects(
+        "module m\nconst fn bad() -> bool requires 1 in struct => true",
+        "type/type.not_a_type",
+    );
+}
+
+#[test]
+fn categories_accept_indexed_pack_types() {
+    // GEN-3 and GEN-17: an indexed member denotes a type, not a runtime value.
+    let declaration = "module m\nstruct Label { text: str }\nconst fn structures<...Ts>(values: ...Ts) -> bool requires each k in arg_keys(Ts) { Ts[k] in struct } => true\n";
+    accepts(&format!(
+        "{declaration}test checks {{ assert structures(Label(text: \"a\"), Label(text: \"b\")) }}"
+    ));
+    rejects(
+        &format!("{declaration}const fn bad() -> bool => structures(1)"),
+        "constraint/requires.unmet",
     );
 }

@@ -101,6 +101,15 @@ impl Reader<'_> {
             SyntaxKind::OperatorProperties => {
                 Position::value("the domain of an operator's properties", "GEN-9")
             }
+            // GEN-3 and GEN-13: a category determines the left operand's
+            // kind even where the generic occurs nowhere in a signature.
+            SyntaxKind::ConstraintRelation
+                if parent
+                    .children()
+                    .any(|child| child.kind() == SyntaxKind::ConstraintCategory) =>
+            {
+                Position::PLAIN
+            }
             // TYPE-12: `signal` is the whole type of a function's
             // temporal parameter, and neither a local's annotation nor
             // an anonymous function's parameter. Which other types

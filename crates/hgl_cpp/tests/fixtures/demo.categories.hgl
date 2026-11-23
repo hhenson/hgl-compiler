@@ -55,9 +55,11 @@ test specialized_tuples {
 
 # GEN-3 and GEN-5: concrete specialization still outranks a category.
 const fn forwarded_category<T>(value: T) -> str requires T in struct => shown(value)
+const fn type_category<T>() -> bool requires T in struct => true
 test category_instances {
     assert forwarded_category(Label(text: "a")) == "a struct"
     assert forwarded_category(Point(x: 1.0, y: 2.0)) == "a point"
+    assert type_category<Label>()
 }
 
 # GEN-3 and GEN-10: a forwarded tuple proves its each-category bound.
@@ -100,3 +102,5 @@ const fn missing_pack_bound<...Us>(value: tuple<Us>) -> bool => structures(value
 const fn rejected_pack_count() -> tuple<i64> => pair((1,))
 # expect-error(type, "type.not_a_type")
 const fn pack_is_not_one_type<...Ts>(value: list<Ts>) -> bool => true
+# expect-error(type, "generic.argument_kind")
+const fn category_takes_no_value() -> bool => type_category<1>()
