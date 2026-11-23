@@ -27,6 +27,7 @@
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind};
 use hgl_analyser::{ConstantValue, NamedKind, Type};
+use hgl_lower::types::fixed_list_size;
 
 use super::Emitter;
 use super::forms::Family;
@@ -62,22 +63,15 @@ fn structural_list_port(schema: &str, children: &str) -> String {
     )
 }
 
-/// The shape of `ty`, where it is a list this family writes: a fixed list
-/// of a positive size (TYPE-10 allows none of no position that hgraph's
-/// `TSL` takes).
+/// The shape written by this family (TYPE-10): a growing list or a fixed
+/// list with a positive size, as hgraph's `TSL` requires.
 fn shape(ty: &Type) -> Option<Shape<'_>> {
-    match ty {
-        Type::List {
-            element,
-            size: None,
-        } => Some(Shape::Growing(element)),
-        Type::List {
-            element,
-            size: Some(size),
-        } => match size.value {
-            ConstantValue::Int(count) if count > 0 => Some(Shape::Fixed(element, count)),
-            _ => None,
-        },
+    let Type::List { element, size } = ty else {
+        return None;
+    };
+    match fixed_list_size(size.as_ref()).map(|size| &size.value) {
+        None => Some(Shape::Growing(element)),
+        Some(ConstantValue::Int(count)) if *count > 0 => Some(Shape::Fixed(element, *count)),
         _ => None,
     }
 }
@@ -158,7 +152,7 @@ impl Emitter<'_> {
         let Some(result) = self.written_type(&value.ty, value.at) else {
             return "0".to_string();
         };
-        let fixed = if let Some(size) = size {
+        let fixed = if let Some(size) = fixed_list_size(size.as_ref()) {
             let ConstantValue::Int(count) = size.value else {
                 return self.missing(
                     value.at,
