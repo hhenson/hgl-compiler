@@ -2218,6 +2218,7 @@ pub(super) fn instances_hold(
     let mut computing: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
     let mut configured = std::collections::HashSet::new();
     let mut endpoint_reads = std::collections::HashSet::new();
+    let mut dependent_indices = std::collections::HashSet::new();
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let mut made = Vec::new();
@@ -2254,6 +2255,15 @@ pub(super) fn instances_hold(
             }
             if super::node_endpoint_reads(module, position, None) {
                 endpoint_reads.insert((index, position));
+            }
+            if !declared.is_empty()
+                && module
+                    .bodies
+                    .get(position)
+                    .and_then(Option::as_ref)
+                    .is_some_and(super::has_dependent_index)
+            {
+                dependent_indices.insert((index, position));
             }
             for call in made {
                 // ERR-9: a generic argument the body works out from its
@@ -2316,6 +2326,7 @@ pub(super) fn instances_hold(
         .chain(computing)
         .chain(configured.iter().copied())
         .chain(endpoint_reads.iter().copied())
+        .chain(dependent_indices.iter().copied())
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -2403,6 +2414,7 @@ pub(super) fn instances_hold(
             let graph = unit.phases.get(made.callee.1) == Some(&Some(Phase::Graph));
             let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
             let recheck_results = selecting.iter().any(|call| call.result.is_some());
+            let recheck_indices = dependent_indices.contains(&made.callee);
             let declared = own(made.callee);
             let map: Vec<(Location, &Argument)> =
                 declared.iter().copied().zip(&made.generics).collect();
@@ -2433,7 +2445,7 @@ pub(super) fn instances_hold(
                     diagnostics,
                     &mut body_reports,
                 )
-            } else if recheck_graph || recheck_endpoints || recheck_results {
+            } else if recheck_graph || recheck_endpoints || recheck_results || recheck_indices {
                 program.checked_instance(
                     made.callee,
                     &made.generics,
@@ -2463,13 +2475,20 @@ pub(super) fn instances_hold(
                 }
                 reread_calls = made_after_result_recheck(&instance.body, &mut instance_calls);
             }
-            if recheck_graph && let Some(instance) = &instance {
-                if instance.result_uses.is_none()
-                    && let Some(Some(source)) =
-                        program.modules[made.callee.0].bodies.get(made.callee.1)
-                {
-                    made_after_inference(source, &instance.body, &mut instance_calls);
+            if (recheck_graph || recheck_indices)
+                && let Some(instance) = &instance
+                && instance.result_uses.is_none()
+                && let Some(Some(source)) = unit.bodies.get(made.callee.1)
+            {
+                made_after_inference(source, &instance.body, &mut instance_calls);
+            }
+            if recheck_indices && !recheck_graph && !recheck_endpoints {
+                let paths = chain.paths(program, &root_calls);
+                for report in body_reports.as_slice() {
+                    emit_instance_report(report.clone(), &paths, diagnostics);
                 }
+            }
+            if recheck_graph && let Some(instance) = &instance {
                 let constants = super::lifting::instance_constants(program, &instance.body);
                 for (reports, message) in [
                     (&constants, "this place in the generic body needs a value"),
@@ -2734,7 +2753,7 @@ pub(super) fn instances_hold(
                                 type_packs,
                                 forwarded: false,
                                 answers,
-                                at: call.name,
+                                at: call.at,
                             });
                         }
                         // GEN-5: "No match rejects; tied most-specific
@@ -2936,7 +2955,7 @@ impl InstanceChain<'_> {
 
 /// Report the instance's rejection once at each outer making call.
 /// Keep the failing body location and the intermediate calls beside it.
-fn emit_instance_report(
+pub(super) fn emit_instance_report(
     report: Diagnostic,
     paths: &[Vec<MakingCall>],
     diagnostics: &mut Diagnostics,
@@ -3422,19 +3441,15 @@ pub(super) fn report_instance_result_uses(
     let calls = &result_uses.changed_results;
     for report in result_uses.reports.as_slice() {
         let mut report = report.clone().with_note(&instance);
-        let changed = unique_location(calls.iter().copied()).or_else(|| {
-            changed_result_source(unit.bodies[declaration].as_ref()?, report.primary, calls)
-        });
-        if let Some(changed) = changed {
-            if report.primary != changed {
-                let use_at = report.primary;
-                report = report.with_related(use_at, "this use checks the selected result");
-                report.primary = changed;
-            }
-        } else {
-            for &call in calls {
-                report = report.with_related(call, "this call selected a different result type");
-            }
+        let changed = unit.bodies[declaration]
+            .as_ref()
+            .and_then(|body| changed_result_source(body, report.primary, calls));
+        if let Some(changed) = changed
+            && report.primary != changed
+        {
+            let use_at = report.primary;
+            report = report.with_related(use_at, "this use checks the selected result");
+            report.primary = changed;
         }
         emit_instance_report(report, paths, diagnostics);
     }
@@ -3551,12 +3566,12 @@ fn made_after_result_recheck(body: &hir::Body, made: &mut Vec<Made>) -> HashSet<
     reread
 }
 
-/// Follow calls that graph settlement has made concrete through the same
+/// Follow calls that settlement or rereading has made concrete through the same
 /// bounded admission traversal as other calls. A source call already
 /// concrete there does not create a new edge here (GEN-3, GEN-13).
 fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<Made>) {
     let mut pending = std::collections::HashSet::new();
-    hir::walk_statements(&source.statements, &mut |expression| {
+    walk_nested_calls(&source.statements, &mut |expression| {
         if super::calls::pending_function_inference(&expression.kind)
             || matches!(
                 expression.kind,
@@ -3573,7 +3588,7 @@ fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<
     if pending.is_empty() {
         return;
     }
-    hir::walk_statements(&settled.statements, &mut |expression| {
+    walk_nested_calls(&settled.statements, &mut |expression| {
         if pending.contains(&expression.at)
             && let ExprKind::Call {
                 callee: Callee::Function { generics, .. } | Callee::Candidate { generics, .. },
@@ -3619,7 +3634,7 @@ pub(super) fn concrete_default_calls(expression: &Expr, made: &mut Vec<Made>) {
 }
 
 /// The callable reached by a call or a function reference.
-fn called_or_referenced(expression: &Expr) -> Option<&Callee> {
+pub(super) fn called_or_referenced(expression: &Expr) -> Option<&Callee> {
     match &expression.kind {
         ExprKind::Call { callee, .. } => Some(callee),
         ExprKind::StaticCallable(callee) => Some(callee),

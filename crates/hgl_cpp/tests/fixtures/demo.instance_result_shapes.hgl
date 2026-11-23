@@ -19,6 +19,10 @@ impl const fn extent_of(items: list<i64, 2>) -> i64 => 2
 impl const fn extent_of(items: list<i64, 3>) -> i64 => 3
 
 const fn first_of<T>(value: T) -> i64 => items_of(value)[0]
+const fn first_from_index<T>(values: T) -> i64 => first_of(values[0])
+const fn relay_first<...Args>(values: ...Args) -> i64 => first_of(...values)
+const fn relay_instance<T>(value: T) -> i64 => relay_first(value)
+const fn call_first(f: const fn(i64) -> i64, value: i64) -> i64 => f(value)
 const fn first_two<T>(value: T) -> list<i64, 2> => items_of(value)
 const fn extent<T>(value: T) -> i64 {
     let items = items_of(value)
@@ -51,6 +55,9 @@ test direct { assert items_of(5) == [5, 6, 7] }
 test indexed {
     assert first_of(5) == 5
     assert first_of("string") == 1
+    assert first_from_index([5]) == 5
+    assert first_from_index(["string"]) == 1
+    assert call_first(relay_instance<i64>, 5) == 5
 }
 test whole {
     assert extent(5) == 3

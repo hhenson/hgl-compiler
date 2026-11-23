@@ -478,10 +478,10 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>)
                 .map(|element| substitute(element, map, member))
                 .collect(),
         ),
-        Type::List { element, size } => Type::List {
-            element: part(element),
-            size: size.as_ref().map(constant),
-        },
+        Type::List { element, size } => Type::list(
+            substitute(element, map, member),
+            size.as_ref().map(constant),
+        ),
         Type::Set(inner) => Type::Set(part(inner)),
         Type::Dict { key, value } => Type::Dict {
             key: part(key),

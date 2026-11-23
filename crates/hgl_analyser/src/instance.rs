@@ -365,7 +365,9 @@ impl Program {
         let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
         let recheck_endpoints =
             crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
-        if (recheck_endpoints || pending_forwards.is_some())
+        if (recheck_endpoints
+            || pending_forwards.is_some()
+            || (!generics.is_empty() && crate::values::has_dependent_index(&body)))
             && let Some(reread) = crate::values::reread_instance_body(
                 self,
                 (module, declaration),

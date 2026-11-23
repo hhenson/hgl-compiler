@@ -204,6 +204,8 @@ pub mod codes {
     pub const ALIAS_UNKNOWN: &str = "alias.unknown";
     /// A name that nothing in scope binds (UNIT-10).
     pub const NAME_UNKNOWN: &str = "name.unknown";
+    /// A function declared with a reserved activation form's name (UNIT-10).
+    pub const NAME_RESERVED: &str = "name.reserved";
     /// A generic type's name stands before a `<` that does not open its
     /// arguments (GEN-14).
     pub const GENERIC_INVALID_APPLICATION: &str = "generic.invalid_application";
@@ -346,6 +348,8 @@ pub mod codes {
     pub const RUN_CONFIGURATION: &str = "run.configuration";
     /// A constant's value depends on itself (UNIT-13).
     pub const CONSTANT_CYCLE: &str = "constant.cycle";
+    /// A field or parameter default depends on itself (UNIT-8).
+    pub const DEFAULT_CYCLE: &str = "default.cycle";
     /// A module constant or parameter/field default whose evaluation
     /// fails (UNIT-13, UNIT-8, ERR-9).
     /// The catalogue row is proposed.
