@@ -2199,6 +2199,33 @@ fn a_computed_pack_spread_reports_a_value_pack_used_as_a_type_pack() {
     );
 }
 
+/// GEN-17 and FN-19: a written member type in a deferred entry keeps its
+/// type reading in calls, nested types and binding or parameter annotations.
+#[test]
+fn a_computed_pack_spread_preserves_written_pack_member_types() {
+    let root = scratch("computed-pack-entry-types");
+    let file = write(
+        &root,
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn exact<T>(value: T) -> T => value\n",
+            "const fn apply<T>(f: const fn(T) -> T, value: T) -> T => f(value)\n",
+            "operator pick_value<T>(value: T) -> T\n",
+            "impl const fn pick_value<T>(value: T) -> T => value\n",
+            "const fn forward<...Ps, ...As>(f: const fn(...{Ps}) -> i64, args: ...{As for f}) -> i64 =>\n",
+            "    f(...{for key in arg_keys(Ps): {\n",
+            "        let value: Ps[key] = args[key]\n",
+            "        let values: list<Ps[key]> = [value]\n",
+            "        let picked = pick_value<Ps[key]>(value)\n",
+            "        apply<Ps[key]>(fn(item: Ps[key]) => item, exact<Ps[key]>(picked))\n",
+            "    }})\n",
+        ),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
+}
+
 /// FN-19, FN-17 and EXPR-3: invalid places, iterables and declaration-bound
 /// reads are diagnosed without unrolling the computed pack.
 #[test]
@@ -2221,6 +2248,11 @@ fn a_computed_pack_spread_rejects_invalid_declaration_uses() {
         ),
         (
             "f(...{for k in arg_keys(Ps): Ps})",
+            "type/type.mismatch",
+            "is a type pack and cannot be read as a value",
+        ),
+        (
+            "f(...{for k in arg_keys(Ps): Ps[k]})",
             "type/type.mismatch",
             "is a type pack and cannot be read as a value",
         ),

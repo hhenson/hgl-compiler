@@ -11,7 +11,8 @@ use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey};
 use crate::program::{Binding, LocalKind};
 use crate::syntax::{
-    child, has_token, is_arg_keys_call, name_token, parent_outside_grouping, ungrouped,
+    child, has_token, is_arg_keys_call, name_token, pack_member_names, parent_outside_grouping,
+    ungrouped,
 };
 use crate::types::{GenericKind, Scalar, Type};
 use crate::{codes, error};
@@ -124,6 +125,7 @@ impl Typer<'_> {
                 self.pack_key_membership(node);
                 return;
             }
+            SyntaxKind::IndexExpr if self.is_pack_member_type_argument(node) => return,
             SyntaxKind::NameExpr => self.check_pack_entry_name(node),
             SyntaxKind::AssignStmt => self.check_pack_key_assignment(node),
             _ => {}
@@ -131,6 +133,16 @@ impl Typer<'_> {
         for part in node.children() {
             self.check_pack_entry(&part);
         }
+    }
+
+    /// GEN-17: the parser keeps a bare projection in generic arguments
+    /// as an index until the base's binding tells whether it names a type.
+    fn is_pack_member_type_argument(&self, node: &SyntaxNode) -> bool {
+        node.parent()
+            .is_some_and(|parent| parent.kind() == SyntaxKind::GenericArgs)
+            && pack_member_names(node)
+                .and_then(|(pack, _)| self.bindings.get(&(self.file, pack.span().start)))
+                .is_some_and(|binding| self.is_type_pack(binding))
     }
 
     fn check_pack_iterable(&mut self, node: &SyntaxNode) {

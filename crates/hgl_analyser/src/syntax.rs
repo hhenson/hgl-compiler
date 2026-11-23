@@ -49,6 +49,23 @@ pub(crate) fn pack_for_names(
     Some((function, names.skip(1)))
 }
 
+/// The two bare names of a pack member in either parser representation (GEN-17).
+pub(crate) fn pack_member_names(node: &SyntaxNode) -> Option<(SyntaxToken, SyntaxToken)> {
+    if node.kind() == SyntaxKind::PackMemberType {
+        let mut identifiers = tokens(node).filter(|token| token.kind() == SyntaxKind::Ident);
+        return Some((identifiers.next()?, identifiers.next()?));
+    }
+    let mut operands = node.children();
+    let bare_name = |operand: SyntaxNode| {
+        if operand.kind() == SyntaxKind::NameExpr && operand.children().next().is_none() {
+            name_token(&operand)
+        } else {
+            None
+        }
+    };
+    Some((bare_name(operands.next()?)?, bare_name(operands.next()?)?))
+}
+
 /// The call of the pack key form `arg_keys(Ps)`, before checking its argument (GEN-17).
 pub(crate) fn is_arg_keys_call(node: &SyntaxNode) -> bool {
     node.kind() == SyntaxKind::CallExpr
