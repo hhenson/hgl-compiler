@@ -2482,7 +2482,12 @@ pub(super) fn instances_hold(
                 && instance.result_uses.is_none()
                 && let Some(Some(source)) = unit.bodies.get(made.callee.1)
             {
-                made_after_inference(source, &instance.body, &mut instance_calls);
+                reread_calls = made_after_inference(
+                    source,
+                    &instance.body,
+                    instance.reread_body.then_some(provisional),
+                    &mut instance_calls,
+                );
             }
             if recheck_indices && !recheck_graph && !recheck_endpoints {
                 let paths = chain.paths(program, &root_calls);
@@ -3710,11 +3715,15 @@ fn made_after_result_recheck(body: &hir::Body, made: &mut Vec<Made>) -> HashSet<
     reread
 }
 
-/// Follow calls that settlement or rereading has made concrete through the same
-/// bounded admission traversal as other calls. A source call already
-/// concrete there does not create a new edge here (GEN-3, GEN-13).
-fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<Made>) {
-    let mut pending = std::collections::HashSet::new();
+/// Follow calls whose inference has settled. A body read from its source
+/// under concrete inputs also replaces its provisionally typed edges.
+fn made_after_inference(
+    source: &hir::Body,
+    settled: &hir::Body,
+    provisional: Option<&HashSet<Location>>,
+    made: &mut Vec<Made>,
+) -> HashSet<Location> {
+    let mut pending = HashSet::new();
     walk_nested_calls(&source.statements, &mut |expression| {
         if super::calls::pending_function_inference(&expression.kind)
             || matches!(
@@ -3729,20 +3738,24 @@ fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<
             pending.insert(expression.at);
         }
     });
-    if pending.is_empty() {
-        return;
+    let mut replaced = HashSet::new();
+    if pending.is_empty() && provisional.is_none_or(HashSet::is_empty) {
+        return replaced;
     }
     walk_nested_calls(&settled.statements, &mut |expression| {
-        if pending.contains(&expression.at)
-            && let ExprKind::Call {
-                callee: Callee::Function { generics, .. } | Callee::Candidate { generics, .. },
-                ..
-            } = &expression.kind
-            && generics.iter().all(resolved_default_argument)
+        let replace = provisional.is_some_and(|calls| calls.contains(&expression.at));
+        if (replace || pending.contains(&expression.at))
+            && let Some(callee @ (Callee::Function { .. } | Callee::Candidate { .. })) =
+                called_or_referenced(expression)
+            && callee.generics().iter().all(resolved_default_argument)
         {
             made_at(expression, made);
+            if replace {
+                replaced.insert(expression.at);
+            }
         }
     });
+    replaced
 }
 
 /// The calls of generic declarations `expression` makes, at any depth.

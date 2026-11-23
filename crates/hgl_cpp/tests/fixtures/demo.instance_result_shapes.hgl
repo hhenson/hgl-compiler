@@ -37,6 +37,11 @@ const fn first_marker_by_pack<T>(value: T) -> i64 {
     let items = items_of(value)
     return relay_marker(items)
 }
+const fn first_marker_with_index<T, U>(value: T, extra: U) -> i64 {
+    let index = extra[0]
+    let items = items_of(value)
+    return marker_at_first(items)
+}
 
 const fn first_of<T>(value: T) -> i64 => items_of(value)[0]
 const fn first_from_index<T>(values: T) -> i64 => first_of(values[0])
@@ -81,6 +86,7 @@ test indexed {
     assert first_marker(5) == 9
     assert first_marker_by_reference(5) == 9
     assert first_marker_by_pack(5) == 9
+    assert first_marker_with_index(5, [0]) == 9
 }
 test whole {
     assert extent(5) == 3

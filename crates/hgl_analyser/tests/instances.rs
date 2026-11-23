@@ -587,6 +587,28 @@ fn a_provisional_result_does_not_make_an_independent_instance() {
         rejected.report
     );
     assert!(rejected.report.contains("`relay<[list<i64, 2>]>`"));
+
+    let indexed = format!(
+        "{definitions}\
+         const fn with_index<T, U>(value: T, extra: U) -> i64 {{\n\
+             let unused = extra[0]\n\
+             let items = items_of(value)\n\
+             return first(items)\n\
+         }}\n"
+    );
+    let accepted = module(&format!(
+        "{indexed}test invoke {{ assert with_index(5, [0]) == 9 }}\n"
+    ));
+    assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
+    let rejected = module(&format!(
+        "{indexed}test invoke {{ with_index(\"s\", [0]) }}\n"
+    ));
+    assert_eq!(
+        rejected.summary(),
+        ["m.hgl:19:15 type/type.mismatch EXPR-7"],
+        "{}",
+        rejected.report
+    );
 }
 
 /// GEN-7: non-generic bodies make instances where they write the calls or

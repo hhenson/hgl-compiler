@@ -88,6 +88,8 @@ pub(crate) struct CheckedInstance {
     pub(crate) signature: Signature,
     /// The body with its concrete types and callees.
     pub(crate) body: Body,
+    /// The syntax was read with concrete inputs before placing the body.
+    pub(crate) reread_body: bool,
     /// Checks made when a selected result differs from the admitting result.
     pub(crate) result_uses: Option<ResultUseChecks>,
 }
@@ -365,6 +367,7 @@ impl Program {
         let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
         let recheck_endpoints =
             crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
+        let mut reread_body = false;
         if (recheck_endpoints
             || pending_forwards.is_some()
             || (!generics.is_empty() && crate::values::has_dependent_index(&body)))
@@ -378,6 +381,7 @@ impl Program {
             )
         {
             body = reread;
+            reread_body = true;
         }
         let recheck = graph
             && (!declared.selecting[declaration].is_empty()
@@ -429,6 +433,7 @@ impl Program {
         Some(CheckedInstance {
             signature: taken,
             body,
+            reread_body,
             result_uses,
         })
     }
