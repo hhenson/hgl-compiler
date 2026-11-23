@@ -366,8 +366,7 @@ fn a_result_contract_checks_values_used_across_inputs() {
     );
 }
 
-/// GEN-6: a result dependent on an unbound generic value has no one
-/// declared type to compare at the candidate's declaration.
+/// GEN-6: an unresolved extent leaves just that part of the result open.
 #[test]
 fn a_result_contract_leaves_unbound_sizes_open() {
     let checked = module(concat!(
@@ -379,6 +378,38 @@ fn a_result_contract_leaves_unbound_sizes_open() {
         "impl const fn generic<const M: i64>(x: list<i64, M>) -> list<i64> => []\n",
     ));
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// GEN-6: an unresolved parameter does not hide a known contradiction
+/// in another part of the candidate's result.
+#[test]
+fn a_result_contract_compares_known_parts_of_a_generic_result() {
+    let checked = module(concat!(
+        "operator pair<T, U>(x: T) -> tuple<T, U>\n",
+        "impl const fn pair(x: i64) -> tuple<str, f64> => (\"a\", 1.5)\n",
+        "operator admitted<T, U>(x: T) -> tuple<T, U>\n",
+        "impl const fn admitted(x: i64) -> tuple<i64, f64> => (x, 1.5)\n",
+        "operator unbound<T, const N: i64>(x: T) -> list<T, N>\n",
+        "impl const fn unbound(x: i64) -> list<str, 1> => [\"a\"]\n",
+        "operator generic<const N: i64>(x: list<i64, N>) -> list<i64, N>\n",
+        "impl const fn generic<const M: i64>(x: list<i64, M>) -> list<str, M> => []\n",
+        "operator dictionary<T, U>(x: T) -> dict<T, U>\n",
+        "impl const fn dictionary(x: i64) -> dict<str, bool> => [\"a\": true]\n",
+        "operator fixed<const N: i64>(x: list<i64, N>) -> list<i64, N>\n",
+        "impl const fn fixed(x: list<i64, 2>) -> list<i64> => []\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:31 operator/impl.result GEN-6",
+            "m.hgl:7:34 operator/impl.result GEN-6",
+            "m.hgl:9:57 operator/impl.result GEN-6",
+            "m.hgl:11:37 operator/impl.result GEN-6",
+            "m.hgl:13:41 operator/impl.result GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
 }
 
 /// GEN-6: a contract comparison needs a valid candidate and operator.

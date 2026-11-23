@@ -9,7 +9,7 @@ use hgl_parser::{HasSpan, SyntaxKind};
 use hgl_source::FileId;
 
 use crate::constant::{Constants, Scope};
-use crate::declared::{names_one_of, same_type, substitute_within};
+use crate::declared::{result_types_differ, same_type, substitute_within};
 use crate::program::{Declaration, DeclarationKind, Program, Role};
 use crate::read::type_child;
 use crate::syntax::child;
@@ -121,7 +121,7 @@ fn result_error(
     bindings: &[(Location, &Argument)],
 ) -> Option<String> {
     match (expected, actual) {
-        (Some(expected), Some(actual)) if result_is_bound(expected, bindings) => {
+        (Some(expected), Some(actual)) => {
             let expected = substitute_within(expected, bindings);
             mismatched_result(&expected, actual).then(|| {
                 format!(
@@ -150,23 +150,6 @@ fn declaration_has_error(declaration: &Declaration, diagnostics: &Diagnostics) -
             && diagnostic.primary.file == declaration.at.file
             && (span.start..span.end).contains(&diagnostic.primary.span.start)
     })
-}
-
-/// The operator's generic result can still depend on an argument the
-/// candidate's inputs do not establish, such as an unsized list's extent.
-fn result_is_bound(ty: &Type, bindings: &[(Location, &Argument)]) -> bool {
-    let unbound: Vec<_> = bindings
-        .iter()
-        .filter_map(|&(at, argument)| match argument {
-            Argument::Type(Type::Unknown) => Some(at),
-            Argument::Constant(constant) if constant.value.key().is_none() => Some(at),
-            _ => None,
-        })
-        .collect();
-    !names_one_of(ty, &unbound)
-        && !ty.any_part(&|_| false, &|constant| {
-            constant.value.names_one_of(&unbound)
-        })
 }
 
 /// Bind the operator's generics from the corresponding candidate parameters.
@@ -265,10 +248,10 @@ fn constant_needs_binding_check(
 }
 
 fn mismatched_result(expected: &Type, actual: &Type) -> bool {
-    same_type(expected, actual) == Some(false)
+    result_types_differ(expected, actual)
         // GEN-6 leaves wrapper-only differences open. The payload still
         // establishes a contradiction when it is known to differ.
-        && same_type(result_payload(expected), result_payload(actual)) == Some(false)
+        && result_types_differ(result_payload(expected), result_payload(actual))
 }
 
 fn result_payload(mut ty: &Type) -> &Type {
