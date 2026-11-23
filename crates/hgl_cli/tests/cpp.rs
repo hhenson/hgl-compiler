@@ -2472,6 +2472,34 @@ fn keyed_temporal_code_runs_on_the_sdk() {
     );
 }
 
+/// Nested dictionary entry observations retain the final child's validity,
+/// modification and delta, including where an intermediate key is absent (END-8).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn nested_dictionary_entry_observations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("nested-dictionary-observations");
+    let file = write(
+        &root,
+        "src/demo.nested_dictionary_observations.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.nested_dictionary_observations.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// `demo.composites`, structs, sets, dictionaries and deltas as values
 /// (TYPE-3 to TYPE-6, TYPE-14, TYPE-16, EXPR-3, ERR-6, CTRL-12): every
 /// test of it passes on the SDK, and under the sanitizers where
