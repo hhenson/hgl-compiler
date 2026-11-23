@@ -496,6 +496,9 @@ fn instances_check_the_category_of_braced_configuration() {
         "{}",
         checked.report
     );
+    for instance in ["braced<i64>", "named_braced<i64>", "named<i64>"] {
+        assert!(checked.report.contains(instance), "{}", checked.report);
+    }
 }
 
 // ---- A hook's and a graph's expressions ----
