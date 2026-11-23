@@ -744,6 +744,38 @@ fn generic_null_defaults_run_on_the_sdk() {
     );
 }
 
+/// GEN-7, EXPR-5: literal arguments and their results use the selected
+/// instance's type, in functions, node handlers and graphs.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn generic_instance_literals_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic_instance_literals");
+    let file = write(
+        &root,
+        "demo.instance_literals.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.instance_literals.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 6 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// GEN-2, GEN-6 and UNIT-8: concrete operator calls read literals at
 /// each candidate; generic-body calls retain main's existing behavior.
 #[test]

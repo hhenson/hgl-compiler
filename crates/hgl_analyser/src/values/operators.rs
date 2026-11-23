@@ -56,9 +56,8 @@ impl<'a> Typer<'a> {
     /// inherits from widens the parameter to that struct". GEN-4: the
     /// operator's own requirement of its result.
     ///
-    /// Named operator requirements (GEN-16) and calls written in generic
-    /// bodies retain complete input-derived result requests here. Value
-    /// calls outside generic bodies use `argument_output_requested`.
+    /// Named operator requirements (GEN-16) retain complete inference
+    /// here. Value calls use `argument_output_requested`.
     pub(super) fn output_requested(
         &self,
         operator: OperatorRef,
@@ -70,9 +69,10 @@ impl<'a> Typer<'a> {
         self.request_output(operator, public, found, supplied, said, None)
     }
 
-    /// GEN-5, GEN-6, GEN-8: outside a generic body, an option contributes
-    /// its generic value without promoting literal-derived type arguments
-    /// into result constraints. Every candidate still checks every input.
+    /// GEN-5, GEN-6, GEN-8: literal-aware calls keep generic value options
+    /// without turning a literal's preliminary type into a result request.
+    /// GEN-7 extends this to generic-dependent literals and instance rereads.
+    /// Every candidate still checks every input.
     pub(super) fn argument_output_requested(
         &self,
         operator: OperatorRef,
@@ -85,21 +85,34 @@ impl<'a> Typer<'a> {
         // GEN-2: a typed argument still decides its generic. Only literal,
         // contextual and callback readings wait for the candidate; an
         // unrelated literal flag cannot erase another argument's type.
-        // Generic bodies and their concrete rereads retain the full request.
-        let requested = self.signature.generics.is_empty().then(|| {
-            let mut requested = found.clone();
-            let mut fixed = supplied.clone();
-            for argument in given {
-                if argument.explicit.is_none()
-                    && (argument.by_place || argument.by_function || literal_input(&argument.value))
-                    && let Some(index) = argument.key.public_parameter(public)
-                {
-                    fixed[index] = None;
+        // GEN-7: a generic-dependent literal is fitted by each instance's
+        // candidate. Its preliminary type cannot request that result. The
+        // instance reread uses the same rule as the written-out call.
+        let own: Vec<_> = self
+            .signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        let instance_literal = given.iter().any(|argument| literal_input(&argument.value))
+            && given.iter().any(|argument| mentions(argument.ty(), &own));
+        let requested =
+            (own.is_empty() || !self.instance.is_empty() || instance_literal).then(|| {
+                let mut requested = found.clone();
+                let mut fixed = supplied.clone();
+                for argument in given {
+                    if argument.explicit.is_none()
+                        && (argument.by_place
+                            || argument.by_function
+                            || literal_input(&argument.value))
+                        && let Some(index) = argument.key.public_parameter(public)
+                    {
+                        fixed[index] = None;
+                    }
                 }
-            }
-            self.infer_operator_inputs(public, &mut requested, &fixed);
-            requested
-        });
+                self.infer_operator_inputs(public, &mut requested, &fixed);
+                requested
+            });
         self.request_output(operator, public, found, &supplied, said, requested)
     }
 

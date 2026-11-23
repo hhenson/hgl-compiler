@@ -1748,11 +1748,12 @@ impl<'a> Typer<'a> {
         // GEN-8: what the call itself requests, through the generic
         // arguments it writes and the operator's defaults, decides
         // before what the arguments say: `echo<f64>(1, mode: M)` gives an
-        // `f64`. Then the operator's result, and then what the call's
-        // place asks of every candidate selected for it.
+        // `f64`. Its contextual place also decides before input-derived
+        // types (GEN-2), including a literal's preliminary `i64` reading.
         let gives = requested
             .filter(|requested| known(requested))
             .cloned()
+            .or_else(|| wanted.place.filter(|place| known(place)).cloned())
             .or_else(|| {
                 public
                     .result
@@ -1760,8 +1761,12 @@ impl<'a> Typer<'a> {
                     .map(|result| placed(substitute_within(result, &map), &operator_own))
                     .filter(|result| known(result))
             })
-            .or_else(|| wanted.place.filter(|place| known(place)).cloned())
             .unwrap_or(Type::Unknown);
+        // GEN-7: membership admission also supplies a provisional result
+        // to the declaration's consumers. An instance that selects another
+        // result type must recheck those consumers, just as a provisional
+        // candidate's result does.
+        record.result = Some(gives.clone());
         self.selecting.borrow_mut().push(record);
         Settled::Deferred(gives)
     }
