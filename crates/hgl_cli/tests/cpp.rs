@@ -2470,6 +2470,34 @@ fn temporal_structs_run_on_the_sdk() {
     );
 }
 
+/// A concrete generic struct is replayed and recorded using its applied
+/// nominal schema (TYPE-3, TYPE-9, CEVAL-3, CEVAL-4).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn concrete_generic_struct_traces_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic-struct-traces");
+    let file = write(
+        &root,
+        "src/demo.generic-struct-traces.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.generic-struct-traces.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// `demo.keyed`, the temporal form of a set and of a dictionary (TYPE-9,
 /// TIME-7, TIME-9, END-3, END-4, TST-9): every test of it passes on the
 /// SDK, and under the sanitizers where `HGL_CPP_FLAGS` names them.

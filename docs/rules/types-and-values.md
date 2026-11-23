@@ -136,8 +136,11 @@ transpiler: partial
 
 - Writes structural temporal lists, tuples, structs, sets and dictionaries, including
   atomic struct connections, and maps supported children to endpoints.
-- Left: Reports generic or abstract temporal structs, bundles with unsupported field
-  types, list parts that are sets, dictionaries, windows or atomic structs, nullable
+- Gives concrete struct applications with supported type arguments their own nominal
+  schemas and maps their substituted fields to child endpoints.
+- Left: Reports abstract temporal structs, structs with generic value arguments,
+  bundles with unsupported field or type argument schemas, list parts that are
+  sets, dictionaries, windows or atomic structs, nullable
   aggregate connections, non-scalar temporal keys, and dictionary values outside
   scalars, sets, dictionaries and tuples of supported keyed forms. The family dispatch
   reports unsupported schemas, reads, writes, deltas, constants and traces.

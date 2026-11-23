@@ -1,0 +1,39 @@
+module demo.generic_struct_traces
+
+# TYPE-9, CEVAL-3, CEVAL-4: the applied field has its own schema and delta.
+struct Packet<T> { value: T }
+
+fn same(value: Packet<i64>) -> Packet<i64> => value
+
+test replay_and_record {
+    assert eval same(value: [Packet<i64>(value: 7), _, delta<Packet<i64>>(value: 9)]) ==
+        [Packet<i64>(value: 7), _, delta<Packet<i64>>(value: 9)]
+}
+
+fn wrap(value: i64) -> Packet<i64> {
+    when { return Packet<i64>(value: value) }
+}
+
+test record_from_scalar {
+    assert eval wrap(value: [7]) == [Packet<i64>(value: 7)]
+}
+
+struct Nested { packet: Packet<str?> }
+
+fn same_nested(value: Nested) -> Nested => value
+
+test nested_optional_field {
+    assert eval same_nested(value: [Nested(packet: Packet<str?>(value: "in"))]) ==
+        [Nested(packet: Packet<str?>(value: "in"))]
+}
+
+# TYPE-3: the argument distinguishes two nominal types with the same field.
+struct Tagged<T> requires T in {i64, str} { value: i64 }
+
+fn same_int_tag(value: Tagged<i64>) -> Tagged<i64> => value
+fn same_str_tag(value: Tagged<str>) -> Tagged<str> => value
+
+test same_fields_with_distinct_type_arguments {
+    assert eval same_int_tag(value: [Tagged<i64>(value: 3)]) == [Tagged<i64>(value: 3)]
+    assert eval same_str_tag(value: [Tagged<str>(value: 4)]) == [Tagged<str>(value: 4)]
+}

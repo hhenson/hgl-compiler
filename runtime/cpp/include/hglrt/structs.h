@@ -30,10 +30,12 @@
 #include <hgraph/types/generated.h>
 #include <hgraph/types/native_bundle.h>
 
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <source_location>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -598,7 +600,13 @@ struct value_form<atomic_trace<S>> {
 template <class T>
     requires requires { type_named<T>::name; }
 struct value_form<T> {
-    static std::string name() { return std::string{type_named<T>::name}; }
+    static std::string name() {
+        if constexpr (requires { type_named<T>::name(); }) {
+            return type_named<T>::name();
+        } else {
+            return std::string{type_named<T>::name};
+        }
+    }
 
     static std::string text(const T& value)
         requires requires {
@@ -643,6 +651,37 @@ namespace hglrt {
 /// a list field as its own form does.
 template <class E, std::size_t N = 0>
 struct list_value {};
+
+namespace detail {
+/// A concrete C++ member type as the value schema of a generic bundle
+/// field. These are the same shapes the compiler checks for a named field.
+template <class T>
+struct bundle_value { using type = T; };
+
+template <hgraph::NativeBundleValue T>
+struct bundle_value<T> { using type = typename hgraph::native_bundle<T>::schema; };
+
+template <class T>
+struct bundle_value<std::optional<T>> { using type = hgraph::Optional<typename bundle_value<T>::type>; };
+
+template <class T>
+struct bundle_value<list<T>> { using type = list_value<typename bundle_value<T>::type>; };
+
+template <class T, std::size_t N>
+struct bundle_value<std::array<T, N>> { using type = list_value<typename bundle_value<T>::type, N>; };
+} // namespace detail
+
+template <class T>
+using bundle_value = typename detail::bundle_value<T>::type;
+
+/// The display name of a concrete application and its ordered type arguments.
+template <class... Args>
+std::string applied_struct_name(std::string_view name) {
+    std::string result{name};
+    const char* separator = "<";
+    ((result += std::exchange(separator, ", "), result += type_name<Args>()), ...);
+    return result + ">";
+}
 
 } // namespace hglrt
 
