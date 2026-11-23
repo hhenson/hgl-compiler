@@ -124,24 +124,30 @@ class DroppedWakes {
 
   private:
     /// Warn on the first drop and count any further drops.
-    void record(const hgraph::NodeView& node) const;
+    void record(const hgraph::NodeView& node);
     /// At stop, report the count of drops after the initial warning.
     void finish(const hgraph::NodeView& node) const;
 
-    // The count is diagnostic state. Updating it needs no hgraph mutation.
-    mutable std::size_t count_{0};
+    std::size_t count_{0};
 };
 
-/// Borrowed access to a node's drop count. The state is read only to warn
-/// of an actual drop or report the count at stop.
+/// Borrowed access to the node-local count. A drop uses the SDK's write
+/// path and the stop report only reads.
 struct DroppedWakeLog {
+    enum class Operation { record, finish };
+
     const hgraph::NodeView* node{nullptr};
-    const DroppedWakes& (*read)(const hgraph::NodeView&){nullptr};
+    void (*apply)(const hgraph::NodeView&, Operation){nullptr};
 
     template <class State, DroppedWakes State::*field>
     [[nodiscard]] static DroppedWakeLog bind(const hgraph::NodeView& node) noexcept {
-        return {&node, [](const hgraph::NodeView& owner) -> const DroppedWakes& {
-                    return hgraph::State<State>{owner.state()}.ref().*field;
+        return {&node, [](const hgraph::NodeView& owner, Operation operation) {
+                    hgraph::State<State> state{owner.state()};
+                    if (operation == Operation::record) {
+                        (state.modify().*field).record(owner);
+                    } else {
+                        (state.ref().*field).finish(owner);
+                    }
                 }};
     }
 

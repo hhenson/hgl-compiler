@@ -818,7 +818,7 @@ impl Emitter<'_> {
         }
         if tracks_drops && !user_state {
             // hgraph can allocate lifecycle state without supplying a
-            // State argument to eval. Only a confirmed drop reads it.
+            // State argument to eval. Only a confirmed drop changes it.
             let signature = hook
                 .iter()
                 .map(|parameter| {
