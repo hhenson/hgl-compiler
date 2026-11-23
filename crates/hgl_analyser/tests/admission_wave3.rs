@@ -189,6 +189,7 @@ fn scheduled_calls_keep_their_meaning_under_a_binding() {
     assert_eq!(
         declared.summary(),
         [
+            "m.hgl:2:10 name/name.reserved UNIT-10",
             "m.hgl:4:10 injectable/inject.no_scheduler TIME-9",
             "m.hgl:6:29 phase/scheduled.outside_node FN-9",
             "m.hgl:6:29 type/generic.argument_count GEN-8",
