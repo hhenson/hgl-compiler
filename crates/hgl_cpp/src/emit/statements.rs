@@ -166,7 +166,7 @@ impl Emitter<'_> {
         written: &str,
         text: &mut String,
     ) {
-        let directive = if scope.testing && !self.map_test_statements {
+        let directive = if scope.testing && !self.debugger {
             None
         } else {
             self.line_directive(statement_at(statement, &scope.body.locals))

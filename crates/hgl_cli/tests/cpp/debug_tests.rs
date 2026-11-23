@@ -50,6 +50,166 @@ fn plan(output: Output) -> Value {
     plan
 }
 
+/// The launch maps graph entry, HGL function ends and bundled Core to
+/// readable source. A warm launch repairs the bundled copies.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn debug_launch_maps_closing_braces_and_eval_wiring() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("debug-stepping");
+    let source = r#"module debug.stepping
+
+const fn add_one(value: i64) -> i64 {
+    let increased = value + 1
+    return increased
+}
+
+fn observed_node(value: i64) -> i64 {
+    when {
+        let increased = add_one(value)
+        return increased
+    }
+}
+
+fn observed_graph(value: i64) -> i64 {
+    let connected = observed_node(value)
+    return connected
+}
+
+test value_steps {
+    const fn own_helper(value: i64) -> i64 {
+        let increased = add_one(value)
+        return increased
+    }
+    let solved = own_helper(3)
+    assert solved == 4
+}
+
+test eval_steps {
+    assert eval observed_graph(value: [1]) == [2]
+}
+
+test calendar_steps {
+    let next_day = @2026-01-02 + 1B
+    assert next_day == @2026-01-05
+}
+"#;
+    write(&root, "stepping.hgl", source);
+    let workspace = root.join("debug workspace");
+    let inputs = argument(&root);
+    let directory = argument(&workspace);
+    let run = || {
+        plan(hgl(&[
+            "test",
+            &inputs,
+            "--target",
+            "cpp",
+            "--debug-build",
+            &directory,
+        ]))
+    };
+    let launch = run();
+    assert_eq!(
+        launch["launches"][0]["tests"],
+        json!([
+            "debug.stepping::value_steps",
+            "debug.stepping::eval_steps",
+            "debug.stepping::calendar_steps"
+        ])
+    );
+    let module = fs::read_to_string(workspace.join("modules/mod-debug-stepping.cpp")).unwrap();
+    assert!(
+        module
+            .lines()
+            .zip(module.lines().skip(1))
+            .any(|(map, next)| {
+                map.trim_start().starts_with("#line 15 ")
+                    && map.ends_with("stepping.hgl\"")
+                    && next.contains(" compose(")
+            }),
+        "missing graph composition entry mapping"
+    );
+    // Value function, handler, node, graph, test-local helper and test.
+    for line in [6, 12, 13, 18, 24, 27] {
+        let directive = format!("#line {line} ");
+        assert!(
+            module
+                .lines()
+                .zip(module.lines().skip(1))
+                .any(|(map, next)| {
+                    map.trim_start().starts_with(&directive)
+                        && map.ends_with("stepping.hgl\"")
+                        && next.trim() == "}"
+                }),
+            "missing closing-brace mapping for line {line}"
+        );
+    }
+    let bundled = |file| {
+        hgl_analyser::CORE_FILES
+            .iter()
+            .find_map(|(name, text)| (*name == file).then_some(*text))
+            .unwrap()
+    };
+    let core_path = workspace.join("debug-sources/core.hgl.source");
+    let core_source = bundled("<core>/core/core.hgl");
+    assert!(fs::read_to_string(&core_path).unwrap() == core_source);
+    let core_module = fs::read_to_string(workspace.join("modules/mod-core.cpp")).unwrap();
+    assert!(!core_module.contains("\"<core>/"));
+    assert!(core_module.contains("\"debug-sources/calendar.hgl.source\""));
+    for (source_name, wiring) in [
+        (
+            "fn replay<",
+            "return ::hgraph::wire<::hgl::core::m_::n_::i_::replay::",
+        ),
+        (
+            "fn record<",
+            "::hgraph::wire<::hgl::core::m_::n_::i_::record::",
+        ),
+    ] {
+        let line = core_source
+            .lines()
+            .position(|line| line.starts_with(source_name))
+            .unwrap()
+            + 1;
+        let directive = format!("#line {line} \"debug-sources/core.hgl.source\"");
+        assert!(
+            core_module
+                .lines()
+                .zip(core_module.lines().skip(1))
+                .any(|(map, next)| { map.trim() == directive && next.contains(wiring) }),
+            "missing wiring mapping for {source_name}"
+        );
+    }
+
+    let calendar_path = workspace.join("debug-sources/calendar.hgl.source");
+    let calendar_source = bundled("<core>/core/calendar.hgl");
+    assert!(fs::read_to_string(&calendar_path).unwrap() == calendar_source);
+    let executable = Path::new(launch["launches"][0]["executable"].as_str().unwrap());
+    let built = || fs::metadata(executable).unwrap().modified().unwrap();
+    let modification = built();
+
+    assert_eq!(run(), launch);
+    fs::remove_file(&calendar_path).unwrap();
+    assert_eq!(run(), launch);
+    assert!(fs::read_to_string(calendar_path).unwrap() == calendar_source);
+    assert_eq!(built(), modification);
+
+    #[cfg(unix)]
+    {
+        let target = root.join("core-copy.txt");
+        fs::write(&target, core_source).unwrap();
+        fs::remove_file(&core_path).unwrap();
+        std::os::unix::fs::symlink(&target, &core_path).unwrap();
+        assert_eq!(run(), launch);
+        assert!(fs::symlink_metadata(&core_path).unwrap().is_file());
+        assert!(fs::read_to_string(&core_path).unwrap() == core_source);
+        assert!(fs::read_to_string(&target).unwrap() == core_source);
+        assert_eq!(built(), modification);
+    }
+}
+
 /// TST-14, TST-15: usage errors start no build, and a selected empty
 /// subdirectory of a valid source root needs no native toolchain.
 #[test]

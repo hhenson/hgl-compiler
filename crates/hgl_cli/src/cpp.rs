@@ -41,6 +41,9 @@ pub(super) use commands::{build, run};
 pub(super) use plan::CaseOutcome;
 pub(super) use stamp::Replacements;
 
+/// Workspace directory for embedded sources named by debugger line tables.
+const DEBUG_SOURCES: &str = "debug-sources";
+
 /// Writes `files` under `directory`, each where it differs from what is
 /// there: `hgl emit --target cpp`.
 pub(super) fn write(files: &[hgl_cpp::File], directory: &Path) -> Result<(), String> {
@@ -198,7 +201,16 @@ impl BuildSession {
             }
         };
         interrupt.check()?;
-        let artifacts = artifacts?;
+        let mut artifacts = artifacts?;
+        // A reusable debug launch needs the sources from its line tables
+        // as well as the executable.
+        artifacts.extend(
+            output
+                .files
+                .iter()
+                .filter(|file| Path::new(&file.path).starts_with(DEBUG_SOURCES))
+                .map(|file| file.path.clone()),
+        );
         if self.toolchain.key() != self.toolchain_key {
             return Err("the C++ toolchain changed during the build".to_string());
         }

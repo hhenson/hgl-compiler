@@ -32,6 +32,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use hgl_cpp::{Executable, Output, application_stem};
 
 use super::{
+    DEBUG_SOURCES,
     application::Stop,
     sdk::{Description, last_lines},
     stamp::Stamp,
@@ -138,6 +139,10 @@ pub(super) fn write_if_changed(path: &Path, text: &str) -> Result<(), String> {
     if fs::read(path).ok().as_deref() == Some(text.as_bytes()) {
         return Ok(());
     }
+    write_text(path, text)
+}
+
+fn write_text(path: &Path, text: &str) -> Result<(), String> {
     let parent = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(parent)
         .map_err(|error| format!("{} could not be made: {error}", parent.display()))?;
@@ -244,7 +249,15 @@ impl Workspace {
                 .path
                 .split('/')
                 .fold(self.directory.clone(), |path, part| path.join(part));
-            write_if_changed(&path, &file.text)?;
+            // The build stamp requires a regular copy of the debug source.
+            // Rename over an old symlink without following its target.
+            if Path::new(&file.path).starts_with(DEBUG_SOURCES)
+                && fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_symlink())
+            {
+                write_text(&path, &file.text)?;
+            } else {
+                write_if_changed(&path, &file.text)?;
+            }
         }
         write_if_changed(&self.manifest(), &ninja_file(output, description, tests))
     }

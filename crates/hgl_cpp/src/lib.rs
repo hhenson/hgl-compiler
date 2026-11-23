@@ -301,14 +301,14 @@ pub fn transpile_with_positions(
         &runtime::provides,
         Positions {
             source: Some(position),
-            tests: false,
+            debugger: false,
         },
         diagnostics,
     )
 }
 
-/// Writes source positions for a native debugger, including the statements
-/// of ordinary and integration tests (TST-17).
+/// Writes source positions for a native debugger, including test
+/// statements (TST-17) and the ends of HGL functions.
 pub fn transpile_for_debugger(
     program: &Program,
     position: SourcePosition,
@@ -319,7 +319,7 @@ pub fn transpile_for_debugger(
         &runtime::provides,
         Positions {
             source: Some(position),
-            tests: true,
+            debugger: true,
         },
         diagnostics,
     )
@@ -346,7 +346,7 @@ pub fn transpile_for(
         provides,
         Positions {
             source: file_name.map(|_| &position as SourcePosition),
-            tests: false,
+            debugger: false,
         },
         diagnostics,
     )
@@ -355,7 +355,7 @@ pub fn transpile_for(
 #[derive(Clone, Copy)]
 struct Positions<'a> {
     source: Option<SourcePosition<'a>>,
-    tests: bool,
+    debugger: bool,
 }
 
 fn transpile_with(

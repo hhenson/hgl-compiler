@@ -155,7 +155,12 @@ unknown test name or conflicting integration flags exits 2 before any build.
 
 The debugger sets breakpoints in the original HGL files, including on the
 statements of ordinary and integration tests. Step Over between test
-statements stays in HGL. Breakpoints on declaration lines can bind to
+statements stays in HGL. A graph's composition function opens at its
+HGL declaration, and function and handler ends map to their HGL
+closing lines. Step Into on an `eval` can stop at the Core declaration
+that its replay or record wiring belongs to. The debug workspace stores
+the bundled Core files named by its line tables under `debug-sources/`.
+Breakpoints on declaration lines can bind to
 nearby executable lines, including a helper. Set a breakpoint on a body
 statement to stop there. The same sources and selection in `DIR` reuse
 the same launches without compiling again. A new
@@ -175,8 +180,9 @@ selected rejection case or a test the target cannot write.
 A failed selected rejection has `status: "failed"` in its skipped entry
 and gives the ordinary rejection details in `reason`. The command exits 1
 and still prints the description with any launches it prepared. An error
-in the surviving source exits 1 with empty stdout. A native build failure
-exits 2 with empty stdout. A failed build supplies no partial launches.
+in the surviving source exits 1 with empty stdout. A native build failure,
+a missing C++ compiler, an unwritable build directory or an interrupted
+build exits 2 with empty stdout. A failed build supplies no partial launches.
 
 The test executable's result file is text. It starts fresh on each
 launch and flushes one record per line. `N` is the zero-based index in the

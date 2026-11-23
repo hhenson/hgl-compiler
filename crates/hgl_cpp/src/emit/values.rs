@@ -112,7 +112,8 @@ impl Emitter<'_> {
         {
             return;
         }
-        text.push_str("}\n");
+        let end = declaration.syntax.text_range().end().into();
+        text.push_str(&self.debug_end(declaration.at, end, "}\n".to_string()));
         let place = self.place_of(index);
         let comment = format!("// {described}, {place}\n");
         self.piece.declaration = within(namespace.as_deref(), &format!("{comment}{prototype};\n"));

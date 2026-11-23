@@ -27,7 +27,13 @@ impl Emitter<'_> {
         let definition = if function.template.value {
             self.anonymous_value(function, signature, &name)
         } else {
-            self.graph_definition(&name, signature, &function.body, function.at)
+            self.graph_definition(
+                &name,
+                signature,
+                &function.body,
+                function.at,
+                function.at.span.end,
+            )
         };
         self.temporal = outer;
         self.control = control;
@@ -55,7 +61,7 @@ impl Emitter<'_> {
             function.at,
             &mut text,
         )?;
-        text.push_str("}\n");
+        text.push_str(&self.debug_end(function.at, function.at.span.end, "}\n".to_string()));
         Some(text)
     }
 }
