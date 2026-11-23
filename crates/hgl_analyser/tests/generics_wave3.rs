@@ -788,7 +788,7 @@ fn a_deferred_operator_call_checks_const_arguments() {
         checked.summary(),
         [
             "m.hgl:4:54 phase/connection.as_constant FN-3",
-            "m.hgl:8:43 phase/connection.as_constant FN-3",
+            "m.hgl:9:41 phase/connection.as_constant FN-3",
         ],
         "{}",
         checked.report
@@ -816,7 +816,7 @@ fn graph_instances_check_consumers_of_deferred_calls() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:6:52 phase/connection.as_constant FN-3",
+            "m.hgl:12:32 phase/connection.as_constant FN-3",
             "m.hgl:13:33 phase/connection.as_constant FN-3",
         ],
         "{}",
@@ -3200,7 +3200,7 @@ const fn other() -> i64 => inferred("s")"#,
     );
     assert_eq!(
         checked.summary(),
-        ["m.hgl:6:13 type/type.mismatch ERR-3"],
+        ["m.hgl:15:26 type/type.mismatch ERR-3"],
         "{}",
         checked.report
     );
