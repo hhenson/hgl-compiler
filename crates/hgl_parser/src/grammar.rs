@@ -95,6 +95,7 @@ pub(crate) fn can_begin(kind: SyntaxKind) -> bool {
                 | SyntaxKind::KwWhile
                 | SyntaxKind::KwFor
                 | SyntaxKind::KwYield
+                | SyntaxKind::KwSwitch
                 | SyntaxKind::KwAssert
                 // Declarations.
                 | SyntaxKind::KwModule
