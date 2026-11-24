@@ -544,3 +544,12 @@ fn tuple_arity_alone_remains_ambiguous_pending_spec240() {
         );
     }
 }
+
+#[test]
+fn nested_evidence_does_not_guess_an_unconstrained_partition() {
+    // GEN-3: a fixed point needs independent evidence, not an arbitrary split.
+    rejects(
+        "module m\nconst fn f<...As, ...Bs>(joined: list<tuple<As, Bs>>) -> bool => true\ntest t { assert f([(1, \"a\")]) }",
+        "type/generic.unresolved",
+    );
+}

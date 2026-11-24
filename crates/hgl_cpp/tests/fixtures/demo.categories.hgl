@@ -296,3 +296,8 @@ impl const fn arity<...Ts>(value: tuple<Ts>) -> bool => true
 impl const fn arity<A, B>(value: tuple<A, B>) -> bool => true
 # expect-error(operator, "operator.ambiguous")
 const fn tuple_arity_stays_ambiguous() -> bool => arity((1, "a"))
+
+# GEN-3: evidence retention never guesses a split between two unknown packs.
+const fn unconstrained_partition<...As, ...Bs>(joined: list<tuple<As, Bs>>) -> bool => true
+# expect-error(type, "generic.unresolved")
+const fn no_partition_evidence() -> bool => unconstrained_partition([(1, "a")])
