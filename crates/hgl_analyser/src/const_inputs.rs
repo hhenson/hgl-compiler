@@ -3,9 +3,10 @@
 //! A const parameter can also be read at run time. Only a check that
 //! needs its value during analysis adds its slot to the instance inputs.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
-use hgl_diagnostics::Location;
+use hgl_diagnostics::{Diagnostics, Location};
 
 use crate::formatting;
 use crate::hir::{
@@ -118,6 +119,9 @@ impl Program {
             .into_iter()
             .flat_map(|mode| demand.iter().filter(move |(_, demand)| **demand == mode));
         for (&slot, &demand) in ordered {
+            if demand == Demand::IfSelected && !self.instance_reads_const(callee, slot) {
+                continue;
+            }
             let text_before = reader.text_left;
             let input = (|| {
                 let parameter = signature.parameters.get(slot).ok_or(Unread)?;
@@ -190,6 +194,110 @@ impl Program {
             }
         }
         known
+    }
+
+    /// Follow a possible demand with the instance's types in place and its
+    /// ordinary consts still unread. A forwarded value only enters the key
+    /// if a selected candidate reads it, or selection remains unresolved.
+    fn instance_reads_const(&self, callee: &Callee, slot: usize) -> bool {
+        let mut pending = VecDeque::from([(callee.clone(), slot)]);
+        let mut seen = Vec::new();
+        while let Some((callee, slot)) = pending.pop_front() {
+            let Some((module, declaration)) = callee.declaration() else {
+                return true;
+            };
+            match self
+                .const_demands
+                .get(&(module, declaration))
+                .and_then(|slots| slots.get(&slot))
+            {
+                Some(Demand::Always) => return true,
+                Some(Demand::IfSelected) => {}
+                None => continue,
+            }
+            if seen
+                .iter()
+                .any(|(target, position)| target == &callee && *position == slot)
+            {
+                continue;
+            }
+            if seen.len() >= crate::INSTANCES {
+                return true;
+            }
+            let unit = &self.modules[module];
+            let Some(Detail::Callable(signature)) = unit.details.get(declaration) else {
+                return true;
+            };
+            let Some(parameter) = signature.parameters.get(slot) else {
+                return true;
+            };
+            let (Callee::Candidate { requirements, .. } | Callee::Function { requirements, .. }) =
+                &callee
+            else {
+                return true;
+            };
+            let placement_reports = RefCell::new(Diagnostics::new());
+            let mut body_reports = Diagnostics::new();
+            let Some(instance) = self.checked_instance(
+                (module, declaration),
+                callee.generics(),
+                requirements,
+                crate::InstanceInputs {
+                    type_packs: callee.type_packs(),
+                    ..crate::InstanceInputs::default()
+                },
+                &placement_reports,
+                &mut body_reports,
+            ) else {
+                return true;
+            };
+            if body_reports.has_errors() || placement_reports.borrow().has_errors() {
+                return true;
+            }
+            seen.push((callee, slot));
+            let bindings = local_bindings(unit);
+            let slots = HashMap::from([(parameter.at, slot)]);
+            let reads_parameter = |argument: &Expr| {
+                let mut reads = false;
+                slots_read(argument, &bindings, &slots, |_| reads = true);
+                reads
+            };
+            let mut required = false;
+            instance.walk_calls(&mut |call| {
+                let ExprKind::Call {
+                    callee, arguments, ..
+                } = &call.kind
+                else {
+                    return;
+                };
+                if let Some(signature) = formatting::value_signature(self, callee) {
+                    required |= formatting::argument(signature, arguments, "fmt_str")
+                        .is_some_and(|pattern| reads_parameter(&pattern.value));
+                    return;
+                }
+                if matches!(callee, Callee::DeferredPackCall) {
+                    required = true;
+                    return;
+                }
+                for argument in arguments
+                    .iter()
+                    .filter(|argument| reads_parameter(&argument.value))
+                {
+                    if let Some(slot) = argument
+                        .parameter
+                        .filter(|_| callee.declaration().is_some())
+                    {
+                        pending.push_back((callee.clone(), slot));
+                    } else {
+                        required = true;
+                    }
+                }
+            });
+            if required {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -594,14 +702,7 @@ pub(crate) fn demands(program: &Program) -> Demands {
         }
     }
     for (module_index, module) in program.modules.iter().enumerate() {
-        let bindings: HashMap<_, _> = module
-            .uses
-            .iter()
-            .filter_map(|used| match &used.binding {
-                Binding::Local { at, .. } => Some(((used.at.file, used.at.span.start), *at)),
-                _ => None,
-            })
-            .collect();
+        let bindings = local_bindings(module);
         for (declaration, body) in module.bodies.iter().enumerate() {
             let (Some(body), Some(Detail::Callable(signature))) =
                 (body, module.details.get(declaration))
@@ -719,6 +820,17 @@ pub(crate) fn demands(program: &Program) -> Demands {
         }
     }
     required
+}
+
+fn local_bindings(module: &crate::Module) -> HashMap<(hgl_source::FileId, u32), Location> {
+    module
+        .uses
+        .iter()
+        .filter_map(|used| match &used.binding {
+            Binding::Local { at, .. } => Some(((used.at.file, used.at.span.start), *at)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Use lexical bindings so a captured parameter keeps its original slot.

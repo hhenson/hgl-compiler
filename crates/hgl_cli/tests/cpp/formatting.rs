@@ -24,6 +24,11 @@ impl const fn show_variant{const pattern: str}(value: f64) -> str => format(patt
 impl const fn show_variant{const pattern: str}(value: i64) -> str => pattern
 const fn choose_variant<T>(const pattern: str, value: T) -> str
     requires T in {f64, i64} => show_variant{pattern: pattern}(value)
+const fn repeat_variant<T>(const pattern: str, value: T, turns: i64) -> str
+    requires T in {f64, i64} {
+    if turns == 0 { return choose_variant(pattern, value) }
+    return repeat_variant(pattern + "x", value, turns - 1)
+}
 const fn identity_text(value: str) -> str => value
 const UNREAD_PATTERN: str = identity_text("{:x}")
 const fn apply_format(f: const fn(f64) -> str) -> str => f(1.5)
@@ -79,6 +84,7 @@ test deferred_patterns {
     assert choose_variant("{:.1f}", 1.25) == "1.2"
     assert choose_variant("{:.2f}", 1.25) == "1.25"
     assert choose_variant(UNREAD_PATTERN, 1) == "{:x}"
+    assert repeat_variant("", 1, 3) == "xxx"
     assert captured_pattern("{:.2f}") == "1.50"
 }
 "#;

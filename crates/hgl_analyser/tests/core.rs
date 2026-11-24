@@ -116,6 +116,11 @@ fn formatting_checks_deferred_const_inputs_at_the_caller() {
         "test named_argument { assert named(\"{item:x}\", 1.5) == \"\" }\n",
         "test captured { assert cap(\"{:x}\") == \"\" }\n",
         "test runtime { assert choose(\"{:x}\", 1) == \"{:x}\" }\n",
+        "const fn repeat<T>(const pattern: str, value: T, turns: i64) -> str requires T in {f64, i64} {\n",
+        "    if turns == 0 { return choose(pattern, value) }\n",
+        "    return repeat(pattern + \"x\", value, turns - 1)\n",
+        "}\n",
+        "test runtime_recursion { assert repeat(\"\", 1, 3) == \"xxx\" }\n",
     ));
     assert_eq!(
         checked.summary(),
