@@ -12,6 +12,10 @@
 //! `var` parameter is a copy: "The call changes the place and no value"
 //! (FN-15, the copy rule).
 //!
+//! An inline computed spread supplies the arguments selected by the
+//! analyser's passes (FN-19, CTRL-16). A skipped entry leaves the
+//! ordinary argument-binding and default rules to apply.
+//!
 //! A native's generic arguments are its template's (`runtime`'s naming
 //! scheme): each type, and each constant, an enum's member among them,
 //! `div__f64_f64<::hglrt::ZeroPolicy::nan>`. A candidate of an operator
