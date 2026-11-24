@@ -853,9 +853,9 @@ transpiler: planned
 
 ## SET-1
 
-transpiler: planned
+transpiler: done
 
-- #370.
+- The value candidate gives the dictionary's keys. The temporal candidate projects hgraph's key set, which publishes membership changes and is silent on a value-only update.
 
 ## SET-2
 
