@@ -758,7 +758,7 @@ impl<'a> Typer<'a> {
         // GEN-5: "Select exactly one most-specific admitted candidate.
         // Concrete types outrank variables; structurally constrained
         // variables outrank unconstrained ones."
-        most_specific(&mut selected, public, given);
+        retain_preferred(&mut selected, |left, right| outranks(left, right, public));
         // GEN-5: "Select exactly one most-specific admitted candidate.
         // Concrete types outrank variables". A candidate not told to admit
         // the call that one admitted candidate outranks is selected by
@@ -771,7 +771,7 @@ impl<'a> Typer<'a> {
                     || *reads == fewest
                         && !selected
                             .iter()
-                            .any(|admitted| outranks(admitted, unknown, public, given))
+                            .any(|admitted| outranks(admitted, unknown, public))
             })
         });
         if widening && selected.len() > 1 {
@@ -815,6 +815,13 @@ impl<'a> Typer<'a> {
             selected.retain(|_| {
                 position += 1;
                 !outranked[position - 1]
+            });
+        }
+        // Compare the inferred inputs only among candidates still tied
+        // after structural specificity, literal widening and phase.
+        if !untold {
+            retain_preferred(&mut selected, |left, right| {
+                callback_input_specificity(left, right, given) == Specific::More
             });
         }
         (selected, untold)
@@ -3726,24 +3733,14 @@ fn specificity(left: RankingType<'_, '_>, right: RankingType<'_, '_>) -> Specifi
     }
 }
 
-/// Keeps of the candidates a call admits the most specific: those no
-/// other outranks. One is left where the call selects; more are a tie.
-///
-/// GEN-5: "Select exactly one most-specific admitted candidate." The
-/// operator's public parameters are compared place for
-/// place ([`specificity`]). A candidate outranks another when it is as
-/// specific in every one and more specific in one.
-fn most_specific(selected: &mut Vec<Chosen>, public: &Signature, given: &[Given]) {
+/// Keep the admitted candidates no other candidate outranks.
+fn retain_preferred(selected: &mut Vec<Chosen>, outranks: impl Fn(&Chosen, &Chosen) -> bool) {
     if selected.len() < 2 {
         return;
     }
     let outranked: Vec<bool> = selected
         .iter()
-        .map(|chosen| {
-            selected
-                .iter()
-                .any(|other| outranks(other, chosen, public, given))
-        })
+        .map(|chosen| selected.iter().any(|other| outranks(other, chosen)))
         .collect();
     let mut position = 0;
     selected.retain(|_| {
@@ -3794,24 +3791,33 @@ fn callback_input_specificity(left: &Chosen, right: &Chosen, given: &[Given]) ->
         if left_type == right_type {
             continue;
         }
-        let callback_rank = |plain: &FunctionType,
-                             widened: &FunctionType,
-                             written: &FunctionType,
-                             chosen| {
-            plain.ordinary_parameters().count() == widened.ordinary_parameters().count()
-                && plain.ordinary_parameters().count() == written.ordinary_parameters().count()
+        let callback_rank = |(plain, written, chosen): (&FunctionType, &FunctionType, &Chosen),
+                             (widened, widened_written, widened_chosen): (
+            &FunctionType,
+            &FunctionType,
+            &Chosen,
+        )| {
+            let arity = plain.ordinary_parameters().count();
+            arity == widened.ordinary_parameters().count()
+                && arity == written.ordinary_parameters().count()
+                && arity == widened_written.ordinary_parameters().count()
                 && plain
                     .ordinary_parameters()
                     .zip(widened.ordinary_parameters())
                     .zip(written.ordinary_parameters())
-                    .all(|((plain, widened), written)| {
+                    .zip(widened_written.ordinary_parameters())
+                    .all(|(((plain, widened), written), widened_written)| {
                         plain.ty() == widened.ty()
                             || matches!(widened.ty(), Type::Nullable(inner) if inner.as_ref() == plain.ty())
                                 && callback_input_from_arguments(chosen, given, written.ty())
+                                && matches!(widened_written.ty(), Type::Nullable(inner)
+                                    if callback_input_from_arguments(widened_chosen, given, inner))
                     })
         };
-        let left_exact = callback_rank(left_type, right_type, left_written, left);
-        let right_exact = callback_rank(right_type, left_type, right_written, right);
+        let left_types = (left_type.as_ref(), left_written.as_ref(), left);
+        let right_types = (right_type.as_ref(), right_written.as_ref(), right);
+        let left_exact = callback_rank(left_types, right_types);
+        let right_exact = callback_rank(right_types, left_types);
         rank = rank.and(match (left_exact, right_exact) {
             (true, false) => Specific::More,
             (false, true) => Specific::Less,
@@ -3822,16 +3828,17 @@ fn callback_input_specificity(left: &Chosen, right: &Chosen, given: &[Given]) ->
     rank
 }
 
-/// A callback input shares a written type with an ordinary argument,
-/// including a generic type inside the ordinary parameter's structure.
+/// A callback input's type variable also occurs in an ordinary parameter
+/// whose argument supplies its type, including inside a structured type.
 fn callback_input_from_arguments(chosen: &Chosen, given: &[Given], input: &Type) -> bool {
-    given.iter().zip(&chosen.bound).any(|(argument, &place)| {
-        !argument.by_function
-            && parameter_type(&chosen.taken, &chosen.type_packs, place)
-                .is_some_and(|parameter| parameter == argument.ty())
-            && parameter_type(chosen.declared, &chosen.type_packs, place)
-                .is_some_and(|parameter| parameter.any_part(&|part| part == input, &|_| false))
-    })
+    bare_parameter(input, &chosen.declared.generics).is_some()
+        && given.iter().zip(&chosen.bound).any(|(argument, &place)| {
+            !argument.by_function
+                && parameter_type(&chosen.taken, &chosen.type_packs, place)
+                    .is_some_and(|parameter| parameter == argument.ty())
+                && parameter_type(chosen.declared, &chosen.type_packs, place)
+                    .is_some_and(|parameter| parameter.any_part(&|part| part == input, &|_| false))
+        })
 }
 
 /// The length admitted for this pack, where it is known at this call.
@@ -3878,12 +3885,7 @@ fn ranking_type(chosen: &Chosen<'_>, ty: &Type) -> Type {
 /// or may admit: as specific in each of the operator's own parameters,
 /// compared place for place ([`specificity`]), and more
 /// specific in one (GEN-5, GEN-12).
-fn outranks(better: &Chosen, worse: &Chosen, public: &Signature, given: &[Given]) -> bool {
-    match callback_input_specificity(better, worse, given) {
-        Specific::More => return true,
-        Specific::Less => return false,
-        Specific::Same | Specific::Neither => {}
-    }
+fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
     let whole = public
         .candidate_parameters(better.declared)
         .zip(public.candidate_parameters(worse.declared))
