@@ -33,6 +33,9 @@ const fn identity_text(value: str) -> str => value
 const UNREAD_PATTERN: str = identity_text("{:x}")
 const fn apply_format(f: const fn(f64) -> str) -> str => f(1.5)
 const fn captured_pattern(const pattern: str) -> str => apply_format(fn(value) => format(pattern, value))
+const fn apply_typed_format<T>(f: const fn(T) -> str, value: T) -> str => f(value)
+const fn capture_typed_pattern<T>(const pattern: str, value: T) -> str =>
+    apply_typed_format(fn(item) => format(pattern, item), value)
 
 struct FormatMember { number: i64 }
 impl const fn convert(value: FormatMember) -> str => convert<str>(value.number)
@@ -85,7 +88,11 @@ test deferred_patterns {
     assert choose_variant("{:.2f}", 1.25) == "1.25"
     assert choose_variant(UNREAD_PATTERN, 1) == "{:x}"
     assert repeat_variant("", 1, 3) == "xxx"
-    assert captured_pattern("{:.2f}") == "1.50"
+    assert captured_pattern("[{:.2f}]") == "[1.50]"
+    assert captured_pattern("<{:.2f}>") == "<1.50>"
+    assert capture_typed_pattern("{:x}", 255) == "ff"
+    assert capture_typed_pattern("<{}>", 7) == "<7>"
+    assert capture_typed_pattern("<{}>", 1.5) == "<1.5>"
 }
 "#;
 
