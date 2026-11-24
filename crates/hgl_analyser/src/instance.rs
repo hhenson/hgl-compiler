@@ -51,7 +51,7 @@ type Map<'a> = [(Location, &'a Argument)];
 use crate::values::PackTypes;
 
 /// The compile-time call inputs that specialize a declaration (FN-17, FN-19).
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub struct InstanceInputs<'a> {
     /// Each function supplied at an original parameter slot.
     pub functions: &'a [(usize, Callee)],
@@ -59,6 +59,8 @@ pub struct InstanceInputs<'a> {
     pub type_packs: &'a [TypePackArgument],
     /// Concrete entries held by the caller's packs, including an empty shape.
     pub pack_inputs: Option<&'a [PackInput]>,
+    /// Ordinary const inputs read by a compile-time check, by original slot.
+    pub constants: &'a [crate::ConstInput],
 }
 
 /// The enclosing declaration and the arguments common to its body and
@@ -384,8 +386,14 @@ impl Program {
         let recheck_endpoints =
             crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
         let mut reread_body = false;
+        let reread_inputs = InstanceInputs {
+            functions: &functions,
+            pack_inputs: pending_forwards,
+            ..inputs
+        };
         if (recheck_endpoints
             || pending_forwards.is_some()
+            || !inputs.constants.is_empty()
             || (!generics.is_empty()
                 && (crate::values::has_dependent_index(&body)
                     || crate::formatting::has_dependent_formatting(self, &body))))
@@ -393,7 +401,7 @@ impl Program {
                 self,
                 (module, declaration),
                 (&taken, &map),
-                (&functions, pending_forwards),
+                reread_inputs,
                 &project,
                 body_diagnostics,
             )
@@ -419,7 +427,7 @@ impl Program {
                 self,
                 (module, declaration),
                 (&taken, &map),
-                (&functions, pending_forwards),
+                reread_inputs,
                 &project,
                 &mut reports,
             ) {

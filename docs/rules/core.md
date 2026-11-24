@@ -876,7 +876,8 @@ transpiler: done
 analyser: partial
 
 - Direct native calls take a constant `str` pattern followed by positional and named packs. A generic value pattern and dependent argument types are checked together at their concrete call.
-- Left: passing an ordinary `const` parameter through as a pattern, and forwarding both packs through the graph and diagnostic candidates (#368, #434).
+- An enclosing function can pass an ordinary `const` parameter or option through as the pattern. The concrete call supplies its checked value (FN-1, #695).
+- Left: forwarding both packs through the graph and diagnostic candidates (#368, #434).
 
 ## FMT-2
 
@@ -890,7 +891,8 @@ analyser: partial
 
 - A direct value call is checked for braces, missing and unused arguments, and specifiers. A dependent string is checked in its concrete instance. Diagnostics use `format.syntax`, `format.argument`, `format.unused` and `format.specifier`.
 - The current compile-time pattern reader builds up to 64 KiB of text per result. The C++ target declines calls whose patterns exceed that support limit (#695).
-- Left: patterns whose text the analyser cannot yet read, including ordinary `const` parameters and options (#695), and patterns reached through forwarded packs (#368, #434).
+- The analyser checks demanded const inputs at each concrete call and reports a bad pattern there. Lowering uses those same values to select the checked body.
+- Left: patterns made by general constant function evaluation (#695), and patterns reached through forwarded packs (#368, #434).
 
 ## FMT-4
 

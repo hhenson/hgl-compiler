@@ -72,6 +72,159 @@ fn formatting_checks_a_generic_pattern_and_argument_together() {
     );
 }
 
+/// FN-1, FMT-3 and GEN-7: report each call whose const input makes the
+/// body reject, even when two callers supply the same bad pattern.
+#[test]
+fn formatting_checks_const_inputs_at_every_call() {
+    let checked = with_core(concat!(
+        "const fn show(const pattern: str, value: f64) -> str => format(pattern, value)\n",
+        "const fn relay<const P: str>(value: f64) -> str => show(P, value)\n",
+        "test first { assert show(\"{:x}\", 1.5) == \"\" }\n",
+        "test second { assert show(\"{:x}\", 2.5) == \"\" }\n",
+        "test relay_call { assert relay<\"{:x}\">(2.5) == \"\" }\n",
+        "test good { assert show(\"{:.1f}\", 1.5) == \"1.5\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:21 type/format.specifier FMT-4",
+            "m.hgl:5:22 type/format.specifier FMT-4",
+            "m.hgl:6:26 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// GEN-7: an independent const input rejects at its body call once.
+#[test]
+fn formatting_checks_independent_const_inputs_once() {
+    let body = concat!(
+        "const fn show(const pattern: str, value: f64) -> str => format(pattern, value)\n",
+        "const fn outer<T>(w: f64, v: T) -> str => show(\"{:x}\", w)\n",
+        "test first { assert outer(1.5, 4) == \"\" }\n",
+    );
+    for additional_call in ["", "test second { assert outer(1.5, true) == \"\" }\n"] {
+        let checked = with_core(&format!("{body}{additional_call}"));
+        assert_eq!(
+            checked.summary(),
+            ["m.hgl:3:43 type/format.specifier FMT-4"],
+            "{}",
+            checked.report,
+        );
+    }
+}
+
+/// GEN-7: a separate const-input call does not replay a direct rejection.
+#[test]
+fn formatting_reread_keeps_one_direct_source_rejection() {
+    let checked = with_core(concat!(
+        "const fn show(const pattern: str, value: f64) -> str => format(pattern, value)\n",
+        "const fn outer<T>(w: f64, v: T) -> str => format(\"{:x}\", w) + show(\"{}\", w)\n",
+        "test outer_call { assert outer(1.5, 4) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:53 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// GEN-7: a call that passes its type parameter still checks at the caller.
+#[test]
+fn formatting_checks_type_dependent_const_inputs_at_the_caller() {
+    let checked = with_core(concat!(
+        "const fn show<T>(const pattern: str, value: f64, witness: T) -> str => format(pattern, value)\n",
+        "const fn outer<T>(w: f64, v: T) -> str => show(\"{:x}\", w, v)\n",
+        "test outside { assert outer(1.5, 4) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:23 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+    assert!(
+        checked
+            .report
+            .contains("this call makes the instance `show<i64>`")
+    );
+    assert!(
+        checked
+            .report
+            .contains("this call makes the instance `outer<i64>`")
+    );
+}
+
+/// FMT-3: an independent unread pattern does not hide a known error.
+#[test]
+fn formatting_checks_known_const_inputs_when_another_is_unread() {
+    let checked = with_core(concat!(
+        "const fn pattern(value: str) -> str => value\n",
+        "const P: str = pattern(\"{}\")\n",
+        "const fn join(const a: str, const b: str, value: f64) -> str => format(a, value) + format(b, value)\n",
+        "test t { assert join(\"{:x}\", P, 1.5) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:17 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// UNIT-13 rejects a cyclic const input without a second instance limit.
+#[test]
+fn cyclic_const_input_keeps_its_constant_cycle_diagnostic() {
+    let checked = with_core(concat!(
+        "const Pattern: str = Pattern\n",
+        "const fn show(const pattern: str) -> str => format(pattern)\n",
+        "test t { assert show(Pattern) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:7 name/constant.cycle UNIT-13"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// GEN-13: a growing const input must stop making new instances.
+#[test]
+fn demanded_const_input_growth_reports_the_instance_limit() {
+    let checked = with_core(concat!(
+        "const fn grow(const pattern: str) -> str => format(pattern) + grow(pattern + \"x\")\n",
+        "test t { assert grow(\"\") == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:17 type/generic.instance_limit GEN-13"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// FN-1: const instancing does not change the admission of projections
+/// as const arguments. See #697 for those expressions.
+#[test]
+fn const_instance_checks_leave_aggregate_admission_as_written() {
+    let checked = with_core(concat!(
+        "struct Settings { pattern: str }\n",
+        "const fn field(const settings: Settings) -> str => format(settings.pattern)\n",
+        "const fn entry(const settings: tuple<str, i64>) -> str => format(settings[0])\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:59 type/argument.constant FN-1",
+            "m.hgl:4:66 type/argument.constant FN-1",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 /// FMT-5: the selected conversion must consume the whole value and
 /// yield `str`, including when a native collection converts its parts.
 #[test]

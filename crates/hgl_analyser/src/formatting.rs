@@ -499,6 +499,13 @@ pub(crate) fn has_dependent_formatting(program: &Program, body: &crate::hir::Bod
                     dependent |= matches!(value.kind, ExprKind::GenericValue { .. });
                 });
             }
+        } else if callee
+            .declaration()
+            .is_some_and(|declaration| program.needs_const_inputs(declaration))
+        {
+            // A generic caller can supply a concrete ordinary const value
+            // only after substituting its own generic arguments.
+            dependent = true;
         } else if let [argument] = arguments.as_slice()
             && let Some(members) = collection_members(program, callee, &argument.value.ty)
         {

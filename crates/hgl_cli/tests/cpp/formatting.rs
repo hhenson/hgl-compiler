@@ -14,6 +14,9 @@ const fn display_value<const Pattern: str, T>(value: T) -> str =>
     format("value " + Pattern, value)
 const fn hex_prefix() -> str { return "{:" }
 const HEX: str = hex_prefix() + "x}"
+const fn positional(const pattern: str, value: f64) -> str => format(pattern, value)
+operator configured{const pattern: str = "{}"}(value: f64) -> str
+impl const fn configured{const pattern: str}(value: f64) -> str => format(pattern, value)
 
 struct FormatMember { number: i64 }
 impl const fn convert(value: FormatMember) -> str => convert<str>(value.number)
@@ -39,6 +42,9 @@ test typed_formats {
     assert display<"{:.2f}">(1.25) == "1.25"
     assert display_value<"{:x}">(42) == "value 2a"
     assert format(HEX, 255) == "ff"
+    assert positional("{:.2f}", 1.5) == "1.50"
+    assert configured(1.5) == "1.5"
+    assert configured{pattern: "{:.2f}"}(1.5) == "1.50"
     let least = -9223372036854775807us - 1us
     assert format("{:%[S].9}", least) == "-9223372036854.775808000"
     let boundary = @0001-01-01T19:59:05.224192Z
@@ -59,23 +65,8 @@ test selected_converters {
 /// FMT-3, #695: the target needs the analyser's checked pattern text.
 #[test]
 fn target_declines_unresolved_format_patterns() {
-    let root = scratch("ordinary-format-constants");
+    let root = scratch("unresolved-format-constants");
     let cases = [
-        (
-            "positional",
-            "const fn show(const p: str, v: f64) -> str => format(p, v)",
-            "show(\"{:x}\", 1.5)",
-        ),
-        (
-            "default_option",
-            "const fn show{const p: str = \"{:x}\"}(v: f64) -> str => format(p, v)",
-            "show(1.5)",
-        ),
-        (
-            "given_option",
-            "const fn show{const p: str = \"{}\"}(v: i64) -> str => format(p, v)",
-            "show{p: \"{:c}\"}(65)",
-        ),
         (
             "constant_from_input",
             "const fn pattern(s: str) -> str => s\nconst P: str = pattern(\"{:x}\")",
@@ -91,6 +82,126 @@ fn target_declines_unresolved_format_patterns() {
         let source = format!("module {name}\n{declaration}\ntest t {{ assert {call} == \"\" }}\n");
         let file = write(&root, &format!("{name}.hgl"), &source);
         assert_target_declines_pattern(&file, &root.join(name));
+    }
+}
+
+/// FN-1 and FMT-3: equivalent option values share a compiled body.
+#[test]
+fn format_options_key_instances_by_value() {
+    let root = scratch("format-option-instance-keys");
+    let file = write(
+        &root,
+        "keys.hgl",
+        r#"module format_option_keys
+const P: str = "{}"
+const fn show{const pattern: str = "{}"}(value: f64) -> str => format(pattern, value)
+test t {
+    assert show(1.5) == "1.5"
+    assert show{pattern: P}(1.5) == "1.5"
+    assert show{pattern: "{}"}(1.5) == "1.5"
+    assert show{pattern: "{:.2f}"}(1.5) == "1.50"
+}
+"#,
+    );
+    let output = root.join("cpp");
+    let emitted = emit_format_program(&file, &output);
+    assert!(emitted.status.success(), "{}", text(&emitted.stderr));
+    let module = fs::read_to_string(output.join("modules/mod-format_option_keys.cpp")).unwrap();
+    assert_eq!(
+        module
+            .lines()
+            .filter(|line| *line == "namespace i_::show")
+            .count(),
+        2,
+        "{module}"
+    );
+}
+
+/// FMT-2 and GEN-13: reader traversal limits do not make an unbounded set
+/// of instances. Keys count the decoded text.
+#[test]
+fn bounds_const_format_pattern_reads() {
+    let root = scratch("const-format-pattern-budget");
+    let mut chain = "const C0: str = \"<\"\n".to_owned();
+    for level in 1..=70 {
+        writeln!(chain, "const C{level}: str = C{}", level - 1).unwrap();
+    }
+    let relay = |pattern: &str| {
+        format!("{chain}const fn relay(const pattern: str) -> str => show({pattern}, 1.5)\n")
+    };
+    let deep_left = relay("C70 + pattern");
+    let deep_right = relay("pattern + C70");
+    let short_right = relay("pattern + C60");
+    let cases = [
+        (
+            "long",
+            "",
+            format!("show(\"{{}}{}\", 1.5)", "a".repeat(69_998)),
+            false,
+        ),
+        (
+            "escaped",
+            "",
+            format!("show(\"{{}}{}\", 1.5)", "\\n".repeat(33_000)),
+            true,
+        ),
+        (
+            "deep",
+            chain.as_str(),
+            "show(C70 + \"{}\", 1.5)".to_owned(),
+            false,
+        ),
+        (
+            "shallow",
+            chain.as_str(),
+            "show(C60 + \"{}\", 1.5)".to_owned(),
+            true,
+        ),
+        (
+            "relay_left",
+            deep_left.as_str(),
+            "relay(\"{}\")".to_owned(),
+            false,
+        ),
+        (
+            "relay_right",
+            deep_right.as_str(),
+            "relay(\"{}\")".to_owned(),
+            false,
+        ),
+        (
+            "relay_shallow",
+            short_right.as_str(),
+            "relay(\"{}\")".to_owned(),
+            true,
+        ),
+    ];
+    for (name, declarations, call, supported) in cases {
+        let source = format!(
+            "module {name}\n{declarations}\n\
+             const fn show(const pattern: str, value: f64) -> str => format(pattern, value)\n\
+             test t {{ assert {call} != \"\" }}\n"
+        );
+        let file = write(&root, &format!("{name}.hgl"), &source);
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        assert!(
+            checked.status.success(),
+            "{name}: {}",
+            text(&checked.stderr)
+        );
+        let output = root.join(name);
+        let emitted = emit_format_program(&file, &output);
+        let stderr = text(&emitted.stderr);
+        if supported {
+            assert!(emitted.status.success(), "{name}: {stderr}");
+        } else {
+            assert_eq!(emitted.status.code(), Some(1), "{name}: {stderr}");
+            assert!(
+                stderr.contains("build/target.unsupported"),
+                "{name}: {stderr}"
+            );
+            assert!(!output.exists());
+        }
     }
 }
 
