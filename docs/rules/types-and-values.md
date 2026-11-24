@@ -17,7 +17,7 @@ transpiler: partial
 
 - Uses distinct C++ representations for bool, i64, f64, Unicode strings and byte
   sequences and the admitted ordinary collection types.
-- A declared `str` variable appends in place with `+=`, so each piece is copied amortised once as the destination grows.
+- A declared `str` variable appends in place with `+=`, so each piece is copied amortised once as the destination grows. [Agreed TYPE-1 and EXPR-3 text](https://github.com/hhenson/hgl_spec/pull/243).
 - Left: The unstable key restriction for f64 and types containing it is pending. An
   ordinary type with no C++ representation is reported.
 
