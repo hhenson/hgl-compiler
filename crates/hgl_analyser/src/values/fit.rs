@@ -339,6 +339,17 @@ impl<'a> Typer<'a> {
     }
 }
 
+/// The type of an endpoint read in a hook. An atomic holds its entire
+/// value (TYPE-9), and a window reads as the list it holds (TYPE-11).
+/// An omission mark on these inputs adds no null payload (TYPE-14).
+pub(super) fn hook_payload_type(ty: &Type) -> Type {
+    match ty.omission_removed() {
+        Type::Atomic(payload) => payload.as_ref().clone(),
+        window @ Type::RollingWindow { .. } => window_value(window),
+        under => under.clone(),
+    }
+}
+
 /// The type of a window's value, `window` being a `rolling_window<V, ...>`;
 /// any other type as it is. TYPE-11: "That value, read in a hook or given
 /// to a lifted helper (FN-12), is a `list<V>` of the values held, oldest

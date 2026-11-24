@@ -469,6 +469,7 @@ pub(crate) fn reread_instance_body(
         },
         ..signature.clone()
     };
+    let pack_types = PackTypes::new(&reading.generics, inputs.type_packs);
     let mut typer = Typer::new(
         program,
         owner,
@@ -496,7 +497,10 @@ pub(crate) fn reread_instance_body(
             ))
         })
         .collect();
-    typer.pack_inputs = inputs.pack_inputs.map(|inputs| inputs.to_vec());
+    typer.pack_inputs = inputs.pack_inputs.map(|values| PackInputs {
+        values,
+        types: &pack_types,
+    });
     typer.pack_functions = inputs.functions.to_vec();
     typer.body_at_phase(owner.phases[declaration])
 }
@@ -596,6 +600,8 @@ struct Typer<'a> {
     calls: &'a HashMap<(FileId, u32), &'a CallArguments>,
     /// The parameters and locals found so far.
     locals: Vec<Local>,
+    /// Operand categories learned while probing one pair's arguments.
+    pair_phases: Option<calls::PairPhases>,
     /// Call results unavailable when reading a body for independent calls.
     unsettled_results: Option<&'a HashSet<Location>>,
     /// The local each declaration is, by where its name is declared.
@@ -747,10 +753,12 @@ struct Typer<'a> {
     instance: Vec<(Location, crate::types::Argument)>,
     /// Known const parameter values in this reread, by lexical binding.
     const_inputs: Vec<(Location, Expr)>,
-    /// Concrete entries of the enclosing instance's pack parameters.
-    pack_inputs: Option<Vec<hir::PackInput>>,
+    /// Concrete value and type pack entries of the enclosing instance.
+    pack_inputs: Option<PackInputs<'a>>,
     /// Compile-time callbacks available to forwarded calls.
     pack_functions: Vec<(usize, hir::Callee)>,
+    /// Active computed-pack passes, from the outermost to the current one.
+    pack_passes: Vec<(String, hir::PackKey)>,
     /// The generic value parameters of the declaration being read that
     /// its `requires` binds, each where it is declared with the constant
     /// it is bound to (GEN-3: "A positive conjunctive equality may bind
@@ -758,6 +766,13 @@ struct Typer<'a> {
     /// .slow` is `.slow` where the body gives it to an option.
     bound: Vec<(Location, crate::types::Argument)>,
     diagnostics: &'a mut Diagnostics,
+}
+
+/// The pack arguments available while rereading an instance (FN-19).
+#[derive(Clone, Copy)]
+struct PackInputs<'a> {
+    values: &'a [hir::PackInput],
+    types: &'a PackTypes<'a>,
 }
 
 /// How many expressions of one construct are read a second time, beside
@@ -843,6 +858,7 @@ impl<'a> Typer<'a> {
             written: tables.written,
             calls: tables.calls,
             locals: Vec::new(),
+            pair_phases: None,
             unsettled_results: None,
             declared: HashMap::new(),
             assigned: Vec::new(),
@@ -888,6 +904,7 @@ impl<'a> Typer<'a> {
             const_inputs: Vec::new(),
             pack_inputs: None,
             pack_functions: Vec::new(),
+            pack_passes: Vec::new(),
             bound: Vec::new(),
             diagnostics,
         }
@@ -1152,7 +1169,7 @@ struct Mark {
 type Candidate<'a> = (usize, usize, &'a Signature);
 
 /// What the `.value` of a capture is (ERR-7).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum CapturedOutput {
     /// The call it covers has no output: there is no `.value`.
     None,

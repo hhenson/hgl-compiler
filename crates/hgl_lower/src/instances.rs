@@ -55,7 +55,7 @@ use hgl_analyser::{
 };
 use hgl_diagnostics::Location;
 
-use crate::calls::{DefaultValue, LeftOut, left_out, runtime_arguments};
+use crate::calls::{DefaultValue, LeftOut, applied_field_default, left_out, runtime_arguments};
 use crate::canonical::{canonical, canonical_argument};
 use crate::packs::{Captures, Slot};
 
@@ -659,7 +659,9 @@ fn function_key(program: &Program, target: &Callee) -> Option<(String, bool)> {
         // A nested key is already encoded. Quoting it again would escape
         // the escapes at every level. Its byte length frames it as-is.
         let mut encoded = String::new();
-        let mut has_const = !function.specialization.const_inputs.is_empty();
+        let pass_keys = &function.specialization.pack_pass_keys;
+        let mut has_const =
+            !function.specialization.const_inputs.is_empty() || !pass_keys.is_empty();
         for target in targets {
             let (target, target_has_const) = target?;
             has_const |= target_has_const;
@@ -668,6 +670,9 @@ fn function_key(program: &Program, target: &Callee) -> Option<(String, bool)> {
         for (slot, key) in &function.specialization.const_inputs {
             write!(encoded, "const[{slot}]:{}#{key}", key.len())
                 .expect("writing to a string succeeds");
+        }
+        if !pass_keys.is_empty() {
+            write!(encoded, "pack passes:{pass_keys:?}").expect("writing to a string succeeds");
         }
         let key = format!(
             "anonymous:{}:{}:{}:{types:?}:{result:?}:{generic_arguments:?}:{type_packs:?}:{pack_inputs:?}:{encoded}",
@@ -881,9 +886,20 @@ impl Instances {
             if let Some(body) = &module.store_body {
                 waiting.extend(instances.asked(program, &body.statements));
             }
-            // What is worked out with no body around it: a constant's
-            // value, and a default (UNIT-13, UNIT-8).
-            let defaults = module.defaults.iter().flatten().flatten();
+            // Generic struct defaults ask for instances at omitted
+            // fields, with the struct's arguments in place (TYPE-5).
+            let defaults = module
+                .defaults
+                .iter()
+                .zip(&module.details)
+                .filter_map(|(defaults, detail)| match detail {
+                    Detail::Struct(shape) if !shape.generics.is_empty() => None,
+                    _ => Some(defaults),
+                })
+                .flatten()
+                .flatten();
+            // Constants and other defaults are read in their defining
+            // scope (UNIT-13, UNIT-8).
             for value in module.constants.iter().flatten().chain(defaults) {
                 waiting.extend(instances.asked_in(program, &value.value));
             }
@@ -1030,6 +1046,41 @@ impl Instances {
         value: &Expr,
         expanding: &mut Vec<(usize, usize, usize)>,
     ) -> Vec<Asked> {
+        if let ExprKind::Construct {
+            module,
+            declaration,
+            arguments,
+            ..
+        } = &value.kind
+        {
+            let Some(fields) = crate::types::fields_of(program, &value.ty) else {
+                return Vec::new();
+            };
+            let mut found = Vec::new();
+            for (slot, (member, expected)) in fields.into_iter().enumerate() {
+                let Some(field) = member.default else {
+                    continue;
+                };
+                let key = (*module, *declaration, usize::MAX - slot);
+                if arguments
+                    .iter()
+                    .any(|argument| argument.parameter == Some(slot))
+                    || expanding.contains(&key)
+                {
+                    continue;
+                }
+                if let Some(DefaultValue::Specialized(default)) =
+                    applied_field_default(program, field, &value.ty, &expected)
+                {
+                    expanding.push(key);
+                    default
+                        .value
+                        .walk(&mut |value| found.extend(self.asks(program, value, expanding)));
+                    expanding.pop();
+                }
+            }
+            return found;
+        }
         if let ExprKind::Eval { call, .. } = &value.kind {
             let Some(wiring) = run_wiring(program, call, &value.ty) else {
                 return Vec::new();

@@ -541,6 +541,9 @@ pub enum ExprKind {
         /// The entry's original name or position.
         key: PackKey,
     },
+    /// An indexed pack read awaiting the concrete entries and key of an
+    /// instance. The source expression is read again there (FN-19).
+    DeferredPackRead,
     /// An immutable graph binding read where a null test proved its
     /// presence, before the instance has determined its ordinary type (ERR-12).
     DeferredPresent(LocalId),
@@ -1309,6 +1312,8 @@ pub struct AnonymousSpecialization {
     pub pack_inputs: Vec<PackInput>,
     /// The original slots and normalized keys of its compile-time const inputs.
     pub const_inputs: Vec<(usize, String)>,
+    /// The lexical computed-pack passes enclosing its body (FN-14, GEN-17).
+    pub pack_pass_keys: Vec<PackKey>,
 }
 
 impl AnonymousFunction {
@@ -1739,6 +1744,7 @@ impl Expr {
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
             | ExprKind::PackEntry { .. }
+            | ExprKind::DeferredPackRead
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
@@ -1905,6 +1911,7 @@ impl Expr {
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
             | ExprKind::PackEntry { .. }
+            | ExprKind::DeferredPackRead
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)

@@ -1333,9 +1333,8 @@ So `requires window(T) -> list<T, 5>` neither is the body's bare
 `window(value)`, which asks for the default, nor meets a candidate's
 `requires window(T)`.
 
-Named requirements and calls written in generic bodies keep the
-complete request through `Typer::output_requested`: what the place
-expects, the types supplied
+Named requirements keep complete inference through
+`Typer::output_requested`: what the place expects, the types supplied
 in the operator's parameter order with an abstract struct widening what
 an earlier one decided (GEN-2), the operator's defaults, each of its
 parameter's type as resolved (GEN-13), and the operator's own
@@ -1349,9 +1348,19 @@ The complete public inference still checks dependent defaults (GEN-13),
 result membership and reflected packs. Separate call metadata lets
 `Typer::called` resolve inherited configuration defaults from the fitted
 arguments (UNIT-8): fitting to `f64?` yields the `f64` payload type.
-Named requirements and calls written in generic bodies keep the existing
-complete request; this change neither rereads an instance nor changes
-the held GEN-7 result/literal behavior.
+Generic-dependent literal calls use that same request separation (GEN-7),
+and a concrete instance reread fits the literal as the written-out call
+would. Membership admission records a provisional result type for the
+existing consumer checks. For a literal call, rechecking reaches consumers
+that the declaration already admits with its provisional `i64`; the supplied
+sum of calls using a typed seed and a literal seed gives `4.5` in its `f64`
+instance. Literal-free membership-admitted operator chains keep their
+result consumers too. A literal-call result
+used as another call's argument, or multiplied by another literal-call
+result, can still reject in the declaration (#734). A genuine contextual
+output is retained before the preliminary input-derived type
+(GEN-2). Fully concrete calls lexically inside generic declarations keep
+their existing request; generic configuration-default metadata is unchanged.
 
 Where two requirements name one operator with the same types and
 different results, the call is the one that gives what its place
@@ -1727,7 +1736,7 @@ analysed program.
 | Module | What it decides | Rules |
 | --- | --- | --- |
 | `copies` | Where a value is copied: which `let`s and loops take a copy, what a name refers into, whether what a call gives is its own; which structs are values (`by_value`) | the owner's rule (compiler issue 151), FN-13, FN-15 |
-| `instances`, `canonical`, `packs` | Which instances a program asks for, including generic value functions and packed calls. A pack's captured types and keys identify its instance, and each capture becomes an individual parameter. Ordinary const inputs identify the instance where a compile-time check reads them. For a deferred candidate, the compiler follows the call with the instance's types in place to discover that demand. The analyser and lowering use the same normalized value key. These modules also describe what an eval's run and an application's run are wired with. | FN-1, FN-8, GEN-2, GEN-10, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
+| `instances`, `canonical`, `packs` | Which instances a program asks for, including generic value functions and packed calls. A pack's captured types and keys identify its instance, and each capture becomes an individual parameter. Ordinary const inputs identify the instance where a compile-time check reads them. For a deferred candidate or a call that forwards packs, the compiler follows the call with the instance's types and entries in place to discover that demand. The analyser and lowering use the same normalized value key. These modules also describe what an eval's run and an application's run are wired with. | FN-1, FN-8, GEN-2, GEN-10, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
 | `pieces` | What a piece a target writes reaches (`Reach`), and whether a test or an application reaches a form the target does not write (`blocked`) | |
 | `graphs` | What a child graph of a graph's `if`, `switch` or `for` takes, the value of a `switch` label, the `var`s a branch assigns, which paths return | CTRL-6, CTRL-7, CTRL-11, CTRL-14 |
 | `types` | A struct's fields and descendants, whether a struct has none, and which values are read whole only where they are all valid | TYPE-3, TYPE-4, TYPE-9, TIME-1 |
@@ -1923,7 +1932,7 @@ call of its wiring function (`graphs::temporal_call`), so no other
 unit instantiates hgraph's templates of a node, and a node's struct and
 state never leave its unit. A generic one is written for each instance
 `hgl_lower::instances` collects, `n_::i_::f::of_i64::impl_` and
-`w_::i_::f::of_i64`. hgraph 0.9.29 compares native Float zero signs when it
+`w_::i_::f::of_i64`. hgraph 0.9.30 compares native Float zero signs when it
 interns nodes. When an opaque HGL configuration can hide an `f64`,
 `nodes::opaque_float_configuration` selects `Wiring::add_unique_node`
 to preserve the zero signs (NUM-2).
@@ -2159,6 +2168,14 @@ these, it is given on the command line. Kept, and under the toolchain's
 hash: `MACOSX_DEPLOYMENT_TARGET` and `SDKROOT`. Kept, and not under it:
 `PATH`, which finds no package, and `CMAKE_BUILD_PARALLEL_LEVEL`, how
 many jobs, which changes nothing made.
+
+Native build tools start without `CPATH`, `C_INCLUDE_PATH`,
+`CPLUS_INCLUDE_PATH`, `OBJC_INCLUDE_PATH`, `OBJCPLUS_INCLUDE_PATH`, or
+`LIBRARY_PATH`. The include variables can shadow SDK headers, and
+`LIBRARY_PATH` can add link inputs from outside the SDK. The prepared
+toolchain's format version invalidates caches made with the previous
+search environment.
+
 `HGL_HGRAPH_BUILD_TYPE=Debug scripts/provision-hgraph-sdk.sh TAG
 DIR/hgraph-sdk`, with `HGL_HGRAPH_SOURCE` naming a checkout of `TAG` for
 a debugger to read, makes a debug SDK for `HGL_HGRAPH_DEBUG` to name,
@@ -2197,9 +2214,11 @@ lock through the build and until its last executable ends. A stop during
 preparation exits immediately. A first stop while waiting for a native tool
 lets that tool exit before the driver exits. A second stop exits immediately.
 Ninja inherits the workspace lock, and tools building the SDK runtime and
-precompiled header inherit the toolchain lock. On Linux those processes also
-receive a termination signal when `hgl` dies. On macOS a started build can
-finish under its inherited lock.
+precompiled header inherit the toolchain lock. A second descriptor keeps the
+lock available to jobs after Ninja replaces their standard input. On Linux
+the tools started by the driver receive a termination signal when `hgl`
+dies. On macOS CMake closes extra descriptors when starting Ninja, so a
+launcher restores the lock descriptor from stdin immediately before Ninja.
 
 `hgl build ROOT...` checks the program, writes the generated files
 and builds its units and application executables. `--tests` builds a
@@ -2603,10 +2622,10 @@ the job the way the design needs is dropped.
 | `clap` | `hgl_cli` | command-line parsing and help text |
 | `serde` | `hgl_cli`, `hgl_doc`, `hgl_runner` | serialization of documentation and built test records |
 | `serde_json` | `hgl_cli`, `hgl_doc` | check diagnostics, API documentation and native build records as JSON |
-| `blake3` | `hgl_cli` | content fingerprints for native build reuse |
+| `blake3` | `hgl_cli`, `hgl_doc` | content fingerprints for native build reuse and stable filenames for long documentation module names |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
 | `ctrlc` | `hgl_cli` | handles stops during preparation, native builds and application execution |
-| `nix` | `hgl_cli` on Linux | delivers a termination signal to a native build tool if the build driver dies |
+| `nix` | `hgl_cli` on Linux and macOS | passes the build lock to native jobs and sets the parent-death signal on Linux |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `pulldown-cmark` | `hgl_parser`, `hgl_doc` | CommonMark fenced block ranges and HTML rendering of documentation comments |

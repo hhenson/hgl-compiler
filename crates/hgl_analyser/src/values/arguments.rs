@@ -451,7 +451,7 @@ impl<'a> Typer<'a> {
         };
         // FN-19: written arguments bind first. Forwarded names then
         // bind ahead of forwarded positions, which take the slots left.
-        let computed = super::forwarded_packs::has_computed_spread(list);
+        let computed = self.deferred_computed_spread(list);
         let spreads = if computed {
             Vec::new()
         } else {

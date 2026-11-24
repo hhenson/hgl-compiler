@@ -9,7 +9,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::control::{Outcome, branch_is_null, branch_takes_its_type};
 use super::fit::{
-    accepts_float, is_integer_literal, not_null, nullable, open, whole, window_value,
+    accepts_float, hook_payload_type, is_integer_literal, not_null, nullable, open, whole,
 };
 use super::node::RefRead;
 use super::results::proof_binding;
@@ -333,13 +333,31 @@ impl<'a> Typer<'a> {
                 category: ValueCategory::Unsettled,
             };
         }
-        let Some(Binding::Local {
-            at: declared,
-            kind: LocalKind::GenericParameter,
-        }) = self.bindings.get(&(self.file, name.span().start))
+        let Some(Binding::Local { at: declared, kind }) =
+            self.bindings.get(&(self.file, name.span().start))
         else {
             return unread;
         };
+        if *kind == LocalKind::PackIterationKey {
+            // CTRL-16: a computed pass binds its key as a constant, also
+            // when an anonymous body inside the pass reads the key.
+            let literal = self
+                .bound_pack_key(*declared)
+                .and_then(|value| match value {
+                    ConstantValue::Int(position) => Some((Value::Int(*position), Scalar::I64)),
+                    ConstantValue::Str(name) => Some((Value::Str(name.clone()), Scalar::Str)),
+                    _ => None,
+                });
+            return literal.map_or(unread, |(value, scalar)| Expr {
+                kind: ExprKind::Literal(value),
+                ty: Type::Scalar(scalar),
+                at,
+                category: ValueCategory::Unsettled,
+            });
+        }
+        if *kind != LocalKind::GenericParameter {
+            return unread;
+        }
         let Some(generic) = self
             .signature
             .generics
@@ -459,7 +477,7 @@ impl<'a> Typer<'a> {
         {
             self.ref_read(local, None, RefRead::Value, at);
         }
-        self.signal_read(local, at);
+        self.signal_read(local, at, None);
         // TIME-7: "`out` is read in a `when` and in `stop` ... `start`
         // neither reads nor writes it". Nor does a `state`'s or a
         // `cache`'s initializer, which gives it its first value on
@@ -539,21 +557,9 @@ impl<'a> Typer<'a> {
         } else {
             ExprKind::Local(local)
         };
-        // TYPE-9: "`atomic<V>` stops expansion at a complete ordinary
-        // V", and TYPE-16: "an atomic publishes whole". In a hook an
-        // atomic input's payload, and `out`'s, is that whole V, an
-        // ordinary value. TYPE-14: the `?` of an input whose type is
-        // no ordinary value marks one that may be left out, and no
-        // null: what a hook reads of `atomic<Quote>?` is a `Quote`
-        // (`Type::omission_removed`). TYPE-11: a window's value, "read
-        // in a hook ... is a `list<V>` of the values held, oldest first".
         let endpoint = self.is_temporal_input(local) || Some(local) == self.out;
         let ty = if self.hook.is_some() && endpoint {
-            match ty.omission_removed() {
-                Type::Atomic(payload) => (**payload).clone(),
-                window @ Type::RollingWindow { .. } => window_value(window),
-                under => under.clone(),
-            }
+            hook_payload_type(&ty)
         } else {
             ty
         };

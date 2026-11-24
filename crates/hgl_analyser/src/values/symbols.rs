@@ -293,6 +293,11 @@ impl<'a> Typer<'a> {
         {
             return self.trace_comparison(operator, &left, &right);
         }
+        if config.is_none()
+            && let Some(value) = self.pack_pass_key_comparison(operator, &left, &right)
+        {
+            return (ExprKind::Literal(Value::Bool(value)), BOOL);
+        }
         // A null presence check is intrinsic, unlike the calls of a
         // comparison identity (GEN-4 and the generics chapter).
         let identity = if matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual)

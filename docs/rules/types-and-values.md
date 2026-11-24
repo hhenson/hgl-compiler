@@ -72,8 +72,10 @@ transpiler: partial
 
 - Constructs concrete structs by name and in argument order, using inherited defaults
   and implicit nulls.
-- Left: Reports a generic field default the emitter cannot specialize, a default that
-  runs statements or propagates failure, and a default that recursively omits itself.
+- Writes omitted field defaults in their defining scope, including statement blocks
+  and defaults whose type is supplied by a generic struct application.
+- Left: Reports field defaults whose specialization cannot be emitted, defaults
+  that propagate failure, and defaults that recursively omit themselves.
   Unmapped fields and missing required constructor inputs have defensive reports.
 
 ## TYPE-6
@@ -193,7 +195,7 @@ analyser: done
 - `ref` is no type but a mark of a node's parameter and result, whose type is the T after it (FN-16); a graph gives a `ref` parameter of T a connection of T
 - A `signal` parameter marked `ref` is `ref.position` (FN-16)
 - `rolling_window`, `atomic` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input; `endpoint<T>` only as the whole type of a native value function's parameter (`endpoint.position`)
-- A `signal` takes no default but `null` (`type.mismatch`), and a hook gives it to an endpoint operation and reads it nowhere else (`type.not_ordinary`)
+- A `signal` takes no default but `null` (`type.mismatch`). A hook gives it to an endpoint operation and reads its payload nowhere (`type.not_ordinary`), including from a constant-key pack entry whose type is supplied by an instance.
 
 transpiler: partial
 

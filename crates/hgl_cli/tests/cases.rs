@@ -675,6 +675,15 @@ fn dependent_call_packs_reject_invalid_arguments() {
         stdout.contains("rejection cases: 11 passed, 0 failed"),
         "{stdout}"
     );
+    let checked = hgl(&["check", &declarations, &cases]);
+    let stderr = text(&checked.stderr);
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(
+            "error[type/type.mismatch]: `true` must be a compile-time `str` or `i64` pack key"
+        ),
+        "{stderr}"
+    );
 }
 
 /// EXPR-16 and EXPR-17: ranges are loop syntax and fixed comprehensions

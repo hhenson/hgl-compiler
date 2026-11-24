@@ -322,15 +322,15 @@ fn a_typed_input_keeps_its_binding_beside_a_contextual_argument() {
     }
 }
 
-/// The GEN-7/#614 half is held: this extraction must retain main's
-/// rejection under an option, including a fully concrete nested call.
+/// GEN-7 admits generic-dependent literals. The unrelated fully concrete
+/// call inside a generic declaration retains its existing request.
 #[test]
-fn generic_body_calls_keep_the_existing_option_rejection() {
-    for body in [
+fn generic_literal_calls_are_admitted_without_changing_concrete_body_calls() {
+    for (index, body) in [
         "const fn observed<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} => op(items, seed) + op(items, 1)",
         "fn observed<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} => op(items, seed) + op(items, 1)",
         "const fn observed<V>(unused: V) { let picked = op([1.5, 2.0], 1) }",
-    ] {
+    ].into_iter().enumerate() {
         for option in [false, true] {
             let generic = if option {
                 ", const on: bool = true"
@@ -343,11 +343,11 @@ fn generic_body_calls_keep_the_existing_option_rejection() {
             );
             let checked = check(&[("m.hgl", &source)]);
             assert_eq!(
-                checked.rejected, option,
+                checked.rejected, option && index == 2,
                 "{body}/{option}: {}",
                 checked.report
             );
-            if option {
+            if option && index == 2 {
                 assert!(
                     checked
                         .findings

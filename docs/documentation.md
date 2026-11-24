@@ -7,8 +7,9 @@ Open `index.html` in that directory. The default directory is
 The index links to one page per module. Each module page shows its
 parts, their source comments and its declarations grouped by kind.
 Declarations show their written signatures, file and line,
-documentation, and parameter and type-parameter tables. Configuration
-parameters have a separate table. An operator lists its candidates
+documentation, and parameter and type-parameter tables. The argument and
+configuration tables show modes beside parameter names and pack marks
+beside types. An operator lists its candidates
 with their own signatures and documentation. Exported declarations
 appear by default. Use `--private` to include the rest and named tests.
 
@@ -21,10 +22,11 @@ New sites use an empty `.hgl-doc-site-v2` marker. Sites with the original
 
 Comments are rendered as CommonMark with tables (SDOC-7). Authored HTML
 is shown as text. HGL fences are highlighted using the lexer and labeled
-as runnable or shown examples (SDOC-9). A code span naming a declaration or member links to it when it resolves in the
-comment's source scope and appears in the site (SDOC-8). Only generated
-local destinations become active Markdown links. Other link labels
-and image descriptions remain readable text. The pages and stylesheet
+as runnable or shown examples (SDOC-9). A code span naming a declaration
+or member links to it when it resolves in the comment's source scope and
+appears in the site (SDOC-8). Markdown link and image destinations appear
+as text after their labels. HTTP and HTTPS link labels are clickable.
+Image descriptions appear as text. The pages and stylesheet
 use relative paths and open offline. The index searches declaration names
 using a local search index. Inline formulas and `math` fences use the
 bundled KaTeX renderer. `mermaid` fences use the bundled Mermaid renderer.

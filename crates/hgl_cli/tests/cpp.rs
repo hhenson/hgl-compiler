@@ -714,6 +714,34 @@ fn block_constants_run_on_the_sdk() {
     );
 }
 
+/// TYPE-5, UNIT-7 and EXPR-5: omitted fields use their defining scope and
+/// their applied type, including statement blocks, generic calls and lambdas.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn field_defaults_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("field_defaults");
+    let file = write(
+        &root,
+        "demo.field_defaults.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.field_defaults.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// EXPR-5, TYPE-14, UNIT-8: a generic null default is written using
 /// the selected nullable value parameter's concrete type.
 #[test]
@@ -742,6 +770,38 @@ fn generic_null_defaults_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// GEN-7, EXPR-5: literal arguments and their results use the selected
+/// instance's type, in functions, node handlers and graphs.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn generic_instance_literals_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic_instance_literals");
+    let file = write(
+        &root,
+        "demo.instance_literals.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.instance_literals.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 6 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1252,7 +1312,7 @@ fn configurations_run_on_the_sdk() {
 /// duration, values leaving one by age, their reads checked when they
 /// run, a lifted helper given one, a window recorded and replayed, and two
 /// writes of a window result in one evaluation, the last of which arrives
-/// (TYPE-11; core's END-9).
+/// (TYPE-11, END-9). A changed branch starts a window afresh (CTRL-2).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn windows_run_on_the_sdk() {
@@ -1288,7 +1348,7 @@ fn windows_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 20 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 21 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1386,8 +1446,8 @@ fn timing_runs_on_the_sdk() {
     );
 }
 
-/// TYPE-12 and UNIT-8: parameters and configuration observe the ticks of
-/// a signal connection. An omitted signal stays silent when forwarded.
+/// TYPE-12, FN-19 and UNIT-8: parameters, configuration and pack
+/// connections observe signal ticks. An omitted signal stays silent.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn signal_inputs_run_on_the_sdk() {
@@ -1409,7 +1469,7 @@ fn signal_inputs_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1924,7 +1984,7 @@ fn operator_instance_results_take_their_context_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2232,6 +2292,113 @@ fn forwarded_packs_run_on_the_sdk() {
     );
 }
 
+/// FN-19 and GEN-17: a constant key reads a fitted entry, including a
+/// captured value or a connection. An absent key rejects under the shape
+/// supplied at the call.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn pack_entries_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("pack-entries");
+    let file = write(
+        &root,
+        "demo.pack_reads.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.pack_reads.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 6 passed, 0 failed\nexecutable cases: 9 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
+/// FN-19: a range pass supplies a constant key (CTRL-16), and UNIT-13
+/// lets a module constant be computed by a call. Both checks succeed
+/// even when C++ cannot yet write the lookup.
+#[test]
+fn pack_entries_with_unread_constant_keys_decline_cpp_emission() {
+    let root = scratch("unread-pack-keys");
+    let cases = [
+        (
+            "range_key",
+            concat!(
+                "fn summed<...As>(args: ...As) -> i64 {\n",
+                "    var s = args[0]\n",
+                "    for i in 1..<3 { s = s + args[i] }\n",
+                "    return s\n",
+                "}\n",
+                "test example { assert eval summed([1], [10], [100]) == [111] }\n",
+            ),
+        ),
+        (
+            "range_expression_key",
+            concat!(
+                "fn summed(args: ...i64) -> i64 {\n",
+                "    var s = args[0]\n",
+                "    for i in 0..<2 { s = s + args[i + 1] }\n",
+                "    return s\n",
+                "}\n",
+                "test example { assert eval summed([1], [10], [100]) == [111] }\n",
+            ),
+        ),
+        (
+            "module_key",
+            concat!(
+                "const fn name() -> str => \"a\"\n",
+                "const key: str = name()\n",
+                "const fn fetch<...As>(args: ...{As}) -> i64 => args[key + \"b\"]\n",
+                "test example { assert fetch(ab: 1) == 1 }\n",
+            ),
+        ),
+        (
+            "generic_key",
+            concat!(
+                "const fn name() -> str => \"a\"\n",
+                "const key: str = name()\n",
+                "const fn fetch<const given: str, ...As>(args: ...{As}) -> i64 => args[given]\n",
+                "test example { assert fetch<key>(a: 1) == 1 }\n",
+            ),
+        ),
+    ];
+    for (name, body) in cases {
+        let file = write(
+            &root,
+            &format!("{name}.hgl"),
+            &format!("module {name}\n{body}"),
+        );
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        assert_eq!(
+            checked.status.code(),
+            Some(0),
+            "{name}: {}",
+            text(&checked.stderr)
+        );
+        let out = root.join(name);
+        let emitted = hgl_in(
+            &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
+            &[],
+            &[],
+        );
+        let stderr = text(&emitted.stderr);
+        assert_eq!(emitted.status.code(), Some(1), "{name}: {stderr}");
+        assert!(
+            stderr.contains("error[build/target.unsupported]"),
+            "{name}: {stderr}"
+        );
+    }
+}
+
 /// FN-17: named, operator and anonymous targets specialize value and
 /// temporal calls. Captured values and connections reach their bodies
 /// through a node hook, a graph and another static function parameter.
@@ -2346,6 +2513,34 @@ fn reflected_pack_followups_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// FN-19, CTRL-16 and GEN-7: computed passes give only the entries that
+/// exist, including when a callee supplies its own default.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn computed_pack_passes_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("computed-pack-passes");
+    let file = write(
+        &root,
+        "demo.computed_pack_passes.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.computed_pack_passes.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2465,11 +2660,10 @@ fn an_unread_reflected_membership_preserves_the_operator_error() {
     );
 }
 
-/// FN-19 and GEN-17: a computed spread is read through its pack-key
-/// expressions. C++ declines it while the generic passes remain unread.
-/// A function inside an entry may capture its iteration key (FN-14).
+/// FN-19 and GEN-17: a computed spread emits its selected entries.
+/// A function inside an entry can capture its iteration key (FN-14).
 #[test]
-fn a_computed_pack_spread_checks_and_declines_cpp_emission() {
+fn a_computed_pack_spread_emits_selected_key_captures() {
     let root = scratch("computed-pack-spread");
     let file = write(
         &root,
@@ -2477,12 +2671,16 @@ fn a_computed_pack_spread_checks_and_declines_cpp_emission() {
         concat!(
             "module m\n",
             "const fn identity(x: i64) -> i64 => x\n",
+            "const fn named(unused: i64) -> i64 => unused\n",
             "const fn apply(f: const fn() -> i64) -> i64 => f()\n",
             "const fn forward<...Ps, ...As>(f: const fn(...{Ps}) -> i64, args: ...{As for f}) -> i64 =>\n",
             "    f(...{for key in arg_keys(Ps):\n",
             "        if key == \"unused\" { apply(fn() => if key == \"unused\" { 0 } else { 1 }) }\n",
             "        else if key in arg_keys(As) { args[key] }})\n",
-            "test example { assert forward(identity, 3) == 3 }\n",
+            "test example {\n",
+            "    assert forward(identity, 3) == 3\n",
+            "    assert forward(named, unused: 3) == 0\n",
+            "}\n",
         ),
     );
     let checked = hgl_in(&["check", &file], &[], &[]);
@@ -2493,13 +2691,7 @@ fn a_computed_pack_spread_checks_and_declines_cpp_emission() {
         &[],
         &[],
     );
-    let stderr = text(&emitted.stderr);
-    assert_eq!(emitted.status.code(), Some(1), "{stderr}");
-    assert!(
-        stderr.contains("error[build/target.unsupported]")
-            && stderr.contains("f(...{for key in arg_keys(Ps)"),
-        "{stderr}"
-    );
+    assert_eq!(emitted.status.code(), Some(0), "{}", text(&emitted.stderr));
 }
 
 /// GEN-17 and FN-19: the keys in a computed spread are those of a type pack.
@@ -4871,6 +5063,31 @@ fn callable_block_defaults_run_on_the_sdk() {
     );
 }
 
+/// FN-4, FN-6, FN-17, GEN-5 and GEN-6: prefer the direct role,
+/// including where a pair takes a callable, and keep ordinary and eval roles.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn call_role_preferences_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("call-role-preference");
+    let file = write(
+        &root,
+        "demo.call_roles.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.call_roles.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 3 passed, 0 failed\nexecutable cases: 12 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
 /// GEN-16, UNIT-8: a required symbol keeps the public generic arguments
 /// that its selected candidate's inherited configuration default reads.
 #[test]
@@ -5004,7 +5221,7 @@ fn category_constraints_and_tuple_packs_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 29 passed, 0 failed\nexecutable cases: 17 passed, 0 failed, 0 not run\n"
+            "rejection cases: 29 passed, 0 failed\nexecutable cases: 18 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );

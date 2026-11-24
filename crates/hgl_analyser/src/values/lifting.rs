@@ -88,6 +88,35 @@ impl<'a> Typer<'a> {
     }
 }
 
+/// FN-4 and GEN-5 prefer the role the operands can call directly.
+/// In composition an unsettled operand keeps the temporal preference
+/// until its category can be determined.
+pub(super) fn preferred_call_role(
+    composing: bool,
+    operands: impl IntoIterator<Item = ValueCategory>,
+) -> Role {
+    if composing
+        && operands
+            .into_iter()
+            .any(|operand| operand != ValueCategory::Value)
+    {
+        Role::Temporal
+    } else {
+        Role::Value
+    }
+}
+
+/// A connection decides the category of combined operands. With no
+/// connection, an unsettled operand keeps the combination unsettled.
+pub(super) fn join_categories(one: ValueCategory, other: ValueCategory) -> ValueCategory {
+    use ValueCategory::{Connection, Unsettled, Value};
+    match (one, other) {
+        (Connection, _) | (_, Connection) => Connection,
+        (Unsettled, _) | (_, Unsettled) => Unsettled,
+        _ => Value,
+    }
+}
+
 /// The same CTRL-14 comparison, once the categories of both sides are known.
 pub(super) fn assignment_category(
     binding: &Local,
@@ -266,13 +295,7 @@ fn gives_a_value(value: &Expr) -> bool {
 pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> ValueCategory {
     use ValueCategory::{Connection, Unsettled, Value};
     let category = |value: &Expr| category(program, locals, value);
-    // Several values taken together: a connection where one is, and
-    // not settled where one is not and none is a connection.
-    let join = |one: ValueCategory, other: ValueCategory| match (one, other) {
-        (Connection, _) | (_, Connection) => Connection,
-        (Unsettled, _) | (_, Unsettled) => Unsettled,
-        _ => Value,
-    };
+    let join = join_categories;
     let all = |values: &mut dyn Iterator<Item = &Expr>| values.map(category).fold(Value, join);
     match &value.kind {
         // A default and a constant are read with no local in scope
@@ -282,6 +305,7 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
         | ExprKind::PackEntry { pack: local, .. } => {
             locals.get(*local).map_or(Value, |local| local.category)
         }
+        ExprKind::DeferredPackRead => Unsettled,
         // EXPR-16: a range has ordinary bounds. Its loop variable does
         // not become a connection even when a bound was reported.
         ExprKind::Range { .. } => Value,

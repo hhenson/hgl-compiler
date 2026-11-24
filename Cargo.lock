@@ -316,7 +316,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hgl_analyser"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "hgl_diagnostics",
  "hgl_lexer",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "hgl_cli"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "blake3",
  "clap",
@@ -352,7 +352,7 @@ dependencies = [
 
 [[package]]
 name = "hgl_cpp"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "hgl_analyser",
  "hgl_diagnostics",
@@ -364,7 +364,7 @@ dependencies = [
 
 [[package]]
 name = "hgl_diagnostics"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "codespan-reporting",
  "hgl_source",
@@ -372,8 +372,9 @@ dependencies = [
 
 [[package]]
 name = "hgl_doc"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
+ "blake3",
  "hgl_analyser",
  "hgl_diagnostics",
  "hgl_lexer",
@@ -386,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "hgl_lexer"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "hgl_diagnostics",
  "hgl_source",
@@ -394,7 +395,7 @@ dependencies = [
 
 [[package]]
 name = "hgl_lower"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "hgl_analyser",
  "hgl_diagnostics",
@@ -405,7 +406,7 @@ dependencies = [
 
 [[package]]
 name = "hgl_parser"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "hgl_diagnostics",
  "hgl_lexer",
@@ -416,7 +417,7 @@ dependencies = [
 
 [[package]]
 name = "hgl_runner"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "hgl_analyser",
  "hgl_diagnostics",
@@ -428,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "hgl_source"
-version = "0.2.6"
+version = "0.2.7"
 
 [[package]]
 name = "indexmap"

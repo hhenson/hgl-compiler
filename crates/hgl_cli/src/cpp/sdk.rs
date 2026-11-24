@@ -44,7 +44,9 @@ use std::process::Command;
 use serde_json::Value;
 use walkdir::WalkDir;
 
-use super::build::{Interrupt, lock, native_command, quoted, write_if_changed};
+use super::build::{
+    Interrupt, lock, native_command, native_tool_command, quoted, write_if_changed,
+};
 use super::stamp::file_digest;
 
 mod package;
@@ -173,9 +175,35 @@ fn cmake_command(program: &Path, held: &fs::File) -> Result<Command, String> {
     Ok(command)
 }
 
+/// CMake on macOS passes stdin to Ninja but closes extra descriptors.
+/// Duplicate the lock again before Ninja opens /dev/null over jobs' stdin.
+#[cfg(target_os = "macos")]
+fn cmake_ninja(ninja: &Path, directory: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let launcher = directory.join("ninja-with-lock");
+    let script = format!(
+        "#!/bin/sh\nexec 3<&0\nexec {} \"$@\"\n",
+        quoted(&ninja.display().to_string())
+    );
+    write_if_changed(&launcher, &script)?;
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700)).map_err(|error| {
+        format!(
+            "{} could not be made executable: {error}",
+            launcher.display()
+        )
+    })?;
+    Ok(launcher)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cmake_ninja(ninja: &Path, _: &Path) -> Result<PathBuf, String> {
+    Ok(ninja.to_path_buf())
+}
+
 /// A version of what is made for a toolchain: raised when what this
 /// driver makes changes, so that what an older `hgl` made is not used.
-const FORMAT: u32 = 4;
+const FORMAT: u32 = 5;
 
 /// The family of compilers a platform builds the cpp target with
 /// (`docs/cpp-target.md`): GCC on Linux, Apple clang on macOS. Each way
@@ -639,11 +667,12 @@ impl Toolchain {
     }
 
     /// The flags every CMake configure of this toolchain is given.
-    fn configure_flags(&self) -> Result<Vec<String>, String> {
+    fn configure_flags(&self, directory: &Path) -> Result<Vec<String>, String> {
+        let ninja = cmake_ninja(self.ninja()?, directory)?;
         let mut flags = vec![
             "-G".to_string(),
             "Ninja".to_string(),
-            format!("-DCMAKE_MAKE_PROGRAM={}", self.ninja()?.display()),
+            format!("-DCMAKE_MAKE_PROGRAM={}", ninja.display()),
             format!("-DCMAKE_CXX_COMPILER={}", self.compiler.display()),
             // The flags are these and no others: CMake would otherwise
             // take `CXXFLAGS` and `LDFLAGS` from the environment, which
@@ -695,7 +724,7 @@ impl Toolchain {
             .arg(&source)
             .arg("-B")
             .arg(&build)
-            .args(self.configure_flags()?)
+            .args(self.configure_flags(directory)?)
             .arg(format!("-DCMAKE_BUILD_TYPE={}", self.build_type()))
             // A debug build's runtime library is built for debugging, with
             // the toolchain's `-O0 -g` alone: a Release build's own `-O3
@@ -765,7 +794,7 @@ impl Toolchain {
             .arg(&source)
             .arg("-B")
             .arg(&build)
-            .args(self.configure_flags()?)
+            .args(self.configure_flags(directory)?)
             // The runtime library's build type, so that where a package
             // imports a library of each configuration the program links
             // the one the runtime library does; and none of its flags, so
@@ -1117,7 +1146,7 @@ fn probe_compiler(
 ) -> Option<(Family, String, Option<String>)> {
     let output = interrupt
         .output(
-            Command::new(driver)
+            native_tool_command(driver)
                 .args(["-dM", "-E", "-v", "-x", "c++", "/dev/null"])
                 .env("LC_ALL", "C"),
         )
@@ -1139,7 +1168,11 @@ fn probe_compiler(
 /// An absent version leaves the linker's selection unchanged.
 fn linker_version(linker: &Path, interrupt: &Interrupt) -> String {
     interrupt
-        .output(Command::new(linker).arg("--version").env("LC_ALL", "C"))
+        .output(
+            native_tool_command(linker)
+                .arg("--version")
+                .env("LC_ALL", "C"),
+        )
         .ok()
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
@@ -2014,12 +2047,15 @@ mod tests {
     #[test]
     fn every_configure_finds_packages_in_the_two_prefixes_alone() {
         let libexec = Path::new("libexec");
+        let directory = tempfile::tempdir().unwrap();
         for (build, debug) in [
             (Build::Debug, true),
             (Build::Optimised, true),
             (Build::Optimised, false),
         ] {
-            let flags = toolchain(libexec, build, debug).configure_flags().unwrap();
+            let flags = toolchain(libexec, build, debug)
+                .configure_flags(directory.path())
+                .unwrap();
             assert!(
                 CONFINED
                     .iter()
@@ -2027,6 +2063,32 @@ mod tests {
                 "{flags:?}"
             );
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cmake_ninja_launcher_passes_a_copy_of_stdin_to_jobs() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::process::{Command, Stdio};
+
+        let directory = tempfile::tempdir().unwrap();
+        let ninja = directory.path().join("fake ninja");
+        fs::write(
+            &ninja,
+            "#!/bin/sh\nexec </dev/null\nread -r line <&3\ntest \"$line\" = lock\n",
+        )
+        .unwrap();
+        fs::set_permissions(&ninja, fs::Permissions::from_mode(0o700)).unwrap();
+        let inherited = directory.path().join("lock");
+        fs::write(&inherited, "lock\n").unwrap();
+        let launcher = super::cmake_ninja(&ninja, directory.path()).unwrap();
+        assert!(
+            Command::new(launcher)
+                .stdin(Stdio::from(fs::File::open(inherited).unwrap()))
+                .status()
+                .unwrap()
+                .success()
+        );
     }
 
     #[test]

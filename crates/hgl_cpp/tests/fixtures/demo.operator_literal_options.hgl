@@ -233,13 +233,12 @@ test a_float_seed_does_not_override_integer_items_with_an_option {
     let observed = n2([1, 2], 0.5)
 }
 
-# GEN-7/#614 is held: a call written in a generic body retains main's
-# existing rejection, although the corresponding concrete test above runs.
-test an_option_call_in_a_generic_body_keeps_its_rejection {
-    const fn stays<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} {
+# This fully concrete call lexically inside a generic body is outside
+# the generic-dependent literal change. Its existing request is retained.
+test a_concrete_call_in_a_generic_body_keeps_its_rejection {
+    const fn stays<V>(unused: V) {
         # expect-error(operator, "operator.no_candidate")
-        let picked = n2(items, 1)
-        return seed
+        let picked = n2([1.5, 2.0], 1)
     }
 }
 

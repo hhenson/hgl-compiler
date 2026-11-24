@@ -9,14 +9,14 @@
 <header><nav><a href="../index.html">API reference</a></nav></header>
 <main>
 <h1>guide.api</h1>
-<p>Reference for the guide, including <a href="#decl-increment-0"><code>increment</code></a>.</p>
+<p>Reference for the guide, including <a href="#decl-increment"><code>increment</code></a>.</p>
 <h2>Functions</h2>
-<article id="decl-increment-0">
+<article id="decl-increment">
 <h3>increment</h3>
 <pre class="signature"><code>export const fn increment{const offset: i64 = 1}(value: i64) -&gt; i64</code></pre>
 <p class="source">api.hgl:86</p>
-<p>Describe the <a href="mod-guide.types.html#decl-shared-3"><code>shared</code></a> value and the <a href="mod-guide.types.html#decl-buy-1"><code>foreign::Side.buy</code></a> case.</p>
-<p><a href="mod-guide.types.html#decl-sell-2"><code>guide.types.Side.sell</code></a> uses its full name. <code>value</code> is the parameter.
+<p>Describe the <a href="mod-guide.types.html#decl-shared"><code>shared</code></a> value and the <a href="mod-guide.types.html#decl-buy"><code>foreign::Side.buy</code></a> case.</p>
+<p><a href="mod-guide.types.html#decl-sell"><code>guide.types.Side.sell</code></a> uses its full name. <code>value</code> is the parameter.
 <code>hidden_elsewhere</code> stays code. See also <code>private_marker</code>.</p>
 <h4>Arguments</h4>
 <table><thead><tr><th scope="col">Name</th><th scope="col">Type</th>
@@ -27,20 +27,20 @@
 <h4>Configuration</h4>
 <table><thead><tr><th scope="col">Name</th><th scope="col">Type</th>
 <th scope="col">Default</th><th scope="col">Description</th></tr></thead><tbody>
-<tr><th scope="row"><code>offset</code></th><td><code>i64</code></td><td><code>1</code></td><td><p>The <strong>offset</strong> to apply.</p>
+<tr><th scope="row"><code>const offset</code></th><td><code>i64</code></td><td><code>1</code></td><td><p>The <strong>offset</strong> to apply.</p>
 </td></tr>
 </tbody></table>
 <p>The options are evaluated once.</p>
 <h4><strong>Further reading</strong></h4>
-<p>See <a href="mod-guide.types.html#decl-shared-3"><code>shared</code></a> for another example.</p>
+<p>See <a href="mod-guide.types.html#decl-shared"><code>shared</code></a> for another example.</p>
 <h4>Notes</h4>
 <table><thead><tr><th>Setting</th><th>Meaning</th></tr></thead><tbody>
 <tr><td>Default</td><td>One</td></tr>
 </tbody></table>
 <pre class="authored-html">&lt;script&gt;alert("escaped")&lt;/script&gt;
 </pre>
-<p>External label
-External picture</p>
+<p><a href="https://example.invalid/external">External label</a> (<code>https://example.invalid/external</code>)
+External picture (<code>https://example.invalid/picture.png</code>)</p>
 <p>Inline formula $<code class="formula-inline">shared</code>$ with a formula and diagram below:</p>
 <pre><code data-renderer="math" class="language-math">a^2+b^2=c^2
 </code></pre>
@@ -76,7 +76,7 @@ journey
 </code></pre></figure>
 </article>
 <h2>Operators</h2>
-<article id="decl-choose-1">
+<article id="decl-choose">
 <h3>choose</h3>
 <pre class="signature"><code>export operator choose&lt;T&gt;(value: T) -&gt; i64</code></pre>
 <p class="source">api.hgl:94</p>

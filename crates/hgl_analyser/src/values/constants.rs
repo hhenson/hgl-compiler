@@ -5,22 +5,25 @@
 //! Part of the typing pass ([`super`]); what a constant
 //! comes to is worked out by [`crate::constant`].
 
-use hgl_diagnostics::{Category, Location};
+use std::cell::RefCell;
+
+use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
-use super::Typer;
 use super::expressions::written_null;
 use super::fit::{not_null, whole};
 use super::inference::placed;
+use super::{Tables, Typer, tables};
 use crate::constant::{Fault, Scope, Typed};
 use crate::declared::{names_parameter, substitute_within};
-use crate::hir::{DefaultExpr, Expr, ExprKind, Value};
-use crate::program::{Declaration, Role};
+use crate::hir::{Body, Callee, DefaultExpr, Expr, ExprKind, Value, walk_statements_mut};
+use crate::program::{Declaration, Program, Role};
 use crate::read::{default_of, parameters};
 use crate::syntax::{child, name_token, tokens};
 use crate::types::{
-    Argument, Constant, ConstantValue, GenericKind, GenericParameter, Parameter, StructType, Type,
+    Argument, CallArguments, Constant, ConstantValue, Detail, Field, FieldRef, GenericKind,
+    GenericParameter, Parameter, Signature, StructType, Type,
 };
 use crate::{codes, error};
 
@@ -208,17 +211,7 @@ impl<'a> Typer<'a> {
                 if !field.has_default {
                     return None;
                 }
-                // The member that writes the field: its name is its
-                // first token.
-                let written = syntax
-                    .children()
-                    .filter(|member| member.kind() == SyntaxKind::StructMember)
-                    .find(|member| {
-                        tokens(member)
-                            .next()
-                            .is_some_and(|name| name.span().start == field.at.span.start)
-                    })
-                    .and_then(|member| default_of(&member))?;
+                let written = field_initializer(&syntax, field)?;
                 // The type the struct has the field with: the one
                 // written, or for `name = value` the parent's.
                 let declared = match &field.ty {
@@ -310,6 +303,7 @@ impl<'a> Typer<'a> {
             binding: &binding,
             parameter,
             arguments,
+            type_packs: &[],
             constants: &self.constants,
         };
         crate::constant::typed(node, expected, &scope)
@@ -443,6 +437,142 @@ impl<'a> Typer<'a> {
             _ => None,
         }
     }
+}
+
+impl Program {
+    /// TYPE-5 and UNIT-7: read the default in the defining struct's
+    /// lexical scope, with its generic arguments and the applied field type.
+    /// Returns none when the applied default cannot be read as that type.
+    pub fn specialize_field_default(
+        &self,
+        field: FieldRef,
+        arguments: &[Argument],
+        expected: &Type,
+    ) -> Option<DefaultExpr> {
+        let owner = self.modules.get(field.module)?;
+        let declared = owner.declarations.get(field.declaration)?;
+        let Detail::Struct(read) = owner.details.get(field.declaration)? else {
+            return None;
+        };
+        let member = read.fields.get(field.field)?;
+        let initialized = field_initializer(&declared.syntax, member)?;
+        let map: Vec<_> = read
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(arguments)
+            .collect();
+        let signature = super::candidates::in_instance(&Signature::of_struct(read), &map);
+        let (bindings, mut written, mut calls) = tables(owner);
+        let span = initialized.span();
+        let within =
+            |(file, start)| file == member.at.file && (span.start..span.end).contains(&start);
+        // A written type or call argument in the expression can refer to
+        // the struct's generic parameters, just as its local values can.
+        let types: Vec<_> = written
+            .iter()
+            .filter(|&(&at, _)| within(at))
+            .map(|(&at, ty)| (at, substitute_within(ty, &map)))
+            .collect();
+        written.extend(types.iter().map(|(at, ty)| (*at, ty)));
+        let applied_calls: Vec<_> = calls
+            .iter()
+            .filter(|&(&at, _)| within(at))
+            .map(|(&at, call)| {
+                (
+                    at,
+                    CallArguments {
+                        at: call.at,
+                        arguments: call
+                            .arguments
+                            .iter()
+                            .map(|(at, argument)| (*at, crate::instance::placed(argument, &map)))
+                            .collect(),
+                    },
+                )
+            })
+            .collect();
+        calls.extend(applied_calls.iter().map(|(at, call)| (*at, call)));
+        let selecting = RefCell::new(Vec::new());
+        let mut diagnostics = Diagnostics::new();
+        let defaults = Tables {
+            bindings: &bindings,
+            written: &written,
+            calls: &calls,
+            selecting: &selecting,
+        };
+        let mut typer = Typer::bare(
+            self,
+            owner,
+            declared,
+            &signature,
+            defaults,
+            &mut diagnostics,
+        );
+        typer.instance = map
+            .iter()
+            .map(|(at, argument)| (*at, (*argument).clone()))
+            .collect();
+        let value = typer.expression(&initialized, Some(expected));
+        let value = typer.fit(value, expected, &format!("the field `{}`", member.name));
+        let parameter = |at| {
+            let generic = signature.generics.iter().find(|generic| generic.at == at)?;
+            match &generic.kind {
+                GenericKind::Value(ty) => Some(ty.clone()),
+                _ => None,
+            }
+        };
+        // UNIT-8 and ERR-9: an argument can make evaluation of the cold
+        // default fail when the generic declaration alone could not tell.
+        let failed = typer
+            .typed_in_scope(
+                member.at.file,
+                &initialized,
+                Some(expected),
+                &parameter,
+                &map,
+            )
+            .is_ok_and(|constant| constant.evaluation_failed());
+        let mut body = typer.take_default(value).into_body();
+        if failed || diagnostics.has_errors() {
+            return None;
+        }
+        record_field_default_lambda_arguments(&mut body, arguments);
+        super::record(self, &mut body, false);
+        Some(DefaultExpr::from_body(body))
+    }
+}
+
+/// GEN-13 and FN-17: the same lambda in a reread field default can hold
+/// different values and types for different applications of its struct.
+fn record_field_default_lambda_arguments(body: &mut Body, arguments: &[Argument]) {
+    walk_statements_mut(&mut body.statements, &mut |expression| {
+        let callee = match &mut expression.kind {
+            ExprKind::Call { callee, .. } => callee,
+            ExprKind::StaticCallable(callee) => callee.as_mut(),
+            _ => return,
+        };
+        if let Callee::Anonymous(function) = callee {
+            function
+                .specialization
+                .generics
+                .extend_from_slice(arguments);
+            record_field_default_lambda_arguments(&mut function.body, arguments);
+        }
+    });
+}
+
+/// The member that writes the initializer, identified by its first token.
+fn field_initializer(declaration: &SyntaxNode, field: &Field) -> Option<SyntaxNode> {
+    declaration
+        .children()
+        .filter(|member| member.kind() == SyntaxKind::StructMember)
+        .find(|member| {
+            tokens(member)
+                .next()
+                .is_some_and(|name| name.span().start == field.at.span.start)
+        })
+        .and_then(|member| default_of(&member))
 }
 
 /// The default a declaration writes for its generic value parameter

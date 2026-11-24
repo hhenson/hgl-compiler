@@ -74,7 +74,12 @@ fn internal_link_targets_exist(directory: &Path, files: &BTreeMap<PathBuf, Vec<u
             .split("src=\"")
             .skip(1)
             .filter_map(|tail| tail.split_once('"').map(|(src, _)| src));
-        for href in hrefs(html).chain(scripts) {
+        let links = hrefs(html).filter(|href| {
+            !href.split_once(':').is_some_and(|(scheme, _)| {
+                scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+            })
+        });
+        for href in links.chain(scripts) {
             let (target, anchor) = href
                 .split_once('#')
                 .map_or((href, None), |(path, id)| (path, Some(id)));
@@ -99,7 +104,7 @@ fn internal_link_targets_exist(directory: &Path, files: &BTreeMap<PathBuf, Vec<u
 }
 
 #[test]
-fn documentation_site_links_only_visible_declarations_and_local_files() {
+fn documentation_site_links_visible_declarations_and_web_destinations() {
     let root = tempdir().unwrap();
     let source = root.path().join("source");
     input(&source, "\n");
@@ -113,8 +118,11 @@ fn documentation_site_links_only_visible_declarations_and_local_files() {
     assert!(api.contains("<table") && api.contains("The options are evaluated once."));
     assert_eq!(api.matches("The input value.").count(), 1);
     assert!(api.contains("&lt;script&gt;") && !api.contains("<script>alert"));
-    assert!(api.contains("External label") && api.contains("External picture"));
-    assert!(!api.contains("example.invalid"));
+    assert!(api.contains(
+        "<a href=\"https://example.invalid/external\">External label</a> (<code>https://example.invalid/external</code>)"
+    ));
+    assert!(api.contains("External picture (<code>https://example.invalid/picture.png</code>)"));
+    assert!(!api.contains("<img"));
     assert!(
         api.contains("<code>private_marker</code>")
             && !api.contains("Private implementation detail.")
@@ -144,7 +152,7 @@ fn documentation_site_links_only_visible_declarations_and_local_files() {
     );
     let api = fs::read_to_string(private.join("modules/mod-guide.api.html")).unwrap();
     assert!(api.contains("Private implementation detail."));
-    assert!(hrefs(&api).any(|href| href.starts_with("#decl-private_marker-")));
+    assert!(hrefs(&api).any(|href| href == "#decl-private_marker"));
     assert_eq!(
         hrefs(&api)
             .filter(|href| href.contains("mod-guide.types.html#"))
@@ -153,6 +161,97 @@ fn documentation_site_links_only_visible_declarations_and_local_files() {
         "a declaration private to another module remains outside this comment's scope"
     );
     internal_link_targets_exist(&private, &snapshot(&private));
+}
+
+/// SDOC-4: separate table columns preserve modes (FN-1, FN-15 and FN-16)
+/// on names and keep both FN-8 pack marks with their types.
+#[test]
+fn documentation_site_shows_parameter_modes_and_packs() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("parameters.hgl");
+    fs::write(
+        &source,
+        concat!(
+            "module parameters\n",
+            "export const fn modes{const offset: i64 = 1}(const count: i64, var values: list<i64>) -> i64 => count + offset\n",
+            "export const fn packs<...Names>(items: ...bool, fields: ...{Names}) -> i64 => 0\n",
+            "export fn observe(ref input: i64) { when {} }\n",
+        ),
+    )
+    .unwrap();
+    let site = write_site(root.path(), &source, &[]);
+    let page = fs::read_to_string(site.join("modules/mod-parameters.html")).unwrap();
+    for (name, ty, default) in [
+        ("const offset", "i64", "<code>1</code>"),
+        ("const count", "i64", "—"),
+        ("var values", "list&lt;i64&gt;", "—"),
+        ("ref input", "i64", "—"),
+        ("items", "...bool", "—"),
+        ("fields", "...{Names}", "—"),
+    ] {
+        assert!(
+            page.contains(&format!(
+                "<th scope=\"row\"><code>{name}</code></th><td><code>{ty}</code></td><td>{default}</td>"
+            )),
+            "no table row for {name}: {ty}"
+        );
+    }
+}
+
+/// SDOC-7: Markdown destinations are visible, and only HTTP(S) link
+/// labels carry external anchors.
+#[test]
+fn documentation_site_shows_markdown_destinations_as_text() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("destinations.hgl");
+    fs::write(
+        &source,
+        r#"module destinations
+
+/** [**Web**](HTTPS://example.invalid/page?x=1&y=2)
+
+[`home`](http://example.invalid/home)
+
+[Relative](../guide)
+[Fragment](#fragment)
+[Other](custom:inert)
+[Script](javascript:inert)
+[Data](data:text/plain,inert)
+[Quoted](<https://example.invalid/"q">)
+
+[![Picture](https://example.invalid/picture.png)](https://example.invalid/gallery)
+*/
+export const fn home() -> i64 => 1
+"#,
+    )
+    .unwrap();
+    let site = write_site(root.path(), &source, &[]);
+    let page = fs::read_to_string(site.join("modules/mod-destinations.html")).unwrap();
+    assert!(page.contains(concat!(
+        "<a href=\"HTTPS://example.invalid/page?x=1&amp;y=2\"><strong>Web</strong></a> ",
+        "(<code>HTTPS://example.invalid/page?x=1&amp;y=2</code>)",
+    )));
+    assert!(page.contains(concat!(
+        "<a href=\"http://example.invalid/home\"><code>home</code></a> ",
+        "(<code>http://example.invalid/home</code>)",
+    )));
+    assert!(page.contains(concat!(
+        "<a href=\"https://example.invalid/gallery\">Picture</a> ",
+        "(<code>https://example.invalid/picture.png</code>) ",
+        "(<code>https://example.invalid/gallery</code>)",
+    )));
+    assert!(page.contains("(<code>https://example.invalid/&quot;q&quot;</code>)"));
+    assert!(!page.contains("<img"));
+    for (label, destination) in [
+        ("Relative", "../guide"),
+        ("Fragment", "#fragment"),
+        ("Other", "custom:inert"),
+        ("Script", "javascript:inert"),
+        ("Data", "data:text/plain,inert"),
+    ] {
+        assert!(page.contains(&format!("{label} (<code>{destination}</code>)")));
+        assert!(!hrefs(&page).any(|href| href == destination));
+    }
 }
 
 /// SDOC-4 and SDOC-7: initializer blocks stay in signatures, and the
@@ -352,6 +451,100 @@ fn modules_that_differ_in_case_have_distinct_paths() {
             .unwrap()
             .contains("<h1>guide.types</h1>")
     );
+}
+
+/// SDOC-8 and SDOC-10: private declarations and unrelated additions leave
+/// public links intact. Names repeated on a page still have separate anchors.
+#[test]
+fn declaration_anchors_survive_private_and_unrelated_declarations() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source.hgl");
+    let declarations = r#"
+struct Hidden { shared: i64 }
+/** The field is `Shown.shared` and the operator is `choose`. */
+export struct Shown { shared: i64 }
+export operator choose<T>(value: T) -> i64
+impl const fn choose(value: i64) -> i64 => value
+impl const fn choose(value: str) -> i64 => 0
+"#;
+    fs::write(&source, format!("module anchors\n{declarations}")).unwrap();
+    let public = write_site(root.path(), &source, &[]);
+    write_site(root.path(), &source, &["--out", "private", "--private"]);
+    fs::write(
+        &source,
+        format!("module anchors\nexport const earlier: i64 = 1\n{declarations}"),
+    )
+    .unwrap();
+    write_site(root.path(), &source, &["--out", "expanded"]);
+    for (site, private) in [
+        (public, false),
+        (root.path().join("private"), true),
+        (root.path().join("expanded"), false),
+    ] {
+        let page = fs::read_to_string(site.join("modules/mod-anchors.html")).unwrap();
+        for anchor in ["Shown", "shared", "choose", "choose-2", "choose-3"] {
+            assert_eq!(page.matches(&format!("id=\"decl-{anchor}\"")).count(), 1);
+        }
+        assert_eq!(page.contains("id=\"decl-shared-2\""), private);
+        assert!(page.contains(r##"<a href="#decl-shared"><code>Shown.shared</code></a>"##));
+        assert!(page.contains(r##"<a href="#decl-choose"><code>choose</code></a>"##));
+        let search = fs::read_to_string(site.join("search-index.js")).unwrap();
+        assert!(search.contains(r#""href":"modules/mod-anchors.html#decl-Shown""#));
+        assert!(search.contains(r#""href":"modules/mod-anchors.html#decl-choose""#));
+        internal_link_targets_exist(&site, &snapshot(&site));
+    }
+}
+
+/// SDOC-8: paths for long module names stay distinct even on a
+/// case-insensitive filesystem and do not depend on the other modules.
+#[test]
+fn long_module_paths_survive_unrelated_modules() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    fs::create_dir(&source).unwrap();
+    let prefix = format!("zz.{}", "long_module_part_for_reference.".repeat(8));
+    let lower = format!("{prefix}values");
+    let upper = format!("{prefix}Values");
+    for (file, module) in [("lower.hgl", &lower), ("upper.hgl", &upper)] {
+        fs::write(
+            source.join(file),
+            format!("module {module}\nexport const answer: i64 = 13\n"),
+        )
+        .unwrap();
+    }
+    fs::write(
+        source.join("reference.hgl"),
+        format!(
+            "/** See `lower::answer` and `upper::answer`. */\n\
+             module reference\nuse {lower} as lower\nuse {upper} as upper\n"
+        ),
+    )
+    .unwrap();
+    let original = write_site(root.path(), &source, &[]);
+    fs::write(source.join("earlier.hgl"), "module a.first\n").unwrap();
+    write_site(root.path(), &source, &["--out", "expanded"]);
+    let references = |site: &Path| {
+        let page = fs::read_to_string(site.join("modules/mod-reference.html")).unwrap();
+        hrefs(&page)
+            .filter_map(|link| link.strip_suffix("#decl-answer").map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    let paths = references(&original);
+    let [lower_path, upper_path] = paths.as_slice() else {
+        panic!("Expected two cross-module destinations, found {paths:?}");
+    };
+    assert_ne!(
+        lower_path.to_ascii_lowercase(),
+        upper_path.to_ascii_lowercase()
+    );
+    let expanded = root.path().join("expanded");
+    assert_eq!(references(&expanded), paths);
+    for (path, module) in [(lower_path, lower), (upper_path, upper)] {
+        assert!(path.len() <= 205, "{path}");
+        let contents = fs::read_to_string(expanded.join("modules").join(path)).unwrap();
+        assert!(contents.contains(&format!("<h1>{module}</h1>")));
+    }
+    internal_link_targets_exist(&expanded, &snapshot(&expanded));
 }
 
 #[test]

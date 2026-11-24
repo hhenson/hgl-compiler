@@ -7,11 +7,14 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
 use super::requirements::{IndependentSourceBodies, called_or_referenced, pack_view};
+use crate::constant::{Fault, Scope};
 use crate::declared::{names_parameter, substitute_within};
-use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey};
+use crate::hir::{
+    BinaryOperator, Callee, Expr, ExprKind, Form, PackInput, PackKey, TypePackArgument,
+};
 use crate::program::{Binding, LocalKind};
 use crate::syntax::{child, has_token, is_arg_keys_call, name_token, pack_member_names, ungrouped};
-use crate::types::{GenericKind, Scalar, Type};
+use crate::types::{Argument, Constant, ConstantValue, GenericKind, Scalar, Type};
 use crate::{codes, error};
 
 /// A concrete entry supplied by one spread in the original call.
@@ -24,7 +27,7 @@ pub(super) struct ForwardedArgument {
     pub(super) value: Expr,
 }
 
-impl Typer<'_> {
+impl<'a> Typer<'a> {
     /// A form that does not implement pack forwarding must not discard
     /// the spread and emit a call using only its written arguments.
     pub(super) fn unread_pack_call(&mut self, list: &SyntaxNode) -> Option<(ExprKind, Type)> {
@@ -64,7 +67,7 @@ impl Typer<'_> {
     ) -> Option<(ExprKind, Type)> {
         let mut spreads = spread_operands(list).peekable();
         spreads.peek()?;
-        let computed = has_computed_spread(list);
+        let computed = self.deferred_computed_spread(list);
         if self.pack_inputs.is_some() && !computed {
             return None;
         }
@@ -98,9 +101,13 @@ impl Typer<'_> {
             .cloned()
             .unwrap_or(Type::Unknown);
         if computed {
-            // FN-19: this spread is an inline pack. Keep the call for
-            // the target to decline without instantiating its passes.
-            return Some((read_written(self), ty));
+            // GEN-7: keep the written arguments, but reread the spread
+            // and the call after the enclosing instance supplies its keys.
+            let mut kind = read_written(self);
+            if let ExprKind::Call { callee, .. } = &mut kind {
+                *callee = Callee::DeferredPackCall;
+            }
+            return Some((kind, ty));
         }
         Some((
             ExprKind::Call {
@@ -351,19 +358,84 @@ impl Typer<'_> {
                 && matches!(generic.kind, GenericKind::Pack { .. })))
     }
 
+    /// GEN-7: the pack's keys exist only in the instance that supplies it.
+    fn computed_pack(&self, comprehension: &SyntaxNode) -> Option<&'a TypePackArgument> {
+        let inputs = self.pack_inputs?;
+        let iterable = ungrouped(comprehension.children().next()?);
+        let (_, pack) = pack_view(iterable)?;
+        let Binding::Local { at, .. } = self.binding_at(self.file, pack.span().start)? else {
+            return None;
+        };
+        inputs
+            .types
+            .bindings()
+            .iter()
+            .find(|(declared, pack)| {
+                declared == at && !pack.infer_from_arguments && pack.forwarded_from.is_none()
+            })
+            .map(|(_, pack)| *pack)
+    }
+
+    /// Whether a written computed spread must wait for its own keys.
+    pub(super) fn deferred_computed_spread(&self, list: &SyntaxNode) -> bool {
+        spread_operands(list).map(ungrouped).any(|spread| {
+            spread.kind() == SyntaxKind::PackComprehension && !self.computed_spread_ready(&spread)
+        })
+    }
+
+    /// Keep the whole spread unread when the constant reader cannot yet
+    /// choose a branch. A known type error is reported by the pass itself.
+    fn computed_spread_ready(&self, comprehension: &SyntaxNode) -> bool {
+        let (Some(pack), Some(name), Some(entry)) = (
+            self.computed_pack(comprehension),
+            name_token(comprehension),
+            comprehension.children().nth(1),
+        ) else {
+            return false;
+        };
+        let binding = Location::new(self.file, name.span());
+        // UNIT-12: a nested duplicate has already been reported by the
+        // resolver. Its body still names the outer key, so don't expand it.
+        if self
+            .pack_passes
+            .iter()
+            .any(|(active, _)| active == name.text())
+        {
+            return false;
+        }
+        pack.keys.iter().all(|key| {
+            let Some(argument) = pack_key_argument(key) else {
+                return false;
+            };
+            matches!(
+                self.selected_pack_entry(ungrouped(entry.clone()), (binding, &argument)),
+                Ok(_) | Err((_, Fault::Mismatch(_) | Fault::NoMember(_) | Fault::NoEnum))
+            )
+        })
+    }
+
     /// The entries the instance gives to this call. Bind names before
     /// positions, preserving spread and capture order within each group.
-    pub(super) fn forwarded_arguments(&self, list: &SyntaxNode) -> Vec<ForwardedArgument> {
-        let Some(inputs) = &self.pack_inputs else {
+    pub(super) fn forwarded_arguments(&mut self, list: &SyntaxNode) -> Vec<ForwardedArgument> {
+        let Some(inputs) = self.pack_inputs else {
             return Vec::new();
         };
         let mut forwarded = Vec::new();
         for source in spread_operands(list) {
-            let Some(local) = self.local_of(&ungrouped(source.clone())) else {
+            let operand = ungrouped(source.clone());
+            if operand.kind() == SyntaxKind::PackComprehension {
+                self.computed_arguments(&operand, &mut forwarded);
+                continue;
+            }
+            let Some(local) = self.local_of(&operand) else {
                 continue;
             };
             let category = self.locals[local].category;
-            for input in inputs.iter().filter(|input| input.parameter == local) {
+            for input in inputs
+                .values
+                .iter()
+                .filter(|input| input.parameter == local)
+            {
                 let key = input.key.clone();
                 let value = Expr {
                     kind: ExprKind::PackEntry {
@@ -384,6 +456,225 @@ impl Typer<'_> {
         forwarded.sort_by_key(|entry| matches!(entry.key, PackKey::Position(_)));
         forwarded
     }
+
+    /// FN-19 and CTRL-16: each pass reads its key as a constant and
+    /// contributes only the branch it selects, if any.
+    fn computed_arguments(
+        &mut self,
+        comprehension: &SyntaxNode,
+        forwarded: &mut Vec<ForwardedArgument>,
+    ) {
+        let (Some(pack), Some(name), Some(entry)) = (
+            self.computed_pack(comprehension),
+            name_token(comprehension),
+            comprehension.children().nth(1),
+        ) else {
+            return;
+        };
+        let key_binding = Location::new(self.file, name.span());
+        let before = self.bound.len();
+        for key in pack.keys.iter().cloned() {
+            let Some(argument) = pack_key_argument(&key) else {
+                continue;
+            };
+            match self.selected_pack_entry(ungrouped(entry.clone()), (key_binding, &argument)) {
+                Ok(Some(source)) => {
+                    self.bound.push((key_binding, argument));
+                    self.pack_passes
+                        .push((name.text().to_string(), key.clone()));
+                    let value = self.expression(&source, None);
+                    forwarded.push(ForwardedArgument { key, source, value });
+                    self.pack_passes.pop();
+                    self.bound.truncate(before);
+                }
+                Ok(None) => {}
+                Err((condition, _)) => self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    self.at(&condition),
+                    "a pack loop condition must be a constant bool".to_string(),
+                    "FN-19",
+                )),
+            }
+        }
+    }
+
+    /// Find the selected expression of an `if` chain, or omit this key.
+    fn selected_pack_entry(
+        &self,
+        mut entry: SyntaxNode,
+        key: (Location, &Argument),
+    ) -> Result<Option<SyntaxNode>, (SyntaxNode, Fault)> {
+        while entry.kind() == SyntaxKind::IfExpr {
+            let mut parts = entry.children();
+            let (Some(condition), Some(then)) = (parts.next(), parts.next()) else {
+                return Ok(None);
+            };
+            if self
+                .pack_condition(&condition, key)
+                .map_err(|fault| (condition, fault))?
+            {
+                return Ok(Some(then));
+            }
+            let Some(otherwise) = parts.next() else {
+                return Ok(None);
+            };
+            entry = ungrouped(otherwise);
+        }
+        Ok(Some(entry))
+    }
+
+    fn pack_condition(
+        &self,
+        condition: &SyntaxNode,
+        key: (Location, &Argument),
+    ) -> Result<bool, Fault> {
+        self.read_pack_condition(condition, Some(key))
+    }
+
+    /// CTRL-16 also applies to a constant condition nested in an entry.
+    pub(super) fn active_pack_condition(&self, node: &SyntaxNode) -> Option<bool> {
+        if self.pack_passes.is_empty() {
+            return None;
+        }
+        self.read_pack_condition(node, None).ok()
+    }
+
+    fn read_pack_condition(
+        &self,
+        condition: &SyntaxNode,
+        key: Option<(Location, &Argument)>,
+    ) -> Result<bool, Fault> {
+        let expected = Type::Scalar(Scalar::Bool);
+        match self.pack_pass_constant(condition, &expected, key)? {
+            ConstantValue::Bool(value) => Ok(value),
+            _ => Err(Fault::NotConstant),
+        }
+    }
+
+    /// GEN-17: keep a pass key's comparison with a constant of the other
+    /// kind, also inside a nested body that captures that key (FN-14).
+    pub(super) fn pack_pass_key_comparison(
+        &self,
+        operator: BinaryOperator,
+        left: &SyntaxNode,
+        right: &SyntaxNode,
+    ) -> Option<bool> {
+        if self.bound.is_empty()
+            || !matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual)
+        {
+            return None;
+        }
+        let (key, other) = self
+            .pack_iteration_key(left)
+            .map(|key| (key, right))
+            .or_else(|| self.pack_iteration_key(right).map(|key| (key, left)))?;
+        let other_type = Type::Scalar(match key {
+            ConstantValue::Int(_) => Scalar::Str,
+            ConstantValue::Str(_) => Scalar::I64,
+            _ => return None,
+        });
+        let other = self.pack_pass_constant(other, &other_type, None).ok()?;
+        crate::constant::different_pack_key_kinds(key, &other)
+            .then_some(operator == BinaryOperator::NotEqual)
+    }
+
+    fn pack_iteration_key(&self, node: &SyntaxNode) -> Option<&ConstantValue> {
+        let node = ungrouped(node.clone());
+        if node.kind() != SyntaxKind::NameExpr {
+            return None;
+        }
+        let name = name_token(&node)?;
+        let Binding::Local {
+            at,
+            kind: LocalKind::PackIterationKey,
+        } = self.bindings.get(&(self.file, name.span().start))?
+        else {
+            return None;
+        };
+        self.bound_pack_key(*at)
+    }
+
+    /// The lexical constant for a key bound while reading a concrete pass.
+    pub(super) fn bound_pack_key(&self, declared: Location) -> Option<&ConstantValue> {
+        self.bound.iter().find_map(|(at, argument)| match argument {
+            Argument::Constant(constant) if *at == declared => Some(&constant.value),
+            _ => None,
+        })
+    }
+
+    fn pack_pass_constant(
+        &self,
+        node: &SyntaxNode,
+        expected: &Type,
+        key: Option<(Location, &Argument)>,
+    ) -> Result<ConstantValue, Fault> {
+        let inputs = self.pack_inputs.ok_or(Fault::NotConstant)?;
+        let arguments: Vec<_> = self
+            .instance
+            .iter()
+            .chain(&self.bound)
+            .map(|(at, value)| (*at, value))
+            .chain(key)
+            .collect();
+        let binding = |file, start| self.binding_at(file, start);
+        let parameter = |at| {
+            let generic = self
+                .signature
+                .generics
+                .iter()
+                .find(|generic| generic.at == at)?;
+            match &generic.kind {
+                GenericKind::Value(ty) => Some(ty.clone()),
+                _ => None,
+            }
+        };
+        let scope = Scope {
+            program: self.program,
+            file: self.file,
+            binding: &binding,
+            parameter: &parameter,
+            arguments: &arguments,
+            type_packs: inputs.types.bindings(),
+            constants: &self.constants,
+        };
+        let read = crate::constant::typed(node, Some(expected), &scope)?;
+        crate::constant::fit(read, Some(expected), self.program)
+    }
+
+    /// GEN-17: an annotation in a computed pass sees its key's concrete
+    /// type, which was still unknown when the function body was entered.
+    pub(super) fn project_pack_pass_type(&mut self, ty: &Type, at: Location) -> Type {
+        let Some(inputs) = self.pack_inputs.filter(|_| !self.pack_passes.is_empty()) else {
+            return ty.clone();
+        };
+        if !ty.any_part(
+            &|part| matches!(part, Type::PackMember { .. }),
+            &|constant| constant.value.key().is_none(),
+        ) {
+            return ty.clone();
+        }
+        let bound: Vec<_> = self.bound.iter().map(|(at, value)| (*at, value)).collect();
+        match inputs.types.project(ty, &bound) {
+            Ok(ty) => ty,
+            Err(fault) => {
+                self.pack_member_fault(at, &fault);
+                Type::Unknown
+            }
+        }
+    }
+}
+
+/// An integer position or a name read from the pass in which it is bound.
+fn pack_key_argument(key: &PackKey) -> Option<Argument> {
+    let value = match key {
+        PackKey::Name(name) => ConstantValue::Str(name.clone()),
+        PackKey::Position(position) => ConstantValue::Int(i64::try_from(*position).ok()?),
+    };
+    Some(Argument::Constant(Constant {
+        text: value.key().unwrap_or_default(),
+        value,
+    }))
 }
 
 /// The operand of each spread, in the order it is written.
@@ -393,27 +684,22 @@ pub(super) fn spread_operands(list: &SyntaxNode) -> impl Iterator<Item = SyntaxN
         .filter_map(|argument| argument.children().next())
 }
 
-/// Whether this call's written slots can be read while its spread stays deferred.
-pub(super) fn has_computed_spread(list: &SyntaxNode) -> bool {
-    spread_operands(list).any(|spread| ungrouped(spread).kind() == SyntaxKind::PackComprehension)
-}
-
-/// Whether the shape of a parameter pack still needs to be applied.
+/// Whether a body needs its concrete pack inputs for a spread or entry read.
 pub(crate) fn has_forwarded_calls(body: &crate::hir::Body) -> bool {
     let mut pending = false;
     walk_nested_calls(&body.statements, &mut |value| {
-        pending |= is_forwarded_call(value);
+        pending |= needs_pack_inputs(value);
     });
     pending
 }
 
-fn is_forwarded_call(value: &Expr) -> bool {
+fn needs_pack_inputs(value: &Expr) -> bool {
     matches!(
         &value.kind,
         ExprKind::Call {
             callee: Callee::DeferredPackCall,
             ..
-        }
+        } | ExprKind::DeferredPackRead
     )
 }
 
@@ -426,6 +712,9 @@ pub(crate) struct ForwardingInstance {
     functions: Vec<(usize, Callee)>,
     type_packs: Vec<crate::hir::TypePackArgument>,
     pack_inputs: Vec<crate::hir::PackInput>,
+    /// The ordinary const inputs a check in the body reads (FN-1, FMT-3),
+    /// carried with the entries so the instance is read with both.
+    constants: crate::const_inputs::ReadInputs,
 }
 
 impl crate::Program {
@@ -498,6 +787,8 @@ impl crate::Program {
 
 impl ForwardingInstance {
     /// The declaration and fully known argument shape supplied by a call.
+    /// Its const inputs are left out: what the body reads of its constants
+    /// is told of the instances [`check_instances`] follows.
     pub(crate) fn of(program: &crate::Program, expression: &Expr) -> Option<Self> {
         let ExprKind::Call {
             callee, arguments, ..
@@ -505,34 +796,42 @@ impl ForwardingInstance {
         else {
             return None;
         };
-        Self::from_callee(program, callee, Some(arguments))
+        Self::from_callee(program, callee, Some(arguments), false)
     }
 
     /// A static reference can reach a forwarding body even without its own
     /// pack arguments, through the ordinary calls the referenced body makes.
+    /// A call gives the instance its const inputs too (FN-1, GEN-7).
     fn for_check(program: &crate::Program, expression: &Expr) -> Option<Self> {
         let (module, declaration) = called_or_referenced(expression)?.declaration()?;
+        let instance = match &expression.kind {
+            ExprKind::StaticCallable(callee) => Self::from_callee(program, callee, None, false),
+            ExprKind::Call {
+                callee, arguments, ..
+            } => Self::from_callee(program, callee, Some(arguments), true),
+            _ => None,
+        }?;
         if let crate::Detail::Callable(signature) = &program.modules[module].details[declaration]
             && signature.generics.is_empty()
             && signature
                 .parameters
                 .iter()
                 .all(|parameter| parameter.pack.is_none())
+            && instance.constants.values.is_empty()
         {
             // Concrete bodies supply their own forwarding roots. A call
-            // of one does not make those same instances a second time.
+            // of one does not make those same instances a second time,
+            // unless it gives the body const inputs it reads (FN-1).
             return None;
         }
-        match &expression.kind {
-            ExprKind::StaticCallable(callee) => Self::from_callee(program, callee, None),
-            _ => Self::of(program, expression),
-        }
+        Some(instance)
     }
 
     fn from_callee(
         program: &crate::Program,
         callee: &Callee,
         arguments: Option<&[crate::hir::Argument]>,
+        with_constants: bool,
     ) -> Option<Self> {
         use crate::types::Argument;
         let declaration = callee.declaration()?;
@@ -597,6 +896,11 @@ impl ForwardingInstance {
             functions,
             type_packs: type_packs.to_vec(),
             pack_inputs,
+            constants: if with_constants {
+                program.known_const_inputs(callee, arguments)
+            } else {
+                crate::const_inputs::ReadInputs::default()
+            },
         })
     }
 
@@ -616,8 +920,13 @@ impl ForwardingInstance {
             functions: &self.functions,
             type_packs: &self.type_packs,
             pack_inputs: Some(&self.pack_inputs),
-            ..crate::InstanceInputs::default()
+            constants: &self.constants.values,
         }
+    }
+
+    /// GEN-13: a const input that outgrew its text budget makes no instance.
+    fn outgrew_its_inputs(&self) -> bool {
+        self.constants.outgrown
     }
 }
 
@@ -685,12 +994,15 @@ impl PackShape {
 }
 
 struct ForwardingParent {
-    call: (super::requirements::MakingCall, Option<usize>),
+    /// The calls from this instance out to the root, which the calls it
+    /// makes share: a path grows by one call at each instance (GEN-7).
+    path: std::rc::Rc<super::requirements::MakingPath>,
+    parent: Option<usize>,
     shape: PackShape,
 }
 
-/// Check forwarded calls under the concrete shapes that reach them (FN-19).
-/// A forwarding error belongs to the call that supplies that pack shape.
+/// Check pack spreads and reads under the concrete shapes that reach them
+/// (FN-19). A pack error belongs to the call that supplies its shape.
 /// Record the concrete calls it reaches for the ordinary GEN-7 checks.
 pub(super) fn check_instances(
     program: &crate::Program,
@@ -699,26 +1011,45 @@ pub(super) fn check_instances(
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
     use super::requirements::{
-        MakingCall, bounded_instance_key, emit_instance_report, making_path,
-        past_pack_growth_limit, past_the_limit,
+        MakingCall, MakingPath, bounded_instance_key, emit_instance_report, past_pack_growth_limit,
+        past_the_limit,
     };
+    use hgl_diagnostics::Code;
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = HashSet::new();
     let mut callers = HashMap::<_, Vec<_>>::new();
+    // GEN-5 and GEN-7: a call whose candidate each instance selects may
+    // select one that forwards; each candidate of its operator is called.
+    let mut candidates = HashMap::<(usize, usize), Vec<(usize, usize)>>::new();
+    for (module, unit) in program.modules.iter().enumerate() {
+        for (declaration, declared) in unit.declarations.iter().enumerate() {
+            if let Some((_, Some(operator))) = declared.kind.candidate() {
+                candidates
+                    .entry((operator.module, operator.declaration))
+                    .or_default()
+                    .push((module, declaration));
+            }
+        }
+    }
     for (module, unit) in program.modules.iter().enumerate() {
         for (declaration, body) in unit.bodies.iter().enumerate() {
             let Some(body) = body else { continue };
             let owner = (module, declaration);
             walk_nested_calls(&body.statements, &mut |value| {
-                if let Some(callee) = called_or_referenced(value) {
-                    if matches!(callee, Callee::DeferredPackCall) {
-                        forwarding.insert(owner);
-                    } else if let Some(called) = callee.declaration() {
-                        callers.entry(called).or_default().push(owner);
-                    }
+                if needs_pack_inputs(value) {
+                    forwarding.insert(owner);
+                }
+                if let Some(called) = called_or_referenced(value).and_then(Callee::declaration) {
+                    callers.entry(called).or_default().push(owner);
                 }
             });
+            for selected in unit.selecting.get(declaration).into_iter().flatten() {
+                let operator = (selected.operator.module, selected.operator.declaration);
+                for &candidate in candidates.get(&operator).into_iter().flatten() {
+                    callers.entry(candidate).or_default().push(owner);
+                }
+            }
         }
     }
     if forwarding.is_empty() {
@@ -773,6 +1104,12 @@ pub(super) fn check_instances(
                 .walk(&mut |value| visit_anonymous_bodies(value, &mut |part| record(part, false)));
         }
     }
+    let rejected_pack_calls: HashSet<_> = diagnostics
+        .as_slice()
+        .iter()
+        .filter(|report| report.code == Code::Catalogued(codes::PACK_NAME))
+        .map(|report| report.primary)
+        .collect();
     for (initial, at) in roots {
         let mut waiting = VecDeque::from([(initial, at, None::<usize>)]);
         let mut parents = Vec::<ForwardingParent>::new();
@@ -785,7 +1122,7 @@ pub(super) fn check_instances(
             let count = counts.entry(instance.declaration).or_insert(0);
             *count += 1;
             let shape = PackShape::of(&instance);
-            let ancestors = std::iter::successors(parent, |&index| parents[index].call.1)
+            let ancestors = std::iter::successors(parent, |&index| parents[index].parent)
                 .map(|index| parents[index].shape);
             if shape.exceeds_growth(ancestors) {
                 past_pack_growth_limit(at, instance.declaration, program, PACK_GROWTH, diagnostics);
@@ -813,24 +1150,28 @@ pub(super) fn check_instances(
                 &reports,
                 &mut graph_reports,
             );
-            let making = || {
+            let here = MakingPath::new(
                 MakingCall::new(
                     program,
                     instance.declaration,
                     &instance.generics,
                     &instance.type_packs,
                     written,
-                )
-            };
+                ),
+                parent.map(|index| parents[index].path.clone()),
+            );
+            let path = || here.calls().cloned().collect::<Vec<_>>();
             for report in graph_reports.as_slice() {
-                if diagnostics.as_slice().contains(report) {
+                // A missing member in the written signature rejects the
+                // making call already. Its body supplies no second pack
+                // diagnostic at the same call (ERR-9).
+                if diagnostics.as_slice().contains(report)
+                    || (report.code == Code::Catalogued(codes::PACK_NAME)
+                        && rejected_pack_calls.contains(&at))
+                {
                     continue;
                 }
-                emit_instance_report(
-                    report.clone(),
-                    &[making_path(making(), parent, |index| &parents[index].call)],
-                    diagnostics,
-                );
+                emit_instance_report(report.clone(), &[path()], diagnostics);
             }
             if let Some(checked) = checked {
                 if let Some(result_uses) = &checked.result_uses
@@ -844,7 +1185,7 @@ pub(super) fn check_instances(
                             &instance.type_packs,
                         ),
                         result_uses,
-                        &[making_path(making(), parent, |index| &parents[index].call)],
+                        &[path()],
                         diagnostics,
                     );
                     if result_uses.reports.has_errors() {
@@ -853,10 +1194,17 @@ pub(super) fn check_instances(
                     }
                 }
                 let mut link = None;
+                let mut outgrown = false;
                 checked.walk_calls(&mut |value| {
                     let Some(child) = ForwardingInstance::for_check(program, value) else {
                         return;
                     };
+                    // GEN-13: a const input that grows past its budget
+                    // ends the walk, as one past the instance bound does.
+                    if child.outgrew_its_inputs() {
+                        outgrown = true;
+                        return;
+                    }
                     // The final body can make new calls wherever the
                     // entries affect a type, including in a callback.
                     if !independent
@@ -864,21 +1212,30 @@ pub(super) fn check_instances(
                         .is_some_and(|calls| calls.contains(&child))
                         && let Some(callee) = called_or_referenced(value)
                     {
-                        let mut path = vec![MakingCall::new(
-                            program,
-                            child.declaration,
-                            &child.generics,
-                            &child.type_packs,
-                            value.at,
-                        )];
-                        path.extend(making_path(making(), parent, |index| &parents[index].call));
-                        super::requirements::made_forwarded_callee(callee, at, path, discovered);
+                        let via = MakingPath::new(
+                            MakingCall::new(
+                                program,
+                                child.declaration,
+                                &child.generics,
+                                &child.type_packs,
+                                value.at,
+                            ),
+                            Some(here.clone()),
+                        );
+                        super::requirements::made_forwarded_callee(
+                            callee,
+                            child.constants.clone(),
+                            at,
+                            via,
+                            discovered,
+                        );
                     }
                     if forwarding.contains(&child.declaration) {
                         let caller = *link.get_or_insert_with(|| {
                             let index = parents.len();
                             parents.push(ForwardingParent {
-                                call: (making(), parent),
+                                path: here.clone(),
+                                parent,
                                 shape,
                             });
                             index
@@ -886,6 +1243,10 @@ pub(super) fn check_instances(
                         waiting.push_back((child, value.at, Some(caller)));
                     }
                 });
+                if outgrown {
+                    past_the_limit(&[at], instance.declaration, program, diagnostics);
+                    break;
+                }
             }
             seen.push(instance);
         }
@@ -944,6 +1305,7 @@ mod tests {
                 key: PackKey::Position(0),
                 ty,
             }],
+            constants: Default::default(),
         };
         assert_eq!(PackShape::of(&instance).entries, 3);
         instance.type_packs.clear();
