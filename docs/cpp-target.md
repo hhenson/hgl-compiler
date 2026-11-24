@@ -208,7 +208,7 @@ failure from old results.
 
 ## What hgraph is asked for
 
-The SDK is hgraph 0.9.29. It compares native Float zero signs during
+The SDK is hgraph 0.9.30. It compares native Float zero signs during
 interning ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866)).
 HGL tuples and lists can still hide their floats from that comparison,
 so their nodes use unique wiring.
@@ -228,6 +228,7 @@ so their nodes use unique wiring.
 | [1881](https://github.com/hhenson/hgraph/issues/1881) | A `REF<TS<Optional<T>>>` input bound to a `TS<T>` output through the widening | A connection of T given to a `ref` parameter of `T?` is written |
 | [1884](https://github.com/hhenson/hgraph/issues/1884) | In the evaluation a wake brings about, that wake is no longer pending | `libhglrt`'s scheduler is hgraph's, with no adaptation (CAP-4) |
 | [1885](https://github.com/hhenson/hgraph/issues/1885) | A switch's output is withdrawn when the selected branch has published nothing | Nothing here adapted it |
+| [1911](https://github.com/hhenson/hgraph/issues/1911) | A switch's window history starts fresh when its selected branch changes | Temporal `if` and `switch` use the SDK's window result directly (CTRL-2) |
 
 Nothing is asked on references: a `REF` output holds the reference it
 was given, which is the specification's rule for a returned `ref`
