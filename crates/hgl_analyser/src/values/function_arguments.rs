@@ -736,14 +736,14 @@ impl<'a> Typer<'a> {
     }
 
     fn reference_written(
-        &self,
+        &mut self,
         node: &SyntaxNode,
         name: &SyntaxToken,
     ) -> Option<&'a CallArguments> {
         // The read pass uses the full name's start, including its module alias.
         let start = child(node, SyntaxKind::QualifiedName)
             .map_or(name.span().start, |qualified| qualified.span().start);
-        self.calls.get(&(self.file, start)).copied()
+        self.call_arguments_at(start)
     }
 
     /// Neither the reference nor its receiving template supplies every generic.

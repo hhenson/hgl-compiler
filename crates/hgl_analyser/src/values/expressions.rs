@@ -7,7 +7,7 @@
 use hgl_diagnostics::Category;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
-use super::control::{Outcome, branch_is_null, branch_takes_its_type};
+use super::control::{Outcome, ValueUse, branch_is_null, branch_takes_its_type};
 use super::fit::{
     accepts_float, hook_payload_type, is_integer_literal, not_null, nullable, open, whole,
 };
@@ -34,7 +34,7 @@ impl<'a> Typer<'a> {
     /// of the construct around it, which may read it again
     /// ([`Typer::begin_construct`]): so it is counted while it is read.
     pub(super) fn expression(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> Expr {
-        self.expression_in_flow(node, expected, true)
+        self.expression_in_flow(node, expected, ValueUse::Required)
     }
 
     /// Read an expression whose control-flow context may discard its result.
@@ -42,10 +42,29 @@ impl<'a> Typer<'a> {
         &mut self,
         node: &SyntaxNode,
         expected: Option<&Type>,
-        used: bool,
+        value_use: ValueUse,
     ) -> Expr {
         self.expressing += 1;
-        let mut value = self.expression_read(node, expected, used);
+        let reported = self.diagnostics.len();
+        let mut value = self.expression_read(node, expected, value_use);
+        if value_use == ValueUse::Required
+            && self.diagnostics.len() == reported
+            && let ExprKind::Call { callee, .. } = &value.kind
+            && self.call_has_no_result(callee)
+        {
+            let rule = if callee.generics().contains(&Argument::NoResult) {
+                "GEN-1"
+            } else {
+                "FN-7"
+            };
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                value.at,
+                "this call gives no result and cannot be used as a value".to_string(),
+                rule,
+            ));
+        }
         self.expressing -= 1;
         if self
             .unsettled_results
@@ -60,7 +79,12 @@ impl<'a> Typer<'a> {
     }
 
     /// [`Typer::expression`], counted.
-    fn expression_read(&mut self, node: &SyntaxNode, expected: Option<&Type>, used: bool) -> Expr {
+    fn expression_read(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        value_use: ValueUse,
+    ) -> Expr {
         // TIME-9: a place that expects an endpoint is given one, and no
         // value: the argument of an `endpoint<T>` parameter.
         if let Some(Type::Endpoint(_)) = expected {
@@ -100,7 +124,7 @@ impl<'a> Typer<'a> {
             // "Parentheses select grouping" (EXPR-1): the expression
             // inside, where it stands.
             SyntaxKind::ParenExpr => match node.children().next() {
-                Some(inner) => return self.expression(&inner, expected),
+                Some(inner) => return self.expression_in_flow(&inner, expected, value_use),
                 None => (ExprKind::Unread, Type::Unknown),
             },
             SyntaxKind::TupleExpr => self.tuple(node, expected),
@@ -113,7 +137,7 @@ impl<'a> Typer<'a> {
             SyntaxKind::PackKeyMembership => self.pack_key_membership(node),
             SyntaxKind::UnaryExpr => self.unary(node, expected),
             SyntaxKind::BinaryExpr => self.binary(node, expected),
-            SyntaxKind::CallExpr => self.call(node, expected, used),
+            SyntaxKind::CallExpr => self.call(node, expected, value_use.is_used()),
             SyntaxKind::TypedConstructor => self.typed_constructor(node, expected),
             SyntaxKind::DeltaConstructor => self.delta_constructor(node),
             SyntaxKind::UndecidedConstructor => {
@@ -152,11 +176,11 @@ impl<'a> Typer<'a> {
             SyntaxKind::RunExpr if self.testing => self.eval(node),
             // A block or an `if` whose value is used.
             SyntaxKind::Block | SyntaxKind::IfExpr => {
-                let (value, outcome) = self.flow(node, expected, true);
+                let (value, outcome) = self.flow(node, expected, value_use);
                 // CTRL-10: "A block whose last statement is an
                 // expression has that expression's value and type; any
                 // other block has none."
-                if matches!(outcome, Outcome::Nothing) {
+                if value_use == ValueUse::Required && matches!(outcome, Outcome::Nothing) {
                     self.diagnostics.emit(error(
                         Category::Type,
                         codes::TYPE_MISMATCH,

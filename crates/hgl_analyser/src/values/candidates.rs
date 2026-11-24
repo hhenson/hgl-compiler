@@ -1052,11 +1052,17 @@ impl<'a> Typer<'a> {
                     && let Type::Function(template) = ty
                     && (given.retried || !keeps_function_read(&given.value, template))
                 {
-                    self.operator_function_argument(
-                        &given.node,
-                        template,
-                        &CallbackInputs::default(),
-                    )
+                    // Candidate trials are tentative. The final read
+                    // still uses this expression's reread allowance.
+                    if self.may_reread() {
+                        self.operator_function_argument(
+                            &given.node,
+                            template,
+                            &CallbackInputs::default(),
+                        )
+                    } else {
+                        given.value
+                    }
                 } else if given.retried && !matches!(given.value.kind, ExprKind::StaticCallable(_))
                 {
                     self.expression(&given.node, Some(ty))

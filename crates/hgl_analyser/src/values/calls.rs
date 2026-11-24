@@ -288,6 +288,17 @@ impl<'a> Typer<'a> {
         self.call_read(node, expected, used)
     }
 
+    /// A direct call uses its selected signature. A callback parameter
+    /// uses the function type in its local binding.
+    pub(super) fn call_has_no_result(&self, callee: &Callee) -> bool {
+        match callee {
+            Callee::Parameter { parameter, .. } => self.locals.get(*parameter).is_some_and(
+                |local| matches!(&local.ty, Type::Function(template) if template.result.is_none()),
+            ),
+            callee => callee.has_result(self.program) == Some(false),
+        }
+    }
+
     /// A call, as the form or the function its callee names.
     fn call_read(
         &mut self,

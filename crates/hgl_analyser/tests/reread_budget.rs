@@ -264,3 +264,44 @@ fn a_construct_past_its_allowance_is_reported_and_the_next_is_judged() {
         ]
     );
 }
+
+/// FN-17 and EXPR-5: the final selected callback uses the same reading
+/// allowance as the trials, even when its result is inferred as none.
+#[test]
+fn resultless_callbacks_use_the_construct_reading_allowance() {
+    for (depth, resultless) in [(6, true), (13, true), (13, false)] {
+        let mut nested = if resultless {
+            format!("record(x{depth})")
+        } else {
+            format!("x{depth} + 1")
+        };
+        for level in (1..=depth).rev() {
+            let input = if level == 1 {
+                "value".to_string()
+            } else {
+                format!("x{}", level - 1)
+            };
+            nested = format!("visit(fn(x{level}) => {nested}, {input})");
+        }
+        let body = if resultless {
+            format!("{{ {nested} }}")
+        } else {
+            format!("-> i64 => {nested}")
+        };
+        let text = format!(
+            "module m\nfn record(value: i64) {{}}\n\
+             operator visit<R>(f: fn(i64) -> R, value: i64) -> R\n\
+             impl fn visit<R>(f: fn(i64) -> R, value: i64) -> R => f(value)\n\
+             fn run_it(value: i64) {body}\n"
+        );
+        let checked = check(&[("m.hgl", &text)]);
+        if resultless && depth == 13 {
+            assert_eq!(
+                checked.summary(),
+                ["m.hgl:5:4 local:type/reading.limit EXPR-5"]
+            );
+        } else {
+            assert!(checked.summary().is_empty(), "{}", checked.report);
+        }
+    }
+}

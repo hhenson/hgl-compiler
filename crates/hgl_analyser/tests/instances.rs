@@ -1193,6 +1193,98 @@ fn a_graphs_instance_reaches_the_value_candidate() {
     assert_eq!(called(&checked, &node), ["add_(f64, f64)"]);
 }
 
+/// GEN-1: a call of an instance whose result is absent is a statement.
+#[test]
+fn resultless_calls_reject_in_value_positions() {
+    let definitions = concat!(
+        "fn record(value: i64) {}\n",
+        "fn through<R>(f: fn(i64) -> R, value: i64) -> R => f(value)\n",
+        "fn accept<T>(value: T) {}\n",
+        "fn accept_nullable(value: i64?) {}\n",
+    );
+    for (definition, rule, detail) in [
+        (
+            "fn call(value: i64) { let unused = (through(record, value)) }",
+            "GEN-1",
+            "this call gives no result",
+        ),
+        (
+            "fn call(value: i64) => accept(through(record, value))",
+            "GEN-1",
+            "this call gives no result",
+        ),
+        (
+            "fn call(value: i64) -> i64 { return through(record, value) }",
+            "FN-17",
+            "the parameter takes `fn(i64) -> i64`",
+        ),
+        (
+            "fn call(value: i64) { if through(record, value) { record(value) } }",
+            "FN-17",
+            "the parameter takes `fn(i64) -> bool`",
+        ),
+        (
+            "fn call(value: i64) -> i64? => through(record, value)",
+            "GEN-1",
+            "this call gives no result",
+        ),
+        (
+            "fn call(value: i64) => accept_nullable(through(record, value))",
+            "GEN-1",
+            "this call gives no result",
+        ),
+        (
+            "fn call(value: i64) { let unused: i64? = through(record, value) }",
+            "GEN-1",
+            "this call gives no result",
+        ),
+        (
+            "fn call(value: i64) { let unused = record(value) }",
+            "FN-7",
+            "this call gives no result",
+        ),
+    ] {
+        let checked = module(&format!("{definitions}{definition}\n"));
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, "type/type.mismatch");
+        assert_eq!(checked.findings[0].rule, rule, "{}", checked.report);
+        assert!(checked.report.contains(detail), "{}", checked.report);
+    }
+    let checked = module(&format!(
+        "{definitions}fn call(value: i64) => through(fn(input) => {{ (record(input)) }}, value)\n"
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// GEN-1 and GEN-7: a resultless binding does not supply a type in a body.
+#[test]
+fn written_types_in_a_body_cannot_use_a_resultless_binding() {
+    let definitions = concat!(
+        "fn record(value: i64) {}\n",
+        "fn keep<T>(value: T) -> T => value\n",
+        "struct Box<T> { value: T? }\n",
+    );
+    for statement in [
+        "let unused = keep<R?>(null)",
+        "var unused: Box<R>",
+        "let unused: list<R> = []",
+        "let unused = Box<R>(value: null)",
+    ] {
+        let checked = module(&format!(
+            "{definitions}fn through<R>(f: fn(i64) -> R, value: i64) -> R {{\n                 {statement}\n    f(value)\n}}\nfn call(value: i64) => through(record, value)\n"
+        ));
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, "type/type.mismatch");
+        assert_eq!(checked.findings[0].rule, "GEN-1", "{}", checked.report);
+        assert!(
+            checked.report.contains("this requires a type")
+                && checked.report.contains("through<none>"),
+            "{}",
+            checked.report,
+        );
+    }
+}
+
 /// GEN-7: an explicit return stays a return in an instance with no result.
 #[test]
 fn returning_a_resultless_callback_rejects_at_the_call() {

@@ -9,6 +9,7 @@ analyser: partial
 - Generic scope covers the whole declaration; a repeated type parameter is one type at a call of a value function
 - A repeated generic value parameter is one constant (UNIT-13) at a call of a value function and of a temporal one: `Scaled<1>` and `Scaled<1.00>` given to two `Scaled<k>` are one, and so are two NaNs, and `Scaled<0.0>` beside `Scaled<-0.0>`, or `list<i64, 2>` beside `list<i64, 3>`, is `type.mismatch`
 - A generic used only as a complete, unqualified result can bind to no result from a supplied callback (FN-17). A nested type, ordinary input, `ref` result or constraint still needs a type.
+- An instance with no result is called as a statement. A call in a value position and a written type in the body that needs the absent generic report `type.mismatch` (FN-7, GEN-7).
 - Left: the other occurrence requirements in temporal bodies
 
 ## GEN-2

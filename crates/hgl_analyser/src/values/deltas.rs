@@ -175,7 +175,7 @@ impl<'a> Typer<'a> {
             return (ExprKind::Unread, Type::Unknown);
         };
         // The delta is recorded where the constructor starts.
-        let written = self.written.get(&(self.file, node.span().start)).copied();
+        let written = self.written_type_at(node.span().start);
         let properties = match written {
             Some(Type::Delta(of)) => self.program.delta_properties(of),
             _ => None,

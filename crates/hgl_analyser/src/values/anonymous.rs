@@ -66,9 +66,7 @@ impl Typer<'_> {
     pub(super) fn anonymous_type(&mut self, annotation: &SyntaxNode) -> Option<Type> {
         let written = annotation.children().find(|part| is_type(part.kind()))?;
         let ty = self
-            .written
-            .get(&(self.file, written.span().start))
-            .copied()
+            .written_type_at(written.span().start)
             .unwrap_or(&Type::Unknown);
         let ty = self.project_pack_pass_type(ty, self.at(&written));
         if self.instance.is_empty() {

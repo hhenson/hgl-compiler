@@ -8,7 +8,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::Typer;
 use super::candidates::Given;
-use super::control::Outcome;
+use super::control::{Outcome, ValueUse};
 use super::fit::open;
 use super::graph_instance::GraphReturnCheck;
 use super::results::{captured_binding, captured_output};
@@ -144,10 +144,19 @@ impl<'a> Typer<'a> {
     fn final_expression(&mut self, node: &SyntaxNode, result: Option<&Type>) -> Stmt {
         let at = self.at(node);
         let Some(result) = result else {
-            let (value, _) = self.flow(node, None, false);
+            let (value, _) = self.flow(node, None, ValueUse::Discarded);
             return Stmt::Expr(value);
         };
-        let (value, outcome) = self.flow(node, Some(result), true);
+        let value_use = if self
+            .anonymous
+            .as_ref()
+            .is_some_and(|scope| scope.infer_result)
+        {
+            ValueUse::Inferred
+        } else {
+            ValueUse::Required
+        };
+        let (value, outcome) = self.flow(node, Some(result), value_use);
         match outcome {
             Outcome::Value(_) => {
                 let value = self.fit_return(value, result);
@@ -348,7 +357,7 @@ impl<'a> Typer<'a> {
             // A block or an `if` on a line of its own: its value, when
             // it has one, is dropped.
             SyntaxKind::ExprStmt => match node.children().next() {
-                Some(value) => Stmt::Expr(self.flow(&value, None, false).0),
+                Some(value) => Stmt::Expr(self.flow(&value, None, ValueUse::Discarded).0),
                 None => Stmt::Unread { at: self.at(node) },
             },
             SyntaxKind::WhileStmt => self.while_loop(node),
@@ -384,10 +393,13 @@ impl<'a> Typer<'a> {
         {
             return self.published(node, result, "the function's result");
         }
-        let value = self.expression(node, result.as_ref());
-        match &result {
-            Some(result) => self.fit_return(value, result),
-            None => value,
+        if let Some(result) = &result {
+            let value = self.expression(node, Some(result));
+            self.fit_return(value, result)
+        } else {
+            // The return statement itself reports a value written in
+            // a function with no result (FN-7).
+            self.expression_in_flow(node, None, ValueUse::Discarded)
         }
     }
 
@@ -432,7 +444,7 @@ impl<'a> Typer<'a> {
             .children()
             .find(|part| is_type(part.kind()))
             .and_then(|part| {
-                let ty = *self.written.get(&(self.file, part.span().start))?;
+                let ty = self.written_type_at(part.span().start)?;
                 Some(self.project_pack_pass_type(ty, self.at(&part)))
             });
         // The first value: the child that is no type.
