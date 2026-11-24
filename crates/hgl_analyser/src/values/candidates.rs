@@ -14,7 +14,7 @@ use super::control::value_of_branch;
 use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, reflects, specialize_named_pack,
 };
-use super::expressions::takes_its_type;
+use super::expressions::{takes_its_type, written_null};
 use super::fit::{
     accepts_float, arithmetic, checked_child_result, is_integer_literal, negated, not_null, whole,
 };
@@ -1255,7 +1255,14 @@ impl<'a> Typer<'a> {
                                 declared[index].map_or(&parameter.name, |public| &public.name);
                             excluded.contains(&name.as_str())
                         })
-                    || declared[index].is_some_and(|parameter| parameter.has_default)
+                    || declared[index].is_some_and(|public| {
+                        public.has_default
+                            // GEN-6: the public default `null` does not
+                            // supply a narrowed, non-nullable candidate input.
+                            && (!matches!(public.ty, Type::Nullable(_))
+                                || default_at(&operator.syntax, public)
+                                    .is_none_or(|default| !written_null(&default)))
+                    })
                     || matches!(parameter.ty, Type::Nullable(_))
             };
             if !admitted {
@@ -1612,13 +1619,13 @@ impl<'a> Typer<'a> {
         Some(Ok(checking))
     }
 
-    /// The constant a call's argument `node` comes to, as
+    /// The constant expression `node` comes to, as
     /// [`Typer::read_constant`] reads it, with what the instance being
     /// read gives each generic value parameter of the declaration in
     /// place ([`Typer::instance`]), and what the declaration's `requires`
     /// binds one to ([`Typer::bound`]): `mode: M` in an instance for `M =
     /// .medium` is `.medium`, and under `requires M == .slow` is `.slow`.
-    fn given_constant(
+    pub(super) fn given_constant(
         &self,
         node: &SyntaxNode,
         expected: Option<&Type>,
@@ -3369,10 +3376,26 @@ fn candidate_bindings(
     // GEN-10: reflected packs are known before a positive existential
     // equality chooses its first binding. Unresolved non-pack arguments
     // remain placeholders during this projection.
-    if reflects(&typer.program.modules[module], signature) {
-        let provisional: Vec<_> = found
+    let owner = &typer.program.modules[module];
+    if reflects(owner, signature) {
+        let dependent = dependent_slot(owner, signature)
+            .and_then(|slot| owner.dependent_packs.get(&signature.parameters[slot].at));
+        let provisional: Vec<_> = generics
             .iter()
-            .map(|value| value.clone().unwrap_or(Argument::Type(Type::Unknown)))
+            .zip(&found)
+            .map(|(generic, value)| {
+                value
+                    .clone()
+                    .or_else(|| {
+                        // FN-8: a defaulted exclusion decides which arguments
+                        // belong to this pack, before the pack can infer types.
+                        dependent
+                            .filter(|pack| pack.without.contains(&generic.at))
+                            .and_then(|_| typer.default_constant(declaration, generic))
+                            .map(Argument::Constant)
+                    })
+                    .unwrap_or(Argument::Type(Type::Unknown))
+            })
             .collect();
         let slots: Vec<_> = bound.iter().map(|place| place.parameter()).collect();
         let reflected = operator_packs(
