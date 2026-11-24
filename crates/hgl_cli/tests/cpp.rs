@@ -2266,6 +2266,36 @@ fn ranges_and_list_comprehensions_run_on_the_sdk() {
     );
 }
 
+/// FN-19 and CTRL-16: let-bound entries keep their keys and values when
+/// read or spread. UNIT-8 supplies a default for an omitted graph input.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn let_bound_packs_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("let-bound-packs");
+    let file = write(
+        &root,
+        "examples.pack_forms.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/examples.pack_forms.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 10 passed, 0 failed\nexecutable cases: 6 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
 /// GEN-7, GEN-13 and TYPE-10: an inferred list size is an integer
 /// constant in value code, a node handler and graph composition.
 #[test]
@@ -3425,6 +3455,35 @@ fn composite_values_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 16 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// FN-1: read fields and constant-index entries as const arguments.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn fixed_projections_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("fixed-reads");
+    let file = write(
+        &root,
+        "demo.fixed_reads.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.fixed_reads.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 1 passed, 0 failed\nexecutable cases: 2 passed, 0 failed, 0 not run\n"
+        ),
         "{stdout}"
     );
 }
@@ -5140,7 +5199,7 @@ fn call_role_preferences_run_on_the_sdk() {
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
         stdout.ends_with(
-            "rejection cases: 3 passed, 0 failed\nexecutable cases: 12 passed, 0 failed, 0 not run\n"
+            "rejection cases: 3 passed, 0 failed\nexecutable cases: 13 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );

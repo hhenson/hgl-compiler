@@ -32,6 +32,9 @@ hgl_lower = { path = "crates/hgl_lower" }
 hgl_runner = { path = "crates/hgl_runner" }
 hgl_cpp = { path = "crates/hgl_cpp" }
 clap = { version = "4.6", features = ["derive"] }
+regex = "1"
+sha2 = "0.11"
+toml = "1"
 codespan-reporting = "0.13"
 # `termination`: a request to end is taken as an interrupt is.
 ctrlc = { version = "3.5", features = ["termination"] }

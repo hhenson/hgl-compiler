@@ -206,17 +206,15 @@ jobs:
           cases=$((jobs < 8 ? jobs : 8))
           scripts/check-cpp-sdk.sh "$jobs" "$cases"
       # Core's cases, held to the list of those it does not run yet
-      # (crates/hgl_cpp/ci/unsupported_cases.toml) by check_core.py, whose
+      # (crates/hgl_cpp/ci/unsupported_cases.toml) by the build tool, whose
       # own tests run first, once.
-      - name: Run the Python script tests
+      - name: Run the build tooling tests
         if: matrix.part == 'runtime and core' && matrix.mode == 'plain'
-        run: |
-          python3 -m unittest discover -s crates/hgl_cpp/ci
-          python3 -m unittest discover -s scripts -p test_release_bundle.py
+        run: cargo test --locked -p hgl_build_tool
       - if: matrix.part == 'runtime and core'
         run: cargo build --locked --bin hgl
       - if: matrix.part == 'runtime and core'
-        run: python3 crates/hgl_cpp/ci/check_core.py target/debug/hgl spec/hgl_core
+        run: cargo run --locked --quiet -p hgl_build_tool -- check-core target/debug/hgl spec/hgl_core
       - name: Run Core documentation examples
         if: matrix.part == 'runtime and core' && matrix.mode == 'plain'
         run: target/debug/hgl test spec/hgl_core/hgl --target cpp

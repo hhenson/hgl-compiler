@@ -139,12 +139,7 @@ impl Program {
         let Some(Detail::Callable(signature)) = owner.details.get(declaration) else {
             return ReadInputs::default();
         };
-        let mut reader = Reader {
-            program: self,
-            steps_left: INPUT_BUDGET,
-            text_left: INPUT_BUDGET,
-            reading: Vec::new(),
-        };
+        let mut reader = Reader::new(self);
         let mut known = ReadInputs::default();
         // FN-19: the entries a call gives a pack decide which calls a
         // forwarding body makes, and so which of its consts they read.
@@ -483,7 +478,29 @@ struct Reader<'a> {
     reading: Vec<(Declaration, Option<usize>)>,
 }
 
-impl Reader<'_> {
+/// Read a fixed projection for a check that needs its value (FN-1).
+pub(crate) fn projection_value(
+    program: &Program,
+    expression: &Expr,
+    generics: &[(Location, GenericArgument)],
+) -> Result<Expr, ConstInputFault> {
+    let generics: Vec<_> = generics
+        .iter()
+        .map(|(at, argument)| (*at, argument))
+        .collect();
+    Reader::new(program).read(expression, INPUT_DEPTH, &generics)
+}
+
+impl<'a> Reader<'a> {
+    fn new(program: &'a Program) -> Self {
+        Self {
+            program,
+            steps_left: INPUT_BUDGET,
+            text_left: INPUT_BUDGET,
+            reading: Vec::new(),
+        }
+    }
+
     fn read_declaration(
         &mut self,
         declaration: Declaration,
@@ -656,6 +673,31 @@ impl Reader<'_> {
                     arguments: fields,
                     infer_types: false,
                 }
+            }
+            ExprKind::Field { base, member } => {
+                let ExprKind::Construct { arguments, .. } = self.read(base, next, generics)?.kind
+                else {
+                    return Err(Unread);
+                };
+                arguments
+                    .into_iter()
+                    .find(|argument| argument.parameter == Some(*member))
+                    .ok_or(Unread)?
+                    .value
+                    .kind
+            }
+            ExprKind::Index { base, index } => {
+                // The bounded const-input reader normalizes tuples and lists.
+                let ConstantValue::Int(position) = self.scalar(index, next, generics)? else {
+                    return Err(Unread);
+                };
+                let position = usize::try_from(position).map_err(|_| Unread)?;
+                let (ExprKind::Tuple(entries) | ExprKind::Sequence(entries)) =
+                    self.read(base, next, generics)?.kind
+                else {
+                    return Err(Unread);
+                };
+                entries.into_iter().nth(position).ok_or(Unread)?.kind
             }
             ExprKind::Widen(inner) => match self.scalar(inner, next, generics)? {
                 ConstantValue::Int(value) => ExprKind::Literal(Value::Float(value as f64)),
@@ -896,10 +938,11 @@ pub(crate) fn demands(program: &Program) -> Demands {
             }
             let caller = (module_index, declaration);
             let mut read_pattern = |pattern: &Expr| {
-                if crate::values::fixed_expression(pattern, &|_, at| {
-                    bindings
-                        .get(&(at.file, at.span.start))
-                        .is_some_and(|at| slots.contains_key(at))
+                if crate::values::fixed_expression(pattern, &|read| {
+                    matches!(read.kind, ExprKind::Local(_))
+                        && bindings
+                            .get(&(read.at.file, read.at.span.start))
+                            .is_some_and(|at| slots.contains_key(at))
                 }) {
                     slots_read(pattern, &bindings, &slots, |slot| {
                         pending.push_back(((caller, slot), Demand::Always));

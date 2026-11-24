@@ -175,6 +175,10 @@ const RESERVED: &[&str] = &[
 /// `m` and `t` where they were not plain; they are, so no name gives
 /// either.
 pub(crate) fn identifier(written: &str) -> String {
+    if let Some(entry) = written.strip_prefix(hgl_analyser::hir::PACK_ENTRY_LOCAL_PREFIX) {
+        // The suffix has the reserved form of a generated temporary.
+        return format!("pack_entry_0{entry}_");
+    }
     let plain = written.starts_with(|first: char| first.is_ascii_alphabetic())
         && !written.ends_with('_')
         && !written.contains("__")

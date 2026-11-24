@@ -36,8 +36,8 @@ specification says which is which.
 The chapter entries cover C++ lowering, emission and runtime support.
 They identify the language forms the emitter reports as unsupported.
 Core cases skipped on that target are listed with their reasons in
-`crates/hgl_cpp/ci/unsupported_cases.toml`, which
-`crates/hgl_cpp/ci/check_core.py` checks against the actual run
+`crates/hgl_cpp/ci/unsupported_cases.toml`. The `hgl_build_tool check-core`
+command checks the list against the actual run
 ([architecture](architecture.md#cpp)).
 
 Not listed: `TEST-1` to `TEST-4` and `WRITE-1` to `WRITE-12` of the

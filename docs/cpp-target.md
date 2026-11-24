@@ -255,9 +255,9 @@ The measure is cases passing on this target: core's runtime cases (182 today)
 and the tests of the fixture programs (about 370 in about 100 programs), all
 of which are HGL with their own expectations and need no change. A case this
 target cannot yet write is listed with its reason in
-`crates/hgl_cpp/ci/unsupported_cases.toml`; a case that passes and is
-listed fails the check (`crates/hgl_cpp/ci/check_core.py`). A case's own
-expectation is the judge.
+`crates/hgl_cpp/ci/unsupported_cases.toml`. A passing case still on the list
+fails the `hgl_build_tool check-core` command. A case's own expectation is the
+judge.
 
 ## Order of work
 

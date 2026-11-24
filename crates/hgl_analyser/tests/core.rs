@@ -327,20 +327,22 @@ fn demanded_const_input_growth_bounds_conditional_selection() {
     }
 }
 
-/// FN-1: const instancing does not change the admission of projections
-/// as const arguments. See #697 for those expressions.
+/// FN-1: a read is fixed only if its base and every index are fixed.
 #[test]
-fn const_instance_checks_leave_aggregate_admission_as_written() {
+fn const_arguments_reject_reads_of_one_evaluation() {
     let checked = with_core(concat!(
         "struct Settings { pattern: str }\n",
-        "const fn field(const settings: Settings) -> str => format(settings.pattern)\n",
-        "const fn entry(const settings: tuple<str, i64>) -> str => format(settings[0])\n",
+        "const fn take(const pattern: str) -> str => pattern\n",
+        "const fn field(settings: Settings) -> str => take(settings.pattern)\n",
+        "const fn indexed(const items: list<str>, index: i64) -> str => take(items[index])\n",
+        "const fn nested(const items: list<Settings>, index: i64) -> str => take(items[index].pattern)\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:59 type/argument.constant FN-1",
-            "m.hgl:4:66 type/argument.constant FN-1",
+            "m.hgl:4:51 type/argument.constant FN-1",
+            "m.hgl:5:69 type/argument.constant FN-1",
+            "m.hgl:6:73 type/argument.constant FN-1",
         ],
         "{}",
         checked.report,
