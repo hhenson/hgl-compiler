@@ -1,0 +1,8 @@
+module examples.tuple_specificity
+
+operator p<T>(value: T) -> str
+impl const fn p<...Ts>(value: tuple<Ts>) -> str => "pack"
+impl const fn p<A, B>(value: tuple<A, B>) -> str => "pair"
+
+test pair { assert p((1, "a")) == "pair" }
+test pack { assert p((1, "a", true)) == "pack" }

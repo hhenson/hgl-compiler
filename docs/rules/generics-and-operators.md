@@ -88,6 +88,7 @@ analyser: partial
 
 - In a value function, a call of an operator, by name or by the symbol that stands for it, selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened, which the candidates' types settle before their conditions, and candidates that tie in which literals they widen give way to the one that widens every one; no candidate and a tie rejected
 - A generic candidate is admitted with its parameters resolved from the call, and the most specific admitted one is selected (GEN-12). A fallible candidate can meet a T or `T?` place. The selected candidate determines the result before its form is taken (ERR-15).
+- A fixed-length tuple pattern outranks a tuple pattern with a pack that admits it. The comparison also applies inside nested and nullable tuple types.
 - Operand forms are tried at integer precision before widening literals. A nullable candidate result can meet a place for its payload under ERR-12. [Specification decision #182](https://github.com/hhenson/hgl_spec/pull/182)
 - In a graph a call selects among temporal and value candidates, and a temporal candidate outranks a value one of the same parameter types
 - In value code, a test's outside an `eval` or a `run` and an application's statements, a call selects among both too, a value candidate outranking a temporal one of the same parameter types; a temporal candidate it selects is `call.role`, the code proposed (TST-3, UNIT-14)
@@ -175,12 +176,11 @@ analyser: partial
 - A function's `each T in types(Ts)` checks its condition for every resolved type in the pack. An empty capture satisfies it. Equality and membership can test the bound type by name. A verdict the analyser cannot give rejects as untold (GEN-3).
 - GEN-17 adds quantification over pack keys. `any` succeeds for at least one entry and rejects an empty pack. Type and key bindings project within nested type expressions.
 - An `any` equality can infer a const generic nested in a type, such as a fixed list length, from either equality operand; an explicitly supplied value is preserved (GEN-3).
-- Tuple candidate ranking expands captured arities into declared variables before comparing components; a concrete component outranks an unconstrained tuple-pack member (GEN-5, GEN-12). Explicit callback packs keep their supplied function types, and a template mismatch is reported at the argument (FN-17, GEN-8).
+- Tuple candidate ranking retains the declared tuple form and compares components using declared variables for captured entries (GEN-5, GEN-12). Explicit callback packs keep their supplied function types, and a template mismatch is reported at the argument (FN-17, GEN-8).
 - In a declaration contract, a homogeneous positional candidate pack with a known nonempty arity supplies the elements of a public tuple-pack result (GEN-6, GEN-10). Concrete result mismatches use `impl.result`.
 - Guaranteed indexed tuple members retain their pack's universal category facts only where the effective minimum guarantees that key. Exact tuple-pack occurrences inside parameter containers also prove a positive minimum. Tuple equations are retained inside lists, dictionary values, nullable types and nested tuples without changing argument reading.
 - Left: key-preserving universal finite-membership and named-call inheritance for indexed members (#723); ordinary membership proof rows do not represent independent pack keys.
 - Left: positive existential constraints do not yet prove a nonempty pack for tuple indexing (#724).
-- Left: fixed tuple arity versus variadic tuple ranking is unresolved in hgl_spec#240; neither outranks the other solely by arity.
 - Left: named operator requirements bound by a quantifier.
 - An ordinary value context rejects the borrowed view from `schemas(pack)`.
 
