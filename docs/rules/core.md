@@ -755,7 +755,7 @@ transpiler: partial
 
 transpiler: partial
 
-- A fixed-size map binds positional and named inputs, splits the fitted list inputs, and supplies whole inputs to each child. An omitted callback input uses the callback's default (FN-8, UNIT-8). Native forms await #370.
+- A fixed-size map binds positional and named inputs, splits the fitted list inputs, and supplies whole inputs to each child. An explicitly specialized operator can supply the callback's member types (FN-17). An omitted callback input uses the callback's default (FN-8, UNIT-8). Native forms await #370.
 
 ## MAP-3
 

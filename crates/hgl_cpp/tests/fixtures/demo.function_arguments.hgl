@@ -309,3 +309,40 @@ test explicit_operator_callbacks {
     assert eval lifted_convert(value: [2, 3]) == [2.0, 3.0]
     assert eval composed_operator(value: [2, 3]) == [12, 13]
 }
+
+operator double_member<T>(value: T) -> T
+impl fn double_member(value: i64) -> i64 => value * 2
+
+fn sum_mapped_pairs(left: list<i64, 2>, right: list<i64, 2>) -> list<i64, 2> =>
+    map(add_<i64, i64, i64>, left, right)
+
+fn multiply_mapped(values: list<f64, 2>, factor: f64) -> list<f64, 2> =>
+    map(mul_<f64, f64, f64>, values, factor)
+
+fn double_mapped(values: list<i64, 2>) -> list<i64, 2> =>
+    map(double_member<i64>, value: values)
+
+fn forward_member<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R =>
+    f(...args)
+
+fn double_forwarded(value: i64) -> i64 => forward_member(double_member<i64>, value)
+
+operator choose_member<R>(value: any) -> R
+impl fn choose_member(value: i64) -> i64 => value + 1
+impl fn choose_member(value: f64) -> i64 => 7
+
+fn choose_forwarded_integer(value: i64) -> i64 => forward_member(choose_member<i64>, value)
+fn choose_forwarded_float(value: f64) -> i64 => forward_member(choose_member<i64>, value)
+
+# MAP-2 and FN-17: an explicit operator supplies the member types. Map
+# fits its split and whole arguments separately, while a direct
+# forwarding call uses the same operator reference with a whole input
+# or supplies the type of a public `any` parameter.
+test explicit_operator_callbacks_with_split_inputs {
+    assert eval sum_mapped_pairs(left: [[1, 2]], right: [[3, 4]]) == [[4, 6]]
+    assert eval multiply_mapped(values: [[2.0, 3.0]], factor: [4.0]) == [[8.0, 12.0]]
+    assert eval double_mapped(values: [[2, 3]]) == [[4, 6]]
+    assert eval double_forwarded(value: [3]) == [6]
+    assert eval choose_forwarded_integer(value: [3]) == [4]
+    assert eval choose_forwarded_float(value: [3.0]) == [7]
+}
