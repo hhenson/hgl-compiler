@@ -286,6 +286,8 @@ fn the_conformance_cases_assemble_into_one_module() {
 /// TST-12, CONF-3: core's source rejections, `conformance.rejections`,
 /// are each rejected with the code their `# expect-error` annotation
 /// names, on the line it applies to, and with nothing else.
+/// The mapping cases include a call without a split argument (MAP-3)
+/// and a dictionary reduction whose callback lacks the laws (RED-4).
 #[test]
 fn the_conformance_rejections_are_rejected_as_annotated() {
     let samples: Vec<common::Sample> = hgl_files("hgl_core/tests/conformance")

@@ -206,6 +206,9 @@ impl Emitter<'_> {
     /// Compose one connection per pass and combine them into the fixed
     /// list's structural port (EXPR-17). A range carries ordinary values
     /// and a fixed input list carries child connections.
+    /// Core's fixed map uses the range position to fit each child's
+    /// arguments (MAP-1, MAP-2, MAP-6, MAP-9). The structural result
+    /// keeps the child ports and their publications (MAP-7, MAP-10).
     fn list_comprehension_port(
         &mut self,
         scope: &mut Scope,
