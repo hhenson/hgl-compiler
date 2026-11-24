@@ -66,3 +66,84 @@ test a_captured_position_differs_from_a_name {
 test a_captured_name_differs_from_a_position {
     assert capture_name(tagged) == 13
 }
+
+# FN-14 and GEN-17: the same anonymous body can be emitted once per key,
+# even when its parameter, result and captured entry types are equal.
+const fn abc(a: i64 = 0, b: i64 = 0, c: i64 = 0) -> i64 => a * 100 + b * 10 + c
+const fn two_named(tag: i64, other: i64) -> i64 => tag * 100 + other
+const fn scaled(x: i64, const by: i64) -> i64 => x * by
+const fn first(xs: list<i64>) -> i64 => xs[0]
+const fn apply_t<T>(f: const fn() -> T) -> T => f()
+operator entry_code<T>(value: T) -> i64
+impl const fn entry_code(value: i64) -> i64 => 1
+impl const fn entry_code(value: str) -> i64 => 2
+
+const fn positional<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): invoke(fn() => key + 1)})
+
+const fn named<...N>(items: ...{N}) -> i64 =>
+    abc(...{for key in arg_keys(N): invoke(fn() => if key == "b" { 9 } else { 1 })})
+
+const fn named_values<...N>(items: ...{N}) -> i64 =>
+    abc(...{for key in arg_keys(N): invoke(fn() => items[key])})
+
+const fn mixed<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): invoke(fn() => entry_code(items[key]) + key)})
+
+const fn mixed_result<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): entry_code(apply_t(fn() => items[key]))})
+
+const fn const_in_lambda<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): invoke(fn() => scaled(2, key))})
+
+const fn list_in_pass<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): first([for i in 0..<2: i + key])})
+
+test a_key_is_held_by_its_own_pass {
+    assert capture_key(two_named) == 4213
+    assert positional(5, 5) == 120
+    assert positional(5, 5, 5) == 123
+    assert named(a: 0, b: "b", c: 0) == 191
+    assert named_values(a: 1, b: 9, c: 1) == 191
+    assert mixed("a", 0, "c") == 224
+    assert mixed_result("a", 0, "c") == 212
+    assert const_in_lambda(5, 5, 5) == 24
+    assert list_in_pass(5, 5, 5) == 12
+}
+
+# CTRL-16: an if nested inside the entry still reads the selected branch only.
+const fn nested<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): increment(if key == 1 { items[1] } else { 0 })})
+
+const fn nested_statement<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): invoke(fn() {
+        if key == 1 { increment(items[1]) }
+        return key + 1
+    })})
+
+test a_nested_condition_leaves_the_other_branch_unread {
+    assert nested(5) == 100
+    assert nested(5, 8) == 190
+    assert nested_statement(5) == 100
+    assert nested_statement(5, 8) == 120
+}
+
+# GEN-17: a written argument or annotation can refer to the current member type.
+const fn identity<T>(value: T) -> T => value
+const fn a_written_argument<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): entry_code(identity<A[key]>(items[key]))})
+
+const fn a_written_local<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): invoke(fn() {
+        let value: A[key] = items[key]
+        return entry_code(value)
+    })})
+
+const fn a_written_result<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): invoke(fn() -> A[key] => items[key])})
+
+test a_written_type_reads_the_current_entry {
+    assert a_written_argument(1, "two", 3) == 121
+    assert a_written_local("one", 2, "three") == 212
+    assert a_written_result(4, 5) == 450
+}

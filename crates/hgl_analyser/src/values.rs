@@ -469,11 +469,7 @@ pub(crate) fn reread_instance_body(
         },
         ..signature.clone()
     };
-    let pack_types: Vec<_> = inputs
-        .type_packs
-        .iter()
-        .filter_map(|pack| Some((reading.generics.get(pack.parameter)?.at, pack)))
-        .collect();
+    let pack_types = PackTypes::new(&reading.generics, inputs.type_packs);
     let mut typer = Typer::new(
         program,
         owner,
@@ -759,6 +755,8 @@ struct Typer<'a> {
     pack_inputs: Option<PackInputs<'a>>,
     /// Compile-time callbacks available to forwarded calls.
     pack_functions: Vec<(usize, hir::Callee)>,
+    /// Active computed-pack passes, from the outermost to the current one.
+    pack_passes: Vec<(String, hir::PackKey)>,
     /// The generic value parameters of the declaration being read that
     /// its `requires` binds, each where it is declared with the constant
     /// it is bound to (GEN-3: "A positive conjunctive equality may bind
@@ -772,7 +770,7 @@ struct Typer<'a> {
 #[derive(Clone, Copy)]
 struct PackInputs<'a> {
     values: &'a [hir::PackInput],
-    types: &'a [(Location, &'a hir::TypePackArgument)],
+    types: &'a PackTypes<'a>,
 }
 
 /// How many expressions of one construct are read a second time, beside
@@ -903,6 +901,7 @@ impl<'a> Typer<'a> {
             const_inputs: Vec::new(),
             pack_inputs: None,
             pack_functions: Vec::new(),
+            pack_passes: Vec::new(),
             bound: Vec::new(),
             diagnostics,
         }

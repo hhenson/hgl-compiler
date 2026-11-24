@@ -17,6 +17,51 @@ const INSTANCE_CALLS: [&str; 4] = [
     "relay(value)",
 ];
 
+/// FN-19: a computed entry has the pass's type. A written argument
+/// still takes its place's type (EXPR-5, TYPE-7, TYPE-14).
+#[test]
+fn computed_pack_entries_have_no_callee_type_context() {
+    let definitions = r#"
+enum Mode { slow, fast }
+const fn speed(mode: Mode) -> i64 => if mode == Mode.fast { 2 } else { 1 }
+const fn half(x: f64) -> f64 => x / 2.0
+const fn maybe(x: i64?) -> i64 => if x == null { 5 } else { 6 }
+const fn size(xs: list<i64>) -> i64 => 7
+"#;
+    let written = module(&format!(
+        "{definitions}test written {{\n    speed(.fast)\n    half(3)\n    maybe(null)\n    size([])\n}}\n"
+    ));
+    assert_eq!(written.summary(), NONE, "{}", written.report);
+    for (function, entry, result, code) in [
+        ("speed", ".fast", "i64", "type/enum.context_type"),
+        ("half", "3", "f64", "type/type.mismatch"),
+        ("maybe", "null", "i64", "type/null.context_type"),
+        ("size", "[]", "i64", "type/sequence.context_type"),
+    ] {
+        let found = module(&format!(
+            "{definitions}const fn through<...A>(items: ...A) -> {result} =>\n    \
+             {function}(...{{for key in arg_keys(A): if key == 0 {{ {entry} }}}})\n\
+             test computed {{ through(1) }}\n"
+        ));
+        assert_eq!(found.findings.len(), 1, "{}", found.report);
+        assert_eq!(found.findings[0].code, code, "{}", found.report);
+    }
+}
+
+/// UNIT-12: reusing a pass name reports the duplicate alone.
+#[test]
+fn duplicated_pack_pass_names_report_only_the_duplicate() {
+    let checked = module(
+        "const fn one(a: i64 = 0) -> i64 => a\n\
+         const fn abc(a: i64, b: i64, c: i64) -> i64 => a * 100 + b * 10 + c\n\
+         const fn shadow<...A>(items: ...A) -> i64 =>\n    \
+             abc(...{for k in arg_keys(A): one(...{for k in arg_keys(A): if k == 2 { items[k] }})})\n\
+         test computed { shadow(1, 2, 3) }\n",
+    );
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "name/name.duplicate");
+}
+
 /// GEN-7, FN-15: each route to the same instance checks its candidate's
 /// `var` argument even when every candidate gives the same result type.
 #[test]

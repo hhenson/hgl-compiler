@@ -293,10 +293,11 @@ analyser: partial
 - Checks where a pack comprehension is held and requires its iterable to name a type pack's keys. At the declaration it checks condition chains for runtime bindings, assignments to the iteration key, and ordinary reads of a type pack or callback. In an instance an inline computed spread visits the concrete keys, reads only each selected branch, and omits keys whose chain selects no entry (GEN-7, CTRL-16).
 - Reads a declared function's written arguments, including its configuration, through their parameter types before the computed entries are known.
 - Keeps the compile-time key comparison in anonymous bodies that capture a concrete key. A key differs from a constant of the other kind (FN-14, GEN-17).
+- A computed entry has the type of its own pass (FN-19). The receiving parameter does not give a type to a bare implied enum member, `null`, or an empty sequence, and it does not widen an `i64` literal entry to `f64`.
 
 transpiler: partial
 
 - Lowers forwarded entries and constant-key reads from the same fitted pack input slots, including captured values and connections. The SDK cases also exercise operator selection, static callbacks and constructors.
-- Lowers the concrete arguments of an inline computed spread. The SDK cases exercise a skipped position and a skipped name whose parameter takes its default.
+- Lowers the concrete arguments of an inline computed spread. An anonymous body is specialized for the enclosing pack keys even when each pass supplies a value of the same type. The SDK cases also cover mixed entry types, named and positional keys, selected nested conditions, and written pack-member types.
 
-Left: A pack bound with `let` and then spread, and conditions whose compile-time values this reader does not yet work out, remain part of #368. The packed signal payload diagnostic is tracked in #731, and guards on the pack entry itself in #732.
+Left: A pack bound with `let` and then spread, and conditions whose compile-time values this reader does not yet work out, remain part of #368. C++ declines an inline spread whose pass condition does not supply a known constant `bool`. The packed signal payload diagnostic is tracked in #731, and guards on the pack entry itself in #732.

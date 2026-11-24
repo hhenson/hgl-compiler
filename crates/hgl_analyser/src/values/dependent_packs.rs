@@ -28,6 +28,11 @@ pub(crate) struct PackTypes<'p> {
 }
 
 impl<'p> PackTypes<'p> {
+    /// The lexical declaration and concrete pack of each generic slot.
+    pub(super) fn bindings(&self) -> &[(Location, &'p TypePackArgument)] {
+        &self.bindings
+    }
+
     /// Match resolved packs to their declarations, by generic slot.
     pub(crate) fn new(generics: &[GenericParameter], packs: &'p [TypePackArgument]) -> Self {
         Self {

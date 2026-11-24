@@ -411,8 +411,10 @@ impl<'a> Typer<'a> {
         let annotation = node
             .children()
             .find(|part| is_type(part.kind()))
-            .and_then(|part| self.written.get(&(self.file, part.span().start)))
-            .map(|ty| (*ty).clone());
+            .and_then(|part| {
+                let ty = *self.written.get(&(self.file, part.span().start))?;
+                Some(self.project_pack_pass_type(ty, self.at(&part)))
+            });
         // The first value: the child that is no type.
         let binds_child = annotation.is_none() && kind == LocalKind::Let && self.reads_children();
         let value = node

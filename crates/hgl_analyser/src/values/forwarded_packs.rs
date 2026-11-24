@@ -368,6 +368,7 @@ impl<'a> Typer<'a> {
         };
         inputs
             .types
+            .bindings()
             .iter()
             .find(|(declared, pack)| {
                 declared == at && !pack.infer_from_arguments && pack.forwarded_from.is_none()
@@ -393,6 +394,15 @@ impl<'a> Typer<'a> {
             return false;
         };
         let binding = Location::new(self.file, name.span());
+        // UNIT-12: a nested duplicate has already been reported by the
+        // resolver. Its body still names the outer key, so don't expand it.
+        if self
+            .pack_passes
+            .iter()
+            .any(|(active, _)| active == name.text())
+        {
+            return false;
+        }
         pack.keys.iter().all(|key| {
             let Some(argument) = pack_key_argument(key) else {
                 return false;
@@ -470,8 +480,11 @@ impl<'a> Typer<'a> {
             match self.selected_pack_entry(ungrouped(entry.clone()), (key_binding, &argument)) {
                 Ok(Some(source)) => {
                     self.bound.push((key_binding, argument));
+                    self.pack_passes
+                        .push((name.text().to_string(), key.clone()));
                     let value = self.expression(&source, None);
                     forwarded.push(ForwardedArgument { key, source, value });
+                    self.pack_passes.pop();
                     self.bound.truncate(before);
                 }
                 Ok(None) => {}
@@ -516,8 +529,24 @@ impl<'a> Typer<'a> {
         condition: &SyntaxNode,
         key: (Location, &Argument),
     ) -> Result<bool, Fault> {
+        self.read_pack_condition(condition, Some(key))
+    }
+
+    /// CTRL-16 also applies to a constant condition nested in an entry.
+    pub(super) fn active_pack_condition(&self, node: &SyntaxNode) -> Option<bool> {
+        if self.pack_passes.is_empty() {
+            return None;
+        }
+        self.read_pack_condition(node, None).ok()
+    }
+
+    fn read_pack_condition(
+        &self,
+        condition: &SyntaxNode,
+        key: Option<(Location, &Argument)>,
+    ) -> Result<bool, Fault> {
         let expected = Type::Scalar(Scalar::Bool);
-        match self.pack_pass_constant(condition, &expected, Some(key))? {
+        match self.pack_pass_constant(condition, &expected, key)? {
             ConstantValue::Bool(value) => Ok(value),
             _ => Err(Fault::NotConstant),
         }
@@ -606,11 +635,33 @@ impl<'a> Typer<'a> {
             binding: &binding,
             parameter: &parameter,
             arguments: &arguments,
-            type_packs: inputs.types,
+            type_packs: inputs.types.bindings(),
             constants: &self.constants,
         };
         let read = crate::constant::typed(node, Some(expected), &scope)?;
         crate::constant::fit(read, Some(expected), self.program)
+    }
+
+    /// GEN-17: an annotation in a computed pass sees its key's concrete
+    /// type, which was still unknown when the function body was entered.
+    pub(super) fn project_pack_pass_type(&mut self, ty: &Type, at: Location) -> Type {
+        let Some(inputs) = self.pack_inputs.filter(|_| !self.pack_passes.is_empty()) else {
+            return ty.clone();
+        };
+        if !ty.any_part(
+            &|part| matches!(part, Type::PackMember { .. }),
+            &|constant| constant.value.key().is_none(),
+        ) {
+            return ty.clone();
+        }
+        let bound: Vec<_> = self.bound.iter().map(|(at, value)| (*at, value)).collect();
+        match inputs.types.project(ty, &bound) {
+            Ok(ty) => ty,
+            Err(fault) => {
+                self.pack_member_fault(at, &fault);
+                Type::Unknown
+            }
+        }
     }
 }
 
