@@ -89,7 +89,7 @@ impl<'a> Typer<'a> {
         inputs: &CallbackInputs<'_>,
     ) -> Option<(Callee, FunctionType)> {
         if node.kind() == SyntaxKind::FnExpr {
-            return self.anonymous_target(node, template);
+            return self.anonymous_target(node, template, false);
         }
         if matches!(
             node.kind(),
@@ -787,10 +787,49 @@ impl<'a> Typer<'a> {
         ));
     }
 
+    /// FN-4 and FN-17: the temporal template lets a callback compose.
+    /// Determine whether the callback uses a connection or a temporal
+    /// call, even when its committed read will report another error.
+    pub(super) fn anonymous_pair_category(
+        &mut self,
+        node: &SyntaxNode,
+        template: &FunctionType,
+    ) -> ValueCategory {
+        let mark = self.mark();
+        let read = self.anonymous_target(node, template, true);
+        self.take_back(mark, false);
+        let Some((Callee::Anonymous(function), _)) = read else {
+            return ValueCategory::Value;
+        };
+        let captured = function
+            .captures
+            .iter()
+            .map(|&local| self.locals[local].category)
+            .fold(ValueCategory::Value, super::lifting::join_categories);
+        let mut temporal = captured == ValueCategory::Connection;
+        super::forwarded_packs::walk_nested_calls(&function.body.statements, &mut |value| {
+            if let ExprKind::Call { callee, .. } = &value.kind {
+                temporal |= matches!(callee, Callee::Parameter { temporal: true, .. })
+                    || callee.declaration().is_some_and(|(module, declaration)| {
+                        self.program.modules[module].declarations[declaration]
+                            .kind
+                            .role()
+                            == Some(Role::Temporal)
+                    });
+            }
+        });
+        if temporal {
+            ValueCategory::Connection
+        } else {
+            captured
+        }
+    }
+
     fn anonymous_target(
         &mut self,
         node: &SyntaxNode,
         template: &FunctionType,
+        probing_role: bool,
     ) -> Option<(Callee, FunctionType)> {
         let mut parameters = self.anonymous_parameters(node);
         if !takes_input_count(template, parameters.len()) {
@@ -855,8 +894,15 @@ impl<'a> Typer<'a> {
         if !template.value {
             self.hook = None;
         }
-        let definition =
-            self.anonymous_definition(node, parameters, result.as_ref(), !template.value);
+        // FN-4: during a role probe the template supplies the types
+        // and lets the body compose. Its own parameters do not make a
+        // call temporal merely because this template is temporal.
+        let definition = self.anonymous_definition(
+            node,
+            parameters,
+            result.as_ref(),
+            !template.value && !probing_role,
+        );
         self.hook = outer_hook;
         self.value_code = value_code;
         self.graph = graph;

@@ -47,6 +47,8 @@ pub(super) struct PairPhases {
 impl PairPhases {
     fn at(typer: &Typer<'_>, list: &SyntaxNode) -> Option<Self> {
         let call = list.parent()?;
+        #[cfg(test)]
+        tests::PHASE_ROOTS.with(|count| count.set(count.get() + 1));
         Some(Self {
             scope: typer.at(&call),
             categories: HashMap::new(),
@@ -712,9 +714,9 @@ impl<'a> Typer<'a> {
         category
     }
 
-    /// GEN-6 and FN-17: first find written arguments that take matching
-    /// callable templates of different roles. Other mismatches belong
-    /// to the selected signature (FN-4).
+    /// GEN-6 and FN-17: find the written arguments that take callable
+    /// templates of different roles. The selected signature checks the
+    /// template's ordinary types (FN-4).
     fn pair_callback_templates(
         &mut self,
         name: &SyntaxToken,
@@ -778,15 +780,7 @@ impl<'a> Typer<'a> {
             .filter_map(|(node, temporal)| {
                 let at = self.at(&node);
                 let value = *values.get(&at)?;
-                (value.value
-                    && !temporal.value
-                    && value.parameters == temporal.parameters
-                    && value.result == temporal.result
-                    && value.reference == temporal.reference
-                    && value.named_pack.is_none()
-                    && temporal.named_pack.is_none()
-                    && value.types().all(whole))
-                .then_some((at, (value, temporal)))
+                (value.value && !temporal.value).then_some((at, (value, temporal)))
             })
             .collect()
     }
@@ -800,14 +794,44 @@ impl<'a> Typer<'a> {
         value: &FunctionType,
         temporal: &FunctionType,
     ) -> ValueCategory {
+        let node = ungrouped(node.clone());
+        if node.kind() == SyntaxKind::FnExpr {
+            return self.anonymous_pair_category(&node, temporal);
+        }
+        if !matches!(
+            node.kind(),
+            SyntaxKind::NameExpr | SyntaxKind::FunctionReference
+        ) {
+            return ValueCategory::Value;
+        }
+        if let Some(local) = self.local_of(&node) {
+            return match &self.locals[local].ty {
+                Type::Function(template) if !template.value => ValueCategory::Connection,
+                _ => ValueCategory::Value,
+            };
+        }
+        let Some((module, declarations)) =
+            name_token(&node).and_then(|token| self.declarations(&token))
+        else {
+            return ValueCategory::Value;
+        };
+        match function_pair(self.program, module, declarations) {
+            (None, Some(_)) => return ValueCategory::Connection,
+            (Some(_), _) => return ValueCategory::Value,
+            _ => {}
+        }
+        if !declarations.iter().any(|&index| {
+            self.program.modules[module].declarations[index].kind == DeclarationKind::Operator
+        }) {
+            return ValueCategory::Value;
+        }
+
+        // An operator reference names a set of candidates. The two
+        // receiving templates still determine which candidates fit.
         let mark = self.mark();
-        let read = self.function_argument(node, value);
-        let category = self.category(&read);
+        let read = self.function_argument(&node, value);
         let fits_value =
             self.take_back(mark, false) && matches!(read.kind, ExprKind::StaticCallable(_));
-        if category == ValueCategory::Connection {
-            return category;
-        }
         if fits_value {
             return ValueCategory::Value;
         }
@@ -815,7 +839,7 @@ impl<'a> Typer<'a> {
             return ValueCategory::Unsettled;
         }
         let mark = self.mark();
-        let read = self.function_argument(node, temporal);
+        let read = self.function_argument(&node, temporal);
         let fits_temporal =
             self.take_back(mark, false) && matches!(read.kind, ExprKind::StaticCallable(_));
         if fits_temporal {
@@ -2051,9 +2075,10 @@ mod tests {
 
     thread_local! {
         pub(super) static PHASE_PROBES: Cell<usize> = const { Cell::new(0) };
+        pub(super) static PHASE_ROOTS: Cell<usize> = const { Cell::new(0) };
     }
 
-    fn check_with_phase_count(body: &str) -> (Diagnostics, usize) {
+    fn check_with_phase_count(body: &str) -> (Diagnostics, usize, usize) {
         let source = format!(
             "module m\n\
              const fn scale(value: i64) -> i64 => value * 2\n\
@@ -2072,28 +2097,31 @@ mod tests {
             &mut diagnostics,
         );
         PHASE_PROBES.set(0);
+        PHASE_ROOTS.set(0);
         analyse(&[ParsedFile::new(file, tree.syntax())], &mut diagnostics);
-        (diagnostics, PHASE_PROBES.get())
+        (diagnostics, PHASE_ROOTS.get(), PHASE_PROBES.get())
     }
 
     /// FN-4: phase probes can cross a computed spread without probing
     /// the same three calls again during the selected call's reading.
     #[test]
     fn phased_pairs_share_reads_around_a_pack_comprehension() {
-        let (diagnostics, probes) = check_with_phase_count(
+        let (diagnostics, roots, probes) = check_with_phase_count(
             "fn compose<...Inputs>(cb: fn(...{Inputs}) -> i64, value: i64) -> i64 {
                 return value + scale(scale(scale(cb(...{for key in arg_keys(Inputs): 7}))))
             }\n",
         );
         assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");
-        assert_eq!(probes, 3);
+        // The computed spread is read in two analysis passes. Each
+        // has its own memo, with one probe per written pair call.
+        assert_eq!((roots, probes), (2, 6));
     }
 
     /// FN-4 and TST-5: an eval inside a pair's argument retains its
     /// ordinary type diagnostic when the same phase probe is reused.
     #[test]
     fn phased_pairs_share_reads_around_an_eval_operand() {
-        let (diagnostics, probes) = check_with_phase_count(
+        let (diagnostics, roots, probes) = check_with_phase_count(
             "fn probe(value: i64) -> i64 => value
             fn configured(const bias: i64, value: i64) -> i64 => bias + value
             test nested {
@@ -2105,6 +2133,6 @@ mod tests {
             diagnostics.as_slice()[0].code,
             hgl_diagnostics::Code::Catalogued(crate::codes::TYPE_MISMATCH),
         );
-        assert_eq!(probes, 3);
+        assert_eq!((roots, probes), (1, 3));
     }
 }

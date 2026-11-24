@@ -103,3 +103,62 @@ test compatible_callbacks_leave_the_choice_to_other_inputs {
     assert eval pure_body(tick: [1]) == [5]
     assert eval other_temporal(tick: [1]) == [6]
 }
+
+# A capture's phase survives generic inference and disagreeing input types.
+const fn capture_types(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 2
+fn capture_types(f: fn(str) -> i64, x: i64) -> i64 => f("a") * 3
+const fn capture_types_value(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 2
+fn capture_types_temporal(f: fn(str) -> i64, x: i64) -> i64 => f("a") * 3
+
+const fn generic_apply<T>(f: const fn(T) -> T, x: T) -> T requires T in {i64} => f(x) * 2
+fn generic_apply<T>(f: fn(T) -> T, x: T) -> T requires T in {i64} => f(x) * 3
+const fn generic_value<T>(f: const fn(T) -> T, x: T) -> T requires T in {i64} => f(x) * 2
+fn generic_temporal<T>(f: fn(T) -> T, x: T) -> T requires T in {i64} => f(x) * 3
+
+const fn infer_other<T>(f: const fn(i64) -> i64, x: T) -> i64 requires T in {i64} => f(1) * 2
+fn infer_other<T>(f: fn(i64) -> i64, x: T) -> i64 requires T in {i64} => f(1) * 3
+const fn other_value<T>(f: const fn(i64) -> i64, x: T) -> i64 requires T in {i64} => f(1) * 2
+fn other_temporal_role<T>(f: fn(i64) -> i64, x: T) -> i64 requires T in {i64} => f(1) * 3
+
+fn capture_differing_templates(tick: i64) -> tuple<i64, i64, i64> => (
+    capture_types(fn(n) => tick + 1, 1),
+    capture_types_value(fn(n) => tick + 1, 1),
+    capture_types_temporal(fn(n) => tick + 1, 1),
+)
+fn capture_generic_templates(tick: i64) -> tuple<i64, i64, i64> => (
+    generic_apply(fn(n) => n + tick, 1),
+    generic_value(fn(n) => n + tick, 1),
+    generic_temporal(fn(n) => n + tick, 1),
+)
+fn capture_generic_arguments(tick: i64) -> tuple<i64, i64, i64> => (
+    infer_other(fn(n) => n + tick, 1),
+    other_value(fn(n) => n + tick, 1),
+    other_temporal_role(fn(n) => n + tick, 1),
+)
+
+test closure_captures_choose_the_temporal_template {
+    assert eval capture_differing_templates(tick: [1]) == [(6, 4, 6)]
+    assert eval capture_generic_templates(tick: [1]) == [(6, 4, 6)]
+    assert eval capture_generic_arguments(tick: [1]) == [(6, 4, 6)]
+}
+
+const fn named_types(f: const fn(str) -> i64, x: i64) -> i64 => f("a") * 2
+fn named_types(f: fn(i64) -> i64, x: i64) -> i64 => f(x) * 3
+fn named_types_temporal(f: fn(i64) -> i64, x: i64) -> i64 => f(x) * 3
+fn named_different_template(tick: i64) -> i64 => tick + named_types(later, 1)
+fn named_different_control(tick: i64) -> i64 => tick + named_types_temporal(later, 1)
+fn named_generic_template(tick: i64) -> i64 => tick + generic_apply(later, 1)
+fn named_generic_control(tick: i64) -> i64 => tick + generic_temporal(later, 1)
+fn anonymous_generic_template(tick: i64) -> i64 => tick + generic_apply(fn(n) => later(n), 1)
+fn anonymous_generic_control(tick: i64) -> i64 => tick + generic_temporal(fn(n) => later(n), 1)
+fn pure_pair_body(tick: i64) -> i64 => tick + apply(fn(n) => doubled(n), 1)
+
+test temporal_callbacks_keep_their_phase_across_templates {
+    assert eval named_different_template(tick: [1]) == [34]
+    assert eval named_different_control(tick: [1]) == [34]
+    assert eval named_generic_template(tick: [1]) == [34]
+    assert eval named_generic_control(tick: [1]) == [34]
+    assert eval anonymous_generic_template(tick: [1]) == [34]
+    assert eval anonymous_generic_control(tick: [1]) == [34]
+    assert eval pure_pair_body(tick: [1]) == [5]
+}

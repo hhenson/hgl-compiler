@@ -482,3 +482,71 @@ fn a_conversions_options_and_the_result_its_policy_returns() {
         ]
     );
 }
+
+/// FN-4, FN-17 and ERR-9: an unrelated error in a callback still leaves
+/// its temporal calls visible to role selection.
+#[test]
+fn temporal_callback_body_errors_keep_the_selected_roles_diagnostics() {
+    let value = "const fn apply(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 2";
+    let temporal = "fn apply(f: fn(i64) -> i64, x: i64) -> i64 => f(x) * 3";
+    for (body, ordinary_error, depth) in [
+        (
+            "apply(fn(a) => later(a) + product(1), 1)",
+            "type/argument.missing",
+            1,
+        ),
+        (
+            "apply(fn(a) => later(a) + apply(fn(b) => later(b) + apply(fn(c) => later(c) + product(1), 1), 1), 1)",
+            "type/argument.missing",
+            3,
+        ),
+        (
+            "apply(fn(a) => later(a) + product(1, \"wrong\"), 1)",
+            "type/type.mismatch",
+            1,
+        ),
+    ] {
+        for (definitions, role_errors) in [
+            (format!("{value}\n{temporal}"), 0),
+            (temporal.to_string(), 0),
+            (value.to_string(), depth),
+        ] {
+            let checked = module(&format!(
+                "{definitions}\n\
+                 const fn product(a: i64, b: i64) -> i64 => a * b\n\
+                 fn later(n: i64) -> i64 {{ when {{ return n + 10 }} }}\n\
+                 fn graph(tick: i64) -> i64 => tick + {body}\n"
+            ));
+            let codes: Vec<_> = checked
+                .findings
+                .iter()
+                .map(|finding| finding.code.as_str())
+                .collect();
+            let mut expected = vec!["function-kind/call.role"; role_errors];
+            expected.push(ordinary_error);
+            assert_eq!(codes, expected, "{}", checked.report);
+        }
+    }
+}
+
+/// FN-17: a declaration restricted to the value template rejects
+/// a temporal function name or a temporal call inside its argument.
+#[test]
+fn value_only_callback_twins_still_reject_temporal_arguments() {
+    let definitions = concat!(
+        "const fn named(f: const fn(str) -> i64, x: i64) -> i64 => f(\"a\") * 2\n",
+        "const fn generic<T>(f: const fn(T) -> T, x: T) -> T requires T in {i64} => f(x) * 2\n",
+        "fn later(n: i64) -> i64 { when { return n + 10 } }\n",
+    );
+    for (body, expected) in [
+        ("named(later, 1)", "type/type.mismatch"),
+        ("generic(later, 1)", "type/type.mismatch"),
+        ("generic(fn(n) => later(n), 1)", "function-kind/call.role"),
+    ] {
+        let checked = module(&format!(
+            "{definitions}fn graph(tick: i64) -> i64 => tick + {body}\n"
+        ));
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, expected, "{}", checked.report);
+    }
+}
