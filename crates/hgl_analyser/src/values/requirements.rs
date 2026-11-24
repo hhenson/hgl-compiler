@@ -543,7 +543,16 @@ impl<'a> Typer<'a> {
         generics: &[Argument],
         type_packs: &[hir::TypePackArgument],
     ) -> bool {
-        if type_packs.iter().any(|pack| pack.forwarded_from.is_some()) {
+        if type_packs.iter().any(|pack| {
+            pack.forwarded_from.is_some_and(|source| {
+                !pack
+                    .types
+                    .iter()
+                    .any(|ty| matches!(ty, Type::Parameter { at, .. } if *at == source))
+            })
+        }) {
+            // GEN-10 tuple captures keep a marker and must prove the
+            // callee's requirements under the body's own constraints.
             // GEN-17: a function parameter's reflected shape is supplied
             // by the caller of the enclosing declaration.
             return true;
@@ -4096,8 +4105,147 @@ fn answered_in(
     }
 }
 
+/// GEN-3: only a nominal declaration has a category. An unresolved
+/// parameter can use facts stated by its own declaration's requirement.
+pub(super) fn category_holds(program: &Program, ty: &Type, category: SyntaxKind) -> Option<bool> {
+    if let Some(known) = known_category(ty, category) {
+        return Some(known);
+    }
+    let at = match ty {
+        Type::Parameter { at, .. } => *at,
+        Type::PackMember { pack, key, .. } if guaranteed_member(program, *pack, key) => *pack,
+        _ => return None,
+    };
+    for (index, module) in program.modules.iter().enumerate() {
+        for position in 0..module.declarations.len() {
+            let Some((parameters, condition)) = required(program, (index, position)) else {
+                continue;
+            };
+            if parameters.iter().any(|generic| generic.at == at) {
+                let file = module.declarations[position].at.file;
+                return category_facts(&condition, module, file, at, true)
+                    .into_iter()
+                    .find_map(|(stated, positive)| {
+                        if stated == category {
+                            Some(positive)
+                        } else if positive {
+                            Some(false)
+                        } else {
+                            None
+                        }
+                    });
+            }
+        }
+    }
+    None
+}
+
+/// GEN-7 and GEN-10: only an existing member inherits universal facts.
+/// A known nonnegative key must be below the pack's effective minimum.
+fn guaranteed_member(program: &Program, pack: Location, key: &Constant) -> bool {
+    let ConstantValue::Int(position) = key.value else {
+        return false;
+    };
+    u64::try_from(position).ok().is_some_and(|position| {
+        type_pack_bounds(program, pack).is_some_and(|(minimum, _)| position < minimum)
+    })
+}
+
+fn known_category(ty: &Type, category: SyntaxKind) -> Option<bool> {
+    match ty {
+        Type::Unknown | Type::Parameter { .. } | Type::PackMember { .. } => None,
+        Type::Named { kind, .. } => Some(matches!(
+            (kind, category),
+            (NamedKind::Struct, SyntaxKind::KwStruct) | (NamedKind::Enum, SyntaxKind::KwEnum)
+        )),
+        _ => Some(false),
+    }
+}
+
+/// Facts implied by a true clause. Conjunction collects facts; a
+/// disjunction keeps only facts shared by both alternatives. Negation
+/// reverses these operations rather than turning a non-struct into an enum.
+fn category_facts(
+    node: &SyntaxNode,
+    module: &crate::Module,
+    file: FileId,
+    at: Location,
+    positive: bool,
+) -> Vec<(SyntaxKind, bool)> {
+    match node.kind() {
+        SyntaxKind::ConstraintParen => node.children().next().map_or_else(Vec::new, |inner| {
+            category_facts(&inner, module, file, at, positive)
+        }),
+        SyntaxKind::ConstraintNot => node.children().next().map_or_else(Vec::new, |inner| {
+            category_facts(&inner, module, file, at, !positive)
+        }),
+        SyntaxKind::ConstraintBinary => {
+            let mut children = node.children();
+            let (Some(left), Some(right)) = (children.next(), children.next()) else {
+                return Vec::new();
+            };
+            let mut left = category_facts(&left, module, file, at, positive);
+            let right = category_facts(&right, module, file, at, positive);
+            if has_token(node, SyntaxKind::AmpAmp) == positive {
+                left.extend(right);
+            } else {
+                left.retain(|fact| right.contains(fact));
+            }
+            left
+        }
+        SyntaxKind::ConstraintEach if positive => {
+            let mut children = node.children();
+            let (Some(view), Some(body)) = (children.next(), children.next()) else {
+                return Vec::new();
+            };
+            let Some((view, name)) = pack_view(view) else {
+                return Vec::new();
+            };
+            if view.text() != "types" || !module.uses.iter().any(|used|
+                used.at == Location::new(file, name.span())
+                    && matches!(&used.binding, Binding::Local { at: declared, .. } if *declared == at)) {
+                return Vec::new();
+            }
+            let Some(bound) = tokens(node)
+                .filter(|token| token.kind() == SyntaxKind::Ident)
+                .nth(1)
+            else {
+                return Vec::new();
+            };
+            category_facts(&body, module, file, Location::new(file, bound.span()), true)
+        }
+        SyntaxKind::ConstraintRelation if tokens(node).any(|token| token.text() == "in") => {
+            let mut children = node.children();
+            let (Some(left), Some(right)) = (children.next(), children.next()) else {
+                return Vec::new();
+            };
+            if right.kind() != SyntaxKind::ConstraintCategory {
+                return Vec::new();
+            }
+            let Some(name) = name_token(&left) else {
+                return Vec::new();
+            };
+            if !module.uses.iter().any(|used| used.at == Location::new(file, name.span())
+                && matches!(&used.binding, Binding::Local { at: declared, .. } if *declared == at)) {
+                return Vec::new();
+            }
+            vec![(
+                if has_token(&right, SyntaxKind::KwStruct) {
+                    SyntaxKind::KwStruct
+                } else {
+                    SyntaxKind::KwEnum
+                },
+                positive,
+            )]
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// What a candidate's condition is checked against at a call.
 pub(super) struct Condition<'c> {
+    /// Declaration identities used to prove category facts of symbolic types.
+    pub(super) program: &'c Program,
     /// The value an option has at the call: what the call gives it, or
     /// its default. `None` when it is no constant this pass reads.
     pub(super) value_of: &'c dyn Fn(&str) -> Option<ConstantValue>,
@@ -4115,6 +4263,8 @@ pub(super) struct Condition<'c> {
     /// Whether a named operator requirement written in the condition
     /// holds at the call (GEN-16). `None` when it cannot be told.
     pub(super) callable: &'c dyn Fn(&SyntaxNode) -> Option<bool>,
+    /// A category fact, including a caller's stated generic requirement.
+    pub(super) category: &'c dyn Fn(&SyntaxNode, SyntaxKind) -> Option<bool>,
     /// Set where a comparison is not told because a value it compares
     /// is one this compiler does not work out: a constant held by its
     /// name, or one not worked out. Such a constant is not taken as
@@ -4327,13 +4477,8 @@ fn requires_holds(
                 Some(ty)
             }
         };
-        if !matches!(read.ty, Type::PackMember { .. })
-            && !read
-                .ty
-                .any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false)
-        {
-            return projected(substitute_within(&read.ty, &map));
-        }
+        // GEN-10: tuple operands expand captures even without an indexed
+        // PackMember; a pack's ordinary generic slot is deliberately unknown.
         match pack_types.project(&read.ty, &map) {
             Ok(ty) => projected(ty),
             Err(fault) => {
@@ -4354,14 +4499,39 @@ fn requires_holds(
         };
         (place.constant)(node, Some(&ty))
     };
+    let category = |node: &SyntaxNode, category| {
+        let raw = (node.kind() == SyntaxKind::NamedType)
+            .then(|| name_token(node))
+            .flatten()
+            .and_then(|name| {
+                parameters
+                    .iter()
+                    .position(|generic| generic.name == name.text())
+            })
+            .and_then(|index| generics.get(index))
+            .and_then(|argument| match argument {
+                Argument::Type(ty) => Some(ty.clone()),
+                Argument::Constant(_) => None,
+            })
+            .or_else(|| {
+                let read = declared_in
+                    .written
+                    .iter()
+                    .find(|read| read.at.file == file && read.at.span.start == node.span().start)?;
+                pack_types.project(&read.ty, &map).ok()
+            })?;
+        category_holds(program, &raw, category)
+    };
     holds_with_packs(
         condition,
         &Condition {
+            program,
             value_of: &value_of,
             constant: &constant,
             type_of: &type_of,
             written: &written,
             callable: place.callable,
+            category: &category,
             unvalued: place.unvalued,
         },
         Some(&PackScope {
@@ -4606,6 +4776,38 @@ fn holds_with_packs(
                     .then(|| operand.text().to_string().trim().to_string())
             };
             let within = tokens(node).any(|token| token.text() == "in");
+            if within && right.kind() == SyntaxKind::ConstraintCategory {
+                let category = if has_token(right, SyntaxKind::KwStruct) {
+                    SyntaxKind::KwStruct
+                } else {
+                    SyntaxKind::KwEnum
+                };
+                if option(left).and_then(|name| (of.value_of)(&name)).is_some()
+                    || (left.kind() != SyntaxKind::NamedType
+                        && !is_type(left.kind())
+                        && scope.is_some_and(|scope| (scope.constant)(left, None).is_some()))
+                {
+                    return Some(false);
+                }
+                let ty = option(left)
+                    .and_then(|name| {
+                        keys.iter()
+                            .rev()
+                            .find(|key| key.name == name)
+                            .and_then(|key| match &key.argument {
+                                Argument::Type(ty) => Some(ty.clone()),
+                                _ => None,
+                            })
+                    })
+                    .or_else(|| option(left).and_then(|name| (of.type_of)(&name)))
+                    .or_else(|| (scope?.written)(left, keys));
+                if let Some(ty) = ty
+                    && let Some(held) = category_holds(of.program, &ty, category)
+                {
+                    return Some(held);
+                }
+                return (of.category)(left, category);
+            }
             let key = |operand: &SyntaxNode| {
                 let name = option(operand)?;
                 keys.iter()
@@ -4783,6 +4985,20 @@ fn each_holds(
         return held;
     }
     for ty in &pack.types {
+        // GEN-10: a zero-length forwarded pack contributes no element
+        // to an each/any view, even while its tuple marker is symbolic.
+        let source = match ty {
+            Type::Parameter { at, .. }
+                if pack.tuple_sources.contains(at) || pack.forwarded_from == Some(*at) =>
+            {
+                Some(*at)
+            }
+            _ => None,
+        };
+        let bounds = source.and_then(|at| type_pack_bounds(of.program, at));
+        if bounds.is_some_and(|(_, maximum)| maximum == Some(0)) {
+            continue;
+        }
         let mut nested = keys.to_vec();
         nested.push(ConstraintKey {
             name: bound.text(),
@@ -4809,12 +5025,62 @@ fn each_holds(
             ..*of
         };
         match holds_with_packs(&body, &here, Some(scope), &nested) {
-            Some(value) if value == existential => return Some(value),
+            Some(value) if value == existential => {
+                // A decisive any-true or each-false answer needs an
+                // actual element. A symbolic pack may still be empty.
+                if source.is_some() && bounds.is_none_or(|(minimum, _)| minimum == 0) {
+                    held = None;
+                } else {
+                    return Some(value);
+                }
+            }
             Some(_) => {}
             None => held = None,
         }
     }
     held
+}
+
+/// GEN-10: explicit bounds and exact tuple<Us> occurrences anywhere in
+/// a non-packed parameter type guarantee lengths. Fixed tuple items do not.
+pub(super) fn type_pack_bounds(program: &Program, at: Location) -> Option<(u64, Option<u64>)> {
+    for detail in program.modules.iter().flat_map(|module| &module.details) {
+        let (generics, parameters) = match detail {
+            Detail::Callable(signature) => (&signature.generics, &signature.parameters[..]),
+            Detail::Struct(structure) => (&structure.generics, &[][..]),
+            _ => continue,
+        };
+        let Some(generic) = generics.iter().find(|generic| generic.at == at) else {
+            continue;
+        };
+        let GenericKind::Pack {
+            mut minimum,
+            mut maximum,
+        } = generic.kind
+        else {
+            return None;
+        };
+        for parameter in parameters {
+            if parameter.pack.is_some()
+                && matches!(parameter.ty, Type::Parameter { at: declared, .. } if declared == at)
+            {
+                minimum = minimum.max(parameter.pack_bounds.0);
+                maximum = maximum.into_iter().chain(parameter.pack_bounds.1).min();
+            } else if parameter.pack.is_none()
+                && parameter.ty.any_part(
+                    &|part| {
+                        matches!(part, Type::Tuple(elements) if matches!(elements.as_slice(),
+                        [Type::Parameter { at: declared, .. }] if *declared == at))
+                    },
+                    &|_| false,
+                )
+            {
+                minimum = minimum.max(1);
+            }
+        }
+        return Some((minimum, maximum));
+    }
+    None
 }
 
 /// The view name and pack name in a `types(Ts)` or `arg_keys(Ps)` form.

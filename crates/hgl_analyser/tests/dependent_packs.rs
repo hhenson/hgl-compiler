@@ -77,6 +77,23 @@ operator by_position<...Ps>(f: fn(...{Ps})) -> list<Ps[position_key]>"#,
     ));
 }
 
+/// FN-19, GEN-17 and ERR-9: the written result already rejects this
+/// making call. Its entry read adds no second report, and the report
+/// uses the key as written in the member type (UNIT-13).
+#[test]
+fn a_missing_pack_key_in_a_result_and_body_is_reported_once() {
+    let checked = module(concat!(
+        "const fn fetch<const key: str, ...As>(args: ...{As}) -> As[key] => args[key]\n",
+        "test missing { assert fetch<\"absent\">(given: 1) == 1 }\n",
+    ));
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/pack.name");
+    assert_eq!(
+        checked.findings[0].message,
+        "pack `As` has no member under `key`"
+    );
+}
+
 #[test]
 fn key_membership_reads_the_bound_key_as_a_value() {
     // GEN-17: key membership refers to the compile-time key that each binds.

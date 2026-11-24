@@ -23,9 +23,11 @@ use hgl_parser::{SyntaxKind, SyntaxNode};
 use super::fit::{not_null, nullable, window_value};
 use super::node::RefRead;
 use super::{BOOL, Fact, Typer};
-use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LabelValue, LocalId, ValueCategory};
-use crate::syntax::tokens;
-use crate::types::{Detail, NamedKind, Scalar, Type};
+use crate::hir::{
+    EndpointOperation, Expr, ExprKind, Hook, LabelValue, LocalId, PackKey, ValueCategory,
+};
+use crate::syntax::{tokens, ungrouped};
+use crate::types::{ConstantValue, Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
 
 /// A child of a temporal input that the program names when it is
@@ -34,6 +36,8 @@ use crate::{codes, error};
 pub(super) struct ChildPath {
     /// The temporal input.
     pub(super) input: LocalId,
+    /// Which physical input of a pack the path starts at.
+    entry: Option<PackKey>,
     /// The steps from it, outermost first. None for the input itself.
     pub(super) steps: Vec<Step>,
 }
@@ -45,6 +49,7 @@ impl ChildPath {
         steps.pop();
         ChildPath {
             input: self.input,
+            entry: self.entry.clone(),
             steps,
         }
     }
@@ -74,8 +79,10 @@ pub(super) enum Child {
 
 /// The input and path captured by an inferred `let` (ERR-14). A path
 /// with a runtime index still has a known root.
+#[derive(Clone)]
 pub(super) struct ChildOrigin {
     input: LocalId,
+    entry: Option<PackKey>,
     steps: Option<Vec<Step>>,
 }
 
@@ -126,9 +133,17 @@ impl Typer<'_> {
     /// element, a field or an entry, through collections alone and at
     /// any depth. `None` for anything else, the input itself among them.
     pub(super) fn child_of(&self, value: &Expr) -> Option<Child> {
-        let ChildOrigin { input, steps } = self.child_origin(value)?;
+        let ChildOrigin {
+            input,
+            entry,
+            steps,
+        } = self.child_origin(value)?;
         match steps {
-            Some(steps) => Some(Child::Named(ChildPath { input, steps })),
+            Some(steps) => Some(Child::Named(ChildPath {
+                input,
+                entry,
+                steps,
+            })),
             None => Some(Child::Runtime),
         }
     }
@@ -136,35 +151,45 @@ impl Typer<'_> {
     /// The origin of an endpoint binding, if the initializer names a
     /// child. A direct input is read as usual.
     pub(super) fn child_origin(&self, value: &Expr) -> Option<ChildOrigin> {
-        let (input, _, steps) = self.steps_of(value)?;
-        if steps.as_ref().is_some_and(Vec::is_empty) {
+        let (origin, _) = self.steps_of(value)?;
+        if origin.steps.as_ref().is_some_and(Vec::is_empty) {
             return None;
         }
-        Some(ChildOrigin { input, steps })
+        Some(origin)
     }
 
     /// The temporal input `value` is rooted at, through fields and
     /// indices.
     pub(super) fn input_of(&self, value: &Expr) -> Option<LocalId> {
-        self.steps_of(value).map(|(input, _, _)| input)
+        self.steps_of(value).map(|(origin, _)| origin.input)
     }
 
     /// The input `value` is rooted at, where it is written, and the
     /// steps from it, `None` where one is known only when the program
     /// runs.
-    fn steps_of(&self, value: &Expr) -> Option<(LocalId, Location, Option<Vec<Step>>)> {
+    fn steps_of(&self, value: &Expr) -> Option<(ChildOrigin, Location)> {
         match &value.kind {
             // A `T?` is no collection, though a test against null has
             // refined the read to its T (ERR-12): it publishes whole.
             ExprKind::Local(local)
                 if self.is_temporal_input(*local) && collection(&self.locals[*local].ty) =>
             {
-                Some((*local, value.at, Some(Vec::new())))
+                Some((
+                    ChildOrigin {
+                        input: *local,
+                        entry: None,
+                        steps: Some(Vec::new()),
+                    },
+                    value.at,
+                ))
+            }
+            ExprKind::PackEntry { .. } | ExprKind::DeferredPackRead => {
+                self.packed_child_root(value)
             }
             ExprKind::BoundChild(local) => self
                 .bound_children
                 .get(local)
-                .map(|origin| (origin.input, value.at, origin.steps.clone())),
+                .map(|origin| (origin.clone(), value.at)),
             ExprKind::Field { base, member }
                 if matches!(
                     base.ty,
@@ -174,32 +199,72 @@ impl Typer<'_> {
                     }
                 ) =>
             {
-                let (input, at, steps) = self.steps_of(base)?;
-                Some((
-                    input,
-                    at,
-                    steps.map(|mut steps| {
-                        steps.push(Step::Field(*member));
-                        steps
-                    }),
-                ))
+                let (mut origin, at) = self.steps_of(base)?;
+                if let Some(steps) = &mut origin.steps {
+                    steps.push(Step::Field(*member));
+                }
+                Some((origin, at))
             }
             // A window is no collection (TIME-9): its value is read as a
             // list (TYPE-11), and a position of that list is no child.
             ExprKind::Index { base, index } if collection(&base.ty) && !self.reads_window(base) => {
-                let (input, at, steps) = self.steps_of(base)?;
+                let (mut origin, at) = self.steps_of(base)?;
                 let step = self.step(&base.ty, index);
-                let steps = match (steps, step) {
+                origin.steps = match (origin.steps, step) {
                     (Some(mut steps), Some(step)) => {
                         steps.push(step);
                         Some(steps)
                     }
                     _ => None,
                 };
-                Some((input, at, steps))
+                Some((origin, at))
             }
             _ => None,
         }
+    }
+
+    /// A structural entry has children of its own (FN-19, TIME-1).
+    /// Use the input's endpoint type before any hook payload projection.
+    fn packed_child_root(&self, value: &Expr) -> Option<(ChildOrigin, Location)> {
+        let written = self.syntax_of(value)?;
+        let mut parts = written.children();
+        let root = ungrouped(parts.next()?);
+        let input = self.local_of(&root)?;
+        let (key, ty) = match &value.kind {
+            ExprKind::PackEntry { pack, key } => {
+                let entry = self
+                    .pack_inputs
+                    .as_ref()?
+                    .iter()
+                    .find(|entry| entry.parameter == *pack && entry.key == *key)?;
+                (key.clone(), &entry.ty)
+            }
+            ExprKind::DeferredPackRead => {
+                // A homogeneous pack can already expose its child shape
+                // where the declaration is read, before any call.
+                let ty = &self.signature.parameters.get(input)?.ty;
+                let index = self.read_constant(&parts.next()?, None).ok()?;
+                let key = match index {
+                    ConstantValue::Int(position) => {
+                        PackKey::Position(usize::try_from(position).ok()?)
+                    }
+                    ConstantValue::Str(name) => PackKey::Name(name),
+                    _ => return None,
+                };
+                (key, ty)
+            }
+            _ => return None,
+        };
+        (self.is_temporal_input(input) && collection(ty)).then(|| {
+            (
+                ChildOrigin {
+                    input,
+                    entry: Some(key),
+                    steps: Some(Vec::new()),
+                },
+                self.at(&root),
+            )
+        })
     }
 
     /// True where `value` reads a child that is a window, of an input
@@ -380,7 +445,7 @@ impl Typer<'_> {
         // is not read.
         let named = self
             .steps_of(&value)
-            .is_some_and(|(_, at, _)| self.naming == Some(at));
+            .is_some_and(|(_, at)| self.naming == Some(at));
         if named || (self.binding_child == Some(value.at) && self.child_origin(&value).is_some()) {
             return value;
         }
@@ -698,7 +763,12 @@ impl Typer<'_> {
 /// entry is valid" (TIME-9). `all_valid` also admits each of the child's
 /// own children.
 pub(super) fn child_facts(operation: EndpointOperation, path: ChildPath) -> Vec<Fact> {
-    let mut facts = vec![Fact::Valid(path.input), Fact::ChildValid(path.clone())];
+    let mut facts = Vec::new();
+    // A guard on one pack entry proves nothing about the other inputs.
+    if path.entry.is_none() {
+        facts.push(Fact::Valid(path.input));
+    }
+    facts.push(Fact::ChildValid(path.clone()));
     if operation == EndpointOperation::AllValid {
         facts.push(Fact::AllValid(path));
     }
@@ -711,6 +781,7 @@ pub(super) fn child_facts(operation: EndpointOperation, path: ChildPath) -> Vec<
 pub(super) fn all_valid_fact(input: LocalId) -> Fact {
     Fact::AllValid(ChildPath {
         input,
+        entry: None,
         steps: Vec::new(),
     })
 }

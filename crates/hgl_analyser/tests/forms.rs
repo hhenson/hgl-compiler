@@ -498,10 +498,12 @@ fn a_result_contract_leaves_unbound_members_and_normalizing_types_open() {
 
 /// GEN-6: a contract comparison needs a valid candidate and operator.
 /// An invalid binding in a named test is already reported by TST-2.
+/// GEN-10 now admits tuple<Ts>; use a value in type position instead so
+/// this fixture still has an earlier declaration error (GEN-13).
 #[test]
 fn a_result_contract_does_not_repeat_an_earlier_declaration_error() {
     let checked = module(concat!(
-        "operator tp2<...Ts>(values: ...Ts) -> tuple<Ts>\n",
+        "operator tp2<const n: i64>(values: ...i64) -> tuple<n>\n",
         "impl const fn tp2(values: ...i64{2}) -> tuple<i64, i64> => (1, 2)\n",
         "operator list_size<const N: i64>(x: list<i64, N>) -> list<i64, N>\n",
         "impl const fn list_size(x: list<i64, -1>) -> list<i64, 2> => [1, 2]\n",
