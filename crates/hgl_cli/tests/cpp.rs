@@ -19,6 +19,8 @@ mod debug_tests;
 mod executable;
 #[path = "cpp/formatting.rs"]
 mod formatting;
+#[path = "cpp/result_only.rs"]
+mod result_only;
 #[path = "cpp/string_append.rs"]
 mod string_append;
 
@@ -1989,6 +1991,200 @@ eval present(values: [taste(7)])
     );
 }
 
+/// TST-2: an application build omits test units, and a mixed build keeps
+/// their code and candidate instances out of the application executable.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn building_tests_preserves_the_applications_production_link() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("mixed-test-and-application-link");
+    write(
+        &root,
+        "src/a.hgl",
+        r#"module p21.a
+export operator kind<T>(value: T) -> i64
+impl const fn kind<T>(value: T) -> i64 => 0
+export const fn via(value: i64) -> i64 => kind(value)
+test a_plain { assert via(7) == 0 }
+"#,
+    );
+    write(
+        &root,
+        "src/b.hgl",
+        r#"module p21.b
+use p21.a::{kind, via}
+test b_declares {
+    impl const fn kind(value: i64) -> i64 => 2
+    assert via(7) == 2
+}
+"#,
+    );
+    write(
+        &root,
+        "src/app.hgl",
+        r#"application p21.app
+use p21.a::{via}
+fn present(const values: list<i64>) -> i64 {
+    for value in values { yield 1s: value }
+}
+test app_plain {
+    struct AppTestValue { value: i64 }
+    const fn app_expected(value: AppTestValue) -> i64 => value.value
+    assert app_expected(AppTestValue(value: via(7))) == 0
+}
+eval present(values: [via(7)])
+"#,
+    );
+    let sources = argument(&root.join("src"));
+    let workspace = argument(&root.join("mixed"));
+    let build = |directory: &str, options: &[&str]| {
+        let mut args = vec![
+            "build",
+            &sources,
+            "--out",
+            directory,
+            "--format",
+            "json",
+            "--compile-commands",
+        ];
+        args.extend_from_slice(options);
+        let built = hgl_in(&args, &[], &[]);
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        serde_json::from_slice::<serde_json::Value>(&built.stdout).unwrap()
+    };
+    let manifest =
+        |directory: &str| fs::read_to_string(Path::new(directory).join("build.ninja")).unwrap();
+    let link = |manifest: &str, target: &str| {
+        let prefix = format!("build {target}{}: link ", std::env::consts::EXE_SUFFIX);
+        manifest
+            .lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .unwrap()
+            .to_owned()
+    };
+    let production = argument(&root.join("production"));
+    let production_units = serde_json::json!(["core", "p21.a", "p21.app"]);
+    let built = build(&production, &[]);
+    assert_eq!(built["units"], production_units);
+    assert_eq!(built["tests"], serde_json::json!([]));
+    let production_manifest = manifest(&production);
+    assert!(
+        !production_manifest.contains("test-mod-"),
+        "{production_manifest}"
+    );
+    assert!(!root.join("production/modules/test-mod-p21-a.cpp").exists());
+    assert!(
+        !root
+            .join("production/obj/modules/test-mod-p21-a.o")
+            .exists()
+    );
+    assert!(!root.join("production/modules/type-p21-app.h").exists());
+    assert!(
+        !fs::read_to_string(root.join("production/modules/mod-p21-app.h"))
+            .unwrap()
+            .contains("AppTestValue")
+    );
+
+    let mixed = build(&workspace, &["--tests"]);
+    let mixed_manifest = manifest(&workspace);
+    let units = mixed["units"].as_array().unwrap();
+    for unit in [
+        "p21.a",
+        "test:p21.a",
+        "test:p21.b",
+        "p21.app",
+        "test:p21.app",
+    ] {
+        assert_eq!(
+            units.iter().filter(|name| *name == unit).count(),
+            1,
+            "{units:?}"
+        );
+    }
+    assert_eq!(mixed["tests"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        link(&mixed_manifest, "run/app-p21-app"),
+        link(&production_manifest, "run/app-p21-app")
+    );
+    let other_module_test = link(&mixed_manifest, "bin/test-p21-b");
+    assert!(
+        other_module_test.contains("obj/modules/test-mod-p21-a.o"),
+        "{other_module_test}"
+    );
+    assert!(
+        other_module_test.contains("obj/modules/test-mod-p21-b.o"),
+        "{other_module_test}"
+    );
+    assert!(
+        !other_module_test.contains("test-mod-p21-app.o"),
+        "{other_module_test}"
+    );
+    let application_test = link(&mixed_manifest, "bin/test-p21-app");
+    assert!(
+        application_test.contains("obj/modules/mod-p21-app.o"),
+        "{application_test}"
+    );
+    assert!(
+        application_test.contains("obj/modules/test-mod-p21-app.o"),
+        "{application_test}"
+    );
+    let module = fs::read_to_string(root.join("mixed/modules/mod-p21-a.cpp")).unwrap();
+    assert!(!module.contains("test_candidates_"), "{module}");
+
+    let runtime = argument(&root.join("runtime"));
+    for directory in [&runtime, &workspace] {
+        let app = hgl_in(
+            &["run", &sources, "--target", "cpp", "--keep", directory],
+            &[],
+            &[],
+        );
+        let stdout = text(&app.stdout);
+        assert!(app.status.success(), "{stdout}{}", text(&app.stderr));
+        assert!(stdout.contains("  0\n"), "{stdout}");
+        assert!(
+            stdout.contains("ran p21.app on cpp: 1 publication"),
+            "{stdout}"
+        );
+    }
+    assert_eq!(manifest(&workspace), mixed_manifest);
+    let runtime_manifest = manifest(&runtime);
+    assert!(
+        !runtime_manifest.contains("test-mod-"),
+        "{runtime_manifest}"
+    );
+    assert!(!root.join("runtime/modules/test-mod-p21-a.cpp").exists());
+
+    let tests = hgl_in(
+        &["test", &sources, "--target", "cpp", "--keep", &workspace],
+        &[],
+        &[],
+    );
+    let stdout = text(&tests.stdout);
+    assert!(tests.status.success(), "{stdout}{}", text(&tests.stderr));
+    for test in ["p21.a::a_plain", "p21.b::b_declares", "p21.app::app_plain"] {
+        assert!(
+            stdout.contains(&format!("passed   executable  {test}\n")),
+            "{stdout}"
+        );
+    }
+
+    let rebuilt = build(&workspace, &[]);
+    assert_eq!(rebuilt["units"], production_units);
+    assert_eq!(rebuilt["tests"], serde_json::json!([]));
+    let rebuilt_manifest = manifest(&workspace);
+    assert!(
+        !rebuilt_manifest.contains("test-mod-"),
+        "{rebuilt_manifest}"
+    );
+    let compile_commands = fs::read_to_string(root.join("mixed/compile_commands.json")).unwrap();
+    assert!(
+        !compile_commands.contains("test-mod-"),
+        "{compile_commands}"
+    );
+}
+
 /// The integration test above passes on the SDK.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
@@ -2387,8 +2583,9 @@ fn let_bound_packs_run_on_the_sdk() {
     );
 }
 
-/// MAP-1, RED-1, RED-4 and RED-5: Core declares the native forms and
-/// C++ reports the work still tracked by #370.
+/// MAP-1, RED-1, RED-4 and RED-5: C++ reports the remaining native forms.
+/// A capture-free ordered fold is written, and FN-14 permits the captured
+/// callback even though the engine cannot wire it in an ordered reduction.
 #[test]
 fn native_mapping_forms_decline_cpp_emission() {
     let root = scratch("native-mapping-forms");
@@ -2405,6 +2602,8 @@ export fn keyed_map(values: dict<str, i64>, selected: set<str>) -> dict<str, i64
 export fn growing_map(values: list<i64>) -> list<i64> => map(twice_for_map, values)
 export fn growing_tree(values: list<i64>) -> i64 => reduce(add_, values, 0)
 export fn ordered_growing(values: list<i64>) -> i64 => reduce(fold_digit, values, 0)
+export fn ordered_captured(values: list<i64>, bias: i64) -> i64 =>
+    reduce(fn(accumulated, member) => accumulated * 10 + member + bias, values, 0)
 export fn set_tree(values: set<i64>) -> i64 => reduce(add_, values, 0)
 export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values, 0)
 "#,
@@ -2420,10 +2619,59 @@ export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values,
     );
     let stderr = text(&emitted.stderr);
     assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("an ordered reduction with a captured callback"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("reduce(fold_digit, values, 0)"),
+        "{stderr}"
+    );
     assert_eq!(
         stderr.matches("error[build/target.unsupported]").count(),
         6,
         "{stderr}"
+    );
+}
+
+/// RED-5 and TYPE-14: a plain seed widens to the selected nullable accumulator.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn ordered_reduction_widens_the_seed_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("ordered-nullable-accumulator");
+    let file = write(
+        &root,
+        "demo.ordered_nullable_accumulator.hgl",
+        r#"module demo.ordered_nullable_accumulator
+
+const fn combine(accumulated: i64?, member: i64?) -> i64? {
+    if accumulated == null { return member }
+    if member == null { return accumulated }
+    return accumulated + member
+}
+
+fn fold(values: list<i64?>, seed: i64) -> i64? =>
+    reduce<i64?, i64?, list<i64?>>(combine, values, seed)
+
+test nullable_accumulator_takes_a_plain_seed {
+    assert eval fold(values: [[2]], seed: [1]) == [delta<i64?>(value: 3)]
+}
+"#,
+    );
+    let tested = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&tested.stdout);
+    assert_eq!(
+        tested.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&tested.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
     );
 }
 
@@ -2513,7 +2761,8 @@ fn forwarded_packs_run_on_the_sdk() {
 
 /// FN-19 and GEN-17: a constant key reads a fitted entry, including a
 /// captured value or a connection. An absent key rejects under the shape
-/// supplied at the call.
+/// supplied at the call. TIME-1, TIME-4 and TIME-9 use that shape for a
+/// selected child endpoint and its admission.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn pack_entries_run_on_the_sdk() {
@@ -2536,8 +2785,31 @@ fn pack_entries_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 6 passed, 0 failed\nexecutable cases: 9 passed, 0 failed, 0 not run\n"
+            "rejection cases: 8 passed, 0 failed\nexecutable cases: 12 passed, 0 failed, 0 not run\n"
         ),
+        "{stdout}"
+    );
+}
+
+/// TIME-9 and GEN-7: delta and retained time reads observe the fitted
+/// pack child in the same way as the child of an ordinary input.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn pack_child_observations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("pack-child-operations");
+    let file = write(
+        &root,
+        "demo.pack_child_operations.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.pack_child_operations.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

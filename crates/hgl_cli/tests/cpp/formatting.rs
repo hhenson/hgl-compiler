@@ -99,6 +99,24 @@ test text_layout {
     assert format("{:>6.1f}", 3.0) == "   3.0"
 }
 
+# FMT-4 and OPS-6: a sign or zero flag applies to the default f64
+# text even without a field width.
+test default_float_signs {
+    assert format("{:+}", 3.0) == "+3.0"
+    assert format("{:-}", 3.0) == "3.0"
+    assert format("{: }", 3.0) == " 3.0"
+    assert format("{:0}", 3.0) == "3.0"
+    assert format("{:+}", -0.0) == "-0.0"
+    assert format("{:+}", 1.0e21) == "+1e21"
+    let infinity = 1.0 / 0.0
+    let nan = infinity - infinity
+    assert format("{:+}", nan) == "+nan"
+    assert format("{:-}", nan) == "nan"
+    assert format("{: }", nan) == " nan"
+    assert format("{:+8}", 3.0) == "    +3.0"
+    assert format("{:+.2f}", 3.0) == "+3.00"
+}
+
 const fn show_nullable<T>(value: T?) -> str => format("{}", value)
 
 # FMT-5 and GEN-7: value formatting selects the payload's conversion.
@@ -404,6 +422,7 @@ fn core_format_and_write_run_on_the_sdk() {
         "stream_bytes",
         "typed_formats",
         "text_layout",
+        "default_float_signs",
         "nullable_formats",
         "selected_converters",
         "deferred_patterns",
@@ -633,4 +652,56 @@ test pack_entry { assert entry("<{:.1f}>", 2.5) == "<2.5>" }
         8,
         "{stdout}"
     );
+}
+
+/// FMT-9: a lifted native call uses its own node's cycle clock.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn engine_time_formatting_follows_the_lifted_nodes_ticks() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("engine-time-formatting");
+    let file = write(
+        &root,
+        "demo.engine_time.hgl",
+        include_str!("../../../hgl_cpp/tests/fixtures/demo.engine_time.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.contains("executable cases: 3 passed, 0 failed, 0 not run"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("rejection cases: 5 passed, 0 failed"),
+        "{stdout}"
+    );
+}
+
+/// FMT-9 admits the graph call; FMT-6's graph-start trigger is left to
+/// the HGL graph candidate (#434), so emission must decline explicitly.
+#[test]
+fn engine_time_without_a_temporal_input_declines_without_a_cycle_context() {
+    let root = scratch("engine-time-without-cycle");
+    for (name, call) in [
+        ("no_values", r#"format("{engine_time}")"#),
+        ("scalar_value", r#"format("{engine_time} {}", 7)"#),
+    ] {
+        let source = format!(
+            "module {name}\nfn describe() -> str => {call}\ntest clock {{ assert eval describe() == [\"\"] }}\n"
+        );
+        let file = write(&root, &format!("{name}.hgl"), &source);
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        assert!(checked.status.success(), "{}", text(&checked.stderr));
+        let target = root.join(name);
+        let emitted = emit_format_program(&file, &target);
+        let stderr = text(&emitted.stderr);
+        assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+        assert!(stderr.contains("build/target.unsupported"), "{stderr}");
+        assert!(stderr.contains("{engine_time}"), "{stderr}");
+        assert!(stderr.contains("cycle context"), "{stderr}");
+        assert!(!target.exists());
+    }
 }

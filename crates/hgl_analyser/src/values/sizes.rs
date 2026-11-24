@@ -166,7 +166,7 @@ fn parts(ty: &Type) -> Vec<&Type> {
             .iter()
             .filter_map(|argument| match argument {
                 Argument::Type(ty) => Some(ty),
-                Argument::Constant(_) => None,
+                Argument::Constant(_) | Argument::NoResult => None,
             })
             .collect(),
         Type::Tuple(elements) => elements.iter().collect(),

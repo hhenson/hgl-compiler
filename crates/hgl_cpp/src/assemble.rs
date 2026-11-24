@@ -1,8 +1,8 @@
 //! Puts the pieces `emit` wrote into the target's files: for each
 //! module a header of its declarations, a types header of the types it
-//! declares where it declares one, and a unit of its definitions and
-//! tests, for each module with a test that can be run an entry unit, and
-//! for each application that can be run one too (UNIT-14). Part of the
+//! declares where it declares one, and units of its definitions and
+//! tests. It also writes an entry unit for each module with a runnable
+//! test and for each runnable application (UNIT-14). Part of the
 //! transpiler, the last stage.
 //!
 //! C++ is compiled a unit at a time and whole, so a piece is written
@@ -50,7 +50,11 @@ struct Blocks {
 /// `written`, and the form that blocks each piece of a module other
 /// than core's that is blocked by a piece it names: core's pieces are
 /// reported where the program reaches them.
-pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Diagnostic>) {
+pub(crate) fn output(
+    program: &Program,
+    written: &[Written],
+    include_tests: bool,
+) -> (Output, Vec<Diagnostic>) {
     let core = program.core();
     // What each piece a declaration or an instance is written as
     // reaches: the declaration's own, and the instance's.
@@ -92,46 +96,64 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
                 .collect(),
         })
         .collect();
-    // The instances a piece that is written reaches, through the pieces
-    // it names: each declaration, test and run statement that is clear
-    // reaches what it names. An instance that only a piece left out asks
-    // for is not written, so that it, which may not compile, does not stop
-    // its module's unit, or core's, from being built.
-    let mut reached: BTreeSet<Used> = BTreeSet::new();
-    let mut next: Vec<Used> = Vec::new();
-    for (index, module) in written.iter().enumerate() {
-        let roots = module
+    // TST-2: an application and a test built together may use different
+    // instances of a declaration. Classify the instances reached by ordinary
+    // declarations and applications before adding the test roots.
+    let split_tests = include_tests
+        && written
+            .iter()
+            .zip(&blocks)
+            .any(|(module, blocked)| module.application.is_some() && blocked.application.is_none());
+    let mut production = Vec::new();
+    let mut testing = Vec::new();
+    for (index, (module, blocked)) in written.iter().zip(&blocks).enumerate() {
+        for (declaration, (piece, blocked)) in module
             .declarations
             .iter()
-            .zip(&blocks[index].declarations)
-            .chain(module.tests.iter().zip(&blocks[index].tests))
-            .chain(
-                module
-                    .application
-                    .iter()
-                    .zip(std::iter::once(&blocks[index].application)),
-            );
-        for (piece, blocked) in roots {
-            if blocked.is_none() {
-                next.extend(piece.reach.uses.iter().cloned());
+            .zip(&blocked.declarations)
+            .enumerate()
+        {
+            let test_only = program.modules[index].declarations[declaration].test_only;
+            if blocked.is_none() && (include_tests || !test_only) {
+                let roots = if split_tests && test_only {
+                    &mut testing
+                } else {
+                    &mut production
+                };
+                roots.extend(piece.reach.uses.iter().cloned());
+            }
+        }
+        if let Some(piece) = &module.application
+            && blocked.application.is_none()
+        {
+            production.extend(piece.reach.uses.iter().cloned());
+        }
+        if include_tests {
+            for (piece, blocked) in module.tests.iter().zip(&blocked.tests) {
+                if blocked.is_none() {
+                    testing.extend(piece.reach.uses.iter().cloned());
+                }
             }
         }
     }
-    while let Some(used) = next.pop() {
-        if !reached.contains(&used) {
-            for reach in pieces(&used) {
-                next.extend(reach.uses.iter().cloned());
-            }
-            reached.insert(used);
-        }
-    }
+    let mut reached = BTreeSet::new();
+    follow_uses(production, &mut reached, pieces);
+    let production_reached = split_tests.then(|| reached.clone());
+    follow_uses(testing, &mut reached, pieces);
+    let test_only = |used: &Used| {
+        let (module, declaration, instance) = used;
+        ((!include_tests || split_tests)
+            && program.modules[*module].declarations[*declaration].test_only)
+            || (instance.is_some()
+                && production_reached
+                    .as_ref()
+                    .is_some_and(|production| !production.contains(used)))
+    };
     let mut files = Vec::new();
     let mut units = Vec::new();
-    // The unit of each module, as a position in `units`.
-    let mut unit_of: Vec<Option<usize>> = vec![None; written.len()];
-    // For each module's unit, the other modules whose functions what it
-    // holds calls: an executable that links it links theirs.
-    let mut calls_into: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); written.len()];
+    let mut unit_of = BTreeMap::new();
+    let mut dependencies = BTreeMap::new();
+    let mut test_unit_of = vec![None; written.len()];
     // For each test of each module, where its statements start in the
     // module's unit.
     let mut test_lines: Vec<Vec<Vec<(usize, Location)>>> = written
@@ -142,34 +164,38 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         let path = &program.modules[index].path;
         // A type's declaration is in the header alone; each other piece
         // that is clear has its definition in the unit.
-        let defined: Vec<&Piece> = module
+        let defined: Vec<(bool, &Piece)> = module
             .declarations
             .iter()
             .zip(&blocks[index].declarations)
+            .enumerate()
+            .map(|(of, (piece, blocked))| (test_only(&(index, of, None)), piece, blocked))
             .chain(
                 module
                     .instances
                     .iter()
                     .zip(&blocks[index].instances)
-                    .filter(|((of, suffix, _), _)| {
-                        reached.contains(&(index, *of, Some(suffix.clone())))
-                    })
-                    .map(|((_, _, piece), blocked)| (piece, blocked)),
+                    .filter_map(|((of, suffix, piece), blocked)| {
+                        let used = (index, *of, Some(suffix.clone()));
+                        reached
+                            .contains(&used)
+                            .then(|| (test_only(&used), piece, blocked))
+                    }),
             )
-            .filter(|(piece, blocked)| {
-                blocked.is_none()
+            .filter(|(test_only, piece, blocked)| {
+                (include_tests || !test_only)
+                    && blocked.is_none()
                     && !(piece.text.is_empty()
                         && piece.declaration.is_empty()
                         && piece.layout.is_none())
             })
-            .map(|(piece, _)| piece)
+            .map(|(test_only, piece, _)| (test_only, piece))
             .collect();
-        // TST-2: each in-scope test gets its own executable entry.
         let tests: Vec<(usize, &Piece)> = module
             .tests
             .iter()
             .enumerate()
-            .filter(|(test, _)| blocks[index].tests[*test].is_none())
+            .filter(|(test, _)| include_tests && blocks[index].tests[*test].is_none())
             .collect();
         // An application's run statement, where it is clear (UNIT-14).
         let application = module
@@ -179,27 +205,12 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         if defined.is_empty() && tests.is_empty() && application.is_none() {
             continue;
         }
-        // The headers of the other modules whose functions its pieces
-        // call, and of those whose enums they name.
-        let included: BTreeSet<usize> = defined
-            .iter()
-            .copied()
-            .chain(tests.iter().map(|(_, piece)| *piece))
-            .chain(application)
-            .flat_map(|piece| {
-                piece
-                    .reach
-                    .uses
-                    .iter()
-                    .map(|(module, _, _)| *module)
-                    .chain(piece.types.iter().map(|(module, _)| *module))
-            })
-            .filter(|&used| used != index)
-            .collect();
         // The module's types are in a header of their own, which its
         // header includes; its other declarations are in its header.
-        let (typed, functions): (Vec<&Piece>, Vec<&Piece>) =
-            defined.iter().copied().partition(|piece| piece.is_type);
+        let (typed, functions): (Vec<&Piece>, Vec<&Piece>) = defined
+            .iter()
+            .map(|(_, piece)| *piece)
+            .partition(|piece| piece.is_type);
         // The modules whose enums and structs its declarations name: its
         // header includes their types headers, and no other module's
         // header. An instance is written in its declaration's module
@@ -229,87 +240,95 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
                 types_header_name(&program.modules[module].path)
             ));
         }
-        let mut unit = format!("{WRITTEN}\n#include \"{}\"\n", header_name(path));
-        if defined
-            .iter()
-            .copied()
-            .chain(tests.iter().map(|(_, piece)| *piece))
-            .chain(application)
-            .any(|piece| piece.formatting)
-        {
-            unit.push_str("#include <hglrt/formatting.h>\n");
-        }
-        for &used in &included {
-            unit.push_str(&format!(
-                "#include \"{}\"\n",
-                header_name(&program.modules[used].path)
-            ));
-        }
-        calls_into[index] = included;
-        if !defined.is_empty() {
-            let namespace = module_namespace(path);
-            let declared = namespace.trim_start_matches("::");
-            header.push_str(&declarations(declared, &functions));
-            unit.push_str(&format!("\nnamespace {declared}\n{{\n"));
-            for piece in &defined {
-                if !piece.text.is_empty() {
-                    unit.push('\n');
-                    unit.push_str(&piece.text);
-                    restore_after(&mut unit, &piece.text);
-                }
-            }
-            unit.push_str(&format!("\n}}  // namespace {declared}\n"));
-        }
-        if !tests.is_empty() {
-            let namespace = test_namespace(path);
-            let declared = namespace.trim_start_matches("::");
-            unit.push_str(&format!("\nnamespace {declared}\n{{\n"));
-            for (test, piece) in &tests {
-                unit.push('\n');
-                // The line the piece starts on, counted from 1.
-                let first = unit.matches('\n').count() + 1;
-                test_lines[index][*test] = piece
-                    .statements
-                    .iter()
-                    .map(|(line, at)| (first + line, *at))
-                    .collect();
-                unit.push_str(&piece.text);
-            }
-            unit.push_str(&format!("\n}}  // namespace {declared}\n"));
-        }
-        if let Some(piece) = application {
-            let namespace = module_namespace(path);
-            let declared = namespace.trim_start_matches("::");
-            unit.push_str(&format!("\nnamespace {declared}\n{{\n\n{}", piece.text));
-            restore_after(&mut unit, &piece.text);
-            unit.push_str(&format!("\n}}  // namespace {declared}\n"));
-        }
-        unit_of[index] = Some(units.len());
-        let source = unit_path(path);
-        let header_path = header_path(path);
-        files.push(File {
-            path: header_path.clone(),
+        let declared = module_namespace(path);
+        header.push_str(&declarations(declared.trim_start_matches("::"), &functions));
+        let header = File {
+            path: header_path(path),
             text: header,
-        });
-        files.push(File {
-            path: source.clone(),
-            text: unit,
-        });
-        units.push(Unit {
-            module: path.clone(),
-            source,
-            header: header_path,
-        });
+        };
+        let module_header = header.path.clone();
+        files.push(header);
+
+        let mut production = Vec::new();
+        let mut testing = Vec::new();
+        for (test_only, piece) in defined {
+            if test_only {
+                testing.push(piece);
+            } else {
+                production.push(piece);
+            }
+        }
+        let production = UnitPieces {
+            definitions: &production,
+            tests: if split_tests { &[] } else { &tests },
+            application,
+        };
+        let testing = UnitPieces {
+            definitions: &testing,
+            tests: if split_tests { &tests } else { &[] },
+            application: None,
+        };
+        for (tests_only, content) in [(false, production), (true, testing)] {
+            let owner = UnitOwner {
+                module: index,
+                tests_only,
+            };
+            if content.pieces().next().is_none() {
+                continue;
+            }
+            let calls: BTreeSet<_> = content
+                .pieces()
+                .flat_map(|piece| {
+                    piece
+                        .reach
+                        .uses
+                        .iter()
+                        .map(|used| UnitOwner {
+                            module: used.0,
+                            tests_only: test_only(used),
+                        })
+                        .chain(piece.types.iter().map(|(module, declaration)| UnitOwner {
+                            module: *module,
+                            tests_only: test_only(&(*module, *declaration, None)),
+                        }))
+                })
+                .filter(|used| *used != owner)
+                .collect();
+            let included = calls
+                .iter()
+                .map(|used| used.module)
+                .filter(|&used| used != index)
+                .collect();
+            dependencies.insert(owner, calls);
+            let source = if tests_only {
+                format!("modules/{}.cpp", crate::path_stem("test-mod-", path))
+            } else {
+                unit_path(path)
+            };
+            let text = unit_text(program, index, &content, &included, &mut test_lines[index]);
+            unit_of.insert(owner, units.len());
+            if !content.tests.is_empty() {
+                test_unit_of[index] = Some(units.len());
+            }
+            files.push(File {
+                path: source.clone(),
+                text,
+            });
+            units.push(Unit {
+                module: path.clone(),
+                test_only: tests_only,
+                source,
+                header: module_header.clone(),
+            });
+        }
     }
 
-    // One executable for each module with a test that can be run,
-    // linked from its module's unit and every unit that one calls into,
-    // through the units those call into: a unit holds every function of
-    // its module that is written, which its tests may not call, and each
-    // is linked whole.
+    // One executable for each module with a runnable test, linked from
+    // its module's units and their transitive dependencies. The linker takes
+    // each unit whole, so every function needs what it calls.
     let mut executables = Vec::new();
     let mut tests = Vec::new();
-    for (index, module) in written.iter().enumerate() {
+    for (index, module) in written.iter().enumerate().filter(|_| include_tests) {
         let declared = &program.modules[index];
         let clear: Vec<(usize, &Piece)> = module
             .tests
@@ -336,13 +355,17 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         if clear.is_empty() {
             continue;
         }
-        let mut reached: BTreeSet<usize> = BTreeSet::new();
-        let mut next = vec![index];
-        while let Some(module) = next.pop() {
-            if reached.insert(module) {
-                next.extend(&calls_into[module]);
-            }
-        }
+        let roots = [
+            UnitOwner {
+                module: index,
+                tests_only: false,
+            },
+            UnitOwner {
+                module: index,
+                tests_only: split_tests,
+            },
+        ];
+        let links = link_units(roots.to_vec(), &dependencies, &unit_of);
         let source = entry_path(&declared.path);
         files.push(File {
             path: source.clone(),
@@ -352,10 +375,7 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             module: declared.path.clone(),
             source,
             stem: test_stem(&declared.path),
-            units: reached
-                .iter()
-                .filter_map(|&module| unit_of[module])
-                .collect(),
+            units: links,
         });
     }
 
@@ -377,22 +397,19 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             units: Vec::new(),
         };
         if application.blocked.is_none() {
-            let mut reached: BTreeSet<usize> = BTreeSet::new();
-            let mut next = vec![index];
-            while let Some(module) = next.pop() {
-                if reached.insert(module) {
-                    next.extend(&calls_into[module]);
-                }
-            }
             files.push(File {
                 path: application_path(&declared.path),
                 text: application_entry(program, index),
             });
             application.source = Some(application_path(&declared.path));
-            application.units = reached
-                .iter()
-                .filter_map(|&module| unit_of[module])
-                .collect();
+            application.units = link_units(
+                vec![UnitOwner {
+                    module: index,
+                    tests_only: false,
+                }],
+                &dependencies,
+                &unit_of,
+            );
         }
         applications.push(application);
     }
@@ -408,7 +425,13 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             .declarations
             .iter()
             .zip(&blocks[index].declarations)
-            .chain(module.tests.iter().zip(&blocks[index].tests))
+            .chain(
+                module
+                    .tests
+                    .iter()
+                    .zip(&blocks[index].tests)
+                    .filter(|_| include_tests),
+            )
             .chain(module.application.iter().zip([&blocks[index].application]))
             .chain(
                 module
@@ -427,9 +450,15 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
     // No macro of a platform's headers takes a name the files write.
     // The lines a unit's block adds move each test's statements in it.
     let names = program_names(program);
-    let unit_sources: BTreeMap<_, _> = units
-        .iter()
-        .map(|unit| (unit.module.as_str(), unit.source.as_str()))
+    let unit_sources: BTreeMap<_, _> = test_unit_of
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, unit)| {
+            Some((
+                program.modules[index].path.as_str(),
+                units[unit?].source.as_str(),
+            ))
+        })
         .collect();
     for file in &mut files {
         let (text, added) = undefined(&file.text, &names);
@@ -451,6 +480,124 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         applications,
     };
     (output, blocking)
+}
+
+/// The C++ object that owns definitions for one module and view.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct UnitOwner {
+    module: usize,
+    tests_only: bool,
+}
+
+/// Each kind of piece written into one translation unit.
+struct UnitPieces<'a> {
+    definitions: &'a [&'a Piece],
+    tests: &'a [(usize, &'a Piece)],
+    application: Option<&'a Piece>,
+}
+
+impl<'a> UnitPieces<'a> {
+    fn pieces(&self) -> impl Iterator<Item = &'a Piece> + '_ {
+        self.definitions
+            .iter()
+            .copied()
+            .chain(self.tests.iter().map(|(_, piece)| *piece))
+            .chain(self.application)
+    }
+}
+
+fn follow_uses<'a>(
+    mut pending: Vec<Used>,
+    reached: &mut BTreeSet<Used>,
+    pieces: impl Fn(&Used) -> Vec<&'a Reach>,
+) {
+    while let Some(used) = pending.pop() {
+        if !reached.contains(&used) {
+            for reach in pieces(&used) {
+                pending.extend(reach.uses.iter().cloned());
+            }
+            reached.insert(used);
+        }
+    }
+}
+
+/// Follow the whole objects an executable links, in stable module order.
+fn link_units(
+    mut pending: Vec<UnitOwner>,
+    dependencies: &BTreeMap<UnitOwner, BTreeSet<UnitOwner>>,
+    unit_of: &BTreeMap<UnitOwner, usize>,
+) -> Vec<usize> {
+    let mut reached = BTreeSet::new();
+    while let Some(unit) = pending.pop() {
+        if reached.insert(unit)
+            && let Some(calls) = dependencies.get(&unit)
+        {
+            pending.extend(calls);
+        }
+    }
+    reached
+        .iter()
+        .filter_map(|unit| unit_of.get(unit).copied())
+        .collect()
+}
+
+/// Write definitions and keep statement offsets relative to the object
+/// that now holds the test (TST-15).
+fn unit_text(
+    program: &Program,
+    index: usize,
+    content: &UnitPieces<'_>,
+    included: &BTreeSet<usize>,
+    test_lines: &mut [Vec<(usize, Location)>],
+) -> String {
+    let path = &program.modules[index].path;
+    let mut unit = format!("{WRITTEN}\n#include \"{}\"\n", header_name(path));
+    if content.pieces().any(|piece| piece.formatting) {
+        unit.push_str("#include <hglrt/formatting.h>\n");
+    }
+    for &used in included {
+        unit.push_str(&format!(
+            "#include \"{}\"\n",
+            header_name(&program.modules[used].path)
+        ));
+    }
+    if !content.definitions.is_empty() {
+        let namespace = module_namespace(path);
+        let declared = namespace.trim_start_matches("::");
+        unit.push_str(&format!("\nnamespace {declared}\n{{\n"));
+        for piece in content.definitions {
+            if !piece.text.is_empty() {
+                unit.push('\n');
+                unit.push_str(&piece.text);
+                restore_after(&mut unit, &piece.text);
+            }
+        }
+        unit.push_str(&format!("\n}}  // namespace {declared}\n"));
+    }
+    if !content.tests.is_empty() {
+        let namespace = test_namespace(path);
+        let declared = namespace.trim_start_matches("::");
+        unit.push_str(&format!("\nnamespace {declared}\n{{\n"));
+        for (test, piece) in content.tests {
+            unit.push('\n');
+            let first = unit.matches('\n').count() + 1;
+            test_lines[*test] = piece
+                .statements
+                .iter()
+                .map(|(line, at)| (first + line, *at))
+                .collect();
+            unit.push_str(&piece.text);
+        }
+        unit.push_str(&format!("\n}}  // namespace {declared}\n"));
+    }
+    if let Some(piece) = content.application {
+        let namespace = module_namespace(path);
+        let declared = namespace.trim_start_matches("::");
+        unit.push_str(&format!("\nnamespace {declared}\n{{\n\n{}", piece.text));
+        restore_after(&mut unit, &piece.text);
+        unit.push_str(&format!("\n}}  // namespace {declared}\n"));
+    }
+    unit
 }
 
 /// The types header of module `index`, of the pieces `typed` that

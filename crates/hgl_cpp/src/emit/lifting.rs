@@ -256,6 +256,12 @@ impl Emitter<'_> {
                 |instance| instance.parameter(argument),
             )
         };
+        let original_parameter = |index| {
+            native_pack.as_ref().map_or_else(
+                || concrete.map_or(index, |instance| instance.original_parameter(index)),
+                |pack| pack.original_parameter(index),
+            )
+        };
         let signature = native_pack.as_ref().map_or_else(
             || concrete.map_or(declared, |instance| &instance.signature),
             |pack| &pack.signature,
@@ -334,8 +340,7 @@ impl Emitter<'_> {
                     // An input the body reads is its view, of the input's
                     // type; a fallback's binding is a value of the read's.
                     let mut local = ty.clone();
-                    let declared =
-                        concrete.map_or(index, |instance| instance.original_parameter(index));
+                    let declared = original_parameter(index);
                     match left_out(program, callee, declared, parameter) {
                         // FN-11: "Every other input must satisfy ordinary
                         // `valid(input)`": hgraph evaluates the node only
@@ -500,7 +505,7 @@ impl Emitter<'_> {
             if parameter.pack.is_some() {
                 return self.missing(value.at, "a lifted call that leaves out a pack");
             }
-            let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
+            let declared = original_parameter(index);
             let (configured, ty) = match left_out(program, callee, declared, parameter) {
                 Some(LeftOut::Null) => continue,
                 Some(LeftOut::Default(default)) if matches!(default.ty, Type::Nullable(_)) => {
@@ -582,7 +587,9 @@ impl Emitter<'_> {
                 callee: callee.clone(),
                 arguments: synthetic,
                 form: *form,
-                text: text.as_ref().filter(|text| text.pattern.is_none()).cloned(),
+                // FMT-9: the checked native format plan belongs to this
+                // call, now written inside the lifted node's eval.
+                text: text.clone(),
                 braced: Vec::new(),
                 lifted: false,
             },

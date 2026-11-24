@@ -680,7 +680,7 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
         "    d: dict<str, rolling_window<f64, 5>>, e: list<atomic<Quote>>, f: delta<rolling_window<f64, 5>>,\n",
         "    g: set<tuple<i64, list<str>>>, h: atomic<dict<str, list<Quote>>>) {}\n",
         "fn sets(a: set<signal>, b: set<rolling_window<f64, 5>>, c: set<atomic<Quote>>) {}\n",
-        "fn keys(a: dict<signal, f64>, b: dict<atomic<Quote>, f64>) {}\n",
+        "fn maps(a: dict<signal, f64>, b: dict<atomic<Quote>, f64>) {}\n",
         "fn windows(a: rolling_window<signal, 5>, b: rolling_window<rolling_window<f64, 5>, 5>) {}\n",
         "fn payloads(a: atomic<signal>, b: atomic<atomic<Quote>>) {}\n",
         "fn results(a: result<signal, error>, b: result<f64, rolling_window<f64, 5>>) {}\n",
@@ -871,7 +871,7 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
 fn a_key_is_never_null() {
     let checked = module(concat!(
         "fn good(a: set<str>, b: dict<str, f64?>, c: list<str?>, d: dict<str, set<i64>>?) {}\n",
-        "fn keys(a: set<str?>, b: dict<str?, f64>, c: list<set<i64?>>, d: dict<tuple<i64, str>?, f64>) {}\n",
+        "fn maps(a: set<str?>, b: dict<str?, f64>, c: list<set<i64?>>, d: dict<tuple<i64, str>?, f64>) {}\n",
     ));
     assert_eq!(
         checked.summary(),

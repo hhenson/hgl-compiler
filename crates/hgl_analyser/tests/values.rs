@@ -4991,3 +4991,82 @@ fn temporal_pack_endpoints_keep_shape_and_lifecycle_checks() {
         checked.report,
     );
 }
+
+/// GEN-7, TIME-4 and TIME-5: the declaration checks an unfitted entry's
+/// admission even when there are no calls to read its body again.
+#[test]
+fn an_uncalled_pack_declaration_checks_a_projected_entrys_admission() {
+    for (source, rule) in [
+        (
+            r#"fn read<...As>(items: ...As) -> i64 {
+    when valid([]) { return items[0][1] }
+}"#,
+            "TIME-4",
+        ),
+        (
+            r#"fn read<...As>(items: ...As) -> i64 {
+    state seen: i64 = 0
+    when valid([]) { return 1 }
+    stop { seen = items[0][1] }
+}"#,
+            "TIME-5",
+        ),
+        (
+            r#"fn read<...As>(items: ...As) -> i64 {
+    when modified(items[1]) && valid([]) { return items[0].bid }
+}"#,
+            "TIME-4",
+        ),
+        (
+            r#"fn read<...As>(items: ...As) -> i64 {
+    when valid([]) {
+        if modified(items[1][0]) { return items[0][0] }
+    }
+}"#,
+            "TIME-4",
+        ),
+    ] {
+        let checked = module(source);
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, "phase/payload.unguarded");
+        assert!(checked.report.contains(rule), "{}", checked.report);
+        assert!(checked.report.contains("`items[0]`"), "{}", checked.report);
+    }
+}
+
+/// TIME-1, TIME-4, TIME-9 and GEN-7: the grouped body guard and the
+/// nested collection guard survive until each entry has a shape.
+#[test]
+fn guards_on_unfitted_pack_children_admit_the_fitted_reads() {
+    let checked = module(
+        r#"fn read<...As>(trigger: bool, items: ...As) -> i64 {
+    when modified(trigger) && valid([]) {
+        if modified((items[0])[0]) { return (items[0])[0] }
+    }
+}
+fn read_list(trigger: bool, values: list<i64>) -> i64 => read(trigger, values)
+
+fn nested<...As>(items: ...As) -> i64 {
+    when all_valid(items[0][0]) && valid([]) { return items[0][0][0] }
+}
+fn read_nested(values: list<list<i64>>) -> i64 => nested(values)"#,
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// TIME-5: even before fitting, `start` gives no input's child to a guard.
+#[test]
+fn a_deferred_pack_child_guard_in_start_reports_lifecycle() {
+    let checked = module(
+        r#"fn read<...As>(items: ...As) -> i64 {
+    start { let ready = valid(items[0][0]) }
+    when { return 1 }
+}"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:25 phase/input.lifecycle TIME-5"],
+        "{}",
+        checked.report
+    );
+}

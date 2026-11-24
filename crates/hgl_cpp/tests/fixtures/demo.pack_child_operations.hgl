@@ -1,0 +1,55 @@
+module demo.pack_child_operations
+
+# TIME-1, TIME-9 and GEN-7: the fitted pack supplies the endpoint and
+# delta type. Its sibling's update does not admit this child.
+fn packed_delta<...As>(items: ...As) -> i64 {
+    when modified(items[0][0]) { return delta_value(items[0][0]) }
+}
+
+fn child_delta(items: list<i64>) -> i64 => packed_delta(items)
+
+fn ordinary_delta(items: list<i64>) -> i64 {
+    when modified(items[0]) { return delta_value(items[0]) }
+}
+
+test packed_delta_reads_only_the_selected_child {
+    assert eval child_delta([
+        delta<list<i64>>(size_modified: 2, updated: [1: 7]),
+        delta<list<i64>>(updated: [0: 9]),
+    ]) == [_, 9]
+    assert eval ordinary_delta([
+        delta<list<i64>>(size_modified: 2, updated: [1: 7]),
+        delta<list<i64>>(updated: [0: 9]),
+    ]) == [_, 9]
+}
+
+# TIME-1, TIME-9 and END-6: metadata can observe an invalid child and
+# retains that child's last publication time through a sibling update.
+struct Quote {
+    bid: i64
+    ask: i64
+}
+
+fn packed_time<...As>(sample: bool, items: ...{As}) -> datetime? {
+    when modified(sample) && valid([]) { return last_modified(items["quote"].bid) }
+}
+
+fn child_time(sample: bool, quote: Quote) -> datetime? => packed_time(sample, quote: quote)
+
+fn ordinary_time(sample: bool, quote: Quote) -> datetime? {
+    when modified(sample) && valid([]) { return last_modified(quote.bid) }
+}
+
+test packed_timestamp_keeps_the_selected_child_time {
+    let t = earliest_start
+    assert eval child_time(sample: [true, true, true], quote: [
+        delta<Quote>(ask: 7),
+        delta<Quote>(bid: 9),
+        delta<Quote>(ask: 8),
+    ]) == [null, t + 1us, t + 1us]
+    assert eval ordinary_time(sample: [true, true, true], quote: [
+        delta<Quote>(ask: 7),
+        delta<Quote>(bid: 9),
+        delta<Quote>(ask: 8),
+    ]) == [null, t + 1us, t + 1us]
+}

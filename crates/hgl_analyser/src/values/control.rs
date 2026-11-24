@@ -153,6 +153,22 @@ pub(super) fn iteration_types(ty: &Type, names: usize) -> Option<Vec<&Type>> {
     }
 }
 
+/// How a flow expression's result is used.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ValueUse {
+    /// A statement or the tail of a function with no result (FN-7).
+    Discarded,
+    Required,
+    /// The inferred tail of a callback can give no result (FN-17).
+    Inferred,
+}
+
+impl ValueUse {
+    pub(super) fn is_used(self) -> bool {
+        self != Self::Discarded
+    }
+}
+
 /// What a block or an `if` comes to.
 ///
 /// `#[derive(Clone)]` asks the compiler to write the code that copies
@@ -206,29 +222,35 @@ impl<'a> Typer<'a> {
         (statements, last)
     }
 
-    /// An expression that may be a block or an `if`, with what it comes
-    /// to. Any other expression has its value. `used` is false when the
-    /// value is dropped: a statement, or the last expression of a
-    /// function that declares no result (FN-7).
+    /// An expression that may be a block or an `if`, with what it comes to.
     pub(super) fn flow(
         &mut self,
         node: &SyntaxNode,
         expected: Option<&Type>,
-        used: bool,
+        value_use: ValueUse,
     ) -> (Expr, Outcome) {
         // "Parentheses select grouping" (EXPR-1).
         let node = &ungrouped(node.clone());
         // SOURCE-4: a block or an `if` whose value is used is a value
         // expression, and a `yield` inside it is reported.
-        let valued = used && matches!(node.kind(), SyntaxKind::Block | SyntaxKind::IfExpr);
+        let valued =
+            value_use.is_used() && matches!(node.kind(), SyntaxKind::Block | SyntaxKind::IfExpr);
         self.valued += u32::from(valued);
         let read = match node.kind() {
-            SyntaxKind::Block => self.block(node, expected, used),
-            SyntaxKind::IfExpr => self.conditional(node, expected, used),
+            SyntaxKind::Block => self.block(node, expected, value_use),
+            SyntaxKind::IfExpr => self.conditional(node, expected, value_use),
             _ => {
-                let value = self.expression_in_flow(node, expected, used);
-                let ty = value.ty.clone();
-                (value, Outcome::Value(ty))
+                let value = self.expression_in_flow(node, expected, value_use);
+                let outcome = if value_use == ValueUse::Inferred
+                    && value.ty == Type::Unknown
+                    && let ExprKind::Call { callee, .. } = &value.kind
+                    && self.call_has_no_result(callee)
+                {
+                    Outcome::Nothing
+                } else {
+                    Outcome::Value(value.ty.clone())
+                };
+                (value, outcome)
             }
         };
         self.valued -= u32::from(valued);
@@ -241,12 +263,17 @@ impl<'a> Typer<'a> {
     /// Where the place says what it expects, the value is checked
     /// against that here, where it is written; the block is then of the
     /// type expected and is not reported again.
-    fn block(&mut self, node: &SyntaxNode, expected: Option<&Type>, used: bool) -> (Expr, Outcome) {
+    fn block(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        value_use: ValueUse,
+    ) -> (Expr, Outcome) {
         let at = self.at(node);
         // ERR-12: what a null test proves inside the block holds to its
         // end.
         let frame = self.present.len();
-        let (expression, outcome) = self.block_read(node, expected, used, at);
+        let (expression, outcome) = self.block_read(node, expected, value_use, at);
         self.present.truncate(frame);
         (expression, outcome)
     }
@@ -256,7 +283,7 @@ impl<'a> Typer<'a> {
         &mut self,
         node: &SyntaxNode,
         expected: Option<&Type>,
-        used: bool,
+        value_use: ValueUse,
         at: Location,
     ) -> (Expr, Outcome) {
         let (statements, last) = self.block_head(node);
@@ -264,11 +291,11 @@ impl<'a> Typer<'a> {
             // CTRL-5: what follows a `return` is not reached. It is read
             // for what it reports itself, and is not the block's value.
             Some(last) if self.returned => {
-                let (value, _) = self.flow(&last, Some(&Type::Unknown), false);
+                let (value, _) = self.flow(&last, Some(&Type::Unknown), ValueUse::Discarded);
                 (Some(Box::new(value)), Outcome::Returns)
             }
             Some(last) => {
-                let (value, outcome) = self.flow(&last, expected, used);
+                let (value, outcome) = self.flow(&last, expected, value_use);
                 match (outcome, expected) {
                     (Outcome::Value(_), Some(expected)) if !open(expected) => {
                         let reported = self.diagnostics.len();
@@ -359,7 +386,7 @@ impl<'a> Typer<'a> {
         &mut self,
         node: &SyntaxNode,
         expected: Option<&Type>,
-        used: bool,
+        value_use: ValueUse,
         (before, before_returned, proved): (&[bool], bool, &[Fact]),
     ) -> Branch {
         self.assigned = restored(before, self.locals.len(), true);
@@ -368,7 +395,7 @@ impl<'a> Typer<'a> {
         // further.
         let frame = self.present.len();
         self.present.extend_from_slice(proved);
-        let (value, outcome) = self.flow(node, expected, used);
+        let (value, outcome) = self.flow(node, expected, value_use);
         self.present.truncate(frame);
         Branch {
             value,
@@ -395,7 +422,7 @@ impl<'a> Typer<'a> {
         &mut self,
         node: &SyntaxNode,
         expected: Option<&Type>,
-        used: bool,
+        value_use: ValueUse,
     ) -> (Expr, Outcome) {
         let at = self.at(node);
         let mut parts = node.children();
@@ -415,12 +442,12 @@ impl<'a> Typer<'a> {
             // CTRL-16: a constant condition in a concrete pack pass
             // composes only the selected branch.
             if selected {
-                return self.flow(&then, expected, used);
+                return self.flow(&then, expected, value_use);
             }
             if let Some(otherwise) = otherwise {
-                return self.flow(&otherwise, expected, used);
+                return self.flow(&otherwise, expected, value_use);
             }
-            let (kind, outcome) = if used {
+            let (kind, outcome) = if value_use.is_used() {
                 (ExprKind::Literal(hir::Value::Null), Outcome::Null)
             } else {
                 (
@@ -481,21 +508,21 @@ impl<'a> Typer<'a> {
         };
         let by_place = |branch: &SyntaxNode| branch_takes_its_type(branch);
         let (mut then, mut other) = match &otherwise {
-            None => (self.branch(&then, expected, used, in_then), None),
+            None => (self.branch(&then, expected, value_use, in_then), None),
             Some(otherwise) if !told && by_place(&then) && !by_place(otherwise) => {
-                let other = self.branch(otherwise, expected, used, in_else);
+                let other = self.branch(otherwise, expected, value_use, in_else);
                 let hint = from_other(&other.outcome, &then);
-                let then = self.branch(&then, hint.as_ref().or(expected), used, in_then);
+                let then = self.branch(&then, hint.as_ref().or(expected), value_use, in_then);
                 (then, Some(other))
             }
             Some(otherwise) => {
-                let then = self.branch(&then, expected, used, in_then);
+                let then = self.branch(&then, expected, value_use, in_then);
                 let hint = if !told && by_place(otherwise) {
                     from_other(&then.outcome, otherwise)
                 } else {
                     None
                 };
-                let other = self.branch(otherwise, hint.as_ref().or(expected), used, in_else);
+                let other = self.branch(otherwise, hint.as_ref().or(expected), value_use, in_else);
                 (then, Some(other))
             }
         };
@@ -568,7 +595,7 @@ impl<'a> Typer<'a> {
                     // CTRL-10 gives the one type to "an `if` whose value
                     // is used". One whose value is dropped has branches
                     // of any types.
-                    _ if !used => Type::Unknown,
+                    _ if !value_use.is_used() => Type::Unknown,
                     (_, Some(other)) => self.one_type(&mut then.value, &mut other.value),
                     (_, None) => then.value.ty.clone(),
                 };
@@ -607,7 +634,7 @@ impl<'a> Typer<'a> {
         // CTRL-10: record the surviving branch from the same outcomes
         // that decide the source's type. A dead tail is no branch value.
         let inference = match (
-            used,
+            value_use.is_used(),
             &then.outcome,
             other.as_ref().map(|other| &other.outcome),
         ) {

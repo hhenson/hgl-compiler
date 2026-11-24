@@ -1084,6 +1084,7 @@ impl ForwardingInstance {
                 Argument::Type(ty) => {
                     known(ty) || type_packs.iter().any(|pack| pack.parameter == index)
                 }
+                Argument::NoResult => true,
                 Argument::Constant(constant) => !matches!(
                     constant.value,
                     crate::ConstantValue::Unknown

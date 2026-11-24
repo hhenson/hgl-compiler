@@ -270,6 +270,8 @@ pub struct FunctionType {
     pub named_pack: Option<ReflectedPack>,
     /// The output, if the function gives one.
     pub result: Option<Type>,
+    /// GEN-1: the result is a generic parameter used only in result positions.
+    pub result_admits_none: bool,
     /// True when the output designates a reference (FN-16).
     pub reference: bool,
 }
@@ -380,6 +382,7 @@ impl Type {
             Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {
                 Argument::Type(argument) => part(argument),
                 Argument::Constant(argument) => constant(argument),
+                Argument::NoResult => false,
             }),
             Type::Tuple(elements) => elements.iter().any(part),
             Type::List { element, size } => size.as_ref().is_some_and(constant) || part(element),
@@ -571,13 +574,15 @@ impl Type {
     }
 }
 
-/// One generic argument: a type, or a constant.
+/// One generic argument: a type, a constant, or an inferred absence of a result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Argument {
     /// `i64` in `Box<i64>`.
     Type(Type),
     /// `3` in `Matrix<3, 4>`.
     Constant(Constant),
+    /// GEN-1: a result-only type parameter bound by a callback with no result.
+    NoResult,
 }
 
 /// A constant written inside a type: a list's size, a window's size, a
@@ -767,6 +772,7 @@ impl fmt::Display for Argument {
         match self {
             Argument::Type(argument) => write!(f, "{argument}"),
             Argument::Constant(argument) => write!(f, "{argument}"),
+            Argument::NoResult => write!(f, "none"),
         }
     }
 }
@@ -926,6 +932,24 @@ pub struct Signature {
 }
 
 impl Signature {
+    /// The declared result, unless the call binds its result-only
+    /// generic to the absence of a result (GEN-1).
+    pub fn result_at_call(&self, arguments: &[Argument]) -> Option<&Type> {
+        let result = self.result.as_ref()?;
+        if let Type::Parameter { at, .. } = result
+            && self
+                .generics
+                .iter()
+                .zip(arguments)
+                .any(|(generic, argument)| {
+                    generic.at == *at && matches!(argument, Argument::NoResult)
+                })
+        {
+            return None;
+        }
+        Some(result)
+    }
+
     /// Maps each parameter of this operator to the candidate's index, in
     /// the operator's order. Configuration parameters match by name in
     /// the braces (FN-18); the ordinary parameters match in order
@@ -1027,6 +1051,8 @@ pub struct GenericParameter {
     /// Its signature uses this otherwise untyped parameter as a list's
     /// whole size. A read in the body is an `i64` constant (GEN-7, TYPE-10).
     pub inferred_list_size: bool,
+    /// GEN-1: every occurrence in the signature is a result position.
+    pub result_only: bool,
 }
 
 /// What a generic parameter is declared as (GEN-13).

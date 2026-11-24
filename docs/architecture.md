@@ -1795,7 +1795,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 | Part | Where | What it does |
 | --- | --- | --- |
 | Emitter | `crates/hgl_cpp/src/emit.rs` and `emit/` by concern: `names`, `types`, `composites`, `values`, `statements`, `expressions`, `calls`, `nodes`, `graphs`, `sources`, `tests`, `apps`; the temporal forms through the dispatch point, `forms` ("Temporal forms: what a construct lane reads" below), and its families `scalars`, `endpoints`, `nodes`, `sources`, `graphs`, `tests`, `windows`, `references`, `apps`, `scheduling`, `activity`, `lifting`, `control`, `nullables`, `structs`, `keyed`, `lists` | Writes each declaration, instance, named test and application's run statement as a piece: a prototype for the module's header, a definition for its unit, the functions it calls, and the first form in it not written |
-| Assembly | `crates/hgl_cpp/src/assemble.rs` | Leaves out each piece that is not written or reaches one that is not, and each instance that no piece it writes reaches (one only a piece left out asks for, an eval's `record` of a type not written, so that it stops no other module's unit, core's among them), puts the rest into each module's types header, header and unit, and writes an entry unit for each module with a test that can be run and for each application that can be |
+| Assembly | `crates/hgl_cpp/src/assemble.rs` | Keeps the pieces the target can write and the generic instances they reach. Writes the module's declarations and types headers, its definition units and the runnable entry units. A mixed build separates test definitions into `test-mod-<module>.cpp` units |
 | Runtime library | `crates/hgl_cpp/src/runtime.rs`, `build.rs` | Carries `runtime/cpp` in `hgl`, and reads from its headers which of core's natives it defines |
 | Build driver | `crates/hgl_cli/src/cpp.rs` and `cpp/` | Finds the toolchain, prepares it once, builds a program in a workspace kept between runs, runs the executables and reads their results |
 
@@ -2223,12 +2223,12 @@ the tools started by the driver receive a termination signal when `hgl`
 dies. On macOS CMake closes extra descriptors when starting Ninja, so a
 launcher restores the lock descriptor from stdin immediately before Ninja.
 
-`hgl build ROOT...` checks the program, writes the generated files
-and builds its units and application executables. `--tests` builds a
-test executable for each module with tests. The command reports the
-workspace and artifacts. `--format json` reports a versioned object
-with `workspace`, `target`, `units`, `applications`, `tests` and
-`reused`.
+`hgl build ROOT...` checks the program, writes production files and builds
+its production units and application executables. `--tests` includes test
+definitions and builds a test executable for each module with runnable
+tests. `--format json` reports a versioned object with `workspace`, `target`,
+`units`, `applications`, `tests` and `reused`. A module unit uses its HGL
+path in `units`, such as `p21.a`. A separate test unit uses `test:p21.a`.
 
 `hgl build --compile-commands` writes `compile_commands.json` in the
 workspace using `ninja -t compdb` for its module and entry rules.
@@ -2249,15 +2249,18 @@ to verify incremental outputs when the build is retried. Ninja receives the
 outputs that still match those digests and rebuilds unverified outputs.
 An ordinary build or run checks rejection owners as source. When a
 test build omitted those owners, its stamp covers test commands.
+A build selects a manifest for its requested inventory. An application
+run can reuse its verified executable from a mixed build.
 
 The driver writes each generated file and `build.ninja` where its
 contents change. Ninja compiles each module unit with the precompiled
-header. A test entry uses the light host header (`hglrt/host.h`) and
-each executable links its entry, module unit and the units it calls
-into. A unit is linked whole.
+header. A test entry uses the light host header (`hglrt/host.h`). A test
+executable links its entry, its module's definition and test units where
+present, and their transitive dependencies. An application executable links
+its entry and its reachable production units. A unit is linked whole.
 Executables run side by side. File stems replace each dot of a module
 or application path with a hyphen and mark folded uppercase letters
-with `+`. The `mod-`, `type-`, `test-` and `app-` prefixes
+with `+`. The `mod-`, `type-`, `test-mod-`, `test-` and `app-` prefixes
 distinguish artifact roles. `tm.pricing.app` and `tm.Pricing.App`
 give `bin/test-tm-pricing-app` and `bin/test-tm-+pricing-+app`
 on macOS. Reports keep the original HGL paths.
@@ -2394,6 +2397,8 @@ fails where a public header brings it in.
 | `conversions.h` | Every `convert` of core's: those that cannot fail, and those that can under `invalid`; core's `Rounding` and `InvalidPolicy` | OPS-4, OPS-6 to OPS-8 |
 | `tenors.h` | Core's natives of `tenor`, which is hgraph's `Tenor` (counts and form alone): its arithmetic, order and text, and the parts core's calendar candidates use, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-9 |
 | `lists.h` | `append`, `extend` | LIST-1 to LIST-3 |
+| `key_sets.h` | Keys of a dictionary value and hgraph's temporal dictionary-membership projection | SET-1 |
+| `ordered_reduce.h` | An ordered growing-list fold built from a required seed, a compiled combiner and a member-validity guard | RED-2, RED-5 |
 | `collections.h` | `set<K>`, `dict<K, V>`; a key's hash, alike for keys that are `==`; `entry_at`, `entry`, core's `get`; `set_delta`, `dict_delta`, a list's delta's properties as HGL's; `fields<S>`, `held_value`, `held_as`, `parents<S>`, `inherits`; `enum_member` | TYPE-3, TYPE-7, TYPE-14, TYPE-16, EXPR-3, ERR-6, OPS-2 |
 | `nullables.h` | A nullable scalar's temporal form, `TS<Optional<T>>`: its payload read checked, `nullable_value`, `nullable_payload`; `publish_nullable`; a `std::optional<T>` registered with hgraph as an atomic | TYPE-14, TYPE-15, TIME-1, TIME-7 |
 | `structs.h` | A struct's (`NativeTSB`, `NominalTSB`), a tuple's (`UnNamedTSB`) and an atomic struct's temporal forms: `child`, `field_port`, `whole_value`, `publish`, their `endpoint_read` (delta, `all_valid` one level deep with an optional child aside, the value held), `atomic_field`, a trace's cell of a struct published as its change from what each field held (`testing::detail::Publisher`), an atomic struct's whole (`whole_publication`), and a struct's name and text (`value_form`); a struct and a tuple as a part of another form, read whole and published (`whole`, `publisher`), and each part of one through its own form; `list_value`, the value schema a struct's nominal bundle holds a list field as; `atomic_trace<S>`, what a trace of an atomic struct is of, whose cell, the whole struct, is its delta, and its recording compared with a trace of the struct's whole values (`difference`) | TYPE-9, TYPE-16, TIME-1, TIME-7, TIME-9, EXPR-7, TST-9 |

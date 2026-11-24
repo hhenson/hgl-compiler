@@ -93,7 +93,9 @@ impl Typer<'_> {
             let Piece::Place(place) = part else {
                 continue;
             };
-            if place.name == "engine_time" {
+            // TST-3 temporarily reads an eval's target as composition,
+            // but its trace cells and const operands remain value code.
+            if place.name == "engine_time" && (!self.graph || self.value_code) {
                 missing = true;
                 self.format_fault(
                     &pattern.value,
@@ -104,7 +106,10 @@ impl Typer<'_> {
                 );
                 continue;
             }
-            let (ty, operand) = if place.name == "wall_time" {
+            // FMT-9: a native call made from a graph may ask for its
+            // cycle's evaluation time. Neither clock place consumes an
+            // argument, and both use datetime's ordinary specifiers.
+            let (ty, operand) = if matches!(place.name, "wall_time" | "engine_time") {
                 (&Type::Scalar(Scalar::Datetime), None)
             } else {
                 let position = next_position;

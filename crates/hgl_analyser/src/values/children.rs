@@ -301,6 +301,23 @@ impl Typer<'_> {
         }
     }
 
+    /// The selected pack entry whose fitted type must supply the projection's
+    /// shape (FN-19, GEN-7).
+    pub(super) fn deferred_pack_selection(&self, value: &Expr) -> Option<PackEndpointSelection> {
+        if self.pack_inputs.is_some() || value.ty != Type::Unknown {
+            return None;
+        }
+        let mut root = value;
+        while let ExprKind::Index { base, .. } | ExprKind::DeferredMember { base, .. } = &root.kind
+        {
+            root = base;
+        }
+        if root.ty != Type::Unknown || !matches!(root.kind, ExprKind::DeferredPackRead) {
+            return None;
+        }
+        self.pack_endpoint_selection(root)
+    }
+
     /// True where `value` reads a child that is a window, of an input
     /// or of `out`: a field, a position or an entry whose declared type
     /// is a window, whatever its read is typed as (TYPE-11: a list).
@@ -422,23 +439,9 @@ impl Typer<'_> {
     /// read is then the child, and that read is judged where the child
     /// is (`child_read`): the collection is not read whole.
     pub(super) fn continues_chain(&self, node: &SyntaxNode, ty: &Type) -> bool {
-        // "Parentheses select grouping" (EXPR-1): `(parts)[1]` reads a
-        // child of `parts` as `parts[1]` does.
-        let mut current = node.clone();
-        let mut parent = node.parent();
-        while let Some(grouping) = parent
-            .as_ref()
-            .filter(|parent| parent.kind() == SyntaxKind::ParenExpr)
-        {
-            current = grouping.clone();
-            parent = grouping.parent();
-        }
-        let Some(parent) = parent else {
+        let Some(parent) = following_projection(node) else {
             return false;
         };
-        if parent.children().next().as_ref() != Some(&current) {
-            return false;
-        }
         match parent.kind() {
             SyntaxKind::IndexExpr => {
                 matches!(ty, Type::List { .. } | Type::Tuple(_) | Type::Dict { .. })
@@ -625,6 +628,16 @@ impl Typer<'_> {
     /// The child is named and not read: an index in it is read, as any
     /// value is.
     pub(super) fn child_endpoint(&mut self, node: &SyntaxNode) -> Option<Option<Expr>> {
+        self.read_child_endpoint(node, false)
+    }
+
+    /// Like [`Typer::child_endpoint`], with deferral for endpoint operations
+    /// on projections whose selected entry's shape is unknown (GEN-7).
+    pub(super) fn read_child_endpoint(
+        &mut self,
+        node: &SyntaxNode,
+        defer_child: bool,
+    ) -> Option<Option<Expr>> {
         let named = super::endpoint_argument(node);
         let mut root = named.clone();
         while matches!(
@@ -646,7 +659,11 @@ impl Typer<'_> {
         let before = self.naming.replace(self.at(&root));
         let child = self.expression(&named, None);
         self.naming = before;
-        Some(self.child_of(&child).is_some().then_some(child))
+        let has_child = self.child_of(&child).is_some()
+            || (defer_child
+                && !matches!(child.kind, ExprKind::DeferredPackRead)
+                && self.deferred_pack_selection(&child).is_some());
+        Some(has_child.then_some(child))
     }
 
     /// The operation `operation`, written at `at`, on the child `given`
@@ -747,6 +764,7 @@ impl Typer<'_> {
             // END-3: "`delta_value(x)` returns what `x` published this
             // cycle, a `delta<T>` for an endpoint of T". TYPE-16:
             // "`signal`: None".
+            EndpointOperation::DeltaValue if child.ty == Type::Unknown => Type::Unknown,
             EndpointOperation::DeltaValue => {
                 if matches!(not_null(Some(&child.ty)), Some(Type::Signal)) {
                     self.diagnostics.emit(
@@ -780,7 +798,9 @@ impl Typer<'_> {
     /// it runs before any input has a value).
     pub(super) fn child_in_start(&mut self, at: Location, child: &Expr) {
         if self.hook == Some(Hook::Start)
-            && let Some(input) = self.input_of(child)
+            && let Some(input) = self
+                .input_of(child)
+                .or_else(|| self.deferred_pack_selection(child).map(|entry| entry.pack))
         {
             let name = self.locals[input].name.clone();
             self.input_lifecycle(at, &name);
@@ -789,12 +809,47 @@ impl Typer<'_> {
 
     /// The child a test of `child`, an endpoint operation's argument,
     /// proves valid, where it is named when the program is compiled.
-    pub(super) fn tested_child(&self, child: &Expr) -> Option<ChildPath> {
+    fn tested_child(&self, child: &Expr) -> Option<ChildPath> {
         match self.child_of(child)? {
             Child::Named(path) => Some(path),
             Child::Runtime => None,
         }
     }
+
+    /// A guard on a known child admits that child. A guard before fitting
+    /// defers checking reads projected from the same entry (TIME-4, GEN-7).
+    pub(super) fn child_guard_facts(
+        &self,
+        operation: EndpointOperation,
+        child: &Expr,
+    ) -> Vec<Fact> {
+        if let Some(path) = self.tested_child(child) {
+            return child_facts(operation, path);
+        }
+        if let Some(PackEndpointSelection {
+            pack,
+            key: Some(key),
+        }) = self.deferred_pack_selection(child)
+        {
+            return vec![Fact::DeferredChildGuard { pack, key }];
+        }
+        Vec::new()
+    }
+}
+
+/// The next field or index whose base is `node`, through grouping (EXPR-1).
+pub(super) fn following_projection(node: &SyntaxNode) -> Option<SyntaxNode> {
+    let mut current = node.clone();
+    let mut parent = node.parent()?;
+    while parent.kind() == SyntaxKind::ParenExpr {
+        current = parent;
+        parent = current.parent()?;
+    }
+    (matches!(
+        parent.kind(),
+        SyntaxKind::IndexExpr | SyntaxKind::MemberExpr
+    ) && parent.children().next().as_ref() == Some(&current))
+    .then_some(parent)
 }
 
 /// What a test of `valid` or `all_valid` of a child proves where it

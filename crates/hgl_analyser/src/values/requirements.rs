@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
+use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location, Severity};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
@@ -271,7 +271,7 @@ impl<'a> Typer<'a> {
                     .into_iter()
                     .map(|member| match member {
                         Argument::Type(ty) => Some(ty),
-                        Argument::Constant(_) => None,
+                        Argument::Constant(_) | Argument::NoResult => None,
                     })
                     .collect()
             }
@@ -663,6 +663,7 @@ impl<'a> Typer<'a> {
                 let member = match member {
                     Argument::Type(ty) => ty.to_string(),
                     Argument::Constant(constant) => constant.text.clone(),
+                    Argument::NoResult => "none".to_string(),
                 };
                 format!("`{parameter}` = `{member}`")
             })
@@ -747,7 +748,7 @@ impl<'a> Typer<'a> {
             // arguments. The substituted member types also set the size bound.
             let constant_at = |at| match given.iter().find(|(declared, _)| *declared == at)?.1 {
                 Argument::Constant(constant) => Some(constant.value.clone()),
-                Argument::Type(_) => None,
+                Argument::Type(_) | Argument::NoResult => None,
             };
             let projected_members = stated_members
                 .iter()
@@ -798,7 +799,7 @@ impl<'a> Typer<'a> {
                 .iter()
                 .map(|argument| match argument {
                     Argument::Type(ty) => Argument::Type(project(ty)),
-                    Argument::Constant(_) => given_in(argument, &given, &own),
+                    Argument::Constant(_) | Argument::NoResult => given_in(argument, &given, &own),
                 })
                 .collect();
             let placed_packs: Vec<_> = type_packs
@@ -2281,6 +2282,7 @@ pub(super) fn instances_hold(
     source: &IndependentSourceBodies,
     diagnostics: &mut Diagnostics,
 ) {
+    let declared_reports = diagnostics.len();
     // The generic parameters of `(module, declaration)`, by where each
     // is declared.
     let own = |(module, declaration): (usize, usize)| -> Vec<Location> {
@@ -2486,28 +2488,20 @@ pub(super) fn instances_hold(
                 .get(declaration)
                 .is_some_and(Option::is_some)
     };
-    if reaching.is_empty()
-        && !given
-            .iter()
-            .any(|made| test_body(made.callee, made.test_candidates))
-    {
-        return;
-    }
-    let tables: Vec<_> = program.modules.iter().map(super::tables).collect();
-    let empty = Signature {
-        generics: Vec::new(),
-        parameters: Vec::new(),
-        result: None,
-        reference: false,
+    let checks_instance = |callee, generics: &[Argument], test_candidates| {
+        reaching.contains(&callee)
+            || test_body(callee, test_candidates)
+            || generics.contains(&Argument::NoResult)
     };
     // The instances the calls that give every argument make, each once
     // with every call it is made from: two calls of `wrap<1>` are one
     // instance of it.
     let mut roots: Vec<(Made, Vec<InstanceRoot>)> = Vec::new();
     let mut root_of: HashMap<String, usize> = HashMap::new();
-    for mut made in given.into_iter().filter(|made| {
-        reaching.contains(&made.callee) || test_body(made.callee, made.test_candidates)
-    }) {
+    for mut made in given
+        .into_iter()
+        .filter(|made| checks_instance(made.callee, &made.generics, made.test_candidates))
+    {
         // A root whose input could not be read can still check the inputs
         // already known. Only exhaustion while following instances is a limit.
         let key = instance_key(&made);
@@ -2523,6 +2517,16 @@ pub(super) fn instances_hold(
             }
         }
     }
+    if roots.is_empty() {
+        return;
+    }
+    let tables: Vec<_> = program.modules.iter().map(super::tables).collect();
+    let empty = Signature {
+        generics: Vec::new(),
+        parameters: Vec::new(),
+        result: None,
+        reference: false,
+    };
     let mut rejected_calls = InstanceCallRejections::default();
     // GEN-7 reports a rejection once at each call written outside every
     // generic body. An instance a walk has told for one of those calls is
@@ -2579,6 +2583,22 @@ pub(super) fn instances_hold(
             let recheck_indices = dependent_indices.contains(&made.callee);
             let constants = made.constants.values.as_slice();
             let recheck_format = dependent_patterns.contains(&made.callee) || !constants.is_empty();
+            let recheck_resultless = made.generics.contains(&Argument::NoResult);
+            let declaration = &unit.declarations[made.callee.1];
+            if recheck_resultless
+                && diagnostics.as_slice()[..declared_reports]
+                    .iter()
+                    .any(|report| {
+                        let span = declaration.syntax.span();
+                        report.severity == Severity::Error
+                            && report.primary.file == declaration.at.file
+                            && (span.start..span.end).contains(&report.primary.span.start)
+                    })
+            {
+                // ERR-9: the declaration already rejects. Do not
+                // report a second reading of its resultless instance.
+                continue;
+            }
             let inputs = crate::InstanceInputs {
                 constants,
                 test_candidates: made.test_candidates,
@@ -2620,6 +2640,7 @@ pub(super) fn instances_hold(
                 || recheck_indices
                 || recheck_format
                 || recheck_tests
+                || recheck_resultless
             {
                 program.checked_instance(
                     made.callee,
@@ -2669,7 +2690,7 @@ pub(super) fn instances_hold(
                     made_after_inference(program, declared_body, instance, &mut instance_calls);
                 }
             }
-            if (recheck_indices || recheck_format || recheck_tests)
+            if (recheck_indices || recheck_format || recheck_tests || recheck_resultless)
                 && !recheck_graph
                 && !recheck_endpoints
             {
@@ -3039,7 +3060,7 @@ pub(super) fn instances_hold(
                     }
                 }
                 let child_calls = untold(&told, &key, &making);
-                if (reaching.contains(&callee) || test_body(callee, test_candidates))
+                if checks_instance(callee, &generics, test_candidates)
                     && !child_calls.is_empty()
                     && seen.insert(key)
                 {
@@ -3397,6 +3418,7 @@ fn generic_instance_key(
         .map(|argument| match argument {
             Argument::Constant(constant) => format!("{:?}", constant.value),
             Argument::Type(ty) => format!("{:?}", by_value(ty)),
+            Argument::NoResult => "no result".to_string(),
         })
         .collect();
     let packs = type_packs
@@ -3462,6 +3484,7 @@ fn by_value(ty: &Type) -> Type {
                 .map(|argument| match argument {
                     Argument::Type(ty) => Argument::Type(by_value(ty)),
                     Argument::Constant(given) => Argument::Constant(constant(given)),
+                    Argument::NoResult => Argument::NoResult,
                 })
                 .collect(),
             kind: *kind,
@@ -3526,7 +3549,7 @@ fn computed(argument: &Argument, declared: &[Location]) -> Vec<Constant> {
     };
     match argument {
         Argument::Constant(constant) if worked(constant) => vec![constant.clone()],
-        Argument::Constant(_) => Vec::new(),
+        Argument::Constant(_) | Argument::NoResult => Vec::new(),
         Argument::Type(ty) => {
             // `any_part` takes a closure that cannot change what it
             // captures: the constants found are kept in a `RefCell`.
@@ -3563,7 +3586,7 @@ fn argument_fails(
             .find(|(own, _)| *own == at)
             .and_then(|(_, argument)| match argument {
                 Argument::Constant(constant) => Some(constant.value.clone()),
-                Argument::Type(_) => None,
+                Argument::Type(_) | Argument::NoResult => None,
             })
     };
     let (module, declaration) = call.callee;
@@ -3600,6 +3623,7 @@ fn argument_fails(
                     "{parameter} of `{callee}` is given `{ty}`, and `{}` in it {why}",
                     constant.text
                 ),
+                Argument::NoResult => continue,
             };
             return Some(
                 error(
@@ -3726,6 +3750,7 @@ fn passes_on(generics: &[Argument], declared: &[Location]) -> bool {
     !declared.is_empty()
         && generics.iter().any(|argument| match argument {
             Argument::Constant(constant) => constant.value.names_one_of(declared),
+            Argument::NoResult => false,
             Argument::Type(ty) => ty.any_part(
                 &|part| matches!(part, Type::Parameter { at, .. } if declared.contains(at)),
                 &|constant| constant.value.names_one_of(declared),
@@ -3737,7 +3762,7 @@ fn passes_on(generics: &[Argument], declared: &[Location]) -> bool {
 /// (GEN-17). Source requirement checking can read its stated type.
 fn reflects(generics: &[Argument], packs: &[Location]) -> bool {
     generics.iter().any(|argument| match argument {
-        Argument::Constant(_) => false,
+        Argument::Constant(_) | Argument::NoResult => false,
         Argument::Type(ty) => ty.any_part(
             &|part| matches!(part, Type::PackMember { pack, .. } if packs.contains(pack)),
             &|_| false,
@@ -3764,11 +3789,12 @@ fn given_in(argument: &Argument, map: &[(Location, &Argument)], declared: &[Loca
                     .find(|(own, _)| *own == at)
                     .and_then(|(_, given)| match given {
                         Argument::Constant(given) => Some(given.value.clone()),
-                        Argument::Type(_) => None,
+                        Argument::Type(_) | Argument::NoResult => None,
                     })
             }),
         }),
         Argument::Type(ty) => Argument::Type(placed(substitute_within(ty, map), declared)),
+        Argument::NoResult => Argument::NoResult,
     }
 }
 
@@ -4400,6 +4426,7 @@ fn resolved_default_argument(argument: &Argument) -> bool {
             &|constant| !known(&constant.value),
         ),
         Argument::Constant(constant) => known(&constant.value),
+        Argument::NoResult => true,
     }
 }
 
@@ -4533,7 +4560,7 @@ fn requires_holds(
     let value_of = |name: &str| -> Option<ConstantValue> {
         match generics.get(option(name)?)? {
             Argument::Constant(constant) => Some(constant.value.clone()),
-            Argument::Type(_) => None,
+            Argument::Type(_) | Argument::NoResult => None,
         }
     };
     let own: Vec<Location> = parameters.iter().map(|generic| generic.at).collect();
@@ -4543,7 +4570,7 @@ fn requires_holds(
         let index = parameters.iter().position(|generic| generic.name == name)?;
         match generics.get(index)? {
             Argument::Type(ty) => told(ty.clone()),
-            Argument::Constant(_) => None,
+            Argument::Constant(_) | Argument::NoResult => None,
         }
     };
     let file = declared_in.files[declared.file].file;
@@ -4616,7 +4643,7 @@ fn requires_holds(
             .and_then(|index| generics.get(index))
             .and_then(|argument| match argument {
                 Argument::Type(ty) => Some(ty.clone()),
-                Argument::Constant(_) => None,
+                Argument::Constant(_) | Argument::NoResult => None,
             })
             .or_else(|| {
                 let read = declared_in
@@ -4808,7 +4835,7 @@ impl ConstraintKey<'_> {
     fn value(&self) -> Option<&ConstantValue> {
         match &self.argument {
             Argument::Constant(constant) => Some(&constant.value),
-            Argument::Type(_) => None,
+            Argument::Type(_) | Argument::NoResult => None,
         }
     }
 }

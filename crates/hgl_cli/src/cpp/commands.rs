@@ -118,8 +118,11 @@ impl<'a> BuildRequest<'a> {
         let session = session.and_then(|session| self.with_key(session, &inputs));
         let session = match session {
             Ok((mut session, key)) => {
+                // A build reports the requested inventory. A run can use
+                // the same verified application from either inventory.
+                let tests = (!self.running).then_some(self.tests);
                 if (!self.compile_commands || session.workspace.manifest().is_file())
-                    && let Some(built) = session.reused(&key, self.tests)
+                    && let Some(built) = session.reused(&key, tests)
                 {
                     return Ok(BuildStart::Hit(session, built));
                 }
@@ -257,8 +260,14 @@ impl<'a> BuildRequest<'a> {
             Some((path, line))
         };
         let mut unwritten = Diagnostics::new();
+        let mut output = if !self.tests {
+            hgl_cpp::transpile_production(program, &position, self.debug, &mut unwritten)
+        } else if self.debug {
+            hgl_cpp::transpile_for_debugger(program, &position, &mut unwritten)
+        } else {
+            hgl_cpp::transpile_with_positions(program, &position, &mut unwritten)
+        };
         if self.debug {
-            let mut output = hgl_cpp::transpile_for_debugger(program, &position, &mut unwritten);
             output
                 .files
                 .extend(
@@ -270,10 +279,8 @@ impl<'a> BuildRequest<'a> {
                             text: text.to_string(),
                         }),
                 );
-            output
-        } else {
-            hgl_cpp::transpile_with_positions(program, &position, &mut unwritten)
         }
+        output
     }
 
     fn failed(&self, path: Option<&str>, reason: String) -> ExitCode {

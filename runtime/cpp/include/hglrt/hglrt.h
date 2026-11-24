@@ -30,9 +30,11 @@
 #include <hglrt/failure.h>
 #include <hglrt/generator.h>
 #include <hglrt/keyed.h>
+#include <hglrt/key_sets.h>
 #include <hglrt/list_endpoints.h>
 #include <hglrt/lists.h>
 #include <hglrt/nullables.h>
+#include <hglrt/ordered_reduce.h>
 #include <hglrt/output.h>
 #include <hglrt/references.h>
 #include <hglrt/scalar.h>

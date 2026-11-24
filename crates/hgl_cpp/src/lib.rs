@@ -81,8 +81,8 @@ pub struct File {
 pub struct Output {
     /// The files: each module's header and unit, and each entry unit.
     pub files: Vec<File>,
-    /// The translation units, one for each module with something
-    /// written in it, in the order of the program's modules.
+    /// The translation units, in module order. A module can add a
+    /// separate test unit when applications and tests share a build.
     pub units: Vec<Unit>,
     /// The executables, one for each module with a test that can be
     /// run, in the order of the program's modules.
@@ -95,11 +95,13 @@ pub struct Output {
     pub applications: Vec<Application>,
 }
 
-/// The translation unit of one module.
+/// A translation unit owned by a module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unit {
     /// The module's path.
     pub module: String,
+    /// Whether the unit holds only the module's test definitions (TST-2).
+    pub test_only: bool,
     /// The unit's file, one of [`Output::files`].
     pub source: String,
     /// Its header's file, which the units that call into the module
@@ -117,10 +119,9 @@ pub struct Executable {
     pub stem: String,
     /// Its entry unit's file, one of [`Output::files`]: its `main`.
     pub source: String,
-    /// The units it is linked from, as positions in [`Output::units`]:
-    /// its module's, and each that one calls into, through the units
-    /// those call into. A unit is linked whole, so each function it
-    /// holds needs what it calls, whether a test calls it or not.
+    /// The units it links, as positions in [`Output::units`]: its module's
+    /// units and their transitive dependencies. A unit is linked whole,
+    /// so every function it holds needs what it calls.
     pub units: Vec<usize>,
 }
 
@@ -143,7 +144,7 @@ pub struct Test {
     /// The executable that runs it, as a position in
     /// [`Output::executables`]; `None` for one that is blocked.
     pub executable: Option<usize>,
-    /// Where each statement of the test starts in its module's unit:
+    /// Where each statement starts in the generated unit holding the test:
     /// the line, counted from 1, and the place in the source. The
     /// generated code tells the runtime library the line of the
     /// statement it is running, and a failure is reported with it.
@@ -312,6 +313,7 @@ pub fn transpile_with_positions(
             source: Some(position),
             debugger: false,
         },
+        true,
         diagnostics,
     )
 }
@@ -330,6 +332,27 @@ pub fn transpile_for_debugger(
             source: Some(position),
             debugger: true,
         },
+        true,
+        diagnostics,
+    )
+}
+
+/// Writes production units with source positions for the driver (TST-2).
+/// When debugging, also marks the ends of HGL functions.
+pub fn transpile_production(
+    program: &Program,
+    position: SourcePosition,
+    debugger: bool,
+    diagnostics: &mut Diagnostics,
+) -> Output {
+    transpile_with(
+        program,
+        &runtime::provides,
+        Positions {
+            source: Some(position),
+            debugger,
+        },
+        false,
         diagnostics,
     )
 }
@@ -357,6 +380,7 @@ pub fn transpile_for(
             source: file_name.map(|_| &position as SourcePosition),
             debugger: false,
         },
+        true,
         diagnostics,
     )
 }
@@ -371,6 +395,7 @@ fn transpile_with(
     program: &Program,
     provides: &dyn Fn(&str) -> bool,
     positions: Positions<'_>,
+    include_tests: bool,
     diagnostics: &mut Diagnostics,
 ) -> Output {
     let core = program.core();
@@ -404,7 +429,7 @@ fn transpile_with(
             }
         })
         .collect();
-    let (output, blocking) = assemble::output(program, &written);
+    let (output, blocking) = assemble::output(program, &written, include_tests);
     // A piece of the program that reaches a piece of core's that is not
     // written is reported with what that piece lacks, once.
     for diagnostic in blocking {

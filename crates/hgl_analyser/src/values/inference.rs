@@ -404,6 +404,11 @@ impl<'a> Typer<'a> {
                 .iter()
                 .map(|(at, argument)| match argument {
                     Argument::Type(ty) => self.project_pack_pass_type(ty, *at),
+                    Argument::NoResult => {
+                        faulty = true;
+                        self.diagnostics.emit(super::absent_type_argument(*at));
+                        Type::Unknown
+                    }
                     Argument::Constant(_) => {
                         faulty = true;
                         self.diagnostics.emit(error(
@@ -468,6 +473,11 @@ impl<'a> Typer<'a> {
         let mut rejected = false;
         for (position, (at, argument)) in given.iter().enumerate() {
             let generic = &generics[position];
+            if matches!(argument, Argument::NoResult) && !generic.result_only {
+                self.diagnostics.emit(super::absent_type_argument(*at));
+                rejected = true;
+                continue;
+            }
             let mismatch = match (&generic.kind, argument) {
                 // Reported where it is written.
                 (_, Argument::Type(Type::Unknown)) => {
@@ -511,7 +521,7 @@ impl<'a> Typer<'a> {
                     }
                     found[position] = Some(match argument {
                         Argument::Type(ty) => Argument::Type(self.project_pack_pass_type(ty, *at)),
-                        Argument::Constant(_) => argument.clone(),
+                        Argument::Constant(_) | Argument::NoResult => argument.clone(),
                     });
                     None
                 }
@@ -590,7 +600,15 @@ impl<'a> Typer<'a> {
             result_fallback,
             defaults,
             callable,
+            defer_endpoint_child,
         } = places;
+        let read_input = |typer: &mut Self, node: &SyntaxNode, expected: &Type| {
+            if *defer_endpoint_child && matches!(expected, Type::Endpoint(_)) {
+                typer.read_endpoint_given(node, true)
+            } else {
+                typer.expression(node, Some(expected))
+            }
+        };
         // The parameters being resolved. A place's type that still
         // names one once what was found is in place is not known.
         let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
@@ -773,14 +791,14 @@ impl<'a> Typer<'a> {
             if ordered {
                 if self.may_reread() {
                     let mark = self.mark();
-                    let value = as_given(self.expression(node, Some(read_as)));
+                    let value = as_given(read_input(self, node, read_as));
                     learn(self, &value, &mut found);
                     self.take_back(mark, false);
                 }
                 continue;
             }
             let reported = self.diagnostics.len();
-            let value = as_given(self.expression(node, Some(read_as)));
+            let value = as_given(read_input(self, node, read_as));
             learn(self, &value, &mut found);
             // A value with no whole type while nothing is known of its
             // place, `[1, "x"]`, has not been judged. Neither has one
@@ -793,6 +811,7 @@ impl<'a> Typer<'a> {
             // something is read once.
             let by_place = typed_by_place(node);
             let again = (by_place || !whole(&value.ty))
+                && !(*defer_endpoint_child && matches!(read_as, Type::Endpoint(_)))
                 && self.diagnostics.len() == reported
                 && self.may_reread();
             if !again {
@@ -1079,6 +1098,7 @@ impl<'a> Typer<'a> {
                             // (TIME-1); replay is graph composition.
                             Fact::AllValid(_)
                             | Fact::ChildValid(_)
+                            | Fact::DeferredChildGuard { .. }
                             | Fact::DeferredPackGuard { .. } => None,
                         })
                         .collect()
@@ -1089,6 +1109,14 @@ impl<'a> Typer<'a> {
                         pack: None,
                         value: self.fit_argument(value, &slot, traced, takes),
                     },
+                    None if *defer_endpoint_child && matches!(slot.ty, Type::Endpoint(_)) => {
+                        let value = read_input(self, node, &slot.ty);
+                        hir::Argument {
+                            parameter: Some(index),
+                            pack: None,
+                            value: self.fit_argument(value, &slot, traced, takes),
+                        }
+                    }
                     None if placeless => {
                         let value = self.expression(node, None);
                         // TST-16: a const function takes the publications
@@ -1318,6 +1346,9 @@ pub(super) struct Places<'s> {
     pub(super) defaults: Vec<Option<Constant>>,
     /// A callable declaration whose callbacks may reflect parameter packs.
     pub(super) callable: Option<(usize, &'s Signature)>,
+    /// The core activity query checks a projected pack child's shape in
+    /// its instance before rejecting it as an indirect input (TIME-9).
+    pub(super) defer_endpoint_child: bool,
 }
 
 /// What [`Typer::infer_arguments`] read.
@@ -1587,8 +1618,14 @@ pub(super) fn infer(
             {
                 infer(pattern.ty(), actual.ty(), generics, found);
             }
-            if let (Some(pattern), Some(actual)) = (&pattern.result, &actual.result) {
-                infer(pattern, actual, generics, found);
+            match (&pattern.result, &actual.result) {
+                (Some(pattern), Some(actual)) => infer(pattern, actual, generics, found),
+                (Some(Type::Parameter { at, .. }), None) if pattern.result_admits_none => {
+                    // FN-17: a result-only parameter takes the absence
+                    // of a result from an actual callback.
+                    find(*at, Argument::NoResult, generics, found);
+                }
+                _ => {}
             }
         }
         (Type::Nullable(pattern), Type::Nullable(actual)) => {
@@ -1824,6 +1861,7 @@ fn find(
     let position = generics.iter().position(|generic| generic.at == at);
     if let Some(position) = position
         && found[position].is_none()
+        && (!matches!(argument, Argument::NoResult) || generics[position].result_only)
     {
         found[position] = Some(argument);
     }
