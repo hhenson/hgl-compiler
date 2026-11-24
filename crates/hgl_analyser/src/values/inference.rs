@@ -403,7 +403,7 @@ impl<'a> Typer<'a> {
             let types = types
                 .iter()
                 .map(|(at, argument)| match argument {
-                    Argument::Type(ty) => ty.clone(),
+                    Argument::Type(ty) => self.project_pack_pass_type(ty, *at),
                     Argument::Constant(_) => {
                         faulty = true;
                         self.diagnostics.emit(error(
@@ -509,7 +509,10 @@ impl<'a> Typer<'a> {
                             "GEN-8",
                         ));
                     }
-                    found[position] = Some(argument.clone());
+                    found[position] = Some(match argument {
+                        Argument::Type(ty) => Argument::Type(self.project_pack_pass_type(ty, *at)),
+                        Argument::Constant(_) => argument.clone(),
+                    });
                     None
                 }
             };

@@ -321,6 +321,408 @@ fn const_instance_checks_leave_aggregate_admission_as_written() {
     );
 }
 
+/// The code and rule of each finding, in order.
+fn codes(checked: &Checked) -> Vec<String> {
+    checked
+        .findings
+        .iter()
+        .map(|finding| format!("{} {}", finding.code, finding.rule))
+        .collect()
+}
+
+/// FN-1, FN-19, FMT-3, FMT-4 and GEN-7: a const pattern given beside
+/// forwarded packs is read in each instance with its entries. Each call
+/// whose entries the pattern does not take rejects once, at the call that
+/// makes the instance, with the code the same direct `format` call has.
+#[test]
+fn formatting_checks_const_patterns_forwarded_beside_packs() {
+    let calls = [
+        ("good", "both(\"{} {name}\", 1, name: \"a\") == \"1 a\""),
+        (
+            "positional",
+            "positional(\"{:x}|{:.1f}\", 255, 2.5) == \"ff|2.5\"",
+        ),
+        (
+            "named",
+            "named(\"{b}-{a:>3}\", a: 1, b: \"x\") == \"x-  1\"",
+        ),
+        ("no_entries", "both(\"plain {{x}}\") == \"plain {x}\""),
+        ("specifier", "both(\"{:x}\", 1.5) == \"\""),
+        ("few", "both(\"{} {}\", 1) == \"\""),
+        ("unknown", "named(\"{nope}\", a: 1) == \"\""),
+        ("unused", "positional(\"{}\", 1, 2) == \"\""),
+        ("syntax", "positional(\"{\", 1) == \"\""),
+        ("empty", "both(\"{}\") == \"\""),
+    ];
+    let tests = |direct: bool| -> String {
+        calls
+            .iter()
+            .map(|(name, call)| {
+                let call = if direct {
+                    call.replacen("both(", "format(", 1)
+                        .replacen("positional(", "format(", 1)
+                        .replacen("named(", "format(", 1)
+                } else {
+                    (*call).to_string()
+                };
+                format!("test {name} {{ assert {call} }}\n")
+            })
+            .collect()
+    };
+    let checked = with_core(&format!(
+        "{}{}{}{}",
+        "const fn both<...As, ...Ks>(const p: str, args: ...As, kwargs: ...{Ks}) -> str => format(p, ...args, ...kwargs)\n",
+        "const fn positional<...As>(const p: str, args: ...As) -> str => format(p, ...args)\n",
+        "const fn named<...Ks>(const p: str, kwargs: ...{Ks}) -> str => format(p, ...kwargs)\n",
+        tests(false),
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:25 type/format.specifier FMT-4",
+            "m.hgl:10:19 type/format.argument FMT-3",
+            "m.hgl:11:23 type/format.argument FMT-3",
+            "m.hgl:12:22 type/format.unused FMT-3",
+            "m.hgl:13:22 type/format.syntax FMT-3",
+            "m.hgl:14:21 type/format.argument FMT-3",
+        ],
+        "{}",
+        checked.report,
+    );
+    for instance in [
+        "both<[f64], []>",
+        "both<[i64], []>",
+        "named<[i64]>",
+        "positional<[i64, i64]>",
+        "positional<[i64]>",
+        "both<[], []>",
+    ] {
+        assert!(
+            checked
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            checked.report,
+        );
+    }
+    assert_eq!(
+        checked
+            .report
+            .matches("the instance's body rejects here")
+            .count(),
+        6,
+        "{}",
+        checked.report,
+    );
+    let direct = with_core(&tests(true));
+    assert_eq!(codes(&checked), codes(&direct), "{}", direct.report);
+}
+
+/// FN-19 and GEN-7: the pattern reaches `format` through a function that
+/// forwards to one that forwards, by name, from a literal in a forwarding
+/// body, through a generic caller, and to a pack entry's own call.
+#[test]
+fn formatting_checks_const_patterns_forwarded_twice() {
+    let checked = with_core(concat!(
+        "const fn inner<...As, ...Ks>(const p: str, args: ...As, kwargs: ...{Ks}) -> str => format(p, ...args, ...kwargs)\n",
+        "const fn outer<...As, ...Ks>(const p: str, args: ...As, kwargs: ...{Ks}) -> str => inner(p, ...args, ...kwargs)\n",
+        "const fn fixed<...As>(args: ...As) -> str => inner(\"{:x}\", ...args)\n",
+        "const fn by_name<...As>(const q: str, args: ...As) -> str => inner(...args, p: q)\n",
+        "const fn typed<T>(const q: str, v: T) -> str => outer(q, v)\n",
+        "const fn helper<T>(const p: str, v: T) -> str => format(p, v)\n",
+        "const fn entry<...As>(const p: str, args: ...As) -> str => helper(p, args[0])\n",
+        "test good {\n",
+        "    assert outer(\"{} {name}\", 1, name: \"a\") == \"1 a\"\n",
+        "    assert fixed(255) == \"ff\"\n",
+        "    assert by_name(\"<{}>\", 1) == \"<1>\"\n",
+        "    assert typed(\"{:x}\", 255) == \"ff\"\n",
+        "    assert entry(\"<{}>\", 1) == \"<1>\"\n",
+        "}\n",
+        "test twice { assert outer(\"{:x}\", 1.5) == \"\" }\n",
+        "test twice_named { assert outer(\"{} {nope}\", 1, name: \"a\") == \"\" }\n",
+        "test literal { assert fixed(1.5) == \"\" }\n",
+        "test named_argument { assert by_name(\"{:x}\", 1.5) == \"\" }\n",
+        "test generic { assert typed(\"{:x}\", 1.5) == \"\" }\n",
+        "test pack_entry { assert entry(\"{:x}\", 1.5) == \"\" }\n",
+        "test twice_few { assert outer(\"{} {}\", 1) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:16:21 type/format.specifier FMT-4",
+            "m.hgl:17:27 type/format.argument FMT-3",
+            "m.hgl:18:23 type/format.specifier FMT-4",
+            "m.hgl:19:30 type/format.specifier FMT-4",
+            "m.hgl:20:23 type/format.specifier FMT-4",
+            "m.hgl:21:26 type/format.specifier FMT-4",
+            "m.hgl:22:25 type/format.argument FMT-3",
+        ],
+        "{}",
+        checked.report,
+    );
+    for instance in [
+        "outer<[f64], []>",
+        "inner<[f64], []>",
+        "inner<[i64], [str]>",
+        "fixed<[f64]>",
+        "by_name<[f64]>",
+        "typed<f64>",
+        "helper<f64>",
+        "entry<[f64]>",
+    ] {
+        assert!(
+            checked
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            checked.report,
+        );
+    }
+}
+
+/// GEN-7 and GEN-13: two calls with different patterns, or one pattern
+/// and different entries, are different instances, each with its own
+/// verdict, whichever is checked first. The pattern written in the body
+/// beside the packs is checked as before.
+#[test]
+fn formatting_checks_each_forwarded_pattern_instance_on_its_own() {
+    let declarations = concat!(
+        "const fn show<...As>(const p: str, args: ...As) -> str => format(p, ...args)\n",
+        "const fn written<...As, ...Ks>(args: ...As, kwargs: ...{Ks}) -> str => format(\"{:x} {name}\", ...args, ...kwargs)\n",
+    );
+    let good = [
+        "test hex { assert show(\"{:x}\", 255) == \"ff\" }\n",
+        "test float { assert show(\"{:.1f}\", 1.5) == \"1.5\" }\n",
+        "test flag { assert show(\"{:x}\", true) == \"1\" }\n",
+        "test body { assert written(255, name: \"a\") == \"ff a\" }\n",
+    ];
+    let bad = [
+        (
+            "test hex_float { assert show(\"{:x}\", 1.5) == \"\" }\n",
+            25,
+            "format.specifier FMT-4",
+        ),
+        (
+            "test body_float { assert written(1.5, name: \"a\") == \"\" }\n",
+            26,
+            "format.specifier FMT-4",
+        ),
+        (
+            "test body_missing { assert written(1) == \"\" }\n",
+            28,
+            "format.argument FMT-3",
+        ),
+    ];
+    for bad_first in [false, true] {
+        let mut lines: Vec<(&str, Option<(usize, &str)>)> =
+            good.iter().map(|line| (*line, None)).collect();
+        let failing = bad
+            .iter()
+            .map(|(line, column, code)| (*line, Some((*column, *code))));
+        if bad_first {
+            lines.splice(0..0, failing);
+        } else {
+            lines.extend(failing);
+        }
+        let source: String = lines.iter().map(|(line, _)| *line).collect();
+        let checked = with_core(&format!("{declarations}{source}"));
+        let expected: Vec<String> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (_, failing))| {
+                let (column, code) = (*failing)?;
+                Some(format!("m.hgl:{}:{column} type/{code}", index + 4))
+            })
+            .collect();
+        assert_eq!(checked.summary(), expected, "{}", checked.report);
+    }
+}
+
+/// GEN-13: a const pattern that grows through a forwarded call makes
+/// instances without end, whether it is appended to, doubled, or grown
+/// through a generic caller of the forwarding body. Each walk ends at the
+/// bound, reported once at the call that makes the first of them.
+#[test]
+fn forwarded_const_pattern_growth_reports_the_instance_limit() {
+    for (body, call) in [
+        (
+            "const fn grow<...As>(const p: str, args: ...As) -> str => format(p, ...args) + grow(p + \"x\", ...args)\n",
+            "grow(\"{}\", 1)",
+        ),
+        (
+            "const fn grow<...As>(const p: str, args: ...As) -> str => format(p, ...args) + grow(p + p, ...args)\n",
+            "grow(\"a\")",
+        ),
+        (
+            concat!(
+                "const fn show<...As>(const p: str, args: ...As) -> str => format(p, ...args)\n",
+                "const fn grow<T>(const p: str, v: T) -> str => show(p, v) + grow(p + \"x\", v)\n",
+            ),
+            "grow(\"{}\", 1)",
+        ),
+        // Two declarations that grow from one call: that call rejects once.
+        (
+            concat!(
+                "const fn ga<...As>(const p: str, args: ...As) -> str => format(p, ...args) + ga(p + \"x\", ...args)\n",
+                "const fn gb<T>(const p: str, v: T) -> str => format(p, v) + gb(p + \"y\", v)\n",
+                "const fn grow<...As>(const p: str, args: ...As) -> str => ga(p, ...args) + gb(p, args[0])\n",
+            ),
+            "grow(\"{}\", 1)",
+        ),
+    ] {
+        let lines = body.lines().count();
+        let checked = with_core(&format!("{body}test t {{ assert {call} == \"\" }}\n"));
+        assert_eq!(
+            checked.summary(),
+            [format!(
+                "m.hgl:{}:17 type/generic.instance_limit GEN-13",
+                lines + 2
+            )],
+            "{body}: {}",
+            checked.report,
+        );
+    }
+}
+
+/// FN-19 and GEN-7: a pack entry given to a generic relay of a forwarding
+/// body is read in each instance, where the entry is known; where the
+/// body is declared it makes no instance to judge. The shapes, with no
+/// call: an entry and a const pattern, a literal pattern, `debug_print`'s
+/// own (a forwarding body, a generic relay of it, and a first entry), a
+/// named entry, a node's hook, and a mutual recursion that ends.
+#[test]
+fn forwarded_entries_given_to_a_generic_relay_check_where_declared() {
+    let show = "const fn show<...As>(const p: str, args: ...As) -> str => format(p, ...args)\n";
+    let mid = "const fn mid<T>(const p: str, v: T) -> str => show(p, v)\n";
+    let shapes = [
+        format!("{show}{mid}const fn top<...As>(const p: str, args: ...As) -> str => mid(p, args[0])\n"),
+        format!("{show}{mid}const fn top<...As>(args: ...As) -> str => mid(\"<{{}}>\", args[0])\n"),
+        concat!(
+            "const fn logline<...As, ...Ks>(const fmt_str: str, args: ...As, kwargs: ...{Ks}) -> str\n",
+            "    => format(fmt_str, ...args, ...kwargs) + \"\\n\"\n",
+            "const fn log_one<T>(const fmt_str: str, v: T) -> str => logline(fmt_str, v)\n",
+            "const fn first<...As>(const fmt_str: str, args: ...As) -> str => log_one(fmt_str, args[0])\n",
+        )
+        .to_string(),
+        format!("{show}{mid}const fn top<...Ks>(const p: str, kwargs: ...{{Ks}}) -> str => mid(p, kwargs[\"a\"])\n"),
+        format!(
+            "{show}{mid}fn nod<...As>(args: ...As) -> str {{\n    when {{ return mid(\"<{{}}>\", args[0]) }}\n}}\n"
+        ),
+        concat!(
+            "const fn ping<...As>(const p: str, n: i64, args: ...As) -> str {\n",
+            "    if n == 0 { return format(p, ...args) }\n",
+            "    return pong(p, n - 1, args[0])\n",
+            "}\n",
+            "const fn pong<T>(const p: str, n: i64, v: T) -> str => ping(p, n, v)\n",
+            "test t { assert ping(\"<{}>\", 3, 1) == \"<1>\" }\n",
+        )
+        .to_string(),
+    ];
+    for shape in &shapes {
+        let checked = with_core(shape);
+        assert!(checked.summary().is_empty(), "{shape}: {}", checked.report);
+    }
+    // Called, the debug_print shape is checked in its instances.
+    let checked = with_core(&format!(
+        "{}test good {{ assert first(\"<{{}}>\", 1) == \"<1>\\n\" }}\ntest bad {{ assert first(\"{{:x}}\", 1.5) == \"\" }}\n",
+        shapes[2]
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:7:19 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+    for instance in ["first<[f64]>", "log_one<f64>", "logline<[f64], []>"] {
+        assert!(
+            checked
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            checked.report,
+        );
+    }
+}
+
+/// GEN-7: an instance two calls make, one through another instance, is
+/// reported once at each call, whichever of its paths is found first.
+#[test]
+fn a_shared_forwarded_instance_reports_once_at_each_call() {
+    for (fa, fb) in [
+        ("h1(p, args[0]) + h2(p, args[0])", "h2"),
+        ("h2(p, args[0]) + h1(p, args[0])", "h1"),
+    ] {
+        let source = format!(
+            "const fn h2<T>(const p: str, v: T) -> str => format(p, v)\n\
+             const fn h1<T>(const p: str, v: T) -> str => h2(p, v)\n\
+             const fn fa<...As>(const p: str, args: ...As) -> str => {fa}\n\
+             const fn fb<...As>(const p: str, args: ...As) -> str => {fb}(p, args[0])\n\
+             test t1 {{ assert fa(\"{{:x}}\", 1.5) == \"\" }}\n\
+             test t2 {{ assert fb(\"{{:x}}\", 1.5) == \"\" }}\n"
+        );
+        let checked = with_core(&source);
+        assert_eq!(
+            checked.summary(),
+            [
+                "m.hgl:6:18 type/format.specifier FMT-4",
+                "m.hgl:7:18 type/format.specifier FMT-4",
+            ],
+            "{source}: {}",
+            checked.report,
+        );
+    }
+}
+
+/// FN-1 and GEN-7: a call that gives a concrete body const inputs it reads
+/// makes an instance of its own, so a pattern given there reaches the
+/// forwarding body: from a value function, a node's const and option, a
+/// graph's const, and an operator candidate's option, chosen directly or
+/// by a generic caller.
+#[test]
+fn concrete_const_inputs_reach_a_forwarding_body() {
+    let checked = with_core(concat!(
+        "const fn show<...As>(const p: str, args: ...As) -> str => format(p, ...args)\n",
+        "const fn v_fwd(const p: str, x: f64) -> str => show(p, x)\n",
+        "fn node_fwd(x: f64, const p: str) -> str {\n",
+        "    when { return show(p, x) }\n",
+        "}\n",
+        "fn option_fwd{const p: str = \"{:x}\"}(x: f64) -> str {\n",
+        "    when { return show(p, x) }\n",
+        "}\n",
+        "fn graph_fwd(x: f64, const p: str) -> str => show(p, x)\n",
+        "operator pick<T>{const pattern: str = \"{:x}\"}(value: T) -> str\n",
+        "impl const fn pick{const pattern: str}(value: f64) -> str => show(pattern, value)\n",
+        "impl const fn pick{const pattern: str}(value: i64) -> str => show(pattern, value)\n",
+        "const fn choose<T>(const p: str, v: T) -> str requires T in {f64, i64} => pick{pattern: p}(v)\n",
+        "test good {\n",
+        "    assert v_fwd(\"{:.1f}\", 1.5) == \"1.5\"\n",
+        "    assert pick(255) == \"ff\"\n",
+        "    assert choose(\"{:x}\", 255) == \"ff\"\n",
+        "}\n",
+        "test value { assert v_fwd(\"{:x}\", 1.5) == \"\" }\n",
+        "test node { assert eval node_fwd(x: [1.5], p: \"{:x}\") == [\"\"] }\n",
+        "test option { assert eval option_fwd(x: [1.5]) == [\"\"] }\n",
+        "test graph { assert eval graph_fwd(x: [1.5], p: \"{:x}\") == [\"\"] }\n",
+        "test candidate { assert pick(1.5) == \"\" }\n",
+        "test chosen { assert choose(\"{:x}\", 1.5) == \"\" }\n",
+        "test chosen_integer { assert choose(\"{:.1f}\", 255) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:20:21 type/format.specifier FMT-4",
+            "m.hgl:21:20 type/format.specifier FMT-4",
+            "m.hgl:22:22 type/format.specifier FMT-4",
+            "m.hgl:23:21 type/format.specifier FMT-4",
+            "m.hgl:24:25 type/format.specifier FMT-4",
+            "m.hgl:25:22 type/format.specifier FMT-4",
+            "m.hgl:26:30 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 /// FMT-5: the selected conversion must consume the whole value and
 /// yield `str`, including when a native collection converts its parts.
 #[test]

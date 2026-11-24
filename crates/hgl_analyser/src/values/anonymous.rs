@@ -44,7 +44,7 @@ impl Typer<'_> {
     /// The parameters of the anonymous function, each with its written
     /// type if it has one (FN-7).
     pub(super) fn anonymous_parameters(
-        &self,
+        &mut self,
         function: &SyntaxNode,
     ) -> Vec<(SyntaxToken, Option<Type>)> {
         child(function, SyntaxKind::ParamList)
@@ -60,12 +60,14 @@ impl Typer<'_> {
     }
 
     /// The type written on an anonymous parameter or result (FN-7).
-    pub(super) fn anonymous_type(&self, annotation: &SyntaxNode) -> Option<Type> {
-        let ty = annotation.children().find(|part| is_type(part.kind()))?;
+    pub(super) fn anonymous_type(&mut self, annotation: &SyntaxNode) -> Option<Type> {
+        let written = annotation.children().find(|part| is_type(part.kind()))?;
         let ty = self
             .written
-            .get(&(self.file, ty.span().start))
-            .map_or(Type::Unknown, |ty| (*ty).clone());
+            .get(&(self.file, written.span().start))
+            .copied()
+            .unwrap_or(&Type::Unknown);
+        let ty = self.project_pack_pass_type(ty, self.at(&written));
         if self.instance.is_empty() {
             return Some(ty);
         }

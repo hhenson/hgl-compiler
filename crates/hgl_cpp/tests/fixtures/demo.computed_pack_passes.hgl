@@ -1,0 +1,149 @@
+module demo.computed_pack_passes
+
+# FN-19 and CTRL-16: omitted positional entries leave the remaining slots
+# available, and omitted named entries let the callee use its own defaults.
+const fn increment(value: i64) -> i64 => value + 1
+const fn weighted(price: i64, weight: i64 = 2) -> i64 => price * weight
+
+const fn take_second<...A>(items: ...A) -> i64 =>
+    increment(...{for key in arg_keys(A): if key == 1 { items[key] }})
+
+const fn weight_when<const Include: bool, ...A>(items: ...A) -> i64 =>
+    weighted(price: 7, ...{for key in arg_keys(A): if Include { items[key] }})
+
+const fn forward<...Ps, ...As>(
+    f: const fn(...{Ps}) -> i64,
+    args: ...{As for f},
+) -> i64 =>
+    f(...{for key in arg_keys(Ps):
+        if key in arg_keys(As) && key != "unused" { args[key] }})
+
+test an_omitted_position_leaves_a_slot {
+    assert take_second(3, 5) == 6
+}
+
+test an_omitted_name_leaves_a_default {
+    assert forward(weighted, price: 7) == 14
+    assert forward(weighted, 7, 3) == 21
+    assert weight_when<false>(3) == 14
+    assert weight_when<true>(3) == 21
+}
+
+# FN-14: the anonymous function reads the key of the pass that made it.
+const fn invoke(f: const fn() -> i64) -> i64 => f()
+const fn tagged(tag: i64) -> i64 => tag
+const fn capture_key<...Ps>(f: const fn(...{Ps}) -> i64) -> i64 =>
+    f(...{for key in arg_keys(Ps): invoke(fn() => if key == "tag" { 42 } else { 13 })})
+
+test an_entry_can_capture_its_key {
+    assert capture_key(tagged) == 42
+}
+
+# GEN-17 and FN-14: a captured key keeps its compile-time comparison
+# with a constant of the other kind, in either operand order.
+const other_name: str = "tag"
+
+const fn capture_position<...A>(items: ...A) -> i64 =>
+    increment(...{for key in arg_keys(A): invoke(fn() =>
+        if key == other_name { 41 }
+        else if "tag" == key { 42 }
+        else if !(key != "tag") { 43 }
+        else if !("tag" != key) { 44 }
+        else if key == 0 { 13 } else { 45 })})
+
+const fn capture_name<...Ps>(f: const fn(...{Ps}) -> i64) -> i64 =>
+    f(...{for key in arg_keys(Ps): invoke(fn() =>
+        if 0 == key { 41 }
+        else if key == 0 { 42 }
+        else if !(0 != key) { 43 }
+        else if !(key != 0) { 44 }
+        else if key == "tag" { 13 } else { 45 })})
+
+test a_captured_position_differs_from_a_name {
+    assert capture_position(7) == 14
+}
+
+test a_captured_name_differs_from_a_position {
+    assert capture_name(tagged) == 13
+}
+
+# FN-14 and GEN-17: the same anonymous body can be emitted once per key,
+# even when its parameter, result and captured entry types are equal.
+const fn abc(a: i64 = 0, b: i64 = 0, c: i64 = 0) -> i64 => a * 100 + b * 10 + c
+const fn two_named(tag: i64, other: i64) -> i64 => tag * 100 + other
+const fn scaled(x: i64, const by: i64) -> i64 => x * by
+const fn first(xs: list<i64>) -> i64 => xs[0]
+const fn apply_t<T>(f: const fn() -> T) -> T => f()
+operator entry_code<T>(value: T) -> i64
+impl const fn entry_code(value: i64) -> i64 => 1
+impl const fn entry_code(value: str) -> i64 => 2
+
+const fn positional<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): invoke(fn() => key + 1)})
+
+const fn named<...N>(items: ...{N}) -> i64 =>
+    abc(...{for key in arg_keys(N): invoke(fn() => if key == "b" { 9 } else { 1 })})
+
+const fn named_values<...N>(items: ...{N}) -> i64 =>
+    abc(...{for key in arg_keys(N): invoke(fn() => items[key])})
+
+const fn mixed<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): invoke(fn() => entry_code(items[key]) + key)})
+
+const fn mixed_result<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): entry_code(apply_t(fn() => items[key]))})
+
+const fn const_in_lambda<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): invoke(fn() => scaled(2, key))})
+
+const fn list_in_pass<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): first([for i in 0..<2: i + key])})
+
+test a_key_is_held_by_its_own_pass {
+    assert capture_key(two_named) == 4213
+    assert positional(5, 5) == 120
+    assert positional(5, 5, 5) == 123
+    assert named(a: 0, b: "b", c: 0) == 191
+    assert named_values(a: 1, b: 9, c: 1) == 191
+    assert mixed("a", 0, "c") == 224
+    assert mixed_result("a", 0, "c") == 212
+    assert const_in_lambda(5, 5, 5) == 24
+    assert list_in_pass(5, 5, 5) == 12
+}
+
+# CTRL-16: an if nested inside the entry still reads the selected branch only.
+const fn nested<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): increment(if key == 1 { items[1] } else { 0 })})
+
+const fn nested_statement<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): invoke(fn() {
+        if key == 1 { increment(items[1]) }
+        return key + 1
+    })})
+
+test a_nested_condition_leaves_the_other_branch_unread {
+    assert nested(5) == 100
+    assert nested(5, 8) == 190
+    assert nested_statement(5) == 100
+    assert nested_statement(5, 8) == 120
+}
+
+# GEN-17: a written argument or annotation can refer to the current member type.
+const fn identity<T>(value: T) -> T => value
+const fn a_written_argument<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): entry_code(identity<A[key]>(items[key]))})
+
+const fn a_written_local<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): invoke(fn() {
+        let value: A[key] = items[key]
+        return entry_code(value)
+    })})
+
+const fn a_written_result<...A>(items: ...A) -> i64 =>
+    abc(...{for key in arg_keys(A): invoke(fn() -> A[key] => items[key])})
+
+test a_written_type_reads_the_current_entry {
+    assert a_written_argument(1, "two", 3) == 121
+    assert a_written_local("one", 2, "three") == 212
+    assert a_written_result(4, 5) == 450
+}

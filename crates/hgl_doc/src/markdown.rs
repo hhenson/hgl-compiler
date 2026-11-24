@@ -1,6 +1,6 @@
 //! Renders the comment's Markdown (SDOC-7) and inserts resolved
-//! declaration links (SDOC-8). Authored HTML and external destinations
-//! never become active content.
+//! declaration links (SDOC-8). Authored destinations are visible as text.
+//! Web link labels may navigate, and image labels are rendered as text.
 
 use std::ops::Range;
 
@@ -81,6 +81,8 @@ pub(crate) fn render_section(
 ) {
     let mut source = Parser::new_ext(text, Options::ENABLE_TABLES).into_offset_iter();
     let mut events = Vec::new();
+    let mut labels = Vec::new();
+    let mut label_destinations = Vec::new();
     while let Some((event, range)) = source.next() {
         let event = match event {
             Event::Start(Tag::Heading { level, .. }) => {
@@ -132,17 +134,57 @@ pub(crate) fn render_section(
             Event::Start(Tag::HtmlBlock) => Event::Html("<pre class=\"authored-html\">".into()),
             Event::End(TagEnd::HtmlBlock) => Event::Html("</pre>\n".into()),
             Event::Html(markup) | Event::InlineHtml(markup) => Event::Text(markup),
-            // Strip the destination while preserving the link label or image
-            // description. The source comment may refer to an online host.
-            Event::Start(Tag::Link { .. } | Tag::Image { .. })
-            | Event::End(TagEnd::Link | TagEnd::Image) => continue,
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => {
+                let linked = labels.is_empty()
+                    && dest_url.split_once(':').is_some_and(|(scheme, _)| {
+                        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+                    });
+                labels.push((dest_url.clone(), linked));
+                if !linked {
+                    continue;
+                }
+                Event::Start(Tag::Link {
+                    link_type,
+                    dest_url,
+                    title,
+                    id,
+                })
+            }
+            Event::Start(Tag::Image { dest_url, .. }) => {
+                labels.push((dest_url, false));
+                continue;
+            }
+            Event::End(TagEnd::Link | TagEnd::Image) => {
+                let (destination, linked) = labels.pop().expect("the label starts before it ends");
+                if linked {
+                    events.push(Event::End(TagEnd::Link));
+                }
+                // An image in a link label can add a destination. Wait for
+                // the outer label to close so every displayed URL is inert.
+                label_destinations.push(destination);
+                if labels.is_empty() {
+                    for destination in label_destinations.drain(..) {
+                        events.push(Event::InlineHtml(
+                            format!(" (<code>{}</code>)", escaped(&destination)).into(),
+                        ));
+                    }
+                }
+                continue;
+            }
             Event::Code(name) if formula(text, &range) => {
                 output.renderers.math = true;
                 Event::InlineHtml(
                     format!("<code class=\"formula-inline\">{}</code>", escaped(&name)).into(),
                 )
             }
-            Event::Code(name) => match link(&name) {
+            // An authored label may contain code, but adding an anchor
+            // inside that label can make a nested link.
+            Event::Code(name) if labels.is_empty() => match link(&name) {
                 Some(href) => Event::InlineHtml(
                     format!(
                         "<a href=\"{}\"><code>{}</code></a>",

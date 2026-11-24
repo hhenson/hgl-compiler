@@ -1,0 +1,164 @@
+module demo.call_roles
+
+const fn doubled(value: i64, by: i64 = 2) -> i64 => value * by
+fn doubled(value: i64, const by: i64 = 3) -> i64 => value * by
+
+fn constant_call(tick: i64) -> i64 => tick + doubled(21)
+fn temporal_call(tick: i64) -> i64 => doubled(tick)
+fn configured_call(tick: i64, const amount: i64) -> i64 =>
+    tick + doubled(by: 4, value: amount)
+const fn ordinary_call(value: i64) -> i64 => doubled(value)
+fn handler_call(value: i64) -> i64 {
+    when { return doubled(value) }
+}
+
+operator multiply(value: i64) -> i64
+impl const fn multiply(value: i64) -> i64 => value * 2
+impl fn multiply(value: i64) -> i64 {
+    when { return value * 3 }
+}
+fn operator_scalar(tick: i64) -> i64 => tick + multiply(21)
+fn operator_temporal(tick: i64) -> i64 => multiply(tick)
+
+const fn value_takes_text(value: str) -> i64 => 1
+fn value_takes_text(value: i64) -> i64 => value
+const fn temporal_takes_text(value: i64) -> i64 => value
+fn temporal_takes_text(value: str) -> i64 => 1
+
+# expect-error(type, "type.mismatch")
+fn no_scalar_fallback(tick: i64) -> i64 => tick + value_takes_text(21)
+# expect-error(type, "type.mismatch")
+fn no_temporal_fallback(tick: i64) -> i64 => temporal_takes_text(tick)
+
+fn lexical_call(tick: i64) -> i64 {
+    var saved: i64
+    let scalar = doubled({
+        saved = 21
+        let local = saved
+        1 + doubled(1 + local)
+    })
+    let local = tick
+    let temporal = doubled(1 + doubled(1 + local))
+    return scalar + temporal
+}
+
+test all_scalar_takes_the_value_definition { assert eval constant_call(tick: [1]) == [43] }
+test temporal_takes_the_temporal_definition { assert eval temporal_call(tick: [1]) == [3] }
+test value_code_takes_the_value_definition {
+    assert doubled(21) == 42
+    assert ordinary_call(21) == 42
+    assert eval handler_call(value: [21]) == [42]
+}
+test named_const_arguments_and_omitted_defaults {
+    assert eval configured_call(tick: [1], amount: 21) == [85]
+}
+test eval_targets_keep_the_temporal_definition { assert eval doubled(value: [1]) == [3] }
+test operator_candidates_use_the_same_role_preference {
+    assert eval operator_scalar(tick: [1]) == [43]
+    assert eval operator_temporal(tick: [1]) == [3]
+    assert multiply(21) == 42
+}
+test probes_read_lexical_locals_in_their_scope {
+    assert eval lexical_call(tick: [1, 2]) == [111, 120]
+}
+
+# FN-4, GEN-6, FN-17: distinguish a temporal-only callback, a capture
+# that would require lifting, and a function that fits either template.
+const fn apply(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 2
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 => f(x) * 3
+const fn apply_value(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 2
+fn apply_temporal(f: fn(i64) -> i64, x: i64) -> i64 => f(x) * 3
+const fn plus_one(n: i64) -> i64 => n + 1
+fn later(n: i64) -> i64 {
+    when { return n + 10 }
+}
+
+fn captures(tick: i64) -> i64 => apply(fn(n) => n + tick, 1)
+fn typed_capture(tick: i64) -> i64 => apply(f: fn(n: i64) => n + tick, x: 1)
+fn value_twin(tick: i64) -> i64 => apply_value(fn(n) => n + tick, 1)
+fn temporal_twin(tick: i64) -> i64 => apply_temporal(fn(n) => n + tick, 1)
+fn named_temporal(tick: i64) -> i64 => tick + apply(later, 1)
+fn body_calls_temporal(tick: i64) -> i64 => tick + apply(fn(n) => later(n), 1)
+fn named_value(tick: i64) -> i64 => tick + apply(plus_one, 1)
+fn pure_body(tick: i64) -> i64 => tick + apply(fn(n) => n + 1, 1)
+fn other_temporal(tick: i64) -> i64 => apply(plus_one, tick)
+
+# expect-error(type, "type.mismatch")
+fn bad_temporal_callback_input(tick: i64) -> i64 => tick + apply(later, "wrong")
+
+test captures_choose_a_direct_template {
+    assert eval captures(tick: [1, 5]) == [6, 18]
+    assert eval typed_capture(tick: [1, 5]) == [6, 18]
+    assert eval temporal_twin(tick: [1, 5]) == [6, 18]
+    assert eval value_twin(tick: [1, 5]) == [4, 12]
+}
+
+test temporal_only_callbacks_choose_the_temporal_definition {
+    assert eval named_temporal(tick: [1]) == [34]
+    assert eval body_calls_temporal(tick: [1]) == [34]
+}
+
+test compatible_callbacks_leave_the_choice_to_other_inputs {
+    assert eval named_value(tick: [1]) == [5]
+    assert eval pure_body(tick: [1]) == [5]
+    assert eval other_temporal(tick: [1]) == [6]
+}
+
+# A capture's phase survives generic inference and disagreeing input types.
+const fn capture_types(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 2
+fn capture_types(f: fn(str) -> i64, x: i64) -> i64 => f("a") * 3
+const fn capture_types_value(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 2
+fn capture_types_temporal(f: fn(str) -> i64, x: i64) -> i64 => f("a") * 3
+
+const fn generic_apply<T>(f: const fn(T) -> T, x: T) -> T requires T in {i64} => f(x) * 2
+fn generic_apply<T>(f: fn(T) -> T, x: T) -> T requires T in {i64} => f(x) * 3
+const fn generic_value<T>(f: const fn(T) -> T, x: T) -> T requires T in {i64} => f(x) * 2
+fn generic_temporal<T>(f: fn(T) -> T, x: T) -> T requires T in {i64} => f(x) * 3
+
+const fn infer_other<T>(f: const fn(i64) -> i64, x: T) -> i64 requires T in {i64} => f(1) * 2
+fn infer_other<T>(f: fn(i64) -> i64, x: T) -> i64 requires T in {i64} => f(1) * 3
+const fn other_value<T>(f: const fn(i64) -> i64, x: T) -> i64 requires T in {i64} => f(1) * 2
+fn other_temporal_role<T>(f: fn(i64) -> i64, x: T) -> i64 requires T in {i64} => f(1) * 3
+
+fn capture_differing_templates(tick: i64) -> i64 => capture_types(fn(n) => tick + 1, 1)
+fn capture_differing_value(tick: i64) -> i64 => capture_types_value(fn(n) => tick + 1, 1)
+fn capture_differing_temporal(tick: i64) -> i64 => capture_types_temporal(fn(n) => tick + 1, 1)
+fn capture_generic_templates(tick: i64) -> i64 => generic_apply(fn(n) => n + tick, 1)
+fn capture_generic_value(tick: i64) -> i64 => generic_value(fn(n) => n + tick, 1)
+fn capture_generic_temporal(tick: i64) -> i64 => generic_temporal(fn(n) => n + tick, 1)
+fn capture_generic_arguments(tick: i64) -> i64 => infer_other(fn(n) => n + tick, 1)
+fn capture_other_value(tick: i64) -> i64 => other_value(fn(n) => n + tick, 1)
+fn capture_other_temporal(tick: i64) -> i64 => other_temporal_role(fn(n) => n + tick, 1)
+
+test closure_captures_choose_the_temporal_template {
+    assert eval capture_differing_templates(tick: [1]) == [6]
+    assert eval capture_differing_value(tick: [1]) == [4]
+    assert eval capture_differing_temporal(tick: [1]) == [6]
+    assert eval capture_generic_templates(tick: [1]) == [6]
+    assert eval capture_generic_value(tick: [1]) == [4]
+    assert eval capture_generic_temporal(tick: [1]) == [6]
+    assert eval capture_generic_arguments(tick: [1]) == [6]
+    assert eval capture_other_value(tick: [1]) == [4]
+    assert eval capture_other_temporal(tick: [1]) == [6]
+}
+
+const fn named_types(f: const fn(str) -> i64, x: i64) -> i64 => f("a") * 2
+fn named_types(f: fn(i64) -> i64, x: i64) -> i64 => f(x) * 3
+fn named_types_temporal(f: fn(i64) -> i64, x: i64) -> i64 => f(x) * 3
+fn named_different_template(tick: i64) -> i64 => tick + named_types(later, 1)
+fn named_different_control(tick: i64) -> i64 => tick + named_types_temporal(later, 1)
+fn named_generic_template(tick: i64) -> i64 => tick + generic_apply(later, 1)
+fn named_generic_control(tick: i64) -> i64 => tick + generic_temporal(later, 1)
+fn anonymous_generic_template(tick: i64) -> i64 => tick + generic_apply(fn(n) => later(n), 1)
+fn anonymous_generic_control(tick: i64) -> i64 => tick + generic_temporal(fn(n) => later(n), 1)
+fn pure_pair_body(tick: i64) -> i64 => tick + apply(fn(n) => doubled(n), 1)
+
+test temporal_callbacks_keep_their_phase_across_templates {
+    assert eval named_different_template(tick: [1]) == [34]
+    assert eval named_different_control(tick: [1]) == [34]
+    assert eval named_generic_template(tick: [1]) == [34]
+    assert eval named_generic_control(tick: [1]) == [34]
+    assert eval anonymous_generic_template(tick: [1]) == [34]
+    assert eval anonymous_generic_control(tick: [1]) == [34]
+    assert eval pure_pair_body(tick: [1]) == [5]
+}

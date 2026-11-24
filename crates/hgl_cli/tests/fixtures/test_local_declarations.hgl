@@ -14,6 +14,14 @@ fn through_node(value: i64) -> i64 {
 const fn through_requirement<T>(value: T) -> i64
     requires classify(T) -> i64 => classify(value)
 
+export const fn relay<...Args>(values: ...Args) -> i64 => classify(...values)
+
+operator render<T>(const pattern: str, value: T) -> str
+impl const fn render<T>(const pattern: str, value: T) -> str => "production"
+
+export const fn render_relay<...Args>(const pattern: str, values: ...Args) -> str =>
+    render(pattern, ...values)
+
 test with_a_type {
     const cutoff: date = @2026-01-05
 
@@ -71,15 +79,21 @@ test local_calendar {
 
 test local_candidate {
     impl const fn classify(value: i64) -> i64 => 1
+    impl const fn render(const pattern: str, value: i64) -> str => format(pattern, value)
     assert classify(7) == 1
     assert through_requirement(7) == 1
     assert in_production() == 1
+    assert relay(7) == 1
+    assert render_relay("[{}]", 7) == "[7]"
 }
 
 test shared_candidate_scope {
     assert classify(7) == 1
     assert through_requirement(7) == 1
     assert in_production() == 1
+    assert relay(7) == 1
+    assert render_relay("[{}]", 7) == "[7]"
+    assert render_relay("{:x}", 255) == "ff"
     assert eval through_node(value: [7]) == [1]
 }
 

@@ -28,6 +28,11 @@ pub(crate) struct PackTypes<'p> {
 }
 
 impl<'p> PackTypes<'p> {
+    /// The lexical declaration and concrete pack of each generic slot.
+    pub(super) fn bindings(&self) -> &[(Location, &'p TypePackArgument)] {
+        &self.bindings
+    }
+
     /// Match resolved packs to their declarations, by generic slot.
     pub(crate) fn new(generics: &[GenericParameter], packs: &'p [TypePackArgument]) -> Self {
         Self {
@@ -423,7 +428,7 @@ impl Typer<'_> {
         // The computed entries can still fill this callback's inputs.
         // Its written reference can be read against its template.
         let dependent = dependent
-            .filter(|_| !super::forwarded_packs::has_computed_spread(list))
+            .filter(|_| !self.deferred_computed_spread(list))
             .map(|slot| {
                 let parameter = &signature.parameters[slot];
                 (slot, &declared.dependent_packs[&parameter.at])

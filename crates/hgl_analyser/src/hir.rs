@@ -1329,6 +1329,8 @@ pub struct AnonymousSpecialization {
     pub pack_inputs: Vec<PackInput>,
     /// The original slots and normalized keys of its compile-time const inputs.
     pub const_inputs: Vec<(usize, String)>,
+    /// The lexical computed-pack passes enclosing its body (FN-14, GEN-17).
+    pub pack_pass_keys: Vec<PackKey>,
 }
 
 impl AnonymousFunction {

@@ -79,7 +79,7 @@ pub(super) enum Child {
 
 /// The input and path captured by an inferred `let` (ERR-14). A path
 /// with a runtime index still has a known root.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(super) struct ChildOrigin {
     input: LocalId,
     entry: Option<PackKey>,
@@ -272,6 +272,7 @@ impl Typer<'_> {
             Some(key) => self
                 .pack_inputs
                 .as_ref()?
+                .values
                 .iter()
                 .find(|entry| entry.parameter == pack && entry.key == *key)
                 .map(|entry| &entry.ty),

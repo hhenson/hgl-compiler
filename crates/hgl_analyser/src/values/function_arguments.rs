@@ -15,8 +15,8 @@ use super::forwarded_packs::spread_operands;
 use super::inference::{ExplicitGenerics, infer, mentions, pack_bounds, type_pack};
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{
-    AnonymousFunction, Callee, Expr, ExprKind, Form, LocalId, Node, Stmt, TypePackArgument,
-    ValueCategory, walk_statement_nodes,
+    AnonymousFunction, AnonymousSpecialization, Callee, Expr, ExprKind, Form, LocalId, Node, Stmt,
+    TypePackArgument, ValueCategory, walk_statement_nodes,
 };
 use crate::program::{Declaration, OperatorRef, Role};
 use crate::syntax::{child, name_token, ungrouped};
@@ -89,7 +89,7 @@ impl<'a> Typer<'a> {
         inputs: &CallbackInputs<'_>,
     ) -> Option<(Callee, FunctionType)> {
         if node.kind() == SyntaxKind::FnExpr {
-            return self.anonymous_target(node, template);
+            return self.anonymous_target(node, template, false);
         }
         if matches!(
             node.kind(),
@@ -377,7 +377,13 @@ impl<'a> Typer<'a> {
                 reflected: reflected.then_some(inputs.excluded),
             }),
         };
-        let (mut matches, unknown) = self.admitted(operator, &candidates, &given, &wanted);
+        let role = if template.value {
+            Role::Value
+        } else {
+            Role::Temporal
+        };
+        let (mut matches, unknown) =
+            self.admitted_for_callback(operator, &candidates, &given, &wanted, role);
         self.graph = graph;
         self.value_code = value_code;
         if !unknown
@@ -783,10 +789,49 @@ impl<'a> Typer<'a> {
         ));
     }
 
+    /// FN-4 and FN-17: the temporal template lets a callback compose.
+    /// Determine whether the callback uses a connection or a temporal
+    /// call, even when its committed read will report another error.
+    pub(super) fn anonymous_pair_category(
+        &mut self,
+        node: &SyntaxNode,
+        template: &FunctionType,
+    ) -> ValueCategory {
+        let mark = self.mark();
+        let read = self.anonymous_target(node, template, true);
+        self.take_back(mark, false);
+        let Some((Callee::Anonymous(function), _)) = read else {
+            return ValueCategory::Value;
+        };
+        let captured = function
+            .captures
+            .iter()
+            .map(|&local| self.locals[local].category)
+            .fold(ValueCategory::Value, super::lifting::join_categories);
+        let mut temporal = captured == ValueCategory::Connection;
+        super::forwarded_packs::walk_nested_calls(&function.body.statements, &mut |value| {
+            if let ExprKind::Call { callee, .. } = &value.kind {
+                temporal |= matches!(callee, Callee::Parameter { temporal: true, .. })
+                    || callee.declaration().is_some_and(|(module, declaration)| {
+                        self.program.modules[module].declarations[declaration]
+                            .kind
+                            .role()
+                            == Some(Role::Temporal)
+                    });
+            }
+        });
+        if temporal {
+            ValueCategory::Connection
+        } else {
+            captured
+        }
+    }
+
     fn anonymous_target(
         &mut self,
         node: &SyntaxNode,
         template: &FunctionType,
+        probing_role: bool,
     ) -> Option<(Callee, FunctionType)> {
         let mut parameters = self.anonymous_parameters(node);
         if !takes_input_count(template, parameters.len()) {
@@ -851,8 +896,15 @@ impl<'a> Typer<'a> {
         if !template.value {
             self.hook = None;
         }
-        let definition =
-            self.anonymous_definition(node, parameters, result.as_ref(), !template.value);
+        // FN-4: during a role probe the template supplies the types
+        // and lets the body compose. Its own parameters do not make a
+        // call temporal merely because this template is temporal.
+        let definition = self.anonymous_definition(
+            node,
+            parameters,
+            result.as_ref(),
+            !template.value && !probing_role,
+        );
         self.hook = outer_hook;
         self.value_code = value_code;
         self.graph = graph;
@@ -895,7 +947,14 @@ impl<'a> Typer<'a> {
             body,
             captures,
             pack_captures,
-            specialization: Default::default(),
+            specialization: AnonymousSpecialization {
+                pack_pass_keys: self
+                    .pack_passes
+                    .iter()
+                    .map(|(_, key)| key.clone())
+                    .collect(),
+                ..Default::default()
+            },
         }));
         Some((callee, actual))
     }
