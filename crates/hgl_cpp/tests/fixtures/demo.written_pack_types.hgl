@@ -50,11 +50,23 @@ const fn explicit_member<const key: str, ...Ps>(
 const fn inferred_member<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
     select_member(item)
 
+# A single generic candidate still needs the member type at instantiation.
+operator pick<T>(value: T) -> T
+impl const fn pick<T>(value: T) -> T => value
+
+const fn explicit_pick<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
+    pick<Ps[item_key]>(item)
+
+const fn inferred_pick<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
+    pick(item)
+
 test operator_reflected_member_types {
     assert explicit_member<"other">(extra, 7) == 8
     assert explicit_member<"item">(words, "text") == "text"
     assert inferred_member(num, 8) == 9
     assert inferred_member(words, "value") == "value"
+    assert explicit_pick(num, 10) == 10
+    assert inferred_pick(num, 11) == 11
 }
 
 fn operator_graph<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
