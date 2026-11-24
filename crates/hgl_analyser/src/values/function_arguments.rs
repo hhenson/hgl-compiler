@@ -364,7 +364,13 @@ impl<'a> Typer<'a> {
                 reflected: reflected.then_some(inputs.excluded),
             }),
         };
-        let (mut matches, unknown) = self.admitted(operator, &candidates, &given, &wanted);
+        let role = if template.value {
+            Role::Value
+        } else {
+            Role::Temporal
+        };
+        let (mut matches, unknown) =
+            self.admitted_for_callback(operator, &candidates, &given, &wanted, role);
         self.graph = graph;
         self.value_code = value_code;
         if !unknown
