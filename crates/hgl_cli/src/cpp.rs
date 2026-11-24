@@ -138,7 +138,7 @@ impl BuildSession {
         key
     }
 
-    fn reused(&mut self, key: &str, tests: bool) -> Option<BuiltProgram> {
+    fn reused(&mut self, key: &str, tests: Option<bool>) -> Option<BuiltProgram> {
         if !self
             .previous
             .as_ref()?

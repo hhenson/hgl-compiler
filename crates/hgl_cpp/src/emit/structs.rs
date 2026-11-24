@@ -576,7 +576,11 @@ fn endpoint_type(
 /// a collection ... is an endpoint whether or not it is valid"), and
 /// whether it is `out` or a part of it. `None` for anything else: a
 /// child of another collection is its own family's.
-fn child_view(emitter: &mut Emitter, scope: &Scope, value: &Expr) -> Option<(String, bool)> {
+pub(super) fn child_view(
+    emitter: &mut Emitter,
+    scope: &Scope,
+    value: &Expr,
+) -> Option<(String, bool)> {
     match &value.kind {
         ExprKind::Local(local) => {
             let view = emitter.view(&scope.body.locals, *local)?;

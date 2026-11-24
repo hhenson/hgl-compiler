@@ -187,4 +187,7 @@ macOS, `scripts/check-debug-release.sh DIRECTORY` checks the two archives
 in DIRECTORY as the release jobs do.
 An unpacked release bundle can also supply that prebuilt tree. The
 macOS workflow job keeps its native and Rust caches in the runner's tool
-cache. Use distinct local cache directories for each build platform.
+cache. The Linux bundle job restores its verified native tree by an exact
+key covering the pinned hgraph tag, build recipe and Linux toolchain.
+The archive verifiers unpack the resulting bundles on fresh runners.
+Use distinct local cache directories for each build platform.

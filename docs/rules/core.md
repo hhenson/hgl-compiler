@@ -749,8 +749,8 @@ runner: planned
 
 transpiler: partial
 
-- Fixed-size list `map` runs its HGL candidate. C++ wires a result-bearing keyed map over one split dictionary.
-- Left: native growing lists, multiple split dictionaries and resultless maps (#370).
+- Fixed-size list `map` runs its HGL candidates. C++ wires a result-bearing keyed map over one split dictionary.
+- Left: native growing lists, multiple split dictionaries and native resultless maps (#370).
 
 ## MAP-2
 
@@ -811,8 +811,10 @@ transpiler: partial
 
 transpiler: partial
 
-- Fixed-size and supported one-dictionary maps hold the children's publications and propagate an error leaving a child. The keyed map removes an entry when its child stops.
-- Left: other native result shapes and callbacks with no result (#370).
+- Fixed-size results hold the children's publications. A callback with no result runs at each fixed position, and the map gives no result. A failure that leaves a child leaves either form.
+- The C++ target's existing [size-zero temporal list limit](https://github.com/hhenson/hgl-compiler/issues/829) applies to both fixed-size forms (TYPE-10).
+- The native one-dictionary map holds the children's publications, propagates a child failure and removes an entry when its child stops.
+- Left: other native result shapes and native callbacks with no result (#370).
 
 ## RED-1
 
@@ -824,13 +826,15 @@ transpiler: partial
 
 transpiler: partial
 
-- A fixed-size fold composes reads of every position. Growing ordered reduction skips invalid members and publishes the seed for an empty list. Native tree candidates await #370.
+- The fixed-size HGL folds skip invalid members and recompute after withdrawal. A step runs while both its accumulator and member are valid. A step that stops starts again with fresh callback state. A tree without any valid member gives its identity if supplied and otherwise has no valid output.
+- A nullable combiner over a fixed list of nonnullable members gets null for each invalid position. A held null in a list whose members are nullable is passed as a valid member. The nullable tree starts on the first list publication and takes no part of its zero.
+- Left: native tree reductions and nullable combiners over nonnullable members of growing lists and keyed collections (#370).
 
 ## RED-3
 
 transpiler: partial
 
-- A fixed-size tree fold uses the first position as its initial value and visits the remaining positions in order. An associative call on a list of size zero rejects. Native grouping awaits #370.
+- A fixed-size tree fold starts from the first valid member and visits the remaining positions in order. It forwards the only valid side of a pair. An associative call on a list of size zero rejects. Native grouping awaits #370.
 
 ## RED-4
 
@@ -846,14 +850,14 @@ transpiler: planned
 
 transpiler: partial
 
-- Ordered folds start from their required zero and visit positions in order. The growing-list target wires a capture-free callback and guards each step on member validity. An omitted zero rejects during candidate selection.
-- Left: callbacks that capture an enclosing connection (FN-14, [hgraph#1914](https://github.com/hhenson/hgraph/issues/1914)).
+- Ordered folds wait for their required zero and visit positions in order. The growing-list target wires a capture-free callback and starts a returning member's callback with fresh state. A change of list length publishes the result again even if its value stays the same. An omitted zero rejects during candidate selection.
+- Left: callbacks that capture values or connections (FN-14, [hgraph#1914](https://github.com/hhenson/hgraph/issues/1914)).
 
 ## RED-6
 
 transpiler: partial
 
-- The fixed-size tree fold combines the positions without adding the supplied identity. Native implementations await #370.
+- The fixed-size tree fold uses the supplied identity when no valid members remain. It combines valid members without applying the identity. Native implementations await #370.
 
 ## RED-7
 

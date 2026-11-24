@@ -519,6 +519,7 @@ impl<'a> Typer<'a> {
         };
         let held = match argument {
             Argument::Type(held) => held,
+            Argument::NoResult => return,
             Argument::Constant(_) => {
                 self.diagnostics.emit(error(
                     Category::Type,

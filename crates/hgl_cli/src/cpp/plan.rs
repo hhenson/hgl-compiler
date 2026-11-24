@@ -113,7 +113,13 @@ impl Program {
             units: output
                 .units
                 .iter()
-                .map(|unit| unit.module.clone())
+                .map(|unit| {
+                    if unit.test_only {
+                        format!("test:{}", unit.module)
+                    } else {
+                        unit.module.clone()
+                    }
+                })
                 .collect(),
             applications: output
                 .applications

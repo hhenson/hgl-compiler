@@ -126,15 +126,23 @@ fn nested_pairs_have_bounded_reads() {
     let anonymous = (0..21).fold(String::from("(fn(x: i64) -> i64 => x)(1)"), |inner, _| {
         format!("scale({inner})")
     });
-    for argument in [operators, blocks, comprehensions, anonymous] {
-        let source = format!(
-            "const fn scale(value: i64) -> i64 => value * 2\n\
-             fn scale(value: i64) -> i64 => value * 3\n\
-             fn wired(tick: i64) -> i64 => tick + {argument}\n"
-        );
-        let checked = module(&source);
-        assert_eq!(checked.summary(), NONE, "{}", checked.report);
-    }
+    // Use the analyser's stack for the parser limits, as `hgl` does.
+    // The default test thread can overflow on these valid nested reads.
+    let worker = std::thread::Builder::new()
+        .stack_size(hgl_analyser::stack_size(hgl_parser::Limits::default()))
+        .spawn(move || {
+            for argument in [operators, blocks, comprehensions, anonymous] {
+                let source = format!(
+                    "const fn scale(value: i64) -> i64 => value * 2\n\
+                     fn scale(value: i64) -> i64 => value * 3\n\
+                     fn wired(tick: i64) -> i64 => tick + {argument}\n"
+                );
+                let checked = module(&source);
+                assert_eq!(checked.summary(), NONE, "{}", checked.report);
+            }
+        })
+        .expect("a thread starts");
+    worker.join().expect("the analyser fits the stack");
 }
 
 /// FN-5: "`const(argument)` is an ordinary call resolved by the usual
