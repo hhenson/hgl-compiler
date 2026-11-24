@@ -2943,8 +2943,8 @@ fn documented(entry: Entry, text: &str) -> Vec<SyntaxKind> {
 #[test]
 fn a_documentation_comment_documents_the_declaration_after_it() {
     // SDOC-1: "`/** ... */` immediately before a module, function/native
-    // function, operator, struct, field, enum, enum member, native type,
-    // or test documents that declaration."
+    // function, operator, constant, struct, field, enum, enum member, native
+    // type, a native type's property, or test documents that declaration."
     let text = "/** The module. */\nmodule a\n\
                 /** A function. */\nexport const fn f() => 1\n\
                 /** A native. */\nnative fn n() -> i64\n\
@@ -2952,7 +2952,8 @@ fn a_documentation_comment_documents_the_declaration_after_it() {
                 /** A struct. */\nstruct Quote {\n    /** A field. */\n    bid: f64\n}\n\
                 /** An enum. */\nexport enum Side {\n    /** A member. */\n    buy,\n    \
                 /** Another. */\n    sell,\n}\n\
-                /** A native type. */\nexport native type Handle\n\
+                /** A native type. */\nexport native type Handle {\n    \
+                /** A property. */\n\n    level: i64\n    limit: i64\n}\n\
                 /** A test. */\ntest t { assert true }\n";
     assert_eq!(
         documented(Entry::SourceFile, text),
@@ -2967,6 +2968,7 @@ fn a_documentation_comment_documents_the_declaration_after_it() {
             SyntaxKind::EnumMember,
             SyntaxKind::EnumMember,
             SyntaxKind::NativeTypeDecl,
+            SyntaxKind::NativeProperty,
             SyntaxKind::TestDecl,
         ]
     );
@@ -3031,6 +3033,43 @@ fn a_documentation_comment_that_documents_nothing_is_rejected() {
         .map(|finding| finding.code.as_str())
         .collect();
     assert_eq!(codes, ["doc.repeated", "doc.unattached"]);
+}
+
+#[test]
+fn native_property_comments_require_whitespace_and_a_property() {
+    // SDOC-1: only whitespace may intervene. Repeated or unattached
+    // comments are rejected at the comment.
+    let text = concat!(
+        "native type Thing {\n",
+        "    /** Separated. */\n",
+        "    # An ordinary comment.\n",
+        "    lower: i64\n",
+        "    /** Repeated. */\n",
+        "    /** The upper limit. */\n",
+        "    upper: i64\n",
+        "    /** Stranded. */\n",
+        "}\n",
+        "const next: i64 = 1\n",
+    );
+    let outcome = run(Entry::Declarations, text);
+    assert!(!outcome.has_error_node());
+    let findings: Vec<_> = outcome
+        .findings
+        .iter()
+        .map(|finding| {
+            assert_eq!(finding.rule, Some("SDOC-1"));
+            assert!(finding.catalogued);
+            (finding.at.as_str(), finding.code.as_str())
+        })
+        .collect();
+    assert_eq!(
+        findings,
+        [
+            ("2:5", "doc.unattached"),
+            ("5:5", "doc.repeated"),
+            ("8:5", "doc.unattached"),
+        ]
+    );
 }
 
 // ---- TYPE-7 ----
