@@ -814,6 +814,9 @@ impl Emitter<'_> {
     /// body written once for each position, where the graph is built, in
     /// a block of its own in which `item` is the connection of that
     /// position, the list's child as its temporal form gives it.
+    /// Core's fixed reductions wire each step this way (RED-1, RED-2).
+    /// Their HGL bodies choose the positions and initial accumulator
+    /// for the tree and ordered forms (RED-3, RED-5, RED-6).
     #[allow(clippy::too_many_arguments)]
     fn unrolled_each(
         &mut self,

@@ -978,7 +978,9 @@ impl<'a> Typer<'a> {
         let size = if matches!(sequence.kind, ExprKind::Range { .. }) {
             let mut bounds = node.children();
             let mut read = || {
-                self.read_constant(&bounds.next()?, Some(&Type::Scalar(Scalar::I64)))
+                // GEN-7: a forwarded body is checked again with the
+                // instance's sizes, including those used in range bounds.
+                self.given_constant(&bounds.next()?, Some(&Type::Scalar(Scalar::I64)))
                     .ok()
             };
             match (read(), read()) {
