@@ -27,6 +27,8 @@
 //!   take, bind and return, as child graphs (CTRL-7, CTRL-14);
 //! * [`nodes`]: what a node's handlers subscribe to and require, and
 //!   which inputs a `ref` result designates (TIME-3, TIME-4, FN-16);
+//! * [`optimise`]: body optimisations, starting with in-place string
+//!   append (TYPE-1, EXPR-3);
 //! * [`pieces`]: what a piece of a program reaches, and which tests and
 //!   applications reach a form a target does not write;
 //! * [`types`]: what a type of the program holds: a struct's fields and
@@ -39,6 +41,7 @@ pub mod copies;
 pub mod graphs;
 pub mod instances;
 pub mod nodes;
+pub mod optimise;
 mod packs;
 pub mod pieces;
 pub mod types;

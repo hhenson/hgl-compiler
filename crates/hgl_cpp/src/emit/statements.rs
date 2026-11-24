@@ -6,7 +6,7 @@
 //! | --- | --- |
 //! | `let name = value` | `const T name = value;`, or `const T& name = value;` where it reads a place or a reference the copy rule lets it refer to (`hgl_lower::copies`) |
 //! | `var name: T = value`, `var name: T` | `T name = value;`, `T name{};` (EXPR-3: it is assigned before it is read) |
-//! | `name = value`, `name += value` | `name = value;`, the compound one's value the symbol's call |
+//! | `name = value`, `name += value` | `name = value;`, or `name.append(value);` where the string append plan applies (TYPE-1, EXPR-3) |
 //! | `items[i] = value`, `pair[0] = value` | `::hglrt::item(items, i) = value;`, `std::get<0>(pair) = value;` |
 //! | `return`, `return value` | `return;`, `return value;` |
 //! | `if`, `while`, `for item in items` | `if`, `while`, `for (const T& item : items)` (CTRL-10, CTRL-12); over a set or a dictionary, `composites`' |
@@ -22,6 +22,7 @@ use hgl_analyser::hir::{
 use hgl_analyser::{LocalKind, Program, Type};
 use hgl_lower::copies::Copies;
 use hgl_lower::graphs::may_return;
+use hgl_lower::optimise::Optimisations;
 
 use super::Emitter;
 use super::calls::changes;
@@ -36,6 +37,8 @@ pub(super) struct Scope<'b> {
     pub(super) body: &'b Body,
     /// What its `let`s and loops are bound to (the copy rule).
     pub(super) copies: Copies,
+    /// The body plans for target-independent optimisations.
+    optimisations: Optimisations,
     /// True in a named test, where a statement is a test's (TST-3).
     pub(super) testing: bool,
     /// Declarations and assignments that prepare the statement's places.
@@ -71,6 +74,7 @@ impl<'b> Scope<'b> {
         Scope {
             body,
             copies: Copies::of(program, body),
+            optimisations: Optimisations::of(body),
             testing: false,
             before: Vec::new(),
             conditional: 0,
@@ -244,14 +248,19 @@ impl Emitter<'_> {
                     identifier(&declared.name)
                 ));
             }
-            // A compound assignment's value is the symbol with the
-            // local as its left operand.
+            // A local str can take the lowered in-place append (TYPE-1).
+            // Other compound assignments write the selected symbol's value.
             Stmt::Assign { local, value, .. } => {
-                let value = self.expression(scope, value);
-                text.push_str(&format!(
-                    "{indent}{} = {value};\n",
-                    identifier(&body.locals[*local].name)
-                ));
+                let name = identifier(&body.locals[*local].name);
+                if let Some(parts) = scope.optimisations.text_append(self.program, statement) {
+                    for part in parts {
+                        let value = self.expression(scope, part);
+                        text.push_str(&format!("{indent}{name}.append({value});\n"));
+                    }
+                } else {
+                    let value = self.expression(scope, value);
+                    text.push_str(&format!("{indent}{name} = {value};\n"));
+                }
             }
             // The place is the one its indices name before the value is
             // evaluated (EXPR-2, EXPR-3), and C++ evaluates the value
