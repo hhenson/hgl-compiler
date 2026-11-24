@@ -815,8 +815,8 @@ transpiler: partial
 
 transpiler: partial
 
-- The fixed-size HGL folds skip invalid members and recompute after withdrawal. A skipped position starts its callback with fresh state when it becomes valid again. A tree without any valid member gives its identity if supplied and otherwise has no valid output.
-- A nullable combiner over a fixed list of nonnullable members gets null for each invalid position. A held null in a list whose members are nullable is passed as a valid member.
+- The fixed-size HGL folds skip invalid members and recompute after withdrawal. A step runs while both its accumulator and member are valid. A step that stops starts again with fresh callback state. A tree without any valid member gives its identity if supplied and otherwise has no valid output.
+- A nullable combiner over a fixed list of nonnullable members gets null for each invalid position. A held null in a list whose members are nullable is passed as a valid member. The nullable tree starts on the first list publication and takes no part of its zero.
 - Left: native tree reductions and nullable combiners over nonnullable members of growing lists and keyed collections (#370).
 
 ## RED-3
@@ -839,7 +839,7 @@ transpiler: planned
 
 transpiler: partial
 
-- Ordered folds wait for their required zero and visit positions in order. The growing-list target wires a capture-free callback and guards each step on member validity. A change of list length publishes the result again even if its value stays the same. An omitted zero rejects during candidate selection.
+- Ordered folds wait for their required zero and visit positions in order. The growing-list target wires a capture-free callback and starts a returning member's callback with fresh state. A change of list length publishes the result again even if its value stays the same. An omitted zero rejects during candidate selection.
 - Left: callbacks that capture values or connections (FN-14, [hgraph#1914](https://github.com/hhenson/hgraph/issues/1914)).
 
 ## RED-6
