@@ -71,11 +71,6 @@ const PENDING_MODULES: &[(&str, &str, &str)] = &[
         "examples.formatting",
         "FMT-6 and FMT-8 graph candidate (#434)",
     ),
-    (
-        "hgl_core/spec/mapping.md",
-        "examples.mapping",
-        "MAP-1 and RED-1 (#369, #370)",
-    ),
 ];
 
 /// The rejection cases of core the compiler does not yet reject, each as
@@ -291,6 +286,8 @@ fn the_conformance_cases_assemble_into_one_module() {
 /// TST-12, CONF-3: core's source rejections, `conformance.rejections`,
 /// are each rejected with the code their `# expect-error` annotation
 /// names, on the line it applies to, and with nothing else.
+/// The mapping cases include a call without a split argument (MAP-3)
+/// and a dictionary reduction whose callback lacks the laws (RED-4).
 #[test]
 fn the_conformance_rejections_are_rejected_as_annotated() {
     let samples: Vec<common::Sample> = hgl_files("hgl_core/tests/conformance")

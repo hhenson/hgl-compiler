@@ -16,7 +16,7 @@ use super::inference::{fixed, placed, type_pack};
 use super::results::{captured_output, proof_binding};
 use crate::constant::Fault;
 use crate::declared::substitute_within;
-use crate::hir::{Body, Expr, ExprKind, PackKey, Value, ValueCategory};
+use crate::hir::{Body, Expr, ExprKind, Hook, PackKey, Value, ValueCategory};
 use crate::program::DeclarationKind;
 use crate::syntax::{name_token, tokens, ungrouped};
 use crate::types::{Argument, Constant, ConstantValue, Detail, NamedKind, Scalar, Type};
@@ -380,7 +380,20 @@ impl<'a> Typer<'a> {
                 // FN-19 selects one input. In a hook its payload has
                 // the same admission and lifecycle requirements (TIME-1,
                 // TIME-4, TIME-5) as a non-packed input.
-                self.input_read(pack, at, super::children::read_whole_all_valid(&ty));
+                let key = match &kind {
+                    ExprKind::PackEntry { key, .. } => Some(key.clone()),
+                    _ => self.endpoint_key(node),
+                };
+                // An unresolved key or shape can affect what admits the
+                // read. Its instance decides it where both are known.
+                if key.is_some() || !matches!(self.hook, Some(Hook::When | Hook::Stop)) {
+                    self.pack_input_read(
+                        pack,
+                        key,
+                        node,
+                        super::children::read_whole_all_valid(&ty),
+                    );
+                }
                 self.signal_read(pack, at, Some((&ty, node)));
             }
             let ty = if input && self.hook.is_some() {

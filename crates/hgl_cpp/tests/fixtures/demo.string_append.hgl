@@ -1,0 +1,105 @@
+module demo.string_append
+
+# TYPE-1, EXPR-3: the loop appends each piece to one growing local.
+const fn join_pieces(pieces: list<str>) -> str {
+    var text = ""
+    for item in pieces {
+        text += item
+    }
+    return text
+}
+
+const fn suffix(value: str) -> str => value + "!"
+
+const fn joined(piece: str, branch: bool) -> str {
+    var text = "base"
+    text += ":"
+    var local_piece = piece
+    text += local_piece
+    text += suffix(piece)
+    text += text
+    text += ""
+    for i in 0..<2 {
+        text += "*"
+    }
+    if branch {
+        text += "a" + "b" + "c"
+    }
+    text += "0" + "1" + "2" + "3" + "4" + "5" + "6" + "7" + "8" + "9"
+    return text
+}
+
+const fn aliases() -> str {
+    var text = "a"
+    let snapshot = text
+    text += "b" + text + snapshot
+    return text
+}
+
+const fn saved_alias() -> str {
+    var text = "a"
+    let snapshot = text
+    text += "b" + snapshot
+    return text
+}
+
+const fn mutating_rhs() -> str {
+    var text = "old"
+    text += {
+        text = "new"
+        "!"
+    }
+    return text
+}
+
+const fn invoke(callback: const fn() -> str) -> str => callback()
+
+struct Record { text: str }
+const fn append_parameter(var text: str) { text += "+" }
+
+fn append_temporal(input: str) -> str {
+    state saved: str = "S"
+    cache held: str = "C"
+    when {
+        saved += input
+        held += input
+        return saved + held
+    }
+}
+
+fn append_hook_local(input: str) -> str {
+    when {
+        var text = "hook"
+        text += input
+        return text
+    }
+}
+
+test values {
+    assert join_pieces(["before", "", "after"]) == "beforeafter"
+    assert joined("x", true) == "base:xx!base:xx!**abc0123456789"
+    assert joined("x", false) == "base:xx!base:xx!**0123456789"
+    assert aliases() == "abaa"
+    assert saved_alias() == "aba"
+    assert mutating_rhs() == "old!"
+}
+
+test nested {
+    assert invoke(fn() -> str {
+        var text = "lambda"
+        text += "a" + "b" + "c"
+        return text
+    }) == "lambdaabc"
+}
+
+test other_places {
+    var scalar = "x"
+    append_parameter(scalar)
+    var record = Record(text: "r")
+    record.text += "f"
+    var items = ["i"]
+    items[0] += "e"
+    assert scalar == "x+" && record.text == "rf" && items[0] == "ie"
+    assert eval append_temporal(input: ["1", "2"]) == ["S1C1", "S12C12"]
+    assert eval append_hook_local(input: ["1", "2"]) == ["hook1", "hook2"]
+}

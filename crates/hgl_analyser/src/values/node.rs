@@ -4,7 +4,6 @@
 //! TIME-3, TIME-5, TIME-7). Part of the typing pass ([`super`]).
 
 use hgl_diagnostics::{Category, Location};
-use hgl_lexer::literal::decode_string;
 use hgl_parser::{HasSpan, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::calls::call_callee;
@@ -453,11 +452,11 @@ impl<'a> Typer<'a> {
         // so the record is learnt first (`header_requires`), and the
         // condition is then read where it stands.
         if hook == Hook::When {
-            let required = match &header {
+            let record = match &header {
                 Some(header) => self.header_requires(header),
-                None => self.header_of(None).required,
+                None => self.header_of(None),
             };
-            self.admit(&required);
+            self.admit(&record);
         }
         let reported = self.diagnostics.len();
         let condition = header.map(|condition| self.condition(&condition));
@@ -468,7 +467,7 @@ impl<'a> Typer<'a> {
         // The body is judged by the record of the header as it stands.
         if let Some(record) = &record {
             self.present.truncate(frame);
-            self.admit(&record.required);
+            self.admit(record);
         }
         if rejected {
             let inputs = self.temporal_inputs();
@@ -543,27 +542,35 @@ impl<'a> Typer<'a> {
     /// reading of each header and no more: it needs no bound, and the
     /// judgment of a header's reads never falls back to the default
     /// admission, however many handlers come before it.
-    fn header_requires(&mut self, header: &SyntaxNode) -> Vec<LocalId> {
+    fn header_requires(&mut self, header: &SyntaxNode) -> hir::Header {
         let rereads = self.rereads;
         let mark = self.mark();
         let probe = self.condition(header);
-        let required = self.header_of(Some(&probe)).required;
+        let record = self.header_of(Some(&probe));
         self.take_back(mark, false);
         self.rereads = rereads;
-        required
+        record
     }
 
     /// Holds the temporal inputs among `required`, what a `when`
     /// header's record requires valid, to be valid where the header and
     /// its body are read (TIME-3, TIME-4). `out` among them is not
     /// admitted: the record's own words.
-    fn admit(&mut self, required: &[LocalId]) {
-        let admitted: Vec<LocalId> = required
+    fn admit(&mut self, header: &hir::Header) {
+        let admitted: Vec<LocalId> = header
+            .required
             .iter()
             .copied()
             .filter(|local| self.is_temporal_input(*local))
             .collect();
         self.present.extend(admitted.into_iter().map(Fact::Valid));
+        self.present.extend(
+            header
+                .required_entries
+                .iter()
+                .cloned()
+                .flat_map(|entry| children::pack_guard_facts(EndpointOperation::Valid, entry)),
+        );
     }
 
     /// What a `when` header asks of its node, read from its typed
@@ -597,6 +604,8 @@ impl<'a> Typer<'a> {
         };
         let mut subscribed: Option<Vec<LocalId>> = None;
         let mut required: Option<Vec<LocalId>> = None;
+        let mut subscribed_entries = Vec::new();
+        let mut required_entries = Vec::new();
         let mut conditions = Vec::new();
         let mut scheduled = false;
         // TIME-3: "The empty selection `modified([])` subscribes to no
@@ -639,6 +648,32 @@ impl<'a> Typer<'a> {
                     operation: EndpointOperation::Valid,
                     inputs: named,
                 } => add(&mut required, named),
+                ExprKind::PackedEndpoint { operation, inputs }
+                    if matches!(
+                        operation,
+                        EndpointOperation::Valid | EndpointOperation::Modified
+                    ) =>
+                {
+                    let (direct, packed) = if *operation == EndpointOperation::Valid {
+                        (&mut required, &mut required_entries)
+                    } else {
+                        names = true;
+                        conditions.push(position);
+                        (&mut subscribed, &mut subscribed_entries)
+                    };
+                    let direct = direct.get_or_insert_with(Vec::new);
+                    for input in inputs {
+                        if let ExprKind::EndpointOf(local) = input.kind {
+                            if !direct.contains(&local) {
+                                direct.push(local);
+                            }
+                        } else if let Some(entry) = self.pack_endpoint_selection(input)
+                            && !packed.contains(&entry)
+                        {
+                            packed.push(entry);
+                        }
+                    }
+                }
                 // The node says what `scheduled()` is: it depends on
                 // which of the scheduler and the alarm it injects.
                 ExprKind::Endpoint {
@@ -651,7 +686,9 @@ impl<'a> Typer<'a> {
         hir::Header {
             selects: subscribed.is_some(),
             subscribed: subscribed.unwrap_or_else(|| inputs.clone()),
+            subscribed_entries,
             required: required.unwrap_or_else(|| if alone { Vec::new() } else { inputs.clone() }),
+            required_entries,
             scheduled,
             beside: empty.filter(|_| names),
             conditions,
@@ -706,7 +743,35 @@ impl<'a> Typer<'a> {
     /// Shared input lifecycle and admission checks. Only a whole
     /// payload read needs all_valid of a struct, tuple or fixed list.
     pub(super) fn input_read(&mut self, local: LocalId, at: Location, needs_all_valid: bool) {
-        let name = self.locals[local].name.clone();
+        self.input_payload_read(local, at, needs_all_valid, None);
+    }
+
+    /// FN-19: the selected entry has the same lifecycle and admission
+    /// checks as a direct input, with the entry's own guards.
+    pub(super) fn pack_input_read(
+        &mut self,
+        pack: LocalId,
+        key: Option<hir::PackKey>,
+        written: &SyntaxNode,
+        needs_all_valid: bool,
+    ) {
+        self.input_payload_read(
+            pack,
+            self.at(written),
+            needs_all_valid,
+            Some((key, written.text().to_string())),
+        );
+    }
+
+    fn input_payload_read(
+        &mut self,
+        local: LocalId,
+        at: Location,
+        needs_all_valid: bool,
+        packed: Option<(Option<hir::PackKey>, String)>,
+    ) {
+        let is_packed = packed.is_some();
+        let (key, name) = packed.unwrap_or_else(|| (None, self.locals[local].name.clone()));
         if self.initializing {
             self.diagnostics.emit(error(
                 Category::Phase,
@@ -755,12 +820,27 @@ impl<'a> Typer<'a> {
         // is a test of `all_valid` of what it reads". TIME-9: `valid` of
         // a collection "admits no child's read", and a whole read is one
         // of every child.
+        if is_packed
+            && self.present.iter().any(|fact| {
+                matches!(fact, Fact::DeferredPackGuard { pack, all_valid }
+                if *pack == local && (!needs_all_valid || *all_valid))
+            })
+        {
+            // The instance resolves its selector before it checks this read.
+            return;
+        }
+        let pack_path = key.map(|key| children::ChildPath::pack_entry(local, key));
+        let valid = pack_path
+            .as_ref()
+            .map_or(Fact::Valid(local), |path| Fact::ChildValid(path.clone()));
+        let is_valid = self.present.contains(&valid) || self.present.contains(&Fact::Valid(local));
         if needs_all_valid {
-            let all_valid = children::all_valid_fact(local);
-            if self.present.contains(&all_valid) {
+            let direct = children::all_valid_fact(local);
+            let all_valid = pack_path.map_or_else(|| direct.clone(), Fact::AllValid);
+            if self.present.contains(&all_valid) || self.present.contains(&direct) {
                 return;
             }
-            let given = if self.present.contains(&Fact::Valid(local)) {
+            let given = if is_valid {
                 format!("`valid({name})` is true once any child is, and admits no whole read")
             } else {
                 unproved.to_string()
@@ -782,11 +862,11 @@ impl<'a> Typer<'a> {
                 )),
             );
             // One report for one input on a path.
-            self.present.push(Fact::Valid(local));
+            self.present.push(valid);
             self.present.push(all_valid);
             return;
         }
-        if self.present.contains(&Fact::Valid(local)) {
+        if is_valid {
             return;
         }
         self.diagnostics.emit(
@@ -805,7 +885,7 @@ impl<'a> Typer<'a> {
             )),
         );
         // One report for one input on a path.
-        self.present.push(Fact::Valid(local));
+        self.present.push(valid);
     }
 
     /// Reports a temporal input used in `start` (TIME-5): "`start`
@@ -991,16 +1071,7 @@ impl<'a> Typer<'a> {
     /// "At a named function, `@suppress_warning(\"node.no_activation\")`
     /// acknowledges the dormant-node warning for that declaration."
     fn acknowledges(&self, code: &str) -> bool {
-        self.declaration
-            .syntax
-            .children()
-            .filter(|annotation| annotation.kind() == SyntaxKind::WarningAnnotation)
-            .filter_map(|annotation| {
-                tokens(&annotation).find(|token| token.kind() == SyntaxKind::Str)
-            })
-            // The string's value, not its spelling: an escape, or a
-            // text block, that says the code names the same warning.
-            .any(|string| decode_string(string.text()).is_ok_and(|value| value == code))
+        crate::syntax::suppresses_warning(&self.declaration.syntax, code)
     }
 
     /// What a `return` to a `ref` result of type `result`, or `out =` of

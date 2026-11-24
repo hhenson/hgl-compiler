@@ -260,6 +260,7 @@ pub fn is_execution(code: &str) -> bool {
 /// warning has a code and no category, and does not reject the source
 /// (ERR-1); no `expect-error` annotation names one (ERR-10).
 pub const WARNING_CODES: &[&str] = &[
+    "name.hides_function",
     "node.no_activation",
     // GEN-6: registered with the specification pin. Emission is tracked by #466.
     "operator.candidates_tie",

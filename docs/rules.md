@@ -26,7 +26,7 @@ specification says which is which.
 | parser | `hgl_parser` | Tokens to a syntax tree |
 | formatter | planned | Syntax tree to source text |
 | analyser | `hgl_analyser` | Names, types, phases and constants: every source rejection the parser cannot make |
-| optimiser | planned | Rewrites that keep what a program is observed to do |
+| optimiser | `hgl_lower::optimise` | Plans changes that preserve a program's result and evaluation order |
 | transpiler | `hgl_lower`, `hgl_cpp` | The generated program and the runtime it runs on. A rule here may need a change to the runtime, not to generated code |
 | runner | `hgl_runner` | `hgl test`: selects cases, matches `# expect-error`, runs eval |
 | driver | `hgl_cli` | The `hgl` command: source roots, target, entry and run configuration |
@@ -66,6 +66,9 @@ Each chapter's rules are in a file of their own. A rule is a `## RULE`
 heading; under it, each stage's entry is a line `stage: state`, then a
 line `- ...` for each fact of what the stage does. Two changes to one
 rule, made apart, then merge as long as they change different lines.
+
+The units and names chapter records nearest lexical binding and callable
+shadowing (UNIT-10, UNIT-12).
 
 - [Source text](rules/source-text.md)
 - [Units and names](rules/units-and-names.md)

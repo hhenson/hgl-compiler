@@ -4,7 +4,7 @@
 //! Part of the typing pass ([`super`]); a child of a collection named as
 //! an endpoint is read in [`super::children`].
 
-use hgl_diagnostics::{Category, Location};
+use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::calls::arguments_of;
@@ -12,8 +12,8 @@ use super::fit::{not_null, nullable, reads_cycle, whole};
 use super::node::RefRead;
 use super::{BOOL, Fact, Typer, children};
 use crate::hir::{
-    EndpointOperation, Expr, ExprKind, Hook, LocalId, Node, Stmt, ValueCategory,
-    walk_statement_nodes,
+    EndpointOperation, Expr, ExprKind, Hook, LocalId, Node, PackEndpointSelection, PackKey, Stmt,
+    ValueCategory, walk_statement_nodes,
 };
 use crate::program::{DeclarationKind, Module, Phase, Role};
 use crate::syntax::{child, tokens, ungrouped};
@@ -211,6 +211,20 @@ impl<'a> Typer<'a> {
             let selector = list.parent().map_or(at, |call| self.at(&call));
             self.no_scheduler(selector);
         }
+        if matches!(
+            operation,
+            EndpointOperation::Valid
+                | EndpointOperation::Modified
+                | EndpointOperation::AllValid
+                | EndpointOperation::Activate
+                | EndpointOperation::Passivate
+        ) && arguments
+            .iter()
+            .take(most)
+            .any(|argument| self.pack_endpoint_base(argument).is_some())
+        {
+            return self.packed_endpoint(operation, at, arguments.iter().take(most));
+        }
         // TIME-9, END-8: "A child of a collection is an endpoint whether
         // or not it is valid: `valid`, `modified`, `delta_value` and
         // `last_modified` take it, and `all_valid` where it is a
@@ -267,17 +281,8 @@ impl<'a> Typer<'a> {
             && let Some(inputs) = &inputs
         {
             for &input in inputs {
-                self.diagnostics.emit(error(
-                    Category::Phase,
-                    codes::INPUT_LIFECYCLE,
-                    at,
-                    format!(
-                        "`{}` cannot change the activity of `{}` in `stop`: every input is passive",
-                        operation.name(),
-                        self.locals[input].name
-                    ),
-                    "TIME-5",
-                ));
+                self.diagnostics
+                    .emit(activity_in_stop(operation, at, &self.locals[input].name));
             }
         }
         // TIME-9: "`all_valid` takes only a collection or a window;
@@ -290,35 +295,9 @@ impl<'a> Typer<'a> {
         {
             for (input, given) in inputs.iter().zip(&arguments) {
                 let ty = &self.locals[*input].ty;
-                let collection = matches!(
-                    ty,
-                    Type::List { .. }
-                        | Type::Tuple(_)
-                        | Type::Dict { .. }
-                        | Type::Named {
-                            kind: NamedKind::Struct,
-                            ..
-                        }
-                        | Type::RollingWindow { .. }
-                        | Type::Parameter { .. }
-                        | Type::Unknown
-                );
-                if !collection {
-                    self.diagnostics.emit(
-                        error(
-                            Category::Phase,
-                            codes::ENDPOINT_ARGUMENT,
-                            self.at(given),
-                            format!(
-                                "`all_valid` takes a collection or a window, and `{ty}` is neither"
-                            ),
-                            "TIME-9",
-                        )
-                        .with_note(
-                            "a collection is a list, a tuple, a struct or a dictionary; a window \
-                             is a `rolling_window`",
-                        ),
-                    );
+                if !all_valid_shape(ty) {
+                    self.diagnostics
+                        .emit(invalid_all_valid_shape(ty, self.at(given)));
                 }
             }
         }
@@ -397,6 +376,121 @@ impl<'a> Typer<'a> {
         (ExprKind::Endpoint { operation, inputs }, ty)
     }
 
+    /// FN-19: a direct selection of one of this node's temporal inputs.
+    /// A subsequent field or index is handled by the child endpoint reader.
+    fn pack_endpoint_base(&self, node: &SyntaxNode) -> Option<(LocalId, SyntaxNode)> {
+        if node.kind() != SyntaxKind::IndexExpr {
+            return None;
+        }
+        let base = ungrouped(node.children().next()?);
+        let pack = self.local_of(&base)?;
+        (self.is_temporal_input(pack) && self.signature.parameters.get(pack)?.pack.is_some())
+            .then_some((pack, base))
+    }
+
+    /// The identity of a selected input. A declaration can know a written
+    /// key before it knows the shape of that entry (FN-19, GEN-7).
+    pub(super) fn pack_endpoint_selection(&self, value: &Expr) -> Option<PackEndpointSelection> {
+        match &value.kind {
+            ExprKind::PackEntry { pack, key } => Some(PackEndpointSelection {
+                pack: *pack,
+                key: Some(key.clone()),
+            }),
+            ExprKind::DeferredPackRead => {
+                // A positional argument wrapper can have the same span
+                // as the selection it holds.
+                let written = self.syntax_of(value)?.descendants().find(|node| {
+                    node.kind() == SyntaxKind::IndexExpr && node.span() == value.at.span
+                })?;
+                let (pack, _) = self.pack_endpoint_base(&written)?;
+                Some(PackEndpointSelection {
+                    pack,
+                    key: self.endpoint_key(&written),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// The constant key in a direct pack selection that awaits its instance.
+    pub(super) fn endpoint_key(&self, written: &SyntaxNode) -> Option<PackKey> {
+        match self.read_constant(&written.children().nth(1)?, None).ok()? {
+            ConstantValue::Int(position) => {
+                Some(PackKey::Position(usize::try_from(position).ok()?))
+            }
+            ConstantValue::Str(name) => Some(PackKey::Name(name)),
+            _ => None,
+        }
+    }
+
+    /// Read a named endpoint selection without reading any of its payloads.
+    /// Keep regular operands in the same order, so a multi-input selector
+    /// has the same meaning when some of its inputs are packed.
+    fn packed_endpoint<'s>(
+        &mut self,
+        operation: EndpointOperation,
+        at: Location,
+        arguments: impl Iterator<Item = &'s SyntaxNode>,
+    ) -> (ExprKind, Type) {
+        let mut inputs = Vec::new();
+        for argument in arguments {
+            let input = if let Some((pack, base)) = self.pack_endpoint_base(argument) {
+                let before = self.naming.replace(self.at(&base));
+                let mut input = self.expression(argument, None);
+                self.naming = before;
+                input.ty = match &input.kind {
+                    ExprKind::PackEntry { key, .. } => self.packed_input_type(pack, Some(key)),
+                    ExprKind::DeferredPackRead => self.packed_input_type(pack, None),
+                    _ => None,
+                }
+                .cloned()
+                .unwrap_or(Type::Unknown);
+                if matches!(input.kind, ExprKind::Unread) {
+                    continue;
+                }
+                input
+            } else if let Some(local) = self.endpoint_named(operation, argument) {
+                Expr {
+                    kind: ExprKind::EndpointOf(local),
+                    ty: self.locals[local].ty.clone(),
+                    at: self.at(argument),
+                    category: ValueCategory::Unsettled,
+                }
+            } else {
+                continue;
+            };
+            let written = argument.text().to_string();
+            if self.hook == Some(Hook::Start)
+                && !matches!(&input.kind, ExprKind::EndpointOf(local) if Some(*local) == self.out)
+            {
+                self.input_lifecycle(at, &written);
+            }
+            if self.hook == Some(Hook::Stop)
+                && matches!(
+                    operation,
+                    EndpointOperation::Activate | EndpointOperation::Passivate
+                )
+            {
+                self.diagnostics
+                    .emit(activity_in_stop(operation, at, &written));
+            }
+            if operation == EndpointOperation::AllValid && !all_valid_shape(&input.ty) {
+                self.diagnostics
+                    .emit(invalid_all_valid_shape(&input.ty, input.at));
+            }
+            inputs.push(input);
+        }
+        let ty = if matches!(
+            operation,
+            EndpointOperation::Activate | EndpointOperation::Passivate
+        ) {
+            Type::Unknown
+        } else {
+            BOOL
+        };
+        (ExprKind::PackedEndpoint { operation, inputs }, ty)
+    }
+
     /// The generic arguments written on an endpoint operation, held to
     /// what the operation is: core declares each with one type, the
     /// type the endpoint holds, `valid<T>(input: endpoint<T>)` (TIME-9).
@@ -454,6 +548,24 @@ impl<'a> Typer<'a> {
                     ),
                     "EXPR-5",
                 ));
+            }
+            return;
+        }
+        if let ExprKind::PackedEndpoint { inputs, .. } = kind {
+            for input in inputs {
+                if whole(held) && whole(&input.ty) && input.ty != *held {
+                    self.diagnostics.emit(error(
+                        Category::Type,
+                        codes::TYPE_MISMATCH,
+                        *at,
+                        format!(
+                            "`{}<{held}>` takes an endpoint of `{held}`, and this input holds `{}`",
+                            name.text(),
+                            input.ty
+                        ),
+                        "EXPR-5",
+                    ));
+                }
             }
             return;
         }
@@ -821,4 +933,49 @@ pub(super) fn endpoint_arguments(list: &SyntaxNode) -> Vec<SyntaxNode> {
         .into_iter()
         .map(|(_, value)| endpoint_argument(&value))
         .collect()
+}
+
+/// TIME-9: `all_valid` takes a window or a collection. An unknown or
+/// parameterised type can be checked where the instance supplies it.
+fn all_valid_shape(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::List { .. }
+            | Type::Tuple(_)
+            | Type::Dict { .. }
+            | Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            }
+            | Type::RollingWindow { .. }
+            | Type::Parameter { .. }
+            | Type::Unknown
+    )
+}
+
+fn invalid_all_valid_shape(ty: &Type, at: Location) -> Diagnostic {
+    error(
+        Category::Phase,
+        codes::ENDPOINT_ARGUMENT,
+        at,
+        format!("`all_valid` takes a collection or a window, and `{ty}` is neither"),
+        "TIME-9",
+    )
+    .with_note(
+        "a collection is a list, a tuple, a struct or a dictionary; a window is a `rolling_window`",
+    )
+}
+
+/// TIME-5: every input is passive in `stop`.
+fn activity_in_stop(operation: EndpointOperation, at: Location, input: &str) -> Diagnostic {
+    error(
+        Category::Phase,
+        codes::INPUT_LIFECYCLE,
+        at,
+        format!(
+            "`{}` cannot change the activity of `{input}` in `stop`: every input is passive",
+            operation.name(),
+        ),
+        "TIME-5",
+    )
 }

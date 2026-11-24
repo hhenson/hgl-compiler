@@ -1077,7 +1077,9 @@ impl<'a> Typer<'a> {
                             }
                             // Child reads consume these only in hooks
                             // (TIME-1); replay is graph composition.
-                            Fact::AllValid(_) | Fact::ChildValid(_) => None,
+                            Fact::AllValid(_)
+                            | Fact::ChildValid(_)
+                            | Fact::DeferredPackGuard { .. } => None,
                         })
                         .collect()
                 });

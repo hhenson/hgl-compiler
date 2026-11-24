@@ -1,15 +1,14 @@
 //! Resolves the names used inside declarations (UNIT-10).
 //!
-//! > A name resolves to the one binding in scope for it: an earlier local
+//! > A name resolves to the nearest binding in scope for it: an earlier local
 //! > or iteration binding of an enclosing block; a parameter of an
 //! > enclosing function; a generic parameter of an enclosing declaration;
 //! > a module declaration; a selective import; or the prelude.
 //!
 //! This pass walks every signature, body, type and constraint. Where a
 //! name is bound (a `let`, a parameter) it adds the name to the scope,
-//! and rejects it when the name is already there (UNIT-12). Where a name
-//! is used it looks the name up, innermost scope first, and records what
-//! it found.
+//! and rejects it when an enclosing lexical scope already binds it (UNIT-12).
+//! A use starts its lookup at the innermost scope and records what it finds.
 //!
 //! Scopes nest as the source does. A *frame* holds the bindings of one
 //! level: a declaration (its generic parameters and parameters), a block,
@@ -26,16 +25,16 @@ use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
-use crate::hir::EndpointOperation;
+use crate::hir::{self, Callee, EndpointOperation, ExprKind};
 use crate::program::{
     Binding, Decision, DeclarationKind, ImportKind, LocalKind, Module, NameUse, PreludeName,
     Program, RUN_CONFIG,
 };
 use crate::syntax::{
     child, has_token, is_arg_keys_call, leads_its_test, pack_for_names, parent_outside_grouping,
-    ungrouped,
+    suppresses_warning, ungrouped,
 };
-use crate::{INJECTABLES, RESULT_FORMS, codes, error};
+use crate::{Detail, INJECTABLES, RESULT_FORMS, Type, codes, error, warning};
 
 /// Resolves the names of every module, filling in [`Module::uses`] and
 /// [`Module::decisions`] and adding to [`Module::prelude_names`].
@@ -60,11 +59,17 @@ pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
             hidden: Vec::new(),
             diagnostics,
             uses: Vec::new(),
+            hidden_callables: HashMap::new(),
             prelude: Vec::new(),
             decisions: Vec::new(),
         };
         resolver.module();
-        let (mut uses, prelude, decisions) = (resolver.uses, resolver.prelude, resolver.decisions);
+        let (mut uses, prelude, decisions, hidden_callables) = (
+            resolver.uses,
+            resolver.prelude,
+            resolver.decisions,
+            resolver.hidden_callables,
+        );
 
         let module = &mut program.modules[index];
         // File order, then source order.
@@ -77,6 +82,7 @@ pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
         uses.sort_by_key(|used| (position[&used.at.file], used.at.span.start));
         module.uses = uses;
         module.decisions = decisions;
+        module.hidden_callables = hidden_callables;
         for name in prelude {
             if !module
                 .prelude_names
@@ -86,6 +92,94 @@ pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
                 module.prelude_names.push(name);
             }
         }
+    }
+}
+
+/// Warn once at each function-typed binding that hides a callable (UNIT-12).
+pub(crate) fn warn_hidden_callables(program: &Program, diagnostics: &mut Diagnostics) {
+    let code = codes::NAME_HIDES_FUNCTION;
+    for module in &program.modules {
+        if module.hidden_callables.is_empty() {
+            continue;
+        }
+        let mut remaining = module.hidden_callables.clone();
+        let mut report = |name: &str, at: Location, ty: &Type, suppressed: bool| {
+            if let Some(hidden) = remaining.remove(&at)
+                && matches!(ty, Type::Function(_))
+                && !suppressed
+            {
+                diagnostics.emit(
+                    warning(
+                        Category::Name,
+                        code,
+                        at,
+                        format!("the function-typed binding `{name}` hides a function or operator"),
+                        "UNIT-12",
+                    )
+                    .with_related(hidden, "the hidden declaration is here"),
+                );
+            }
+        };
+        for (index, declaration) in module.declarations.iter().enumerate() {
+            let suppressed = suppresses_warning(&declaration.syntax, code);
+            if let Some(Detail::Callable(signature)) = module.details.get(index) {
+                for parameter in &signature.parameters {
+                    report(
+                        &parameter.name,
+                        parameter.at,
+                        &parameter.ty,
+                        suppressed || parameter.pack.is_some(),
+                    );
+                }
+            }
+            let mut local =
+                |bound: &hir::Local| report(&bound.name, bound.at, &bound.ty, suppressed);
+            if let Some(Some(body)) = module.bodies.get(index) {
+                visit_body_bindings(body, &mut local);
+            }
+            let defaults = module.defaults.get(index).into_iter().flatten().flatten();
+            for written in defaults.chain(module.constants.get(index).and_then(Option::as_ref)) {
+                written.locals.iter().for_each(&mut local);
+                written
+                    .value
+                    .walk(&mut |expr| visit_anonymous_bindings(expr, &mut local));
+            }
+        }
+        for (test, body) in module.tests.iter().zip(&module.test_bodies) {
+            if let Some(body) = body {
+                let suppressed = suppresses_warning(&test.syntax, code);
+                visit_body_bindings(body, &mut |bound| {
+                    report(&bound.name, bound.at, &bound.ty, suppressed);
+                });
+            }
+        }
+        let mut local = |bound: &hir::Local| report(&bound.name, bound.at, &bound.ty, false);
+        if let Some(body) = &module.store_body {
+            visit_body_bindings(body, &mut local);
+        }
+        if let Some(run) = &module.run_body {
+            run.locals.iter().for_each(&mut local);
+            run.call
+                .walk(&mut |expr| visit_anonymous_bindings(expr, &mut local));
+        }
+    }
+}
+
+fn visit_body_bindings(body: &hir::Body, visit: &mut dyn FnMut(&hir::Local)) {
+    body.locals.iter().for_each(&mut *visit);
+    hir::walk_statements(&body.statements, &mut |expr| {
+        visit_anonymous_bindings(expr, visit);
+    });
+}
+
+fn visit_anonymous_bindings(expr: &hir::Expr, visit: &mut dyn FnMut(&hir::Local)) {
+    let callee = match &expr.kind {
+        ExprKind::Call { callee, .. } => callee,
+        ExprKind::StaticCallable(callee) => callee.as_ref(),
+        _ => return,
+    };
+    if let Callee::Anonymous(anonymous) = callee {
+        visit_body_bindings(&anonymous.body, visit);
     }
 }
 
@@ -131,6 +225,7 @@ struct Resolver<'a> {
     hidden: Vec<Hidden>,
     diagnostics: &'a mut Diagnostics,
     uses: Vec<NameUse>,
+    hidden_callables: HashMap<Location, Location>,
     prelude: Vec<PreludeName>,
     decisions: Vec<Decision>,
 }
@@ -307,6 +402,9 @@ impl Resolver<'_> {
                 self.walk(&part);
             }
         }
+        if let Some(result) = child(node, SyntaxKind::ReturnType) {
+            self.walk(&result);
+        }
         // UNIT-7: a default is resolved "excluding the callable's formal
         // arguments".
         self.hidden = parameters
@@ -358,11 +456,13 @@ impl Resolver<'_> {
                 }
             }
         }
-        // The result type, the constraints, the body.
+        // The constraints and body see the parameters.
         for part in node.children() {
             match part.kind() {
-                SyntaxKind::GenericParams | SyntaxKind::ConfigParamList | SyntaxKind::ParamList => {
-                }
+                SyntaxKind::GenericParams
+                | SyntaxKind::ConfigParamList
+                | SyntaxKind::ParamList
+                | SyntaxKind::ReturnType => {}
                 // A native contract's `inject` names stand in the
                 // declaration's own scope: it has no block.
                 SyntaxKind::NativeContractBody => self.children(&part),
@@ -731,18 +831,26 @@ impl Resolver<'_> {
             lambda: true,
             ..Frame::default()
         });
-        for part in node.children() {
-            if part.kind() != SyntaxKind::ParamList {
-                self.walk(&part);
-                continue;
+        let parameters: Vec<_> = child(node, SyntaxKind::ParamList)
+            .into_iter()
+            .flat_map(|list| list.children())
+            .collect();
+        for parameter in &parameters {
+            self.children(parameter);
+        }
+        if let Some(result) = child(node, SyntaxKind::ReturnType) {
+            self.walk(&result);
+        }
+        for parameter in parameters {
+            if let Some(name) = identifiers(&parameter).next() {
+                self.bind(&name, LocalKind::Parameter);
             }
-            for parameter in part.children() {
-                // The type of `x: i64`, then the name.
-                self.children(&parameter);
-                if let Some(name) = identifiers(&parameter).next() {
-                    self.bind(&name, LocalKind::Parameter);
-                }
-            }
+        }
+        for part in node
+            .children()
+            .filter(|part| !matches!(part.kind(), SyntaxKind::ParamList | SyntaxKind::ReturnType))
+        {
+            self.walk(&part);
         }
         self.frames.pop();
     }
@@ -773,14 +881,7 @@ impl Resolver<'_> {
 
     // ---- Binding ----
 
-    /// Adds a binding to the innermost frame, unless the name is already
-    /// in scope.
-    ///
-    /// UNIT-12: "No binding takes a name already in scope: that is a
-    /// duplicate definition. A local or iteration binding, parameter, or
-    /// generic parameter takes no name bound there by an enclosing block
-    /// or function, a module declaration, a `use` in its file, or the
-    /// prelude."
+    /// Adds a binding if enclosing lexical scopes leave the name free (UNIT-12).
     fn bind(&mut self, token: &SyntaxToken, kind: LocalKind) {
         let name = token.text();
         let at = self.at(token);
@@ -806,6 +907,16 @@ impl Resolver<'_> {
                     RESULT_FORMS.join("`, `")
                 )),
             );
+        }
+        if matches!(name, "scheduled" | "modified" | "valid") {
+            self.diagnostics.emit(error(
+                Category::Name,
+                codes::NAME_DUPLICATE,
+                at,
+                format!("`{name}` names an activation form and cannot be bound here"),
+                "UNIT-12",
+            ));
+            return;
         }
 
         // A binding of an enclosing block, function or declaration.
@@ -840,43 +951,11 @@ impl Resolver<'_> {
             return;
         }
 
-        // A `use` of the file, or a declaration of the module.
-        let import = self.module.files[self.file]
-            .imports
-            .iter()
-            .find(|import| import.name == name);
-        let declaration = self
+        if let Some(test_local) = self
             .test_declarations(name)
             .and_then(|bound| bound.first())
             .map(|&index| &self.module.declarations[index])
-            .or_else(|| {
-                self.module
-                    .lookup(name)
-                    .find(|declaration| self.in_test || !declaration.test_only)
-            });
-        // UNIT-12: a local "takes no name bound there by ... a module
-        // declaration, a `use` in its file, or the prelude."
-        let prelude = self
-            .program
-            .core()
-            .filter(|core| *core != self.index)
-            .and_then(|core| {
-                self.program.modules[core]
-                    .lookup(name)
-                    .find(|declaration| declaration.is_public())
-            });
-        let clash = match (import, declaration, prelude) {
-            (Some(import), _, _) => Some((import.at, "imported here".to_string())),
-            (None, Some(declaration), _) => Some((
-                declaration.at,
-                format!("declared here, as a {}", declaration.kind.describe()),
-            )),
-            (None, None, Some(bound)) => {
-                Some((bound.at, "the prelude binds it: declared here".to_string()))
-            }
-            (None, None, None) => None,
-        };
-        if let Some((first, words)) = clash {
+        {
             self.diagnostics.emit(
                 error(
                     Category::Name,
@@ -885,17 +964,42 @@ impl Resolver<'_> {
                     format!("`{name}` is already in scope"),
                     "UNIT-12",
                 )
-                .with_related(first, words)
-                .with_note(format!(
-                    "{} takes no name of its module, of its file's imports, or of the prelude",
-                    kind.describe()
-                )),
+                .with_related(test_local.at, "declared in the enclosing test"),
             );
+        } else if let Some(hidden) = self.hidden_callable(name) {
+            self.hidden_callables.insert(at, hidden);
         }
-        // It is bound all the same, so that its uses find it.
         if let Some(frame) = self.frames.last_mut() {
             frame.bound.insert(name.to_string(), (at, kind));
         }
+    }
+
+    /// A module, import or prelude callable that an ordinary binding hides.
+    fn hidden_callable(&self, name: &str) -> Option<Location> {
+        let declaration = if let Some(import) = self.module.files[self.file]
+            .imports
+            .iter()
+            .find(|import| import.name == name)
+        {
+            if import.kind == ImportKind::Alias {
+                return None;
+            }
+            self.program.modules[import.module?]
+                .lookup(name)
+                .find(|declared| declared.is_public())
+        } else {
+            self.module
+                .lookup(name)
+                .find(|declared| self.in_test || !declared.test_only)
+                .or_else(|| {
+                    let core = self.program.core().filter(|core| *core != self.index)?;
+                    self.program.modules[core]
+                        .lookup(name)
+                        .find(|declared| declared.is_public())
+                })
+        }?;
+        (declaration.kind == DeclarationKind::Operator || declaration.kind.binding_role().is_some())
+            .then_some(declaration.at)
     }
 
     // ---- Looking up ----
@@ -962,7 +1066,7 @@ impl Resolver<'_> {
             .map(Vec::as_slice)
     }
 
-    /// UNIT-10: resolves a name to the one binding in scope for it.
+    /// UNIT-10: resolves a name to its nearest binding in scope.
     fn lookup(&mut self, token: &SyntaxToken) -> Option<Binding> {
         self.lookup_or_form(token, false)
     }
@@ -1005,6 +1109,10 @@ impl Resolver<'_> {
                 );
             }
             return self.used(token, Binding::Local { at: bound, kind });
+        }
+
+        if self.reject_default_name(token) {
+            return None;
         }
 
         // A `use` of the file (UNIT-2: imports bind in their own file).
@@ -1089,6 +1197,23 @@ impl Resolver<'_> {
             );
         }
 
+        // Earlier statements can still see a prelude name that a later
+        // local would hide when declared (UNIT-6, UNIT-12).
+        if let Some(core) = self.program.core()
+            && core != self.index
+        {
+            let declarations = self.public(core, name);
+            if !declarations.is_empty() {
+                return self.used(
+                    token,
+                    Binding::Declarations {
+                        module: core,
+                        declarations,
+                    },
+                );
+            }
+        }
+
         // UNIT-6: "Ordinary block locals become visible after
         // declaration."
         let later = self
@@ -1108,40 +1233,6 @@ impl Resolver<'_> {
                 .with_related(later, "declared here"),
             );
             return None;
-        }
-
-        // UNIT-7: what a default may not read.
-        if let Some(hidden) = self.hidden.iter().find(|hidden| hidden.name == name) {
-            self.diagnostics.emit(
-                error(
-                    Category::Name,
-                    codes::DEFAULT_FORMAL_ARGUMENT,
-                    at,
-                    format!("a default cannot read `{name}`, {}", hidden.what),
-                    "UNIT-7",
-                )
-                .with_related(hidden.at, "declared here"),
-            );
-            return None;
-        }
-
-        // UNIT-11: "The prelude is the public declarations of core's
-        // mandatory module, `core`, and nothing else. Every module binds
-        // them without a `use`." Core's own module has found its
-        // declarations above.
-        if let Some(core) = self.program.core()
-            && core != self.index
-        {
-            let declarations = self.public(core, name);
-            if !declarations.is_empty() {
-                return self.used(
-                    token,
-                    Binding::Declarations {
-                        module: core,
-                        declarations,
-                    },
-                );
-            }
         }
 
         // TIME-9: "The operations on an endpoint are intrinsics of the
@@ -1185,9 +1276,37 @@ impl Resolver<'_> {
         None
     }
 
+    /// UNIT-7 rejects a formal or field name in a default before looking
+    /// for the same name in the enclosing scope.
+    fn reject_default_name(&mut self, token: &SyntaxToken) -> bool {
+        let name = token.text();
+        let Some(hidden) = self.hidden.iter().find(|hidden| hidden.name == name) else {
+            return false;
+        };
+        self.diagnostics.emit(
+            error(
+                Category::Name,
+                codes::DEFAULT_FORMAL_ARGUMENT,
+                self.at(token),
+                format!("a default cannot read `{name}`, {}", hidden.what),
+                "UNIT-7",
+            )
+            .with_related(hidden.at, "declared here"),
+        );
+        true
+    }
+
     /// UNIT-2: "an alias qualifies a public interface with
     /// `alias::name`."
     fn qualified(&mut self, alias: &SyntaxToken, name: &SyntaxToken) -> Option<Binding> {
+        let bound = self
+            .frames
+            .iter()
+            .rev()
+            .find_map(|frame| frame.bound.get(alias.text()).copied());
+        if bound.is_none() && self.reject_default_name(alias) {
+            return None;
+        }
         let import = self.module.files[self.file]
             .imports
             .iter()
@@ -1208,6 +1327,20 @@ impl Resolver<'_> {
             );
             return None;
         };
+        if let Some((at, kind)) = bound {
+            self.diagnostics.emit(
+                error(
+                    Category::Name,
+                    codes::ALIAS_UNKNOWN,
+                    self.at(alias),
+                    format!("`{}` does not name a module alias here", alias.text()),
+                    "UNIT-2",
+                )
+                .with_related(at, format!("{} hides the alias", kind.describe()))
+                .with_related(import.at, "the alias is declared here"),
+            );
+            return None;
+        }
         // An alias of a module that no file declares has been reported.
         let target = import.module?;
         let module = &self.program.modules[target];

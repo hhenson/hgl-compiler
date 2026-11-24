@@ -386,6 +386,9 @@ pub struct Header {
     /// selectors name, `modified()` every temporal input and
     /// `modified([])` none; every temporal input where it writes none.
     pub subscribed: Vec<LocalId>,
+    /// Additional subscriptions that name an individual parameter-pack entry.
+    /// Lowering moves these into `subscribed` after expanding the inputs.
+    pub subscribed_entries: Vec<PackEndpointSelection>,
     /// True where the header writes a `modified` selector.
     pub selects: bool,
     /// What the handler requires to be valid: what its `valid`
@@ -395,6 +398,9 @@ pub struct Header {
     /// alone, which requires none. Of these, the temporal inputs are
     /// what the handler admits.
     pub required: Vec<LocalId>,
+    /// Additional validity requirements on individual pack entries. Lowering
+    /// moves these into `required` after expanding the inputs.
+    pub required_entries: Vec<PackEndpointSelection>,
     /// True where `scheduled()` stands alone or as a top-level
     /// conjunct: a wake by the node's scheduler or alarm runs it.
     pub scheduled: bool,
@@ -407,6 +413,15 @@ pub struct Header {
     /// selector, and each `modified` selector but `modified([])`, a
     /// guard on a publication of what it names.
     pub conditions: Vec<usize>,
+}
+
+/// One direct temporal input named through a parameter pack (FN-19).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackEndpointSelection {
+    /// The pack parameter in the unexpanded signature.
+    pub pack: LocalId,
+    /// The key, or `None` when the instance must supply its value.
+    pub key: Option<PackKey>,
 }
 
 /// One `case label: statements` of a `switch`.
@@ -532,6 +547,14 @@ pub enum ExprKind {
         /// argument, which in a `when` header stands for every temporal
         /// input (TIME-3); an empty list for `valid([])`.
         inputs: Option<Vec<LocalId>>,
+    },
+    /// An operation that names at least one direct input through a pack
+    /// (FN-19, TIME-9). Lowering resolves these endpoints to input locals.
+    PackedEndpoint {
+        /// The operation.
+        operation: EndpointOperation,
+        /// Named inputs: direct endpoints, pack entries, or deferred pack reads.
+        inputs: Vec<Expr>,
     },
     /// A parameter or a local. Its type is the local's, or the payload's
     /// where the local is a `T?` that a test against null has proved is
@@ -1773,6 +1796,11 @@ impl Expr {
             | ExprKind::EnumMember { .. }
             | ExprKind::StaticCallable(_)
             | ExprKind::Unread => {}
+            ExprKind::PackedEndpoint { inputs, .. } => {
+                for input in inputs {
+                    input.walk_nodes_at(child, visit)?;
+                }
+            }
             ExprKind::Block { statements, value } => {
                 walk_statement_nodes_at(statements, child, visit)?;
                 if let Some(value) = value {
@@ -1940,6 +1968,11 @@ impl Expr {
             | ExprKind::EnumMember { .. }
             | ExprKind::StaticCallable(_)
             | ExprKind::Unread => {}
+            ExprKind::PackedEndpoint { inputs, .. } => {
+                for input in inputs {
+                    input.walk_nodes_mut(visit);
+                }
+            }
             ExprKind::Block { statements, value } => {
                 walk_statement_nodes_mut(statements, visit);
                 if let Some(value) = value {

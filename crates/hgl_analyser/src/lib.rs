@@ -215,6 +215,8 @@ pub mod codes {
     pub const NAME_UNKNOWN: &str = "name.unknown";
     /// A function declared with a reserved activation form's name (UNIT-10).
     pub const NAME_RESERVED: &str = "name.reserved";
+    /// A function-typed binding hides a function or operator (UNIT-12).
+    pub const NAME_HIDES_FUNCTION: &str = "name.hides_function";
     /// A generic type's name stands before a `<` that does not open its
     /// arguments (GEN-14).
     pub const GENERIC_INVALID_APPLICATION: &str = "generic.invalid_application";
@@ -715,6 +717,7 @@ fn analyse_with_test_candidates(
     signatures::check(&program, diagnostics, tests);
     documentation::check(&program, diagnostics);
     values::check(&mut program, diagnostics);
+    resolve::warn_hidden_callables(&program, diagnostics);
     // UNIT-13: asked of the typed program, where each call has the
     // definition it selected.
     cycles::check(&program, diagnostics);
@@ -774,7 +777,7 @@ fn warning(
 /// `include_str!` puts a file's text in the compiler when the compiler
 /// is built, so the module is the one at the `spec/hgl_core` pin. A
 /// test fails when the pin adds a file this list does not have.
-pub const CORE_FILES: [(&str, &str); 9] = [
+pub const CORE_FILES: [(&str, &str); 11] = [
     (
         "<core>/core/calendar.hgl",
         include_str!("../../../spec/hgl_core/hgl/core/calendar.hgl"),
@@ -782,6 +785,10 @@ pub const CORE_FILES: [(&str, &str); 9] = [
     (
         "<core>/core/core.hgl",
         include_str!("../../../spec/hgl_core/hgl/core/core.hgl"),
+    ),
+    (
+        "<core>/core/mapping.hgl",
+        include_str!("../../../spec/hgl_core/hgl/core/mapping.hgl"),
     ),
     (
         "<core>/native/capabilities.hgl",
@@ -798,6 +805,10 @@ pub const CORE_FILES: [(&str, &str); 9] = [
     (
         "<core>/native/lists.hgl",
         include_str!("../../../spec/hgl_core/hgl/native/lists.hgl"),
+    ),
+    (
+        "<core>/native/mapping.hgl",
+        include_str!("../../../spec/hgl_core/hgl/native/mapping.hgl"),
     ),
     (
         "<core>/native/output.hgl",

@@ -69,6 +69,7 @@ docs: done
 docs: done
 
 - HTML links a code span found in its comment's scope to the named declaration, when present in the site
+- A code span stays plain code when a parameter of the documented declaration hides its name or import qualifier (UNIT-10, UNIT-12).
 - Declaration links use the declared name, with a suffix for repeated names. Module filenames use the module name, including when the name needs a shorter filename.
 
 ## SDOC-9

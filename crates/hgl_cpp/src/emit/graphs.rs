@@ -17,9 +17,8 @@
 //! | A connection of T where one of `T?` is taken (TYPE-14) | hgraph's widening of its port, `(x).as<TS<Optional<T>>>()`; given to a `ref` parameter of `T?`, the node's `REF` input designates that widened view of the producer's endpoint (FN-16) |
 //!
 //! Not written yet, and reported: `if`, `switch` and `for` over
-//! connections (CTRL-7), a `var` connection, and a call that leaves out a
-//! nullable temporal input with no default other than null (UNIT-8).
-//! `inject global_state` in a graph (FN-9) is the `apps` family's.
+//! connections (CTRL-7) and a `var` connection. `inject global_state`
+//! in a graph (FN-9) is the `apps` family's.
 
 use hgl_analyser::hir::{Argument, Body, Callee, Expr, ExprKind, Stmt, Value, ValueCategory};
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Role as Phase, Signature, Type};
@@ -446,7 +445,17 @@ impl Emitter<'_> {
                         changing |= changes(&default);
                         self.temporal_constant(&parameter.ty, &initial, default.at)
                     }
-                    _ => return self.missing(value.at, "a call that leaves out a temporal input"),
+                    // UNIT-8: omission of an optional temporal input
+                    // supplies a never-valid connection, not a null tick.
+                    Some(LeftOut::Default(_) | LeftOut::Null) => {
+                        let Some(schema) = self.temporal_schema(&parameter.ty, value.at) else {
+                            return "0".to_string();
+                        };
+                        format!("::{}::never<{schema}>({WIRING})", runtime::NAMESPACE)
+                    }
+                    None => {
+                        return self.missing(value.at, "a call that leaves out a temporal input");
+                    }
                 });
                 continue;
             }

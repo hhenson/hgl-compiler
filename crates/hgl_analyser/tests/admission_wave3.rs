@@ -173,7 +173,7 @@ fn scheduled_takes_no_generic_argument() {
 /// UNIT-10 and TIME-9: the wake selector keeps its meaning when a
 /// declaration or a local binds the same name.
 #[test]
-fn scheduled_calls_keep_their_meaning_under_a_binding() {
+fn scheduled_calls_keep_their_meaning_beside_a_rejected_binding() {
     let declared = module(concat!(
         "const fn scheduled() -> bool => true\n",
         "fn untimed(value: i64) -> i64 {\n",
@@ -205,7 +205,11 @@ fn scheduled_calls_keep_their_meaning_under_a_binding() {
     ));
     assert_eq!(
         parameter.summary(),
-        ["m.hgl:4:19 injectable/inject.no_scheduler TIME-9"]
+        [
+            "m.hgl:2:15 name/name.duplicate UNIT-12",
+            "m.hgl:3:12 name/name.duplicate UNIT-12",
+            "m.hgl:4:19 injectable/inject.no_scheduler TIME-9",
+        ]
     );
 }
 

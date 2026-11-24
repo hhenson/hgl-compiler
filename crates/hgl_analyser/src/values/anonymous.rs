@@ -421,6 +421,11 @@ pub(crate) fn remap_locals(body: &mut Body, slots: &[LocalId]) {
             } => {
                 header.subscribed.iter_mut().for_each(change);
                 header.required.iter_mut().for_each(change);
+                header
+                    .subscribed_entries
+                    .iter_mut()
+                    .chain(&mut header.required_entries)
+                    .for_each(|entry| change(&mut entry.pack));
             }
             _ => {}
         },

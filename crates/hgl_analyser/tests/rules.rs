@@ -703,7 +703,6 @@ fn a_module_binds_cores_public_names_without_a_use() {
             "app.hgl:4:30 name/name.unknown UNIT-10",
             "bad.hgl:2:12 name/name.duplicate UNIT-12",
             "bad.hgl:3:10 name/name.duplicate UNIT-12",
-            "bad.hgl:5:9 name/name.duplicate UNIT-12",
             "worse.hgl:2:15 operator/impl.unknown_operator GEN-4",
         ]
     );
