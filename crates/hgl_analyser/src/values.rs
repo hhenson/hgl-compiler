@@ -757,6 +757,8 @@ struct Typer<'a> {
     pack_functions: Vec<(usize, hir::Callee)>,
     /// Active computed-pack passes, from the outermost to the current one.
     pack_passes: Vec<(String, hir::PackKey)>,
+    /// Packs bound by `let`. Only their individual entries reach lowering.
+    bound_packs: HashMap<LocalId, forwarded_packs::BoundPack>,
     /// The generic value parameters of the declaration being read that
     /// its `requires` binds, each where it is declared with the constant
     /// it is bound to (GEN-3: "A positive conjunctive equality may bind
@@ -902,6 +904,7 @@ impl<'a> Typer<'a> {
             pack_inputs: None,
             pack_functions: Vec::new(),
             pack_passes: Vec::new(),
+            bound_packs: HashMap::new(),
             bound: Vec::new(),
             diagnostics,
         }
@@ -1045,6 +1048,7 @@ impl<'a> Typer<'a> {
             // its number is given to the next local declared.
             self.aliases.retain(|local, _| *local < mark.locals);
             self.bound_children.retain(|local, _| *local < mark.locals);
+            self.bound_packs.retain(|local, _| *local < mark.locals);
             self.captures.retain(|local, _| *local < mark.locals);
         }
         self.present.truncate(mark.present);

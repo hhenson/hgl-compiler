@@ -2545,6 +2545,36 @@ fn computed_pack_passes_run_on_the_sdk() {
     );
 }
 
+/// FN-19 and CTRL-16: let-bound entries keep their keys and values when
+/// read or spread. UNIT-8 supplies a default for an omitted graph input.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn let_bound_packs_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("let-bound-packs");
+    let file = write(
+        &root,
+        "examples.pack_forms.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/examples.pack_forms.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 3 passed, 0 failed\nexecutable cases: 3 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
 /// GEN-8 and GEN-17: explicitly written reflected types specialize calls
 /// in value and graph bodies and still carry their stated requirements (GEN-7).
 #[test]
