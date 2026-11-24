@@ -2,6 +2,7 @@
 // conversion cases (`tests/core_conformance/conversions.hgl`) and the edges of
 // each rule of OPS-6 to OPS-8.
 #include <hglrt/conversions.h>
+#include <hglrt/formatting.h>
 
 #include <doctest/doctest.h>
 
@@ -171,6 +172,26 @@ TEST_CASE("an f64 is written as the shortest text that reads back (OPS-6)") {
     CHECK(hglrt::convert_f64<str>(not_a_number) == "nan");
     CHECK(hglrt::convert_f64<str>(infinity) == "inf");
     CHECK(hglrt::convert_f64<str>(-infinity) == "-inf");
+}
+
+TEST_CASE("a padded f64 takes its sign from the converted text (FMT-4, OPS-6)") {
+    const auto padded = [](f64 value, hglrt::TextPadding padding,
+                           std::optional<char> sign = std::nullopt, bool zero = false) {
+        str text;
+        hglrt::format_float_text(text, value, padding, sign, zero);
+        return text;
+    };
+    const hglrt::TextPadding right{" ", 8, '>'};
+    for (f64 nan : {std::copysign(not_a_number, 1.0), std::copysign(not_a_number, -1.0)}) {
+        CHECK(padded(nan, right) == "     nan");
+        CHECK(padded(nan, right, '-') == "     nan");
+        CHECK(padded(nan, right, '+') == "    +nan");
+        CHECK(padded(nan, right, ' ') == "     nan");
+        CHECK(padded(nan, right, std::nullopt, true) == "     nan");
+        CHECK(padded(nan, {"*", 9, '^'}, '+') == "**+nan***");
+    }
+    CHECK(padded(-0.0, right, '+', true) == "-00000.0");
+    CHECK(padded(-infinity, right, '+', true) == "    -inf");
 }
 
 TEST_CASE("text is an i64 where it is an integer literal, after one `-` (OPS-6, OPS-7)") {

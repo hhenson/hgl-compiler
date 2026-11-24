@@ -209,13 +209,8 @@ void format_text(str& output, std::string_view value, TextPadding layout,
 void format_float_text(str& output, f64 value, TextPadding padding,
                        std::optional<char> sign, bool zero) {
     auto text = convert_f64<str>(value);
-    if (std::signbit(value)) {
-        // The default conversion calls every NaN "nan". A numeric sign
-        // or zero flag still uses the scalar formatter's sign bit.
-        if ((sign || zero) && !text.starts_with('-')) {
-            text.insert(text.begin(), '-');
-        }
-    } else if (sign == '+' || sign == ' ') {
+    // FMT-4 lays out the FMT-5 text. OPS-6 spells either NaN "nan".
+    if (!text.starts_with('-') && (sign == '+' || sign == ' ')) {
         text.insert(text.begin(), *sign);
     }
 
