@@ -26,7 +26,7 @@ use super::operators::unreadable;
 use super::requirements::{Condition, holds};
 use super::{Candidate, Typer};
 use crate::constant::Fault;
-use crate::declared::{agree, names_parameter, substitute_within};
+use crate::declared::{agree, names_parameter, substitute_with_packs, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
 use crate::syntax::{child, name_token, tokens, ungrouped};
@@ -439,6 +439,7 @@ impl<'a> Typer<'a> {
                     return false;
                 };
                 let partial = Condition {
+                    program: self.program,
                     value_of: &|_| None,
                     constant: &|_, _| None,
                     type_of: &|name| (name == generic.name).then(|| ty.clone()),
@@ -450,6 +451,14 @@ impl<'a> Typer<'a> {
                         (whole(&read.ty) && !names_parameter(&read.ty)).then(|| read.ty.clone())
                     },
                     callable: &|_| None,
+                    category: &|node, category| {
+                        (node.kind() == SyntaxKind::NamedType
+                            && node.text().to_string().trim() == generic.name)
+                            .then(|| {
+                                super::requirements::category_holds(self.program, ty, category)
+                            })
+                            .flatten()
+                    },
                     unvalued: &std::cell::Cell::new(false),
                 };
                 holds(condition, &partial) == Some(false)
@@ -1386,11 +1395,18 @@ impl<'a> Typer<'a> {
         // (`Admits::Unknown`), whatever it is not told for.
         let unvalued = std::cell::Cell::new(false);
         let condition_of = Condition {
+            program: self.program,
             value_of: &value_of,
             constant: &constant,
             type_of: &type_of,
             written: &written,
             callable: &callable,
+            category: &|node, category| {
+                let ty = crate::syntax::name_token(node)
+                    .and_then(|name| type_of(name.text()))
+                    .or_else(|| written(node))?;
+                super::requirements::category_holds(self.program, &ty, category)
+            },
             unvalued: &unvalued,
         };
         match holds(&condition, &condition_of) {
@@ -3058,10 +3074,11 @@ fn instance<'s>(
         }
     }
     let map: Vec<(Location, &Argument)> = own.iter().copied().zip(&resolved).collect();
+    let pack_types = PackTypes::new(generics, &type_packs);
     let mut taken = signature.clone();
     for parameter in &mut taken.parameters {
         if type_pack(parameter, generics).is_none() {
-            parameter.ty = placed(substitute_within(&parameter.ty, &map), &own);
+            parameter.ty = placed(pack_types.project(&parameter.ty, &map).ok()?, &own);
         }
     }
     // A generic value parameter's type may name another generic
@@ -3074,7 +3091,9 @@ fn instance<'s>(
     taken.result = taken
         .result
         .as_ref()
-        .map(|result| placed(substitute_within(result, &map), &own));
+        .map(|result| pack_types.project(result, &map).map(|ty| placed(ty, &own)))
+        .transpose()
+        .ok()?;
     Some((
         std::borrow::Cow::Owned(taken),
         resolved,
@@ -3157,6 +3176,7 @@ fn candidate_bindings(
     // or its place expects, is not widened (GEN-2).
     let mut by_argument = vec![false; generics.len()];
     let mut type_packs = Vec::new();
+    let mut tuple_inputs = Vec::new();
     for (index, parameter) in signature.parameters.iter().enumerate() {
         if let Type::Function(template) = &parameter.ty
             && let Some(reflects) = &template.named_pack
@@ -3231,12 +3251,30 @@ fn candidate_bindings(
                 found[generic] = Some(Argument::Type(actual.clone()));
                 continue;
             }
+            if super::inference::has_tuple_equation(&parameter.ty, generics) {
+                tuple_inputs.push((&parameter.ty, actual));
+            }
             let before: Vec<bool> = found.iter().map(Option::is_some).collect();
             infer(&parameter.ty, actual, generics, &mut found);
             for (generic, was) in before.into_iter().enumerate() {
                 by_argument[generic] |= !was && found[generic].is_some();
             }
         }
+    }
+    super::inference::settle_tuple_inputs(&tuple_inputs, generics, &mut found);
+    for pack in
+        super::inference::tuple_pack_bindings(generics, &mut found, &typer.signature.generics)
+    {
+        if !super::inference::tuple_pack_fits(
+            &pack,
+            &generics[pack.parameter],
+            &typer.signature.generics,
+            typer.program,
+        ) {
+            return None;
+        }
+        type_packs.retain(|other| other.parameter != pack.parameter);
+        type_packs.push(pack);
     }
     type_packs.sort_by_key(|pack| pack.parameter);
     // A generic value parameter's own type may name a type parameter:
@@ -3525,6 +3563,44 @@ fn most_specific(selected: &mut Vec<Chosen>, public: &Signature) {
     });
 }
 
+/// GEN-5 and GEN-10: compare tuple components at the admitted arity.
+/// Expanding a pack for ranking repeats its variable, not the concrete
+/// inferred types: inference must not make an unconstrained candidate specific.
+fn ranking_type(chosen: &Chosen<'_>, ty: &Type) -> Type {
+    let sequence = |at| {
+        let (index, generic) =
+            chosen
+                .declared
+                .generics
+                .iter()
+                .enumerate()
+                .find(|(_, generic)| {
+                    generic.at == at && matches!(generic.kind, GenericKind::Pack { .. })
+                })?;
+        let pack = chosen
+            .type_packs
+            .iter()
+            .find(|pack| pack.parameter == index)?;
+        if pack.forwarded_from.is_some() {
+            return None;
+        }
+        Some(vec![
+            Type::Parameter {
+                at,
+                name: generic.name.clone()
+            };
+            pack.types.len()
+        ])
+    };
+    let weight = chosen
+        .type_packs
+        .iter()
+        .map(|pack| pack.types.len().saturating_add(1))
+        .max()
+        .unwrap_or(1);
+    substitute_with_packs(ty, &[], &|_, _, _| None, &sequence, weight)
+}
+
 /// True when `better` outranks `worse`, each a candidate a call admits
 /// or may admit: as specific in each of the operator's own parameters,
 /// compared place for place ([`specificity`]), and more
@@ -3534,9 +3610,12 @@ fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
         .candidate_parameters(better.declared)
         .zip(public.candidate_parameters(worse.declared))
         .filter_map(|(better_index, worse_index)| {
-            let better = &better.declared.parameters[better_index?];
-            let worse = &worse.declared.parameters[worse_index?];
-            Some(specificity(&better.ty, &worse.ty))
+            let better_type = &better.declared.parameters[better_index?].ty;
+            let worse_type = &worse.declared.parameters[worse_index?].ty;
+            Some(specificity(
+                &ranking_type(better, better_type),
+                &ranking_type(worse, worse_type),
+            ))
         })
         .fold(Specific::Same, Specific::and);
     whole == Specific::More
