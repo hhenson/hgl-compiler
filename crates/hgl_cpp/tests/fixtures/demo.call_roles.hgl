@@ -84,8 +84,7 @@ fn pure_body(tick: i64) -> i64 => tick + apply(fn(n) => n + 1, 1)
 fn other_temporal(tick: i64) -> i64 => apply(plus_one, tick)
 
 # expect-error(type, "type.mismatch")
-fn temporal_callback_does_not_rescue_a_bad_input(tick: i64) -> i64 =>
-    tick + apply(later, "wrong")
+fn bad_temporal_callback_input(tick: i64) -> i64 => tick + apply(later, "wrong")
 
 test captures_choose_a_direct_template {
     assert eval captures(tick: [1, 5]) == [6, 18]
