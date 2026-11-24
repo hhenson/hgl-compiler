@@ -1,0 +1,90 @@
+module demo.explicit_any_callbacks
+
+# FN-17, MAP-2: a written reference fixes the callback independently of
+# the collection which the enclosing call will split to that signature.
+operator pick<R>(value: any) -> R
+impl fn pick(value: i64) -> i64 => value + 1
+fn mapped(values: list<i64, 2>) -> list<i64, 2> => map(pick<i64>, values)
+fn mapped_named(values: list<i64, 2>) -> list<i64, 2> => map(pick<i64>, value: values)
+test fixed_callback_inputs {
+    assert eval mapped(values: [[1, 2]]) == [[2, 3]]
+    assert eval mapped_named(values: [[3, 4]]) == [[4, 5]]
+}
+
+# GEN-8, FN-17: the written result selects one of the known signatures.
+operator typed<R>(value: any) -> R
+impl fn typed(value: i64) -> i64 => value + 10
+impl fn typed(value: f64) -> f64 => value + 0.5
+fn mapped_ints(values: list<i64, 2>) -> list<i64, 2> => map(typed<i64>, values)
+fn mapped_floats(values: list<f64, 2>) -> list<f64, 2> => map(typed<f64>, values)
+test written_result_selects_the_signature {
+    assert eval mapped_ints(values: [[1, 2]]) == [[11, 12]]
+    assert eval mapped_floats(values: [[1.0, 2.0]]) == [[1.5, 2.5]]
+}
+
+operator identity<R>(value: any) -> R
+impl fn identity<T>(value: T) -> T => value
+fn identities(values: list<i64, 2>) -> list<i64, 2> => map(identity<i64>, values)
+test the_written_result_binds_a_candidate_generic {
+    assert eval identities(values: [[3, 4]]) == [[3, 4]]
+}
+
+# MAP-2: a known split slot and a public-any whole collection retain
+# their independent binding; projection never replaces the real inputs.
+operator combine<R>(value: i64, bundle: any) -> R
+impl fn combine(value: i64, bundle: list<i64, 2>) -> i64 => value + bundle[0] + bundle[1]
+fn mixed(values: list<i64, 2>, bundle: list<i64, 2>) -> list<i64, 2> => map(combine<i64>, value: values, bundle: bundle)
+test split_and_whole_inputs {
+    assert eval mixed(values: [[1, 2]], bundle: [[7, 9]]) == [[17, 18]]
+}
+
+# FN-17: ordinary forwarding still selects from the supplied scalar type.
+operator choose<R>(value: any) -> R
+impl fn choose(value: i64) -> i64 => value + 1
+impl fn choose(value: f64) -> i64 => 7
+fn forward<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R => f(...args)
+fn ints(value: i64) -> i64 => forward(choose<i64>, value)
+fn floats(value: f64) -> i64 => forward(choose<i64>, value)
+test ordinary_forwarding_keeps_its_input_types {
+    assert eval ints(value: [3]) == [4]
+    assert eval floats(value: [3.0]) == [7]
+}
+
+# EXPR-5: an ordinary forwarded collection does not become a scalar.
+test ordinary_forwarding_rejects_a_collection {
+    # expect-error(type, "type.mismatch")
+    fn bad(values: list<i64, 2>) -> i64 => forward(pick<i64>, values)
+}
+# GEN-3: a typed f64 list does not fit the callback's i64 member slot.
+test map_checks_the_actual_element_types {
+    # expect-error(operator, "operator.no_candidate")
+    fn bad(values: list<f64, 2>) -> list<i64, 2> => map(pick<i64>, values)
+}
+# FN-17: the result remains a constraint on candidate selection.
+test the_written_result_still_constrains_the_candidate {
+    # expect-error(type, "type.mismatch")
+    fn bad(values: list<i64, 2>) -> list<f64, 2> => map(pick<f64>, values)
+}
+fn inspect<R, ...Ps>(f: fn(...{Ps}) -> R) -> i64 => 1
+# FN-17: no input type means no selection, even with one candidate.
+test no_input_evidence_does_not_choose_a_candidate {
+    # expect-error(type, "generic.unresolved")
+    fn bad() -> i64 => inspect(pick<i64>)
+}
+
+# FN-17, GEN-5: equivalent projected inputs use the normal role and
+# specificity ranking, rather than treating each candidate in isolation.
+operator phased<R>(value: any) -> R
+impl const fn phased(value: i64) -> i64 => value + 100
+impl fn phased(value: i64) -> i64 => value + 1
+fn phased_map(values: list<i64, 2>) -> list<i64, 2> => map(phased<i64>, values)
+test the_callback_template_keeps_its_phase {
+    assert eval phased_map(values: [[1, 2]]) == [[2, 3]]
+}
+operator preferred<R>(value: any) -> R
+impl fn preferred<T>(value: T) -> T => value
+impl fn preferred(value: i64) -> i64 => value + 10
+fn preferred_map(values: list<i64, 2>) -> list<i64, 2> => map(preferred<i64>, values)
+test concrete_inputs_still_outrank_variables {
+    assert eval preferred_map(values: [[1, 2]]) == [[11, 12]]
+}

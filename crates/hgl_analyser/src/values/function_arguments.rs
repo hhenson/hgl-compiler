@@ -395,8 +395,100 @@ impl<'a> Typer<'a> {
         } else {
             Role::Temporal
         };
-        let (mut matches, unknown) =
+        let (mut matches, mut unknown) =
             self.admitted_for_callback(operator, &candidates, &given, &wanted, role);
+        if matches.is_empty()
+            && !unknown
+            && reflected
+            && explicit.as_ref().is_some_and(|reference| {
+                reference
+                    .generics
+                    .iter()
+                    .all(|argument| {
+                        !matches!(argument, Argument::Type(ty) if ty.any_part(&open, &|_| false))
+                    })
+            })
+            && public
+                .parameters
+                .iter()
+                .all(|parameter| parameter.pack.is_none())
+            && request
+                .parameters
+                .iter()
+                .any(|input| matches!(input.ty(), Type::Scalar(crate::types::Scalar::Any)))
+        {
+            // FN-17, MAP-2: a written reference may determine a candidate's
+            // input signature before the enclosing dependent call fits its
+            // split or whole arguments. Supplied-type selection above stays
+            // first for ordinary forwarding. These projected operands select
+            // only the callback; they never replace the enclosing arguments.
+            let mut trials: Vec<(Vec<Given>, Vec<_>)> = Vec::new();
+            for candidate in &candidates {
+                let signature = candidate.2;
+                let mut found = vec![None; signature.generics.len()];
+                if let (Some(pattern), Some(result)) = (&signature.result, &request.result) {
+                    infer(pattern, result, &signature.generics, &mut found);
+                }
+                let map: Vec<_> = signature
+                    .generics
+                    .iter()
+                    .zip(&found)
+                    .filter_map(|(generic, argument)| {
+                        argument.as_ref().map(|argument| (generic.at, argument))
+                    })
+                    .collect();
+                let taken = in_instance(signature, &map);
+                let positions: Vec<_> = public.candidate_parameters(&taken).collect();
+                let own: Vec<_> = signature
+                    .generics
+                    .iter()
+                    .map(|generic| generic.at)
+                    .collect();
+                let mut projected = given.clone();
+                let mut changed = false;
+                let complete = projected.iter_mut().all(|argument| {
+                    let Some(index) = argument.key.public_parameter(public) else {
+                        return true;
+                    };
+                    if !matches!(
+                        request.parameters[index].ty(),
+                        Type::Scalar(crate::types::Scalar::Any)
+                    ) {
+                        return true;
+                    }
+                    let Some(position) = positions[index] else {
+                        return false;
+                    };
+                    let ty = &taken.parameters[position].ty;
+                    if ty.any_part(&open, &|_| false) || mentions(ty, &own) {
+                        return false;
+                    }
+                    argument.value.ty = ty.clone();
+                    changed = true;
+                    true
+                });
+                if complete && changed {
+                    // The keys and order are unchanged; group equal input types
+                    // so normal specificity and phase ranking still apply.
+                    if let Some((_, group)) = trials.iter_mut().find(|(previous, _)| {
+                        previous
+                            .iter()
+                            .zip(&projected)
+                            .all(|(left, right)| left.ty() == right.ty())
+                    }) {
+                        group.push(*candidate);
+                    } else {
+                        trials.push((projected, vec![*candidate]));
+                    }
+                }
+            }
+            for (projected, candidates) in trials {
+                let (selected, untold) =
+                    self.admitted_for_callback(operator, &candidates, &projected, &wanted, role);
+                matches.extend(selected);
+                unknown |= untold;
+            }
+        }
         self.graph = graph;
         self.value_code = value_code;
         if !unknown

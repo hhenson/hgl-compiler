@@ -2676,6 +2676,38 @@ fn function_parameters_run_on_the_sdk() {
     );
 }
 
+/// FN-17, MAP-2: a public-any written callback supplies a fixed input,
+/// while real dependent operands still determine splitting and forwarding.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn explicit_public_any_callbacks_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("explicit_public_any_callbacks");
+    let file = write(
+        &root,
+        "demo.explicit_any_callbacks.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.explicit_any_callbacks.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("rejection cases: 4 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-17: a finite chain of static wrappers and a recursive call that
 /// forwards the same target both specialize and run.
 #[test]
