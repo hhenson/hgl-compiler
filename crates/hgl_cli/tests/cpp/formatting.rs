@@ -74,6 +74,41 @@ test typed_formats {
     assert format("{:%T.9}", boundary) == "19:59:05.224192000"
 }
 
+# FMT-4 and FMT-5: character layout uses Unicode code points, and a
+# width-only float field pads its default text.
+test text_layout {
+    assert format("{:>4}", "日") == "   日"
+    assert format("{:.2}", "日日日") == "日日"
+    assert format("{:界^4.2s}", "日🙂!") == "界日🙂界"
+    assert format("{:.0}", "é日") == ""
+    assert format("{:>4}", "é") == "   é"
+    assert format("{:>6}", 3.0) == "   3.0"
+    assert format("{:9}", -0.0) == "     -0.0"
+    assert format("{:*^7}", 3.0) == "**3.0**"
+    assert format("{:>8}", 1e21) == "    1e21"
+    assert format("{:+6}", 3.0) == "  +3.0"
+    assert format("{:*> 6}", 3.0) == "** 3.0"
+    assert format("{:06}", -3.0) == "-003.0"
+    assert format("{:+06}", 3.0) == "+003.0"
+    assert format("{:>06}", 3.0) == "   3.0"
+    assert format("{:>6.1f}", 3.0) == "   3.0"
+}
+
+const fn show_nullable<T>(value: T?) -> str => format("{}", value)
+
+# FMT-5 and GEN-7: value formatting selects the payload's conversion.
+test nullable_formats {
+    let members: list<str> = ["日"]
+    assert show_nullable<i64>(42) == "42"
+    assert show_nullable<i64>(null) == "null"
+    assert show_nullable<str>("日") == "日"
+    assert show_nullable<str>(null) == "null"
+    assert show_nullable<list<str>>(members) == "[\"日\"]"
+    assert show_nullable<list<str>>(null) == "null"
+    assert show_nullable<FormatMember>(FormatMember(number: 7)) == "7"
+    assert show_nullable<FormatMember>(null) == "null"
+}
+
 test selected_converters {
     let members: list<FormatMember, 1> = [FormatMember(number: 7)]
     let nested: list<list<FormatMember, 1>> = [members]
@@ -363,6 +398,8 @@ fn core_format_and_write_run_on_the_sdk() {
     for test in [
         "stream_bytes",
         "typed_formats",
+        "text_layout",
+        "nullable_formats",
         "selected_converters",
         "deferred_patterns",
     ] {

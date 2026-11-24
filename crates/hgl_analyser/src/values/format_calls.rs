@@ -7,7 +7,7 @@ use hgl_lexer::literal::string_source_range;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::Span;
 
-use super::{Tables, Typer, calls::call_callee, tables};
+use super::{Tables, Typer, calls::call_callee, fit::not_null, tables};
 use crate::declared::names_parameter;
 use crate::formatting::{
     self, PATTERN_DECLARATIONS, PatternFault, PatternMemo, PatternText, Piece,
@@ -131,6 +131,7 @@ impl Typer<'_> {
             };
             let payload = formatting::marked_payload(self.program, ty);
             let effective = payload.unwrap_or(ty);
+            let text_type = not_null(Some(effective)).unwrap_or(effective);
             if names_parameter(effective) || effective == &Type::Unknown {
                 continue;
             }
@@ -156,18 +157,18 @@ impl Typer<'_> {
                     ),
                     "FMT-4",
                 );
-            } else if formatting::needs_text_conversion(effective)
+            } else if formatting::needs_text_conversion(text_type)
                 && let Some(index) = operand
                 && conversions[index].is_none()
             {
                 let at = arguments[index].value.at;
-                conversions[index] = self.text_conversion(effective, at);
+                conversions[index] = self.text_conversion(text_type, at);
                 if conversions[index].is_none() {
                     self.diagnostics.emit(error(
                         Category::Operator,
                         codes::OPERATOR_NO_CANDIDATE,
                         at,
-                        format!("no value candidate of `convert<str>` takes `{effective}`"),
+                        format!("no value candidate of `convert<str>` takes `{text_type}`"),
                         "FMT-5",
                     ));
                 }

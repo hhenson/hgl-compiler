@@ -1,5 +1,9 @@
 #include <hglrt/formatting.h>
 
+#include <hglrt/conversions.h>
+
+#include <cmath>
+
 #include <fmt/chrono.h>
 
 #include "instant_text.h"
@@ -175,6 +179,59 @@ str format_default(duration value) {
         }
     }
     return text;
+}
+
+void format_text(str& output, std::string_view value, TextPadding layout,
+                 std::optional<std::size_t> precision) {
+    std::size_t characters = 0;
+    for (std::size_t byte = 0; byte < value.size(); ++byte) {
+        // Core strings are valid UTF-8. Only leading bytes start characters.
+        if ((static_cast<unsigned char>(value[byte]) & 0xc0) == 0x80) {
+            continue;
+        }
+        if (precision && characters == *precision) {
+            value = value.substr(0, byte);
+            break;
+        }
+        ++characters;
+    }
+    const auto padding = layout.width > characters ? layout.width - characters : 0;
+    const auto before = layout.align == '>' ? padding : layout.align == '^' ? padding / 2 : 0;
+    for (std::size_t count = 0; count < before; ++count) {
+        output.append(layout.fill);
+    }
+    output.append(value);
+    for (std::size_t count = before; count < padding; ++count) {
+        output.append(layout.fill);
+    }
+}
+
+void format_float_text(str& output, f64 value, TextPadding padding,
+                       std::optional<char> sign, bool zero) {
+    auto text = convert_f64<str>(value);
+    if (std::signbit(value)) {
+        // The default conversion calls every NaN "nan". A numeric sign
+        // or zero flag still uses the scalar formatter's sign bit.
+        if ((sign || zero) && !text.starts_with('-')) {
+            text.insert(text.begin(), '-');
+        }
+    } else if (sign == '+' || sign == ' ') {
+        text.insert(text.begin(), *sign);
+    }
+
+    if (zero && std::isfinite(value) && padding.width > text.size()) {
+        const std::size_t sign_width =
+            text.starts_with('-') || text.starts_with('+') || text.starts_with(' ') ? 1 : 0;
+        output.append(text, 0, sign_width);
+        output.append(padding.width - text.size(), '0');
+        output.append(text, sign_width);
+        return;
+    }
+    // Numeric zero padding of a non-finite value uses spaces.
+    if (!std::isfinite(value) && padding.fill == "0") {
+        padding.fill = " ";
+    }
+    format_text(output, text, padding, std::nullopt);
 }
 
 str format_quoted(std::string_view value) {

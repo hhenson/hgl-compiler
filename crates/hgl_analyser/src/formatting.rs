@@ -227,20 +227,84 @@ pub fn chrono_specifier(scalar: Scalar, text: &str) -> Option<Chrono<'_>> {
     Some(Chrono { padding, parts })
 }
 
+/// A checked plain text field measured in Unicode characters (FMT-4).
+pub struct TextLayout<'a> {
+    /// The single character used for each position of padding.
+    pub fill: &'a str,
+    /// The field's '<', '^' or '>' alignment.
+    pub align: char,
+    /// The minimum number of characters in the whole field.
+    pub width: u32,
+    /// The maximum number of characters taken from the text.
+    pub precision: Option<u32>,
+    /// An explicit sign from a numeric specifier.
+    pub sign: Option<char>,
+    /// Whether a numeric field pads after its sign with zeros.
+    pub zero: bool,
+}
+
+/// A plain string or the default float text, with its checked layout.
+/// Explicit numeric presentations and the fmt debug presentation
+/// continue through the library's own formatter.
+pub fn text_layout(scalar: Scalar, specifier: &str) -> Option<TextLayout<'_>> {
+    let (fill, align, mut rest) = split_alignment(specifier);
+    let mut sign = None;
+    let mut zero = false;
+    if scalar == Scalar::F64 {
+        if let Some(flag @ ('+' | '-' | ' ')) = rest.chars().next() {
+            sign = Some(flag);
+            rest = &rest[1..];
+        }
+        if let Some(after_zero) = rest.strip_prefix('0') {
+            zero = align.is_none();
+            rest = after_zero;
+        }
+    }
+    let after_width = digits(rest)?;
+    let width = rest[..rest.len() - after_width.len()].parse().unwrap_or(0);
+    let precision = match scalar {
+        Scalar::Str => {
+            let (precision, presentation) = if let Some(after) = after_width.strip_prefix('.') {
+                let presentation = digits(after)?;
+                let precision = after[..after.len() - presentation.len()].parse().ok()?;
+                (Some(precision), presentation)
+            } else {
+                (None, after_width)
+            };
+            if !matches!(presentation, "" | "s") || (width == 0 && precision.is_none()) {
+                return None;
+            }
+            precision
+        }
+        Scalar::F64 if width != 0 && after_width.is_empty() => None,
+        _ => return None,
+    };
+    Some(TextLayout {
+        fill,
+        align: align.unwrap_or(if scalar == Scalar::F64 { '>' } else { '<' }),
+        width,
+        precision,
+        sign,
+        zero,
+    })
+}
+
 fn alignment(text: &str) -> &str {
+    split_alignment(text).2
+}
+
+fn split_alignment(text: &str) -> (&str, Option<char>, &str) {
     let mut chars = text.chars();
     let Some(first) = chars.next() else {
-        return text;
+        return (" ", None, text);
     };
-    if chars
-        .next()
-        .is_some_and(|next| matches!(next, '<' | '^' | '>'))
-    {
-        &text[first.len_utf8() + 1..]
+    if let Some(next @ ('<' | '^' | '>')) = chars.next() {
+        let fill = first.len_utf8();
+        (&text[..fill], Some(next), &text[fill + 1..])
     } else if matches!(first, '<' | '^' | '>') {
-        &text[1..]
+        (" ", Some(first), &text[1..])
     } else {
-        text
+        (" ", None, text)
     }
 }
 

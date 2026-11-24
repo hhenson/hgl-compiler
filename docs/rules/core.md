@@ -908,12 +908,14 @@ transpiler: partial
 - The C++ target gives primitive fields to pinned fmt with compiled specifiers. It emits checked chrono directives with fractional truncation on `%S`, `%T` and `%[S]`, duration totals and padding on the whole field.
 - Boolean width and alignment without the zero flag use the pinned fmt formatter.
 - A `str` at `{:?}` uses the same HGL literal writer as a string inside a collection (FMT-5).
+- Plain string fields measure width and precision in Unicode code points. Default `f64` fields pad their FMT-5 text, including sign and numeric zero padding.
 
 ## FMT-5
 
 analyser: partial
 
 - A user type uses its selected `convert<str>` and rejects if there is no candidate.
+- A nullable field checks the text conversion of its payload type. The target writes that text when present and `null` when absent.
 - Left: tuple and struct text candidates (#434, #512).
 
 transpiler: partial
