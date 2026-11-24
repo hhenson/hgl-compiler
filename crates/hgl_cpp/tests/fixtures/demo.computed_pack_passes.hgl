@@ -28,3 +28,13 @@ test an_omitted_name_leaves_a_default {
     assert weight_when<false>(3) == 14
     assert weight_when<true>(3) == 21
 }
+
+# FN-14: the anonymous function reads the key of the pass that made it.
+const fn invoke(f: const fn() -> i64) -> i64 => f()
+const fn tagged(tag: i64) -> i64 => tag
+const fn capture_key<...Ps>(f: const fn(...{Ps}) -> i64) -> i64 =>
+    f(...{for key in arg_keys(Ps): invoke(fn() => if key == "tag" { 42 } else { 13 })})
+
+test an_entry_can_capture_its_key {
+    assert capture_key(tagged) == 42
+}

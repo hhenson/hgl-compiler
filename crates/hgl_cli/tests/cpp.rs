@@ -2540,7 +2540,7 @@ fn computed_pack_passes_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2660,11 +2660,10 @@ fn an_unread_reflected_membership_preserves_the_operator_error() {
     );
 }
 
-/// FN-19 and GEN-17: a computed spread is read through its pack-key
-/// expressions. C++ declines it while the generic passes remain unread.
-/// A function inside an entry may capture its iteration key (FN-14).
+/// FN-19 and GEN-17: a computed spread emits its selected entries.
+/// A function inside an entry can capture its iteration key (FN-14).
 #[test]
-fn a_computed_pack_spread_checks_and_declines_cpp_emission() {
+fn a_computed_pack_spread_emits_selected_key_captures() {
     let root = scratch("computed-pack-spread");
     let file = write(
         &root,
@@ -2672,12 +2671,16 @@ fn a_computed_pack_spread_checks_and_declines_cpp_emission() {
         concat!(
             "module m\n",
             "const fn identity(x: i64) -> i64 => x\n",
+            "const fn named(unused: i64) -> i64 => unused\n",
             "const fn apply(f: const fn() -> i64) -> i64 => f()\n",
             "const fn forward<...Ps, ...As>(f: const fn(...{Ps}) -> i64, args: ...{As for f}) -> i64 =>\n",
             "    f(...{for key in arg_keys(Ps):\n",
             "        if key == \"unused\" { apply(fn() => if key == \"unused\" { 0 } else { 1 }) }\n",
             "        else if key in arg_keys(As) { args[key] }})\n",
-            "test example { assert forward(identity, 3) == 3 }\n",
+            "test example {\n",
+            "    assert forward(identity, 3) == 3\n",
+            "    assert forward(named, unused: 3) == 0\n",
+            "}\n",
         ),
     );
     let checked = hgl_in(&["check", &file], &[], &[]);
@@ -2688,13 +2691,7 @@ fn a_computed_pack_spread_checks_and_declines_cpp_emission() {
         &[],
         &[],
     );
-    let stderr = text(&emitted.stderr);
-    assert_eq!(emitted.status.code(), Some(1), "{stderr}");
-    assert!(
-        stderr.contains("error[build/target.unsupported]")
-            && stderr.contains("f(...{for key in arg_keys(Ps)"),
-        "{stderr}"
-    );
+    assert_eq!(emitted.status.code(), Some(0), "{}", text(&emitted.stderr));
 }
 
 /// GEN-17 and FN-19: the keys in a computed spread are those of a type pack.
