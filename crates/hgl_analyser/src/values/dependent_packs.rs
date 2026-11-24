@@ -423,7 +423,7 @@ impl Typer<'_> {
         // The computed entries can still fill this callback's inputs.
         // Its written reference can be read against its template.
         let dependent = dependent
-            .filter(|_| !super::forwarded_packs::has_computed_spread(list))
+            .filter(|_| !self.deferred_computed_spread(list))
             .map(|slot| {
                 let parameter = &signature.parameters[slot];
                 (slot, &declared.dependent_packs[&parameter.at])

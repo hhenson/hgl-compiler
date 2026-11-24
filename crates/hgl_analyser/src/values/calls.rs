@@ -732,7 +732,7 @@ impl<'a> Typer<'a> {
         else {
             return self.unread_call(list);
         };
-        let computed = super::forwarded_packs::has_computed_spread(list);
+        let computed = self.deferred_computed_spread(list);
         // What a parameter takes: its type, or in an eval a trace for
         // one that is not `const`. TST-5: "Each cell is one cycle's
         // publication: it is read as the `delta<T>` (TYPE-16) of its

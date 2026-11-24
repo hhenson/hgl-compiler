@@ -496,7 +496,10 @@ pub(crate) fn reread_instance_body(
             ))
         })
         .collect();
-    typer.pack_inputs = inputs.pack_inputs.map(|inputs| inputs.to_vec());
+    typer.pack_inputs = inputs.pack_inputs.map(|values| PackInputs {
+        values,
+        types: inputs.type_packs,
+    });
     typer.pack_functions = inputs.functions.to_vec();
     typer.body_at_phase(owner.phases[declaration])
 }
@@ -747,8 +750,8 @@ struct Typer<'a> {
     instance: Vec<(Location, crate::types::Argument)>,
     /// Known const parameter values in this reread, by lexical binding.
     const_inputs: Vec<(Location, Expr)>,
-    /// Concrete entries of the enclosing instance's pack parameters.
-    pack_inputs: Option<Vec<hir::PackInput>>,
+    /// Concrete value and type pack entries of the enclosing instance.
+    pack_inputs: Option<PackInputs<'a>>,
     /// Compile-time callbacks available to forwarded calls.
     pack_functions: Vec<(usize, hir::Callee)>,
     /// The generic value parameters of the declaration being read that
@@ -758,6 +761,13 @@ struct Typer<'a> {
     /// .slow` is `.slow` where the body gives it to an option.
     bound: Vec<(Location, crate::types::Argument)>,
     diagnostics: &'a mut Diagnostics,
+}
+
+/// The pack arguments available while rereading an instance (FN-19).
+#[derive(Clone, Copy)]
+struct PackInputs<'a> {
+    values: &'a [hir::PackInput],
+    types: &'a [hir::TypePackArgument],
 }
 
 /// How many expressions of one construct are read a second time, beside
