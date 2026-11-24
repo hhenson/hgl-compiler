@@ -148,11 +148,12 @@ pub fn scalar_specifier(scalar: Scalar, text: &str) -> bool {
         rest
     };
     match scalar {
-        // Hold fmt's byte-oriented `c` pending the FMT-4 decision (#434).
+        // FMT-4 rejects fmt's byte-oriented `c` for i64.
         Scalar::I64 => !precision && matches!(rest, "" | "d" | "x" | "X" | "o" | "b" | "B"),
         Scalar::F64 => matches!(rest, "" | "a" | "A" | "e" | "E" | "f" | "F" | "g" | "G"),
         Scalar::Bool => {
-            !signed && !precision && matches!(rest, "" | "s" | "d" | "x" | "X" | "o" | "b" | "B")
+            !(signed || zero || precision)
+                && matches!(rest, "" | "s" | "d" | "x" | "X" | "o" | "b" | "B")
         }
         Scalar::Str => !(signed || alternate || zero) && matches!(rest, "" | "s" | "?"),
         _ => false,
@@ -412,6 +413,21 @@ pub(crate) fn constant_pattern_in(
                                 .ok_or(Unread)?;
                             read(program, &defined.value, instance, memo, next)
                         })?;
+                    append_pattern(&mut text, &value)?;
+                }
+                ExprKind::Field { .. } | ExprKind::Index { .. } => {
+                    use crate::const_inputs::ConstInputFault::{ReaderLimit, TextLimit};
+
+                    let projection = crate::const_inputs::projection_value(
+                        program, value, instance,
+                    )
+                    .map_err(|fault| match fault {
+                        ReaderLimit | TextLimit => PatternFault::Limit,
+                        _ => Unread,
+                    })?;
+                    let ExprKind::Literal(Value::Str(value)) = projection.kind else {
+                        return Err(Unread);
+                    };
                     append_pattern(&mut text, &value)?;
                 }
                 _ => {

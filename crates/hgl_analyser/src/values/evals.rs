@@ -61,9 +61,7 @@ impl<'a> Typer<'a> {
         self.testing = true;
         self.value_code = true;
         self.integration = integration;
-        let statements = test_statements(&self.declaration.syntax)
-            .map(|statement| self.statement(&statement))
-            .collect();
+        let statements = self.read_statements(test_statements(&self.declaration.syntax));
         Some(Body {
             locals: self.locals,
             statements,

@@ -191,12 +191,13 @@ transpiler: partial
 
 analyser: partial
 
-- An inline pack spread reads only the branch selected in each concrete pack-key pass. A chain with no selected branch and no `else` supplies no argument (FN-19, GEN-7).
-- Left: Other uses of a pass binding in a nested constant bound or generic argument remain part of #368.
+- A computed pack reads only the branch selected in each concrete pack-key pass. A chain with no selected branch and no `else` supplies no entry (FN-19, GEN-7).
+- An ordinary `if` with no selected branch and no `else` in a pass gives `null`. A nullable place supplies its type. A `let` with no type context reports `null.context_type` (CTRL-10, TYPE-14).
+- Left: A constant bound or generic argument stays deferred when the reader cannot determine its value in a pass.
 
 transpiler: partial
 
-- C++ emits the arguments supplied by the selected branches of an inline pack spread.
+- C++ emits the entries supplied by the selected branches of a computed pack.
 
 ## SOURCE-1
 

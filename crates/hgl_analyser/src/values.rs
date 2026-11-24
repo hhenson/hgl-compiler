@@ -600,6 +600,8 @@ struct Typer<'a> {
     calls: &'a HashMap<(FileId, u32), &'a CallArguments>,
     /// The parameters and locals found so far.
     locals: Vec<Local>,
+    /// Operand categories learned while probing one pair's arguments.
+    pair_phases: Option<calls::PairPhases>,
     /// Call results unavailable when reading a body for independent calls.
     unsettled_results: Option<&'a HashSet<Location>>,
     /// The local each declaration is, by where its name is declared.
@@ -757,6 +759,8 @@ struct Typer<'a> {
     pack_functions: Vec<(usize, hir::Callee)>,
     /// Active computed-pack passes, from the outermost to the current one.
     pack_passes: Vec<(String, hir::PackKey)>,
+    /// Packs bound by `let`. Only their individual entries reach lowering.
+    bound_packs: HashMap<LocalId, forwarded_packs::BoundPack>,
     /// The generic value parameters of the declaration being read that
     /// its `requires` binds, each where it is declared with the constant
     /// it is bound to (GEN-3: "A positive conjunctive equality may bind
@@ -856,6 +860,7 @@ impl<'a> Typer<'a> {
             written: tables.written,
             calls: tables.calls,
             locals: Vec::new(),
+            pair_phases: None,
             unsettled_results: None,
             declared: HashMap::new(),
             assigned: Vec::new(),
@@ -902,6 +907,7 @@ impl<'a> Typer<'a> {
             pack_inputs: None,
             pack_functions: Vec::new(),
             pack_passes: Vec::new(),
+            bound_packs: HashMap::new(),
             bound: Vec::new(),
             diagnostics,
         }
@@ -1045,6 +1051,7 @@ impl<'a> Typer<'a> {
             // its number is given to the next local declared.
             self.aliases.retain(|local, _| *local < mark.locals);
             self.bound_children.retain(|local, _| *local < mark.locals);
+            self.bound_packs.retain(|local, _| *local < mark.locals);
             self.captures.retain(|local, _| *local < mark.locals);
         }
         self.present.truncate(mark.present);
@@ -1166,7 +1173,7 @@ struct Mark {
 type Candidate<'a> = (usize, usize, &'a Signature);
 
 /// What the `.value` of a capture is (ERR-7).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum CapturedOutput {
     /// The call it covers has no output: there is no `.value`.
     None,

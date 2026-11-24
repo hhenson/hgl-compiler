@@ -11,7 +11,8 @@ use hgl_diagnostics::{Diagnostics, Location};
 
 use crate::formatting;
 use crate::hir::{
-    Answer, Argument, BinaryOperator, Callee, Expr, ExprKind, Form, Stmt, Value, ValueCategory,
+    Answer, Argument, BinaryOperator, Callee, Expr, ExprKind, Form, PackInput, Stmt, Value,
+    ValueCategory,
 };
 use crate::{
     Argument as GenericArgument, Binding, ConstantValue, Detail, Program, Role, Scalar, Type,
@@ -26,10 +27,17 @@ pub(crate) type SelectedDemands = RefCell<HashMap<InstanceSlot, SelectedDemand>>
 
 type InstanceSlot = (String, usize);
 
+/// A slot followed into an instance: its key, the index of the slot whose
+/// instance made the call, and the instance's declaration.
+type FollowedSlot = (InstanceSlot, Option<usize>, Declaration);
+
+/// A call to follow: its callee, the entries it gives a pack, and the slot.
+type FollowedCall = (Callee, Option<Vec<PackInput>>, usize);
+
 #[derive(Clone, Debug)]
 pub(crate) enum SelectedDemand {
     Read(bool),
-    Calls(Rc<[(Callee, usize)]>),
+    Calls(Rc<[FollowedCall]>),
 }
 
 /// A deferred operator can select a body that only uses this value at run time.
@@ -50,11 +58,23 @@ pub struct ConstInput {
     pub key: String,
 }
 
+/// Two inputs are one where their slot and value are (GEN-13: "each value
+/// one constant"); where each was written does not tell them apart.
+impl PartialEq for ConstInput {
+    fn eq(&self, other: &Self) -> bool {
+        self.slot == other.slot && self.key == other.key
+    }
+}
+
 /// The values analysis can use, and whether reading another hit its budget.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ReadInputs {
     pub(crate) values: Vec<ConstInput>,
     pub(crate) limit: Option<ConstInputFault>,
+    /// A text the instance reads passed the budget, a conditional one
+    /// included: a walk that makes the instance ends there (GEN-13).
+    /// Lowering, which needs only `limit`, still writes the call.
+    pub(crate) outgrown: bool,
 }
 
 /// Why a call's compile-time inputs could not be read.
@@ -119,19 +139,19 @@ impl Program {
         let Some(Detail::Callable(signature)) = owner.details.get(declaration) else {
             return ReadInputs::default();
         };
-        let mut reader = Reader {
-            program: self,
-            steps_left: INPUT_BUDGET,
-            text_left: INPUT_BUDGET,
-            reading: Vec::new(),
-        };
+        let mut reader = Reader::new(self);
         let mut known = ReadInputs::default();
+        // FN-19: the entries a call gives a pack decide which calls a
+        // forwarding body makes, and so which of its consts they read.
+        let pack_inputs = pack_inputs_of(self, callee, signature, arguments);
         // Give unconditional inputs the first use of the read budget.
         let ordered = [Demand::Always, Demand::IfSelected]
             .into_iter()
             .flat_map(|mode| demand.iter().filter(move |(_, demand)| **demand == mode));
         for (&slot, &demand) in ordered {
-            if demand == Demand::IfSelected && !self.instance_reads_const(callee, slot) {
+            if demand == Demand::IfSelected
+                && !self.instance_reads_const(callee, pack_inputs.clone(), slot)
+            {
                 continue;
             }
             let text_before = reader.text_left;
@@ -201,6 +221,10 @@ impl Program {
                     {
                         known.limit = Some(fault);
                     }
+                    // GEN-13: a text the instance reads that outgrows the
+                    // budget ends a walk, a conditional one included once
+                    // its instance is known to read it.
+                    known.outgrown |= fault == TextLimit;
                     reader.text_left = text_before;
                 }
             }
@@ -211,13 +235,20 @@ impl Program {
     /// Follow a possible demand with the instance's types in place and its
     /// ordinary consts still unread. A forwarded value only enters the key
     /// if a selected candidate reads it, or selection remains unresolved.
-    fn instance_reads_const(&self, callee: &Callee, slot: usize) -> bool {
-        let mut pending = VecDeque::from([(callee.clone(), slot, None)]);
+    /// A call that gives packs is followed with their entries (FN-19), so
+    /// the calls its forwarding body makes are the instance's own.
+    fn instance_reads_const(
+        &self,
+        callee: &Callee,
+        pack_inputs: Option<Vec<PackInput>>,
+        slot: usize,
+    ) -> bool {
+        let mut pending = VecDeque::from([(callee.clone(), pack_inputs, slot, None)]);
         let mut followed = HashMap::<Declaration, usize>::new();
         let mut seen = HashSet::new();
         // Parent indices record the path that proves a slot is read.
-        let mut paths = Vec::new();
-        while let Some((callee, slot, parent)) = pending.pop_front() {
+        let mut paths: Vec<FollowedSlot> = Vec::new();
+        while let Some((callee, pack_inputs, slot, parent)) = pending.pop_front() {
             let (Callee::Candidate {
                 module,
                 declaration,
@@ -245,7 +276,10 @@ impl Program {
                 self.remember_read(parent, &paths);
                 return true;
             };
-            let key = (key, slot);
+            let key = match &pack_inputs {
+                Some(entries) => (format!("{key}entries{entries:?}"), slot),
+                None => (key, slot),
+            };
             let cached = self.selected_const_demands.borrow().get(&key).cloned();
             if let Some(SelectedDemand::Read(read)) = cached {
                 if read {
@@ -257,18 +291,35 @@ impl Program {
             if !seen.insert(key.clone()) {
                 continue;
             }
+            // GEN-13 and FN-19: a forwarding body whose declaration comes
+            // back on its own path with other entries may grow its packs
+            // without end. Its slot is taken as read there, as a forwarding
+            // call left unread is, and the instance walk bounds the growth.
+            if pack_inputs.is_some()
+                && std::iter::successors(parent, |&index| paths[index].1)
+                    .any(|index| paths[index].2 == declaration)
+            {
+                self.remember_read(parent, &paths);
+                return true;
+            }
             let count = followed.entry(declaration).or_default();
             *count += 1;
             if *count > crate::INSTANCES {
                 // Only the root used this traversal's full budget.
-                let (root, _) = &paths[0];
+                let (root, _, _) = &paths[0];
                 self.selected_const_demands
                     .borrow_mut()
                     .insert(root.clone(), SelectedDemand::Read(true));
                 return true;
             }
             let direct = cached.unwrap_or_else(|| {
-                let direct = self.selected_const_calls(&callee, declaration, requirements, slot);
+                let direct = self.selected_const_calls(
+                    &callee,
+                    declaration,
+                    requirements,
+                    pack_inputs.as_deref(),
+                    slot,
+                );
                 self.selected_const_demands
                     .borrow_mut()
                     .insert(key.clone(), direct.clone());
@@ -282,12 +333,12 @@ impl Program {
                 SelectedDemand::Read(false) => {}
                 SelectedDemand::Calls(calls) => {
                     let index = paths.len();
-                    paths.push((key, parent));
+                    paths.push((key, parent, declaration));
                     pending.extend(
                         calls
                             .iter()
                             .cloned()
-                            .map(|(callee, slot)| (callee, slot, Some(index))),
+                            .map(|(callee, entries, slot)| (callee, entries, slot, Some(index))),
                     );
                 }
             }
@@ -296,15 +347,15 @@ impl Program {
         self.selected_const_demands.borrow_mut().extend(
             paths
                 .into_iter()
-                .map(|(key, _)| (key, SelectedDemand::Read(false))),
+                .map(|(key, _, _)| (key, SelectedDemand::Read(false))),
         );
         false
     }
 
-    fn remember_read(&self, mut parent: Option<usize>, paths: &[(InstanceSlot, Option<usize>)]) {
+    fn remember_read(&self, mut parent: Option<usize>, paths: &[FollowedSlot]) {
         let mut cache = self.selected_const_demands.borrow_mut();
         while let Some(index) = parent {
-            let (key, earlier) = &paths[index];
+            let (key, earlier, _) = &paths[index];
             cache.insert(key.clone(), SelectedDemand::Read(true));
             parent = *earlier;
         }
@@ -316,6 +367,7 @@ impl Program {
         callee: &Callee,
         (module, declaration): Declaration,
         requirements: &[Answer],
+        pack_inputs: Option<&[PackInput]>,
         slot: usize,
     ) -> SelectedDemand {
         let unit = &self.modules[module];
@@ -333,6 +385,7 @@ impl Program {
             requirements,
             crate::InstanceInputs {
                 type_packs: callee.type_packs(),
+                pack_inputs,
                 ..crate::InstanceInputs::default()
             },
             &placement_reports,
@@ -367,6 +420,7 @@ impl Program {
                     .is_some_and(|pattern| reads_parameter(&pattern.value));
                 return;
             }
+            // A forwarding call left unread says nothing of its callee.
             if matches!(callee, Callee::DeferredPackCall) {
                 required = true;
                 return;
@@ -375,6 +429,11 @@ impl Program {
                 .iter()
                 .filter(|argument| reads_parameter(&argument.value))
             {
+                // FN-17: what a function parameter is given goes to a plain
+                // parameter of its template, read when the function runs.
+                if plain_callback_input(&instance.signature, callee, argument.parameter) {
+                    continue;
+                }
                 let (Some(declaration), Some(slot)) = (callee.declaration(), argument.parameter)
                 else {
                     required = true;
@@ -389,7 +448,15 @@ impl Program {
                         required = true;
                         break;
                     }
-                    Some(Demand::IfSelected) => calls.push((callee.clone(), slot)),
+                    Some(Demand::IfSelected) => {
+                        let entries = match &self.modules[declaration.0].details[declaration.1] {
+                            Detail::Callable(called) => {
+                                pack_inputs_of(self, callee, called, arguments)
+                            }
+                            _ => None,
+                        };
+                        calls.push((callee.clone(), entries, slot));
+                    }
                     None => {}
                 }
             }
@@ -409,7 +476,29 @@ struct Reader<'a> {
     reading: Vec<(Declaration, Option<usize>)>,
 }
 
-impl Reader<'_> {
+/// Read a fixed projection for a check that needs its value (FN-1).
+pub(crate) fn projection_value(
+    program: &Program,
+    expression: &Expr,
+    generics: &[(Location, GenericArgument)],
+) -> Result<Expr, ConstInputFault> {
+    let generics: Vec<_> = generics
+        .iter()
+        .map(|(at, argument)| (*at, argument))
+        .collect();
+    Reader::new(program).read(expression, INPUT_DEPTH, &generics)
+}
+
+impl<'a> Reader<'a> {
+    fn new(program: &'a Program) -> Self {
+        Self {
+            program,
+            steps_left: INPUT_BUDGET,
+            text_left: INPUT_BUDGET,
+            reading: Vec::new(),
+        }
+    }
+
     fn read_declaration(
         &mut self,
         declaration: Declaration,
@@ -582,6 +671,31 @@ impl Reader<'_> {
                     arguments: fields,
                     infer_types: false,
                 }
+            }
+            ExprKind::Field { base, member } => {
+                let ExprKind::Construct { arguments, .. } = self.read(base, next, generics)?.kind
+                else {
+                    return Err(Unread);
+                };
+                arguments
+                    .into_iter()
+                    .find(|argument| argument.parameter == Some(*member))
+                    .ok_or(Unread)?
+                    .value
+                    .kind
+            }
+            ExprKind::Index { base, index } => {
+                // The bounded const-input reader normalizes tuples and lists.
+                let ConstantValue::Int(position) = self.scalar(index, next, generics)? else {
+                    return Err(Unread);
+                };
+                let position = usize::try_from(position).map_err(|_| Unread)?;
+                let (ExprKind::Tuple(entries) | ExprKind::Sequence(entries)) =
+                    self.read(base, next, generics)?.kind
+                else {
+                    return Err(Unread);
+                };
+                entries.into_iter().nth(position).ok_or(Unread)?.kind
             }
             ExprKind::Widen(inner) => match self.scalar(inner, next, generics)? {
                 ConstantValue::Int(value) => ExprKind::Literal(Value::Float(value as f64)),
@@ -822,10 +936,11 @@ pub(crate) fn demands(program: &Program) -> Demands {
             }
             let caller = (module_index, declaration);
             let mut read_pattern = |pattern: &Expr| {
-                if crate::values::fixed_expression(pattern, &|_, at| {
-                    bindings
-                        .get(&(at.file, at.span.start))
-                        .is_some_and(|at| slots.contains_key(at))
+                if crate::values::fixed_expression(pattern, &|read| {
+                    matches!(read.kind, ExprKind::Local(_))
+                        && bindings
+                            .get(&(read.at.file, read.at.span.start))
+                            .is_some_and(|at| slots.contains_key(at))
                 }) {
                     slots_read(pattern, &bindings, &slots, |slot| {
                         pending.push_back(((caller, slot), Demand::Always));
@@ -874,6 +989,7 @@ pub(crate) fn demands(program: &Program) -> Demands {
                     }
                 }
             }
+            let mut forwarding = Vec::new();
             crate::values::walk_body_calls(body, &mut |call| {
                 // A provisional candidate does not make its demands unconditional.
                 if deferred_at.contains(&call.at) {
@@ -885,6 +1001,10 @@ pub(crate) fn demands(program: &Program) -> Demands {
                 else {
                     return;
                 };
+                if matches!(callee, Callee::DeferredPackCall) {
+                    forwarding.push(call.at);
+                    return;
+                }
                 let Some(called) = callee.declaration() else {
                     return;
                 };
@@ -904,6 +1024,21 @@ pub(crate) fn demands(program: &Program) -> Demands {
                     });
                 }
             });
+            // FN-19 and GEN-7: a call that spreads a pack is read in each
+            // instance, where its entries are known, and its callee and
+            // the slot of each written argument with them. A const read
+            // anywhere in it is followed there, as a deferred candidate's
+            // is, and is an input only where that instance reads it.
+            for call in forwarding {
+                for (&(file, start), binding) in &bindings {
+                    if file == call.file
+                        && (call.span.start..call.span.end).contains(&start)
+                        && let Some(&slot) = slots.get(binding)
+                    {
+                        pending.push_back(((caller, slot), Demand::IfSelected));
+                    }
+                }
+            }
         }
     }
     while let Some(((declaration, slot), demand)) = pending.pop_front() {
@@ -921,6 +1056,40 @@ pub(crate) fn demands(program: &Program) -> Demands {
         }
     }
     required
+}
+
+/// Whether a call of a function parameter gives this slot of its template
+/// a plain parameter: one that is no `const` and stands for no pack (FN-17).
+fn plain_callback_input(
+    signature: &crate::Signature,
+    callee: &Callee,
+    slot: Option<usize>,
+) -> bool {
+    let Callee::Parameter { parameter, .. } = callee else {
+        return false;
+    };
+    let Some(Type::Function(template)) = signature.parameters.get(*parameter).map(|p| &p.ty) else {
+        return false;
+    };
+    template.named_pack.is_none()
+        && slot
+            .and_then(|slot| template.parameters.get(slot))
+            .is_some_and(|input| input.declared().is_none_or(|declared| !declared.constant))
+}
+
+/// The entries a call gives its callee's packs, where it has any (FN-19).
+/// An empty shape is an input too: it decides the forwarded calls.
+fn pack_inputs_of(
+    program: &Program,
+    callee: &Callee,
+    signature: &crate::Signature,
+    arguments: &[Argument],
+) -> Option<Vec<PackInput>> {
+    signature
+        .parameters
+        .iter()
+        .any(|parameter| parameter.pack.is_some())
+        .then(|| program.call_pack_inputs(callee, signature, arguments))
 }
 
 fn local_bindings(module: &crate::Module) -> HashMap<(hgl_source::FileId, u32), Location> {

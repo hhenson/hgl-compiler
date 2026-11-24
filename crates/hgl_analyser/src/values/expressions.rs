@@ -309,6 +309,19 @@ impl<'a> Typer<'a> {
             category: ValueCategory::Unsettled,
         };
         if let Some(local) = self.local_of(node) {
+            if self.names_pack(local) {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    at,
+                    format!(
+                        "`{}` is a pack and cannot be read as an ordinary value",
+                        self.locals[local].name
+                    ),
+                    "FN-19",
+                ));
+                return unread;
+            }
             if self.reject_function_value(local, at, None) {
                 return unread;
             }

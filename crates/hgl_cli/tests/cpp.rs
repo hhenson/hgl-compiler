@@ -1984,7 +1984,7 @@ fn operator_instance_results_take_their_context_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2204,6 +2204,36 @@ fn ranges_and_list_comprehensions_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 9 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// FN-19 and CTRL-16: let-bound entries keep their keys and values when
+/// read or spread. UNIT-8 supplies a default for an omitted graph input.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn let_bound_packs_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("let-bound-packs");
+    let file = write(
+        &root,
+        "examples.pack_forms.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/examples.pack_forms.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 10 passed, 0 failed\nexecutable cases: 6 passed, 0 failed, 0 not run\n"
+        ),
         "{stdout}"
     );
 }
@@ -2568,8 +2598,8 @@ fn computed_pack_passes_run_on_the_sdk() {
     );
 }
 
-/// GEN-8 and GEN-17: explicitly written reflected types specialize calls
-/// in value and graph bodies and still carry their stated requirements (GEN-7).
+/// GEN-8 and GEN-17: reflected types specialize function and operator calls
+/// in value and graph bodies and derive evidence from stated requirements (GEN-7).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn written_pack_member_types_run_on_the_sdk() {
@@ -2592,7 +2622,7 @@ fn written_pack_member_types_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 6 passed, 0 failed\nexecutable cases: 5 passed, 0 failed, 0 not run\n"
+            "rejection cases: 6 passed, 0 failed\nexecutable cases: 7 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );
@@ -3390,6 +3420,35 @@ fn composite_values_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 16 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// FN-1: read fields and constant-index entries as const arguments.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn fixed_projections_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("fixed-reads");
+    let file = write(
+        &root,
+        "demo.fixed_reads.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.fixed_reads.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 1 passed, 0 failed\nexecutable cases: 2 passed, 0 failed, 0 not run\n"
+        ),
         "{stdout}"
     );
 }
@@ -5086,6 +5145,31 @@ fn callable_block_defaults_run_on_the_sdk() {
     );
 }
 
+/// FN-4, FN-6, FN-17, GEN-5 and GEN-6: prefer the direct role,
+/// including where a pair takes a callable, and keep ordinary and eval roles.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn call_role_preferences_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("call-role-preference");
+    let file = write(
+        &root,
+        "demo.call_roles.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.call_roles.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 3 passed, 0 failed\nexecutable cases: 13 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
 /// GEN-16, UNIT-8: a required symbol keeps the public generic arguments
 /// that its selected candidate's inherited configuration default reads.
 #[test]
@@ -5195,6 +5279,31 @@ fn named_law_requirements_run_on_the_sdk() {
     );
 }
 
+/// GEN-5: the specification's complete tuple-specificity example
+/// exercises both the fixed-length tuple and the admitting pack.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn fixed_length_tuple_example_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("tuple-specificity");
+    let file = write(
+        &root,
+        "examples.tuple_specificity.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/examples.tuple_specificity.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 0 passed, 0 failed\nexecutable cases: 2 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
 /// GEN-3 and GEN-10: category selection and tuple type packs execute on
 /// the SDK, including forwarding and independently typed callbacks.
 #[test]
@@ -5219,7 +5328,7 @@ fn category_constraints_and_tuple_packs_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 29 passed, 0 failed\nexecutable cases: 18 passed, 0 failed, 0 not run\n"
+            "rejection cases: 28 passed, 0 failed\nexecutable cases: 19 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );

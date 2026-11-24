@@ -37,6 +37,47 @@ test reflected_type_argument_on_a_connection {
     assert eval reflected_graph_i64([2, 3]) == [2, 3]
 }
 
+# GEN-7, GEN-8 and GEN-17: the operator selects from the enclosing pack's
+# actual member type, whether the call writes the type or infers it.
+operator select_member<T>(value: T) -> T
+impl const fn select_member<T>(value: T) -> T => value
+impl const fn select_member(value: i64) -> i64 => value + 1
+
+const fn explicit_member<const key: str, ...Ps>(
+    f: const fn(...{Ps}) -> i64, item: Ps[key]
+) -> Ps[key] => select_member<Ps[key]>(item)
+
+const fn inferred_member<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
+    select_member(item)
+
+# A single generic candidate still needs the member type at instantiation.
+operator pick<T>(value: T) -> T
+impl const fn pick<T>(value: T) -> T => value
+
+const fn explicit_pick<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
+    pick<Ps[item_key]>(item)
+
+const fn inferred_pick<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
+    pick(item)
+
+test operator_reflected_member_types {
+    assert explicit_member<"other">(extra, 7) == 8
+    assert explicit_member<"item">(words, "text") == "text"
+    assert inferred_member(num, 8) == 9
+    assert inferred_member(words, "value") == "value"
+    assert explicit_pick(num, 10) == 10
+    assert inferred_pick(num, 11) == 11
+}
+
+fn operator_graph<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
+    select_member<Ps[item_key]>(item)
+
+fn operator_graph_i64(item: i64) -> i64 => operator_graph(num, item)
+
+test operator_reflected_member_on_a_connection {
+    assert eval operator_graph_i64([2, 3]) == [3, 4]
+}
+
 test unknown_written_member {
     # expect-error(type, "pack.name")
     assert missing(num) == 1

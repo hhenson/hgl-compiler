@@ -76,18 +76,13 @@ const PENDING_MODULES: &[(&str, &str, &str)] = &[
         "examples.mapping",
         "MAP-1 and RED-1 (#369, #370)",
     ),
-    (
-        "hgl_spec/spec/language/functions-and-phases.md",
-        "examples.pack_forms",
-        "LEX-29, EXPR-16, EXPR-17 and FN-19 (#368)",
-    ),
 ];
 
 /// The rejection cases of core the compiler does not yet reject, each as
 /// `(file, declaration)`, the file under `tests/conformance/`: the
 /// `[rejections]` of `crates/hgl_cpp/ci/unsupported_cases.toml`, which
-/// `check_core.py` reads too, so that the two agree. Each is listed under a
-/// reason that names the rule not yet built.
+/// `hgl_build_tool check-core` reads too, so that the two agree. Each is
+/// listed under a reason that names the rule not yet built.
 fn unrejected() -> Vec<(String, String)> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../hgl_cpp/ci/unsupported_cases.toml");

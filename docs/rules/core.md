@@ -877,7 +877,8 @@ analyser: partial
 
 - Direct native calls take a constant `str` pattern followed by positional and named packs. A generic value pattern and dependent argument types are checked together at their concrete call.
 - An enclosing function can pass or capture an ordinary `const` parameter as the pattern. A generic value body carries the demand through deferred operator selection to the concrete call (FN-1, #695, #704).
-- Left: const inputs through forwarded packs (#706) and the graph and diagnostic candidates (#368, #434).
+- A `const` parameter given beside forwarded packs, `format(fmt_str, ...args, ...kwargs)`, through forwarding calls, generic relays given a pack entry, and candidates an instance selects, is an input of each instance whose body reads it at compile time, and is read there with the entries (FN-19, #706). So is one an enclosing value function, node, graph, option or operator candidate gives with its own `const`.
+- Left: the graph and diagnostic candidates (#368, #434). The C++ target declines a graph that gives its own `const` parameter to a value call as the pattern (#745). A pattern in a `let`-bound anonymous function is not checked, forwarded or not (#750).
 
 ## FMT-2
 
@@ -892,19 +893,20 @@ analyser: partial
 - A direct value call is checked for braces, missing and unused arguments, and specifiers. A dependent string is checked in its concrete instance. Diagnostics use `format.syntax`, `format.argument`, `format.unused` and `format.specifier`.
 - The current compile-time pattern reader builds up to 64 KiB of text per result. The C++ target declines calls whose patterns exceed that support limit (#695).
 - The analyser checks demanded const inputs and concrete argument conversions after selecting the value candidate. GEN-7 reports failures that depend on the instance at its outside call. Lowering uses the same concrete values to select the checked body.
-- Left: patterns made by general constant function evaluation (#695), and patterns reached through forwarded calls (#706).
+- A pattern reached through forwarded calls is checked in the instance the entries make, and a failure is reported at the call outside every generic body that makes it, with the code of the same direct call (GEN-7, #706).
+- Left: patterns made by general constant function evaluation (#695).
 
 ## FMT-4
 
 analyser: partial
 
 - A specifier is checked against the argument's type at compile time.
-- Left: the compiler declines integer `c` with `format.specifier` pending the owner’s decision (#434). The pinned fmt formatter can emit a byte outside UTF-8.
+- The zero flag on `bool` or `str` and the integer `c` specifier reject with `format.specifier`. Boolean width and alignment, including an explicit fill, still apply.
 
 transpiler: partial
 
 - The C++ target gives primitive fields to pinned fmt with compiled specifiers. It emits checked chrono directives with fractional truncation on `%S`, `%T` and `%[S]`, duration totals and padding on the whole field.
-- Left: integer `c` is held at the analyser gate above (#434).
+- Boolean width and alignment without the zero flag use the pinned fmt formatter.
 
 ## FMT-5
 

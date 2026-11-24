@@ -12,6 +12,7 @@ analyser: partial
 - A `const fn` parameter marked `ref` is `ref.position` (FN-16)
 - A generic parameter of a value function that a call's place, or what the call writes, binds to a type that holds a window is `type.not_ordinary`; one given a window binds to the `list<V>` it holds (GEN-1, TYPE-11)
 - In a hook, a source and a value function a `const` parameter is given a constant expression (`argument.constant`); in a graph, no connection (`connection.as_constant`)
+- A constant, generic value parameter, or enclosing `const` parameter can be read by field or at a constant index in a constant expression. An admitted read can serve as the base of the next read.
 - Left: a `const` parameter that only an operator marks; roles of `const fn` and a temporal `fn` in bodies
 
 ## FN-2
@@ -46,9 +47,12 @@ transpiler: partial
 analyser: partial
 
 - A temporal and a value definition may share a name
-- a call in a value function takes the value definition, and a temporal one alone is rejected
-- A call in a graph takes the temporal definition where there is one
-- Left: selection in eval
+- A call in a graph takes the temporal definition of a pair when given a connection, and the value definition when all arguments are ordinary (FN-6, GEN-5)
+- A temporal function name, or an anonymous function that captures a connection or calls a temporal function, selects the temporal definition (FN-17, GEN-6). A callable both roles admit directly leaves the choice to the other arguments. The selected definition checks its template's input types.
+- The selected definition checks the call's signature
+- An inner pair can reuse its phase check across a change to an enclosing anonymous formal it does not read. A referenced formal keeps its actual category.
+- A call in value code takes the value definition. An eval's target takes the temporal definition where it exists.
+- Left: named-pair selection where an operand's category settles only after instance selection or after it receives a contextual type
 
 ## FN-5
 
@@ -111,7 +115,7 @@ analyser: partial
 transpiler: partial
 
 - C++ writes a concrete parameter for each captured argument in value functions, nodes, graphs, and lifted calls.
-- Left: reading, making and forwarding a pack in a body (#368).
+- FN-19 describes how the body reads and forwards these entries.
 
 ## FN-9
 
@@ -288,6 +292,7 @@ analyser: partial
 - A child of a structural pack entry uses the ordinary child admission check. A guard proves a child of that entry only (TIME-1, TIME-4).
 - Keeps an entry read pending when its constant key needs an unrolled range pass (CTRL-16) or a module constant the compiler has not evaluated (UNIT-13). C++ declines the pending read.
 - Resolves spreads of parameter packs when the enclosing callable is instantiated. Written arguments bind first, then named entries, then positional entries fill the remaining parameter slots in order.
+- A `const` parameter written among a forwarding call's arguments is followed into the instance with the call's entries, and is an input of the instance only where its body reads it at compile time (FN-1, FMT-3). A forwarding body that comes back on its own path with other entries takes the parameter as read there (GEN-13). What a function parameter is given goes to a plain parameter of its template and is no compile-time read (FN-17). A conditional input past the 64 KiB text budget ends the analyser's walk; lowering treats it as before.
 - Checks function, operator and static callback arguments with the ordinary call diagnostics (EXPR-2) and uses the names written by a callback template (FN-17).
 - A forwarded name that binds a generic value parameter or a selecting operator option reports `generic.argument_constant` at the runtime entry (GEN-6, GEN-8). Generic value names take priority over a callee's ordinary named pack.
 - Follows concrete calls in parameter and field defaults and anonymous bodies. Struct fields bind by name, and positional entries reject (TYPE-5). An enum constructor with a spread reports the argument during analysis (TYPE-7).
@@ -295,10 +300,13 @@ analyser: partial
 - Reads a declared function's written arguments, including its configuration, through their parameter types before the computed entries are known.
 - Keeps the compile-time key comparison in anonymous bodies that capture a concrete key. A key differs from a constant of the other kind (FN-14, GEN-17).
 - A computed entry has the type of its own pass (FN-19). The receiving parameter does not give a type to a bare implied enum member, `null`, or an empty sequence, and it does not widen an `i64` literal entry to `f64`.
+- A `let` can name an existing pack or keep the selected entries of a comprehension. Both forms preserve their keys and support indexing and spreading. A pack name in an ordinary value expression rejects.
+- A homogeneous positional parameter pack can be iterated in value code and in a node hook. In composition its fitted number of entries makes a fixed loop, with one pass per connection (CTRL-15).
 
 transpiler: partial
 
 - Lowers forwarded entries and constant-key reads from the same fitted pack input slots, including captured values and connections. The SDK cases also exercise operator selection, static callbacks and constructors.
 - Lowers the concrete arguments of an inline computed spread. An anonymous body is specialized for the enclosing pack keys even when each pass supplies a value of the same type. The SDK cases also cover mixed entry types, named and positional keys, selected nested conditions, and written pack-member types.
+- Stores each computed entry once where its `let` runs. Bindings of an existing pack reuse the same entries. SDK cases cover all four forwarding examples, constructor fields, reuse, and a fixed graph loop that carries a connection binding.
 
-Left: A pack bound with `let` and then spread, and conditions whose compile-time values this reader does not yet work out, remain part of #368. C++ declines an inline spread whose pass condition does not supply a known constant `bool`. Guards on a structural child of a heterogeneous entry are tracked in #735.
+Left: C++ declines a spread whose pass condition does not supply a known constant `bool`. Guards on a structural child of a heterogeneous entry are tracked in #735.

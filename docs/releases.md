@@ -155,7 +155,7 @@ contains the SDK and its libraries. **Homebrew bottle** bottles `hgl` alone;
 ## Build an archive locally
 
 Build from a clean checkout with the pinned Rust toolchain, CMake, Ninja,
-Git and Python 3.11 or later. On Apple silicon use Apple clang 21 or
+Git and curl. On Apple silicon use Apple clang 21 or
 later, with the command line tools' `dsymutil`. On x86-64 Ubuntu 26.04
 install `gcc`, `g++-15` and binutils.
 
@@ -163,8 +163,9 @@ install `gcc`, `g++-15` and binutils.
 scripts/package-release.sh
 ```
 
-Before fetching sources, the script compiles and runs a C++23 probe with
-the configured toolchain.
+The script uses the workspace's `hgl_build_tool` commands to prepare and
+verify the archives. Before fetching sources, it compiles and runs a C++23
+probe with the configured toolchain.
 
 It fetches the pinned sources, builds the SDK and its dependencies twice,
 optimised with their debug information split out and for debugging, builds

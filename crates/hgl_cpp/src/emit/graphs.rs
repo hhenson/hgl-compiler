@@ -18,10 +18,10 @@
 //!
 //! Not written yet, and reported: `if`, `switch` and `for` over
 //! connections (CTRL-7), a `var` connection, and a call that leaves out a
-//! temporal input other than a signal (UNIT-8). `inject global_state` in a
-//! graph (FN-9) is the `apps` family's.
+//! nullable temporal input with no default other than null (UNIT-8).
+//! `inject global_state` in a graph (FN-9) is the `apps` family's.
 
-use hgl_analyser::hir::{Argument, Body, Callee, Expr, ExprKind, Stmt, ValueCategory};
+use hgl_analyser::hir::{Argument, Body, Callee, Expr, ExprKind, Stmt, Value, ValueCategory};
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Role as Phase, Signature, Type};
 use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
 
@@ -428,18 +428,27 @@ impl Emitter<'_> {
             }
             let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
             if !parameter.constant {
-                // UNIT-8: an omitted optional temporal input is never valid.
-                // A silent signal supplies no publication to `modified`.
-                if matches!(parameter.ty.omission_removed(), Type::Signal)
-                    && left_out(program, callee, declared, parameter).is_some()
-                {
-                    written[index] = Some(format!(
+                let omitted = left_out(program, callee, declared, parameter);
+                written[index] = Some(match omitted {
+                    // A silent signal supplies no publication to `modified`.
+                    Some(_) if matches!(parameter.ty.omission_removed(), Type::Signal) => format!(
                         "::{}::never<::hgraph::SIGNAL>({WIRING})",
                         runtime::NAMESPACE
-                    ));
-                    continue;
-                }
-                return self.missing(value.at, "a call that leaves out a temporal input");
+                    ),
+                    // UNIT-8: a temporal default supplies a constant connection.
+                    Some(LeftOut::Default(default))
+                        if !matches!(default.kind, ExprKind::Literal(Value::Null)) =>
+                    {
+                        let Some(initial) = self.write_default(&default) else {
+                            return "0".to_string();
+                        };
+                        failing += usize::from(may_fail(&default));
+                        changing |= changes(&default);
+                        self.temporal_constant(&parameter.ty, &initial, default.at)
+                    }
+                    _ => return self.missing(value.at, "a call that leaves out a temporal input"),
+                });
+                continue;
             }
             if let Some((_, held)) = defaults.iter().find(|(at, _)| *at == declared) {
                 written[index] = Some(held.clone());
@@ -613,6 +622,10 @@ impl Family for Graphs {
             ExprKind::Local(local) if emitter.role(*local) == Role::Connection => {
                 Some(identifier(&scope.body.locals[*local].name))
             }
+            ExprKind::Block {
+                statements,
+                value: Some(tail),
+            } if statements.is_empty() => Some(emitter.connection(scope, tail, &value.ty)),
             ExprKind::Call {
                 callee: Callee::Anonymous(function),
                 ..

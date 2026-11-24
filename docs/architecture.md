@@ -45,6 +45,7 @@ Rules for every stage:
 | `hgl_doc` | Analysed interfaces and their attached SDOC comments to an HTML reference or JSON API model | [documentation.md](documentation.md) |
 | `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases handed to a target to run |
 | `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl doc`, `hgl test`, `hgl emit`, `hgl run` |
+| `hgl_build_tool` | Workspace commands for the Core conformance gate, release packaging and checks | implemented |
 | formatter | Syntax tree to source text | planned |
 | optimiser | Analysed program to analysed program | planned |
 | `hgl_lower` | Lowering, in the optimiser's place: the facts every target decides the same way, read from the analysed program | implemented for what the cpp target needs: see "Lowering" below |
@@ -1736,7 +1737,7 @@ analysed program.
 | Module | What it decides | Rules |
 | --- | --- | --- |
 | `copies` | Where a value is copied: which `let`s and loops take a copy, what a name refers into, whether what a call gives is its own; which structs are values (`by_value`) | the owner's rule (compiler issue 151), FN-13, FN-15 |
-| `instances`, `canonical`, `packs` | Which instances a program asks for, including generic value functions and packed calls. A pack's captured types and keys identify its instance, and each capture becomes an individual parameter. Ordinary const inputs identify the instance where a compile-time check reads them. For a deferred candidate, the compiler follows the call with the instance's types in place to discover that demand. The analyser and lowering use the same normalized value key. These modules also describe what an eval's run and an application's run are wired with. | FN-1, FN-8, GEN-2, GEN-10, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
+| `instances`, `canonical`, `packs` | Which instances a program asks for, including generic value functions and packed calls. A pack's captured types and keys identify its instance, and each capture becomes an individual parameter. Ordinary const inputs identify the instance where a compile-time check reads them. For a deferred candidate or a call that forwards packs, the compiler follows the call with the instance's types and entries in place to discover that demand. The analyser and lowering use the same normalized value key. These modules also describe what an eval's run and an application's run are wired with. | FN-1, FN-8, GEN-2, GEN-10, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
 | `pieces` | What a piece a target writes reaches (`Reach`), and whether a test or an application reaches a form the target does not write (`blocked`) | |
 | `graphs` | What a child graph of a graph's `if`, `switch` or `for` takes, the value of a `switch` label, the `var`s a branch assigns, which paths return | CTRL-6, CTRL-7, CTRL-11, CTRL-14 |
 | `types` | A struct's fields and descendants, whether a struct has none, and which values are read whole only where they are all valid | TYPE-3, TYPE-4, TYPE-9, TIME-1 |
@@ -2063,8 +2064,8 @@ expression"). Each reason is a key of `crates/hgl_cpp/ci/unsupported_cases.toml`
 3. A fixture and its goldens in `crates/hgl_cpp/tests` (`fixtures/`,
    `HGL_UPDATE_GOLDENS=1 cargo test -p hgl_cpp --test emit`), and the
    fixture run on the SDK in `crates/hgl_cli/tests/cpp.rs`.
-4. `crates/hgl_cpp/ci/check_core.py --write-list`, never by hand: the
-   cases it now runs come off the list.
+4. Regenerate the list with the build tool's `check-core --write-list`
+   command so cases it now runs come off the list.
 
 A lane that needs a lookup the trait lacks asks for it: it is added to
 `Family` and to this table on the spine's branch, so every lane has the
@@ -2308,7 +2309,7 @@ reported, applications run with their output, the store and a failure,
 and a run in real time stopped by an interrupt of `hgl` alone. Run the SDK
 suite with `scripts/check-cpp-sdk.sh 16 8` to share up to 16 native build
 jobs among eight concurrent cases. The Linux and macOS C++ jobs run the
-SDK suite and `check_core.py` (below), and both again with
+SDK suite and the Core conformance gate below, and both again with
 `HGL_CPP_FLAGS` naming the address and undefined-behaviour sanitizers:
 on macOS one after another, on Linux side by side on separate runners.
 The generated code compiles with `-Wall -Wextra -Werror`.
@@ -2317,13 +2318,13 @@ The target's progress is counted in cases: core's runtime cases, and
 later the fixture programs' tests. Each case the target does not run is
 listed with its reason in
 [`crates/hgl_cpp/ci/unsupported_cases.toml`](../crates/hgl_cpp/ci/unsupported_cases.toml).
-The list covers the remaining nullable store put case. Build `hgl` and run
-`check_core.py`, which runs the pinned core's `tests/conformance`
+The list covers the remaining nullable store put case. Build `hgl` and use
+`hgl_build_tool check-core`, which runs the pinned core's `tests/conformance`
 and `tests/core_conformance` on the target, including integration tests:
 
 ```sh
 cargo build --locked --bin hgl
-python3 crates/hgl_cpp/ci/check_core.py target/debug/hgl spec/hgl_core
+cargo run --locked --quiet -p hgl_build_tool -- check-core target/debug/hgl spec/hgl_core
 ```
 
 It compares the runner's full discovery and execution lists and prints
@@ -2337,8 +2338,8 @@ driver's corpus tests read the same list. An assertion or source
 failure, a host that did not run a case, a new gap, or a listed case
 that passes, is rejected or disappears fails the check. `--write-list`
 writes the list from a run in place of checking it; read the difference
-before it is committed. Its own tests are
-`python3 -m unittest discover -s crates/hgl_cpp/ci`.
+before it is committed. Run the build tool's own tests with
+`cargo test --locked -p hgl_build_tool`.
 
 ### Pull request checks
 
@@ -2540,8 +2541,8 @@ The Linux C++ job makes the prefix and SDK with the provisioner and
 caches both by tag, provisioning inputs and runner image. The macOS job
 uses the runner's configured Apple Clang and SDK and keys the cache by
 the tag, provisioning inputs, toolchain and workspace path. The cached
-SDK retains absolute dependency paths. The macOS job keeps Rust and
-Python tooling in the runner's tool cache and builds in the job's
+SDK retains absolute dependency paths. The macOS job keeps Rust tooling
+in the runner's tool cache and builds in the job's
 workspace. Both C++ jobs build `runtime/cpp` and run its unit tests,
 and repeat both with sanitizers; the Linux job runs each mode on a
 runner of its own, with the SDK tests on one runner and the runtime
@@ -2619,10 +2620,13 @@ the job the way the design needs is dropped.
 
 | Crate | Used by | For |
 | --- | --- | --- |
-| `clap` | `hgl_cli` | command-line parsing and help text |
-| `serde` | `hgl_cli`, `hgl_doc`, `hgl_runner` | serialization of documentation and built test records |
-| `serde_json` | `hgl_cli`, `hgl_doc` | check diagnostics, API documentation and native build records as JSON |
+| `clap` | `hgl_cli`, `hgl_build_tool` | command-line parsing and help text |
+| `serde` | `hgl_cli`, `hgl_doc`, `hgl_runner`, `hgl_build_tool` | documentation, built test records and release metadata |
+| `serde_json` | `hgl_cli`, `hgl_doc`, `hgl_build_tool` | check diagnostics, API documentation, native build records and release metadata as JSON |
 | `blake3` | `hgl_cli`, `hgl_doc` | content fingerprints for native build reuse and stable filenames for long documentation module names |
+| `regex` | `hgl_build_tool` | runner case rows and the release's path and binary checks |
+| `sha2` | `hgl_build_tool` | SHA-256 fingerprints for the native release cache |
+| `toml` | `hgl_build_tool` | workspace version and Core conformance inventory |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
 | `ctrlc` | `hgl_cli` | handles stops during preparation, native builds and application execution |
 | `nix` | `hgl_cli` on Linux and macOS | passes the build lock to native jobs and sets the parent-death signal on Linux |
@@ -2630,8 +2634,8 @@ the job the way the design needs is dropped.
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `pulldown-cmark` | `hgl_parser`, `hgl_doc` | CommonMark fenced block ranges and HTML rendering of documentation comments |
 | KaTeX and Mermaid | `hgl_doc` | Vendored browser renderers for offline formulas and diagrams |
-| `tempfile` | `hgl_cli` | a file of a build written beside the one it replaces and renamed onto it, so that nothing reads half of it |
-| `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
+| `tempfile` | `hgl_cli`, `hgl_build_tool` | temporary build and release files, including staging beside a cache for atomic replacement |
+| `walkdir` | `hgl_cli`, `hgl_build_tool` | source discovery and release-tree inspection |
 | `dirs` | `hgl_cli` | the user's cache directory, where the cpp target's builds are kept |
 | `which` | `hgl_cli` | the programs the cpp target builds with, found on the `PATH` |
 | `object` | `hgl_cli` | the headers of a shared library, ELF and Mach-O: that each of hgraph's libraries built for debugging is whole before a debug build links it |
