@@ -5226,6 +5226,31 @@ fn named_law_requirements_run_on_the_sdk() {
     );
 }
 
+/// GEN-5: the specification's complete tuple-specificity example
+/// exercises both the fixed-length tuple and the admitting pack.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn fixed_length_tuple_example_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("tuple-specificity");
+    let file = write(
+        &root,
+        "examples.tuple_specificity.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/examples.tuple_specificity.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 0 passed, 0 failed\nexecutable cases: 2 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
 /// GEN-3 and GEN-10: category selection and tuple type packs execute on
 /// the SDK, including forwarding and independently typed callbacks.
 #[test]
@@ -5250,7 +5275,7 @@ fn category_constraints_and_tuple_packs_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 29 passed, 0 failed\nexecutable cases: 18 passed, 0 failed, 0 not run\n"
+            "rejection cases: 28 passed, 0 failed\nexecutable cases: 19 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );
