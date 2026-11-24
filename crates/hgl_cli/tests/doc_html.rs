@@ -1027,6 +1027,29 @@ fn documentation_navigation_associates_external_candidates_and_signature_types()
         .next()
         .unwrap();
     assert!(!shadowed.contains("href=\"#decl-number\""), "{shadowed}");
+    // SDOC-4/FN-14: anonymous parameters shadow module declarations only
+    // in their own body, including a nested function and a retained default.
+    for (name, module_references) in [
+        ("anonymous_result", 2),
+        ("inferred_result", 1),
+        ("nested_result", 1),
+        ("block_result", 1),
+        ("with_default", 1),
+    ] {
+        let signature = types
+            .split(&format!("<article id=\"decl-{name}\">"))
+            .nth(1)
+            .unwrap()
+            .split("</pre>")
+            .next()
+            .unwrap();
+        assert_eq!(
+            signature.matches("href=\"#decl-n\"").count(),
+            module_references,
+            "{signature}"
+        );
+        assert!(!signature.contains("href=\"#decl-value\""), "{signature}");
+    }
     internal_link_targets_exist(&site, &snapshot(&site));
     let private = root.path().join("private");
     write_site(root.path(), &source, &["--private", "--out", "private"]);

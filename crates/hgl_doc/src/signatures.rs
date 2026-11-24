@@ -6,7 +6,8 @@ use std::collections::HashSet;
 
 use hgl_diagnostics::Diagnostics;
 use hgl_lexer::TokenKind;
-use hgl_source::SourceMap;
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
+use hgl_source::{SourceMap, Span};
 
 use crate::markdown::escaped;
 
@@ -17,6 +18,17 @@ pub(crate) fn render(text: &str, link: impl Fn(&str) -> Option<String>) -> Strin
         return escaped(text);
     };
     let tokens = hgl_lexer::lex(&sources, file, &mut Diagnostics::new());
+    // Headers can omit their declaration's body. The total parser still
+    // retains the complete anonymous functions within their initializers.
+    let syntax = hgl_parser::parse(
+        &sources,
+        file,
+        &tokens,
+        hgl_parser::Entry::Declarations,
+        hgl_parser::Limits::default(),
+        &mut Diagnostics::new(),
+    );
+    let anonymous = anonymous_bindings(&syntax.syntax());
     let tokens: Vec<_> = tokens
         .iter()
         .filter(|token| !token.kind.is_trivia() && token.kind != TokenKind::Newline)
@@ -57,6 +69,11 @@ pub(crate) fn render(text: &str, link: impl Fn(&str) -> Option<String>) -> Strin
             after += 2;
         }
         let binding = locals.contains(name.split(['.', ':']).next().unwrap_or_default())
+            || anonymous.iter().any(|(bound, scope)| {
+                bound == name.split(['.', ':']).next().unwrap_or_default()
+                    && scope.start <= first.span.start
+                    && first.span.end <= scope.end
+            })
             || tokens
                 .get(after)
                 .is_some_and(|token| token.kind == TokenKind::Colon)
@@ -78,4 +95,39 @@ pub(crate) fn render(text: &str, link: impl Fn(&str) -> Option<String>) -> Strin
     }
     output.push_str(&escaped(&text[rendered..]));
     output
+}
+
+/// FN-14: anonymous parameters bind their name and uses within their body,
+/// including captured uses in nested functions, but not later expressions.
+fn anonymous_bindings(syntax: &SyntaxNode) -> Vec<(String, Span)> {
+    let mut bindings = Vec::new();
+    for function in syntax
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::FnExpr)
+    {
+        let body = function
+            .children()
+            .find(|node| matches!(node.kind(), SyntaxKind::ArrowBody | SyntaxKind::Block));
+        let parameters = function
+            .children()
+            .find(|node| node.kind() == SyntaxKind::ParamList);
+        for parameter in parameters
+            .into_iter()
+            .flat_map(|list| list.children())
+            .filter(|node| node.kind() == SyntaxKind::LambdaParam)
+        {
+            let Some(name) = parameter
+                .children_with_tokens()
+                .filter_map(|element| element.into_token())
+                .find(|token| token.kind() == SyntaxKind::Ident)
+            else {
+                continue;
+            };
+            bindings.push((name.text().to_string(), name.span()));
+            if let Some(body) = &body {
+                bindings.push((name.text().to_string(), body.span()));
+            }
+        }
+    }
+    bindings
 }

@@ -8,3 +8,9 @@ export const shadowed: i64 = {
     let number = 4
     number
 }
+export const n: i64 = 7
+export const anonymous_result: i64 = (fn(n: i64) => n)(n) + n
+export const inferred_result: i64 = (fn(n) => n)(n)
+export const nested_result: i64 = (fn(n: i64) => (fn(value: i64) => n + value)(1))(n)
+export const block_result: i64 = (fn(n: i64) { n })(n)
+export const fn with_default(value: i64 = (fn(n: i64) => n)(n)) -> i64 => value
