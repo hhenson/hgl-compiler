@@ -79,7 +79,7 @@ pub(super) enum Child {
 
 /// The input and path captured by an inferred `let` (ERR-14). A path
 /// with a runtime index still has a known root.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(super) struct ChildOrigin {
     input: LocalId,
     entry: Option<PackKey>,
