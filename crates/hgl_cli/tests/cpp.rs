@@ -2498,6 +2498,7 @@ fn pack_entries_with_unread_constant_keys_decline_cpp_emission() {
 /// FN-17: named, operator and anonymous targets specialize value and
 /// temporal calls. Captured values and connections reach their bodies
 /// through a node hook, a graph and another static function parameter.
+/// MAP-2: map fits its split inputs to an explicit operator's member types.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn function_parameters_run_on_the_sdk() {
@@ -2524,7 +2525,7 @@ fn function_parameters_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
