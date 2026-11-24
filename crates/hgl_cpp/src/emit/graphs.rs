@@ -622,6 +622,10 @@ impl Family for Graphs {
             ExprKind::Local(local) if emitter.role(*local) == Role::Connection => {
                 Some(identifier(&scope.body.locals[*local].name))
             }
+            ExprKind::Block {
+                statements,
+                value: Some(tail),
+            } if statements.is_empty() => Some(emitter.connection(scope, tail, &value.ty)),
             ExprKind::Call {
                 callee: Callee::Anonymous(function),
                 ..

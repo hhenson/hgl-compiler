@@ -649,19 +649,6 @@ impl<'a> Typer<'a> {
                     self.pack_passes
                         .push((name.text().to_string(), key.clone()));
                     let value = self.expression(&source, None);
-                    // CTRL-16: when the selected branch is only an expression,
-                    // its wiring is the expression's, without a block scope.
-                    let value = match value {
-                        Expr {
-                            kind:
-                                ExprKind::Block {
-                                    statements,
-                                    value: Some(tail),
-                                },
-                            ..
-                        } if statements.is_empty() => *tail,
-                        value => value,
-                    };
                     forwarded.push(ForwardedArgument { key, source, value });
                     self.pack_passes.pop();
                     self.bound.truncate(before);
