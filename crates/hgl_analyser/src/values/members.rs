@@ -78,7 +78,7 @@ impl<'a> Typer<'a> {
         }
         let at = Location::new(self.file, name.span());
         let variant_proven = self.payload_proven(&base, name.text());
-        if self.graph
+        let deferred_graph = self.graph
             && !matches!(base.kind, ExprKind::Unread)
             && not_null(Some(&base.ty)).is_some_and(|ty| match ty {
                 Type::Unknown => true,
@@ -90,8 +90,8 @@ impl<'a> Typer<'a> {
                 // ERR-15 cannot take an implicit success until its type settles.
                 Type::Result { .. } => !whole(ty),
                 _ => false,
-            })
-        {
+            });
+        if deferred_graph || self.deferred_pack_root(&base).is_some() {
             return (
                 ExprKind::DeferredMember {
                     base: Box::new(base),
@@ -371,7 +371,14 @@ impl<'a> Typer<'a> {
             let (kind, ty) = self.pack_entry(pack, named, &index);
             let at = self.at(node);
             let input = self.is_temporal_input(pack);
-            let child = self.reads_children() && self.continues_chain(node, &ty);
+            // With an unfitted entry only the concrete body can tell whether
+            // the projection reads a temporal child or the entry's payload.
+            let deferred_child = matches!(kind, ExprKind::DeferredPackRead)
+                && ty == Type::Unknown
+                && self.pack_inputs.is_none()
+                && super::children::following_projection(node).is_some();
+            let child =
+                self.reads_children() && (deferred_child || self.continues_chain(node, &ty));
             if !matches!(kind, ExprKind::Unread)
                 && input
                 && !child

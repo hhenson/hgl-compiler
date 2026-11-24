@@ -65,6 +65,7 @@ analyser: partial
 - In a `when`, a payload read of an input its header does not admit needs a `valid(input)` that holds where it stands: in the branch it holds for, in the right operand of the `&&` it guards, after a branch that returns (`payload.unguarded`)
 - A child's guard is `all_valid` of its collection or `valid` of the child as the read names it, in a body or as a header's test; a child's `valid` in a header names no input, and the default admission stands with it
 - A direct pack entry has its own guards, such as `valid(items[0])` and `all_valid(items["prior"])` (FN-19). Its validity does not admit another entry.
+- A guard on a child of a heterogeneous pack entry, such as `valid(items[0][0])`, checks the child against the fitted shape and admits that child only (FN-19, GEN-7, TIME-1).
 - An endpoint argument is read through its grouping (EXPR-1) by every check: `valid((quote.bid))` is `valid(quote.bid)`
 - The guard of a whole read of a struct, a tuple or a fixed list, a child among them, is `all_valid` of what it reads (TIME-1)
 - A test of `modified(input)` guards what `valid(input)` does, in a header's top-level conjunct, `when modified(a) && valid([])`, and in a body, in `stop` too, and `modified` of a child as the read names it guards that child: "An input is not modified without being valid"; `modified(a, b)` and `modified()` guard none, nor does a saved bool

@@ -97,6 +97,50 @@ test a_packed_child_waits_for_its_guard {
     ]) == [_, 9]
 }
 
+# FN-19, GEN-7, TIME-1, TIME-4 and TIME-9: the concrete pack supplies
+# the endpoint shape. A tick on a sibling does not admit the child.
+fn guarded_heterogeneous_child<...As>(items: ...As) -> i64 {
+    when valid(items[0][0]) { return items[0][0] }
+}
+
+fn graph_heterogeneous_child(items: list<i64>) -> i64 => guarded_heterogeneous_child(items)
+
+test a_heterogeneous_child_waits_for_its_guard {
+    assert eval graph_heterogeneous_child(items: [
+        delta<list<i64>>(size_modified: 2, updated: [1: 7]),
+        delta<list<i64>>(updated: [0: 9]),
+    ]) == [_, 9]
+}
+
+struct PackQuote {
+    bid: i64
+    ask: i64
+}
+
+fn guarded_named_child<...As>(items: ...{As}) -> i64 {
+    when valid(items["quote"].bid) { return items["quote"].bid }
+}
+
+fn graph_named_child(quote: PackQuote, other: i64) -> i64 =>
+    guarded_named_child(other: other, quote: quote)
+
+test a_named_pack_child_uses_its_fitted_field {
+    assert eval graph_named_child(
+        quote: [delta<PackQuote>(ask: 7), delta<PackQuote>(bid: 9)],
+        other: [3, _],
+    ) == [_, 9]
+}
+
+# expect-error(phase, "endpoint.argument")
+fn nonstructural_pack_child(quote: atomic<PackQuote>) -> i64 => guarded_named_child(quote: quote)
+
+fn reads_a_sibling<...As>(items: ...{As}) -> i64 {
+    when valid(items["quote"].bid) { return items["quote"].ask }
+}
+
+# expect-error(phase, "payload.unguarded")
+fn unguarded_pack_child(quote: PackQuote) -> i64 => reads_a_sibling(quote: quote)
+
 # TYPE-11, ERR-14 and ERR-15: an underfilled window in a selected entry
 # gives the same checked forms as the corresponding ordinary input.
 fn window_source(reading: i64) -> rolling_window<i64, 3, 2> {

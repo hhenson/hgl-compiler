@@ -2367,7 +2367,8 @@ fn forwarded_packs_run_on_the_sdk() {
 
 /// FN-19 and GEN-17: a constant key reads a fitted entry, including a
 /// captured value or a connection. An absent key rejects under the shape
-/// supplied at the call.
+/// supplied at the call. TIME-1, TIME-4 and TIME-9 use that shape for a
+/// selected child endpoint and its admission.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn pack_entries_run_on_the_sdk() {
@@ -2390,7 +2391,7 @@ fn pack_entries_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 6 passed, 0 failed\nexecutable cases: 9 passed, 0 failed, 0 not run\n"
+            "rejection cases: 8 passed, 0 failed\nexecutable cases: 11 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );
