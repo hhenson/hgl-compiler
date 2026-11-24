@@ -13,7 +13,7 @@ use serde_json::Value;
 use walkdir::WalkDir;
 
 use super::executable::publish_executable;
-use super::{BACKTEST, CALC, TICKS, argument, scratch, sdk_named, text, write};
+use super::{BACKTEST, CALC, TICKS, argument, hgl_in, scratch, sdk_named, text, write};
 
 const SOURCE: &str = "module demo.stamped\n\
     export fn pulse(const value: i64) -> i64 { yield 1s: value }\n\
@@ -21,6 +21,40 @@ const SOURCE: &str = "module demo.stamped\n\
 const APP: &str = "application demo.app\n\
     use demo.stamped::{pulse}\n\
     eval pulse(value: 51)\n";
+
+/// A cold toolchain uses the SDK's fmt even when CPATH could shadow it.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn native_build_ignores_inherited_header_search_paths() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("native-search-paths");
+    let source = write(&root, "stamped.hgl", SOURCE);
+    write(
+        &root,
+        "shadow/fmt/chrono.h",
+        "#include <hgl_test_cpath_header_was_selected.h>\n",
+    );
+    let shadow = argument(&root.join("shadow"));
+    let cache = argument(&root.join("native-cache"));
+    let output = hgl_in(
+        &["test", &source, "--target", "cpp"],
+        &[("CPATH", &shadow), ("HGL_NATIVE_CACHE", &cache)],
+        &[],
+    );
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
 
 struct NinjaTrace {
     native: PathBuf,
