@@ -688,9 +688,12 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     analyse_with_test_candidates(files, diagnostics, true)
 }
 
-/// Analyse for a production build or run, without opening a test candidate view (TST-1).
+/// Analyse for a production build or run, retaining diagnostics from every body.
+/// Test-view instances are kept out of the resulting production units (TST-1).
 pub fn analyse_production(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
-    analyse_with_test_candidates(files, diagnostics, false)
+    let mut program = analyse_with_test_candidates(files, diagnostics, false);
+    test_candidates::omit_test_artifacts(&mut program);
+    program
 }
 
 fn analyse_with_test_candidates(
@@ -711,7 +714,7 @@ fn analyse_with_test_candidates(
     declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics, tests);
     documentation::check(&program, diagnostics);
-    values::check(&mut program, diagnostics, tests);
+    values::check(&mut program, diagnostics);
     // UNIT-13: asked of the typed program, where each call has the
     // definition it selected.
     cycles::check(&program, diagnostics);

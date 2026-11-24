@@ -138,7 +138,7 @@ pub(crate) fn walk_body_calls(body: &hir::Body, visit: &mut dyn FnMut(&hir::Expr
     });
 }
 /// Types the bodies of the program, filling in [`Module::bodies`].
-pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics, tests: bool) {
+pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     // The signature of what has none: a test, a run statement, a
     // constant.
     let empty = Signature {
@@ -153,7 +153,6 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics, tests:
     // does (CTRL-6: "compared by resolved value").
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
-        let production_view = !tests && crate::TestCandidateScope::of(program, module).is_some();
         let (bindings, written, calls) = tables(module);
         let selecting = RefCell::new(Vec::new());
         let found = Tables {
@@ -167,9 +166,6 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics, tests:
             .iter()
             .enumerate()
             .map(|(position, declaration)| {
-                if production_view && declaration.test_only {
-                    return None;
-                }
                 let Some(Detail::Constant(ty)) = module.details.get(position) else {
                     return None;
                 };
@@ -186,7 +182,6 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics, tests:
     }
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
-        let production_view = !tests && crate::TestCandidateScope::of(program, module).is_some();
         let (bindings, written, calls) = tables(module);
         let selecting = RefCell::new(Vec::new());
         let found = Tables {
@@ -201,12 +196,6 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics, tests:
         let mut selected = Vec::with_capacity(module.declarations.len());
         let mut graph_return_checks = Vec::with_capacity(module.declarations.len());
         for (position, declaration) in module.declarations.iter().enumerate() {
-            if production_view && declaration.test_only {
-                bodies.push(None);
-                selected.push(Vec::new());
-                graph_return_checks.push(None);
-                continue;
-            }
             let mut check_return = None;
             let body = match (&declaration.kind, module.details.get(position)) {
                 // FN-1: a `const fn`. GEN-4: "an `impl const fn` a value
@@ -284,10 +273,6 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics, tests:
         // empty signature.
         let mut test_bodies = Vec::with_capacity(module.tests.len());
         for (owner, test) in module.tests.iter().enumerate() {
-            if production_view {
-                test_bodies.push(None);
-                continue;
-            }
             let mut stand_in =
                 Declaration::stand_in(&test.name, test.at, test.file, &test.syntax, true);
             stand_in.test_owner = Some(owner);
@@ -319,10 +304,6 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics, tests:
         let mut defaults = Vec::with_capacity(module.declarations.len());
         selecting.borrow_mut().clear();
         for (position, declaration) in module.declarations.iter().enumerate() {
-            if production_view && declaration.test_only {
-                defaults.push(Vec::new());
-                continue;
-            }
             let read = match module.details.get(position) {
                 Some(Detail::Callable(signature))
                     if signature

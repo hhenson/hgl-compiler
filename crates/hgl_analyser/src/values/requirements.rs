@@ -2675,7 +2675,8 @@ pub(super) fn instances_hold(
             {
                 let paths = chain.paths(program, &root_calls);
                 for report in body_reports.as_slice() {
-                    if recheck_format && diagnostics.as_slice().contains(report) {
+                    if (recheck_format || recheck_tests) && diagnostics.as_slice().contains(report)
+                    {
                         continue;
                     }
                     emit_instance_report(report.clone(), &paths, diagnostics);
