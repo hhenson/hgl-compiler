@@ -12,6 +12,7 @@
 //! | `let x = f(a)`, a connection | `const ::hgraph::Port<S> x = ...;` |
 //! | `return x` (FN-7) | `return x;`: the connection the graph gives |
 //! | A call of a temporal function | its wiring function, `w_::f(wiring_, a)`; a generic one's instance's |
+//! | A native temporal candidate (NATIVE-7) | the provider's `wire_<candidate>` function, with the wiring and its inputs |
 //! | A lifted call, `value + 1` (FN-6); `capture` (ERR-7) | the lifting family's (`lifting`) |
 //! | An ordinary value where a connection is expected (FN-3) | its temporal form's constant, `::hglrt::constant<T>(wiring_, value)` |
 //! | A connection of T where one of `T?` is taken (TYPE-14) | hgraph's widening of its port, `(x).as<TS<Optional<T>>>()`; given to a `ref` parameter of `T?`, the node's `REF` input designates that widened view of the producer's endpoint (FN-16) |
@@ -293,6 +294,21 @@ impl Emitter<'_> {
         else {
             return self.missing(value.at, "this call");
         };
+        if let Some(name) = self.native_wiring_name(module, declaration) {
+            return self.graph_call(
+                scope,
+                value,
+                arguments,
+                held,
+                GraphTarget {
+                    name,
+                    signature: declared,
+                    instance: None,
+                    callee,
+                    reads: None,
+                },
+            );
+        }
         let concrete = if self.instances.instanced(program, module, declaration) {
             let instances = self.instances;
             match instances.find_call(program, callee, arguments) {
@@ -355,6 +371,28 @@ impl Emitter<'_> {
                 reads: reader.map(|(_, reads)| reads),
             },
         )
+    }
+
+    /// The wiring function supplied for a native temporal candidate of core.
+    fn native_wiring_name(&self, module: usize, index: usize) -> Option<String> {
+        let owner = &self.program.modules[module];
+        let declaration = &owner.declarations[index];
+        if Some(module) != self.program.core()
+            || !matches!(
+                declaration.kind,
+                DeclarationKind::NativeCandidate(Phase::Temporal, _)
+            )
+        {
+            return None;
+        }
+        let Detail::Callable(signature) = owner.details.get(index)? else {
+            return None;
+        };
+        let name = format!(
+            "wire_{}",
+            names::native_candidate(&declaration.name, signature)
+        );
+        (self.provides)(&name).then(|| names::native(&name))
     }
 
     /// Wires the runtime arguments of a named or anonymous graph call.
@@ -649,6 +687,11 @@ impl Family for Graphs {
                     // GEN-5: a temporal candidate is the node or the graph
                     // its call selects, wired as a temporal function is.
                     DeclarationKind::Implementation(Phase::Temporal, _) => {
+                        Some(emitter.temporal_call(scope, value, &[]))
+                    }
+                    DeclarationKind::NativeCandidate(Phase::Temporal, _)
+                        if emitter.native_wiring_name(module, declaration).is_some() =>
+                    {
                         Some(emitter.temporal_call(scope, value, &[]))
                     }
                     _ => None,
