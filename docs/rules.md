@@ -162,7 +162,6 @@ unsupported case blocks only the pieces that depend on it.
 | EXPR-9 | Reject duplicate constant dictionary keys (`dict.duplicate_key`). |
 | TYPE-7 | Report a failed enum construction as `enum.no_member`. |
 | CTRL-6 | Report an unmatched switch with no default as `switch.unmatched`. |
-| CRUN-3 | Report out-of-range run bounds as `run.bounds`. |
 | END-5 | Enforce the rule for changing input activity during stop. |
 | CTRL-3, CTRL-13 | Verify and preserve validity when a branch with no publication is selected. |
 
