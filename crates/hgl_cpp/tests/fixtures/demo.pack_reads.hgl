@@ -1,0 +1,159 @@
+module demo.pack_reads
+
+# FN-19 and GEN-17: read entries under constant names and positions.
+const first: i64 = 0
+const price_key: str = "price"
+
+const fn positional<...As>(args: ...As) -> i64 => args[first + 1]
+const fn named<...As>(args: ...{As}) -> i64 => args[price_key]
+const fn by_key<const key: str, ...As>(args: ...{As}) -> i64 => args[key]
+const fn homogeneous(args: ...i64) -> i64 => args[0]
+
+test ordinary_pack_entries {
+    assert positional("unread", 3) == 3
+    assert named(ignored: "unread", price: 7) == 7
+    assert by_key<"other">(other: 5) == 5
+    assert homogeneous(6, 9) == 6
+}
+
+const fn apply(f: const fn(i64) -> i64) -> i64 => f(1)
+const fn captured<...As>(args: ...As) -> i64 => apply(fn(x) => x + args[0])
+
+test captured_pack_entry {
+    assert captured(4) == 5
+    assert captured(7) == 8
+}
+
+fn graph_named<...As>(args: ...{As}) -> i64 => args[price_key]
+fn graph_positional<...As>(args: ...As) -> i64 => args[0]
+
+test graph_connections_keep_their_key {
+    assert eval graph_named(price: [3, 7]) == [3, 7]
+    assert eval graph_positional([4, 5]) == [4, 5]
+}
+
+# TIME-3 and TIME-4: the default admission includes the fitted pack inputs.
+fn first_when_admitted<...As>(args: ...As) -> i64 {
+    when { return args[0] }
+}
+
+test node_admits_a_pack_entry {
+    assert eval first_when_admitted([_, 7], [2, 3]) == [_, 7]
+}
+
+fn first_with_manual_admission(trigger: i64, args: ...i64) -> i64 {
+    # expect-error(phase, "payload.unguarded")
+    when modified(trigger) && valid([]) { return args[0] }
+}
+
+test absent_positional_key {
+    # expect-error(type, "pack.name")
+    assert positional(3) == 3
+}
+
+test absent_named_key {
+    # expect-error(type, "pack.name")
+    assert named(other: 7) == 7
+}
+
+test absent_generic_key {
+    # expect-error(type, "pack.name")
+    assert by_key<"other">(price: 5) == 5
+}
+
+# expect-error(type, "type.mismatch")
+const fn runtime_key(key: i64, args: ...i64) -> i64 => args[key]
+
+# expect-error(type, "type.mismatch")
+const fn wrong_kind(args: ...i64) -> i64 => args[false]
+
+# FN-19: a key reads the fitted type of its own entry on each call.
+const fn entry_type<...As>(args: ...{As}) -> As[price_key] => (args)[price_key]
+
+test each_entry_keeps_its_type {
+    assert entry_type(price: 13) == 13
+    assert entry_type(price: "label") == "label"
+}
+
+# TIME-1 and TIME-4: another child publishing does not admit this read.
+fn guarded_child(items: ...list<i64>) -> i64 {
+    when valid(items[0][0]) { return items[0][0] }
+}
+
+fn graph_guarded_child(items: list<i64>) -> i64 => guarded_child(items)
+
+fn ordinary_guarded_child(items: list<i64>) -> i64 {
+    when valid(items[0]) { return items[0] }
+}
+
+test a_packed_child_waits_for_its_guard {
+    assert eval graph_guarded_child(items: [
+        delta<list<i64>>(size_modified: 2, updated: [1: 7]),
+        delta<list<i64>>(updated: [0: 9]),
+    ]) == [_, 9]
+    assert eval ordinary_guarded_child(items: [
+        delta<list<i64>>(size_modified: 2, updated: [1: 7]),
+        delta<list<i64>>(updated: [0: 9]),
+    ]) == [_, 9]
+}
+
+# TYPE-11, ERR-14 and ERR-15: an underfilled window in a selected entry
+# gives the same checked forms as the corresponding ordinary input.
+fn window_source(reading: i64) -> rolling_window<i64, 3, 2> {
+    when { return reading }
+}
+
+fn checked_window(items: ...rolling_window<i64, 3, 2>) -> tuple<str, i64> {
+    when {
+        let outcome: result<list<i64>, error> = items[0]
+        let samples: list<i64>? = items[0]
+        let oldest = if samples != null { samples[0] } else { -1 }
+        return (if is_ok(outcome) { "ok" } else { outcome.error.code }, oldest)
+    }
+}
+
+fn graph_checked_window(reading: i64) -> tuple<str, i64> =>
+    checked_window(window_source(reading))
+
+test a_packed_window_gives_a_checked_read {
+    assert eval graph_checked_window(reading: [1, 2, 3, 4]) ==
+        [("value.unset_read", -1), ("ok", 1), ("ok", 1), ("ok", 2)]
+}
+
+# TIME-1, ERR-14: a gap makes a whole read of an unsized list fail.
+fn checked_list(items: ...list<i64>) -> bool {
+    when {
+        let outcome: result<list<i64>, error> = items[0]
+        return is_ok(outcome)
+    }
+}
+
+fn graph_checked_list(items: list<i64>) -> bool => checked_list(items)
+
+test a_packed_list_reports_a_gap {
+    assert eval graph_checked_list(items: [
+        [1],
+        delta<list<i64>>(updated: [2: 4]),
+        delta<list<i64>>(updated: [1: 7]),
+    ]) == [true, false, true]
+}
+
+# TIME-1, ERR-14: a named pack may supply a dictionary with a partial entry.
+fn checked_dictionary<...As>(items: ...{As}) -> bool {
+    when {
+        let outcome: result<dict<str, tuple<i64, str>>, error> = items["book"]
+        return is_ok(outcome)
+    }
+}
+
+fn graph_checked_dictionary(book: dict<str, tuple<i64, str>>) -> bool =>
+    checked_dictionary(book: book)
+
+test a_packed_dictionary_reports_a_partial_entry {
+    let initial: delta<tuple<i64, str>> = (1, null)
+    let completed: delta<tuple<i64, str>> = (null, "complete")
+    assert eval graph_checked_dictionary(book: [
+        delta<dict<str, tuple<i64, str>>>(updated: ["x": initial]),
+        delta<dict<str, tuple<i64, str>>>(updated: ["x": completed]),
+    ]) == [false, true]
+}

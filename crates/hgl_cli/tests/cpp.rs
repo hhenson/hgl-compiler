@@ -1446,8 +1446,8 @@ fn timing_runs_on_the_sdk() {
     );
 }
 
-/// TYPE-12 and UNIT-8: parameters and configuration observe the ticks of
-/// a signal connection. An omitted signal stays silent when forwarded.
+/// TYPE-12, FN-19 and UNIT-8: parameters, configuration and pack
+/// connections observe signal ticks. An omitted signal stays silent.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn signal_inputs_run_on_the_sdk() {
@@ -1469,7 +1469,7 @@ fn signal_inputs_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2290,6 +2290,113 @@ fn forwarded_packs_run_on_the_sdk() {
         stdout.ends_with("executable cases: 19 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
+}
+
+/// FN-19 and GEN-17: a constant key reads a fitted entry, including a
+/// captured value or a connection. An absent key rejects under the shape
+/// supplied at the call.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn pack_entries_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("pack-entries");
+    let file = write(
+        &root,
+        "demo.pack_reads.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.pack_reads.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 6 passed, 0 failed\nexecutable cases: 9 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
+/// FN-19: a range pass supplies a constant key (CTRL-16), and UNIT-13
+/// lets a module constant be computed by a call. Both checks succeed
+/// even when C++ cannot yet write the lookup.
+#[test]
+fn pack_entries_with_unread_constant_keys_decline_cpp_emission() {
+    let root = scratch("unread-pack-keys");
+    let cases = [
+        (
+            "range_key",
+            concat!(
+                "fn summed<...As>(args: ...As) -> i64 {\n",
+                "    var s = args[0]\n",
+                "    for i in 1..<3 { s = s + args[i] }\n",
+                "    return s\n",
+                "}\n",
+                "test example { assert eval summed([1], [10], [100]) == [111] }\n",
+            ),
+        ),
+        (
+            "range_expression_key",
+            concat!(
+                "fn summed(args: ...i64) -> i64 {\n",
+                "    var s = args[0]\n",
+                "    for i in 0..<2 { s = s + args[i + 1] }\n",
+                "    return s\n",
+                "}\n",
+                "test example { assert eval summed([1], [10], [100]) == [111] }\n",
+            ),
+        ),
+        (
+            "module_key",
+            concat!(
+                "const fn name() -> str => \"a\"\n",
+                "const key: str = name()\n",
+                "const fn fetch<...As>(args: ...{As}) -> i64 => args[key + \"b\"]\n",
+                "test example { assert fetch(ab: 1) == 1 }\n",
+            ),
+        ),
+        (
+            "generic_key",
+            concat!(
+                "const fn name() -> str => \"a\"\n",
+                "const key: str = name()\n",
+                "const fn fetch<const given: str, ...As>(args: ...{As}) -> i64 => args[given]\n",
+                "test example { assert fetch<key>(a: 1) == 1 }\n",
+            ),
+        ),
+    ];
+    for (name, body) in cases {
+        let file = write(
+            &root,
+            &format!("{name}.hgl"),
+            &format!("module {name}\n{body}"),
+        );
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        assert_eq!(
+            checked.status.code(),
+            Some(0),
+            "{name}: {}",
+            text(&checked.stderr)
+        );
+        let out = root.join(name);
+        let emitted = hgl_in(
+            &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
+            &[],
+            &[],
+        );
+        let stderr = text(&emitted.stderr);
+        assert_eq!(emitted.status.code(), Some(1), "{name}: {stderr}");
+        assert!(
+            stderr.contains("error[build/target.unsupported]"),
+            "{name}: {stderr}"
+        );
+    }
 }
 
 /// FN-17: named, operator and anonymous targets specialize value and
@@ -5064,7 +5171,7 @@ fn category_constraints_and_tuple_packs_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 29 passed, 0 failed\nexecutable cases: 17 passed, 0 failed, 0 not run\n"
+            "rejection cases: 29 passed, 0 failed\nexecutable cases: 18 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );

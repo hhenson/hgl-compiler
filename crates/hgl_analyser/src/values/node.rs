@@ -689,7 +689,11 @@ impl<'a> Typer<'a> {
     /// header stands over it, so each payload read is dominated by a
     /// guard".
     pub(super) fn payload_read(&mut self, local: LocalId, at: Location) {
-        self.input_read(local, at, true);
+        self.input_read(
+            local,
+            at,
+            children::read_whole_all_valid(&self.locals[local].ty),
+        );
     }
 
     /// END-3: a delta read needs the input's validity, but reads no
@@ -701,7 +705,7 @@ impl<'a> Typer<'a> {
 
     /// Shared input lifecycle and admission checks. Only a whole
     /// payload read needs all_valid of a struct, tuple or fixed list.
-    fn input_read(&mut self, local: LocalId, at: Location, whole: bool) {
+    pub(super) fn input_read(&mut self, local: LocalId, at: Location, needs_all_valid: bool) {
         let name = self.locals[local].name.clone();
         if self.initializing {
             self.diagnostics.emit(error(
@@ -751,7 +755,7 @@ impl<'a> Typer<'a> {
         // is a test of `all_valid` of what it reads". TIME-9: `valid` of
         // a collection "admits no child's read", and a whole read is one
         // of every child.
-        if whole && children::read_whole_all_valid(&self.locals[local].ty) {
+        if needs_all_valid {
             let all_valid = children::all_valid_fact(local);
             if self.present.contains(&all_valid) {
                 return;
@@ -1147,29 +1151,42 @@ impl<'a> Typer<'a> {
     /// readable payload": it is given to an endpoint operation, as
     /// `modified(tick)`, and read nowhere. A read in `start` is
     /// `input.lifecycle`, reported once.
-    pub(super) fn signal_read(&mut self, local: LocalId, at: Location) {
-        let signal = matches!(self.locals[local].ty.omission_removed(), Type::Signal);
+    /// For a pack, `entry` supplies the selected type and expression.
+    pub(super) fn signal_read(
+        &mut self,
+        local: LocalId,
+        at: Location,
+        entry: Option<(&Type, &SyntaxNode)>,
+    ) {
+        let ty = entry.map_or(&self.locals[local].ty, |(ty, _)| ty);
         let hook = matches!(self.hook, Some(Hook::When | Hook::Stop));
         // A `ref` one is reported as a `ref` parameter (`ref_read`).
-        if !signal || !self.is_temporal_input(local) || !hook || self.is_reference(local) {
+        if !matches!(ty.omission_removed(), Type::Signal)
+            || !self.is_temporal_input(local)
+            || !hook
+            || self.is_reference(local)
+        {
             return;
         }
-        self.diagnostics.emit(
-            error(
-                Category::Type,
-                codes::TYPE_NOT_ORDINARY,
-                at,
-                format!(
-                    "`{}` is a `signal`, which has no payload to read",
-                    self.locals[local].name
-                ),
-                "TYPE-12",
-            )
-            .with_note(format!(
-                "a signal is given to an endpoint operation: `modified({})`",
-                self.locals[local].name
-            )),
+        let name = match entry {
+            Some((_, written)) => written.text().to_string(),
+            None => self.locals[local].name.clone(),
+        };
+        let diagnostic = error(
+            Category::Type,
+            codes::TYPE_NOT_ORDINARY,
+            at,
+            format!("`{name}` is a `signal`, which has no payload to read"),
+            "TYPE-12",
         );
+        // The ordinary note names an input that can be given directly
+        // to an endpoint operation.
+        self.diagnostics.emit(match entry {
+            Some(_) => diagnostic,
+            None => diagnostic.with_note(format!(
+                "a signal is given to an endpoint operation: `modified({name})`"
+            )),
+        });
     }
 }
 
