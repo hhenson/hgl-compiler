@@ -145,9 +145,17 @@ fn packed_hook_inputs_read_their_payload_types() {
         "fn scalar_read(items: ...i64) -> i64 {\n",
         "    when { return items[0] }\n",
         "}\n",
+        "fn atomic_control(item: atomic<list<i64>>) -> list<i64> {\n",
+        "    when { return item }\n",
+        "}\n",
+        "fn window_control(item: rolling_window<i64, 2, 1>) -> list<i64> {\n",
+        "    when { return item }\n",
+        "}\n",
         "fn atomic_entry(a: atomic<list<i64>>, b: atomic<list<i64>>) -> list<i64> => atomic_read(a, b)\n",
         "fn window_entry(a: rolling_window<i64, 2, 1>, b: rolling_window<i64, 2, 1>) -> list<i64> => window_read(a, b)\n",
         "fn scalar_entry(a: i64, b: i64) -> i64 => scalar_read(a, b)\n",
+        "fn window_connection(items: ...rolling_window<i64, 2, 1>) -> rolling_window<i64, 2, 1> => items[0]\n",
+        "fn forwarded_window(a: rolling_window<i64, 2, 1>) -> rolling_window<i64, 2, 1> => window_connection(a)\n",
     ));
     assert_eq!(checked.summary(), NONE);
 }
