@@ -599,10 +599,10 @@ impl<'a> Typer<'a> {
         };
         match found {
             Ok(ConstantValue::Int(position)) => {
-                if let Some(ty) = index_result(base, Some(position)) {
+                if let Some(ty) = tuple_element(self.program, elements, position) {
                     index.kind = ExprKind::Literal(Value::Int(position));
                     index.ty = integer.clone();
-                    return ty.clone();
+                    return ty;
                 }
             }
             Err(Fault::NotConstant) => {}
@@ -615,10 +615,15 @@ impl<'a> Typer<'a> {
                 Category::Type,
                 codes::TUPLE_INDEX,
                 index.at,
-                format!(
-                    "a tuple's index is a constant, here one of 0 to {}: it selects the element's type",
-                    elements.len().saturating_sub(1)
-                ),
+                if elements.iter().any(|ty| matches!(ty, Type::Parameter { at, .. }
+                    if super::requirements::type_pack_bounds(self.program, *at).is_some())) {
+                    "the index must select an element for every admitted tuple-pack length; its element is not determined here".to_string()
+                } else {
+                    format!(
+                        "a tuple's index is a constant, here one of 0 to {}: it selects the element's type",
+                        elements.len().saturating_sub(1)
+                    )
+                },
                 "EXPR-7",
             ));
         }
@@ -667,6 +672,39 @@ pub(super) fn index_result(ty: &Type, position: Option<i64>) -> Option<&Type> {
         Type::Tuple(elements) => elements.get(usize::try_from(position?).ok()?),
         _ => None,
     }
+}
+
+/// GEN-7, GEN-10 and EXPR-7: a pack marker denotes a sequence, never
+/// one tuple element. A guaranteed member retains its source and key for
+/// specialization; a position that can cross a variable boundary is unknown.
+fn tuple_element(program: &crate::Program, elements: &[Type], position: i64) -> Option<Type> {
+    let mut remaining = u64::try_from(position).ok()?;
+    for ty in elements {
+        if let Type::Parameter { at, name } = ty
+            && let Some((minimum, maximum)) = super::requirements::type_pack_bounds(program, *at)
+        {
+            if remaining < minimum {
+                let position = i64::try_from(remaining).ok()?;
+                return Some(Type::PackMember {
+                    pack: *at,
+                    name: name.clone(),
+                    key: Constant {
+                        text: position.to_string(),
+                        value: ConstantValue::Int(position),
+                    },
+                });
+            }
+            if maximum != Some(minimum) {
+                return None;
+            }
+            remaining -= minimum;
+        } else if remaining == 0 {
+            return Some(ty.clone());
+        } else {
+            remaining -= 1;
+        }
+    }
+    None
 }
 
 /// True when a value of `ty` has members that `value.member` reads: a

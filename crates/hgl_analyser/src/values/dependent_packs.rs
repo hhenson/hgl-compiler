@@ -1,6 +1,6 @@
 //! Compile-time matching of a dependent argument pack (FN-8, GEN-17).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
@@ -10,7 +10,7 @@ use super::arguments::{Assigned, Slot, Takes};
 use super::candidates::Given;
 use super::function_arguments::CallbackInputs;
 use super::inference::{pack_bounds, type_pack};
-use crate::declared::{substitute_with_members, weight};
+use crate::declared::{substitute_with_packs, weight};
 use crate::hir::{Callee, Expr, ExprKind, PackKey, ReflectedInputs, TypePackArgument};
 use crate::syntax::child;
 use crate::types::{
@@ -24,6 +24,7 @@ use crate::{codes, error};
 pub(crate) struct PackTypes<'p> {
     bindings: Vec<(Location, &'p TypePackArgument)>,
     heaviest: usize,
+    sequence_weight: usize,
 }
 
 impl<'p> PackTypes<'p> {
@@ -40,11 +41,61 @@ impl<'p> PackTypes<'p> {
                 .map(weight)
                 .max()
                 .unwrap_or(1),
+            sequence_weight: packs
+                .iter()
+                .map(|pack| {
+                    pack.types
+                        .iter()
+                        .fold(1usize, |sum, ty| sum.saturating_add(weight(ty)))
+                })
+                .max()
+                .unwrap_or(1),
         }
     }
 
     /// Put the enclosing compile-time inputs into a passed-on pack (GEN-17).
     pub(crate) fn place_forwarded(&self, pack: &mut TypePackArgument) {
+        if !pack.tuple_sources.is_empty() {
+            let sources = std::mem::take(&mut pack.tuple_sources);
+            let mut unresolved = Vec::new();
+            let mut types = Vec::new();
+            for ty in std::mem::take(&mut pack.types) {
+                let source = match &ty {
+                    Type::Parameter { at, .. } if sources.contains(at) => Some(*at),
+                    _ => None,
+                };
+                let supplied = source.and_then(|source| {
+                    self.bindings
+                        .iter()
+                        .find(|(at, _)| *at == source)
+                        .map(|(_, given)| *given)
+                });
+                if let Some(given) = supplied
+                    && (given.forwarded_from.is_none() || !given.tuple_sources.is_empty())
+                {
+                    types.extend(given.types.iter().cloned());
+                    for source in &given.tuple_sources {
+                        if !unresolved.contains(source) {
+                            unresolved.push(*source);
+                        }
+                    }
+                } else {
+                    if let Some(source) = source
+                        && !unresolved.contains(&source)
+                    {
+                        unresolved.push(source);
+                    }
+                    types.push(ty);
+                }
+            }
+            pack.keys = (0..types.len())
+                .map(crate::hir::PackKey::Position)
+                .collect();
+            pack.types = types;
+            pack.forwarded_from = unresolved.first().copied();
+            pack.tuple_sources = unresolved;
+            return;
+        }
         let Some(source) = pack.forwarded_from else {
             return;
         };
@@ -104,8 +155,46 @@ impl<'p> PackTypes<'p> {
             fault.borrow_mut().get_or_insert(fault_here);
             Some(Type::Unknown)
         };
-        let ty = substitute_with_members(ty, map, &member, self.heaviest);
-        fault.into_inner().map_or(Ok(ty), Err)
+        let untold_sequence = Cell::new(false);
+        let sequence = |at| {
+            let (_, pack) = self.bindings.iter().find(|(declared, _)| *declared == at)?;
+            let types = pack.types.clone();
+            if let Some(source) = pack.forwarded_from
+                && !types
+                    .iter()
+                    .any(|ty| matches!(ty, Type::Parameter { at, .. } if *at == source))
+            {
+                // A reflected callback whose suffix is not yet supplied
+                // has no tuple arity. Keep the entire type unresolved.
+                untold_sequence.set(true);
+                return Some(Vec::new());
+            }
+            Some(types)
+        };
+        // Only a tuple expansion spends the sequence's combined weight;
+        // a lookup of one reflected member keeps its existing bound.
+        let expands = ty.any_part(
+            &|part| {
+                matches!(part, Type::Tuple(elements) if elements.iter()
+            .any(|element| matches!(element, Type::Parameter { at, .. }
+                if self.bindings.iter().any(|(bound, _)| bound == at))))
+            },
+            &|_| false,
+        );
+        let bound = if expands {
+            self.heaviest.max(self.sequence_weight)
+        } else {
+            self.heaviest
+        };
+        let ty = substitute_with_packs(ty, map, &member, &sequence, bound);
+        fault.into_inner().map_or(
+            Ok(if untold_sequence.get() {
+                Type::Unknown
+            } else {
+                ty
+            }),
+            Err,
+        )
     }
 
     /// A known key must exist when a declaration writes its member type.

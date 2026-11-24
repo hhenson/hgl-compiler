@@ -174,6 +174,8 @@ define_syntax_kinds! {
         ConstraintValue,
         /// `{i64, f64}` as a constraint operand
         ConstraintSet,
+        /// `struct` or `enum`, only after a membership's `in` (GEN-3).
+        ConstraintCategory,
 
         /// `export const scale: i64 = 2`
         ConstantDecl,

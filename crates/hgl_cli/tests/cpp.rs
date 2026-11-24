@@ -5086,3 +5086,33 @@ fn named_law_requirements_run_on_the_sdk() {
         "{stdout}"
     );
 }
+
+/// GEN-3 and GEN-10: category selection and tuple type packs execute on
+/// the SDK, including forwarding and independently typed callbacks.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn category_constraints_and_tuple_packs_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("category-packs");
+    let file = write(
+        &root,
+        "demo.categories.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.categories.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 29 passed, 0 failed\nexecutable cases: 17 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
