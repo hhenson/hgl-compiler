@@ -111,7 +111,7 @@ or Apple clang 21 or later on macOS, and uses CMake and Ninja. See
 before anything is read, with `error: invalid value 'unknown' for
 '--target <TARGET>'` and the values it takes, and status 2.
 
-The C++ runtime is built for hgraph 0.9.29, whose scheduler excludes the
+The C++ runtime is built for hgraph 0.9.30, whose scheduler excludes the
 current delivery from pending wakes.
 
 The compiler reports nesting deeper than 100 levels and a syntax tree deeper
