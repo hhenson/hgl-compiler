@@ -88,6 +88,7 @@ pub fn canonical_argument(program: &Program, argument: &GenericArgument) -> Opti
     match argument {
         GenericArgument::Type(ty) => canonical(program, ty),
         GenericArgument::Constant(constant) => canonical_constant(constant),
+        GenericArgument::NoResult => Some("<no result>".to_string()),
     }
 }
 

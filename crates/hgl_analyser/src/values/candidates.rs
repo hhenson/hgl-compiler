@@ -27,7 +27,9 @@ use super::operators::unreadable;
 use super::requirements::{Condition, holds};
 use super::{Candidate, Typer};
 use crate::constant::Fault;
-use crate::declared::{agree, names_parameter, substitute_with_packs, substitute_within};
+use crate::declared::{
+    agree, bind_result, names_parameter, substitute_with_packs, substitute_within,
+};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
 use crate::syntax::{child, name_token, tokens, ungrouped};
@@ -1414,7 +1416,7 @@ impl<'a> Typer<'a> {
                 .position(|generic| generic.name == name)?;
             match generics.get(index)? {
                 Argument::Type(ty) => Some(ty.clone()),
-                Argument::Constant(_) => None,
+                Argument::Constant(_) | Argument::NoResult => None,
             }
         };
         let declared_in = &self.program.modules[module];
@@ -1642,7 +1644,7 @@ impl<'a> Typer<'a> {
                 .find(|(declared, _)| *declared == at)
                 .and_then(|(_, given)| match given {
                     Argument::Constant(given) => Some(given.value.clone()),
-                    Argument::Type(_) => None,
+                    Argument::Type(_) | Argument::NoResult => None,
                 })
         }))
     }
@@ -1817,6 +1819,7 @@ impl<'a> Typer<'a> {
                     let member = match member {
                         Argument::Type(ty) => ty.to_string(),
                         Argument::Constant(constant) => constant.text.clone(),
+                        Argument::NoResult => "none".to_string(),
                     };
                     format!("`{parameter}` = `{member}`")
                 })
@@ -2092,7 +2095,7 @@ impl<'a> Typer<'a> {
                 .find(|(declared, _)| *declared == at)
                 .and_then(|(_, given)| match given {
                     Argument::Constant(given) => Some(given.value.clone()),
-                    Argument::Type(_) => None,
+                    Argument::Type(_) | Argument::NoResult => None,
                 })
         };
         for Given { key, node, .. } in &selecting.arguments {
@@ -2373,9 +2376,7 @@ pub(crate) fn in_instance(signature: &Signature, map: &[(Location, &Argument)]) 
                 ..parameter.clone()
             })
             .collect(),
-        result: signature
-            .result
-            .as_ref()
+        result: bind_result(signature.result.as_ref(), map)
             .map(|result| substitute_within(result, map)),
         reference: signature.reference,
     }
@@ -3542,9 +3543,10 @@ impl<'a> RankingType<'a, '_> {
             | Type::RollingWindow { value: inner, .. } => Some(inner.as_ref()),
             Type::Dict { key, value } => [key.as_ref(), value.as_ref()].get(index).copied(),
             Type::Result { value, error } => [value.as_ref(), error.as_ref()].get(index).copied(),
+            Type::Function(function) => function.parameters.get(index).map(|input| input.ty()),
             Type::Named { arguments, .. } => match arguments.get(index)? {
                 Argument::Type(argument) => Some(argument),
-                Argument::Constant(_) => None,
+                Argument::Constant(_) | Argument::NoResult => None,
             },
             _ => None,
         });
@@ -3690,6 +3692,27 @@ fn specificity(left: RankingType<'_, '_>, right: RankingType<'_, '_>) -> Specifi
                     // A constant is as specific as a constant.
                     _ => Specific::Same,
                 }))
+        }
+        (Type::Function(l), Type::Function(r))
+            if l.value == r.value
+                && l.parameters.len() == r.parameters.len()
+                && (l.result.is_none() && r.result_admits_none
+                    || r.result.is_none() && l.result_admits_none) =>
+        {
+            // GEN-12: a written absence is more specific than a result
+            // that can bind to none. Keep the inputs' specificity too.
+            let result = if l.result.is_none() {
+                Specific::More
+            } else {
+                Specific::Less
+            };
+            l.parameters
+                .iter()
+                .zip(&r.parameters)
+                .enumerate()
+                .fold(result, |order, (index, (l, r))| {
+                    order.and(compare(l.ty(), r.ty(), index))
+                })
         }
         // Two types with no variable in them: one type, where both
         // candidates admit the call.

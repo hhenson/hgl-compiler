@@ -735,14 +735,5 @@ fn gives_port(emitter: &Emitter, value: &Expr) -> bool {
     let ExprKind::Call { callee, .. } = &value.kind else {
         return false;
     };
-    if let Callee::Anonymous(function) = callee {
-        function.template.result.is_some()
-    } else {
-        callee.declaration().is_some_and(|(module, declaration)| {
-            matches!(
-                emitter.program.modules[module].details.get(declaration),
-                Some(Detail::Callable(signature)) if signature.result.is_some()
-            )
-        })
-    }
+    callee.has_result(emitter.program) == Some(true)
 }

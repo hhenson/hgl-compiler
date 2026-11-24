@@ -10,8 +10,8 @@ use hgl_source::FileId;
 
 use crate::constant::{Constants, Scope};
 use crate::declared::{
-    names_one_of, result_types_differ, same_type, substitute_with_members, substitute_with_packs,
-    substitute_within, weight,
+    bind_result, names_one_of, result_types_differ, same_type, substitute_with_members,
+    substitute_with_packs, substitute_within, weight,
 };
 use crate::program::{Declaration, DeclarationKind, Program, Role};
 use crate::read::type_child;
@@ -63,16 +63,31 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
             {
                 continue;
             }
-            let Some(parameters) = parameter_types(public, signature, role) else {
+            let Some(mut parameters) = parameter_types(public, signature, role) else {
                 continue;
             };
+            // GEN-6: the candidate's own result can settle an otherwise
+            // unbound result-only parameter.
+            if signature.result.is_none()
+                && let Some(Type::Parameter { at, .. }) = &public.result
+                && let Some(argument) = public
+                    .generics
+                    .iter()
+                    .zip(&mut parameters.arguments)
+                    .find_map(|(generic, argument)| {
+                        (generic.at == *at && generic.result_only).then_some(argument)
+                    })
+                && matches!(argument, Argument::Type(Type::Unknown))
+            {
+                *argument = Argument::NoResult;
+            }
             let bindings: Vec<_> = public
                 .generics
                 .iter()
                 .zip(&parameters.arguments)
                 .map(|(parameter, argument)| (parameter.at, argument))
                 .collect();
-            let expected = public.result.as_ref().map(|result| {
+            let expected = bind_result(public.result.as_ref(), &bindings).map(|result| {
                 result_in_candidate(result, public, signature, &bindings, &parameters)
             });
             if let Some(message) = result_error(&expected, &signature.result) {
@@ -278,6 +293,7 @@ fn parameter_types<'a>(
                         if same_type(left, right) == Some(true) => {}
                     (Some(Argument::Constant(left)), Argument::Constant(right))
                         if left.value.same(&right.value) == Some(true) => {}
+                    (Some(Argument::NoResult), Argument::NoResult) => {}
                     (None, _) => *known = Some(next),
                     _ => return None,
                 }

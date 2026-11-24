@@ -19,6 +19,8 @@ mod debug_tests;
 mod executable;
 #[path = "cpp/formatting.rs"]
 mod formatting;
+#[path = "cpp/result_only.rs"]
+mod result_only;
 #[path = "cpp/string_append.rs"]
 mod string_append;
 
@@ -2684,6 +2686,29 @@ fn pack_entries_run_on_the_sdk() {
         stdout.ends_with(
             "rejection cases: 8 passed, 0 failed\nexecutable cases: 12 passed, 0 failed, 0 not run\n"
         ),
+        "{stdout}"
+    );
+}
+
+/// TIME-9 and GEN-7: delta and retained time reads observe the fitted
+/// pack child in the same way as the child of an ordinary input.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn pack_child_observations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("pack-child-operations");
+    let file = write(
+        &root,
+        "demo.pack_child_operations.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.pack_child_operations.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

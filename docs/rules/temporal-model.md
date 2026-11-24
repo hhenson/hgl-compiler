@@ -166,6 +166,7 @@ analyser: partial
 - `scheduled<T>()` is the selector and is judged as `scheduled()` is, and takes no generic argument (`generic.argument_count`): core declares no function of the name
 - `is_active`, `activate` and `passivate` take only a direct temporal input, and `all_valid` only a list, tuple, struct, dictionary or window (`endpoint.argument`); a test of `all_valid` guards as one of `valid` does
 - `valid`, `modified` and `all_valid` name direct temporal pack entries by constant key (FN-19). `activate` and `passivate` on an entry obey the direct input's lifecycle checks (TIME-5).
+- `delta_value` and `last_modified` observe a child of a fitted heterogeneous pack entry. `is_active` reports the fitted child as an indirect input at the instantiating call (GEN-7).
 - The core function `is_active` resolves by its declaration and returns a `bool` in a handler or in stop
 - Core's `removed_value` resolves by its declaration, which takes a window's endpoint; where its place takes `result<V, error>` the place says what V is, and the read is of that result (ERR-14); given no window it binds nothing of the window's sizes (`generic.unresolved`)
 - In a guard it sets neither subscription nor validity

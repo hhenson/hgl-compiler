@@ -915,7 +915,7 @@ transpiler: partial
 - The C++ target gives primitive fields to pinned fmt with compiled specifiers. It emits checked chrono directives with fractional truncation on `%S`, `%T` and `%[S]`, duration totals and padding on the whole field.
 - Boolean width and alignment without the zero flag use the pinned fmt formatter.
 - A `str` at `{:?}` uses the same HGL literal writer as a string inside a collection (FMT-5).
-- Plain string fields measure width and precision in Unicode code points. Default `f64` fields with a width apply the sign and padding to their FMT-5 text. Both NaN signs start from `nan` (OPS-6).
+- Plain string fields measure width and precision in Unicode code points. A default `f64` field applies its sign and layout to its FMT-5 text, including with zero or absent width. Both NaN signs start from `nan` (OPS-6).
 - Left: the alternate `#` form with an `f64` width, and width or precision combined with `?`.
 
 ## FMT-5
@@ -933,9 +933,10 @@ transpiler: partial
 
 ## FMT-6
 
-transpiler: planned
+transpiler: partial
 
-- #434.
+- A graph call with connections lifts the native value formatter (FN-11), publishing text at every admitted evaluation, including an equal result.
+- Left: #434 step 2 supplies the HGL graph candidate's validity policy and triggers. The lifted value candidate currently binds `null` for a nullable argument that is not valid and writes that value, rather than withholding text until the argument is valid as FMT-6 requires.
 
 ## FMT-7
 
@@ -945,21 +946,25 @@ transpiler: done
 
 ## FMT-8
 
-transpiler: planned
+transpiler: partial
 
-- #434.
+- The lifted native value candidate formats a collection whole when it ticks. Explicit `Marked<T>` values retain the value formatter's existing tick-prefix support (FMT-7, FMT-9).
+- Left: #434 step 2 supplies the HGL graph body, default collection-delta formatting, marks, `require_valid`, sampling and triggers; the current lifted value call uses FN-11's ordinary input binding instead.
 
 ## FMT-9
 
 analyser: partial
 
 - Value calls admit `{wall_time}` and reject `{engine_time}` with `format.argument`. A marked place accepts `Marked<T>`.
-- Left: a graph supplies evaluation time and the arguments' tick state (#434).
+- A native call from a graph admits `{engine_time}` as a reserved datetime place; it consumes no supplied argument and uses datetime's checked specifiers.
+- Trace cells and const arguments supplied to an eval remain value code and reject `{engine_time}` (TST-3).
+- Left: the HGL graph candidate supplies the arguments' tick state (#434).
 
 transpiler: partial
 
 - `{wall_time}` reads the process clock. A marked place writes the configured tick prefix when its argument ticked.
-- Left: a graph supplies evaluation time and the arguments' tick state (#434).
+- A lifted native format call reads `{engine_time}` from its node's output endpoint, once per call, with the checked pattern retained through lifting.
+- Left: the HGL graph candidate supplies the arguments' tick state and its trigger (#434 step 2, FMT-6); an `{engine_time}` place without a lifted node is explicitly unsupported until that candidate provides the graph-start tick.
 
 ## DBG-1
 

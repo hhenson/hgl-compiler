@@ -236,7 +236,7 @@ impl<'a> Typer<'a> {
         // read, including one written inside a hook or a source.
         if let Some(scope) = &self.anonymous {
             return match &scope.result {
-                Type::Result { .. } => Raise::Return,
+                Some(Type::Result { .. }) => Raise::Return,
                 _ => Raise::Execution,
             };
         }

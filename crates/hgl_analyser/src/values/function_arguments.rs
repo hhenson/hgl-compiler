@@ -736,14 +736,14 @@ impl<'a> Typer<'a> {
     }
 
     fn reference_written(
-        &self,
+        &mut self,
         node: &SyntaxNode,
         name: &SyntaxToken,
     ) -> Option<&'a CallArguments> {
         // The read pass uses the full name's start, including its module alias.
         let start = child(node, SyntaxKind::QualifiedName)
             .map_or(name.span().start, |qualified| qualified.span().start);
-        self.calls.get(&(self.file, start)).copied()
+        self.call_arguments_at(start)
     }
 
     /// Neither the reference nor its receiving template supplies every generic.
@@ -885,9 +885,22 @@ impl<'a> Typer<'a> {
             ));
             return None;
         }
-        let result = crate::syntax::child(node, SyntaxKind::ReturnType)
+        let written = crate::syntax::child(node, SyntaxKind::ReturnType);
+        let infer_result = written.is_none() && template.result_admits_none;
+        // FN-17: reading the body to infer this result can infer
+        // another callback result. Charge the reading before entering it.
+        if infer_result && !self.may_reread() {
+            return None;
+        }
+        let result = written
             .and_then(|written| self.anonymous_type(&written))
-            .or_else(|| template.result.clone());
+            .or_else(|| {
+                if infer_result {
+                    Some(Type::Unknown)
+                } else {
+                    template.result.clone()
+                }
+            });
         let mut actual = FunctionType {
             value: template.value,
             parameters: parameters
@@ -899,6 +912,7 @@ impl<'a> Typer<'a> {
                 .collect(),
             named_pack: None,
             result: result.clone(),
+            result_admits_none: false,
             reference: false,
         };
         let graph = std::mem::replace(&mut self.graph, !template.value);
@@ -915,7 +929,7 @@ impl<'a> Typer<'a> {
         let definition = self.anonymous_definition(
             node,
             parameters,
-            result.as_ref(),
+            (result.as_ref(), infer_result),
             !template.value && !probing_role,
         );
         self.hook = outer_hook;
@@ -952,6 +966,8 @@ impl<'a> Typer<'a> {
             });
             if let Some(inferred) = inferred {
                 actual.result = Some(inferred.ty);
+            } else if infer_result {
+                actual.result = None;
             }
         }
         let callee = Callee::Anonymous(Box::new(AnonymousFunction {
@@ -1414,6 +1430,8 @@ fn function_type(signature: &Signature, value: bool) -> FunctionType {
             .collect(),
         named_pack: None,
         result: signature.result.clone(),
+        result_admits_none: matches!(signature.result.as_ref(),
+            Some(Type::Parameter { at, .. }) if signature.generics.iter().any(|generic| generic.at == *at && generic.result_only)),
         reference: signature.reference,
     }
 }
@@ -1451,6 +1469,7 @@ pub(super) fn matches_template(expected: &FunctionType, actual: &FunctionType) -
         && match (&expected.result, &actual.result) {
             (Some(expected), Some(actual)) => agree(expected, actual),
             (None, None) => true,
+            (Some(_), None) => expected.result_admits_none,
             _ => false,
         }
 }

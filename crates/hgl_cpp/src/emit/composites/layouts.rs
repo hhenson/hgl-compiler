@@ -116,6 +116,7 @@ fn template_arguments(
         .iter()
         .map(|argument| match argument {
             GenericArgument::Type(ty) => cpp_type_in(program, ty, generic),
+            GenericArgument::NoResult => None,
             GenericArgument::Constant(constant) => {
                 constant_argument(program, &constant.value, generic)
             }
@@ -269,7 +270,7 @@ fn template_keeps(
                 GenericArgument::Type(ty) => {
                     GenericArgument::Type(substituted(ty, generics, arguments))
                 }
-                GenericArgument::Constant(_) => argument.clone(),
+                GenericArgument::Constant(_) | GenericArgument::NoResult => argument.clone(),
             })
             .collect();
         template_keeps(program, of, &given, seen)
@@ -447,6 +448,7 @@ fn substituted(ty: &Type, generics: &[GenericParameter], arguments: &[GenericArg
                     GenericArgument::Type(argument) => {
                         GenericArgument::Type(substituted(argument, generics, arguments))
                     }
+                    GenericArgument::NoResult => argument.clone(),
                     GenericArgument::Constant(constant) => match &constant.value {
                         ConstantValue::Parameter { at, .. } => match argument_of(at) {
                             Some(given @ GenericArgument::Constant(_)) => given.clone(),

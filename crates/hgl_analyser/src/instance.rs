@@ -368,7 +368,7 @@ impl Program {
                     ..parameter.clone()
                 })
                 .collect(),
-            result: signature.result.as_ref().map(project),
+            result: signature.result_at_call(generics).map(project),
             reference: signature.reference,
         };
         let mut body = body.clone();
@@ -399,8 +399,11 @@ impl Program {
             pack_inputs: pending_forwards,
             ..inputs
         };
+        // GEN-7: a callback bound to no result can change how the
+        // instance reads its tail expression or an explicit return.
         if (inputs.test_candidates.is_some()
             || recheck_endpoints
+            || generics.contains(&Argument::NoResult)
             || pending_forwards.is_some()
             || !inputs.constants.is_empty()
             || (!generics.is_empty()
@@ -1048,6 +1051,7 @@ fn place_callee(
     let place = |argument: &Argument| match argument {
         Argument::Type(ty) => Argument::Type(place_type(ty)),
         Argument::Constant(_) => placed(argument, instance.types),
+        Argument::NoResult => Argument::NoResult,
     };
     if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } = callee {
         for pack in type_packs {
@@ -1154,6 +1158,7 @@ pub(crate) fn placed(argument: &Argument, map: &Map) -> Argument {
     };
     match argument {
         Argument::Type(ty) => Argument::Type(substitute_within(ty, map)),
+        Argument::NoResult => Argument::NoResult,
         Argument::Constant(constant) => match &constant.value {
             ConstantValue::Parameter { at, .. } => given(*at)
                 .map(|given| Argument::Constant(given.clone()))

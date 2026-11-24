@@ -51,6 +51,7 @@ fn called(checked: &Checked, body: &Body) -> Vec<String> {
             .map(|argument| match argument {
                 Argument::Type(ty) => ty.to_string(),
                 Argument::Constant(constant) => constant.text.clone(),
+                Argument::NoResult => "none".to_string(),
             })
             .collect();
         found.push(format!(

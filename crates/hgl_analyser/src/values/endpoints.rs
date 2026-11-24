@@ -241,13 +241,7 @@ impl<'a> Typer<'a> {
             )
         {
             let reported = self.diagnostics.len();
-            let guard = matches!(
-                operation,
-                EndpointOperation::Valid
-                    | EndpointOperation::Modified
-                    | EndpointOperation::AllValid
-            );
-            if let Some(found) = self.read_child_endpoint(only, guard) {
+            if let Some(found) = self.read_child_endpoint(only, true) {
                 return self.child_operation(operation, at, only, found, reported);
             }
         }
@@ -525,6 +519,7 @@ impl<'a> Typer<'a> {
         };
         let held = match argument {
             Argument::Type(held) => held,
+            Argument::NoResult => return,
             Argument::Constant(_) => {
                 self.diagnostics.emit(error(
                     Category::Type,
@@ -644,13 +639,19 @@ impl<'a> Typer<'a> {
     /// the function is given the endpoint to ask. In a graph or a value
     /// function there is no enclosing node, and nothing to give.
     pub(super) fn endpoint_given(&mut self, node: &SyntaxNode) -> Expr {
+        self.read_endpoint_given(node, false)
+    }
+
+    /// For core's activity query, defer a child's shape until its pack
+    /// entry is fitted, then apply the direct-input rule (TIME-9, GEN-7).
+    pub(super) fn read_endpoint_given(&mut self, node: &SyntaxNode, defer_child: bool) -> Expr {
         let at = self.at(node);
         let named = endpoint_argument(node);
         // TIME-9: "a child of one, `parts[1]`, `quote.bid` or
         // `parts[i]`", in a hook.
         let reported = self.diagnostics.len();
         if self.hook.is_some()
-            && let Some(found) = self.child_endpoint(&named)
+            && let Some(found) = self.read_child_endpoint(&named, defer_child)
         {
             if let Some(child) = found {
                 self.child_in_start(at, &child);

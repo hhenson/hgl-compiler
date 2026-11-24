@@ -7,6 +7,7 @@ use hgl_lexer::literal::decode_integer;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
+use crate::declared::names_one_of;
 use crate::program::{Binding, Declaration, DeclarationKind, LocalKind, Program, Role};
 use crate::syntax::{child, has_token, name_token, tokens};
 use crate::types::{
@@ -244,7 +245,10 @@ impl Reader<'_> {
         self.constrained(node);
         self.settle_kinds(declaration);
         match &mut detail {
-            Detail::Callable(signature) => signature.generics = self.generics.clone(),
+            Detail::Callable(signature) => {
+                signature.generics = self.generics.clone();
+                self.result_only_parameters(node, signature);
+            }
             Detail::Struct(read) => read.generics = self.generics.clone(),
             _ => {}
         }
@@ -275,6 +279,7 @@ impl Reader<'_> {
                     Form::Value => GenericKind::Value(Type::Unknown),
                 },
                 inferred_list_size: false,
+                result_only: false,
             })
             .collect();
         self.evidence = vec![Evidence::default(); self.generics.len()];
@@ -376,6 +381,85 @@ impl Reader<'_> {
         }
     }
 
+    /// GEN-1: identify each generic that appears only as a complete,
+    /// ordinary result in the signature.
+    fn result_only_parameters(&self, declaration: &SyntaxNode, signature: &mut Signature) {
+        if !signature
+            .generics
+            .iter()
+            .any(|generic| matches!(generic.kind, GenericKind::Type))
+        {
+            return;
+        }
+        let expressions = child(declaration, SyntaxKind::RequiresClause)
+            .into_iter()
+            .chain(
+                crate::read::parameters(declaration)
+                    .into_iter()
+                    .filter_map(|parameter| default_of(&parameter)),
+            )
+            .chain(
+                generic_forms(declaration)
+                    .into_iter()
+                    .filter_map(|(parameter, _, _)| default_of(&parameter)),
+            );
+        let mut mentioned = Vec::new();
+        for expression in expressions {
+            mentioned.extend(self.named_generics(&expression));
+        }
+        let results = signature
+            .result
+            .iter()
+            .map(|ty| (ty, signature.reference))
+            .chain(
+                signature
+                    .parameters
+                    .iter()
+                    .filter_map(|parameter| match &parameter.ty {
+                        Type::Function(template) => {
+                            Some((template.result.as_ref()?, template.reference))
+                        }
+                        _ => None,
+                    }),
+            );
+        for generic in &mut signature.generics {
+            if !matches!(generic.kind, GenericKind::Type) || mentioned.contains(&generic.at) {
+                continue;
+            }
+            let names = |ty: &Type| {
+                names_one_of(ty, &[generic.at])
+                    || ty.any_part(&|_| false, &|constant| {
+                        constant.value.names_one_of(&[generic.at])
+                    })
+            };
+            let direct = |(ty, reference): (&Type, bool)| {
+                !reference && matches!(ty, Type::Parameter { at, .. } if *at == generic.at)
+            };
+            let mut uses = results.clone().filter(|(ty, _)| names(ty)).peekable();
+            let only_results = uses.peek().is_some() && uses.all(direct);
+            let used_by_generic = self
+                .generics
+                .iter()
+                .any(|other| matches!(&other.kind, GenericKind::Value(ty) if names(ty)));
+            let used_by_input = signature
+                .parameters
+                .iter()
+                .any(|parameter| match &parameter.ty {
+                    Type::Function(template) => {
+                        template.parameters.iter().any(|input| names(input.ty()))
+                    }
+                    ty => names(ty),
+                });
+            generic.result_only = only_results && !used_by_generic && !used_by_input;
+        }
+        for parameter in &mut signature.parameters {
+            if let Type::Function(template) = &mut parameter.ty {
+                template.result_admits_none = matches!(template.result.as_ref(),
+                    Some(Type::Parameter { at, .. }) if signature.generics.iter().any(|generic| generic.at == *at && generic.result_only));
+            }
+        }
+    }
+
     /// The input and result types a callable argument must have (FN-17).
     fn function_type(&mut self, template: &SyntaxNode) -> Type {
         let value = tokens(template)
@@ -426,6 +510,7 @@ impl Reader<'_> {
             parameters,
             named_pack,
             result,
+            result_admits_none: false,
             reference,
         }))
     }
@@ -593,12 +678,22 @@ impl Reader<'_> {
             }
         }
         self.in_signature = before;
-        let named: Vec<Location> = clause
+        let named: Vec<Location> = self.named_generics(&clause).collect();
+        for declared in named {
+            if let Some(evidence) = self.evidence_of(declared) {
+                evidence.open = true;
+            }
+        }
+    }
+
+    /// The generic parameters named by uses inside this syntax.
+    fn named_generics<'a>(&'a self, syntax: &'a SyntaxNode) -> impl Iterator<Item = Location> + 'a {
+        syntax
             .descendants_with_tokens()
             .filter_map(|element| element.into_token())
             .filter(|token| token.kind() == SyntaxKind::Ident)
             .filter_map(
-                |token| match self.bindings.get(&(self.file, token.span().start)) {
+                move |token| match self.bindings.get(&(self.file, token.span().start)) {
                     Some(Binding::Local {
                         at,
                         kind: LocalKind::GenericParameter,
@@ -606,12 +701,6 @@ impl Reader<'_> {
                     _ => None,
                 },
             )
-            .collect();
-        for declared in named {
-            if let Some(evidence) = self.evidence_of(declared) {
-                evidence.open = true;
-            }
-        }
     }
 
     /// GEN-13: "Infer its kind from signature positions and

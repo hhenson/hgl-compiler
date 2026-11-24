@@ -7,7 +7,7 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::calls::call_callee;
-use super::control::value_of_branch;
+use super::control::{ValueUse, value_of_branch};
 use super::endpoints::endpoint_argument;
 use super::fit::{accepts_float, is_integer_literal, open, whole};
 use super::symbols::symbol_span;
@@ -485,7 +485,7 @@ impl<'a> Typer<'a> {
             Some(block) => {
                 let (mut statements, last) = self.block_head(&block);
                 if let Some(last) = last {
-                    statements.push(Stmt::Expr(self.flow(&last, None, false).0));
+                    statements.push(Stmt::Expr(self.flow(&last, None, ValueUse::Discarded).0));
                 }
                 statements
             }

@@ -43,7 +43,7 @@ use crate::hir::{self, Expr, Hook, Local, LocalId, ValueCategory};
 use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
 };
-use crate::types::{CallArguments, Detail, Scalar, Signature, Type};
+use crate::types::{Argument, CallArguments, Detail, Scalar, Signature, Type};
 use anonymous::Anonymous;
 use control::label;
 use endpoints::endpoint_argument;
@@ -429,29 +429,62 @@ pub(crate) fn reread_instance_body(
     let span = declared.syntax.span();
     let in_body =
         |(file, start)| file == declared.at.file && (span.start..span.end).contains(&start);
-    let projected: Vec<_> = written
+    let absent: Vec<_> = map
         .iter()
-        .filter(|&(&at, _)| in_body(at))
-        .map(|(&at, ty)| (at, project(ty)))
+        .filter_map(|(at, argument)| matches!(argument, Argument::NoResult).then_some(*at))
+        .collect();
+    let needs_absent_type = |ty: &Type| {
+        !absent.is_empty()
+            && ty.any_part(
+                &|part| matches!(part, Type::Parameter { at, .. } if absent.contains(at)),
+                &|_| false,
+            )
+    };
+    let mut absent_type_uses = HashMap::new();
+    let projected: Vec<_> = owner
+        .written
+        .iter()
+        .filter_map(|written| {
+            let key = (written.at.file, written.at.span.start);
+            if !in_body(key) {
+                return None;
+            }
+            if needs_absent_type(&written.ty) {
+                absent_type_uses.insert(key, written.at);
+            }
+            Some((key, project(&written.ty)))
+        })
         .collect();
     written.extend(projected.iter().map(|(at, ty)| (*at, ty)));
     let projected_calls: Vec<_> = calls
         .iter()
         .filter(|&(&at, _)| in_body(at))
-        .map(|(&at, call)| {
+        .map(|(&at_key, call)| {
             let arguments = call
                 .arguments
                 .iter()
                 .map(|(at, argument)| {
                     let argument = match argument {
-                        crate::Argument::Type(ty) => crate::Argument::Type(project(ty)),
+                        // GEN-1: a bare argument can forward the absence
+                        // to another result-only parameter. The receiving
+                        // signature checks which slots admit it.
+                        Argument::Type(Type::Parameter { at, .. }) if absent.contains(at) => {
+                            Argument::NoResult
+                        }
+                        Argument::Type(ty) => {
+                            if needs_absent_type(ty) {
+                                absent_type_uses.entry(at_key).or_insert(*at);
+                            }
+                            Argument::Type(project(ty))
+                        }
                         crate::Argument::Constant(_) => crate::instance::placed(argument, map),
+                        crate::Argument::NoResult => crate::Argument::NoResult,
                     };
                     (*at, argument)
                 })
                 .collect();
             (
-                at,
+                at_key,
                 CallArguments {
                     at: call.at,
                     arguments,
@@ -483,6 +516,7 @@ pub(crate) fn reread_instance_body(
         diagnostics,
         inputs.test_candidates,
     );
+    typer.absent_type_uses = Some(&absent_type_uses);
     typer.instance = map
         .iter()
         .map(|(at, argument)| (*at, (*argument).clone()))
@@ -503,6 +537,17 @@ pub(crate) fn reread_instance_body(
     });
     typer.pack_functions = inputs.functions.to_vec();
     typer.body_at_phase(owner.phases[declaration])
+}
+
+/// GEN-1: a written argument needs a type unless it takes a whole result.
+fn absent_type_argument(at: Location) -> hgl_diagnostics::Diagnostic {
+    crate::error(
+        hgl_diagnostics::Category::Type,
+        crate::codes::TYPE_MISMATCH,
+        at,
+        "this requires a type, but its generic parameter has no result".to_string(),
+        "GEN-1",
+    )
 }
 
 /// Read the body as declared, leaving provisional call results unknown.
@@ -595,6 +640,8 @@ struct Typer<'a> {
     anonymous: Option<Anonymous>,
     bindings: &'a HashMap<(FileId, u32), &'a Binding>,
     written: &'a HashMap<(FileId, u32), &'a Type>,
+    /// Locations where the instance has no type for a written generic.
+    absent_type_uses: Option<&'a HashMap<(FileId, u32), Location>>,
     /// The generic arguments each call writes, by where its callee
     /// starts (GEN-8).
     calls: &'a HashMap<(FileId, u32), &'a CallArguments>,
@@ -882,6 +929,7 @@ impl<'a> Typer<'a> {
             anonymous: None,
             bindings: tables.bindings,
             written: tables.written,
+            absent_type_uses: None,
             calls: tables.calls,
             locals: Vec::new(),
             pair_phases: None,
@@ -941,6 +989,31 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// A type annotation or an explicitly typed constructor in a body.
+    fn written_type_at(&mut self, start: u32) -> Option<&'a Type> {
+        let written = self.written.get(&(self.file, start)).copied()?;
+        self.check_written_type(start);
+        Some(written)
+    }
+
+    /// The explicit generic arguments of a call or callable reference.
+    fn call_arguments_at(&mut self, start: u32) -> Option<&'a CallArguments> {
+        let call = self.calls.get(&(self.file, start)).copied()?;
+        self.check_written_type(start);
+        Some(call)
+    }
+
+    /// Check a written use when the body reads it, including in the
+    /// selected branch of a concrete pack condition (GEN-1, CTRL-16).
+    fn check_written_type(&mut self, start: u32) {
+        if let Some(at) = self
+            .absent_type_uses
+            .and_then(|uses| uses.get(&(self.file, start)))
+        {
+            self.diagnostics.emit(absent_type_argument(*at));
+        }
+    }
+
     fn body_at_phase(self, phase: Option<Phase>) -> Option<hir::Body> {
         match phase {
             Some(Phase::Graph) => self.graph().0,
@@ -953,10 +1026,10 @@ impl<'a> Typer<'a> {
     /// The current function's result, which is the anonymous function's
     /// while reading its body (FN-7, CTRL-5).
     fn result_type(&self) -> Option<&Type> {
-        self.anonymous
-            .as_ref()
-            .map(|scope| &scope.result)
-            .or(self.signature.result.as_ref())
+        self.anonymous.as_ref().map_or_else(
+            || self.signature.result.as_ref(),
+            |scope| scope.result.as_ref(),
+        )
     }
 
     fn at(&self, node: &SyntaxNode) -> Location {
