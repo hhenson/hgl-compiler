@@ -162,3 +162,23 @@ test temporal_callbacks_keep_their_phase_across_templates {
     assert eval anonymous_generic_control(tick: [1]) == [34]
     assert eval pure_pair_body(tick: [1]) == [5]
 }
+
+# FN-4 and FN-14: the inner pair uses the phase of the local it actually
+# captures. A separate formal can change phase without affecting it.
+const fn quote(price: const fn(i64) -> i64, quantity: i64) -> i64 => price(quantity)
+fn quote(price: fn(i64) -> i64, quantity: i64) -> i64 => price(quantity)
+const fn surcharge(cost: const fn(i64) -> i64, units: i64) -> i64 => cost(units) * 2
+fn surcharge(cost: fn(i64) -> i64, units: i64) -> i64 => cost(units) * 3
+
+fn graph_rate(rate: i64) -> i64 =>
+    quote(fn(quantity) => quantity + surcharge(fn(fee) => fee + rate, 2), 2)
+fn ordinary_quantity(rate: i64) -> i64 =>
+    rate + quote(fn(quantity) => surcharge(fn(fee) => fee + quantity, 2), 2)
+fn graph_quantity(rate: i64) -> i64 =>
+    quote(fn(quantity) => rate + surcharge(fn(fee) => fee + quantity, 2), 2)
+
+test nested_callbacks_preserve_capture_categories {
+    assert eval graph_rate(rate: [1, 5]) == [11, 23]
+    assert eval ordinary_quantity(rate: [1, 5]) == [9, 13]
+    assert eval graph_quantity(rate: [1, 5]) == [13, 17]
+}

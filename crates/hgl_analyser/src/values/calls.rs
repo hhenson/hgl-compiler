@@ -4,6 +4,7 @@
 //! typing pass ([`super`]); a call of an operator is read in
 //! [`super::operators`].
 
+use std::cell::OnceCell;
 use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Location};
@@ -29,7 +30,7 @@ use crate::declared::names_parameter;
 use crate::hir::{
     self, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, Local, LocalId, ValueCategory,
 };
-use crate::program::{Binding, DeclarationKind, OperatorRef, Program, Role};
+use crate::program::{Binding, DeclarationKind, LocalKind, OperatorRef, Program, Role};
 use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
 use crate::types::{
     Argument, CallArguments, ConstantValue, Detail, FunctionType, GenericKind, NamedKind,
@@ -41,7 +42,9 @@ use crate::{codes, error};
 /// Descendant probes can reuse categories in the same lexical scope.
 pub(super) struct PairPhases {
     scope: Location,
+    call: SyntaxNode,
     categories: HashMap<Location, (PairScope, ValueCategory)>,
+    formal_reads: OnceCell<HashMap<Location, Vec<u32>>>,
 }
 
 impl PairPhases {
@@ -51,7 +54,9 @@ impl PairPhases {
         tests::PHASE_ROOTS.with(|count| count.set(count.get() + 1));
         Some(Self {
             scope: typer.at(&call),
+            call,
             categories: HashMap::new(),
+            formal_reads: OnceCell::new(),
         })
     }
 
@@ -59,6 +64,42 @@ impl PairPhases {
         at.file == self.scope.file
             && self.scope.span.start <= at.span.start
             && at.span.end <= self.scope.span.end
+    }
+
+    /// Find written uses of parameters declared in this call. Those
+    /// are anonymous formals whose category may differ between a role
+    /// probe and a committed read. Include nested captures and braces.
+    fn index_formal_reads(&self, typer: &Typer<'_>) -> HashMap<Location, Vec<u32>> {
+        let mut reads = HashMap::<Location, Vec<u32>>::new();
+        for token in self
+            .call
+            .descendants_with_tokens()
+            .filter_map(|part| part.into_token())
+        {
+            let start = token.span().start;
+            if let Some(Binding::Local {
+                at,
+                kind: LocalKind::Parameter,
+            }) = typer.bindings.get(&(typer.file, start))
+                && self.contains(*at)
+            {
+                reads.entry(*at).or_default().push(start);
+            }
+        }
+        reads
+    }
+
+    fn ignores_formal_category(&self, typer: &Typer<'_>, local: &Local, call: Location) -> bool {
+        local.kind == LocalKind::Parameter
+            && self.contains(local.at)
+            && self
+                .formal_reads
+                .get_or_init(|| self.index_formal_reads(typer))
+                .get(&local.at)
+                .is_none_or(|reads| {
+                    let first = reads.partition_point(|&start| start < call.span.start);
+                    reads.get(first).is_none_or(|&start| start >= call.span.end)
+                })
     }
 }
 
@@ -87,6 +128,7 @@ struct PairScope {
     returned: bool,
     must_return: bool,
     unsure: bool,
+    projected_formals: bool,
 }
 
 /// Reading a callback, a pack pass, or an eval can change the context of
@@ -145,10 +187,22 @@ impl PairScope {
             returned: typer.returned,
             must_return: typer.must_return,
             unsure: typer.unsure,
+            projected_formals: Self::can_project_formals(typer),
         }
     }
 
-    fn matches(&self, typer: &Typer<'_>) -> bool {
+    // Forwarded entries and endpoint aliases can introduce reads
+    // that the resolver did not record in the call's written subtree.
+    fn can_project_formals(typer: &Typer<'_>) -> bool {
+        typer.pack_inputs.is_none()
+            && typer.pack_passes.is_empty()
+            && typer.pack_functions.is_empty()
+            && typer.aliases.is_empty()
+            && typer.bound_children.is_empty()
+            && typer.captures.is_empty()
+    }
+
+    fn matches(&self, typer: &Typer<'_>, phases: &PairPhases, call: Location) -> bool {
         let anonymous = typer
             .anonymous
             .as_ref()
@@ -157,7 +211,23 @@ impl PairScope {
             .anonymous
             .as_ref()
             .map(|(first_local, result)| (*first_local, result));
-        self.locals == typer.locals
+        let project_formals = self.projected_formals && Self::can_project_formals(typer);
+        self.locals.len() == typer.locals.len()
+            && self
+                .locals
+                .iter()
+                .zip(&typer.locals)
+                .all(|(probed, current)| {
+                    probed == current
+                        || (project_formals
+                            && probed.at == current.at
+                            && probed.kind == current.kind
+                            && probed.name == current.name
+                            && probed.ty == current.ty
+                            && probed.category != ValueCategory::Unsettled
+                            && current.category != ValueCategory::Unsettled
+                            && phases.ignores_formal_category(typer, current, call))
+                })
             && self.assigned == typer.assigned
             && self.facts == typer.present
             && self.aliases == typer.aliases
@@ -680,8 +750,13 @@ impl<'a> Typer<'a> {
             .pair_phases
             .as_ref()
             .filter(|phases| phases.contains(at));
-        if let Some((scope, category)) = cache.and_then(|phases| phases.categories.get(&at))
-            && scope.matches(self)
+        if let Some(phases) = cache
+            && let Some((scope, category)) = phases.categories.get(&at)
+            && scope.matches(
+                self,
+                phases,
+                list.parent().map_or(at, |call| self.at(&call)),
+            )
         {
             return *category;
         }
@@ -2136,6 +2211,38 @@ mod tests {
         // The computed spread is read in two analysis passes. Each
         // has its own memo, with one probe per written pair call.
         assert_eq!((roots, probes), (2, 6));
+    }
+
+    /// FN-4: the same inner pair does not need another phase read when
+    /// it does not read the parameter whose category changed.
+    #[test]
+    fn phased_pairs_share_reads_across_an_unused_formal_category_change() {
+        let (diagnostics, roots, probes) = check_with_phase_count(
+            "const fn quote(price: const fn(i64) -> i64, quantity: i64) -> i64 => price(quantity)
+             fn quote(price: fn(i64) -> i64, quantity: i64) -> i64 => price(quantity)
+             const fn surcharge(cost: const fn(i64) -> i64, units: i64) -> i64 => cost(units) * 2
+             fn surcharge(cost: fn(i64) -> i64, units: i64) -> i64 => cost(units) * 3
+             fn receipt(rate: i64) -> i64 =>
+                 quote(fn(quantity) => quantity + surcharge(fn(fee) => fee + rate, 2), 2)",
+        );
+        assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");
+        assert_eq!((roots, probes), (1, 2));
+    }
+
+    /// FN-4: an inner pair that reads the enclosing formal must see its
+    /// actual category in the committed read.
+    #[test]
+    fn phased_pairs_read_a_changed_formal_when_it_is_used() {
+        let (diagnostics, roots, probes) = check_with_phase_count(
+            "const fn quote(price: const fn(i64) -> i64, quantity: i64) -> i64 => price(quantity)
+             fn quote(price: fn(i64) -> i64, quantity: i64) -> i64 => price(quantity)
+             const fn surcharge(cost: const fn(i64) -> i64, units: i64) -> i64 => cost(units) * 2
+             fn surcharge(cost: fn(i64) -> i64, units: i64) -> i64 => cost(units) * 3
+             fn receipt(rate: i64) -> i64 =>
+                 quote(fn(quantity) => rate + surcharge(fn(fee) => fee + quantity, 2), 2)",
+        );
+        assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");
+        assert_eq!((roots, probes), (1, 3));
     }
 
     /// FN-4 and TST-5: an eval inside a pair's argument retains its

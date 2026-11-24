@@ -3,7 +3,7 @@
 # Each key completes the cpp emitter's diagnostic "the cpp target does not
 # write ... yet", and lists the cases not run for that form; a case is
 # allowed only for the listed reason, and one that runs fails the check
-# until it is taken off. `check_core.py --target cpp --write-list` writes
+# until it is taken off. `hgl_build_tool check-core --write-list` writes
 # the list from a run; read the difference before it is committed.
 
 # Rejection cases the compiler does not yet reject: none.
