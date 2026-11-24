@@ -98,6 +98,18 @@ fn scratch_start(data: &[u8], found: regex::bytes::Match<'_>) -> bool {
         })
 }
 
+fn scratch_path(data: &[u8]) -> Option<regex::bytes::Match<'_>> {
+    let mut next = 0;
+    while let Some(found) = SCRATCH.find_at(data, next) {
+        if scratch_start(data, found) {
+            return Some(found);
+        }
+        // A rejected match may contain a path with its own boundary.
+        next = found.start() + 1;
+    }
+    None
+}
+
 fn forbidden_prefixes(paths: &[PathBuf]) -> Result<Option<Regex>> {
     let mut prefixes = BTreeSet::new();
     for path in paths {
@@ -122,12 +134,16 @@ fn forbidden_prefixes(paths: &[PathBuf]) -> Result<Option<Regex>> {
 }
 
 fn metadata_paths(bundle: &Path, data: &[u8]) -> Result<bool> {
-    for captured in ABSOLUTE.captures_iter(data) {
-        let start = captured.get(0).expect("whole match").start();
+    let mut next = 0;
+    while let Some(captured) = ABSOLUTE.captures_at(data, next) {
+        let found = captured.get(0).expect("whole match");
+        let start = found.start();
         // Match the delimiting characters used for paths in release metadata.
         if start > 0 && !b"=:\"';, (\t\n".contains(&data[start - 1]) {
+            next = start + 1;
             continue;
         }
+        next = found.end();
         let bytes = captured.get(1).expect("absolute path").as_bytes();
         #[cfg(unix)]
         let path = {
@@ -157,10 +173,7 @@ pub(super) fn verify_paths(bundle: &Path, forbidden: &[PathBuf]) -> Result<()> {
             }
         } else if entry.file_type().is_file() {
             let data = debug_bytes(path)?;
-            let found = SCRATCH
-                .find_iter(&data)
-                .find(|&found| scratch_start(&data, found))
-                .or_else(|| forbidden.as_ref()?.captures(&data)?.get(1));
+            let found = scratch_path(&data).or_else(|| forbidden.as_ref()?.captures(&data)?.get(1));
             if let Some(found) = found {
                 let bytes = found.as_bytes();
                 failures.push(format!(

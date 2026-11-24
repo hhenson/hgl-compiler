@@ -27,6 +27,39 @@ fn a_home_component_in_a_license_url_is_allowed() -> Result<()> {
     verify_paths(&root, &[])
 }
 
+#[test]
+fn paths_after_a_rejected_match_are_checked() -> Result<()> {
+    for (file, contents, diagnostic) in [
+        (
+            "katex.txt",
+            "see x/home/a:/home/sample/build\n",
+            "build path in katex.txt: /home/sample/build",
+        ),
+        (
+            "simdjson.h",
+            "// x/Users/a,/Users/sample/build\n",
+            "build path in simdjson.h: /Users/sample/build",
+        ),
+        (
+            "hgraphConfig.cmake",
+            "set(X \"https://example.com/a:/opt/sample/build\")\n",
+            "external path in hgraphConfig.cmake",
+        ),
+        (
+            "hgl-sdk.txt",
+            "x/home/a:/home/sample/build\n",
+            "build path in hgl-sdk.txt: /home/sample/build",
+        ),
+    ] {
+        let scratch = tempfile::tempdir()?;
+        let bundle = scratch.path().canonicalize()?;
+        fs::write(bundle.join(file), contents)?;
+        let error = verify_paths(&bundle, &[]).expect_err(file).to_string();
+        assert!(error.contains(diagnostic), "{error}");
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn a_forbidden_path_in_legacy_gnu_compressed_debug_is_detected() -> Result<()> {

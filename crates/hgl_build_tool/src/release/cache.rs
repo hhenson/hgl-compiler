@@ -9,6 +9,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use sha2::{Digest, Sha256};
+use walkdir::WalkDir;
 
 use crate::{Result, Target};
 
@@ -25,17 +26,16 @@ const DEBUG_CACHE: &str = "debug/libexec";
 /// Hash the native recipe and compiler configuration used by the macOS cache.
 pub(crate) fn native_key() -> Result<String> {
     let recipe = [
+        "Cargo.lock",
+        "Cargo.toml",
         "HGRAPH_TAG",
+        "rust-toolchain.toml",
         "scripts/hgraph-dependencies.sh",
         "scripts/gather-dsyms.sh",
         "scripts/keep-lto-objects.sh",
         "scripts/provision-hgraph-sdk.sh",
         "scripts/package-release.sh",
-        "crates/hgl_build_tool/src/release/cache.rs",
-        "crates/hgl_build_tool/src/release/audit.rs",
-        "crates/hgl_build_tool/src/release/audit/binary.rs",
-        "crates/hgl_build_tool/src/release/audit/paths.rs",
-        "crates/hgl_build_tool/src/release/licenses.rs",
+        "crates/hgl_build_tool/Cargo.toml",
     ];
     let environment = [
         "CC",
@@ -47,11 +47,11 @@ pub(crate) fn native_key() -> Result<String> {
         "SDKROOT",
         "MACOSX_DEPLOYMENT_TARGET",
     ];
-    let mut inputs = BTreeMap::from([("target", Target::Macos.triple().to_string())]);
+    let mut inputs = BTreeMap::from([("target".to_string(), Target::Macos.triple().to_string())]);
     inputs.extend(
         environment
             .into_iter()
-            .map(|key| (key, env::var(key).unwrap_or_default())),
+            .map(|key| (key.to_string(), env::var(key).unwrap_or_default())),
     );
 
     let cxx = env::var_os("CXX")
@@ -71,10 +71,21 @@ pub(crate) fn native_key() -> Result<String> {
             .filter(|result| result.status.success())
             .and_then(|result| String::from_utf8(result.stdout).ok())
             .unwrap_or_else(|| "unavailable".to_string());
-        inputs.insert(key, value);
+        inputs.insert(key.to_string(), value);
     }
     for path in recipe {
-        inputs.insert(path, sha256(fs::read(path)?));
+        inputs.insert(path.to_string(), sha256(fs::read(path)?));
+    }
+    // Shared command and audit modules also affect cache validation.
+    for entry in WalkDir::new("crates/hgl_build_tool/src") {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type().is_file()
+            && path.extension().is_some_and(|extension| extension == "rs")
+        {
+            let key = path.to_str().ok_or("non-UTF-8 build tool source path")?;
+            inputs.insert(key.to_string(), sha256(fs::read(path)?));
+        }
     }
     Ok(sha256(serde_json::to_vec(&inputs)?))
 }
