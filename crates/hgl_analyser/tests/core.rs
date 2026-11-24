@@ -25,10 +25,9 @@ fn with_core(text: &str) -> Checked {
     check(&[("m.hgl", &format!("module m\n{text}"))])
 }
 
-/// FMT-4 implementation gate pending #434: fmt's integer character
-/// formatter can emit bytes that are outside UTF-8.
+/// FMT-4 excludes fmt's byte-oriented integer character specifier.
 #[test]
-fn integer_character_formatting_is_temporarily_unavailable() {
+fn formatting_rejects_integer_character_specifier() {
     let checked = with_core(concat!(
         "const fn character() -> str => format(\"{:c}\", 233)\n",
         "const fn padded_character() -> str => format(\"{:>3c}\", 256)\n",
@@ -39,6 +38,33 @@ fn integer_character_formatting_is_temporarily_unavailable() {
         [
             "m.hgl:2:42 type/format.specifier FMT-4",
             "m.hgl:3:49 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// FMT-4 rejects the zero flag on bool and str, including once GEN-7
+/// supplies the argument type at the call outside the generic body.
+#[test]
+fn formatting_rejects_zero_padding_for_boolean_and_text() {
+    let checked = with_core(concat!(
+        "const fn direct() -> str => format(\"{:05}\", true)\n",
+        "const fn left() -> str => format(\"{:<05}\", true)\n",
+        "const fn right() -> str => format(\"{:>05}\", false)\n",
+        "const fn string_control() -> str => format(\"{:05}\", \"true\")\n",
+        "const fn show<T>(value: T) -> str => format(\"{:05}\", value)\n",
+        "const fn bool_instance() -> str => show(true)\n",
+        "const fn int_instance() -> str => show(42)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:39 type/format.specifier FMT-4",
+            "m.hgl:3:37 type/format.specifier FMT-4",
+            "m.hgl:4:38 type/format.specifier FMT-4",
+            "m.hgl:5:47 type/format.specifier FMT-4",
+            "m.hgl:7:36 type/format.specifier FMT-4",
         ],
         "{}",
         checked.report,
