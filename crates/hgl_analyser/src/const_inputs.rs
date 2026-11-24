@@ -5,12 +5,13 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 
 use hgl_diagnostics::{Diagnostics, Location};
 
 use crate::formatting;
 use crate::hir::{
-    Argument, BinaryOperator, Callee, Expr, ExprKind, Form, Stmt, Value, ValueCategory,
+    Answer, Argument, BinaryOperator, Callee, Expr, ExprKind, Form, Stmt, Value, ValueCategory,
 };
 use crate::{
     Argument as GenericArgument, Binding, ConstantValue, Detail, Program, Role, Scalar, Type,
@@ -19,6 +20,17 @@ use crate::{
 type Declaration = (usize, usize);
 type Slot = (Declaration, usize);
 pub(crate) type Demands = HashMap<Declaration, BTreeMap<usize, Demand>>;
+
+/// Selected value calls or the resolved demand for a generic instance and slot.
+pub(crate) type SelectedDemands = RefCell<HashMap<InstanceSlot, SelectedDemand>>;
+
+type InstanceSlot = (String, usize);
+
+#[derive(Clone, Debug)]
+pub(crate) enum SelectedDemand {
+    Read(bool),
+    Calls(Rc<[(Callee, usize)]>),
+}
 
 /// A deferred operator can select a body that only uses this value at run time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -200,104 +212,193 @@ impl Program {
     /// ordinary consts still unread. A forwarded value only enters the key
     /// if a selected candidate reads it, or selection remains unresolved.
     fn instance_reads_const(&self, callee: &Callee, slot: usize) -> bool {
-        let mut pending = VecDeque::from([(callee.clone(), slot)]);
-        let mut seen = Vec::new();
-        while let Some((callee, slot)) = pending.pop_front() {
-            let Some((module, declaration)) = callee.declaration() else {
+        let mut pending = VecDeque::from([(callee.clone(), slot, None)]);
+        let mut followed = HashMap::<Declaration, usize>::new();
+        let mut seen = HashSet::new();
+        // Parent indices record the path that proves a slot is read.
+        let mut paths = Vec::new();
+        while let Some((callee, slot, parent)) = pending.pop_front() {
+            let (Callee::Candidate {
+                module,
+                declaration,
+                requirements,
+                ..
+            }
+            | Callee::Function {
+                module,
+                declaration,
+                requirements,
+                ..
+            }) = &callee
+            else {
+                self.remember_read(parent, &paths);
                 return true;
             };
-            match self
-                .const_demands
-                .get(&(module, declaration))
-                .and_then(|slots| slots.get(&slot))
-            {
-                Some(Demand::Always) => return true,
-                Some(Demand::IfSelected) => {}
-                None => continue,
-            }
-            if seen
-                .iter()
-                .any(|(target, position)| target == &callee && *position == slot)
-            {
+            let declaration = (*module, *declaration);
+            let Some(key) = crate::values::bounded_instance_key(
+                declaration,
+                callee.generics(),
+                callee.type_packs(),
+                requirements,
+            ) else {
+                // The instance walk will report its own limit.
+                self.remember_read(parent, &paths);
+                return true;
+            };
+            let key = (key, slot);
+            let cached = self.selected_const_demands.borrow().get(&key).cloned();
+            if let Some(SelectedDemand::Read(read)) = cached {
+                if read {
+                    self.remember_read(parent, &paths);
+                    return true;
+                }
                 continue;
             }
-            if seen.len() >= crate::INSTANCES {
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            let count = followed.entry(declaration).or_default();
+            *count += 1;
+            if *count > crate::INSTANCES {
+                // Only the root used this traversal's full budget.
+                let (root, _) = &paths[0];
+                self.selected_const_demands
+                    .borrow_mut()
+                    .insert(root.clone(), SelectedDemand::Read(true));
                 return true;
             }
-            let unit = &self.modules[module];
-            let Some(Detail::Callable(signature)) = unit.details.get(declaration) else {
-                return true;
-            };
-            let Some(parameter) = signature.parameters.get(slot) else {
-                return true;
-            };
-            let (Callee::Candidate { requirements, .. } | Callee::Function { requirements, .. }) =
-                &callee
-            else {
-                return true;
-            };
-            let placement_reports = RefCell::new(Diagnostics::new());
-            let mut body_reports = Diagnostics::new();
-            let Some(instance) = self.checked_instance(
-                (module, declaration),
-                callee.generics(),
-                requirements,
-                crate::InstanceInputs {
-                    type_packs: callee.type_packs(),
-                    ..crate::InstanceInputs::default()
-                },
-                &placement_reports,
-                &mut body_reports,
-            ) else {
-                return true;
-            };
-            if body_reports.has_errors() || placement_reports.borrow().has_errors() {
-                return true;
-            }
-            seen.push((callee, slot));
-            let bindings = local_bindings(unit);
-            let slots = HashMap::from([(parameter.at, slot)]);
-            let reads_parameter = |argument: &Expr| {
-                let mut reads = false;
-                slots_read(argument, &bindings, &slots, |_| reads = true);
-                reads
-            };
-            let mut required = false;
-            instance.walk_calls(&mut |call| {
-                let ExprKind::Call {
-                    callee, arguments, ..
-                } = &call.kind
-                else {
-                    return;
-                };
-                if let Some(signature) = formatting::value_signature(self, callee) {
-                    required |= formatting::argument(signature, arguments, "fmt_str")
-                        .is_some_and(|pattern| reads_parameter(&pattern.value));
-                    return;
-                }
-                if matches!(callee, Callee::DeferredPackCall) {
-                    required = true;
-                    return;
-                }
-                for argument in arguments
-                    .iter()
-                    .filter(|argument| reads_parameter(&argument.value))
-                {
-                    if let Some(slot) = argument
-                        .parameter
-                        .filter(|_| callee.declaration().is_some())
-                    {
-                        pending.push_back((callee.clone(), slot));
-                    } else {
-                        required = true;
-                    }
-                }
+            let direct = cached.unwrap_or_else(|| {
+                let direct = self.selected_const_calls(&callee, declaration, requirements, slot);
+                self.selected_const_demands
+                    .borrow_mut()
+                    .insert(key.clone(), direct.clone());
+                direct
             });
-            if required {
-                return true;
+            match direct {
+                SelectedDemand::Read(true) => {
+                    self.remember_read(parent, &paths);
+                    return true;
+                }
+                SelectedDemand::Read(false) => {}
+                SelectedDemand::Calls(calls) => {
+                    let index = paths.len();
+                    paths.push((key, parent));
+                    pending.extend(
+                        calls
+                            .iter()
+                            .cloned()
+                            .map(|(callee, slot)| (callee, slot, Some(index))),
+                    );
+                }
             }
         }
+        // No path reached a read, including paths that only cycle.
+        self.selected_const_demands.borrow_mut().extend(
+            paths
+                .into_iter()
+                .map(|(key, _)| (key, SelectedDemand::Read(false))),
+        );
         false
+    }
+
+    fn remember_read(&self, mut parent: Option<usize>, paths: &[(InstanceSlot, Option<usize>)]) {
+        let mut cache = self.selected_const_demands.borrow_mut();
+        while let Some(index) = parent {
+            let (key, earlier) = &paths[index];
+            cache.insert(key.clone(), SelectedDemand::Read(true));
+            parent = *earlier;
+        }
+    }
+
+    /// Read one concrete body for this slot and keep its direct demand edges.
+    fn selected_const_calls(
+        &self,
+        callee: &Callee,
+        (module, declaration): Declaration,
+        requirements: &[Answer],
+        slot: usize,
+    ) -> SelectedDemand {
+        let unit = &self.modules[module];
+        let Some(Detail::Callable(signature)) = unit.details.get(declaration) else {
+            return SelectedDemand::Read(true);
+        };
+        let Some(parameter) = signature.parameters.get(slot) else {
+            return SelectedDemand::Read(true);
+        };
+        let placement_reports = RefCell::new(Diagnostics::new());
+        let mut body_reports = Diagnostics::new();
+        let Some(instance) = self.checked_instance(
+            (module, declaration),
+            callee.generics(),
+            requirements,
+            crate::InstanceInputs {
+                type_packs: callee.type_packs(),
+                ..crate::InstanceInputs::default()
+            },
+            &placement_reports,
+            &mut body_reports,
+        ) else {
+            return SelectedDemand::Read(true);
+        };
+        if body_reports.has_errors() || placement_reports.borrow().has_errors() {
+            return SelectedDemand::Read(true);
+        }
+        let bindings = local_bindings(unit);
+        let slots = HashMap::from([(parameter.at, slot)]);
+        let reads_parameter = |argument: &Expr| {
+            let mut reads = false;
+            slots_read(argument, &bindings, &slots, |_| reads = true);
+            reads
+        };
+        let mut calls = Vec::new();
+        let mut required = false;
+        instance.walk_calls(&mut |call| {
+            let ExprKind::Call {
+                callee, arguments, ..
+            } = &call.kind
+            else {
+                return;
+            };
+            if required {
+                return;
+            }
+            if let Some(signature) = formatting::value_signature(self, callee) {
+                required = formatting::argument(signature, arguments, "fmt_str")
+                    .is_some_and(|pattern| reads_parameter(&pattern.value));
+                return;
+            }
+            if matches!(callee, Callee::DeferredPackCall) {
+                required = true;
+                return;
+            }
+            for argument in arguments
+                .iter()
+                .filter(|argument| reads_parameter(&argument.value))
+            {
+                let (Some(declaration), Some(slot)) = (callee.declaration(), argument.parameter)
+                else {
+                    required = true;
+                    break;
+                };
+                match self
+                    .const_demands
+                    .get(&declaration)
+                    .and_then(|slots| slots.get(&slot))
+                {
+                    Some(Demand::Always) => {
+                        required = true;
+                        break;
+                    }
+                    Some(Demand::IfSelected) => calls.push((callee.clone(), slot)),
+                    None => {}
+                }
+            }
+        });
+        if required || calls.is_empty() {
+            SelectedDemand::Read(required)
+        } else {
+            SelectedDemand::Calls(calls.into())
+        }
     }
 }
 

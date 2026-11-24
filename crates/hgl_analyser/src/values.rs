@@ -116,6 +116,7 @@ mod operators;
 // `requires`, and what a generic body may call by it (GEN-3, GEN-7, GEN-16).
 mod quantifiers;
 mod requirements;
+pub(crate) use requirements::bounded_instance_key;
 // The result forms, the parts of a result and of an error, and `capture` (ERR-2 to ERR-7).
 mod results;
 // The sizes a struct application or a call gives a list or a window (TYPE-10, TYPE-11).

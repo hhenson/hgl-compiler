@@ -270,6 +270,37 @@ fn demanded_const_input_growth_through_a_generic_relay() {
     );
 }
 
+/// GEN-13: following a possible const demand shares the instance walk's bounds.
+#[test]
+fn demanded_const_input_growth_bounds_conditional_selection() {
+    for next in ["[w]", "(w, w)"] {
+        let source = format!(
+            "operator variant<T>{{const pattern: str}}(value: T) -> str\n\
+             impl const fn variant{{const pattern: str}}(value: f64) -> str => format(pattern, value)\n\
+             impl const fn variant{{const pattern: str}}(value: i64) -> str => pattern\n\
+             const fn grow<T, V, U>(const p: str, v: T, other: V, w: U, turns: i64) -> str\n\
+                 requires T in {{f64, i64}} && V in {{f64, i64}} {{\n\
+                 if turns == 0 {{ return variant{{pattern: p}}(v) }}\n\
+                 return grow(p, other, v, {next}, turns - 1)\n\
+             }}\n\
+             test integer {{ assert grow(\"<{{}}>\", 1, 2, 1, 2) == \"<{{}}>\" }}\n\
+             test float {{ assert grow(\"<{{}}>\", 1.5, 2.5, 1, 2) == \"<1.5>\" }}\n\
+             test alternating {{ assert grow(\"<{{}}>\", 1, 2.5, 1, 2) == \"<{{}}>\" }}\n"
+        );
+        let checked = with_core(&source);
+        assert_eq!(
+            checked.summary(),
+            [
+                "m.hgl:10:23 type/generic.instance_limit GEN-13",
+                "m.hgl:11:21 type/generic.instance_limit GEN-13",
+                "m.hgl:12:27 type/generic.instance_limit GEN-13",
+            ],
+            "{next}: {}",
+            checked.report,
+        );
+    }
+}
+
 /// FN-1: const instancing does not change the admission of projections
 /// as const arguments. See #697 for those expressions.
 #[test]
