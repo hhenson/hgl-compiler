@@ -174,6 +174,7 @@ analyser: partial
 - GEN-17 adds quantification over pack keys. `any` succeeds for at least one entry and rejects an empty pack. Type and key bindings project within nested type expressions.
 - An `any` equality can infer a const generic nested in a type, such as a fixed list length, from either equality operand; an explicitly supplied value is preserved (GEN-3).
 - Tuple candidate ranking expands captured arities into declared variables before comparing components; a concrete component outranks an unconstrained tuple-pack member (GEN-5, GEN-12). Explicit callback packs keep their supplied function types, and a template mismatch is reported at the argument (FN-17, GEN-8).
+- Left: a homogeneous candidate pack does not yet bind a public tuple-pack result in the declaration contract (GEN-6/GEN-10, #716; follows #684).
 - Left: named operator requirements bound by a quantifier.
 - An ordinary value context rejects the borrowed view from `schemas(pack)`.
 
