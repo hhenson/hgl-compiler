@@ -595,9 +595,9 @@ fn answer_key(program: &Program, answer: &Answer) -> Option<String> {
     ))
 }
 
-/// Identify a concrete function or operator candidate, including what
-/// its generics and requirements stand for (GEN-13, GEN-16, FN-17).
-fn function_key(program: &Program, target: &Callee) -> Option<String> {
+/// Identify a concrete function or operator candidate and whether its key
+/// holds an anonymous body's const inputs (GEN-13, GEN-16, FN-17).
+fn function_key(program: &Program, target: &Callee) -> Option<(String, bool)> {
     if let Callee::Anonymous(function) = target {
         let types = function
             .body
@@ -659,16 +659,23 @@ fn function_key(program: &Program, target: &Callee) -> Option<String> {
         // A nested key is already encoded. Quoting it again would escape
         // the escapes at every level. Its byte length frames it as-is.
         let mut encoded = String::new();
+        let mut has_const = !function.specialization.const_inputs.is_empty();
         for target in targets {
-            let target = target?;
+            let (target, target_has_const) = target?;
+            has_const |= target_has_const;
             write!(encoded, "{}#{target}", target.len()).expect("writing to a string succeeds");
         }
-        return Some(format!(
+        for (slot, key) in &function.specialization.const_inputs {
+            write!(encoded, "const[{slot}]:{}#{key}", key.len())
+                .expect("writing to a string succeeds");
+        }
+        let key = format!(
             "anonymous:{}:{}:{}:{types:?}:{result:?}:{generic_arguments:?}:{type_packs:?}:{pack_inputs:?}:{encoded}",
             function.at.file.index(),
             function.at.span.start,
             function.template.value,
-        ));
+        );
+        return Some((key, has_const));
     }
     let declared = target.declaration()?;
     let Detail::Callable(signature) = &program.modules[declared.0].details[declared.1] else {
@@ -684,8 +691,14 @@ fn function_key(program: &Program, target: &Callee) -> Option<String> {
         }
         _ => return None,
     };
-    Some(format!("{declared:?}:{arguments:?}:{requirements:?}"))
+    Some((
+        format!("{declared:?}:{arguments:?}:{requirements:?}"),
+        false,
+    ))
 }
+
+/// Marks a function key with const text that should stay out of its C++ name.
+const CONST_FUNCTION_PREFIX: &str = "function with const inputs[";
 
 /// An instance that uses a test's candidate has different evidence from
 /// the same call with another test's candidate or with the module's (TST-1).
@@ -739,10 +752,12 @@ fn key<'a>(
             continue;
         }
         let (_, target) = functions.clone().find(|(index, _)| *index == slot)?;
-        key.push(format!(
-            "function[{slot}]:{}",
-            function_key(program, target)?
-        ));
+        let (target, has_const) = function_key(program, target)?;
+        if has_const {
+            key.push(format!("{CONST_FUNCTION_PREFIX}{slot}]:{target}"));
+        } else {
+            key.push(format!("function[{slot}]:{target}"));
+        }
     }
     if requirements
         .iter()
@@ -938,6 +953,16 @@ impl Instances {
             let (slots, pack_use) = next.captures.expand(&mut signature, &mut body);
             // The arguments as part of a name.
             let mut plain: String = key[..key.len() - next.constants.len()]
+                .iter()
+                .map(|part| {
+                    if part.starts_with(CONST_FUNCTION_PREFIX) {
+                        part.split_once(':')
+                            .map_or(part.as_str(), |(binding, _)| binding)
+                    } else {
+                        part.as_str()
+                    }
+                })
+                .collect::<Vec<_>>()
                 .join("_")
                 .chars()
                 .map(|character| {
