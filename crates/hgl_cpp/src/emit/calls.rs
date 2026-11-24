@@ -478,7 +478,10 @@ impl Emitter<'_> {
             if parameter.pack.is_some() {
                 return self.missing(at, "a call of a function with a pack");
             }
-            let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
+            let declared = native_pack.as_ref().map_or_else(
+                || concrete.map_or(index, |instance| instance.original_parameter(index)),
+                |pack| pack.original_parameter(index),
+            );
             let default = left_out(program, callee, declared, parameter);
             match default {
                 Some(LeftOut::Default(default)) => {

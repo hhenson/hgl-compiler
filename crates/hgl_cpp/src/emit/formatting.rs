@@ -1,6 +1,8 @@
 //! Emit the checked places of Core's native value-format call (FMT-2,
 //! FMT-4, FMT-5, FMT-7 and FMT-9). C++ sees individual compiled fmt patterns
 //! and typed values. Argument expressions run once in source order.
+//! Graph calls currently lift this value formatter (FMT-6, FMT-8, FN-11),
+//! so whole inputs use value rendering until #434 supplies the graph body.
 
 use std::fmt::Write;
 
@@ -12,6 +14,7 @@ use hgl_lower::calls::{LeftOut, left_out};
 
 use super::Emitter;
 use super::names::{self, temporary};
+use super::nodes::{Kind, OUT};
 use super::statements::Scope;
 
 impl Emitter<'_> {
@@ -78,18 +81,33 @@ impl Emitter<'_> {
         let output = temporary("format_text", self.temporary());
         let _ = write!(statements, "::hglrt::str {output}; ");
         let mut wall_time = None;
+        let mut engine_time = None;
         let mut next_position = 0;
         for part in parts {
             match part {
                 Piece::Text(text) => append_text(&mut statements, &output, text),
                 Piece::Place(place) => {
-                    let (held, ty, at, conversion) = if place.name == "wall_time" {
-                        let held = wall_time.get_or_insert_with(|| {
-                            let name = temporary("wall_time", self.temporary());
-                            let _ = write!(
-                                statements,
-                                "const auto {name} = ::hglrt::format_wall_time(); "
-                            );
+                    let (held, ty, at, conversion) = if matches!(
+                        place.name,
+                        "wall_time" | "engine_time"
+                    ) {
+                        // FMT-9: the lifted node already owns its cycle's
+                        // time through its output endpoint, not a native
+                        // argument. Read each reserved clock only once.
+                        let (clock, source) = if place.name == "engine_time" {
+                            if self.kind() != Some(Kind::Lifted) {
+                                return self.missing(
+                                        pattern.value.at,
+                                        "an {engine_time} format place without a lifted node's cycle context",
+                                    );
+                            }
+                            (&mut engine_time, format!("{OUT}.evaluation_time()"))
+                        } else {
+                            (&mut wall_time, "::hglrt::format_wall_time()".to_string())
+                        };
+                        let held = clock.get_or_insert_with(|| {
+                            let name = temporary(place.name, self.temporary());
+                            let _ = write!(statements, "const auto {name} = {source}; ");
                             name
                         });
                         (
