@@ -141,19 +141,20 @@ fn check_reserved_function_names(module: &Module, diagnostics: &mut Diagnostics)
 
 /// The declaration label in a documentation test selector.
 fn documented_name(owner: &SyntaxNode, part: Option<&str>) -> String {
-    match owner.kind() {
+    let member = match owner.kind() {
         SyntaxKind::ModuleDecl | SyntaxKind::ApplicationDecl => {
             return match part {
                 None => "[module]".to_string(),
                 Some(part) => format!("[part {part}]"),
             };
         }
-        SyntaxKind::StructMember | SyntaxKind::EnumMember | SyntaxKind::NativeProperty => {
-            if let (Some(parent), Some(member)) = (owner.parent(), syntax::name_token(owner)) {
-                return format!("{}.{}", documented_name(&parent, part), member.text());
-            }
-        }
-        _ => {}
+        SyntaxKind::StructMember | SyntaxKind::EnumMember => syntax::name_token(owner),
+        // A native property may be named by a reserved word (LEX-9).
+        SyntaxKind::NativeProperty => syntax::tokens(owner).next(),
+        _ => None,
+    };
+    if let (Some(parent), Some(member)) = (owner.parent(), member) {
+        return format!("{}.{}", documented_name(&parent, part), member.text());
     }
     let name = match Item::cast(owner.clone()) {
         Some(Item::Function(item)) => item.name(),

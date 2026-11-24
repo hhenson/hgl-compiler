@@ -62,7 +62,7 @@ fn growing_list_spellings_have_one_api_type() {
 }
 
 /// SDOC-1, SDOC-3 and SDOC-9: a native property's summary, sections and
-/// runnable example belong to the property.
+/// runnable example belong to the property, including a LEX-9 keyword name.
 #[test]
 fn native_property_documentation_preserves_sections_and_identity() {
     let root = scratch("documentation-native-property");
@@ -85,7 +85,7 @@ export native type Thing {
         ~~~
     */
 
-    level: i64
+    if: i64
     limit: i64
 }
 "#,
@@ -95,14 +95,14 @@ export native type Thing {
     assert_eq!(thing["documentation"]["summary"], "A thing.");
     let members = thing["members"].as_array().unwrap();
     assert_eq!(members.len(), 2);
-    let level = &members[0];
-    assert_eq!(level["kind"], "nativeProperty");
-    assert_eq!(level["canonicalName"], "properties::Thing.level");
-    assert_eq!(level["type"], "i64");
-    assert_eq!(level["source"]["line"], 17);
-    assert_eq!(level["documentation"]["summary"], "Its level.");
+    let property = &members[0];
+    assert_eq!(property["kind"], "nativeProperty");
+    assert_eq!(property["canonicalName"], "properties::Thing.if");
+    assert_eq!(property["type"], "i64");
+    assert_eq!(property["source"]["line"], 17);
+    assert_eq!(property["documentation"]["summary"], "Its level.");
     assert_eq!(
-        level["documentation"]["sections"],
+        property["documentation"]["sections"],
         json!([
             {"heading": "Notes:", "recognized": true, "text": "Use the current **level**.", "entries": []},
             {"heading": "Rules:", "recognized": true, "text": "SDOC-1.", "entries": []},
@@ -110,17 +110,17 @@ export native type Thing {
         ])
     );
     assert_eq!(
-        level["documentation"]["examples"],
+        property["documentation"]["examples"],
         json!([{"code": "assert true\n", "position": 1, "runnable": true}])
     );
     assert_eq!(members[1]["name"], "limit");
     assert!(members[1]["documentation"].is_null());
 
-    let listed = hgl(&["test", &source]);
+    let listed = hgl(&["test", &source, "--test", "properties::Thing.if#example-1"]);
     assert_eq!(listed.status.code(), Some(2), "{}", text(&listed.stderr));
     let listing = text(&listed.stdout);
     assert!(
-        listing.contains("not run  executable  properties::Thing.level#example-1\n"),
+        listing.contains("not run  executable  properties::Thing.if#example-1\n"),
         "{listing}"
     );
 }
