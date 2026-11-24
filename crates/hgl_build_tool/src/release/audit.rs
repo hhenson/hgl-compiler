@@ -205,7 +205,11 @@ pub(crate) fn verify_debug(
     let sdk = debug.join("hgraph-sdk");
     let deps = debug.join("hgraph-deps");
     let mut required = sdk_paths(&sdk, &deps);
-    required.push(sdk.join("share/licenses/hgraph/LICENSE"));
+    required.extend([
+        sdk.join("share/licenses/hgraph/LICENSE"),
+        debug.join("hgraph-source/src/hgraph/runtime/node.cpp"),
+        debug.join("hgraph-source/include/hgraph"),
+    ]);
     require_paths(&tree, &required)?;
     let stamp = fs::read_to_string(sdk.join("hgl-sdk.txt"))?;
     if !["build-type=Debug", "dependencies=../hgraph-deps"]

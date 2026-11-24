@@ -21,6 +21,7 @@
 //! left to what reports the run's output. The executable's standard
 //! input is a pipe a stop is passed down.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write as _};
 use std::path::Path;
@@ -136,6 +137,9 @@ pub(super) struct DebugLaunch {
     environment: serde_json::Map<String, serde_json::Value>,
     /// hgraph's libraries the build links ([`Hgraph::json`]).
     hgraph: serde_json::Value,
+    /// Source roots recorded in native symbols and their installed locations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_map: Option<BTreeMap<&'static str, String>>,
 }
 
 impl DebugLaunch {
@@ -154,12 +158,19 @@ impl DebugLaunch {
                 .ok_or_else(|| format!("{name} is not UTF-8"))?;
             environment.insert((*name).into(), value.into());
         }
+        let source_map = hgraph
+            .debug_sources
+            .as_deref()
+            .map(debug_path)
+            .transpose()?
+            .map(|source| BTreeMap::from([("/hgl-release/hgraph", source)]));
         Ok(Self {
             executable: debug_path(executable)?,
             arguments,
             working_directory: debug_path(&cwd)?,
             environment,
             hgraph: hgraph.json(),
+            source_map,
         })
     }
 }

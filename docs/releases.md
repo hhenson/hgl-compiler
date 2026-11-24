@@ -38,6 +38,8 @@ is the release's, `hgl-VERSION-PLATFORM`. It holds:
   them a debugger attached to an ordinary run, or reading a core file of
   one, gives an engine frame's file and line; without them it names the
   function.
+- hgraph's `src` and `include` trees at the SDK's tag, in
+  `libexec/hgraph-debug/hgraph-source`.
 - `libexec/hgraph-debug/hgl-debug.txt`, with the hgl version this archive
   belongs to. A missing stamp or a different version selects the optimised
   libraries and reports the reason for either source of a debug package.
@@ -51,8 +53,9 @@ the symbol files and the debug libraries are compressed (zlib), which gdb
 and lldb read as they are.
 
 The release maps source and build paths under `/hgl-release`.
-Map `/hgl-release/hgraph` to a checkout of the pinned hgraph tag using
-`set substitute-path /hgl-release/hgraph DIR` in gdb or
+The debug launch's `sourceMap` maps `/hgl-release/hgraph` to the installed
+`hgraph-source` directory. For a manual session, set `DIR` to that directory
+and use `set substitute-path /hgl-release/hgraph DIR` in gdb or
 `settings set target.source-map /hgl-release/hgraph DIR` in lldb.
 Generated headers use `/hgl-release/hgraph-build/build`, and the fetched
 date sources use `/hgl-release/hgraph-build/build/_deps/date-src`.
@@ -78,8 +81,8 @@ the release runner. A GitHub-hosted macOS runner independently runs
 archive as a user has it, `scripts/check-debug-release.sh`: the release
 alone links the optimised libraries for a debug build and says why; with
 the debug archive unpacked into it, the debug tree is verified, a debug
-build links the debug libraries, lldb or gdb stops in an engine frame of it
-with its file, line and arguments (gdb: the locals of the engine's loop),
+build links the debug libraries, lldb or gdb lists engine source through the launch map and stops in an engine
+frame with its file, line and arguments (gdb: the locals of the engine's loop),
 and the release's engine and fmt libraries resolve functions to files and
 lines. On Linux a core file of an ordinary run also identifies the engine
 function's file and line. The ordinary process loads the release's own engine
@@ -177,7 +180,9 @@ version. Set `HGL_BUILD_JOBS` to limit parallel builds.
 
 For repeated local builds, set `HGL_RELEASE_NATIVE_CACHE` to a directory
 to keep the verified SDK, dependency prefix and native license notices,
-and the debug archive's tree under `debug`. With gdb on Linux or lldb on
+and the debug archive's tree under `debug`. Packaging fetches the pinned
+hgraph source even when it uses cached libraries, and checks that both SDKs
+were built from that commit. With gdb on Linux or lldb on
 macOS, `scripts/check-debug-release.sh DIRECTORY` checks the two archives
 in DIRECTORY as the release jobs do.
 An unpacked release bundle can also supply that prebuilt tree. The
