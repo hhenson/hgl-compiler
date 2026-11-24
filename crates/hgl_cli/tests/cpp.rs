@@ -714,6 +714,34 @@ fn block_constants_run_on_the_sdk() {
     );
 }
 
+/// TYPE-5, UNIT-7 and EXPR-5: omitted fields use their defining scope and
+/// their applied type, including statement blocks, generic calls and lambdas.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn field_defaults_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("field_defaults");
+    let file = write(
+        &root,
+        "demo.field_defaults.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.field_defaults.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// EXPR-5, TYPE-14, UNIT-8: a generic null default is written using
 /// the selected nullable value parameter's concrete type.
 #[test]

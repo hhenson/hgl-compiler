@@ -3073,13 +3073,36 @@ fn composite_values_are_written() {
     assert!(point < line, "{types}");
 }
 
+/// GEN-13 and FN-17: a field default's lambda keeps the struct's type
+/// arguments even if neither its parameter nor its result depends on them.
+#[test]
+fn generic_field_defaults_write_both_lambda_types() {
+    let emitted = emit_with(
+        &[(
+            "demo.field_defaults.hgl",
+            include_str!("fixtures/demo.field_defaults.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    let module = emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/mod-demo-field_defaults.cpp")
+        .unwrap();
+    for ty in ["Int", "Float"] {
+        let local = format!("::std::optional<::hgraph::{ty}> item = ::std::nullopt;");
+        assert!(module.text.contains(&local), "Missing lambda local {local}");
+    }
+}
+
 /// What the target does not write of the composites yet is reported
 /// where it is written, and nothing is miswritten: a struct that holds
-/// itself (TYPE-6), a field's default that runs statements of its own,
-/// a field of an abstract struct assigned, a dictionary written with keys
-/// that may be one, which the pinned text does not say what it holds, a
-/// dictionary's entry given to a `var` parameter, and an application of a
-/// generic struct that its C++ template would not be.
+/// itself (TYPE-6), a field of an abstract struct assigned, a dictionary
+/// written with keys that may be one, which the pinned text does not say
+/// what it holds, a dictionary's entry given to a `var` parameter, and an
+/// application of a generic struct that its C++ template would not be.
 #[test]
 fn composite_forms_not_written_yet_are_reported() {
     let emitted = emit(&[(
@@ -3144,9 +3167,6 @@ fn composite_forms_not_written_yet_are_reported() {
             "m.hgl:16:5 the cpp target does not write an assignment to this place yet",
             "m.hgl:22:48 the cpp target does not write a dictionary written with keys that may be one yet",
             "m.hgl:25:10 the cpp target does not write this place given to a `var` parameter yet",
-            // Where the default is written, which a construction that
-            // leaves the field out reaches.
-            "m.hgl:7:18 the cpp target does not write a default that runs statements yet",
             // TYPE-14: `T?` of an `i64?` is an `i64?`, where the template's
             // field would be an optional of one.
             "m.hgl:32:15 the cpp target does not write the type `Maybe<i64?>` yet",

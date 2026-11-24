@@ -80,7 +80,8 @@ transpiler: partial
 - Binds omitted defaults or null after explicit arguments. A literal null default is held as the selected nullable parameter type, including when its declaration names a generic. Wires an omitted temporal
   default as a constant or leaves an optional input silent.
 - A callable default, including an inherited operator configuration default, can run a block in its own lexical scope.
-- Left: blocks with statements in field defaults, and nonempty field defaults whose type depends on a generic struct argument. A graph call leaving out a nullable temporal input is reported (#399). The target retains defensive reports for recursively omitted defaults and defaults whose emitted evaluation needs failure-handling statements.
+- Field defaults with statement blocks use their own cold scope. An omitted generic field default uses the field's applied type and the arguments of the struct that declares the default (TYPE-5).
+- Left: a graph call leaving out a nullable temporal input is reported (#399). The target retains defensive reports for recursively omitted defaults and defaults whose emitted evaluation needs failure-handling statements.
 
 ## UNIT-9
 
