@@ -2438,6 +2438,47 @@ export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values,
     );
 }
 
+/// RED-5 and TYPE-14: a plain seed widens to the selected nullable accumulator.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn ordered_reduction_widens_the_seed_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("ordered-nullable-accumulator");
+    let file = write(
+        &root,
+        "demo.ordered_nullable_accumulator.hgl",
+        r#"module demo.ordered_nullable_accumulator
+
+const fn combine(accumulated: i64?, member: i64?) -> i64? {
+    if accumulated == null { return member }
+    if member == null { return accumulated }
+    return accumulated + member
+}
+
+fn fold(values: list<i64?>, seed: i64) -> i64? =>
+    reduce<i64?, i64?, list<i64?>>(combine, values, seed)
+
+test nullable_accumulator_takes_a_plain_seed {
+    assert eval fold(values: [[2]], seed: [1]) == [delta<i64?>(value: 3)]
+}
+"#,
+    );
+    let tested = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&tested.stdout);
+    assert_eq!(
+        tested.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&tested.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// GEN-7, GEN-13 and TYPE-10: an inferred list size is an integer
 /// constant in value code, a node handler and graph composition.
 #[test]

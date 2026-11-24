@@ -6,7 +6,7 @@ use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Local};
 use hgl_lower::calls::OrderedReduction;
 
 use super::Emitter;
-use super::graphs::{HeldInputs, WIRING};
+use super::graphs::{HeldInputs, WIRING, widened_from};
 use super::lifting::Given;
 use super::names;
 use super::nodes::ResultForm;
@@ -114,21 +114,22 @@ impl Emitter<'_> {
         let [items, zero] = reduction.inputs;
         let mut steps = String::new();
         for (position, argument) in arguments.iter().enumerate() {
-            let bound = if position == items {
-                "items_"
+            let (bound, expected) = if position == items {
+                ("items_", &argument.value.ty)
             } else if position == zero {
-                "zero_"
+                ("zero_", &accumulator.value.ty)
             } else {
                 continue;
             };
-            let input = held
-                .given
-                .iter()
-                .find(|(source, _)| *source == position)
-                .map_or_else(
-                    || self.connection(scope, &argument.value, &argument.value.ty),
-                    |(_, port)| port.clone(),
-                );
+            let port = held.given.iter().find(|(source, _)| *source == position);
+            let input = match port {
+                // TYPE-14: a held seed also uses the selected accumulator's nullable schema.
+                Some((_, port)) if widened_from(&argument.value.ty, expected).is_some() => {
+                    format!("({port}).as<{accumulator_schema}>()")
+                }
+                Some((_, port)) => port.clone(),
+                None => self.connection(scope, &argument.value, expected),
+            };
             steps.push_str(&format!("const auto {bound} = {input}; "));
         }
         let runtime = crate::runtime::NAMESPACE;
