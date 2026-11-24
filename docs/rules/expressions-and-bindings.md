@@ -38,6 +38,10 @@ analyser: partial
 - In a value function, a hook and a source an assignment names a place inside a value, `point.x = 1`, `row[0] += 1`, `book["a"] = 1`: the root is a `var`, a `state`, a `cache` or `out`, a `let`, a parameter and an iteration binding are read-only all the way down (`binding.immutable`), the value is of the place's type, and a compound assignment reads the place first
 - Left: an annotation checked against the category of its value
 
+optimiser: done
+
+- Plans an in-place append for a local `str` variable with the built-in `+=` and splits independent string concatenation pieces (TYPE-1). An expression that can write the destination retains the compound assignment so the old place is read first.
+
 transpiler: partial
 
 - Emits immutable and mutable bindings, assignments to supported places, and copy-

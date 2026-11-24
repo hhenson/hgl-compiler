@@ -35,7 +35,7 @@ str format_default(time value);
 str format_default(datetime value);
 str format_default(duration value);
 
-/// Write a string as an HGL literal, as used by a collection's text (FMT-5).
+/// Write an HGL string literal for `{:?}` and compound members (FMT-4, FMT-5).
 str format_quoted(std::string_view value);
 
 /// Write a list or set in exactly the order of traversal (FMT-5).
