@@ -40,7 +40,8 @@ cd -- "$root"
 # is no change of this tree's.
 [[ -z $(git status --porcelain --ignore-submodules=all) ]] || fail "requires a clean checkout"
 
-version=$(python3 scripts/release-bundle.py version)
+build_tool=(cargo run --locked --quiet -p hgl_build_tool --)
+version=$("${build_tool[@]}" version)
 [[ -z $version_tag || $version_tag == "$version" ]] ||
     fail "tag $version_tag does not match workspace version $version"
 name=hgl-$version-$platform
@@ -209,7 +210,7 @@ build_native() (
 )
 
 if [[ -n $native_cache && -d $native_cache/libexec && -d $native_cache/debug/libexec ]]; then
-    python3 scripts/release-bundle.py copy-native "$native_cache" "$bundle" --debug "$debug_tree"
+    "${build_tool[@]}" copy-native "$native_cache" "$bundle" --debug "$debug_tree"
     grep -qxF "tag=$hgraph_tag" "$sdk/hgl-sdk.txt" &&
         grep -qxF "arrow=off" "$sdk/hgl-sdk.txt" ||
         fail "the cached SDK must be hgraph $hgraph_tag built without Arrow"
@@ -224,12 +225,11 @@ cargo_home=${CARGO_HOME:-$HOME/.cargo}
 cargo_target=${CARGO_TARGET_DIR:-$work/cargo-target}
 mkdir -p -- "$cargo_target"
 cargo_target=$(cd -- "$cargo_target" && pwd -P)
-export CARGO_ENCODED_RUSTFLAGS
-CARGO_ENCODED_RUSTFLAGS=$(printf '%s\037%s\037%s' \
+cargo_remaps=$(printf '%s\037%s\037%s' \
     "--remap-path-prefix=$root=." "--remap-path-prefix=$cargo_home=/cargo" \
     "--remap-path-prefix=$cargo_target=/cargo-target")
-export CARGO_PROFILE_RELEASE_STRIP=symbols
-cargo build --locked --release --package hgl_cli --target "$target" \
+CARGO_ENCODED_RUSTFLAGS="$cargo_remaps" CARGO_PROFILE_RELEASE_STRIP=symbols \
+    cargo build --locked --release --package hgl_cli --target "$target" \
     --target-dir "$cargo_target" --jobs "$jobs"
 cp -- "$cargo_target/$target/release/hgl" "$bundle/bin/hgl"
 cp -- LICENSE "$bundle/licenses/hgl-compiler.txt"
@@ -237,16 +237,16 @@ cp -- spec/hgl_core/LICENSE "$bundle/licenses/hgl-core.txt"
 cp -- crates/hgl_doc/vendor/katex/LICENSE "$bundle/licenses/katex.txt"
 cp -- crates/hgl_doc/vendor/mermaid/LICENSE "$bundle/licenses/mermaid.txt"
 cp -- crates/hgl_doc/vendor/mermaid/THIRD-PARTY-NOTICES.txt "$bundle/licenses/mermaid-third-party.txt"
-python3 scripts/release-bundle.py licenses --target "$target" "$bundle/licenses"
+"${build_tool[@]}" licenses --target "$target" "$bundle/licenses"
 audit=(--forbid "$root" --forbid "$work" --forbid "$HOME" --forbid "$cargo_target")
 if [[ -n $native_cache ]]; then
     audit+=(--forbid "$native_cache")
 fi
-python3 scripts/release-bundle.py verify --target "$target" "$bundle" "${audit[@]}"
-python3 scripts/release-bundle.py verify-debug --target "$target" "$debug_tree" --release "$bundle" \
+"${build_tool[@]}" verify --target "$target" "$bundle" "${audit[@]}"
+"${build_tool[@]}" verify-debug --target "$target" "$debug_tree" --release "$bundle" \
     "${audit[@]}"
 if [[ -n $native_cache && ! -d $native_cache/libexec ]]; then
-    python3 scripts/release-bundle.py save-native "$bundle" "$native_cache" --debug "$debug_tree"
+    "${build_tool[@]}" save-native "$bundle" "$native_cache" --debug "$debug_tree"
 fi
 
 # This metadata belongs to the archive, including builds that reuse native libraries.
