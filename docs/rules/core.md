@@ -913,7 +913,7 @@ transpiler: partial
 - The C++ target gives primitive fields to pinned fmt with compiled specifiers. It emits checked chrono directives with fractional truncation on `%S`, `%T` and `%[S]`, duration totals and padding on the whole field.
 - Boolean width and alignment without the zero flag use the pinned fmt formatter.
 - A `str` at `{:?}` uses the same HGL literal writer as a string inside a collection (FMT-5).
-- Plain string fields measure width and precision in Unicode code points. Default `f64` fields with a width apply the sign and padding to their FMT-5 text. Both NaN signs start from `nan` (OPS-6).
+- Plain string fields measure width and precision in Unicode code points. A default `f64` field applies its sign and layout to its FMT-5 text, including with zero or absent width. Both NaN signs start from `nan` (OPS-6).
 - Left: the alternate `#` form with an `f64` width, and width or precision combined with `?`.
 
 ## FMT-5

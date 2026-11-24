@@ -276,7 +276,7 @@ pub fn text_layout(scalar: Scalar, specifier: &str) -> Option<TextLayout<'_>> {
             }
             precision
         }
-        Scalar::F64 if width != 0 && after_width.is_empty() => None,
+        Scalar::F64 if after_width.is_empty() => None,
         _ => return None,
     };
     Some(TextLayout {
