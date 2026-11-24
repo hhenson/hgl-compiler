@@ -207,6 +207,20 @@ test forwarded_homogeneous_shape {
     assert !relay_nullable(2)
 }
 
+# Proposed FN-8 and EXPR-2: the forwarded positions fill the prefix
+# and the pack, and the trailing parameter is supplied by name.
+const fn with_trailing_name(first: i64, middle: ...i64, last: i64 = 4) -> i64 =>
+    first * 1000 + middle[0] * 100 + middle[1] * 10 + last
+
+const fn relay_trailing_name(values: ...i64, last: i64) -> i64 =>
+    with_trailing_name(...values, last: last)
+
+test a_forwarded_pack_can_precede_a_named_argument {
+    assert with_trailing_name(1, 2, 3, last: 5) == 1235
+    assert with_trailing_name(1, 2, 3) == 1234
+    assert relay_trailing_name(6, 7, 8, last: 9) == 6789
+}
+
 # FN-14, FN-19: the held entry of a temporal callback stays a connection.
 fn apply_connection(callback: fn(f64) -> f64, input: f64) -> f64 => callback(input)
 fn captured_connection<...A>(input: f64, values: ...A) -> f64 =>

@@ -18,6 +18,7 @@ analyser: partial
 
 - In a value function, a hook and a graph, the arguments of a value function's call, positional before named, and of a struct's construction, all named; duplicate, unknown, missing, surplus and mistyped arguments rejected
 - A named operator call, and a symbol's configuration, may name an option its candidates declare
+- Proposed trial: a positional pack takes every position the fixed parameters before it leave. Arguments to fixed parameters after the pack bind by name (FN-8).
 - Left: what a pack holds; a generic function's parameter types
 
 transpiler: partial
