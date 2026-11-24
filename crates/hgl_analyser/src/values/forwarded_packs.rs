@@ -398,22 +398,22 @@ pub(super) fn has_computed_spread(list: &SyntaxNode) -> bool {
     spread_operands(list).any(|spread| ungrouped(spread).kind() == SyntaxKind::PackComprehension)
 }
 
-/// Whether the shape of a parameter pack still needs to be applied.
+/// Whether a body needs its concrete pack inputs for a spread or entry read.
 pub(crate) fn has_forwarded_calls(body: &crate::hir::Body) -> bool {
     let mut pending = false;
     walk_nested_calls(&body.statements, &mut |value| {
-        pending |= is_forwarded_call(value);
+        pending |= needs_pack_inputs(value);
     });
     pending
 }
 
-fn is_forwarded_call(value: &Expr) -> bool {
+fn needs_pack_inputs(value: &Expr) -> bool {
     matches!(
         &value.kind,
         ExprKind::Call {
             callee: Callee::DeferredPackCall,
             ..
-        }
+        } | ExprKind::DeferredPackRead
     )
 }
 
@@ -689,8 +689,8 @@ struct ForwardingParent {
     shape: PackShape,
 }
 
-/// Check forwarded calls under the concrete shapes that reach them (FN-19).
-/// A forwarding error belongs to the call that supplies that pack shape.
+/// Check pack spreads and reads under the concrete shapes that reach them
+/// (FN-19). A pack error belongs to the call that supplies its shape.
 /// Record the concrete calls it reaches for the ordinary GEN-7 checks.
 pub(super) fn check_instances(
     program: &crate::Program,
@@ -702,6 +702,7 @@ pub(super) fn check_instances(
         MakingCall, bounded_instance_key, emit_instance_report, making_path,
         past_pack_growth_limit, past_the_limit,
     };
+    use hgl_diagnostics::Code;
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = HashSet::new();
@@ -711,12 +712,11 @@ pub(super) fn check_instances(
             let Some(body) = body else { continue };
             let owner = (module, declaration);
             walk_nested_calls(&body.statements, &mut |value| {
-                if let Some(callee) = called_or_referenced(value) {
-                    if matches!(callee, Callee::DeferredPackCall) {
-                        forwarding.insert(owner);
-                    } else if let Some(called) = callee.declaration() {
-                        callers.entry(called).or_default().push(owner);
-                    }
+                if needs_pack_inputs(value) {
+                    forwarding.insert(owner);
+                }
+                if let Some(called) = called_or_referenced(value).and_then(Callee::declaration) {
+                    callers.entry(called).or_default().push(owner);
                 }
             });
         }
@@ -773,6 +773,12 @@ pub(super) fn check_instances(
                 .walk(&mut |value| visit_anonymous_bodies(value, &mut |part| record(part, false)));
         }
     }
+    let rejected_pack_calls: HashSet<_> = diagnostics
+        .as_slice()
+        .iter()
+        .filter(|report| report.code == Code::Catalogued(codes::PACK_NAME))
+        .map(|report| report.primary)
+        .collect();
     for (initial, at) in roots {
         let mut waiting = VecDeque::from([(initial, at, None::<usize>)]);
         let mut parents = Vec::<ForwardingParent>::new();
@@ -823,7 +829,13 @@ pub(super) fn check_instances(
                 )
             };
             for report in graph_reports.as_slice() {
-                if diagnostics.as_slice().contains(report) {
+                // A missing member in the written signature rejects the
+                // making call already. Its body supplies no second pack
+                // diagnostic at the same call (ERR-9).
+                if diagnostics.as_slice().contains(report)
+                    || (report.code == Code::Catalogued(codes::PACK_NAME)
+                        && rejected_pack_calls.contains(&at))
+                {
                     continue;
                 }
                 emit_instance_report(

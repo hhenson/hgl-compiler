@@ -9,7 +9,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::control::{Outcome, branch_is_null, branch_takes_its_type};
 use super::fit::{
-    accepts_float, is_integer_literal, not_null, nullable, open, whole, window_value,
+    accepts_float, hook_payload_type, is_integer_literal, not_null, nullable, open, whole,
 };
 use super::node::RefRead;
 use super::results::proof_binding;
@@ -539,21 +539,9 @@ impl<'a> Typer<'a> {
         } else {
             ExprKind::Local(local)
         };
-        // TYPE-9: "`atomic<V>` stops expansion at a complete ordinary
-        // V", and TYPE-16: "an atomic publishes whole". In a hook an
-        // atomic input's payload, and `out`'s, is that whole V, an
-        // ordinary value. TYPE-14: the `?` of an input whose type is
-        // no ordinary value marks one that may be left out, and no
-        // null: what a hook reads of `atomic<Quote>?` is a `Quote`
-        // (`Type::omission_removed`). TYPE-11: a window's value, "read
-        // in a hook ... is a `list<V>` of the values held, oldest first".
         let endpoint = self.is_temporal_input(local) || Some(local) == self.out;
         let ty = if self.hook.is_some() && endpoint {
-            match ty.omission_removed() {
-                Type::Atomic(payload) => (**payload).clone(),
-                window @ Type::RollingWindow { .. } => window_value(window),
-                under => under.clone(),
-            }
+            hook_payload_type(&ty)
         } else {
             ty
         };

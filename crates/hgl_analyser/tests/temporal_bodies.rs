@@ -104,6 +104,112 @@ fn a_payload_read_needs_admission() {
     );
 }
 
+/// FN-19: a constant key selects a packed input whose payload needs
+/// the same admission and lifecycle checks as an ordinary input
+/// (TIME-4, TIME-5).
+#[test]
+fn a_packed_input_payload_read_needs_admission() {
+    let checked = module(concat!(
+        "fn read(trigger: i64, values: ...i64) -> i64 {\n",
+        "    state seen: i64 = values[0]\n",
+        "    cache kept: i64 = values[0]\n",
+        "    cache counted: i64 = 0\n",
+        "    start { counted = values[0] }\n",
+        "    when modified(trigger) && valid([]) { return values[0] }\n",
+        "    stop { seen = values[0] }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:23 phase/state.input_read TIME-5",
+            "m.hgl:4:23 phase/cache.input_read TIME-5",
+            "m.hgl:6:23 phase/input.lifecycle TIME-5",
+            "m.hgl:7:50 phase/payload.unguarded TIME-4",
+            "m.hgl:8:19 phase/payload.unguarded TIME-5",
+        ]
+    );
+}
+
+/// FN-19, TYPE-9 and TYPE-11: a packed input reads as its ordinary
+/// payload in a hook. Composition supplies the original endpoint type.
+#[test]
+fn packed_hook_inputs_read_their_payload_types() {
+    let checked = module(concat!(
+        "fn atomic_read(items: ...atomic<list<i64>>) -> list<i64> {\n",
+        "    when { return items[0] }\n",
+        "}\n",
+        "fn window_read(items: ...rolling_window<i64, 2, 1>) -> list<i64> {\n",
+        "    when { return items[0] }\n",
+        "}\n",
+        "fn scalar_read(items: ...i64) -> i64 {\n",
+        "    when { return items[0] }\n",
+        "}\n",
+        "fn atomic_control(item: atomic<list<i64>>) -> list<i64> {\n",
+        "    when { return item }\n",
+        "}\n",
+        "fn window_control(item: rolling_window<i64, 2, 1>) -> list<i64> {\n",
+        "    when { return item }\n",
+        "}\n",
+        "fn atomic_entry(a: atomic<list<i64>>, b: atomic<list<i64>>) -> list<i64> => atomic_read(a, b)\n",
+        "fn window_entry(a: rolling_window<i64, 2, 1>, b: rolling_window<i64, 2, 1>) -> list<i64> => window_read(a, b)\n",
+        "fn scalar_entry(a: i64, b: i64) -> i64 => scalar_read(a, b)\n",
+        "fn window_connection(items: ...rolling_window<i64, 2, 1>) -> rolling_window<i64, 2, 1> => items[0]\n",
+        "fn forwarded_window(a: rolling_window<i64, 2, 1>) -> rolling_window<i64, 2, 1> => window_connection(a)\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+}
+
+/// TIME-1 and FN-19: guard the child of the selected entry as a child
+/// of any temporal input. A guard on one packed input proves only its path.
+#[test]
+fn a_packed_child_needs_its_own_guard() {
+    let checked = module(concat!(
+        "fn ordinary(items: list<i64>) -> i64 {\n",
+        "    when { return items[0] }\n",
+        "}\n",
+        "fn unguarded(items: ...list<i64>) -> i64 {\n",
+        "    when { return items[0][0] }\n",
+        "}\n",
+        "fn guarded(items: ...list<i64>) -> i64 {\n",
+        "    when valid(items[0][0]) { return items[0][0] }\n",
+        "}\n",
+        "fn wrong_entry(items: ...list<i64>) -> i64 {\n",
+        "    when valid(items[0][0]) { return items[1][0] }\n",
+        "}\n",
+        "fn atomic_value(items: ...atomic<list<i64>>) -> i64 {\n",
+        "    when { return items[0][0] }\n",
+        "}\n",
+        "fn window_value(items: ...rolling_window<i64, 2, 1>) -> i64 {\n",
+        "    when { return items[0][0] }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:19 phase/payload.unguarded TIME-1",
+            "m.hgl:6:19 phase/payload.unguarded TIME-1",
+            "m.hgl:12:38 phase/payload.unguarded TIME-1",
+        ]
+    );
+}
+
+/// TIME-1 and GEN-7: a fixed list read whole needs all-valid admission
+/// even when the entry type is supplied by a pack instance.
+#[test]
+fn a_packed_whole_list_needs_all_valid_admission() {
+    let checked = module(concat!(
+        "fn read_pack<...As>(items: ...As) -> list<i64, 2> {\n",
+        "    when { return items[0] }\n",
+        "}\n",
+        "fn via_pack(first: list<i64, 2>) -> list<i64, 2> => read_pack(first)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:53 phase/payload.unguarded TIME-1"]
+    );
+}
+
 /// TIME-1 with TIME-6: a cache is "initialized on every start using
 /// available restored state". Its initializer reads the node's state and
 /// its `const` configuration, which have values then; core's
