@@ -42,3 +42,46 @@ fn engine_time_keeps_datetime_specifiers_and_unused_argument_checks() {
     assert_eq!(checked.findings.len(), 1, "{}", checked.report);
     assert_eq!(checked.findings[0].code, "type/format.unused");
 }
+
+#[test]
+fn eval_input_values_have_no_cycle_time() {
+    // FMT-9, TST-3: replay values and const arguments are made before
+    // a run, even while its target call is read as composition.
+    for (source, count) in [
+        (
+            r#"fn id(s: str) -> str => s
+test t { assert eval id(s: [format("{engine_time:%S}")]) == ["x"] }"#,
+            1,
+        ),
+        (
+            r#"fn id(const s: str, v: i64) -> str => format("{} {}", s, v)
+test t { assert eval id(s: format("{engine_time:%S}"), v: [1]) == ["x"] }"#,
+            1,
+        ),
+        (
+            r#"fn id(s: str) -> str => s
+test t {
+    const opening: datetime = @2026-01-02T03:04:05Z
+    assert eval{start: opening, length: 4s} id(s: [0s: format("{engine_time:%S} {}", 1), 2s: format("{engine_time:%S} {}", 2)]) == [0s: "05 1", 2s: "07 2"]
+}"#,
+            2,
+        ),
+    ] {
+        let checked = module(source);
+        assert_eq!(checked.findings.len(), count, "{}", checked.report);
+        assert!(
+            checked
+                .findings
+                .iter()
+                .all(|finding| finding.code == "type/format.argument"),
+            "{}",
+            checked.report
+        );
+    }
+    // FMT-9: the process clock remains available to these value contexts.
+    let checked = module(
+        r#"fn id(const s: str, v: str) -> str => format("{} {}", s, v)
+test t { assert eval id(s: format("{wall_time:%S}"), v: [format("{wall_time:%S}")]) == ["x"] }"#,
+    );
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}

@@ -44,3 +44,24 @@ test handler_rejects_engine_time {
     }
     assert eval bad(value: [1]) == [""]
 }
+
+# FMT-9, TST-3: trace cells and const inputs are values, not cycles.
+fn unchanged(value: str) -> str => value
+fn const_prefix(const prefix: str, value: i64) -> str => format("{} {}", prefix, value)
+test dense_trace_cell_rejects_engine_time {
+    # expect-error(type, "format.argument")
+    assert eval unchanged(value: [format("{engine_time:%S}")]) == ["x"]
+}
+test eval_const_argument_rejects_engine_time {
+    # expect-error(type, "format.argument")
+    assert eval const_prefix(prefix: format("{engine_time:%S}"), value: [1]) == ["x"]
+}
+test timed_trace_cells_reject_engine_time {
+    const opening: datetime = @2026-01-02T03:04:05Z
+    assert eval{start: opening, length: 4s} unchanged(value: [
+        # expect-error(type, "format.argument")
+        0s: format("{engine_time:%S} {}", 1),
+        # expect-error(type, "format.argument")
+        2s: format("{engine_time:%S} {}", 2),
+    ]) == [0s: "05 1", 2s: "07 2"]
+}

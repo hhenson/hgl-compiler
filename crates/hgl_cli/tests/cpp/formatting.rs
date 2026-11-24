@@ -656,7 +656,7 @@ fn engine_time_formatting_follows_the_lifted_nodes_ticks() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("rejection cases: 2 passed, 0 failed"),
+        stdout.contains("rejection cases: 5 passed, 0 failed"),
         "{stdout}"
     );
 }

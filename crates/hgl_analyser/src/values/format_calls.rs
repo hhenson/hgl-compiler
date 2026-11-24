@@ -93,7 +93,9 @@ impl Typer<'_> {
             let Piece::Place(place) = part else {
                 continue;
             };
-            if place.name == "engine_time" && !self.graph {
+            // TST-3 temporarily reads an eval's target as composition,
+            // but its trace cells and const operands remain value code.
+            if place.name == "engine_time" && (!self.graph || self.value_code) {
                 missing = true;
                 self.format_fault(
                     &pattern.value,

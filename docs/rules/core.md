@@ -929,9 +929,10 @@ transpiler: partial
 
 ## FMT-6
 
-transpiler: planned
+transpiler: partial
 
-- #434.
+- A graph call with connections lifts the native value formatter (FN-11), publishing text at every admitted evaluation, including an equal result.
+- Left: #434 step 2 supplies the HGL graph candidate's validity policy and triggers. The lifted value candidate currently binds `null` for a nullable argument that is not valid and writes that value, rather than withholding text until the argument is valid as FMT-6 requires.
 
 ## FMT-7
 
@@ -941,9 +942,10 @@ transpiler: done
 
 ## FMT-8
 
-transpiler: planned
+transpiler: partial
 
-- #434.
+- The lifted native value candidate formats a collection whole when it ticks. Explicit `Marked<T>` values retain the value formatter's existing tick-prefix support (FMT-7, FMT-9).
+- Left: #434 step 2 supplies the HGL graph body, default collection-delta formatting, marks, `require_valid`, sampling and triggers; the current lifted value call uses FN-11's ordinary input binding instead.
 
 ## FMT-9
 
@@ -951,6 +953,7 @@ analyser: partial
 
 - Value calls admit `{wall_time}` and reject `{engine_time}` with `format.argument`. A marked place accepts `Marked<T>`.
 - A native call from a graph admits `{engine_time}` as a reserved datetime place; it consumes no supplied argument and uses datetime's checked specifiers.
+- Trace cells and const arguments supplied to an eval remain value code and reject `{engine_time}` (TST-3).
 - Left: the HGL graph candidate supplies the arguments' tick state (#434).
 
 transpiler: partial
