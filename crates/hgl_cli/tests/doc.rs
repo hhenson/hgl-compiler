@@ -608,7 +608,14 @@ fn test_local_declarations_are_not_part_of_an_operators_public_interface() {
         .as_array()
         .unwrap();
     assert_eq!(candidates.len(), 1);
-    assert_eq!(exported["declarations"].as_array().unwrap().len(), 1);
+    let mut exported_names: Vec<_> = exported["declarations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|declaration| declaration["name"].as_str().unwrap())
+        .collect();
+    exported_names.sort_unstable();
+    assert_eq!(exported_names, ["classify", "relay", "render_relay"]);
 
     let private: Value = serde_json::from_slice(&document(&[&file, "--private"])).unwrap();
     let decls = module(&private, "demo.test_local_declarations")["declarations"]
