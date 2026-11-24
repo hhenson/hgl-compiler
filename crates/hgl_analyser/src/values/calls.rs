@@ -23,10 +23,10 @@ use super::inference::{
 use super::lifting::{fill_type, join_categories, preferred_call_role};
 use super::node::RefRead;
 use super::sizes;
-use super::{Fact, Typer};
+use super::{CapturedOutput, Fact, Typer};
 use crate::declared::names_parameter;
 use crate::hir::{
-    self, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, Local, ValueCategory,
+    self, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, Local, LocalId, ValueCategory,
 };
 use crate::program::{Binding, DeclarationKind, OperatorRef, Program, Role};
 use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
@@ -36,18 +36,11 @@ use crate::types::{
 };
 use crate::{codes, error};
 
-/// One tentative read of a pair's arguments without introducing local
-/// bindings or changing flow. Memoizing only neutral phase reads keeps
-/// parent and child probes from rereading the same nested argument.
+/// One tentative read of a pair's arguments. Descendant probes can
+/// reuse their answers while this read is active.
 pub(super) struct PairPhases {
     scope: Location,
-    locals: Vec<Local>,
-    assigned: Vec<bool>,
-    facts: Vec<Fact>,
-    callable: Option<SyntaxNode>,
-    naming: Option<Location>,
-    binding_child: Option<Location>,
-    categories: HashMap<Location, ValueCategory>,
+    categories: HashMap<Location, (PairScope, ValueCategory)>,
 }
 
 impl PairPhases {
@@ -56,9 +49,7 @@ impl PairPhases {
         let changes_scope = call.descendants().any(|node| {
             matches!(
                 node.kind(),
-                SyntaxKind::Block
-                    | SyntaxKind::IfExpr
-                    | SyntaxKind::FnExpr
+                SyntaxKind::FnExpr
                     | SyntaxKind::ListComprehension
                     | SyntaxKind::PackComprehension
                     | SyntaxKind::EvalExpr
@@ -67,28 +58,66 @@ impl PairPhases {
         });
         (!changes_scope).then(|| Self {
             scope: typer.at(&call),
-            locals: typer.locals.clone(),
-            assigned: typer.assigned.clone(),
-            facts: typer.present.clone(),
-            callable: typer.callable.clone(),
-            naming: typer.naming,
-            binding_child: typer.binding_child,
             categories: HashMap::new(),
         })
     }
 
-    /// A call with a `var` parameter can assign an enclosing local,
-    /// and candidate trials may supply different proof or endpoint contexts.
-    fn matches(&self, typer: &Typer<'_>, at: Location) -> bool {
+    fn contains(&self, at: Location) -> bool {
         at.file == self.scope.file
             && self.scope.span.start <= at.span.start
             && at.span.end <= self.scope.span.end
-            && self.locals == typer.locals
+    }
+}
+
+/// The state a phase read starts with. A repeated read can be in a
+/// different block, branch, or candidate trial, with different local
+/// types, assignments or proof of presence.
+struct PairScope {
+    locals: Vec<Local>,
+    assigned: Vec<bool>,
+    facts: Vec<Fact>,
+    aliases: HashMap<LocalId, LocalId>,
+    captures: HashMap<LocalId, CapturedOutput>,
+    callable: Option<SyntaxNode>,
+    naming: Option<Location>,
+    binding_child: Option<Location>,
+    designating: Option<Location>,
+    temporal: Option<LocalId>,
+    dynamic: Option<LocalId>,
+    returned: bool,
+}
+
+impl PairScope {
+    fn of(typer: &Typer<'_>) -> Self {
+        Self {
+            locals: typer.locals.clone(),
+            assigned: typer.assigned.clone(),
+            facts: typer.present.clone(),
+            aliases: typer.aliases.clone(),
+            captures: typer.captures.clone(),
+            callable: typer.callable.clone(),
+            naming: typer.naming,
+            binding_child: typer.binding_child,
+            designating: typer.designating,
+            temporal: typer.temporal,
+            dynamic: typer.dynamic,
+            returned: typer.returned,
+        }
+    }
+
+    fn matches(&self, typer: &Typer<'_>) -> bool {
+        self.locals == typer.locals
             && self.assigned == typer.assigned
             && self.facts == typer.present
+            && self.aliases == typer.aliases
+            && self.captures == typer.captures
             && self.callable == typer.callable
             && self.naming == typer.naming
             && self.binding_child == typer.binding_child
+            && self.designating == typer.designating
+            && self.temporal == typer.temporal
+            && self.dynamic == typer.dynamic
+            && self.returned == typer.returned
     }
 }
 
@@ -548,14 +577,16 @@ impl<'a> Typer<'a> {
     /// role. Omitted arguments are filled only by the selected signature.
     fn pair_operands(&mut self, list: &SyntaxNode) -> ValueCategory {
         let at = self.at(list);
-        let matching = self
+        let cache = self
             .pair_phases
             .as_ref()
-            .filter(|phases| phases.matches(self, at));
-        if let Some(category) = matching.and_then(|phases| phases.categories.get(&at)) {
+            .filter(|phases| phases.contains(at) && self.bound_children.is_empty());
+        if let Some((scope, category)) = cache.and_then(|phases| phases.categories.get(&at))
+            && scope.matches(self)
+        {
             return *category;
         }
-        let can_cache = matching.is_some();
+        let scope = cache.map(|_| PairScope::of(self));
         let mut started = false;
         if self.pair_phases.is_none() {
             self.pair_phases = PairPhases::at(self, list);
@@ -592,12 +623,12 @@ impl<'a> Typer<'a> {
         self.returning_tails = returning_tails;
         if started {
             self.pair_phases = None;
-        } else if can_cache
-            && clean
+        } else if clean
             && category != ValueCategory::Unsettled
+            && let Some(scope) = scope
             && let Some(phases) = &mut self.pair_phases
         {
-            phases.categories.insert(at, category);
+            phases.categories.insert(at, (scope, category));
         }
         category
     }
