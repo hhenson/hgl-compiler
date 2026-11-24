@@ -491,6 +491,40 @@ fn a_signal_has_no_payload_and_no_default_but_null() {
     );
 }
 
+/// FN-19 and TYPE-12: a selected signal entry gives no payload to a
+/// hook, including when its type comes from the call's fitted pack.
+#[test]
+fn a_signal_selected_from_a_pack_has_no_payload() {
+    let checked = module(concat!(
+        "fn homogeneous(ticks: ...signal) { when { ticks[0] } }\n",
+        "fn heterogeneous<...As>(items: ...As) { when { items[0] } }\n",
+        "fn relay(tick: signal) { heterogeneous(tick, 0) }\n",
+        "fn relay_value(value: i64) { heterogeneous(value, 0) }\n",
+        "fn before(ticks: ...signal) {\n",
+        "    start { ticks[0] }\n",
+        "    when {}\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:43 type/type.not_ordinary TYPE-12",
+            "m.hgl:4:26 type/type.not_ordinary TYPE-12",
+            "m.hgl:7:13 phase/input.lifecycle TIME-5",
+        ],
+        "{}",
+        checked.report
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "`ticks[0]` is a `signal`, which has no payload to read"
+    );
+    assert_eq!(
+        checked.findings[1].message,
+        "`items[0]` is a `signal`, which has no payload to read"
+    );
+}
+
 /// TYPE-9: "`atomic<V>` stops expansion at a complete ordinary V", and
 /// TYPE-16: "an atomic publishes whole". In a hook an atomic input, and
 /// `out` (TIME-7), is read as that V: bound to a `let` of V, given to a
