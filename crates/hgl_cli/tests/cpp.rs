@@ -2322,8 +2322,8 @@ fn reflected_pack_followups_run_on_the_sdk() {
     );
 }
 
-/// GEN-8 and GEN-17: explicitly written reflected types specialize calls
-/// in value and graph bodies and still carry their stated requirements (GEN-7).
+/// GEN-8 and GEN-17: reflected types specialize function and operator calls
+/// in value and graph bodies and derive evidence from stated requirements (GEN-7).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn written_pack_member_types_run_on_the_sdk() {
@@ -2346,7 +2346,7 @@ fn written_pack_member_types_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 6 passed, 0 failed\nexecutable cases: 5 passed, 0 failed, 0 not run\n"
+            "rejection cases: 6 passed, 0 failed\nexecutable cases: 7 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );
