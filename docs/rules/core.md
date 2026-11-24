@@ -950,12 +950,14 @@ transpiler: planned
 analyser: partial
 
 - Value calls admit `{wall_time}` and reject `{engine_time}` with `format.argument`. A marked place accepts `Marked<T>`.
-- Left: a graph supplies evaluation time and the arguments' tick state (#434).
+- A native call from a graph admits `{engine_time}` as a reserved datetime place; it consumes no supplied argument and uses datetime's checked specifiers.
+- Left: the HGL graph candidate supplies the arguments' tick state (#434).
 
 transpiler: partial
 
 - `{wall_time}` reads the process clock. A marked place writes the configured tick prefix when its argument ticked.
-- Left: a graph supplies evaluation time and the arguments' tick state (#434).
+- A lifted native format call reads `{engine_time}` from its node's output endpoint, once per call, with the checked pattern retained through lifting.
+- Left: the HGL graph candidate supplies the arguments' tick state and its trigger (#434); an evaluation-time place without a lifted node is explicitly unsupported.
 
 ## DBG-1
 

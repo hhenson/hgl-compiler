@@ -1,0 +1,46 @@
+module demo.engine_time
+
+# FMT-9: the native formatter reads its lifted node's evaluation time.
+fn seconds(value: i64) -> str => format("{engine_time:%S} {}", value)
+fn instant(value: i64) -> str => format("{engine_time} {}", value)
+fn repeated(value: i64) -> str => format("{engine_time:%S}/{engine_time:%S} {}", value)
+fn generic<const P: str>(value: i64) -> str => format(P, value)
+fn relay(value: i64) -> str => generic<"{engine_time:%H:%M:%S} {}">(value)
+fn named(value: i64) -> str => format{not_valid: "missing", ticked: "!"}("{engine_time:%S} {price}", price: value)
+
+# Explicit replay times distinguish the cycle clock from the wall clock,
+# and an equal input at the second timestamp must still publish.
+test seconds_follow_ticks {
+    const opening: datetime = @2026-01-02T03:04:05Z
+    assert eval{start: opening, length: 3s} seconds(value: [0s: 7, 2s: 7]) ==
+        [0s: "05 7", 2s: "07 7"]
+}
+
+test plain_instants_follow_ticks {
+    const opening: datetime = @2026-01-02T03:04:05Z
+    assert eval{start: opening, length: 3s} instant(value: [0s: 1, 2s: 2]) ==
+        [0s: "2026-01-02T03:04:05Z 1", 2s: "2026-01-02T03:04:07Z 2"]
+}
+
+test repeated_and_generic_places {
+    const opening: datetime = @2026-01-02T03:04:05Z
+    assert eval{start: opening} repeated(value: [8]) == ["05/05 8"]
+    assert eval{start: opening} relay(value: [9]) == ["03:04:05 9"]
+    assert eval{start: opening} named(value: [10]) == ["05 10"]
+}
+
+test value_function_rejects_engine_time {
+    # expect-error(type, "format.argument")
+    const fn bad(value: i64) -> str => format("{engine_time} {}", value)
+    assert bad(1) == ""
+}
+
+test handler_rejects_engine_time {
+    fn bad(value: i64) -> str {
+        when modified(value) {
+            # expect-error(type, "format.argument")
+            return format("{engine_time} {}", value)
+        }
+    }
+    assert eval bad(value: [1]) == [""]
+}

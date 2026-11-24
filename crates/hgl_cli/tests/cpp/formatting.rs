@@ -634,3 +634,29 @@ test pack_entry { assert entry("<{:.1f}>", 2.5) == "<2.5>" }
         "{stdout}"
     );
 }
+
+/// FMT-9: a lifted native call uses its own node's cycle clock.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn engine_time_formatting_follows_the_lifted_nodes_ticks() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("engine-time-formatting");
+    let file = write(
+        &root,
+        "demo.engine_time.hgl",
+        include_str!("../../../hgl_cpp/tests/fixtures/demo.engine_time.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.contains("executable cases: 3 passed, 0 failed, 0 not run"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("rejection cases: 2 passed, 0 failed"),
+        "{stdout}"
+    );
+}
