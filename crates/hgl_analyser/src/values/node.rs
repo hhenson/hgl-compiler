@@ -1151,29 +1151,42 @@ impl<'a> Typer<'a> {
     /// readable payload": it is given to an endpoint operation, as
     /// `modified(tick)`, and read nowhere. A read in `start` is
     /// `input.lifecycle`, reported once.
-    pub(super) fn signal_read(&mut self, local: LocalId, at: Location) {
-        let signal = matches!(self.locals[local].ty.omission_removed(), Type::Signal);
+    /// For a pack, `entry` supplies the selected type and expression.
+    pub(super) fn signal_read(
+        &mut self,
+        local: LocalId,
+        at: Location,
+        entry: Option<(&Type, &SyntaxNode)>,
+    ) {
+        let ty = entry.map_or(&self.locals[local].ty, |(ty, _)| ty);
         let hook = matches!(self.hook, Some(Hook::When | Hook::Stop));
         // A `ref` one is reported as a `ref` parameter (`ref_read`).
-        if !signal || !self.is_temporal_input(local) || !hook || self.is_reference(local) {
+        if !matches!(ty.omission_removed(), Type::Signal)
+            || !self.is_temporal_input(local)
+            || !hook
+            || self.is_reference(local)
+        {
             return;
         }
-        self.diagnostics.emit(
-            error(
-                Category::Type,
-                codes::TYPE_NOT_ORDINARY,
-                at,
-                format!(
-                    "`{}` is a `signal`, which has no payload to read",
-                    self.locals[local].name
-                ),
-                "TYPE-12",
-            )
-            .with_note(format!(
-                "a signal is given to an endpoint operation: `modified({})`",
-                self.locals[local].name
-            )),
+        let name = match entry {
+            Some((_, written)) => written.text().to_string(),
+            None => self.locals[local].name.clone(),
+        };
+        let diagnostic = error(
+            Category::Type,
+            codes::TYPE_NOT_ORDINARY,
+            at,
+            format!("`{name}` is a `signal`, which has no payload to read"),
+            "TYPE-12",
         );
+        // The ordinary note names an input that can be given directly
+        // to an endpoint operation.
+        self.diagnostics.emit(match entry {
+            Some(_) => diagnostic,
+            None => diagnostic.with_note(format!(
+                "a signal is given to an endpoint operation: `modified({name})`"
+            )),
+        });
     }
 }
 

@@ -459,7 +459,7 @@ impl<'a> Typer<'a> {
         {
             self.ref_read(local, None, RefRead::Value, at);
         }
-        self.signal_read(local, at);
+        self.signal_read(local, at, None);
         // TIME-7: "`out` is read in a `when` and in `stop` ... `start`
         // neither reads nor writes it". Nor does a `state`'s or a
         // `cache`'s initializer, which gives it its first value on
