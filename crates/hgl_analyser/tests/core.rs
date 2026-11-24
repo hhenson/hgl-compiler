@@ -560,6 +560,15 @@ fn forwarded_const_pattern_growth_reports_the_instance_limit() {
             ),
             "grow(\"{}\", 1)",
         ),
+        // Two declarations that grow from one call: that call rejects once.
+        (
+            concat!(
+                "const fn ga<...As>(const p: str, args: ...As) -> str => format(p, ...args) + ga(p + \"x\", ...args)\n",
+                "const fn gb<T>(const p: str, v: T) -> str => format(p, v) + gb(p + \"y\", v)\n",
+                "const fn grow<...As>(const p: str, args: ...As) -> str => ga(p, ...args) + gb(p, args[0])\n",
+            ),
+            "grow(\"{}\", 1)",
+        ),
     ] {
         let lines = body.lines().count();
         let checked = with_core(&format!("{body}test t {{ assert {call} == \"\" }}\n"));
@@ -573,6 +582,145 @@ fn forwarded_const_pattern_growth_reports_the_instance_limit() {
             checked.report,
         );
     }
+}
+
+/// FN-19 and GEN-7: a pack entry given to a generic relay of a forwarding
+/// body is read in each instance, where the entry is known; where the
+/// body is declared it makes no instance to judge. The shapes, with no
+/// call: an entry and a const pattern, a literal pattern, `debug_print`'s
+/// own (a forwarding body, a generic relay of it, and a first entry), a
+/// named entry, a node's hook, and a mutual recursion that ends.
+#[test]
+fn forwarded_entries_given_to_a_generic_relay_check_where_declared() {
+    let show = "const fn show<...As>(const p: str, args: ...As) -> str => format(p, ...args)\n";
+    let mid = "const fn mid<T>(const p: str, v: T) -> str => show(p, v)\n";
+    let shapes = [
+        format!("{show}{mid}const fn top<...As>(const p: str, args: ...As) -> str => mid(p, args[0])\n"),
+        format!("{show}{mid}const fn top<...As>(args: ...As) -> str => mid(\"<{{}}>\", args[0])\n"),
+        concat!(
+            "const fn logline<...As, ...Ks>(const fmt_str: str, args: ...As, kwargs: ...{Ks}) -> str\n",
+            "    => format(fmt_str, ...args, ...kwargs) + \"\\n\"\n",
+            "const fn log_one<T>(const fmt_str: str, v: T) -> str => logline(fmt_str, v)\n",
+            "const fn first<...As>(const fmt_str: str, args: ...As) -> str => log_one(fmt_str, args[0])\n",
+        )
+        .to_string(),
+        format!("{show}{mid}const fn top<...Ks>(const p: str, kwargs: ...{{Ks}}) -> str => mid(p, kwargs[\"a\"])\n"),
+        format!(
+            "{show}{mid}fn nod<...As>(args: ...As) -> str {{\n    when {{ return mid(\"<{{}}>\", args[0]) }}\n}}\n"
+        ),
+        concat!(
+            "const fn ping<...As>(const p: str, n: i64, args: ...As) -> str {\n",
+            "    if n == 0 { return format(p, ...args) }\n",
+            "    return pong(p, n - 1, args[0])\n",
+            "}\n",
+            "const fn pong<T>(const p: str, n: i64, v: T) -> str => ping(p, n, v)\n",
+            "test t { assert ping(\"<{}>\", 3, 1) == \"<1>\" }\n",
+        )
+        .to_string(),
+    ];
+    for shape in &shapes {
+        let checked = with_core(shape);
+        assert!(checked.summary().is_empty(), "{shape}: {}", checked.report);
+    }
+    // Called, the debug_print shape is checked in its instances.
+    let checked = with_core(&format!(
+        "{}test good {{ assert first(\"<{{}}>\", 1) == \"<1>\\n\" }}\ntest bad {{ assert first(\"{{:x}}\", 1.5) == \"\" }}\n",
+        shapes[2]
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:7:19 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+    for instance in ["first<[f64]>", "log_one<f64>", "logline<[f64], []>"] {
+        assert!(
+            checked
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            checked.report,
+        );
+    }
+}
+
+/// GEN-7: an instance two calls make, one through another instance, is
+/// reported once at each call, whichever of its paths is found first.
+#[test]
+fn a_shared_forwarded_instance_reports_once_at_each_call() {
+    for (fa, fb) in [
+        ("h1(p, args[0]) + h2(p, args[0])", "h2"),
+        ("h2(p, args[0]) + h1(p, args[0])", "h1"),
+    ] {
+        let source = format!(
+            "const fn h2<T>(const p: str, v: T) -> str => format(p, v)\n\
+             const fn h1<T>(const p: str, v: T) -> str => h2(p, v)\n\
+             const fn fa<...As>(const p: str, args: ...As) -> str => {fa}\n\
+             const fn fb<...As>(const p: str, args: ...As) -> str => {fb}(p, args[0])\n\
+             test t1 {{ assert fa(\"{{:x}}\", 1.5) == \"\" }}\n\
+             test t2 {{ assert fb(\"{{:x}}\", 1.5) == \"\" }}\n"
+        );
+        let checked = with_core(&source);
+        assert_eq!(
+            checked.summary(),
+            [
+                "m.hgl:6:18 type/format.specifier FMT-4",
+                "m.hgl:7:18 type/format.specifier FMT-4",
+            ],
+            "{source}: {}",
+            checked.report,
+        );
+    }
+}
+
+/// FN-1 and GEN-7: a call that gives a concrete body const inputs it reads
+/// makes an instance of its own, so a pattern given there reaches the
+/// forwarding body: from a value function, a node's const and option, a
+/// graph's const, and an operator candidate's option, chosen directly or
+/// by a generic caller.
+#[test]
+fn concrete_const_inputs_reach_a_forwarding_body() {
+    let checked = with_core(concat!(
+        "const fn show<...As>(const p: str, args: ...As) -> str => format(p, ...args)\n",
+        "const fn v_fwd(const p: str, x: f64) -> str => show(p, x)\n",
+        "fn node_fwd(x: f64, const p: str) -> str {\n",
+        "    when { return show(p, x) }\n",
+        "}\n",
+        "fn option_fwd{const p: str = \"{:x}\"}(x: f64) -> str {\n",
+        "    when { return show(p, x) }\n",
+        "}\n",
+        "fn graph_fwd(x: f64, const p: str) -> str => show(p, x)\n",
+        "operator pick<T>{const pattern: str = \"{:x}\"}(value: T) -> str\n",
+        "impl const fn pick{const pattern: str}(value: f64) -> str => show(pattern, value)\n",
+        "impl const fn pick{const pattern: str}(value: i64) -> str => show(pattern, value)\n",
+        "const fn choose<T>(const p: str, v: T) -> str requires T in {f64, i64} => pick{pattern: p}(v)\n",
+        "test good {\n",
+        "    assert v_fwd(\"{:.1f}\", 1.5) == \"1.5\"\n",
+        "    assert pick(255) == \"ff\"\n",
+        "    assert choose(\"{:x}\", 255) == \"ff\"\n",
+        "}\n",
+        "test value { assert v_fwd(\"{:x}\", 1.5) == \"\" }\n",
+        "test node { assert eval node_fwd(x: [1.5], p: \"{:x}\") == [\"\"] }\n",
+        "test option { assert eval option_fwd(x: [1.5]) == [\"\"] }\n",
+        "test graph { assert eval graph_fwd(x: [1.5], p: \"{:x}\") == [\"\"] }\n",
+        "test candidate { assert pick(1.5) == \"\" }\n",
+        "test chosen { assert choose(\"{:x}\", 1.5) == \"\" }\n",
+        "test chosen_integer { assert choose(\"{:.1f}\", 255) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:20:21 type/format.specifier FMT-4",
+            "m.hgl:21:20 type/format.specifier FMT-4",
+            "m.hgl:22:22 type/format.specifier FMT-4",
+            "m.hgl:23:21 type/format.specifier FMT-4",
+            "m.hgl:24:25 type/format.specifier FMT-4",
+            "m.hgl:25:22 type/format.specifier FMT-4",
+            "m.hgl:26:30 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
 }
 
 /// FMT-5: the selected conversion must consume the whole value and

@@ -2301,8 +2301,10 @@ pub(super) fn instances_hold(
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let mut made = Vec::new();
+            let mut forwarding = false;
             if let Some(Some(body)) = module.bodies.get(position) {
                 made_in(program, body, &mut made);
+                forwarding = super::has_forwarded_calls(body);
             }
             let body_calls = made.len();
             let independent = source.body((index, position)).map(|body| {
@@ -2366,6 +2368,13 @@ pub(super) fn instances_hold(
                 dependent_patterns.insert((index, position));
             }
             for (call_index, call) in made.into_iter().enumerate() {
+                // FN-19 and GEN-7: in a body that forwards packs, a call
+                // given an entry not yet read has a type no instance has.
+                // Each instance reads the entry, and the forwarding walk
+                // finds the call there with its type.
+                if forwarding && call_index < body_calls && reads_pending_entry(&call) {
+                    continue;
+                }
                 // ERR-9: a generic argument the body works out from its
                 // own parameters, `times<(M * 2)>`, may fail where an
                 // instance gives them: each is followed.
@@ -2390,8 +2399,9 @@ pub(super) fn instances_hold(
                 {
                     passed.entry((index, position)).or_default().push(call);
                 } else {
-                    let checks_const_inputs =
-                        call.constants.limit.is_some() || !call.constants.values.is_empty();
+                    let checks_const_inputs = call.constants.limit.is_some()
+                        || call.constants.outgrown
+                        || !call.constants.values.is_empty();
                     // A concrete reread checks the calls whose inputs changed.
                     // This call already has its own independent checking root.
                     if call_index < body_calls && (independent.is_some() || checks_const_inputs) {
@@ -2506,16 +2516,13 @@ pub(super) fn instances_hold(
         }
     }
     let mut rejected_calls = InstanceCallRejections::default();
-    // GEN-7 reports a rejection at the calls written outside every generic
-    // body. An instance one walk has told for each of a root's calls is
-    // not told again for them: a call found inside a forwarding instance
-    // starts a walk that its own root's walk repeats, once per call.
+    // GEN-7 reports a rejection once at each call written outside every
+    // generic body. An instance a walk has told for one of those calls is
+    // not told again for it: a call found inside a forwarding instance
+    // starts a walk of its own that its root's walk can repeat. So each
+    // instance a walk follows carries the root's calls not yet told it.
     let mut told = HashSet::<(String, Location)>::new();
-    let told_for = |told: &HashSet<(String, Location)>, key: &String, from: &[Location]| {
-        from.iter().all(|at| told.contains(&(key.clone(), *at)))
-    };
-    for (root, root_calls) in roots {
-        let from: Vec<_> = root_calls.iter().map(|call| call.at).collect();
+    for (root, all_calls) in roots {
         let root_key = instance_key(
             root.callee,
             &root.generics,
@@ -2523,19 +2530,30 @@ pub(super) fn instances_hold(
             &root.answers,
             &root.constants,
         );
-        if told_for(&told, &root_key, &from) {
+        let untold = |told: &HashSet<(String, Location)>, key: &String, calls: &[usize]| {
+            calls
+                .iter()
+                .copied()
+                .filter(|&call| !told.contains(&(key.clone(), all_calls[call].at)))
+                .collect::<Vec<_>>()
+        };
+        let root_untold = untold(&told, &root_key, &(0..all_calls.len()).collect::<Vec<_>>());
+        if root_untold.is_empty() {
             continue;
         }
         // Each instance this one makes followed once, by what it is: its
         // callee and its arguments, the root's own among them.
         let mut seen: std::collections::HashSet<String> =
             std::collections::HashSet::from([root_key]);
-        let mut waiting = std::collections::VecDeque::from([(root, None)]);
+        let mut waiting = std::collections::VecDeque::from([(root, None, root_untold)]);
         let mut parents = Vec::new();
         // How many instances of each declaration this one has made.
         let mut followed: HashMap<(usize, usize), usize> = HashMap::new();
         let mut exhausted = false;
-        while let Some((made, parent)) = waiting.pop_front() {
+        while let Some((made, parent, making)) = waiting.pop_front() {
+            let root_calls: Vec<InstanceRoot> =
+                making.iter().map(|&call| all_calls[call].clone()).collect();
+            let from: Vec<_> = root_calls.iter().map(|call| call.at).collect();
             let key = instance_key(
                 made.callee,
                 &made.generics,
@@ -2966,7 +2984,7 @@ pub(super) fn instances_hold(
                 };
                 // Traversal budgets leave an input unread. A concrete text
                 // that outgrows its argument budget exhausts this walk.
-                if constants.limit == Some(crate::ConstInputFault::TextLimit) {
+                if constants.outgrown {
                     exhausted = true;
                     break;
                 }
@@ -3011,7 +3029,8 @@ pub(super) fn instances_hold(
                         continue;
                     }
                 }
-                if reaching.contains(&callee) && !told_for(&told, &key, &from) && seen.insert(key) {
+                let child_calls = untold(&told, &key, &making);
+                if reaching.contains(&callee) && !child_calls.is_empty() && seen.insert(key) {
                     let caller = *link.get_or_insert_with(|| {
                         let index = parents.len();
                         parents.push((
@@ -3038,6 +3057,7 @@ pub(super) fn instances_hold(
                             via: None,
                         },
                         Some(caller),
+                        child_calls,
                     ));
                 }
             }
@@ -3050,6 +3070,20 @@ pub(super) fn instances_hold(
     rejected_calls.emit(diagnostics);
 }
 
+/// Whether a call's generic arguments hold a type not yet known: in a
+/// forwarding body, that of a pack entry read before the entries are.
+fn reads_pending_entry(call: &Made) -> bool {
+    let unknown = |ty: &Type| ty.any_part(&|part| matches!(part, Type::Unknown), &|_| false);
+    call.generics
+        .iter()
+        .any(|argument| matches!(argument, Argument::Type(ty) if unknown(ty)))
+        || call
+            .type_packs
+            .iter()
+            .flat_map(hir::TypePackArgument::types_with_prefix)
+            .any(unknown)
+}
+
 /// One call in a chain of concrete instances, shown with the instance it makes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct MakingCall {
@@ -3058,6 +3092,7 @@ pub(super) struct MakingCall {
 }
 
 /// A non-generic making site and the concrete forwarding path it exposes.
+#[derive(Clone)]
 struct InstanceRoot {
     at: Location,
     via: Option<Rc<MakingPath>>,
@@ -3642,9 +3677,12 @@ fn instance_limit(from: &[Location], message: String, diagnostics: &mut Diagnost
             message.clone(),
             "GEN-13",
         );
-        // ERR-9: a walk that meets the bound the forwarding walk met
-        // already reports nothing more at that call.
-        if !rejected && !diagnostics.as_slice().contains(&report) {
+        // GEN-13 and ERR-9: the call that makes the first of them rejects
+        // once; a second walk that meets a bound there adds nothing.
+        let limited = diagnostics.as_slice().iter().any(|earlier| {
+            earlier.code == Code::Catalogued(codes::INSTANCE_LIMIT) && earlier.primary == at
+        });
+        if !rejected && !limited {
             diagnostics.emit(report);
         }
     }
@@ -4081,6 +4119,7 @@ fn make_call(callee: &Callee, at: Location, constants: ConstArguments, made: &mu
         } if !generics.is_empty()
             || !requirements.is_empty()
             || constants.limit.is_some()
+            || constants.outgrown
             || !constants.values.is_empty() =>
         {
             made.push(Made {

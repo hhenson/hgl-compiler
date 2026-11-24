@@ -518,24 +518,27 @@ impl ForwardingInstance {
     /// A call gives the instance its const inputs too (FN-1, GEN-7).
     fn for_check(program: &crate::Program, expression: &Expr) -> Option<Self> {
         let (module, declaration) = called_or_referenced(expression)?.declaration()?;
+        let instance = match &expression.kind {
+            ExprKind::StaticCallable(callee) => Self::from_callee(program, callee, None, false),
+            ExprKind::Call {
+                callee, arguments, ..
+            } => Self::from_callee(program, callee, Some(arguments), true),
+            _ => None,
+        }?;
         if let crate::Detail::Callable(signature) = &program.modules[module].details[declaration]
             && signature.generics.is_empty()
             && signature
                 .parameters
                 .iter()
                 .all(|parameter| parameter.pack.is_none())
+            && instance.constants.values.is_empty()
         {
             // Concrete bodies supply their own forwarding roots. A call
-            // of one does not make those same instances a second time.
+            // of one does not make those same instances a second time,
+            // unless it gives the body const inputs it reads (FN-1).
             return None;
         }
-        match &expression.kind {
-            ExprKind::StaticCallable(callee) => Self::from_callee(program, callee, None, false),
-            ExprKind::Call {
-                callee, arguments, ..
-            } => Self::from_callee(program, callee, Some(arguments), true),
-            _ => None,
-        }
+        Some(instance)
     }
 
     fn from_callee(
@@ -637,7 +640,7 @@ impl ForwardingInstance {
 
     /// GEN-13: a const input that outgrew its text budget makes no instance.
     fn outgrew_its_inputs(&self) -> bool {
-        self.constants.limit == Some(crate::ConstInputFault::TextLimit)
+        self.constants.outgrown
     }
 }
 
@@ -730,6 +733,19 @@ pub(super) fn check_instances(
 
     let mut forwarding = HashSet::new();
     let mut callers = HashMap::<_, Vec<_>>::new();
+    // GEN-5 and GEN-7: a call whose candidate each instance selects may
+    // select one that forwards; each candidate of its operator is called.
+    let mut candidates = HashMap::<(usize, usize), Vec<(usize, usize)>>::new();
+    for (module, unit) in program.modules.iter().enumerate() {
+        for (declaration, declared) in unit.declarations.iter().enumerate() {
+            if let Some((_, Some(operator))) = declared.kind.candidate() {
+                candidates
+                    .entry((operator.module, operator.declaration))
+                    .or_default()
+                    .push((module, declaration));
+            }
+        }
+    }
     for (module, unit) in program.modules.iter().enumerate() {
         for (declaration, body) in unit.bodies.iter().enumerate() {
             let Some(body) = body else { continue };
@@ -742,6 +758,12 @@ pub(super) fn check_instances(
                     callers.entry(called).or_default().push(owner);
                 }
             });
+            for selected in unit.selecting.get(declaration).into_iter().flatten() {
+                let operator = (selected.operator.module, selected.operator.declaration);
+                for &candidate in candidates.get(&operator).into_iter().flatten() {
+                    callers.entry(candidate).or_default().push(owner);
+                }
+            }
         }
     }
     if forwarding.is_empty() {

@@ -454,10 +454,15 @@ fn forwarded_const_inputs_key_instances_by_demand() {
         r#"module forwarded_keys
 const fn count<...As>(const label: str, args: ...As) -> str => label
 const fn relay<...As>(const label: str, args: ...As) -> str => count(label, ...args)
+const fn bang(s: str) -> str => s + "!"
+const fn called<...As>(const label: str, f: const fn(str) -> str, args: ...As) -> str =>
+    f(label) + count(label, ...args)
 const fn show<...As>(const p: str, args: ...As) -> str => format(p, ...args)
 test t {
     assert relay("x", 1) == "x"
     assert relay("y", 2) == "y"
+    assert called("x", bang, 1) == "x!x"
+    assert called("y", bang, 1) == "y!y"
     assert show("{:x}", 255) == "ff"
     assert show("{:x}", 16) == "10"
     assert show("<{}>", 1) == "<1>"
@@ -474,10 +479,58 @@ test t {
             .filter(|line| *line == format!("namespace i_::{name}"))
             .count()
     };
+    // FN-17: what a function parameter is given is read when it runs.
     assert_eq!(
-        [instances("count"), instances("relay"), instances("show")],
-        [1, 1, 2],
+        [
+            instances("count"),
+            instances("relay"),
+            instances("called"),
+            instances("show")
+        ],
+        [1, 1, 1, 2],
         "{module}"
+    );
+}
+
+/// FN-1, FN-17 and FN-19: a label read only at run time, given to a
+/// callback beside forwarded packs, is written whatever its length; a
+/// pack entry given to a generic relay of a forwarding body runs.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn runs_run_time_labels_and_relayed_entries_beside_packs() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("forwarded-run-time-labels");
+    let long = "a".repeat(70_000);
+    let file = write(
+        &root,
+        "labels.hgl",
+        &format!(
+            r#"module forwarded_labels
+const LONG: str = "{long}"
+const fn bang(s: str) -> str => s + "!"
+const fn count<...As>(const label: str, args: ...As) -> str => label
+const fn relay<...As>(const label: str, f: const fn(str) -> str, args: ...As) -> str =>
+    f(label) + count(label, ...args)
+const fn logline<...As, ...Ks>(const fmt_str: str, args: ...As, kwargs: ...{{Ks}}) -> str
+    => format(fmt_str, ...args, ...kwargs) + "\n"
+const fn log_one<T>(const fmt_str: str, v: T) -> str => logline(fmt_str, v)
+const fn first<...As>(const fmt_str: str, args: ...As) -> str => log_one(fmt_str, args[0])
+test long_label {{ assert relay(LONG, bang, 1) == LONG + "!" + LONG }}
+test relayed_entry {{ assert first("<{{:.1f}}>", 2.5, "x") == "<2.5>\n" }}
+"#
+        ),
+    );
+    let report = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&report.stdout);
+    assert!(report.status.success(), "{stdout}{}", text(&report.stderr));
+    assert_eq!(
+        stdout
+            .matches("passed   executable  forwarded_labels::")
+            .count(),
+        2,
+        "{stdout}"
     );
 }
 

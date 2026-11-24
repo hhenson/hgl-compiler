@@ -877,8 +877,8 @@ analyser: partial
 
 - Direct native calls take a constant `str` pattern followed by positional and named packs. A generic value pattern and dependent argument types are checked together at their concrete call.
 - An enclosing function can pass or capture an ordinary `const` parameter as the pattern. A generic value body carries the demand through deferred operator selection to the concrete call (FN-1, #695, #704).
-- A `const` parameter given beside forwarded packs, `format(fmt_str, ...args, ...kwargs)`, through any number of forwarding calls, is an input of each instance whose body reads it at compile time, and is read there with the entries (FN-19, #706).
-- Left: the graph and diagnostic candidates (#368, #434). The C++ target declines a graph that gives its own `const` parameter to a value call as the pattern (#745).
+- A `const` parameter given beside forwarded packs, `format(fmt_str, ...args, ...kwargs)`, through forwarding calls, generic relays given a pack entry, and candidates an instance selects, is an input of each instance whose body reads it at compile time, and is read there with the entries (FN-19, #706). So is one an enclosing value function, node, graph, option or operator candidate gives with its own `const`.
+- Left: the graph and diagnostic candidates (#368, #434). The C++ target declines a graph that gives its own `const` parameter to a value call as the pattern (#745). A pattern in a `let`-bound anonymous function is not checked, forwarded or not (#750).
 
 ## FMT-2
 

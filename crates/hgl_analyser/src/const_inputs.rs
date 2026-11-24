@@ -71,6 +71,10 @@ impl PartialEq for ConstInput {
 pub(crate) struct ReadInputs {
     pub(crate) values: Vec<ConstInput>,
     pub(crate) limit: Option<ConstInputFault>,
+    /// A text the instance reads passed the budget, a conditional one
+    /// included: a walk that makes the instance ends there (GEN-13).
+    /// Lowering, which needs only `limit`, still writes the call.
+    pub(crate) outgrown: bool,
 }
 
 /// Why a call's compile-time inputs could not be read.
@@ -217,16 +221,15 @@ impl Program {
             match input {
                 Ok(input) => known.values.push(input),
                 Err(fault) => {
-                    // GEN-13: a text the instance reads that outgrows the
-                    // budget ends the walk, a conditional one included once
-                    // its instance is known to read it.
-                    if fault == TextLimit
-                        || (demand == Demand::Always
-                            && fault == ReaderLimit
-                            && known.limit.is_none())
+                    if demand == Demand::Always
+                        && (fault == TextLimit || (fault == ReaderLimit && known.limit.is_none()))
                     {
                         known.limit = Some(fault);
                     }
+                    // GEN-13: a text the instance reads that outgrows the
+                    // budget ends a walk, a conditional one included once
+                    // its instance is known to read it.
+                    known.outgrown |= fault == TextLimit;
                     reader.text_left = text_before;
                 }
             }
@@ -431,6 +434,11 @@ impl Program {
                 .iter()
                 .filter(|argument| reads_parameter(&argument.value))
             {
+                // FN-17: what a function parameter is given goes to a plain
+                // parameter of its template, read when the function runs.
+                if plain_callback_input(&instance.signature, callee, argument.parameter) {
+                    continue;
+                }
                 let (Some(declaration), Some(slot)) = (callee.declaration(), argument.parameter)
                 else {
                     required = true;
@@ -1005,6 +1013,25 @@ pub(crate) fn demands(program: &Program) -> Demands {
         }
     }
     required
+}
+
+/// Whether a call of a function parameter gives this slot of its template
+/// a plain parameter: one that is no `const` and stands for no pack (FN-17).
+fn plain_callback_input(
+    signature: &crate::Signature,
+    callee: &Callee,
+    slot: Option<usize>,
+) -> bool {
+    let Callee::Parameter { parameter, .. } = callee else {
+        return false;
+    };
+    let Some(Type::Function(template)) = signature.parameters.get(*parameter).map(|p| &p.ty) else {
+        return false;
+    };
+    template.named_pack.is_none()
+        && slot
+            .and_then(|slot| template.parameters.get(slot))
+            .is_some_and(|input| input.declared().is_none_or(|declared| !declared.constant))
 }
 
 /// The entries a call gives its callee's packs, where it has any (FN-19).
