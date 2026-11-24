@@ -3,9 +3,15 @@
 
 #include <hglrt/collections.h>
 
-#include <hgraph/types/subgraph_wiring.h>
+#include <hgraph/types/generated.h>
 
 namespace hglrt {
+
+namespace key_sets_detail {
+/// The membership port of a dictionary, with the full wiring front end
+/// confined to the runtime's implementation.
+hgraph::WiringPortRef dictionary_keys(const hgraph::WiringPortRef& dictionary);
+} // namespace key_sets_detail
 
 /// SET-1: the keys of an ordinary dictionary, independent of its values.
 template <class K, class V>
@@ -25,7 +31,7 @@ hgraph::Port<hgraph::TSS<K>> wire_keys_dict_K__V_(
     hgraph::Port<hgraph::TSD<K, V>> dictionary
 ) {
     return hgraph::Port<hgraph::TSS<K>>{
-        wiring, hgraph::subgraph_wiring_detail::tsd_key_set_ref(dictionary.erased())
+        wiring, key_sets_detail::dictionary_keys(dictionary.erased())
     };
 }
 
