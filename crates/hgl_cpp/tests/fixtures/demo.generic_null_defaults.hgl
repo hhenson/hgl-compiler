@@ -36,3 +36,20 @@ test candidate_null_defaults {
     assert maybe_candidate(1.0) == null
     assert maybe_candidate(1, 7) == 7
 }
+
+# UNIT-8: an omitted nullable connection never publishes.
+fn implicit_input(tick: i64, other: i64?) -> bool {
+    when modified(tick, other) && valid([]) { return modified(other) }
+}
+
+fn explicit_input(tick: i64, other: i64? = null) -> bool {
+    when modified(tick, other) && valid([]) { return modified(other) }
+}
+
+fn call_with_omission(tick: i64) -> bool => explicit_input(tick)
+
+test omitted_nullable_connections_stay_silent {
+    assert eval implicit_input(tick: [1, 2]) == [false, false]
+    assert eval call_with_omission(tick: [1, 2]) == [false, false]
+    assert eval implicit_input(tick: [1, 2], other: [_, 3]) == [false, true]
+}

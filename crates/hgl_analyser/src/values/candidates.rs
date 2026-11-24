@@ -2871,10 +2871,10 @@ fn parameter_type<'a>(
 /// name is given to the parameter in its position. GEN-8: "A name binds
 /// the callee's generic value parameter of that name, or else its
 /// parameter of that name."
-pub(super) fn bound(
+pub(super) fn bound<'g>(
     signature: &Signature,
     public: &Signature,
-    given: &[Given],
+    given: impl IntoIterator<Item = &'g Given>,
     dependent: Option<usize>,
 ) -> Option<Vec<Place>> {
     let mapping: Vec<_> = public
@@ -2916,7 +2916,8 @@ pub(super) fn bound(
                     .map(|(index, _)| index)
             })
     };
-    let mut places = Vec::with_capacity(given.len());
+    let given = given.into_iter();
+    let mut places = Vec::with_capacity(given.size_hint().0);
     for given in given {
         let place = match &given.key {
             Key::Position(position) => match positional.get(*position) {

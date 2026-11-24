@@ -743,7 +743,8 @@ fn field_defaults_run_on_the_sdk() {
 }
 
 /// EXPR-5, TYPE-14, UNIT-8: a generic null default is written using
-/// the selected nullable value parameter's concrete type.
+/// the selected nullable value parameter's concrete type. An omitted
+/// temporal input supplies a connection with no publication.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn generic_null_defaults_run_on_the_sdk() {
@@ -769,7 +770,7 @@ fn generic_null_defaults_run_on_the_sdk() {
         "{stdout}"
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

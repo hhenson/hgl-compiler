@@ -554,10 +554,31 @@ impl<'a> Typer<'a> {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
         if reflects(&program.modules[operator.module], public) {
-            let Some(placements) = bound(public, public, &given, dependent) else {
+            // GEN-6: candidate-only options do not supply a public slot.
+            // The candidate still receives them when the call is selected.
+            let public_entries =
+                given
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, argument)| match &argument.key {
+                        Key::Configuration(_) | Key::Brace(_) => {
+                            argument.key.public_parameter(public).is_some()
+                        }
+                        Key::Generic(_) => argument.key.generic_parameter(public).is_some(),
+                        _ => true,
+                    });
+            let Some(placements) = bound(
+                public,
+                public,
+                public_entries.clone().map(|(_, argument)| argument),
+                dependent,
+            ) else {
                 return (self.unselected(given, Form::Named), Type::Unknown);
             };
-            let slots: Vec<_> = placements.iter().map(|place| place.parameter()).collect();
+            let mut slots = vec![None; given.len()];
+            for ((index, _), place) in public_entries.zip(placements) {
+                slots[index] = place.parameter();
+            }
             let reflected = operator_packs(
                 program,
                 (operator.module, public),
