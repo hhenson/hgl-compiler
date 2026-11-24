@@ -617,6 +617,7 @@ impl<'a> Typer<'a> {
                 tagged: &tagged,
                 inputs: &|| self.temporal_inputs(),
                 children: &|child| self.tested_child(child),
+                packed: &|entry| self.pack_endpoint_selection(entry),
             },
             &[],
         )
@@ -1026,6 +1027,8 @@ struct Proofs<'p> {
     /// The child an endpoint operation's argument names when the
     /// program is compiled (TIME-1).
     children: &'p dyn Fn(&Expr) -> Option<children::ChildPath>,
+    /// Which direct pack entry a selector names (FN-19).
+    packed: &'p dyn Fn(&Expr) -> Option<crate::hir::PackEndpointSelection>,
 }
 
 /// What a condition proves: where it holds, and where it does not.
@@ -1045,6 +1048,7 @@ fn null_tests(condition: &Expr, proofs: &Proofs, assumed: &[Fact]) -> (Vec<Fact>
         tagged,
         inputs,
         children,
+        packed,
     } = proofs;
     let both = |first: Vec<Fact>, second: Vec<Fact>| -> Vec<Fact> {
         first
@@ -1090,6 +1094,27 @@ fn null_tests(condition: &Expr, proofs: &Proofs, assumed: &[Fact]) -> (Vec<Fact>
             [input] => (vec![Fact::Valid(*input)], Vec::new()),
             _ => (Vec::new(), Vec::new()),
         },
+        // The same direct-input guards keep the key of each selected
+        // temporal pack entry (FN-19, TIME-4).
+        ExprKind::PackedEndpoint { operation, inputs }
+            if matches!(
+                operation,
+                EndpointOperation::Valid | EndpointOperation::AllValid
+            ) || (*operation == EndpointOperation::Modified && inputs.len() == 1) =>
+        {
+            let mut facts = Vec::new();
+            for input in inputs {
+                if let ExprKind::EndpointOf(local) = input.kind {
+                    facts.push(Fact::Valid(local));
+                    if *operation == EndpointOperation::AllValid {
+                        facts.push(children::all_valid_fact(local));
+                    }
+                } else if let Some(entry) = packed(input) {
+                    facts.extend(children::pack_guard_facts(*operation, entry));
+                }
+            }
+            (facts, Vec::new())
+        }
         // TIME-4: "A child's guard is a test of `all_valid` of its
         // input, or of `valid` or `modified` of the child as the read
         // names it, `valid(parts[1])` for `parts[1]`". `modified` of it

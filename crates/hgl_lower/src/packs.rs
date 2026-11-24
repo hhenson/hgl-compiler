@@ -178,6 +178,12 @@ impl Captures {
 
         let mut unsupported = None;
         let change = |local: &mut LocalId| *local = remapped[*local];
+        // Each runtime slot and its input local were added together.
+        let entry = |pack, key: &PackKey| {
+            slots
+                .iter()
+                .position(|slot| slot.parameter == pack && slot.pack.as_ref() == Some(key))
+        };
         walk_statement_nodes_mut(&mut body.statements, &mut |node| match node {
             NodeMut::Statement(statement) => match statement {
                 Stmt::Declare { local, .. }
@@ -186,9 +192,13 @@ impl Captures {
                 Stmt::For { names, .. } => names.iter_mut().for_each(change),
                 Stmt::Hook {
                     header: Some(header),
+                    at,
                     ..
                 } => {
-                    for selected in [&mut header.subscribed, &mut header.required] {
+                    for (selected, packed) in [
+                        (&mut header.subscribed, &mut header.subscribed_entries),
+                        (&mut header.required, &mut header.required_entries),
+                    ] {
                         *selected = selected
                             .iter()
                             .flat_map(|&local| {
@@ -198,17 +208,22 @@ impl Captures {
                                     .unwrap_or_else(|| vec![remapped[local]])
                             })
                             .collect();
+                        for input in std::mem::take(packed) {
+                            if let Some(local) =
+                                input.key.as_ref().and_then(|key| entry(input.pack, key))
+                            {
+                                if !selected.contains(&local) {
+                                    selected.push(local);
+                                }
+                            } else {
+                                unsupported.get_or_insert(*at);
+                            }
+                        }
                     }
                 }
                 _ => {}
             },
             NodeMut::Expression(expression) => {
-                // Each runtime slot and its input local were added together.
-                let entry = |pack, key: &PackKey| {
-                    slots
-                        .iter()
-                        .position(|slot| slot.parameter == pack && slot.pack.as_ref() == Some(key))
-                };
                 let read = |local: &mut LocalId, unsupported: &mut Option<Location>| {
                     if packed.get(*local) == Some(&true) {
                         unsupported.get_or_insert(expression.at);
@@ -236,6 +251,24 @@ impl Captures {
                     ExprKind::PackEntry { pack, key } => {
                         if let Some(local) = entry(*pack, key) {
                             expression.kind = ExprKind::Local(local);
+                        } else {
+                            unsupported.get_or_insert(expression.at);
+                        }
+                    }
+                    ExprKind::PackedEndpoint { operation, inputs } => {
+                        let locals = inputs
+                            .iter()
+                            .map(|input| match &input.kind {
+                                ExprKind::PackEntry { pack, key } => entry(*pack, key),
+                                ExprKind::EndpointOf(local) => Some(remapped[*local]),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<_>>>();
+                        if let Some(locals) = locals {
+                            expression.kind = ExprKind::Endpoint {
+                                operation: *operation,
+                                inputs: Some(locals),
+                            };
                         } else {
                             unsupported.get_or_insert(expression.at);
                         }
