@@ -537,12 +537,17 @@ fn substitute(
                 let ty = parameter.ty_mut();
                 *ty = substitute(ty, map, member, pack);
             }
+            // GEN-1: only an unresolved result-only parameter can learn
+            // the absence of a result. Another type parameter is a binding.
+            function.result_admits_none &= match &function.result {
+                Some(Type::Parameter { at, .. }) => !map.iter().any(|(parameter, argument)| {
+                    parameter == at && !matches!(argument, Argument::Type(Type::Unknown))
+                }),
+                Some(Type::Unknown) => true,
+                _ => false,
+            };
             function.result = bind_result(function.result.as_ref(), map)
                 .map(|ty| substitute(ty, map, member, pack));
-            function.result_admits_none &= matches!(
-                function.result,
-                Some(Type::Parameter { .. } | Type::Unknown)
-            );
             Type::Function(Box::new(function))
         }
         // TYPE-16: "In a generic declaration it stays as written until

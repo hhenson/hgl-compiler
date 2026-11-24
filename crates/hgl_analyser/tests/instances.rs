@@ -1240,6 +1240,33 @@ fn resultless_callbacks_respect_all_uses_of_the_result_type() {
     assert_eq!(checked.findings[0].code, "type/type.mismatch");
 }
 
+/// GEN-1 and FN-17: a result bound to a type parameter requires a result.
+#[test]
+fn a_bound_result_parameter_rejects_a_resultless_callback() {
+    let definitions = concat!(
+        "fn record(value: i64) {}\n",
+        "fn through<R>(f: fn(i64) -> R, value: i64) -> R => f(value)\n",
+    );
+    for (result_type, body) in [
+        ("T", "let got: T = through<T>(record, value)\n    got"),
+        ("T", "through<T>(record, value)\n    seed"),
+        ("i64", "let got: i64 = through<i64>(record, value)\n    got"),
+    ] {
+        let checked = module(&format!(
+            "{definitions}fn outer<T>(seed: T, value: i64) -> {result_type} {{\n    {body}\n}}\n\
+             fn caller(value: i64) -> i64 => outer(1, value)\n"
+        ));
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, "type/type.mismatch");
+        assert_eq!(checked.findings[0].rule, "FN-17");
+        assert!(
+            checked
+                .report
+                .contains(&format!("the parameter takes `fn(i64) -> {result_type}`"))
+        );
+    }
+}
+
 /// GEN-2: dropping the call's value does not resolve the generic.
 #[test]
 fn discarding_a_call_does_not_bind_a_result_parameter_to_none() {
