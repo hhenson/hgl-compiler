@@ -148,7 +148,7 @@ fn documented_name(owner: &SyntaxNode, part: Option<&str>) -> String {
                 Some(part) => format!("[part {part}]"),
             };
         }
-        SyntaxKind::StructMember | SyntaxKind::EnumMember => {
+        SyntaxKind::StructMember | SyntaxKind::EnumMember | SyntaxKind::NativeProperty => {
             if let (Some(parent), Some(member)) = (owner.parent(), syntax::name_token(owner)) {
                 return format!("{}.{}", documented_name(&parent, part), member.text());
             }

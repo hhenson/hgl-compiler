@@ -61,6 +61,70 @@ fn growing_list_spellings_have_one_api_type() {
     assert_eq!(explicit["result"]["type"], "list<i64>");
 }
 
+/// SDOC-1, SDOC-3 and SDOC-9: a native property's summary, sections and
+/// runnable example belong to the property.
+#[test]
+fn native_property_documentation_preserves_sections_and_identity() {
+    let root = scratch("documentation-native-property");
+    let source = write(
+        &root,
+        "thing.hgl",
+        r#"module properties
+
+/** A thing. */
+export native type Thing {
+    /** Its level.
+
+    Notes:
+        Use the current **level**.
+    Rules:
+        SDOC-1.
+    Examples:
+        ~~~hgl
+        assert true
+        ~~~
+    */
+
+    level: i64
+    limit: i64
+}
+"#,
+    );
+    let model: Value = serde_json::from_slice(&document(&[&source])).unwrap();
+    let thing = declaration(module(&model, "properties"), "Thing");
+    assert_eq!(thing["documentation"]["summary"], "A thing.");
+    let members = thing["members"].as_array().unwrap();
+    assert_eq!(members.len(), 2);
+    let level = &members[0];
+    assert_eq!(level["kind"], "nativeProperty");
+    assert_eq!(level["canonicalName"], "properties::Thing.level");
+    assert_eq!(level["type"], "i64");
+    assert_eq!(level["source"]["line"], 17);
+    assert_eq!(level["documentation"]["summary"], "Its level.");
+    assert_eq!(
+        level["documentation"]["sections"],
+        json!([
+            {"heading": "Notes:", "recognized": true, "text": "Use the current **level**.", "entries": []},
+            {"heading": "Rules:", "recognized": true, "text": "SDOC-1.", "entries": []},
+            {"heading": "Examples:", "recognized": true, "text": "~~~hgl\nassert true\n~~~", "entries": []}
+        ])
+    );
+    assert_eq!(
+        level["documentation"]["examples"],
+        json!([{"code": "assert true\n", "position": 1, "runnable": true}])
+    );
+    assert_eq!(members[1]["name"], "limit");
+    assert!(members[1]["documentation"].is_null());
+
+    let listed = hgl(&["test", &source]);
+    assert_eq!(listed.status.code(), Some(2), "{}", text(&listed.stderr));
+    let listing = text(&listed.stdout);
+    assert!(
+        listing.contains("not run  executable  properties::Thing.level#example-1\n"),
+        "{listing}"
+    );
+}
+
 /// SDOC-1, SDOC-2, SDOC-3 and SDOC-10. The module, functions, operator, struct,
 /// field, enum, member, native type and named test keep their own comments.
 #[test]

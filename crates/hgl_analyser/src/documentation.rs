@@ -33,8 +33,8 @@ struct Keys<'a> {
 
 impl Keys<'_> {
     /// A declaration that has neither parameters nor generic
-    /// parameters: a module, an enum and its members, a struct's field,
-    /// a native type, a constant, a test.
+    /// parameters: a module, an enum and its members, a struct field,
+    /// a native type and its properties, a constant, a test.
     fn none() -> Keys<'static> {
         Keys {
             parameters: Some(Vec::new()),
@@ -98,11 +98,11 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
                 },
             };
             documented(&declaration.syntax, file, &keys, diagnostics);
-            // A struct's fields and an enum's members (SDOC-1).
+            // A struct field, enum member or native property (SDOC-1).
             for member in declaration.syntax.descendants().filter(|node| {
                 matches!(
                     node.kind(),
-                    SyntaxKind::StructMember | SyntaxKind::EnumMember
+                    SyntaxKind::StructMember | SyntaxKind::EnumMember | SyntaxKind::NativeProperty
                 )
             }) {
                 documented(&member, file, &Keys::none(), diagnostics);
