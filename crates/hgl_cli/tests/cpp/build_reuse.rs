@@ -72,12 +72,17 @@ impl NinjaTrace {
             r#"#!/bin/sh
 if [ "$1" = -C ] && [ "$2" = "$HGL_TEST_BUILD_WORKSPACE" ] && [ "$3" != -t ]; then
     if [ -n "$HGL_TEST_BUILD_TERM" ]; then
-        trap 'touch "$HGL_TEST_BUILD_TERM"; exit 130' TERM
+        trap 'exec </dev/null; touch "$HGL_TEST_BUILD_TERM"; exit 130' TERM
     fi
     printf '%s\n' build >>"$HGL_TEST_BUILD_TRACE"
     if [ -n "$HGL_TEST_BUILD_FAIL" ]; then
         printf '%s\n' 'The test stopped Ninja before compiling.' >&2
         exit 1
+    fi
+    if [ -n "$HGL_TEST_BUILD_HOLD_JOB" ]; then
+        "$HGL_TEST_REAL_NINJA" -C "$2" -f hold.ninja </dev/null &
+        wait "$!"
+        exit "$?"
     fi
     if [ -n "$HGL_TEST_BUILD_TERM" ]; then
         while [ ! -f "$HGL_TEST_BUILD_TERM.release" ]; do sleep 0.02; done
@@ -993,6 +998,97 @@ fn a_second_stop_exits_while_waiting_for_ninja() {
     assert_eq!(output.status.code(), Some(2));
     assert!(text(&output.stderr).contains("build was interrupted"));
     assert!(!ninja.workspace.join(".hgl-built.json").exists());
+}
+
+/// A nested native job holds the workspace until it exits, even when
+/// its launcher and hgl have both stopped and its stdin is /dev/null.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_retry_waits_for_native_jobs_after_two_stops() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("native-job-lock");
+    let source = write(&root, "stamped.hgl", SOURCE);
+    let ninja = NinjaTrace::new(&root);
+    let workspace = argument(&ninja.workspace);
+    let arguments = ["test", &source, "--target", "cpp", "--out", &workspace];
+    write(
+        &ninja.workspace,
+        "hold.ninja",
+        "rule hold\n  command = sh hold.sh\nbuild job-done: hold\n",
+    );
+    write(
+        &ninja.workspace,
+        "hold.sh",
+        r#"touch job-started
+attempt=0
+while [ "$attempt" -lt 400 ]; do
+    if [ -f job-release ]; then
+        touch job-done
+        exit 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.02
+done
+exit 1
+"#,
+    );
+    let launcher_stopped = root.join("launcher-stopped");
+    let stderr = root.join("first-build.stderr");
+    let mut first = ninja
+        .hgl(&arguments)
+        .env("HGL_TEST_BUILD_HOLD_JOB", "1")
+        .env("HGL_TEST_BUILD_TERM", &launcher_stopped)
+        .stdout(Stdio::null())
+        .stderr(File::create(&stderr).unwrap())
+        .spawn()
+        .unwrap();
+    assert!(wait_until(|| ninja.workspace.join("job-started").is_file()));
+    let signal = |name: &str| {
+        assert!(
+            Command::new("kill")
+                .args([name, &first.id().to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    signal("-INT");
+    std::thread::sleep(Duration::from_millis(100));
+    signal("-TERM");
+    assert!(wait_until(|| first.try_wait().unwrap().is_some()));
+    assert!(wait_until(|| launcher_stopped.is_file()));
+
+    let lock = File::options()
+        .read(true)
+        .write(true)
+        .open(ninja.workspace.join(".hgl-lock"))
+        .unwrap();
+    let held = matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock));
+    drop(lock);
+    let retry = ninja
+        .hgl(&arguments)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(250));
+    let overlapped = ninja.calls() != 1 || ninja.workspace.join("job-done").exists();
+    write(&ninja.workspace, "job-release", "");
+    let stdout = success(retry.wait_with_output().unwrap());
+    assert!(wait_until(|| ninja.workspace.join("job-done").is_file()));
+    assert_eq!(first.wait().unwrap().code(), Some(2));
+    assert!(
+        fs::read_to_string(stderr)
+            .unwrap()
+            .contains("build was interrupted")
+    );
+    assert!(held, "the earlier job still owns the workspace lock");
+    assert!(!overlapped, "the retry waits for the earlier build's job");
+    assert_eq!(ninja.calls(), 2);
+    assert!(stdout.contains("executable cases: 1 passed, 0 failed, 0 not run"));
 }
 
 /// On Linux the native builder receives a termination signal even when
