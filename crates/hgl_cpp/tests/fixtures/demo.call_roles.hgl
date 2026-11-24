@@ -61,3 +61,46 @@ test operator_candidates_use_the_same_role_preference {
 test probes_read_lexical_locals_in_their_scope {
     assert eval lexical_call(tick: [1, 2]) == [111, 120]
 }
+
+# FN-4, GEN-6, FN-17: distinguish a temporal-only callback, a capture
+# that would require lifting, and a function that fits either template.
+const fn apply(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 2
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 => f(x) * 3
+const fn apply_value(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 2
+fn apply_temporal(f: fn(i64) -> i64, x: i64) -> i64 => f(x) * 3
+const fn plus_one(n: i64) -> i64 => n + 1
+fn later(n: i64) -> i64 {
+    when { return n + 10 }
+}
+
+fn captures(tick: i64) -> i64 => apply(fn(n) => n + tick, 1)
+fn typed_capture(tick: i64) -> i64 => apply(f: fn(n: i64) => n + tick, x: 1)
+fn value_twin(tick: i64) -> i64 => apply_value(fn(n) => n + tick, 1)
+fn temporal_twin(tick: i64) -> i64 => apply_temporal(fn(n) => n + tick, 1)
+fn named_temporal(tick: i64) -> i64 => tick + apply(later, 1)
+fn body_calls_temporal(tick: i64) -> i64 => tick + apply(fn(n) => later(n), 1)
+fn named_value(tick: i64) -> i64 => tick + apply(plus_one, 1)
+fn pure_body(tick: i64) -> i64 => tick + apply(fn(n) => n + 1, 1)
+fn other_temporal(tick: i64) -> i64 => apply(plus_one, tick)
+
+# expect-error(type, "type.mismatch")
+fn temporal_callback_does_not_rescue_a_bad_input(tick: i64) -> i64 =>
+    tick + apply(later, "wrong")
+
+test captures_choose_a_direct_template {
+    assert eval captures(tick: [1, 5]) == [6, 18]
+    assert eval typed_capture(tick: [1, 5]) == [6, 18]
+    assert eval temporal_twin(tick: [1, 5]) == [6, 18]
+    assert eval value_twin(tick: [1, 5]) == [4, 12]
+}
+
+test temporal_only_callbacks_choose_the_temporal_definition {
+    assert eval named_temporal(tick: [1]) == [34]
+    assert eval body_calls_temporal(tick: [1]) == [34]
+}
+
+test compatible_callbacks_leave_the_choice_to_other_inputs {
+    assert eval named_value(tick: [1]) == [5]
+    assert eval pure_body(tick: [1]) == [5]
+    assert eval other_temporal(tick: [1]) == [6]
+}

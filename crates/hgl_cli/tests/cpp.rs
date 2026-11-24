@@ -5038,8 +5038,8 @@ fn callable_block_defaults_run_on_the_sdk() {
     );
 }
 
-/// FN-4, FN-6, and GEN-5: pairs and operator candidates prefer the
-/// direct role in composition and preserve ordinary and eval roles.
+/// FN-4, FN-6, FN-17, GEN-5 and GEN-6: prefer the direct role,
+/// including where a pair takes a callable, and keep ordinary and eval roles.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn call_role_preferences_run_on_the_sdk() {
@@ -5057,7 +5057,7 @@ fn call_role_preferences_run_on_the_sdk() {
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
         stdout.ends_with(
-            "rejection cases: 2 passed, 0 failed\nexecutable cases: 7 passed, 0 failed, 0 not run\n"
+            "rejection cases: 3 passed, 0 failed\nexecutable cases: 10 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );

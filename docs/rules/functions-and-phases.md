@@ -47,6 +47,7 @@ analyser: partial
 
 - A temporal and a value definition may share a name
 - A call in a graph takes the temporal definition of a pair when given a connection, and the value definition when all arguments are ordinary (FN-6, GEN-5)
+- A fixed callable argument selects the temporal definition when only its template admits the argument, or when the argument captures a connection. A callable either template admits leaves the choice to the other arguments (FN-17, GEN-6).
 - The selected definition checks the call's signature
 - A call in value code takes the value definition. An eval's target takes the temporal definition where it exists.
 - Left: named-pair selection where an operand's category settles only after instance selection or after it receives a contextual type
