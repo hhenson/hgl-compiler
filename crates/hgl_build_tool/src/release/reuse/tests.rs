@@ -90,19 +90,24 @@ fn every_verifier_has_to_succeed() {
 #[test]
 fn verifiers_match_publish_dependencies() {
     let source = include_str!("../../../../../.github/workflows/release.yml");
-    let published = source.split_once("\n  publish:\n").unwrap().1;
-    let needs = published
-        .lines()
-        .find_map(|line| line.strip_prefix("    needs: ["))
-        .unwrap();
-    let needed: BTreeSet<_> = needs
-        .strip_suffix(']')
-        .unwrap()
-        .split(',')
-        .map(str::trim)
-        .filter(|job| !["reuse-build", "bundle", "bundle-linux"].contains(job))
-        .collect();
-    assert_eq!(needed, REQUIRED.into_iter().collect());
+    let line_feed = source.replace("\r\n", "\n");
+    let carriage_return_line_feed = line_feed.replace('\n', "\r\n");
+    for contents in [&line_feed, &carriage_return_line_feed] {
+        let needs = contents
+            .lines()
+            .skip_while(|&line| line != "  publish:")
+            .skip(1)
+            .find_map(|line| line.strip_prefix("    needs: ["))
+            .expect("publication job dependencies");
+        let needed: BTreeSet<_> = needs
+            .strip_suffix(']')
+            .unwrap()
+            .split(',')
+            .map(str::trim)
+            .filter(|job| !["reuse-build", "bundle", "bundle-linux"].contains(job))
+            .collect();
+        assert_eq!(needed, REQUIRED.into_iter().collect());
+    }
 }
 
 #[test]
