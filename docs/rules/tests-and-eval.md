@@ -23,11 +23,14 @@ analyser: done
 
 transpiler: partial
 
-- Application entry units link reachable production pieces. Named tests have separate
-  entry units and their own runnable dependency set. Test-local types and
+- Application entry units link reachable production pieces. A mixed build writes
+  test bodies, helpers and test-only instances to separate objects. Named tests
+  have separate entry units and their own runnable dependency set. Test-local types and
   callables have distinct generated identities. Generic instances retain the
   test candidates that answer their requirements (GEN-16). Calls within a test get separate instance identities so their candidate scope cannot change production.
-- Left: Production module units can still contain test pieces. When building applications and tests together, a test-view instance can bring another module's test objects into the application link (#773). The emitter reports a missing test block or a return in a test defensively.
+- Left: Modules in a mixed build share declaration headers across their
+  production and test objects. The emitter reports a missing test block or a
+  return in a test defensively.
 
 ## TST-3
 

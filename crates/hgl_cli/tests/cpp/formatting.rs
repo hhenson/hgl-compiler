@@ -99,6 +99,24 @@ test text_layout {
     assert format("{:>6.1f}", 3.0) == "   3.0"
 }
 
+# FMT-4 and OPS-6: a sign or zero flag applies to the default f64
+# text even without a field width.
+test default_float_signs {
+    assert format("{:+}", 3.0) == "+3.0"
+    assert format("{:-}", 3.0) == "3.0"
+    assert format("{: }", 3.0) == " 3.0"
+    assert format("{:0}", 3.0) == "3.0"
+    assert format("{:+}", -0.0) == "-0.0"
+    assert format("{:+}", 1.0e21) == "+1e21"
+    let infinity = 1.0 / 0.0
+    let nan = infinity - infinity
+    assert format("{:+}", nan) == "+nan"
+    assert format("{:-}", nan) == "nan"
+    assert format("{: }", nan) == " nan"
+    assert format("{:+8}", 3.0) == "    +3.0"
+    assert format("{:+.2f}", 3.0) == "+3.00"
+}
+
 const fn show_nullable<T>(value: T?) -> str => format("{}", value)
 
 # FMT-5 and GEN-7: value formatting selects the payload's conversion.
@@ -404,6 +422,7 @@ fn core_format_and_write_run_on_the_sdk() {
         "stream_bytes",
         "typed_formats",
         "text_layout",
+        "default_float_signs",
         "nullable_formats",
         "selected_converters",
         "deferred_patterns",

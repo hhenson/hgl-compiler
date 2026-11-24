@@ -81,8 +81,8 @@ pub struct File {
 pub struct Output {
     /// The files: each module's header and unit, and each entry unit.
     pub files: Vec<File>,
-    /// The translation units, one for each module with something
-    /// written in it, in the order of the program's modules.
+    /// The translation units, in module order. A module can add a
+    /// separate test unit when applications and tests share a build.
     pub units: Vec<Unit>,
     /// The executables, one for each module with a test that can be
     /// run, in the order of the program's modules.
@@ -95,7 +95,7 @@ pub struct Output {
     pub applications: Vec<Application>,
 }
 
-/// The translation unit of one module.
+/// A translation unit owned by a module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unit {
     /// The module's path.
@@ -117,10 +117,9 @@ pub struct Executable {
     pub stem: String,
     /// Its entry unit's file, one of [`Output::files`]: its `main`.
     pub source: String,
-    /// The units it is linked from, as positions in [`Output::units`]:
-    /// its module's, and each that one calls into, through the units
-    /// those call into. A unit is linked whole, so each function it
-    /// holds needs what it calls, whether a test calls it or not.
+    /// The units it links, as positions in [`Output::units`]: its module's
+    /// units and their transitive dependencies. A unit is linked whole,
+    /// so every function it holds needs what it calls.
     pub units: Vec<usize>,
 }
 
@@ -143,7 +142,7 @@ pub struct Test {
     /// The executable that runs it, as a position in
     /// [`Output::executables`]; `None` for one that is blocked.
     pub executable: Option<usize>,
-    /// Where each statement of the test starts in its module's unit:
+    /// Where each statement starts in the generated unit holding the test:
     /// the line, counted from 1, and the place in the source. The
     /// generated code tells the runtime library the line of the
     /// statement it is running, and a failure is reported with it.

@@ -110,7 +110,11 @@ analyser: partial
 - Outside a generic body, literals in named and symbolic operator calls are fitted independently by each candidate, with or without a selecting option. A typed argument still fixes its generic in a requested result; another literal argument does not erase that type. Public generic defaults, result requirements and reflected-pack checks keep their complete inference; inherited configuration defaults use the fitted input type (GEN-2, GEN-8, GEN-13, UNIT-8). Generic-dependent literals use the selected instance's type (GEN-7); fully concrete calls lexically inside a generic declaration and generic configuration-default metadata retain their existing handling.
 - Each value or temporal candidate supplies the function type of a fixed callback, including its phase (FN-17).
 - An option that selects is a generic value parameter, given by name or by its default, and the candidate's `requires` is checked against its value; one that does not select is a parameter, by name or position
-- An option's name is one kind across an operator's candidates
+- An option's name is one kind across the operator's candidates in each view
+  (TST-1). `check`, `test` and `build --tests` report `impl.option_kind` for
+  conflicts in a module's test view. Plain `build` and `run` still diagnose
+  test bodies. Their option-kind check uses the released candidate set,
+  which excludes test-declared candidates.
 - A candidate declares its operator's configuration parameters. Named and symbolic calls bind those parameters in braces, and a candidate may use the operator's default (FN-18, EXPR-10).
 - Candidate-only options participate in candidate selection after the operator's public packs are reflected. A candidate whose required input narrows the operator's nullable input cannot inherit a written null default (UNIT-8).
 - A value candidate may mark a parameter `var`, which takes no part in selecting it (FN-15)

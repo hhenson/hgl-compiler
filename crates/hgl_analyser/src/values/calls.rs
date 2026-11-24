@@ -1063,7 +1063,7 @@ impl<'a> Typer<'a> {
                     (module, declaration),
                     expected,
                     given,
-                    evaluating,
+                    (evaluating, false),
                 )
                 .0
         }) {
@@ -1094,7 +1094,7 @@ impl<'a> Typer<'a> {
             given,
             // An endpoint is never a replayable payload. Even an empty
             // trace cannot supply the receiving node's input (TIME-9).
-            evaluating && !reads_activity,
+            (evaluating && !reads_activity, reads_activity),
         );
         // FN-16: "`removed_value` (TYPE-11) of a window that is
         // a child of a `ref` parameter or of `out` of a `ref` result, a
@@ -1160,7 +1160,8 @@ impl<'a> Typer<'a> {
         if reads_activity
             && let ExprKind::Call { arguments, .. } = &kind
             && let [argument] = arguments.as_slice()
-            && let ExprKind::ChildEndpointOf(_) = argument.value.kind
+            && let ExprKind::ChildEndpointOf(child) = &argument.value.kind
+            && self.deferred_pack_selection(child).is_none()
         {
             self.diagnostics.emit(error(
                 Category::Phase,
@@ -1187,7 +1188,7 @@ impl<'a> Typer<'a> {
         (module, declaration): (usize, usize),
         expected: Option<&Type>,
         given: Option<&CallArguments>,
-        evaluating: bool,
+        (evaluating, reads_activity): (bool, bool),
     ) -> (ExprKind, Type) {
         let program = self.program;
         let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration)
@@ -1360,6 +1361,7 @@ impl<'a> Typer<'a> {
                 .map(|pack| (pack.parameter, pack.types.as_slice())),
             result_fallback,
             callable: Some((module, signature)),
+            defer_endpoint_child: reads_activity && self.pack_inputs.is_none(),
             defaults: generics
                 .iter()
                 .map(|generic| self.default_constant(callee, generic))

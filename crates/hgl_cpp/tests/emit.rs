@@ -145,7 +145,10 @@ fn own_files(output: &Output) -> Vec<&hgl_cpp::File> {
         .filter(|file| {
             !matches!(
                 file.path.as_str(),
-                "modules/mod-core.h" | "modules/mod-core.cpp" | "modules/type-core.h"
+                "modules/mod-core.h"
+                    | "modules/mod-core.cpp"
+                    | "modules/test-mod-core.cpp"
+                    | "modules/type-core.h"
             )
         })
         .collect()
@@ -1377,12 +1380,23 @@ fn a_statement_names_its_hgl_file_and_line() {
     assert!(module.contains("\"modules/mod-demo-apps.cpp\""));
     // A test's statements are told to the test host by the unit's lines:
     // none in its body sets an HGL line.
-    let test = module
+    let test_unit = text("modules/test-mod-demo-apps.cpp");
+    let test = test_unit
         .split("void the_store_is_set_where_the_graph_is_built()")
         .nth(1)
         .unwrap();
     let body = &test[..test.find("\n}\n").unwrap()];
     assert!(!body.contains("#line"), "{body}");
+    for &(line, _) in emitted.output.tests[0].statements() {
+        assert!(
+            test_unit
+                .lines()
+                .nth(line - 1)
+                .unwrap()
+                .contains("statement"),
+            "line {line} in {test_unit}"
+        );
+    }
     // An application's store statements and its run statement.
     let application = text("modules/mod-demo-apps-backtest.cpp");
     let lines: Vec<&str> = application.lines().collect();

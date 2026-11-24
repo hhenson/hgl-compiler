@@ -674,7 +674,7 @@ impl<'a> Typer<'a> {
                 refinable: &refinable,
                 tagged: &tagged,
                 inputs: &|| self.temporal_inputs(),
-                children: &|child| self.tested_child(child),
+                child_guard: &|operation, child| self.child_guard_facts(operation, child),
                 packed: &|entry| self.pack_endpoint_selection(entry),
             },
             &[],
@@ -1082,9 +1082,8 @@ struct Proofs<'p> {
     tagged: &'p dyn Fn(LocalId, &[Fact]) -> bool,
     /// Every temporal input, for a `valid()` written with no argument.
     inputs: &'p dyn Fn() -> Vec<LocalId>,
-    /// The child an endpoint operation's argument names when the
-    /// program is compiled (TIME-1).
-    children: &'p dyn Fn(&Expr) -> Option<children::ChildPath>,
+    /// The admission facts from a guard on a child (TIME-1, TIME-4).
+    child_guard: &'p dyn Fn(EndpointOperation, &Expr) -> Vec<Fact>,
     /// Which direct pack entry a selector names (FN-19).
     packed: &'p dyn Fn(&Expr) -> Option<crate::hir::PackEndpointSelection>,
 }
@@ -1105,7 +1104,7 @@ fn null_tests(condition: &Expr, proofs: &Proofs, assumed: &[Fact]) -> (Vec<Fact>
         refinable,
         tagged,
         inputs,
-        children,
+        child_guard,
         packed,
     } = proofs;
     let both = |first: Vec<Fact>, second: Vec<Fact>| -> Vec<Fact> {
@@ -1184,16 +1183,7 @@ fn null_tests(condition: &Expr, proofs: &Proofs, assumed: &[Fact]) -> (Vec<Fact>
                 | EndpointOperation::AllValid
                 | EndpointOperation::Modified),
             child,
-        } => match children(child) {
-            Some(path) => {
-                let operation = match operation {
-                    EndpointOperation::Modified => EndpointOperation::Valid,
-                    other => *other,
-                };
-                (children::child_facts(operation, path), Vec::new())
-            }
-            None => (Vec::new(), Vec::new()),
-        },
+        } => (child_guard(*operation, child), Vec::new()),
         // ERR-3: a binding "gains its tag fact from a direct
         // `is_ok`/`is_err` guard on it by its name: where `is_ok` holds
         // it is a success and where it does not a failure, and `is_err`

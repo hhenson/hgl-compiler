@@ -65,6 +65,7 @@ analyser: partial
 - In a `when`, a payload read of an input its header does not admit needs a `valid(input)` that holds where it stands: in the branch it holds for, in the right operand of the `&&` it guards, after a branch that returns (`payload.unguarded`)
 - A child's guard is `all_valid` of its collection or `valid` of the child as the read names it, in a body or as a header's test; a child's `valid` in a header names no input, and the default admission stands with it
 - A direct pack entry has its own guards, such as `valid(items[0])` and `all_valid(items["prior"])` (FN-19). Its validity does not admit another entry.
+- A guard on a child of a heterogeneous pack entry, such as `valid(items[0][0])`, checks the child against the fitted shape and admits that child only (FN-19, GEN-7, TIME-1).
 - An endpoint argument is read through its grouping (EXPR-1) by every check: `valid((quote.bid))` is `valid(quote.bid)`
 - The guard of a whole read of a struct, a tuple or a fixed list, a child among them, is `all_valid` of what it reads (TIME-1)
 - A test of `modified(input)` guards what `valid(input)` does, in a header's top-level conjunct, `when modified(a) && valid([])`, and in a body, in `stop` too, and `modified` of a child as the read names it guards that child: "An input is not modified without being valid"; `modified(a, b)` and `modified()` guard none, nor does a saved bool
@@ -165,6 +166,7 @@ analyser: partial
 - `scheduled<T>()` is the selector and is judged as `scheduled()` is, and takes no generic argument (`generic.argument_count`): core declares no function of the name
 - `is_active`, `activate` and `passivate` take only a direct temporal input, and `all_valid` only a list, tuple, struct, dictionary or window (`endpoint.argument`); a test of `all_valid` guards as one of `valid` does
 - `valid`, `modified` and `all_valid` name direct temporal pack entries by constant key (FN-19). `activate` and `passivate` on an entry obey the direct input's lifecycle checks (TIME-5).
+- `delta_value` and `last_modified` observe a child of a fitted heterogeneous pack entry. `is_active` reports the fitted child as an indirect input at the instantiating call (GEN-7).
 - The core function `is_active` resolves by its declaration and returns a `bool` in a handler or in stop
 - Core's `removed_value` resolves by its declaration, which takes a window's endpoint; where its place takes `result<V, error>` the place says what V is, and the read is of that result (ERR-14); given no window it binds nothing of the window's sizes (`generic.unresolved`)
 - In a guard it sets neither subscription nor validity

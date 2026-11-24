@@ -1991,6 +1991,99 @@ eval present(values: [taste(7)])
     );
 }
 
+/// TST-2: building tests with an application keeps test-only instances
+/// and the module supplying their candidates out of its linked objects.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn building_tests_preserves_the_applications_production_link() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("mixed-test-and-application-link");
+    write(
+        &root,
+        "src/a.hgl",
+        r#"module p21.a
+export operator kind<T>(value: T) -> i64
+impl const fn kind<T>(value: T) -> i64 => 0
+export const fn via(value: i64) -> i64 => kind(value)
+test a_plain { assert via(7) == 0 }
+"#,
+    );
+    write(
+        &root,
+        "src/b.hgl",
+        r#"module p21.b
+use p21.a::{kind, via}
+test b_declares {
+    impl const fn kind(value: i64) -> i64 => 2
+    assert via(7) == 2
+}
+"#,
+    );
+    write(
+        &root,
+        "src/app.hgl",
+        r#"application p21.app
+use p21.a::{via}
+fn present(const values: list<i64>) -> i64 {
+    for value in values { yield 1s: value }
+}
+eval present(values: [via(7)])
+"#,
+    );
+    let sources = argument(&root.join("src"));
+    let workspace = argument(&root.join("mixed"));
+    let app_link = |directory: &str, options: &[&str]| {
+        let mut args = vec!["build", &sources, "--out", directory];
+        args.extend_from_slice(options);
+        let built = hgl_in(&args, &[], &[]);
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let manifest = fs::read_to_string(Path::new(directory).join("build.ninja")).unwrap();
+        let prefix = format!(
+            "build run/app-p21-app{}: link ",
+            std::env::consts::EXE_SUFFIX
+        );
+        manifest
+            .lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .unwrap()
+            .to_owned()
+    };
+    let production_link = app_link(&argument(&root.join("production")), &[]);
+    let mixed_link = app_link(&workspace, &["--tests"]);
+    assert_eq!(mixed_link, production_link);
+    let module = fs::read_to_string(root.join("mixed/modules/mod-p21-a.cpp")).unwrap();
+    assert!(!module.contains("test_candidates_"), "{module}");
+
+    let app = hgl_in(
+        &["run", &sources, "--target", "cpp", "--keep", &workspace],
+        &[],
+        &[],
+    );
+    let stdout = text(&app.stdout);
+    assert!(app.status.success(), "{stdout}{}", text(&app.stderr));
+    assert!(stdout.contains("  0\n"), "{stdout}");
+    assert!(
+        stdout.contains("ran p21.app on cpp: 1 publication"),
+        "{stdout}"
+    );
+
+    let tests = hgl_in(
+        &["test", &sources, "--target", "cpp", "--keep", &workspace],
+        &[],
+        &[],
+    );
+    let stdout = text(&tests.stdout);
+    assert!(tests.status.success(), "{stdout}{}", text(&tests.stderr));
+    for test in ["p21.a::a_plain", "p21.b::b_declares"] {
+        assert!(
+            stdout.contains(&format!("passed   executable  {test}\n")),
+            "{stdout}"
+        );
+    }
+}
+
 /// The integration test above passes on the SDK.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
@@ -2389,8 +2482,9 @@ fn let_bound_packs_run_on_the_sdk() {
     );
 }
 
-/// MAP-1, RED-1, RED-4 and RED-5: Core declares the native forms and
-/// C++ reports the work still tracked by #370.
+/// MAP-1, RED-1, RED-4 and RED-5: C++ reports the remaining native forms.
+/// A capture-free ordered fold is written, and FN-14 permits the captured
+/// callback even though the engine cannot wire it in an ordered reduction.
 #[test]
 fn native_mapping_forms_decline_cpp_emission() {
     let root = scratch("native-mapping-forms");
@@ -2407,6 +2501,8 @@ export fn keyed_map(values: dict<str, i64>, selected: set<str>) -> dict<str, i64
 export fn growing_map(values: list<i64>) -> list<i64> => map(twice_for_map, values)
 export fn growing_tree(values: list<i64>) -> i64 => reduce(add_, values, 0)
 export fn ordered_growing(values: list<i64>) -> i64 => reduce(fold_digit, values, 0)
+export fn ordered_captured(values: list<i64>, bias: i64) -> i64 =>
+    reduce(fn(accumulated, member) => accumulated * 10 + member + bias, values, 0)
 export fn set_tree(values: set<i64>) -> i64 => reduce(add_, values, 0)
 export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values, 0)
 "#,
@@ -2422,10 +2518,59 @@ export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values,
     );
     let stderr = text(&emitted.stderr);
     assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("an ordered reduction with a captured callback"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("reduce(fold_digit, values, 0)"),
+        "{stderr}"
+    );
     assert_eq!(
         stderr.matches("error[build/target.unsupported]").count(),
         6,
         "{stderr}"
+    );
+}
+
+/// RED-5 and TYPE-14: a plain seed widens to the selected nullable accumulator.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn ordered_reduction_widens_the_seed_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("ordered-nullable-accumulator");
+    let file = write(
+        &root,
+        "demo.ordered_nullable_accumulator.hgl",
+        r#"module demo.ordered_nullable_accumulator
+
+const fn combine(accumulated: i64?, member: i64?) -> i64? {
+    if accumulated == null { return member }
+    if member == null { return accumulated }
+    return accumulated + member
+}
+
+fn fold(values: list<i64?>, seed: i64) -> i64? =>
+    reduce<i64?, i64?, list<i64?>>(combine, values, seed)
+
+test nullable_accumulator_takes_a_plain_seed {
+    assert eval fold(values: [[2]], seed: [1]) == [delta<i64?>(value: 3)]
+}
+"#,
+    );
+    let tested = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&tested.stdout);
+    assert_eq!(
+        tested.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&tested.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
     );
 }
 
@@ -2515,7 +2660,8 @@ fn forwarded_packs_run_on_the_sdk() {
 
 /// FN-19 and GEN-17: a constant key reads a fitted entry, including a
 /// captured value or a connection. An absent key rejects under the shape
-/// supplied at the call.
+/// supplied at the call. TIME-1, TIME-4 and TIME-9 use that shape for a
+/// selected child endpoint and its admission.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn pack_entries_run_on_the_sdk() {
@@ -2538,8 +2684,31 @@ fn pack_entries_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 6 passed, 0 failed\nexecutable cases: 9 passed, 0 failed, 0 not run\n"
+            "rejection cases: 8 passed, 0 failed\nexecutable cases: 12 passed, 0 failed, 0 not run\n"
         ),
+        "{stdout}"
+    );
+}
+
+/// TIME-9 and GEN-7: delta and retained time reads observe the fitted
+/// pack child in the same way as the child of an ordinary input.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn pack_child_observations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("pack-child-operations");
+    let file = write(
+        &root,
+        "demo.pack_child_operations.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.pack_child_operations.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

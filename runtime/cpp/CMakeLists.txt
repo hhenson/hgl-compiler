@@ -56,6 +56,7 @@ add_library(hglrt SHARED
     src/failure.cpp
     src/formatting.cpp
     src/host.cpp
+    src/key_sets.cpp
     src/list_endpoints.cpp
     src/output.cpp
     src/scalar.cpp

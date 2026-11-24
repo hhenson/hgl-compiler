@@ -809,13 +809,13 @@ transpiler: partial
 
 transpiler: partial
 
-- Fixed-size list reduction runs both HGL candidates, including an ordered fold whose member and accumulator have different types. Other collection forms are declared and await #370.
+- Fixed-size list reduction runs both HGL candidates. The native growing-list ordered fold also accepts distinct member and accumulator types. Growing-list tree, set and dictionary reduction await #370.
 
 ## RED-2
 
 transpiler: partial
 
-- A fixed-size fold composes reads of every position. Reduction of valid members in changing collections awaits #370.
+- A fixed-size fold composes reads of every position. Growing ordered reduction skips invalid members and publishes the seed for an empty list. Native tree candidates await #370.
 
 ## RED-3
 
@@ -837,7 +837,8 @@ transpiler: planned
 
 transpiler: partial
 
-- The fixed-size ordered fold starts from its required zero and visits positions in order. An omitted zero rejects during candidate selection. Growing lists await #370.
+- Ordered folds start from their required zero and visit positions in order. The growing-list target wires a capture-free callback and guards each step on member validity. An omitted zero rejects during candidate selection.
+- Left: callbacks that capture an enclosing connection (FN-14, [hgraph#1914](https://github.com/hhenson/hgraph/issues/1914)).
 
 ## RED-6
 
@@ -853,9 +854,9 @@ transpiler: planned
 
 ## SET-1
 
-transpiler: planned
+transpiler: done
 
-- #370.
+- The value candidate gives the dictionary's keys. The temporal candidate projects hgraph's key set, which publishes membership changes and is silent on a value-only update.
 
 ## SET-2
 
@@ -912,7 +913,8 @@ transpiler: partial
 - The C++ target gives primitive fields to pinned fmt with compiled specifiers. It emits checked chrono directives with fractional truncation on `%S`, `%T` and `%[S]`, duration totals and padding on the whole field.
 - Boolean width and alignment without the zero flag use the pinned fmt formatter.
 - A `str` at `{:?}` uses the same HGL literal writer as a string inside a collection (FMT-5).
-- Plain string fields measure width and precision in Unicode code points. Default `f64` fields pad their FMT-5 text, including sign and numeric zero padding.
+- Plain string fields measure width and precision in Unicode code points. A default `f64` field applies its sign and layout to its FMT-5 text, including with zero or absent width. Both NaN signs start from `nan` (OPS-6).
+- Left: the alternate `#` form with an `f64` width, and width or precision combined with `?`.
 
 ## FMT-5
 
