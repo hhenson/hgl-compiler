@@ -414,6 +414,21 @@ pub(crate) fn constant_pattern_in(
                         })?;
                     append_pattern(&mut text, &value)?;
                 }
+                ExprKind::Field { .. } | ExprKind::Index { .. } => {
+                    use crate::const_inputs::ConstInputFault::{ReaderLimit, TextLimit};
+
+                    let projection = crate::const_inputs::projection_value(
+                        program, value, instance,
+                    )
+                    .map_err(|fault| match fault {
+                        ReaderLimit | TextLimit => PatternFault::Limit,
+                        _ => Unread,
+                    })?;
+                    let ExprKind::Literal(Value::Str(value)) = projection.kind else {
+                        return Err(Unread);
+                    };
+                    append_pattern(&mut text, &value)?;
+                }
                 _ => {
                     let Some((BinaryOperator::Add, left, right)) = value.kind.binary() else {
                         return Err(Unread);

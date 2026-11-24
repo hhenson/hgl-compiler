@@ -3371,6 +3371,35 @@ fn composite_values_run_on_the_sdk() {
     );
 }
 
+/// FN-1: read fields and constant-index entries as const arguments.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn fixed_projections_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("fixed-reads");
+    let file = write(
+        &root,
+        "demo.fixed_reads.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.fixed_reads.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 1 passed, 0 failed\nexecutable cases: 2 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
 /// Two modules, one of whose structs holds the other's, with an instance
 /// of the other's generic function over it: each is built, and its tests
 /// pass (GEN-2, UNIT-6).
