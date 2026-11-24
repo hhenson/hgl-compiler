@@ -1386,6 +1386,34 @@ fn timing_runs_on_the_sdk() {
     );
 }
 
+/// TYPE-12 and UNIT-8: parameters and configuration observe the ticks of
+/// a signal connection. An omitted signal stays silent when forwarded.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn signal_inputs_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("signals");
+    let file = write(
+        &root,
+        "src/demo.signals.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.signals.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// TIME-8 and CAP-4: the first dropped-wake warning names the generated node.
 /// Later drops are reported even when the scheduler is passed to a value
 /// helper and the HGL node has no explicit stop hook.

@@ -1,0 +1,63 @@
+module demo.signals
+
+# TYPE-12: any connection can supply a signal without exposing its payload.
+fn required_parameter(value: i64, trigger: signal) -> i64 {
+    when modified(trigger) && valid(value) { return value }
+}
+
+fn optional_parameter(value: i64, trigger: signal?) -> bool {
+    when modified(value, trigger) && valid([]) { return modified(trigger) }
+}
+
+fn required_configuration{trigger: signal}(value: i64) -> i64 {
+    when modified(trigger) && valid(value) { return value }
+}
+
+fn optional_configuration{trigger: signal?}(value: i64) -> bool {
+    when modified(value, trigger) && valid([]) { return modified(trigger) }
+}
+
+# A default of null is the other spelling of an omittable signal (UNIT-8).
+fn defaulted_parameter(value: i64, trigger: signal = null) -> bool {
+    when modified(value, trigger) && valid([]) { return modified(trigger) }
+}
+
+fn defaulted_configuration{trigger: signal = null}(value: i64) -> bool {
+    when modified(value, trigger) && valid([]) { return modified(trigger) }
+}
+
+fn relay_parameter(value: i64, trigger: signal?) -> bool =>
+    optional_parameter(value, trigger)
+
+fn relay_configuration{trigger: signal?}(value: i64) -> bool =>
+    optional_configuration{trigger: trigger}(value)
+
+fn trigger_parameter(value: i64, beat: str) -> i64 => required_parameter(value, beat)
+fn trigger_configuration(value: i64, beat: bool) -> i64 => required_configuration{trigger: beat}(value)
+fn trigger_optional_parameter(value: i64, beat: bool) -> bool => relay_parameter(value, beat)
+fn trigger_optional_configuration(value: i64, beat: str) -> bool => relay_configuration{trigger: beat}(value)
+fn trigger_from_tuple(value: i64, beat: tuple<i64, bool>) -> bool =>
+    relay_configuration{trigger: beat}(value)
+
+# END-2: repeated values and false payloads still count as publications.
+test required_parameters {
+    assert eval trigger_parameter(value: [7, _, 8, _], beat: [_, "same", _, "same"]) == [_, 7, _, 8]
+}
+
+test required_configurations {
+    assert eval trigger_configuration(value: [7, _, 8, _], beat: [_, false, _, false]) == [_, 7, _, 8]
+}
+
+# UNIT-8: an omitted signal does not tick, including when a graph forwards it.
+test optional_parameters {
+    assert eval trigger_optional_parameter(value: [7, _, 8], beat: [_, false, _]) == [false, true, false]
+    assert eval relay_parameter(value: [7, _, 8]) == [false, _, false]
+    assert eval defaulted_parameter(value: [7, _, 8]) == [false, _, false]
+}
+
+test optional_configurations {
+    assert eval trigger_optional_configuration(value: [7, _, 8], beat: [_, "beat", _]) == [false, true, false]
+    assert eval trigger_from_tuple(value: [7, _, 8], beat: [_, (1, false), _]) == [false, true, false]
+    assert eval relay_configuration(value: [7, _, 8]) == [false, _, false]
+    assert eval defaulted_configuration(value: [7, _, 8]) == [false, _, false]
+}
