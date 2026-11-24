@@ -219,6 +219,8 @@ test a_forwarded_pack_can_precede_a_named_argument {
     assert with_trailing_name(1, 2, 3, last: 5) == 1235
     assert with_trailing_name(1, 2, 3) == 1234
     assert relay_trailing_name(6, 7, 8, last: 9) == 6789
+    assert relay_callback(with_trailing_name, 1, 2, 3) == 1234
+    assert relay_callback(relay_trailing_name, 6, 7, 8, last: 9) == 6789
 }
 
 # FN-14, FN-19: the held entry of a temporal callback stays a connection.
