@@ -107,8 +107,8 @@ fn checked_window(items: ...rolling_window<i64, 3, 2>) -> tuple<str, i64> {
     when {
         let outcome: result<list<i64>, error> = items[0]
         let samples: list<i64>? = items[0]
-        let first = if samples != null { samples[0] } else { -1 }
-        return (if is_ok(outcome) { "ok" } else { outcome.error.code }, first)
+        let oldest = if samples != null { samples[0] } else { -1 }
+        return (if is_ok(outcome) { "ok" } else { outcome.error.code }, oldest)
     }
 }
 
@@ -150,10 +150,10 @@ fn graph_checked_dictionary(book: dict<str, tuple<i64, str>>) -> bool =>
     checked_dictionary(book: book)
 
 test a_packed_dictionary_reports_a_partial_entry {
-    let first: delta<tuple<i64, str>> = (1, null)
-    let second: delta<tuple<i64, str>> = (null, "complete")
+    let initial: delta<tuple<i64, str>> = (1, null)
+    let completed: delta<tuple<i64, str>> = (null, "complete")
     assert eval graph_checked_dictionary(book: [
-        delta<dict<str, tuple<i64, str>>>(updated: ["x": first]),
-        delta<dict<str, tuple<i64, str>>>(updated: ["x": second]),
+        delta<dict<str, tuple<i64, str>>>(updated: ["x": initial]),
+        delta<dict<str, tuple<i64, str>>>(updated: ["x": completed]),
     ]) == [false, true]
 }
