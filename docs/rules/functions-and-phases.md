@@ -283,6 +283,7 @@ analyser: partial
 
 - Reads a parameter pack entry by a constant name or position. The instance supplies the entry type. A missing key reports `pack.name` using its written spelling, with an instantiated generic parameter shown as the value supplied (GEN-17, UNIT-13).
 - In a hook, the entry follows ordinary input admission and lifecycle rules (TIME-1, TIME-4, TIME-5) and reads the whole payload of an atomic or the list held by a window (TYPE-9, TYPE-11).
+- A direct temporal entry is named by its constant key in `valid`, `modified` and `all_valid`. A guard on one entry admits that entry (TIME-4, TIME-9).
 - A checked whole read from a window, an unsized list or a dictionary takes the result or nullable form of its place (ERR-14, ERR-15).
 - A child of a structural pack entry uses the ordinary child admission check. A guard proves a child of that entry only (TIME-1, TIME-4).
 - Keeps an entry read pending when its constant key needs an unrolled range pass (CTRL-16) or a module constant the compiler has not evaluated (UNIT-13). C++ declines the pending read.
@@ -300,4 +301,4 @@ transpiler: partial
 - Lowers forwarded entries and constant-key reads from the same fitted pack input slots, including captured values and connections. The SDK cases also exercise operator selection, static callbacks and constructors.
 - Lowers the concrete arguments of an inline computed spread. An anonymous body is specialized for the enclosing pack keys even when each pass supplies a value of the same type. The SDK cases also cover mixed entry types, named and positional keys, selected nested conditions, and written pack-member types.
 
-Left: A pack bound with `let` and then spread, and conditions whose compile-time values this reader does not yet work out, remain part of #368. C++ declines an inline spread whose pass condition does not supply a known constant `bool`. The packed signal payload diagnostic is tracked in #731, and guards on the pack entry itself in #732.
+Left: A pack bound with `let` and then spread, and conditions whose compile-time values this reader does not yet work out, remain part of #368. C++ declines an inline spread whose pass condition does not supply a known constant `bool`. Guards on a structural child of a heterogeneous entry are tracked in #735.
