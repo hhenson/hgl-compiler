@@ -869,9 +869,9 @@ impl Emitter<'_> {
         let before = self.control.bound.clone();
         self.control.unrolling += 1;
         for position in 0..size {
-            let entry = entries
-                .as_ref()
-                .and_then(|entries| entries.get(position as usize));
+            let entry = usize::try_from(position)
+                .ok()
+                .and_then(|position| entries.as_deref()?.get(position));
             let port = if let Some(entry) = entry {
                 entry.clone()
             } else {

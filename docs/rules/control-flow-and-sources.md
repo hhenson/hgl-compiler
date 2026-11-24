@@ -192,7 +192,8 @@ transpiler: partial
 analyser: partial
 
 - A computed pack reads only the branch selected in each concrete pack-key pass. A chain with no selected branch and no `else` supplies no entry (FN-19, GEN-7).
-- An ordinary `if` with no selected branch and no `else` in a pass gives `null`. A nullable place supplies its type. A `let` with no type context reports `null.context_type` (CTRL-14, TYPE-14).
+- An ordinary `if` with no selected branch and no `else` in a pass gives `null`. A nullable place supplies its type. A `let` with no type context reports `null.context_type` (CTRL-10, TYPE-14).
+- Left: A constant bound or generic argument stays deferred when the reader cannot determine its value in a pass.
 
 transpiler: partial
 
