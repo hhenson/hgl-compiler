@@ -1,0 +1,155 @@
+module demo.instance_literals
+
+# GEN-3, GEN-7, EXPR-5: candidate fitting and result use are checked in
+# each instance; the same source literal is an i64 or f64 there.
+operator n1<L, C>(items: C, zero: L? = null) -> L
+impl const fn n1<V>(items: list<V>, zero: V? = null) -> V
+    requires V in {i64, f64} => if zero == null { items[0] } else { zero + items[0] }
+operator n2<L, C, const on: bool = true>(items: C, zero: L? = null) -> L
+impl const fn n2<V, const on: bool = true>(items: list<V>, zero: V? = null) -> V
+    requires V in {i64, f64} && on => if zero == null { items[0] } else { zero + items[0] }
+
+const fn value_n1_int<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} => n1(items, seed) + n1(items, 1)
+const fn value_n1_negative_int<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} => n1(items, seed) + n1(items, -1)
+const fn value_n1_float<V>(items: list<V>, seed: V) -> V requires V in {f64} => n1(items, seed) + n1(items, 1.0)
+const fn value_n1_negative_float<V>(items: list<V>, seed: V) -> V requires V in {f64} => n1(items, seed) + n1(items, -1.0)
+
+const fn value_n2_int<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} => n2(items, seed) + n2(items, 1)
+const fn value_n2_negative_int<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} => n2(items, seed) + n2(items, -1)
+const fn value_n2_float<V>(items: list<V>, seed: V) -> V requires V in {f64} => n2(items, seed) + n2(items, 1.0)
+const fn value_n2_negative_float<V>(items: list<V>, seed: V) -> V requires V in {f64} => n2(items, seed) + n2(items, -1.0)
+
+fn node_n1_int<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} { when { return n1(items, seed) + n1(items, 1) } }
+fn node_n1_negative_int<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} { when { return n1(items, seed) + n1(items, -1) } }
+fn node_n1_float<V>(items: list<V>, seed: V) -> V requires V in {f64} { when { return n1(items, seed) + n1(items, 1.0) } }
+fn node_n1_negative_float<V>(items: list<V>, seed: V) -> V requires V in {f64} { when { return n1(items, seed) + n1(items, -1.0) } }
+
+fn node_n2_int<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} { when { return n2(items, seed) + n2(items, 1) } }
+fn node_n2_negative_int<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} { when { return n2(items, seed) + n2(items, -1) } }
+fn node_n2_float<V>(items: list<V>, seed: V) -> V requires V in {f64} { when { return n2(items, seed) + n2(items, 1.0) } }
+fn node_n2_negative_float<V>(items: list<V>, seed: V) -> V requires V in {f64} { when { return n2(items, seed) + n2(items, -1.0) } }
+
+fn graph_n1_int<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} => n1(items, seed) + n1(items, 1)
+fn graph_n1_negative_int<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} => n1(items, seed) + n1(items, -1)
+fn graph_n1_float<V>(items: list<V>, seed: V) -> V requires V in {f64} => n1(items, seed) + n1(items, 1.0)
+fn graph_n1_negative_float<V>(items: list<V>, seed: V) -> V requires V in {f64} => n1(items, seed) + n1(items, -1.0)
+
+fn graph_n2_int<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} => n2(items, seed) + n2(items, 1)
+fn graph_n2_negative_int<V>(items: list<V>, seed: V) -> V requires V in {i64, f64} => n2(items, seed) + n2(items, -1)
+fn graph_n2_float<V>(items: list<V>, seed: V) -> V requires V in {f64} => n2(items, seed) + n2(items, 1.0)
+fn graph_n2_negative_float<V>(items: list<V>, seed: V) -> V requires V in {f64} => n2(items, seed) + n2(items, -1.0)
+
+test value_n1_uses_its_instance_literal {
+    assert value_n1_int([1.5, 2.0], 0.5) == 4.5
+    assert value_n1_int([3, 4], 2) == 9
+    assert value_n1_negative_int([1.5, 2.0], 0.5) == 2.5
+    assert value_n1_negative_int([3, 4], 2) == 7
+    assert value_n1_float([1.5, 2.0], 0.5) == 4.5
+    assert value_n1_negative_float([1.5, 2.0], 0.5) == 2.5
+    assert value_n1_int([1.5, 2.0], 0.5) == n1([1.5, 2.0], 0.5) + n1([1.5, 2.0], 1)
+}
+
+test value_n2_uses_its_instance_literal {
+    assert value_n2_int([1.5, 2.0], 0.5) == 4.5
+    assert value_n2_int([3, 4], 2) == 9
+    assert value_n2_negative_int([1.5, 2.0], 0.5) == 2.5
+    assert value_n2_negative_int([3, 4], 2) == 7
+    assert value_n2_float([1.5, 2.0], 0.5) == 4.5
+    assert value_n2_negative_float([1.5, 2.0], 0.5) == 2.5
+    assert value_n2_int([1.5, 2.0], 0.5) == n2([1.5, 2.0], 0.5) + n2([1.5, 2.0], 1)
+}
+
+test node_n1_uses_its_instance_literal {
+    assert eval node_n1_int(items: [[1.5, 2.0]], seed: [0.5]) == [4.5]
+    assert eval node_n1_int(items: [[3, 4]], seed: [2]) == [9]
+    assert eval node_n1_negative_int(items: [[1.5, 2.0]], seed: [0.5]) == [2.5]
+    assert eval node_n1_negative_int(items: [[3, 4]], seed: [2]) == [7]
+    assert eval node_n1_float(items: [[1.5, 2.0]], seed: [0.5]) == [4.5]
+    assert eval node_n1_negative_float(items: [[1.5, 2.0]], seed: [0.5]) == [2.5]
+}
+
+test node_n2_uses_its_instance_literal {
+    assert eval node_n2_int(items: [[1.5, 2.0]], seed: [0.5]) == [4.5]
+    assert eval node_n2_int(items: [[3, 4]], seed: [2]) == [9]
+    assert eval node_n2_negative_int(items: [[1.5, 2.0]], seed: [0.5]) == [2.5]
+    assert eval node_n2_negative_int(items: [[3, 4]], seed: [2]) == [7]
+    assert eval node_n2_float(items: [[1.5, 2.0]], seed: [0.5]) == [4.5]
+    assert eval node_n2_negative_float(items: [[1.5, 2.0]], seed: [0.5]) == [2.5]
+}
+
+test graph_n1_uses_its_instance_literal {
+    assert eval graph_n1_int(items: [[1.5, 2.0]], seed: [0.5]) == [4.5]
+    assert eval graph_n1_int(items: [[3, 4]], seed: [2]) == [9]
+    assert eval graph_n1_negative_int(items: [[1.5, 2.0]], seed: [0.5]) == [2.5]
+    assert eval graph_n1_negative_int(items: [[3, 4]], seed: [2]) == [7]
+    assert eval graph_n1_float(items: [[1.5, 2.0]], seed: [0.5]) == [4.5]
+    assert eval graph_n1_negative_float(items: [[1.5, 2.0]], seed: [0.5]) == [2.5]
+}
+
+test graph_n2_uses_its_instance_literal {
+    assert eval graph_n2_int(items: [[1.5, 2.0]], seed: [0.5]) == [4.5]
+    assert eval graph_n2_int(items: [[3, 4]], seed: [2]) == [9]
+    assert eval graph_n2_negative_int(items: [[1.5, 2.0]], seed: [0.5]) == [2.5]
+    assert eval graph_n2_negative_int(items: [[3, 4]], seed: [2]) == [7]
+    assert eval graph_n2_float(items: [[1.5, 2.0]], seed: [0.5]) == [4.5]
+    assert eval graph_n2_negative_float(items: [[1.5, 2.0]], seed: [0.5]) == [2.5]
+}
+
+# GEN-7: no candidate is known without the membership.
+test n1_still_needs_a_membership {
+    # expect-error(operator, "operator.no_candidate")
+    const fn lit<V>(items: list<V>) -> V => n1(items, 1)
+}
+# GEN-3: the i64 member cannot take the float literal.
+test n1_still_checks_every_member {
+    # expect-error(operator, "operator.no_candidate")
+    const fn lit<V>(items: list<V>) -> V requires V in {i64, f64} => n1(items, 1.0)
+}
+# GEN-5, GEN-8: a written result remains a constraint.
+test n1_still_honors_a_written_result {
+    # expect-error(operator, "operator.no_candidate")
+    const fn fixed<V>(items: list<V>) -> i64 requires V in {i64, f64} => n1<i64>(items, 1)
+}
+
+# GEN-7: no candidate is known without the membership.
+test n2_still_needs_a_membership {
+    # expect-error(operator, "operator.no_candidate")
+    const fn lit<V>(items: list<V>) -> V => n2(items, 1)
+}
+# GEN-3: the i64 member cannot take the float literal.
+test n2_still_checks_every_member {
+    # expect-error(operator, "operator.no_candidate")
+    const fn lit<V>(items: list<V>) -> V requires V in {i64, f64} => n2(items, 1.0)
+}
+# GEN-5, GEN-8: a written result remains a constraint.
+test n2_still_honors_a_written_result {
+    # expect-error(operator, "operator.no_candidate")
+    const fn fixed<V>(items: list<V>) -> i64 requires V in {i64, f64} => n2<i64>(items, 1)
+}
+
+
+# UNIT-8: generic wrappers retain the existing configuration-default
+# metadata while literal result requests are resolved per instance.
+operator configured<T, V>{fallback: T = 2}(value: V, literal: T) -> i64
+impl const fn configured<V>{fallback: f64}(value: V, literal: f64) -> i64
+    => if fallback == 2.0 { 7 } else { 9 }
+operator configured_option<T, V, const on: bool = true>{fallback: T = 2}(value: V, literal: T) -> i64
+impl const fn configured_option<V, const on: bool = true>{fallback: f64}(value: V, literal: f64) -> i64
+    requires on => if fallback == 2.0 { 7 } else { 9 }
+const fn configured_wrapper<V>(value: V) -> i64 requires V in {i64, f64} => configured(value, 1)
+const fn configured_option_wrapper<V>(value: V) -> i64 requires V in {i64, f64} => configured_option(value, 1)
+test configuration_defaults_keep_their_values {
+    assert configured_wrapper(3) == 7
+    assert configured_wrapper(1.5) == 7
+    assert configured_option_wrapper(3) == 7
+    assert configured_option_wrapper(1.5) == 7
+}
+
+# GEN-3, GEN-7: recording a membership-admitted result also retains
+# consumers in an operator chain that has no literal in its generic body.
+const fn membership_chain<V>(a: V, b: V, c: V) -> V requires V in {i64, f64} => a + b * c
+
+test literal_free_membership_results_keep_their_consumers {
+    assert membership_chain(3, 2, 4) == 11
+    assert membership_chain(1.5, 2.0, 0.5) == 2.5
+}
