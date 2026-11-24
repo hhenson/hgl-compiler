@@ -44,7 +44,9 @@ use std::process::Command;
 use serde_json::Value;
 use walkdir::WalkDir;
 
-use super::build::{Interrupt, lock, native_command, quoted, write_if_changed};
+use super::build::{
+    Interrupt, lock, native_command, native_tool_command, quoted, write_if_changed,
+};
 use super::stamp::file_digest;
 
 mod package;
@@ -175,7 +177,7 @@ fn cmake_command(program: &Path, held: &fs::File) -> Result<Command, String> {
 
 /// A version of what is made for a toolchain: raised when what this
 /// driver makes changes, so that what an older `hgl` made is not used.
-const FORMAT: u32 = 4;
+const FORMAT: u32 = 5;
 
 /// The family of compilers a platform builds the cpp target with
 /// (`docs/cpp-target.md`): GCC on Linux, Apple clang on macOS. Each way
@@ -1117,7 +1119,7 @@ fn probe_compiler(
 ) -> Option<(Family, String, Option<String>)> {
     let output = interrupt
         .output(
-            Command::new(driver)
+            native_tool_command(driver)
                 .args(["-dM", "-E", "-v", "-x", "c++", "/dev/null"])
                 .env("LC_ALL", "C"),
         )
@@ -1139,7 +1141,11 @@ fn probe_compiler(
 /// An absent version leaves the linker's selection unchanged.
 fn linker_version(linker: &Path, interrupt: &Interrupt) -> String {
     interrupt
-        .output(Command::new(linker).arg("--version").env("LC_ALL", "C"))
+        .output(
+            native_tool_command(linker)
+                .arg("--version")
+                .env("LC_ALL", "C"),
+        )
         .ok()
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
