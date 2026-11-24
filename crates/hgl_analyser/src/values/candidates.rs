@@ -3241,7 +3241,7 @@ fn candidate_bindings(
                 found[generic] = Some(Argument::Type(actual.clone()));
                 continue;
             }
-            if matches!(parameter.ty, Type::Tuple(_)) {
+            if super::inference::has_tuple_equation(&parameter.ty, generics) {
                 tuple_inputs.push((&parameter.ty, actual));
             }
             let before: Vec<bool> = found.iter().map(Option::is_some).collect();

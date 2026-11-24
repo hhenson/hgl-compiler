@@ -224,3 +224,75 @@ const fn wrong_pair_callback() -> tuple<i64, i64> => apply_pair(echo<f64, f64>, 
 const fn wrong_single_callback() -> tuple<i64> => apply_single(echo<f64>, (1,))
 # expect-error(type, "type.mismatch")
 const fn wrong_named_callback() -> bool => check_named_single(echo<f64>, value: (1,))
+
+# GEN-7/GEN-10: every guaranteed tuple member carries universal category facts.
+const fn first_structure<...Us>(value: tuple<Us>) -> bool
+    requires each U in types(Us) { U in struct } => only_struct(value[0])
+const fn second_structure<...Us{2:*}>(value: tuple<Us>) -> bool
+    requires each U in types(Us) { U in struct } => only_struct(value[1])
+const fn forwarded_structure<...Us>(value: tuple<Us>) -> bool
+    requires each U in types(Us) { U in struct } => first_structure(value)
+const fn listed_structure<...Us>(values: list<tuple<Us>>) -> bool
+    requires each U in types(Us) { U in struct } => only_struct(values[0][0])
+const fn nested_structure<...Us>(value: tuple<tuple<Us>, i64>) -> bool
+    requires each U in types(Us) { U in struct } => only_struct(value[0][0])
+test guaranteed_member_categories {
+    assert first_structure((Label(text: "a"),))
+    assert second_structure((Label(text: "a"), Point(x: 1.0, y: 2.0)))
+    assert forwarded_structure((Point(x: 1.0, y: 2.0),))
+    assert listed_structure([(Label(text: "b"),)])
+    assert nested_structure(((Label(text: "c"),), 1))
+}
+
+# GEN-3: revisit tuple equations in these four input containers only.
+const fn list_partition<...As, ...Bs>(joined: list<tuple<As, Bs>>, left: tuple<As>) -> bool => true
+const fn list_partition_reversed<...As, ...Bs>(left: tuple<As>, joined: list<tuple<As, Bs>>) -> bool => true
+const fn dict_partition<...As, ...Bs>(joined: dict<str, tuple<As, Bs>>, left: tuple<As>) -> bool => true
+const fn optional_partition<...As, ...Bs>(joined: tuple<As, Bs>?, left: tuple<As>?) -> bool => true
+const fn nested_partition<...As, ...Bs>(joined: tuple<tuple<As, Bs>>, left: tuple<As>) -> bool => true
+operator list_partition_op<J, L>(joined: J, left: L) -> bool
+impl const fn list_partition_op<...As, ...Bs>(joined: list<tuple<As, Bs>>, left: tuple<As>) -> bool => true
+operator dict_partition_op<J, L>(joined: J, left: L) -> bool
+impl const fn dict_partition_op<...As, ...Bs>(joined: dict<str, tuple<As, Bs>>, left: tuple<As>) -> bool => true
+operator optional_partition_op<J, L>(joined: J, left: L) -> bool
+impl const fn optional_partition_op<...As, ...Bs>(joined: tuple<As, Bs>?, left: tuple<As>?) -> bool => true
+operator nested_partition_op<J, L>(joined: J, left: L) -> bool
+impl const fn nested_partition_op<...As, ...Bs>(joined: tuple<tuple<As, Bs>>, left: tuple<As>) -> bool => true
+test nested_partition_evidence {
+    let listed: list<tuple<i64, str>> = [(1, "a")]
+    let keyed: dict<str, tuple<i64, str>> = ["k": (2, "b")]
+    let optional: tuple<i64, str>? = (3, "c")
+    let nested: tuple<tuple<i64, str>> = ((4, "d"),)
+    assert list_partition(listed, (1,))
+    assert list_partition_reversed((1,), listed)
+    assert dict_partition(keyed, (2,))
+    assert optional_partition(optional, (3,))
+    assert nested_partition(nested, (4,))
+    assert list_partition_op(listed, (1,))
+    assert dict_partition_op(keyed, (2,))
+    assert optional_partition_op(optional, (3,))
+    assert nested_partition_op(nested, (4,))
+}
+
+# These facts are not supplied, and these keys are not guaranteed.
+# expect-error(constraint, "requires.unmet")
+const fn no_member_category<...Us>(value: tuple<Us>) -> bool => only_struct(value[0])
+# expect-error(constraint, "requires.unmet")
+const fn a_membership_is_not_a_category<...Us>(value: tuple<Us>) -> bool requires each U in types(Us) { U in {i64, str} } => only_struct(value[0])
+# expect-error(constraint, "requires.unmet")
+const fn an_existential_is_not_universal<...Us>(value: tuple<Us>) -> bool requires any U in types(Us) { U in struct } => only_struct(value[0])
+# expect-error(type, "tuple.index")
+const fn no_second_member<...Us>(value: tuple<Us>) -> bool { let selected = value[1]
+    return true }
+# expect-error(type, "tuple.index")
+const fn a_fixed_prefix_proves_no_member<...Us>(value: tuple<i64, Us>) -> bool { let selected = value[1]
+    return true }
+# expect-error(type, "type.mismatch")
+const fn wrong_nested_partition() -> bool => list_partition([("a", true)], (1,))
+
+# hgl_spec#240 leaves tuple arity ranking open: preserve ambiguity.
+operator arity<T>(value: T) -> bool
+impl const fn arity<...Ts>(value: tuple<Ts>) -> bool => true
+impl const fn arity<A, B>(value: tuple<A, B>) -> bool => true
+# expect-error(operator, "operator.ambiguous")
+const fn tuple_arity_stays_ambiguous() -> bool => arity((1, "a"))

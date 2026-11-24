@@ -706,7 +706,7 @@ impl<'a> Typer<'a> {
                 let actual = this.inferred_from(listed, value, takes);
                 let actual =
                     this.inference_input(pattern, &actual, generics, found, *result_fallback);
-                if matches!(pattern, Type::Tuple(_)) {
+                if has_tuple_equation(pattern, generics) {
                     tuple_evidence.push((pattern, actual.clone()));
                 }
                 if let Some(generic) = widenable {
@@ -1427,6 +1427,23 @@ fn infer_tuple(
             infer(pattern, actual, generics, found);
             position += 1;
         }
+    }
+}
+
+/// GEN-3 and GEN-10: retain tuple-pack equations in these input
+/// containers. This discovers evidence; infer still performs every binding.
+pub(super) fn has_tuple_equation(ty: &Type, generics: &[GenericParameter]) -> bool {
+    match ty {
+        Type::Tuple(elements) => elements.iter().any(|element| {
+            bare_parameter(element, generics)
+                .is_some_and(|index| matches!(generics[index].kind, GenericKind::Pack { .. }))
+                || has_tuple_equation(element, generics)
+        }),
+        Type::List { element, .. } | Type::Nullable(element) => {
+            has_tuple_equation(element, generics)
+        }
+        Type::Dict { value, .. } => has_tuple_equation(value, generics),
+        _ => false,
     }
 }
 

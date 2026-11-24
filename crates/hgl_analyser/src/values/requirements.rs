@@ -4067,17 +4067,19 @@ pub(super) fn category_holds(program: &Program, ty: &Type, category: SyntaxKind)
     if let Some(known) = known_category(ty, category) {
         return Some(known);
     }
-    let Type::Parameter { at, .. } = ty else {
-        return None;
+    let at = match ty {
+        Type::Parameter { at, .. } => *at,
+        Type::PackMember { pack, key, .. } if guaranteed_member(program, *pack, key) => *pack,
+        _ => return None,
     };
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let Some((parameters, condition)) = required(program, (index, position)) else {
                 continue;
             };
-            if parameters.iter().any(|generic| generic.at == *at) {
+            if parameters.iter().any(|generic| generic.at == at) {
                 let file = module.declarations[position].at.file;
-                return category_facts(&condition, module, file, *at, true)
+                return category_facts(&condition, module, file, at, true)
                     .into_iter()
                     .find_map(|(stated, positive)| {
                         if stated == category {
@@ -4092,6 +4094,17 @@ pub(super) fn category_holds(program: &Program, ty: &Type, category: SyntaxKind)
         }
     }
     None
+}
+
+/// GEN-7 and GEN-10: only an existing member inherits universal facts.
+/// A known nonnegative key must be below the pack's effective minimum.
+fn guaranteed_member(program: &Program, pack: Location, key: &Constant) -> bool {
+    let ConstantValue::Int(position) = key.value else {
+        return false;
+    };
+    u64::try_from(position).ok().is_some_and(|position| {
+        type_pack_bounds(program, pack).is_some_and(|(minimum, _)| position < minimum)
+    })
 }
 
 fn known_category(ty: &Type, category: SyntaxKind) -> Option<bool> {
@@ -4984,8 +4997,8 @@ fn each_holds(
     held
 }
 
-/// GEN-10: explicit pack bounds and a non-packed parameter exactly of
-/// type tuple<Us> guarantee lengths. A tuple with other elements does not.
+/// GEN-10: explicit bounds and exact tuple<Us> occurrences anywhere in
+/// a non-packed parameter type guarantee lengths. Fixed tuple items do not.
 pub(super) fn type_pack_bounds(program: &Program, at: Location) -> Option<(u64, Option<u64>)> {
     for detail in program.modules.iter().flat_map(|module| &module.details) {
         let (generics, parameters) = match detail {
@@ -5010,8 +5023,13 @@ pub(super) fn type_pack_bounds(program: &Program, at: Location) -> Option<(u64, 
                 minimum = minimum.max(parameter.pack_bounds.0);
                 maximum = maximum.into_iter().chain(parameter.pack_bounds.1).min();
             } else if parameter.pack.is_none()
-                && matches!(&parameter.ty, Type::Tuple(elements) if matches!(elements.as_slice(),
-                    [Type::Parameter { at: declared, .. }] if *declared == at))
+                && parameter.ty.any_part(
+                    &|part| {
+                        matches!(part, Type::Tuple(elements) if matches!(elements.as_slice(),
+                        [Type::Parameter { at: declared, .. }] if *declared == at))
+                    },
+                    &|_| false,
+                )
             {
                 minimum = minimum.max(1);
             }

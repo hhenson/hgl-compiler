@@ -438,3 +438,109 @@ fn callback_pack_commitments_cover_singletons_and_named_arguments() {
         );
     }
 }
+
+#[test]
+fn guaranteed_tuple_members_inherit_only_universal_categories() {
+    // GEN-7 and GEN-10: indexing keeps each source fact at an existing key.
+    let base = "module m\nstruct P { x: i64 }\nconst fn inner<T>(x: T) -> bool requires T in struct => true\n";
+    for (bounds, index) in [("{1:*}", 0), ("{2:*}", 1), ("", 0)] {
+        accepts(&format!(
+            "{base}const fn outer<...Us{bounds}>(x: tuple<Us>) -> bool requires each U in types(Us) {{ U in struct }} => inner(x[{index}])"
+        ));
+        rejects(
+            &format!(
+                "{base}const fn outer<...Us{bounds}>(x: tuple<Us>) -> bool => inner(x[{index}])"
+            ),
+            "constraint/requires.unmet",
+        );
+    }
+    accepts(&format!(
+        "{base}const fn forward<...Us>(x: tuple<Us>) -> bool requires each U in types(Us) {{ U in struct }} => inner(x[0])\nconst fn outer<...Vs>(x: tuple<Vs>) -> bool requires each V in types(Vs) {{ V in struct }} => forward(x)\ntest t {{ assert outer((P(x: 1),)) }}"
+    ));
+    rejects(
+        &format!(
+            "{base}const fn outer<...Us>(x: tuple<Us>) -> bool requires any U in types(Us) {{ U in struct }} => inner(x[0])"
+        ),
+        "constraint/requires.unmet",
+    );
+    rejects(
+        &format!(
+            "{base}const fn outer<...Us>(x: tuple<Us>) -> bool requires each U in types(Us) {{ U in struct || U in enum }} => inner(x[0])"
+        ),
+        "constraint/requires.unmet",
+    );
+    rejects(
+        &format!(
+            "{base}const fn outer<...Us>(x: tuple<i64, Us>) -> bool requires each U in types(Us) {{ U in struct }} => inner(x[1])"
+        ),
+        "type/tuple.index",
+    );
+}
+
+#[test]
+fn nested_tuple_evidence_is_revisited_inside_the_named_containers() {
+    // GEN-3: retain equations, without rereading values or guessing partitions.
+    for (ty, value) in [
+        ("list<tuple<As, Bs>>", "[(1, \"a\")]"),
+        ("dict<str, tuple<As, Bs>>", "[\"k\": (1, \"a\")]"),
+        ("tuple<As, Bs>?", "(1, \"a\")"),
+        ("tuple<tuple<As, Bs>>", "((1, \"a\"),)"),
+    ] {
+        // UNIT-8: an optional input cannot precede a required one.
+        let left = if ty.ends_with('?') {
+            "tuple<As>?"
+        } else {
+            "tuple<As>"
+        };
+        let actual = ty.replace("As, Bs", "i64, str");
+        let setup = format!("let joined: {actual} = {value}\n");
+        let declared = format!(
+            "module m\nconst fn f<...As, ...Bs>(joined: {ty}, left: {left}) -> bool => true\n"
+        );
+        accepts(&format!(
+            "{declared}test t {{ {setup}assert f(joined, (1,)) }}"
+        ));
+        rejects(
+            &format!("{declared}test t {{ {setup}assert f(joined, (true,)) }}"),
+            "type/type.mismatch",
+        );
+        let candidate = format!(
+            "module m\noperator f<J, L>(joined: J, left: L) -> bool\nimpl const fn f<...As, ...Bs>(joined: {ty}, left: {left}) -> bool => true\n"
+        );
+        accepts(&format!(
+            "{candidate}test t {{ {setup}assert f(joined, (1,)) }}"
+        ));
+        rejects(
+            &format!("{candidate}test t {{ {setup}assert f(joined, (true,)) }}"),
+            "operator/operator.no_candidate",
+        );
+    }
+}
+
+#[test]
+fn nested_exact_tuples_guarantee_their_pack_member_exists() {
+    // GEN-10: denoting tuple<Us> needs a nonempty Us even inside a container.
+    accepts(
+        "module m\nconst fn in_list<...Us>(values: list<tuple<Us>>) -> bool { let selected = values[0][0]\n return true }\nconst fn in_tuple<...Us>(value: tuple<tuple<Us>, i64>) -> bool { let selected = value[0][0]\n return true }\ntest t { assert in_list([(1, \"a\")])\n assert in_tuple(((1, \"a\"), 2)) }",
+    );
+    rejects(
+        "module m\nconst fn no_proof<...Us>(value: tuple<tuple<i64, Us>, str>) -> bool { let selected = value[0][1]\n return true }",
+        "type/tuple.index",
+    );
+}
+
+#[test]
+fn tuple_arity_alone_remains_ambiguous_pending_spec240() {
+    // hgl_spec#240: GEN-5 has not settled fixed tuple arity versus a pack.
+    for candidates in [
+        "impl const fn p<...Ts>(x: tuple<Ts>) -> bool => true\nimpl const fn p<A, B>(x: tuple<A, B>) -> bool => true\n",
+        "impl const fn p<A, B>(x: tuple<A, B>) -> bool => true\nimpl const fn p<...Ts>(x: tuple<Ts>) -> bool => true\n",
+    ] {
+        rejects(
+            &format!(
+                "module m\noperator p<T>(x: T) -> bool\n{candidates}test t {{ assert p((1, \"a\")) }}"
+            ),
+            "operator/operator.ambiguous",
+        );
+    }
+}
