@@ -749,13 +749,16 @@ runner: planned
 
 transpiler: partial
 
-- Fixed-size list `map` runs its HGL candidate. The keyed and growing-list candidates are declared and C++ reports them as unsupported (#370).
+- Fixed-size list `map` runs its HGL candidate. C++ wires a result-bearing keyed map over one split dictionary.
+- Left: native growing lists, multiple split dictionaries and resultless maps (#370).
 
 ## MAP-2
 
 transpiler: partial
 
-- A fixed-size map binds positional and named inputs, splits the fitted list inputs, and supplies whole inputs to each child. An explicitly specialized operator can supply the callback's member types (FN-17). An omitted callback input uses the callback's default (FN-8, UNIT-8). Native forms await #370.
+- A fixed-size map binds positional and named inputs, splits the fitted list inputs, and supplies whole inputs to each child. An explicitly specialized operator can supply the callback's member types (FN-17). An omitted callback input uses the callback's default (FN-8, UNIT-8).
+- The native one-dictionary map binds the callback's checked arguments, passes the selected dictionary entry, and gives each whole input to every child.
+- Left: multiple split dictionaries and growing lists (#370).
 
 ## MAP-3
 
@@ -765,15 +768,17 @@ analyser: done
 
 ## MAP-4
 
-transpiler: planned
+transpiler: partial
 
-- #370.
+- In a one-dictionary map the explicit key set or split dictionary supplies K. The keyed candidate requires an injected parameter to have type K.
+- Left: multiple split dictionaries (#370).
 
 ## MAP-5
 
-transpiler: planned
+transpiler: partial
 
-- #370.
+- One split dictionary supplies the keys when the option is omitted or written as `null`. An explicit nonnullable key set selects its own keys and has no children before it becomes valid.
+- Left: joins of multiple dictionaries and nullable `keys` connections, which need nullable set publications to switch the key set (#370).
 
 ## MAP-6
 
@@ -785,25 +790,29 @@ transpiler: partial
 
 transpiler: partial
 
-- A fixed-size map composes a child for each position at build time. Native child lifetimes await #370.
+- A fixed-size map composes a child for each position at build time. In the supported keyed map, hgraph keeps a child as its inputs change and starts a new child when a removed key returns.
+- Left: child lifetimes for the remaining native forms (#370).
 
 ## MAP-8
 
-transpiler: planned
+transpiler: partial
 
-- #370.
+- A one-dictionary map with explicit keys leaves a split input invalid while its selected key has no entry.
+- Left: missing entries under joins of multiple dictionaries or lists (#370).
 
 ## MAP-9
 
 transpiler: partial
 
-- A fixed-size map supplies each child's position to the default `key` parameter or the renamed parameter. Native keys await #370.
+- A fixed-size map supplies each child's position to the default `key` parameter or the renamed parameter. The supported keyed map supplies a key connection when the child starts, regardless of the parameter's position.
+- Left: key injection in the other native forms (#370).
 
 ## MAP-10
 
 transpiler: partial
 
-- Fixed-size results hold the children's publications and propagate an error leaving a child. A callback with no result needs the Core declaration tracked in [hgl_core#147](https://github.com/hhenson/hgl_core/issues/147). Native result shapes await #370.
+- Fixed-size and supported one-dictionary maps hold the children's publications and propagate an error leaving a child. The keyed map removes an entry when its child stops.
+- Left: other native result shapes and callbacks with no result (#370).
 
 ## RED-1
 

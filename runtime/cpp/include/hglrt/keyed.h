@@ -383,6 +383,30 @@ void keyed_publish(const E& out, const endpoint_delta_t<E>& delta) {
     hgraph::apply_delta(out.base(), keyed_form<schema_of<E>>::change(delta).view());
 }
 
+namespace keyed_detail {
+/// Reuse keyed publication wherever a generic publisher holds this form.
+template <class Schema>
+struct KeyedPublisher {
+    template <class O>
+    static void whole(const O& out, const schema_value_t<Schema>& value, std::source_location) {
+        keyed_publish(out, value);
+    }
+
+    template <class O>
+    static void change(const O& out, const delta_t<schema_value_t<Schema>>& value, std::source_location) {
+        keyed_publish(out, value);
+    }
+};
+} // namespace keyed_detail
+
+/// FN-3: a constant set publishes whole through its membership port.
+template <class K>
+struct publisher<hgraph::TSS<K>> : keyed_detail::KeyedPublisher<hgraph::TSS<K>> {};
+
+/// FN-3: a constant dictionary publishes whole through its keyed port.
+template <class K, class V>
+struct publisher<hgraph::TSD<K, V>> : keyed_detail::KeyedPublisher<hgraph::TSD<K, V>> {};
+
 // ---- A dictionary's entry (TIME-1, TIME-9, EXPR-7) -------------------------
 //
 // TIME-1: "A child of a collection (TIME-9), an element, a field or an

@@ -38,7 +38,7 @@ impl Emitter<'_> {
         {
             return self.missing(
                 arguments[keys].value.at,
-                "a keyed map with nullable lifecycle keys",
+                "a keyed map with a nullable keys connection",
             );
         }
 
