@@ -391,3 +391,45 @@ fn core_format_and_write_run_on_the_sdk() {
         ["start 0", "passed 0"]
     );
 }
+
+/// FN-14, FN-17 and FMT-3: specialized callbacks carry the const inputs
+/// that determined their text, including from a node's handler.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn distinguishes_anonymous_formatters_by_enclosing_const_inputs() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("anonymous-format-const-inputs");
+    let file = write(
+        &root,
+        "formatting.hgl",
+        r#"module anonymous_const_keys
+const fn apply_float(f: const fn(f64) -> str, v: f64) -> str => f(v)
+const fn apply_typed<T>(f: const fn(T) -> str, v: T) -> str => f(v)
+fn node_format(x: f64, const pattern: str) -> str {
+    when { return apply_float(fn(v) => format(pattern, v), x) }
+}
+const fn value_format(const pattern: str) -> str =>
+    format(pattern, 1.0) + "|" + apply_float(fn(v) => format(pattern, v), 1.5)
+const fn generic_format<T>(const pattern: str, x: T) -> str =>
+    format(pattern, 1.0) + "|" + apply_typed(fn(v) => format(pattern, v), x)
+test node_first { assert eval node_format(x: [1.5], pattern: "<{}>") == ["<1.5>"] }
+test node_second { assert eval node_format(x: [1.5], pattern: "[{}]") == ["[1.5]"] }
+test value_first { assert value_format("<{:.1f}>") == "<1.0>|<1.5>" }
+test value_second { assert value_format("[{:.1f}]") == "[1.0]|[1.5]" }
+test generic_first { assert generic_format("<{:.1f}>", 1.5) == "<1.0>|<1.5>" }
+test generic_second { assert generic_format("[{:.1f}]", 1.5) == "[1.0]|[1.5]" }
+"#,
+    );
+    let report = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&report.stdout);
+    assert!(report.status.success(), "{stdout}{}", text(&report.stderr));
+    assert_eq!(
+        stdout
+            .matches("passed   executable  anonymous_const_keys::")
+            .count(),
+        6,
+        "{stdout}"
+    );
+}

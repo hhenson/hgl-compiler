@@ -72,6 +72,7 @@ struct InstanceArguments<'a> {
     packs: &'a PackTypes<'a>,
     type_packs: &'a [TypePackArgument],
     pack_inputs: &'a [PackInput],
+    constants: &'a [crate::ConstInput],
     requirements: &'a [Answer],
     diagnostics: &'a RefCell<Diagnostics>,
     changed_results: RefCell<Vec<Location>>,
@@ -212,6 +213,7 @@ impl Program {
             packs: &PackTypes::new(&[], &[]),
             type_packs: &[],
             pack_inputs: &[],
+            constants: &[],
             requirements: &requirements,
             diagnostics: &reports,
             changed_results: RefCell::new(Vec::new()),
@@ -378,6 +380,7 @@ impl Program {
             packs: &packs,
             type_packs: inputs.type_packs,
             pack_inputs: pending_forwards.unwrap_or_default(),
+            constants: inputs.constants,
             requirements,
             diagnostics,
             changed_results: RefCell::new(Vec::new()),
@@ -700,6 +703,12 @@ impl Program {
             specialization
                 .pack_inputs
                 .extend_from_slice(instance.pack_inputs);
+            specialization.const_inputs.extend(
+                instance
+                    .constants
+                    .iter()
+                    .map(|input| (input.slot, input.key.clone())),
+            );
             self.place_body(&mut function.body, instance, &functions);
             crate::values::record(self, &mut function.body, !function.template.value);
         } else {

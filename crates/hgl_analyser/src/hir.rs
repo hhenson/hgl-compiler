@@ -1307,6 +1307,8 @@ pub struct AnonymousSpecialization {
     pub type_packs: Vec<TypePackArgument>,
     /// The shape of its value packs used in forwarding (FN-19).
     pub pack_inputs: Vec<PackInput>,
+    /// The original slots and normalized keys of its compile-time const inputs.
+    pub const_inputs: Vec<(usize, String)>,
 }
 
 impl AnonymousFunction {
