@@ -1,8 +1,8 @@
 //! Writes constructors, field and delta properties, and access to their places.
 
-use hgl_analyser::hir::{Argument, DefaultExpr, Expr, ExprKind, Value};
+use hgl_analyser::hir::{Argument, Expr, ExprKind, Value};
 use hgl_analyser::{Detail, NamedKind, Type};
-use hgl_lower::calls::field_default;
+use hgl_lower::calls::{DefaultValue, applied_field_default, field_default};
 use hgl_lower::types::inherited;
 
 use crate::emit::Emitter;
@@ -51,7 +51,6 @@ impl Emitter<'_> {
         let Type::Named {
             module,
             declaration,
-            arguments: generics,
             kind: NamedKind::Struct,
             ..
         } = &value.ty
@@ -89,15 +88,24 @@ impl Emitter<'_> {
             };
             let default = member
                 .default
-                .and_then(|default| field_default(program, default));
+                .and_then(|field| field_default(program, field).map(|default| (field, default)));
             let text = match default {
-                Some(default) => {
+                Some((field, declared)) => {
                     let key = (*module, *declaration, usize::MAX - slot);
                     if self.expanding.contains(&key) {
-                        return self.missing(default.value.at, "a default that leaves itself out");
+                        return self.missing(declared.value.at, "a default that leaves itself out");
                     }
+                    let Some(default) =
+                        applied_field_default(program, field, &value.ty, field_type)
+                    else {
+                        self.unsupported(
+                            declared.value.at,
+                            "a default of a generic struct's field",
+                        );
+                        return "0".to_string();
+                    };
                     self.expanding.push(key);
-                    let made = self.field_default(default, field_type, generics.is_empty());
+                    let made = self.field_default(&default, field_type);
                     self.expanding.pop();
                     let Some(made) = made else {
                         return "0".to_string();
@@ -105,8 +113,8 @@ impl Emitter<'_> {
                     Given {
                         slot,
                         text: made,
-                        fails: may_fail(&default.value),
-                        changes: false,
+                        fails: may_fail(&default),
+                        changes: changes(&default),
                         refers: false,
                         ty: slot_type,
                     }
@@ -150,20 +158,9 @@ impl Emitter<'_> {
         })
     }
 
-    /// The default `default` of a field of type `field_type` (TYPE-5),
-    /// read with nothing in scope (UNIT-7). A default of a field of a
-    /// generic struct is of the struct's own parameters: where it is the
-    /// empty collection or null (TYPE-6), it is made of the type the
-    /// application gives the field, and any other is not written yet
-    /// unless `concrete` says the struct has none. `None` where it is not
-    /// written, which is reported.
-    fn field_default(
-        &mut self,
-        default: &DefaultExpr,
-        field_type: &Type,
-        concrete: bool,
-    ) -> Option<String> {
-        let value = &default.value;
+    /// TYPE-5: write the applied default in its own scope (UNIT-7).
+    /// Empty collections and null also have the field type available here.
+    fn field_default(&mut self, value: &DefaultValue<'_>, field_type: &Type) -> Option<String> {
         let empty = matches!(&value.kind, ExprKind::Sequence(entries) if entries.is_empty())
             || matches!(&value.kind, ExprKind::Pairs(entries) if entries.is_empty());
         if empty {
@@ -176,22 +173,7 @@ impl Emitter<'_> {
         if matches!(value.kind, ExprKind::Literal(Value::Null)) {
             return Some("::std::nullopt".to_string());
         }
-        if !concrete && value.ty != *field_type {
-            self.unsupported(value.at, "a default of a generic struct's field");
-            return None;
-        }
-        if changes(value) {
-            self.unsupported(value.at, "a default that runs statements");
-            return None;
-        }
-        let cold = default.clone().into_body();
-        let mut defaults = Scope::cold(self.program, &cold);
-        let text = self.expression(&mut defaults, value);
-        if !defaults.before.is_empty() {
-            self.unsupported(value.at, "a default that propagates a failure");
-            return None;
-        }
-        Some(text)
+        self.write_default(value)
     }
 
     /// A value of the C++ type `ty`, made by `made` (the type itself for
