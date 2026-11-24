@@ -2620,7 +2620,7 @@ the job the way the design needs is dropped.
 | `clap` | `hgl_cli` | command-line parsing and help text |
 | `serde` | `hgl_cli`, `hgl_doc`, `hgl_runner` | serialization of documentation and built test records |
 | `serde_json` | `hgl_cli`, `hgl_doc` | check diagnostics, API documentation and native build records as JSON |
-| `blake3` | `hgl_cli` | content fingerprints for native build reuse |
+| `blake3` | `hgl_cli`, `hgl_doc` | content fingerprints for native build reuse and stable filenames for long documentation module names |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
 | `ctrlc` | `hgl_cli` | handles stops during preparation, native builds and application execution |
 | `nix` | `hgl_cli` on Linux | delivers a termination signal to a native build tool if the build driver dies |

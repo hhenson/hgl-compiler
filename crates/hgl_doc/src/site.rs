@@ -83,8 +83,7 @@ pub(crate) fn build(program: &Program, model: Model<'_>) -> Vec<SiteFile> {
     let pages: Vec<_> = model
         .modules
         .iter()
-        .enumerate()
-        .map(|(index, module)| filename(module.name, index))
+        .map(|module| filename(module.name))
         .collect();
     let mut site = Site {
         program,
@@ -92,10 +91,7 @@ pub(crate) fn build(program: &Program, model: Model<'_>) -> Vec<SiteFile> {
         search: Vec::new(),
     };
     for (module, page) in model.modules.iter().zip(&pages) {
-        let mut index = 0;
-        for declaration in &module.declarations {
-            site.add_target(declaration, page, &mut index);
-        }
+        site.add_module_targets(module, page);
     }
 
     let search = serde_json::to_string(&site.search).expect("the search index has only strings");
@@ -143,7 +139,7 @@ pub(crate) fn build(program: &Program, model: Model<'_>) -> Vec<SiteFile> {
 
 /// Module paths can differ only in case. Encode uppercase ASCII so those
 /// modules have separate pages on case-insensitive filesystems too.
-fn filename(module: &str, index: usize) -> String {
+fn filename(module: &str) -> String {
     let mut name = String::from("mod-");
     for byte in module.bytes() {
         if byte.is_ascii_uppercase() {
@@ -153,8 +149,9 @@ fn filename(module: &str, index: usize) -> String {
         }
     }
     if name.len() > 200 {
-        // Keep the generated path component within filesystem name limits.
-        name = format!("mod-@{index}");
+        // The digest uses the whole module name, including its original case.
+        let digest = blake3::hash(module.as_bytes()).to_hex();
+        name = format!("mod-@{digest}");
     }
     name.push_str(".html");
     name
@@ -204,25 +201,52 @@ fn finish_page(mut page: String) -> String {
     page
 }
 
+fn collect_declarations<'d, 'm>(
+    declaration: &'d Declaration<'m>,
+    public: bool,
+    output: &mut Vec<(&'d Declaration<'m>, bool)>,
+) {
+    output.push((declaration, public));
+    for item in declaration.candidates.iter().chain(&declaration.members) {
+        collect_declarations(item, public, output);
+    }
+}
+
 impl<'a> Site<'a> {
-    fn add_target(&mut self, declaration: &Declaration<'_>, page: &'a str, index: &mut usize) {
-        let anchor = format!("decl-{}-{}", declaration.name, *index);
-        // An operator's search result leads to its page, where all its
-        // candidates appear. They do not need duplicate search rows.
-        if !matches!(
-            declaration.kind,
-            "candidate" | "nativeCandidate" | "nativeCandidateImplementation"
-        ) {
-            self.search.push(SearchEntry {
-                canonical_name: declaration.canonical_name.clone(),
-                href: format!("modules/{page}#{anchor}"),
-            });
+    fn add_module_targets(&mut self, module: &Module<'_>, page: &'a str) {
+        let mut declarations = Vec::new();
+        for declaration in &module.declarations {
+            collect_declarations(declaration, declaration.exported, &mut declarations);
         }
-        self.targets
-            .insert(declaration.source.at, Target { page, anchor });
-        *index += 1;
-        for item in declaration.candidates.iter().chain(&declaration.members) {
-            self.add_target(item, page, index);
+        let mut occurrences = HashMap::<_, usize>::new();
+        // Reserve the public destinations first, including candidates and
+        // members of public declarations, so private duplicates cannot move them.
+        for &(declaration, _) in declarations
+            .iter()
+            .filter(|(_, public)| *public)
+            .chain(declarations.iter().filter(|(_, public)| !*public))
+        {
+            let count = occurrences.entry(declaration.name).or_default();
+            *count += 1;
+            let mut anchor = format!("decl-{}", declaration.name);
+            if *count > 1 {
+                write!(anchor, "-{count}").unwrap();
+            }
+            self.targets
+                .insert(declaration.source.at, Target { page, anchor });
+        }
+        for (declaration, _) in declarations {
+            // Search locates an operator on the same page as its candidates.
+            if !matches!(
+                declaration.kind,
+                "candidate" | "nativeCandidate" | "nativeCandidateImplementation"
+            ) {
+                let Target { anchor, .. } = &self.targets[&declaration.source.at];
+                self.search.push(SearchEntry {
+                    canonical_name: declaration.canonical_name.clone(),
+                    href: format!("modules/{page}#{anchor}"),
+                });
+            }
         }
     }
 

@@ -374,6 +374,7 @@ dependencies = [
 name = "hgl_doc"
 version = "0.2.6"
 dependencies = [
+ "blake3",
  "hgl_analyser",
  "hgl_diagnostics",
  "hgl_lexer",

@@ -175,7 +175,7 @@ try {
     return { visible, hidden, empty, status: status.textContent };
   })()`);
   assert.deepEqual(search, {
-    visible: [['guide.api::increment', 'modules/mod-guide.api.html#decl-increment-0']],
+    visible: [['guide.api::increment', 'modules/mod-guide.api.html#decl-increment']],
     hidden: [], empty: [], status: '',
   });
   const requested = history.filter(({method}) => method === 'Network.requestWillBeSent');
