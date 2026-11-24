@@ -232,6 +232,9 @@ impl Emitter<'_> {
             Type::Scalar(Scalar::Str) if specifier.is_empty() => {
                 let _ = write!(text, "{output} += {value}; ");
             }
+            Type::Scalar(Scalar::Str) if specifier == "?" => {
+                let _ = write!(text, "{output} += ::hglrt::format_quoted({value}); ");
+            }
             Type::Scalar(Scalar::I64 | Scalar::F64 | Scalar::Bool) if specifier.is_empty() => {
                 let _ = write!(
                     text,

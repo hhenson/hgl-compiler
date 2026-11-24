@@ -907,6 +907,7 @@ transpiler: partial
 
 - The C++ target gives primitive fields to pinned fmt with compiled specifiers. It emits checked chrono directives with fractional truncation on `%S`, `%T` and `%[S]`, duration totals and padding on the whole field.
 - Boolean width and alignment without the zero flag use the pinned fmt formatter.
+- A `str` at `{:?}` uses the same HGL literal writer as a string inside a collection (FMT-5).
 
 ## FMT-5
 
