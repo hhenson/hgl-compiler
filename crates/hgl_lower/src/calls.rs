@@ -6,8 +6,13 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 
-use hgl_analyser::hir::{Argument, Body, Callee, DefaultExpr, Expr, ExprKind, Value};
-use hgl_analyser::{Detail, FieldRef, GenericKind, Parameter, Program, Type, substitute_within};
+use hgl_analyser::hir::{
+    Argument, Body, Callee, DefaultExpr, Expr, ExprKind, Form, Value, ValueCategory,
+};
+use hgl_analyser::{
+    DeclarationKind, Detail, FieldRef, GenericKind, Parameter, Program, Role, Type,
+    substitute_within,
+};
 
 /// The evaluated arguments of a call in written order, keeping their
 /// positions in the analysed argument list (EXPR-2). A function
@@ -19,6 +24,100 @@ pub fn runtime_arguments(arguments: &[Argument]) -> impl Iterator<Item = (usize,
         .iter()
         .enumerate()
         .filter(|(_, argument)| !matches!(argument.value.kind, ExprKind::StaticCallable(_)))
+}
+
+/// The selected growing-list ordered reduction and the call of its RED-5 combiner.
+pub struct OrderedReduction {
+    /// The source positions of the list and the seed, in parameter order.
+    pub inputs: [usize; 2],
+    /// A call of `f` with the accumulator and member as two connection locals.
+    pub combiner: Expr,
+}
+
+/// Lower a call of core's native RED-5 candidate using the checked callable binding.
+pub fn ordered_list_reduction(program: &Program, value: &Expr) -> Option<OrderedReduction> {
+    let ExprKind::Call {
+        callee, arguments, ..
+    } = &value.kind
+    else {
+        return None;
+    };
+    let (module, declaration) = callee.declaration()?;
+    if Some(module) != program.core() {
+        return None;
+    }
+    let owner = &program.modules[module];
+    let declared = &owner.declarations[declaration];
+    if declared.name != "reduce"
+        || !matches!(
+            declared.kind,
+            DeclarationKind::NativeCandidate(Role::Temporal, _)
+        )
+    {
+        return None;
+    }
+    let Detail::Callable(signature) = &owner.details[declaration] else {
+        return None;
+    };
+    let [_, items, zero] = signature.parameters.as_slice() else {
+        return None;
+    };
+    if !matches!(items.ty, Type::List { size: None, .. }) || matches!(zero.ty, Type::Nullable(_)) {
+        return None;
+    }
+    let argument = |slot| {
+        arguments
+            .iter()
+            .position(|argument| argument.parameter == Some(slot))
+    };
+    let callback = &arguments[argument(0)?].value;
+    let (ExprKind::StaticCallable(target), Type::Function(function)) =
+        (&callback.kind, &callback.ty)
+    else {
+        return None;
+    };
+    let [accumulator, member] = function.parameters.as_slice() else {
+        return None;
+    };
+    let inputs = [argument(1)?, argument(2)?];
+    let lifted = match target.as_ref() {
+        Callee::Anonymous(function) => function.template.value,
+        _ => {
+            let (module, declaration) = target.declaration()?;
+            program.modules[module].declarations[declaration]
+                .kind
+                .role()
+                == Some(Role::Value)
+        }
+    };
+    let parameters = [accumulator, member]
+        .into_iter()
+        .enumerate()
+        .map(|(position, parameter)| Argument {
+            parameter: Some(position),
+            pack: None,
+            value: Expr {
+                kind: ExprKind::Local(position),
+                ty: parameter.ty().clone(),
+                at: callback.at,
+                category: ValueCategory::Connection,
+            },
+        })
+        .collect();
+    let combiner = Expr {
+        kind: ExprKind::Call {
+            callee: (**target).clone(),
+            arguments: parameters,
+            form: Form::Named,
+            text: None,
+            braced: Vec::new(),
+            lifted,
+        },
+        ty: value.ty.clone(),
+        at: callback.at,
+        category: ValueCategory::Connection,
+    };
+    Some(OrderedReduction { inputs, combiner })
 }
 
 /// What a call that leaves a parameter out gives it (UNIT-8).

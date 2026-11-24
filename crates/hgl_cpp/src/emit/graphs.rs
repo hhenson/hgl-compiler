@@ -23,7 +23,7 @@
 
 use hgl_analyser::hir::{Argument, Body, Callee, Expr, ExprKind, Stmt, Value, ValueCategory};
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Role as Phase, Signature, Type};
-use hgl_lower::calls::{LeftOut, left_out, runtime_arguments};
+use hgl_lower::calls::{LeftOut, left_out, ordered_list_reduction, runtime_arguments};
 
 use super::Emitter;
 use super::anonymous::{anonymous_arguments, anonymous_signature};
@@ -236,6 +236,9 @@ impl Emitter<'_> {
         held: HeldInputs<'_>,
         result_form: ResultForm,
     ) -> String {
+        if let Some(reduction) = ordered_list_reduction(self.program, value) {
+            return self.ordered_reduction(scope, value, &reduction, held);
+        }
         if let ExprKind::Call {
             callee: callee @ Callee::Anonymous(function),
             arguments,
@@ -690,9 +693,16 @@ impl Family for Graphs {
                     DeclarationKind::Implementation(Phase::Temporal, _) => {
                         Some(emitter.temporal_call(scope, value, &[]))
                     }
-                    DeclarationKind::NativeCandidate(Phase::Temporal, _)
-                        if emitter.native_wiring_name(module, declaration).is_some() =>
-                    {
+                    DeclarationKind::NativeCandidate(Phase::Temporal, _) => {
+                        if let Some(reduction) = ordered_list_reduction(emitter.program, value) {
+                            return Some(emitter.ordered_reduction(
+                                scope,
+                                value,
+                                &reduction,
+                                HeldInputs::default(),
+                            ));
+                        }
+                        emitter.native_wiring_name(module, declaration)?;
                         Some(emitter.temporal_call(scope, value, &[]))
                     }
                     _ => None,
