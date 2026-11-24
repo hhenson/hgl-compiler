@@ -15,6 +15,31 @@ pub(crate) struct Markup {
     pub(crate) renderers: Renderers,
 }
 
+impl Markup {
+    /// Appends a plain heading at its level in the reference outline.
+    pub(crate) fn heading(&mut self, level: usize, title: &str) {
+        self.html.push_str(&heading_start(level));
+        self.html.push_str(&escaped(title));
+        self.html.push_str(&heading_end(level));
+    }
+}
+
+fn heading_start(level: usize) -> String {
+    if level <= 6 {
+        format!("<h{level}>")
+    } else {
+        format!("<div role=\"heading\" aria-level=\"{level}\">")
+    }
+}
+
+fn heading_end(level: usize) -> String {
+    if level <= 6 {
+        format!("</h{level}>\n")
+    } else {
+        "</div>\n".to_owned()
+    }
+}
+
 /// Browser assets needed by the rendered forms (SDOC-7).
 #[derive(Default)]
 pub(crate) struct Renderers {
@@ -35,16 +60,22 @@ impl Renderers {
     }
 }
 
-/// Appends a CommonMark fragment. The callback only returns destinations
-/// of declarations present in the generated site.
-pub(crate) fn render(output: &mut Markup, text: &str, link: impl Fn(&str) -> Option<String>) {
-    render_section(output, text, false, link);
+/// Appends CommonMark under the containing heading (SDOC-7). The link
+/// callback only returns destinations present in the generated site.
+pub(crate) fn render(
+    output: &mut Markup,
+    text: &str,
+    parent_level: usize,
+    link: impl Fn(&str) -> Option<String>,
+) {
+    render_section(output, text, parent_level, false, link);
 }
 
 /// HGL fences in a recognized Examples section can run as tests.
 pub(crate) fn render_section(
     output: &mut Markup,
     text: &str,
+    parent_level: usize,
     in_examples: bool,
     link: impl Fn(&str) -> Option<String>,
 ) {
@@ -52,6 +83,12 @@ pub(crate) fn render_section(
     let mut events = Vec::new();
     while let Some((event, range)) = source.next() {
         let event = match event {
+            Event::Start(Tag::Heading { level, .. }) => {
+                Event::Html(heading_start(parent_level + level as usize).into())
+            }
+            Event::End(TagEnd::Heading(level)) => {
+                Event::Html(heading_end(parent_level + level as usize).into())
+            }
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))
                 if matches!(&*info, "hgl" | "hgl no-run" | "math" | "mermaid") =>
             {

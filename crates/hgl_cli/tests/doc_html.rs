@@ -186,6 +186,111 @@ fn site_renders_initializer_headers_and_entry_markdown() {
     assert!(page.contains("<p>A custom section.</p>"));
 }
 
+/// SDOC-3 and SDOC-7: generated titles and Markdown use the containing
+/// module, part, article, or section to set their heading levels.
+#[test]
+fn documentation_headings_follow_their_containing_outline() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    fs::create_dir(&source).unwrap();
+    fs::write(
+        source.join("main.hgl"),
+        r#"/** # Module overview */
+module outline
+
+/**
+# Public overview
+
+Public details
+--------------
+
+Notes:
+    # Public note
+
+    ~~~text
+    # Literal source
+    ~~~
+*/
+export operator echo<T>(value: T) -> T
+
+/**
+# Candidate overview
+
+Type Args:
+    T: The input type.
+
+Args:
+    value: The input value.
+
+        # Argument detail
+
+Returns:
+    # Return detail
+
+    More detail
+    -----------
+
+Examples:
+    ~~~hgl
+    assert true
+    ~~~
+*/
+impl const fn echo<T>(value: T) -> T => value
+
+export struct Packet {
+    /**
+    Member prose.
+
+    **Member note**:
+        # Member detail
+    */
+    value: i64
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        source.join("extra.hgl"),
+        "/** # Part overview */\nmodule outline part details\n",
+    )
+    .unwrap();
+    let site = write_site(root.path(), &source, &[]);
+    let page = fs::read_to_string(site.join("modules/mod-outline.html")).unwrap();
+    for (level, label) in [
+        (2, "Module overview"),
+        (2, "Part details"),
+        (3, "Part overview"),
+        (4, "Public overview"),
+        (5, "Public details"),
+        (5, "Public note"),
+        (4, "Candidates"),
+        (5, "echo"),
+        (6, "Candidate overview"),
+        (6, "Type arguments"),
+        (6, "Arguments"),
+        (6, "Returns"),
+        (6, "Examples"),
+        (4, "Members"),
+        (5, "value"),
+        (6, "<strong>Member note</strong>"),
+    ] {
+        let heading = format!("<h{level}>{label}</h{level}>");
+        assert!(page.contains(&heading), "Missing {heading}");
+    }
+    for (level, label) in [
+        (7, "Argument detail"),
+        (7, "Return detail"),
+        (8, "More detail"),
+        (7, "Member detail"),
+    ] {
+        let heading = format!("<div role=\"heading\" aria-level=\"{level}\">{label}</div>");
+        assert!(page.contains(&heading), "Missing {heading}");
+    }
+    assert_eq!(page.matches("<h1>").count(), 1);
+    assert!(page.contains("<code class=\"language-text\"># Literal source\n</code>"));
+    assert!(page.contains("data-example=\"runnable\""));
+}
+
 #[test]
 fn site_bytes_do_not_depend_on_source_location_or_line_endings() {
     let lf = tempdir().unwrap();

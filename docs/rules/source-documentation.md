@@ -58,6 +58,7 @@ docs: done
 
 - The JSON model carries Markdown text, preserving fenced blocks
 - HTML renders CommonMark tables and displays authored HTML as text
+- HTML places section titles and Markdown headings beneath their containing module, part or declaration
 - Inline and fenced formulas and Mermaid fences render with local assets, with source text remaining visible on rendering failure
 
 ## SDOC-8
