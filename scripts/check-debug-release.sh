@@ -103,9 +103,15 @@ list_engine_source() {
         "${gdb[@]}" -ex "set substitute-path /hgl-release/hgraph \"$source\"" \
             -ex "list $function" "$library" 2>&1
     else
+        # Listing by name can choose the declaration in node.h. Use the
+        # function's debug line so the check sees the implementation.
+        local line
+        line=$(lookup_symbol "$library" "$function" |
+            sed -nE 's@^[[:space:]]*LineEntry: .*/node\.cpp:([0-9]+)(:[0-9]+)?$@\1@p')
+        [[ $line =~ ^[0-9]+$ ]] || fail "LLDB did not find the engine implementation line"
         "${lldb[@]}" -o "target create '$library'" \
             -o "settings set target.source-map /hgl-release/hgraph \"$source\"" \
-            -o "source list -n $function" 2>&1
+            -o "source list -f /hgl-release/hgraph/src/hgraph/runtime/node.cpp -l $line" 2>&1
     fi
 }
 
