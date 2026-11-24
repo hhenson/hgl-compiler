@@ -194,6 +194,66 @@ fn a_packed_child_needs_its_own_guard() {
     );
 }
 
+/// TIME-9 and GEN-7: core's activity query rejects the fitted child at
+/// the call. It reports the same reason as for an ordinary input's child.
+#[test]
+fn activity_rejects_a_selected_pack_child_in_its_instance() {
+    let checked = module(concat!(
+        "use core as c\n",
+        "fn packed<...As>(items: ...As) -> bool {\n",
+        "    when modified(items[0][0]) { return c::is_active<i64>(input: (items[0][0])) }\n",
+        "}\n",
+        "fn fitted(items: list<i64>) -> bool => packed(items)\n",
+        "fn ordinary(items: list<i64>) -> bool {\n",
+        "    when modified(items[0]) { return is_active(items[0]) }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:40 phase/endpoint.argument TIME-9",
+            "m.hgl:8:48 phase/endpoint.argument TIME-9",
+        ],
+        "{}",
+        checked.report
+    );
+    assert_eq!(checked.findings[0].message, checked.findings[1].message);
+}
+
+/// TIME-1 and TIME-9: a fitted delta read still needs the child's
+/// admission, and an atomic's element is no endpoint for a time read.
+#[test]
+fn fitted_pack_child_observations_keep_the_ordinary_checks() {
+    let checked = module(concat!(
+        "fn raw_delta<...As>(trigger: bool, items: ...As) -> i64 {\n",
+        "    when modified(trigger) && valid([]) { return delta_value(items[0][0]) }\n",
+        "}\n",
+        "fn normal_raw_delta(trigger: bool, items: list<i64>) -> i64 {\n",
+        "    when modified(trigger) && valid([]) { return delta_value(items[0]) }\n",
+        "}\n",
+        "fn fitted_raw_delta(trigger: bool, items: list<i64>) -> i64 => raw_delta(trigger, items)\n",
+        "\n",
+        "fn last<...As>(trigger: bool, items: ...As) -> datetime? {\n",
+        "    when modified(trigger) && valid([]) { return last_modified(items[0][0]) }\n",
+        "}\n",
+        "fn ordinary_last(trigger: bool, item: atomic<list<i64>>) -> datetime? {\n",
+        "    when modified(trigger) && valid([]) { return last_modified(item[0]) }\n",
+        "}\n",
+        "fn fitted_last(trigger: bool, item: atomic<list<i64>>) -> datetime? => last(trigger, item)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:62 phase/payload.unguarded TIME-1",
+            "m.hgl:8:64 phase/payload.unguarded TIME-1",
+            "m.hgl:14:64 phase/endpoint.argument TIME-9",
+            "m.hgl:16:72 phase/endpoint.argument TIME-9",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// TIME-1 and GEN-7: a fixed list read whole needs all-valid admission
 /// even when the entry type is supplied by a pack instance.
 #[test]
