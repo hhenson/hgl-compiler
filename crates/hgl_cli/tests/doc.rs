@@ -597,7 +597,7 @@ fn a_rejected_program_writes_diagnostics_instead_of_a_model() {
     assert!(!out.exists());
 }
 
-/// TST-1 and SDOC-10: a test's candidate is private to that test, and
+/// TST-1 and SDOC-10: a test's candidate is private to the module's tests, and
 /// the type identity in private documentation includes its owner.
 #[test]
 fn test_local_declarations_are_not_part_of_an_operators_public_interface() {

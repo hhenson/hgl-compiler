@@ -100,6 +100,8 @@ mod signals;
 mod signatures;
 mod store_keys;
 mod syntax;
+mod test_candidates;
+pub use test_candidates::TestCandidateScope;
 mod types;
 mod values;
 
@@ -683,6 +685,19 @@ pub fn stack_size(limits: hgl_parser::Limits) -> usize {
 /// (UNIT-1). A file whose `module` line the parser could not read belongs
 /// to no module and is left out; the parser has reported it.
 pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
+    analyse_with_test_candidates(files, diagnostics, true)
+}
+
+/// Analyse for a production build or run, without opening a test candidate view (TST-1).
+pub fn analyse_production(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
+    analyse_with_test_candidates(files, diagnostics, false)
+}
+
+fn analyse_with_test_candidates(
+    files: &[ParsedFile],
+    diagnostics: &mut Diagnostics,
+    tests: bool,
+) -> Program {
     let (mut program, module_files) = assemble::assemble(files, diagnostics);
     for (module, files) in program.modules.iter_mut().zip(&module_files) {
         declare::declare(module, files, diagnostics);
@@ -694,9 +709,9 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     read::read(&mut program, diagnostics);
     phases::check(&program, diagnostics);
     declared::check(&mut program, diagnostics);
-    signatures::check(&program, diagnostics);
+    signatures::check(&program, diagnostics, tests);
     documentation::check(&program, diagnostics);
-    values::check(&mut program, diagnostics);
+    values::check(&mut program, diagnostics, tests);
     // UNIT-13: asked of the typed program, where each call has the
     // definition it selected.
     cycles::check(&program, diagnostics);

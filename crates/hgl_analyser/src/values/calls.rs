@@ -829,6 +829,7 @@ impl<'a> Typer<'a> {
                 requirements,
                 defer_pack_members: false,
                 contextual: Vec::new(),
+                test_candidates: self.test_candidates,
             };
             let mut kind = ExprKind::Call {
                 callee,
@@ -1126,6 +1127,7 @@ impl<'a> Typer<'a> {
             type_packs,
             requirements,
             defer_pack_members,
+            test_candidates: self.test_candidates,
             contextual: if !faulty && self.diagnostics.len() == reported {
                 contextual
             } else {
@@ -1216,6 +1218,7 @@ impl<'a> Typer<'a> {
                     requirements,
                     defer_pack_members,
                     contextual,
+                    ..
                 },
             arguments,
             ..

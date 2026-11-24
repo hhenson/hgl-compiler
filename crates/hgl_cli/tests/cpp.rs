@@ -1812,8 +1812,8 @@ fn running_an_application_ignores_documentation_examples() {
     assert_eq!(with_example.stdout, without_example.stdout);
 }
 
-/// TST-1 and GEN-16: private declarations and operator candidates are
-/// compiled for their own test, including the evidence for date addition.
+/// TST-1 and GEN-16: private declarations belong to their own test, but
+/// candidates reach sibling tests and the functions and operators they call.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn named_test_declarations_run_on_the_sdk() {
@@ -1826,7 +1826,17 @@ fn named_test_declarations_run_on_the_sdk() {
         "local.hgl",
         include_str!("fixtures/test_local_declarations.hgl"),
     );
-    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let foreign = write(
+        &root,
+        "foreign.hgl",
+        r#"module demo.foreign
+use demo.test_local_declarations::{classify}
+test keeps_production_candidate {
+    assert classify(7) == 0
+}
+"#,
+    );
+    let output = hgl_in(&["test", &file, &foreign, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -1835,7 +1845,53 @@ fn named_test_declarations_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// GEN-6 and TST-1: conflicting test candidates report one option kind
+/// error during test analysis, and an application still uses production.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn test_candidate_option_conflicts_do_not_affect_an_application() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("test-candidate-option-kind");
+    let file = write(
+        &root,
+        "taste.hgl",
+        include_str!("fixtures/test_candidate_option_kind.hgl"),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert_eq!(checked.status.code(), Some(1));
+    assert!(text(&checked.stderr).contains("error[operator/impl.option_kind]"));
+    let tests = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let outcomes = text(&tests.stdout);
+    assert!(tests.status.success(), "{outcomes}{}", text(&tests.stderr));
+    assert!(
+        outcomes.contains("rejection cases: 1 passed, 0 failed"),
+        "{outcomes}"
+    );
+
+    let app = write(
+        &root,
+        "taste.app.hgl",
+        r#"application demo.taste.app
+use demo.test_candidate_option_kind::{taste}
+fn present(const values: list<i64>) -> i64 {
+    for value in values { yield 1s: value }
+}
+eval present(values: [taste(7)])
+"#,
+    );
+    let run = hgl_in(&["run", &file, &app, "--target", "cpp"], &[], &[]);
+    let stdout = text(&run.stdout);
+    assert!(run.status.success(), "{stdout}{}", text(&run.stderr));
+    assert!(stdout.contains("  0\n"), "{stdout}");
+    assert!(
+        stdout.contains("ran demo.taste.app on cpp: 1 publication\n"),
         "{stdout}"
     );
 }

@@ -50,32 +50,30 @@ impl Emitter<'_> {
             self.unsupported(at, "a value function with no body");
             return;
         };
-        if self.instances.instanced(program, self.module, index) {
-            // Each instance is a piece of its own; the declaration's
-            // piece holds nothing, and a call names the instance.
-            let instances = self.instances;
-            for instance in instances.declared(self.module, index) {
-                let described = format!(
-                    "{}{} ({}), the instance `{}`",
-                    declaration.name,
-                    signature,
-                    kind_of(declaration.kind),
-                    instance.suffix
+        let instances = self.instances;
+        for instance in instances.declared(self.module, index) {
+            let described = format!(
+                "{}{} ({}), the instance `{}`",
+                declaration.name,
+                signature,
+                kind_of(declaration.kind),
+                instance.suffix
+            );
+            if let Some(at) = instance.pack_use {
+                self.unsupported(at, "a read of a pack as a whole");
+            } else {
+                self.function(
+                    index,
+                    Some(&instance.suffix),
+                    &instance.signature,
+                    &instance.body,
+                    &described,
                 );
-                if let Some(at) = instance.pack_use {
-                    self.unsupported(at, "a read of a pack as a whole");
-                } else {
-                    self.function(
-                        index,
-                        Some(&instance.suffix),
-                        &instance.signature,
-                        &instance.body,
-                        &described,
-                    );
-                }
-                let piece = self.close();
-                self.instanced.push((index, instance.suffix.clone(), piece));
             }
+            let piece = self.close();
+            self.instanced.push((index, instance.suffix.clone(), piece));
+        }
+        if instances.instanced(program, self.module, index) {
             return;
         }
         let described = format!(

@@ -1,0 +1,17 @@
+module demo.test_candidate_option_kind
+
+export operator taste<T>(value: T) -> i64
+impl const fn taste<T>(value: T) -> i64 => 0
+
+# TST-1 and GEN-6: both candidates are visible to these tests, so their
+# shared option must have one kind.
+test generic_option {
+    impl const fn taste<const mode: i64 = 3>(value: i64) -> i64 => mode
+    assert true
+}
+
+test parameter_option {
+    # expect-error(operator, "impl.option_kind")
+    impl const fn taste{mode: i64 = 4}(value: i64) -> i64 => mode
+    assert true
+}

@@ -209,6 +209,8 @@ struct Asked {
     captures: Captures,
     /// What answers each requirement it states there.
     requirements: Vec<Answer>,
+    /// The test module's candidate scope, if this body is called while testing.
+    test_candidates: Option<hgl_analyser::TestCandidateScope>,
     /// Its static callable targets, by the argument's original slot.
     functions: Vec<(usize, Callee)>,
     /// The anonymous target depth of each of those arguments.
@@ -283,6 +285,7 @@ pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring>
                 functions: &functions_of(arguments),
                 type_packs: callee.type_packs(),
                 pack_inputs: Some(&captures.inputs()),
+                test_candidates: callee.test_candidates(),
                 ..hgl_analyser::InstanceInputs::default()
             },
         )
@@ -691,10 +694,11 @@ fn function_key(program: &Program, target: &Callee) -> Option<(String, bool)> {
         }
         _ => return None,
     };
-    Some((
-        format!("{declared:?}:{arguments:?}:{requirements:?}"),
-        false,
-    ))
+    let mut key = format!("{declared:?}:{arguments:?}:{requirements:?}");
+    if let Some(scope) = target.test_candidates() {
+        write!(key, ":test candidates[{}]", scope.module()).expect("writing to a string succeeds");
+    }
+    Some((key, false))
 }
 
 /// Marks a function key with const text that should stay out of its C++ name.
@@ -732,13 +736,20 @@ fn key<'a>(
     type_packs: &[TypePackArgument],
     captures: &Captures,
     functions: impl Iterator<Item = (usize, &'a Callee)> + Clone,
-    (requirements, constants): (&[Answer], &[hgl_analyser::ConstInput]),
+    (requirements, constants, test_candidates): (
+        &[Answer],
+        &[hgl_analyser::ConstInput],
+        Option<hgl_analyser::TestCandidateScope>,
+    ),
 ) -> Option<Vec<String>> {
     let Some(Detail::Callable(signature)) = program.modules.get(module)?.details.get(declaration)
     else {
         return None;
     };
     let mut key = generic_key(program, signature, generics, type_packs)?;
+    if let Some(scope) = test_candidates {
+        key.push(format!("test candidates[{}]", scope.module()));
+    }
     if signature
         .parameters
         .iter()
@@ -870,6 +881,7 @@ impl Instances {
                         constants: Vec::new(),
                         captures: Captures::default(),
                         requirements: Vec::new(),
+                        test_candidates: None,
                         functions: Vec::new(),
                         depths: Vec::new(),
                     });
@@ -918,7 +930,7 @@ impl Instances {
                 &next.type_packs,
                 &next.captures,
                 next.functions.iter().map(|(slot, target)| (*slot, target)),
-                (&next.requirements, &next.constants),
+                (&next.requirements, &next.constants, next.test_candidates),
             ) else {
                 continue;
             };
@@ -957,6 +969,7 @@ impl Instances {
                     type_packs: &next.type_packs,
                     pack_inputs: Some(&next.captures.inputs()),
                     constants: &next.constants,
+                    test_candidates: next.test_candidates,
                 },
             ) else {
                 continue;
@@ -1089,6 +1102,7 @@ impl Instances {
                     constants: Vec::new(),
                     captures: Captures::default(),
                     requirements: Vec::new(),
+                    test_candidates: None,
                     functions: Vec::new(),
                     depths: Vec::new(),
                 })
@@ -1138,7 +1152,7 @@ impl Instances {
         };
         let mut found = Vec::new();
         // Check the borrowed arguments before cloning them into a request.
-        if self.instanced(program, *module, *declaration)
+        if self.instanced_call(program, callee)
             && let Ok(depths) = request_depths(
                 program,
                 (*module, *declaration),
@@ -1155,6 +1169,7 @@ impl Instances {
                 constants,
                 captures: Captures::of(program, callee, signature, arguments),
                 requirements: requirements.clone(),
+                test_candidates: callee.test_candidates(),
                 functions: functions_of(arguments),
                 depths,
             });
@@ -1218,6 +1233,18 @@ impl Instances {
             || program.needs_const_inputs((module, declaration))
     }
 
+    /// A call in a test uses an instance of its body with the test candidates visible.
+    pub fn instanced_call(&self, program: &Program, callee: &Callee) -> bool {
+        callee.declaration().is_some_and(|(module, declaration)| {
+            self.instanced(program, module, declaration)
+                || (callee.test_candidates().is_some()
+                    && program.modules[module]
+                        .bodies
+                        .get(declaration)
+                        .is_some_and(Option::is_some))
+        })
+    }
+
     /// The instances of `declaration` of `module`, in the order they
     /// were first asked for.
     pub fn declared(&self, module: usize, declaration: usize) -> &[Instance] {
@@ -1242,7 +1269,7 @@ impl Instances {
             &[],
             &Captures::default(),
             std::iter::empty(),
-            (&[], &[]),
+            (&[], &[], None),
         )?;
         self.declared(module, declaration)
             .iter()
@@ -1317,6 +1344,6 @@ fn call_key(program: &Program, callee: &Callee, arguments: &[Argument]) -> Optio
         callee.type_packs(),
         &captures,
         function_arguments(arguments),
-        (requirements, &constants),
+        (requirements, &constants, callee.test_candidates()),
     )
 }

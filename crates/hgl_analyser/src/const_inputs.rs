@@ -333,6 +333,7 @@ impl Program {
             requirements,
             crate::InstanceInputs {
                 type_packs: callee.type_packs(),
+                test_candidates: callee.test_candidates(),
                 ..crate::InstanceInputs::default()
             },
             &placement_reports,

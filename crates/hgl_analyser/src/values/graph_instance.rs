@@ -147,7 +147,11 @@ impl GraphDestinations {
         &self,
         program: &Program,
         (module, declaration): (usize, usize),
-        (signature, map): (&Signature, &[(Location, &Argument)]),
+        (signature, map, test_candidates): (
+            &Signature,
+            &[(Location, &Argument)],
+            Option<crate::TestCandidateScope>,
+        ),
         body: &mut Body,
         diagnostics: &mut Diagnostics,
         place_required: &dyn Fn(&mut Expr),
@@ -207,6 +211,7 @@ impl GraphDestinations {
             },
             diagnostics,
         );
+        typer.test_candidates = test_candidates.or(typer.test_candidates);
         if self.replay_source {
             typer.instance = map
                 .iter()

@@ -1008,8 +1008,13 @@ fn prepare_program(
         diagnostics: mut front_end,
         ..
     } = parse_sources(inputs, limits, None, documentation_examples)?;
+    let analyse = if documentation_examples {
+        hgl_analyser::analyse
+    } else {
+        hgl_analyser::analyse_production
+    };
     let mut diagnostics = front_end.clone();
-    let mut program = hgl_analyser::analyse(&parsed, &mut diagnostics);
+    let mut program = analyse(&parsed, &mut diagnostics);
     if diagnostics.has_errors() {
         if running && !debug {
             println!("not run: the program is rejected");
@@ -1073,7 +1078,7 @@ fn prepare_program(
             else {
                 return false;
             };
-            let read = hgl_analyser::analyse(&files, &mut found);
+            let read = analyse(&files, &mut found);
             !found.has_errors() && replace::EntryCall::of(&read, chosen) == written
         });
         let (file, text, edits) = match replace::replaced(
@@ -1100,7 +1105,7 @@ fn prepare_program(
             ..
         } = parse_sources(inputs, limits, Some((&name, &text)), documentation_examples)?;
         let mut found = read_diagnostics.clone();
-        program = hgl_analyser::analyse(&read_files, &mut found);
+        program = analyse(&read_files, &mut found);
         parsed = read_files;
         front_end = read_diagnostics;
         if debug {

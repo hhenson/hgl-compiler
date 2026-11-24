@@ -7,6 +7,10 @@ impl const fn classify<T>(value: T) -> i64 => 0
 
 const fn in_production() -> i64 => classify(7)
 
+fn through_node(value: i64) -> i64 {
+    when { return classify(value) }
+}
+
 const fn through_requirement<T>(value: T) -> i64
     requires classify(T) -> i64 => classify(value)
 
@@ -69,26 +73,38 @@ test local_candidate {
     impl const fn classify(value: i64) -> i64 => 1
     assert classify(7) == 1
     assert through_requirement(7) == 1
-    assert in_production() == 0
+    assert in_production() == 1
 }
 
-test ordinary_scope {
-    assert classify(7) == 0
-    assert through_requirement(7) == 0
-    assert in_production() == 0
+test shared_candidate_scope {
+    assert classify(7) == 1
+    assert through_requirement(7) == 1
+    assert in_production() == 1
+    assert eval through_node(value: [7]) == [1]
 }
 
+struct Calendar { closed: date }
 
-operator taste<T>(value: T) -> i64
+test declares_calendar {
+    impl const fn business_day(calendar: Calendar, day: date) -> bool =>
+        day != calendar.closed && business_day(Weekdays(), day)
+    assert true
+}
 
-# GEN-6, TST-1: an option has one kind among the candidates that can
-# occur together. These two candidates belong to different tests.
+test uses_calendar {
+    let custom = Calendar(closed: @2026-01-05)
+    assert @2026-01-02 +{calendar: custom} 2B == @2026-01-07
+}
+
+# GEN-6, TST-1: these are two separate operators with the same spelling.
 test generic_option {
+    operator taste<T>(value: T) -> i64
     impl const fn taste<const mode: i64 = 3>(value: i64) -> i64 => mode
     assert taste{mode: 7}(0) == 7
 }
 
 test parameter_option {
+    operator taste<T>(value: T) -> i64
     impl const fn taste{mode: i64 = 4}(value: i64) -> i64 => mode
     assert taste{mode: 8}(0) == 8
 }

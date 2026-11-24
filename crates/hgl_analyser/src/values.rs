@@ -137,9 +137,8 @@ pub(crate) fn walk_body_calls(body: &hir::Body, visit: &mut dyn FnMut(&hir::Expr
         }
     });
 }
-/// Types the body of every value function of the program, filling in
-/// [`Module::bodies`].
-pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
+/// Types the bodies of the program, filling in [`Module::bodies`].
+pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics, tests: bool) {
     // The signature of what has none: a test, a run statement, a
     // constant.
     let empty = Signature {
@@ -154,6 +153,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     // does (CTRL-6: "compared by resolved value").
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
+        let production_view = !tests && crate::TestCandidateScope::of(program, module).is_some();
         let (bindings, written, calls) = tables(module);
         let selecting = RefCell::new(Vec::new());
         let found = Tables {
@@ -167,6 +167,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             .iter()
             .enumerate()
             .map(|(position, declaration)| {
+                if production_view && declaration.test_only {
+                    return None;
+                }
                 let Some(Detail::Constant(ty)) = module.details.get(position) else {
                     return None;
                 };
@@ -183,6 +186,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     }
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
+        let production_view = !tests && crate::TestCandidateScope::of(program, module).is_some();
         let (bindings, written, calls) = tables(module);
         let selecting = RefCell::new(Vec::new());
         let found = Tables {
@@ -197,6 +201,12 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         let mut selected = Vec::with_capacity(module.declarations.len());
         let mut graph_return_checks = Vec::with_capacity(module.declarations.len());
         for (position, declaration) in module.declarations.iter().enumerate() {
+            if production_view && declaration.test_only {
+                bodies.push(None);
+                selected.push(Vec::new());
+                graph_return_checks.push(None);
+                continue;
+            }
             let mut check_return = None;
             let body = match (&declaration.kind, module.details.get(position)) {
                 // FN-1: a `const fn`. GEN-4: "an `impl const fn` a value
@@ -274,6 +284,10 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         // empty signature.
         let mut test_bodies = Vec::with_capacity(module.tests.len());
         for (owner, test) in module.tests.iter().enumerate() {
+            if production_view {
+                test_bodies.push(None);
+                continue;
+            }
             let mut stand_in =
                 Declaration::stand_in(&test.name, test.at, test.file, &test.syntax, true);
             stand_in.test_owner = Some(owner);
@@ -305,6 +319,10 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         let mut defaults = Vec::with_capacity(module.declarations.len());
         selecting.borrow_mut().clear();
         for (position, declaration) in module.declarations.iter().enumerate() {
+            if production_view && declaration.test_only {
+                defaults.push(Vec::new());
+                continue;
+            }
             let read = match module.details.get(position) {
                 Some(Detail::Callable(signature))
                     if signature
@@ -469,7 +487,7 @@ pub(crate) fn reread_instance_body(
         },
         ..signature.clone()
     };
-    let mut typer = Typer::new(
+    let mut typer = Typer::with_test_candidates(
         program,
         owner,
         declared,
@@ -481,6 +499,7 @@ pub(crate) fn reread_instance_body(
             selecting: &selecting,
         },
         diagnostics,
+        inputs.test_candidates,
     );
     typer.instance = map
         .iter()
@@ -735,6 +754,8 @@ struct Typer<'a> {
     /// them. A chain of symbols asks for the same operator's at every
     /// link.
     candidates: HashMap<(usize, usize, bool), Vec<Candidate<'a>>>,
+    /// Which module's test-only candidates this reading can see (TST-1).
+    test_candidates: Option<crate::TestCandidateScope>,
     /// The values of the module constants this function's constants
     /// have named (UNIT-13): a constant named twice is read once.
     constants: crate::constant::Constants,
@@ -800,7 +821,29 @@ impl<'a> Typer<'a> {
         tables: Tables<'a>,
         diagnostics: &'a mut Diagnostics,
     ) -> Typer<'a> {
+        Self::with_test_candidates(
+            program,
+            module,
+            declaration,
+            signature,
+            tables,
+            diagnostics,
+            None,
+        )
+    }
+
+    /// Begin a lexical reading with the candidates of the calling test in scope.
+    fn with_test_candidates(
+        program: &'a Program,
+        module: &'a Module,
+        declaration: &'a Declaration,
+        signature: &'a Signature,
+        tables: Tables<'a>,
+        diagnostics: &'a mut Diagnostics,
+        test_candidates: Option<crate::TestCandidateScope>,
+    ) -> Typer<'a> {
         let mut typer = Typer::bare(program, module, declaration, signature, tables, diagnostics);
+        typer.test_candidates = test_candidates.or(typer.test_candidates);
         for parameter in &signature.parameters {
             // What a pack holds is for the pass that reads calls.
             let ty = match parameter.pack {
@@ -882,6 +925,10 @@ impl<'a> Typer<'a> {
             requiring: 0,
             identities: HashMap::new(),
             candidates: HashMap::new(),
+            test_candidates: declaration
+                .test_only
+                .then(|| crate::TestCandidateScope::of(program, module))
+                .flatten(),
             constants: Default::default(),
             selecting: tables.selecting,
             instance: Vec::new(),
