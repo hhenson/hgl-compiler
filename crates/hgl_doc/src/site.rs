@@ -419,7 +419,8 @@ fn group(kind: &str) -> &'static str {
 
 struct Row<'a> {
     name: &'a str,
-    ty: &'a str,
+    mode: &'static str,
+    ty: Cow<'a, str>,
     default: Option<&'a str>,
 }
 
@@ -436,10 +437,11 @@ fn generic_table(
         level,
         interface.generic_parameters.iter().map(|parameter| Row {
             name: parameter.name,
-            ty: parameter.ty.as_deref().unwrap_or(match parameter.kind {
+            mode: "",
+            ty: Cow::Borrowed(parameter.ty.as_deref().unwrap_or(match parameter.kind {
                 "plain" | "type" => "type",
                 _ => parameter.kind,
-            }),
+            })),
             default: parameter.default.as_deref(),
         }),
         section,
@@ -462,10 +464,27 @@ fn parameter_tables(
             output,
             heading,
             level,
-            parameters.iter().map(|parameter| Row {
-                name: parameter.name,
-                ty: &parameter.ty,
-                default: parameter.default.as_deref(),
+            parameters.iter().map(|parameter| {
+                let mode = if parameter.constant {
+                    "const "
+                } else if parameter.var {
+                    "var "
+                } else if parameter.reference {
+                    "ref "
+                } else {
+                    ""
+                };
+                let ty = match parameter.pack {
+                    Some("positional") => Cow::Owned(format!("...{}", parameter.ty)),
+                    Some("named") => Cow::Owned(format!("...{{{}}}", parameter.ty)),
+                    _ => Cow::Borrowed(parameter.ty.as_str()),
+                };
+                Row {
+                    name: parameter.name,
+                    mode,
+                    ty,
+                    default: parameter.default.as_deref(),
+                }
             }),
             section,
             link,
@@ -494,9 +513,10 @@ fn table<'a>(
     for row in rows {
         write!(
             output.html,
-            "<tr><th scope=\"row\"><code>{}</code></th><td><code>{}</code></td><td>",
+            "<tr><th scope=\"row\"><code>{}{}</code></th><td><code>{}</code></td><td>",
+            row.mode,
             escaped(row.name),
-            escaped(row.ty)
+            escaped(&row.ty)
         )
         .unwrap();
         if let Some(value) = row.default {
