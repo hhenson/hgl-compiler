@@ -7,6 +7,7 @@
 parser: done
 
 - A documentation comment attaches to the declaration after it; repeated or unattached ones rejected
+- Native properties follow the attachment rules for struct fields, and the documentation model carries their own sections
 
 ## SDOC-2
 

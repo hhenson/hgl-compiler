@@ -14,6 +14,7 @@ transpiler: partial
 
 - A temporal `if` or `switch` wires only the selected child to run. It starts a new
   child on selection changes and leaves outside producers running.
+- A window result starts with the newly selected child's samples (hgraph 0.9.30).
 - Left: The proposed child lifetime for core mapping awaits #370. Child graph bodies
   cannot read capabilities captured from the parent or compute ordinary values that may
   fail (FN-9, ERR-5).

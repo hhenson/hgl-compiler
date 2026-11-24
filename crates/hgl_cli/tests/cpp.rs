@@ -1312,7 +1312,7 @@ fn configurations_run_on_the_sdk() {
 /// duration, values leaving one by age, their reads checked when they
 /// run, a lifted helper given one, a window recorded and replayed, and two
 /// writes of a window result in one evaluation, the last of which arrives
-/// (TYPE-11; core's END-9).
+/// (TYPE-11, END-9). A changed branch starts a window afresh (CTRL-2).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn windows_run_on_the_sdk() {
@@ -1348,7 +1348,7 @@ fn windows_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 20 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 21 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
