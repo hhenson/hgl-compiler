@@ -2232,7 +2232,7 @@ fn let_bound_packs_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 3 passed, 0 failed\nexecutable cases: 3 passed, 0 failed, 0 not run\n"
+            "rejection cases: 10 passed, 0 failed\nexecutable cases: 6 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );

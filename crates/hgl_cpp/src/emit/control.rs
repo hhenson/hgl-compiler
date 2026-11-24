@@ -824,19 +824,43 @@ impl Emitter<'_> {
         depth: usize,
         text: &mut String,
     ) {
-        // The list is read once for each position: it is read where it is
-        // a local, and a list made where it is looped over is not written.
-        if !matches!(sequence.kind, ExprKind::Local(_)) {
-            self.unsupported(
-                at,
-                "a `for` over a connection of a fixed list that is no local",
-            );
-            return;
-        }
+        // The list is read once for each position. A fitted pack already
+        // has one connection per position, as a local list has children.
+        let entries = match &sequence.kind {
+            ExprKind::Local(_) => None,
+            ExprKind::Sequence(entries)
+                if entries.iter().all(|entry| {
+                    matches!(entry.kind, ExprKind::Local(_) | ExprKind::PackEntry { .. })
+                }) =>
+            {
+                Some(entries.as_slice())
+            }
+            _ => {
+                self.unsupported(
+                    at,
+                    "a `for` over a connection of a fixed list that is no local",
+                );
+                return;
+            }
+        };
         let Some(schema) = self.temporal_schema(element, at) else {
             return;
         };
         let indent = INDENT.repeat(depth);
+        // Hold every connection before the first pass can rebind a local.
+        let entries: Option<Vec<_>> = entries.map(|entries| {
+            entries
+                .iter()
+                .map(|entry| {
+                    let name = names::temporary("each_entry", self.temporary());
+                    let port = self.connection(scope, entry, element);
+                    text.push_str(&format!(
+                        "{indent}const ::hgraph::Port<{schema}> {name} = {port};\n"
+                    ));
+                    name
+                })
+                .collect()
+        });
         let name = identifier(&scope.body.locals[item].name);
         let role = self.role(item);
         if let Some(context) = self.temporal.as_mut() {
@@ -845,23 +869,30 @@ impl Emitter<'_> {
         let before = self.control.bound.clone();
         self.control.unrolling += 1;
         for position in 0..size {
-            let child = Expr {
-                kind: ExprKind::Index {
-                    base: Box::new(sequence.clone()),
-                    index: Box::new(Expr {
-                        kind: ExprKind::Literal(hgl_analyser::hir::Value::Int(
-                            i64::try_from(position).unwrap_or(i64::MAX),
-                        )),
-                        ty: Type::Scalar(hgl_analyser::Scalar::I64),
-                        at,
-                        category: ValueCategory::Value,
-                    }),
-                },
-                ty: element.clone(),
-                at,
-                category: ValueCategory::Connection,
+            let entry = entries
+                .as_ref()
+                .and_then(|entries| entries.get(position as usize));
+            let port = if let Some(entry) = entry {
+                entry.clone()
+            } else {
+                let child = Expr {
+                    kind: ExprKind::Index {
+                        base: Box::new(sequence.clone()),
+                        index: Box::new(Expr {
+                            kind: ExprKind::Literal(hgl_analyser::hir::Value::Int(
+                                i64::try_from(position).unwrap_or(i64::MAX),
+                            )),
+                            ty: Type::Scalar(hgl_analyser::Scalar::I64),
+                            at,
+                            category: ValueCategory::Value,
+                        }),
+                    },
+                    ty: element.clone(),
+                    at,
+                    category: ValueCategory::Connection,
+                };
+                self.wiring_form(scope, &child)
             };
-            let port = self.wiring_form(scope, &child);
             text.push_str(&format!(
                 "{indent}{{\n{indent}{INDENT}[[maybe_unused]] const ::hgraph::Port<{schema}> {name} = {port};\n"
             ));

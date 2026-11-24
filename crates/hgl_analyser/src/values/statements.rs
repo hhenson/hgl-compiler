@@ -17,7 +17,7 @@ use crate::hir::{
 };
 use crate::program::{DeclarationKind, LocalKind, RUN_CONFIG};
 use crate::read::is_type;
-use crate::syntax::{child, has_token, tokens, ungrouped};
+use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{NamedKind, Type};
 use crate::{codes, error, local_error};
 
@@ -194,18 +194,7 @@ impl<'a> Typer<'a> {
 
     /// Read one statement into its containing list.
     pub(super) fn append_statement(&mut self, node: &SyntaxNode, statements: &mut Vec<Stmt>) {
-        if node.kind() == SyntaxKind::LocalDecl
-            && has_token(node, SyntaxKind::KwLet)
-            && let Some(pack) = node
-                .children()
-                .find(|part| !is_type(part.kind()))
-                .map(ungrouped)
-            && pack.kind() == SyntaxKind::PackComprehension
-        {
-            let outer = self.begin_construct(node);
-            self.bind_computed_pack(node, &pack, statements);
-            self.end_construct(outer);
-        } else {
+        if !self.bind_let_pack(node, statements) {
             statements.push(self.statement(node));
         }
     }

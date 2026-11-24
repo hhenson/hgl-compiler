@@ -297,12 +297,13 @@ analyser: partial
 - Reads a declared function's written arguments, including its configuration, through their parameter types before the computed entries are known.
 - Keeps the compile-time key comparison in anonymous bodies that capture a concrete key. A key differs from a constant of the other kind (FN-14, GEN-17).
 - A computed entry has the type of its own pass (FN-19). The receiving parameter does not give a type to a bare implied enum member, `null`, or an empty sequence, and it does not widen an `i64` literal entry to `f64`.
-- A `let`-bound pack keeps each selected entry under its key. An entry can be indexed or spread; a pack name in an ordinary value expression rejects. The homogeneous positional parameter pack in `examples.pack_forms::total` can be iterated in a node hook.
+- A `let` can name an existing pack or keep the selected entries of a comprehension. Both forms preserve their keys and support indexing and spreading. A pack name in an ordinary value expression rejects.
+- A homogeneous positional parameter pack can be iterated in value code and in a node hook. In composition its fitted number of entries makes a fixed loop, with one pass per connection (CTRL-15).
 
 transpiler: partial
 
 - Lowers forwarded entries and constant-key reads from the same fitted pack input slots, including captured values and connections. The SDK cases also exercise operator selection, static callbacks and constructors.
 - Lowers the concrete arguments of an inline computed spread. An anonymous body is specialized for the enclosing pack keys even when each pass supplies a value of the same type. The SDK cases also cover mixed entry types, named and positional keys, selected nested conditions, and written pack-member types.
-- Stores each `let`-bound entry once where its binding runs. Subsequent reads and spreads use that entry's value or connection. SDK cases cover all four forwarding examples, constructor fields, and reuse of the entries.
+- Stores each computed entry once where its `let` runs. Bindings of an existing pack reuse the same entries. SDK cases cover all four forwarding examples, constructor fields, reuse, and a fixed graph loop that carries a connection binding.
 
 Left: C++ declines a spread whose pass condition does not supply a known constant `bool`. The packed signal payload diagnostic is tracked in #731, and guards on the pack entry itself in #732.
