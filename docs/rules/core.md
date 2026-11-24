@@ -747,21 +747,21 @@ runner: planned
 
 ## MAP-1
 
-transpiler: planned
+transpiler: partial
 
-- #369 tracks fixed lists and #370 tracks native forms.
+- Fixed-size list `map` runs its HGL candidate. The keyed and growing-list candidates are declared and C++ reports them as unsupported (#370).
 
 ## MAP-2
 
-transpiler: planned
+transpiler: partial
 
-- #369 tracks fixed lists and #370 tracks native forms.
+- A fixed-size map binds positional and named inputs, splits the fitted list inputs, and supplies whole inputs to each child. An omitted callback input uses the callback's default (FN-8, UNIT-8). Native forms await #370.
 
 ## MAP-3
 
-transpiler: planned
+analyser: done
 
-- #369 and #370.
+- A call with only whole arguments reports `operator.no_candidate`.
 
 ## MAP-4
 
@@ -777,15 +777,15 @@ transpiler: planned
 
 ## MAP-6
 
-transpiler: planned
+transpiler: partial
 
-- #370.
+- Fixed-size maps compose positions `0..<N`. The join of lengths for growing lists awaits #370.
 
 ## MAP-7
 
-transpiler: planned
+transpiler: partial
 
-- #369 tracks fixed lists and #370 tracks native forms.
+- A fixed-size map composes a child for each position at build time. Native child lifetimes await #370.
 
 ## MAP-8
 
@@ -795,35 +795,39 @@ transpiler: planned
 
 ## MAP-9
 
-transpiler: planned
+transpiler: partial
 
-- #369 tracks fixed lists and #370 tracks native forms.
+- A fixed-size map supplies each child's position to the default `key` parameter or the renamed parameter. Native keys await #370.
 
 ## MAP-10
 
-transpiler: planned
+transpiler: partial
 
-- #369 tracks fixed lists and #370 tracks native forms.
+- Fixed-size results hold the children's publications and propagate an error leaving a child. A callback with no result needs the Core declaration tracked in [hgl_core#147](https://github.com/hhenson/hgl_core/issues/147). Native result shapes await #370.
 
 ## RED-1
 
-transpiler: planned
+transpiler: partial
 
-- #369 tracks fixed lists and #370 tracks native forms.
+- Fixed-size list reduction runs both HGL candidates, including an ordered fold whose member and accumulator have different types. Other collection forms are declared and await #370.
 
 ## RED-2
 
-transpiler: planned
+transpiler: partial
 
-- #369 tracks fixed lists and #370 tracks native forms.
+- A fixed-size fold composes reads of every position. Reduction of valid members in changing collections awaits #370.
 
 ## RED-3
 
-transpiler: planned
+transpiler: partial
 
-- #369 tracks fixed lists and #370 tracks native forms.
+- A fixed-size tree fold uses the first position as its initial value and visits the remaining positions in order. An associative call on a list of size zero rejects. Native grouping awaits #370.
 
 ## RED-4
+
+analyser: done
+
+- A set or dictionary candidate requires both laws. An ordered function does not admit a dictionary reduction.
 
 transpiler: planned
 
@@ -831,15 +835,15 @@ transpiler: planned
 
 ## RED-5
 
-transpiler: planned
+transpiler: partial
 
-- #369 tracks fixed lists and #370 tracks native forms.
+- The fixed-size ordered fold starts from its required zero and visits positions in order. An omitted zero rejects during candidate selection. Growing lists await #370.
 
 ## RED-6
 
-transpiler: planned
+transpiler: partial
 
-- #369 and #370.
+- The fixed-size tree fold combines the positions without adding the supplied identity. Native implementations await #370.
 
 ## RED-7
 

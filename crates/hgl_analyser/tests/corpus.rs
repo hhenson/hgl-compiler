@@ -71,11 +71,6 @@ const PENDING_MODULES: &[(&str, &str, &str)] = &[
         "examples.formatting",
         "FMT-6 and FMT-8 graph candidate (#434)",
     ),
-    (
-        "hgl_core/spec/mapping.md",
-        "examples.mapping",
-        "MAP-1 and RED-1 (#369, #370)",
-    ),
 ];
 
 /// The rejection cases of core the compiler does not yet reject, each as
