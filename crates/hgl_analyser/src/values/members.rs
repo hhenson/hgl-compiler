@@ -363,15 +363,12 @@ impl<'a> Typer<'a> {
             return (ExprKind::Unread, Type::Unknown);
         };
         let root = ungrouped(base.clone());
-        if let Some(pack) = self.local_of(&root)
-            && self.bound_packs.contains_key(&pack)
-        {
-            return self.bound_pack_entry(pack, node, &index);
-        }
-        if let Some(pack) = self.local_of(&root)
-            && self.parameter_pack(pack).is_some()
-        {
-            let (kind, ty) = self.pack_entry(pack, &index);
+        if let Some(named) = self.local_of(&root).filter(|&local| self.names_pack(local)) {
+            let pack = self.pack_origin(named);
+            if self.bound_packs.contains_key(&pack) {
+                return self.bound_pack_entry(pack, named, node, &index);
+            }
+            let (kind, ty) = self.pack_entry(pack, named, &index);
             let at = self.at(node);
             let input = self.is_temporal_input(pack);
             let child = self.reads_children() && self.continues_chain(node, &ty);
@@ -425,7 +422,7 @@ impl<'a> Typer<'a> {
 
     /// FN-19 and GEN-17: read an entry under a compile-time key. A
     /// specialization supplies the pack's actual keys and fitted types.
-    fn pack_entry(&mut self, pack: usize, index: &SyntaxNode) -> (ExprKind, Type) {
+    fn pack_entry(&mut self, pack: usize, named: usize, index: &SyntaxNode) -> (ExprKind, Type) {
         let (wanted, key) = match self.pack_entry_key(index) {
             PackEntryKey::Known(wanted, key) => (wanted, key),
             PackEntryKey::Deferred => return self.deferred_pack_entry(pack),
@@ -445,7 +442,7 @@ impl<'a> Typer<'a> {
             self.pack_member_fault(
                 self.at(index),
                 &MemberFault::Missing {
-                    pack: self.locals[pack].name.clone(),
+                    pack: self.locals[named].name.clone(),
                     key,
                 },
             );
@@ -464,6 +461,7 @@ impl<'a> Typer<'a> {
     fn bound_pack_entry(
         &mut self,
         pack: usize,
+        named: usize,
         node: &SyntaxNode,
         index: &SyntaxNode,
     ) -> (ExprKind, Type) {
@@ -487,7 +485,7 @@ impl<'a> Typer<'a> {
             self.pack_member_fault(
                 self.at(index),
                 &MemberFault::Missing {
-                    pack: self.locals[pack].name.clone(),
+                    pack: self.locals[named].name.clone(),
                     key,
                 },
             );
