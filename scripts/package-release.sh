@@ -195,7 +195,6 @@ build_native() (
     clone fmt https://github.com/fmtlib/fmt.git "$FMT_VERSION"
     clone spdlog https://github.com/gabime/spdlog.git "v$SPDLOG_VERSION"
     clone simdjson https://github.com/simdjson/simdjson.git "v$SIMDJSON_VERSION"
-    clone hgraph https://github.com/hhenson/hgraph.git "$hgraph_tag"
     # Build the pinned libraries against the system's C++ runtime: the
     # release's optimised, with debug information that is then split out of
     # them, and hgl-debug's for debugging.
@@ -209,6 +208,8 @@ build_native() (
     compress_debug "$debug/hgraph-sdk/lib" "$debug/hgraph-deps/lib"
 )
 
+# The debugger's source tree comes from this checkout, even with cached libraries.
+clone hgraph https://github.com/hhenson/hgraph.git "$hgraph_tag"
 if [[ -n $native_cache && -d $native_cache/libexec && -d $native_cache/debug/libexec ]]; then
     "${build_tool[@]}" copy-native "$native_cache" "$bundle" --debug "$debug_tree"
     grep -qxF "tag=$hgraph_tag" "$sdk/hgl-sdk.txt" &&
@@ -218,6 +219,16 @@ if [[ -n $native_cache && -d $native_cache/libexec && -d $native_cache/debug/lib
 else
     build_native
 fi
+
+hgraph_commit=$(git -C "$work/hgraph" rev-parse HEAD)
+for stamp in "$sdk/hgl-sdk.txt" "$debug/hgraph-sdk/hgl-sdk.txt"; do
+    grep -qxF "commit=$hgraph_commit" "$stamp" ||
+        fail "the SDK and bundled source must be from hgraph $hgraph_tag ($hgraph_commit)"
+done
+hgraph_source=$debug/hgraph-source
+rm -rf -- "$hgraph_source"
+mkdir -- "$hgraph_source"
+git -C "$work/hgraph" archive HEAD src include | tar -xf - -C "$hgraph_source"
 
 # Runtime panic locations may carry source paths. Remap workspace and
 # registry paths as well as stripping debug symbols from the release.

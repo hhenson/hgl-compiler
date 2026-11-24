@@ -2690,6 +2690,9 @@ starts its absolute `executable` with its `arguments`, `workingDirectory`
 and `environment` overrides. Its `hgraph` gives the libraries the build
 links: `libraries` (`debug` or `optimised`, as "The build driver" above
 chooses them), and the absolute `sdk` and `dependencies` prefixes.
+When the selected debug package supplies engine source, `sourceMap` maps
+`/hgl-release/hgraph` to its absolute `hgraph-source` directory. This field
+is shared by application and test launches, and is omitted without those sources.
 Standard error says the same in a line before the build, `hgl: a debug
 build, with hgraph's debug libraries in DIR, named by HGL_HGRAPH_DEBUG`,
 or for the optimised ones why no debug ones were taken. A client

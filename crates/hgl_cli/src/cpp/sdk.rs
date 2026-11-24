@@ -393,6 +393,8 @@ pub(super) struct Hgraph {
     pub(super) sdk: PathBuf,
     /// The dependency prefix.
     pub(super) deps: PathBuf,
+    /// Source root supplied by the selected debug package, if present.
+    pub(super) debug_sources: Option<PathBuf>,
     /// Where they were found and, for a debug build that links the
     /// optimised ones, why: what `hgl` prints of a debug build.
     pub(super) found: String,
@@ -964,6 +966,7 @@ fn choose(debug: bool, variables: Variables, bundle: Option<&Path>) -> Result<Hg
         )?;
         Ok(Hgraph {
             build: Build::Optimised,
+            debug_sources: None,
             found: format!("in {}{why}", sdk.display()),
             sdk,
             deps,
@@ -1045,10 +1048,14 @@ fn debug_libraries(directory: &Path, how: &str, notes: &[String]) -> Result<Hgra
         fs::canonicalize(&path).map_err(|error| format!("{}: {error}", path.display()))
     };
     let directory = resolved(directory.to_path_buf())?;
+    let sources = directory.join("hgraph-source");
+    let debug_sources =
+        (sources.join("src").is_dir() && sources.join("include").is_dir()).then_some(sources);
     Ok(Hgraph {
         build: Build::Debug,
         sdk: resolved(directory.join("hgraph-sdk"))?,
         deps: resolved(directory.join("hgraph-deps"))?,
+        debug_sources,
         found: format!(
             "in {}, {how}{}",
             directory.display(),
@@ -1597,6 +1604,47 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn debug_launch_maps_only_the_selected_packages_engine_sources() {
+        use crate::cpp::application::DebugLaunch;
+
+        let bundle = release(Some(HGRAPH_TAG));
+        let bundled = bundle.path().join("libexec/hgraph-debug/hgraph-source");
+        let named = tempfile::tempdir().unwrap();
+        let named_sources = named.path().join("hgraph-source");
+        lay_out_debug(named.path(), HGRAPH_TAG);
+
+        let launch = |variables: &[(&str, &Path)]| {
+            let hgraph = chosen_with(true, variables, Some(bundle.path())).unwrap();
+            let description =
+                DebugLaunch::new(Path::new("program"), vec![], &None, &hgraph).unwrap();
+            serde_json::to_value(description).unwrap()
+        };
+        assert!(launch(&[]).get("sourceMap").is_none());
+        fs::create_dir_all(bundled.join("src")).unwrap();
+        assert!(launch(&[]).get("sourceMap").is_none());
+        fs::create_dir(bundled.join("include")).unwrap();
+        const MAPPED_PREFIX: &str = "/hgl-release/hgraph";
+        assert_eq!(
+            launch(&[])["sourceMap"][MAPPED_PREFIX],
+            real(bundled).to_str().unwrap()
+        );
+
+        for directory in ["src", "include"] {
+            fs::create_dir_all(named_sources.join(directory)).unwrap();
+        }
+        let override_package = [("HGL_HGRAPH_DEBUG", named.path())];
+        assert_eq!(
+            launch(&override_package)["sourceMap"][MAPPED_PREFIX],
+            real(named_sources).to_str().unwrap()
+        );
+        fs::write(named.path().join("hgl-debug.txt"), "0.0.0\n").unwrap();
+        let fallback = launch(&override_package);
+        assert_eq!(fallback["hgraph"]["libraries"], "optimised");
+        assert!(fallback.get("sourceMap").is_none());
+    }
+
     #[test]
     fn hgl_hgraph_debug_names_whole_libraries_built_for_debugging() {
         let bundle = release(Some(HGRAPH_TAG));
@@ -1859,6 +1907,7 @@ mod tests {
                 build,
                 sdk: libexec.join("hgraph-sdk"),
                 deps: libexec.join("hgraph-deps"),
+                debug_sources: None,
                 found: String::new(),
             },
             compiler: PathBuf::from("g++"),

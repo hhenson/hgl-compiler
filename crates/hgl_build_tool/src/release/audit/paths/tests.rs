@@ -11,7 +11,9 @@ fn a_forbidden_include_flag_is_detected() -> Result<()> {
         bundle.join("arguments.txt"),
         format!("-I{}/x\n", build.display()),
     )?;
-    let error = verify_paths(&bundle, &[build]).unwrap_err().to_string();
+    let error = verify_paths(&bundle, &[build], None)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("build path in arguments.txt:"), "{error}");
     Ok(())
 }
@@ -24,7 +26,7 @@ fn a_home_component_in_a_license_url_is_allowed() -> Result<()> {
         root.join("LICENSE.txt"),
         "https://example.com/crates/home/license\n",
     )?;
-    verify_paths(&root, &[])
+    verify_paths(&root, &[], None)
 }
 
 #[test]
@@ -54,9 +56,40 @@ fn paths_after_a_rejected_match_are_checked() -> Result<()> {
         let scratch = tempfile::tempdir()?;
         let bundle = scratch.path().canonicalize()?;
         fs::write(bundle.join(file), contents)?;
-        let error = verify_paths(&bundle, &[]).expect_err(file).to_string();
+        let error = verify_paths(&bundle, &[], None)
+            .expect_err(file)
+            .to_string();
         assert!(error.contains(diagnostic), "{error}");
     }
+    Ok(())
+}
+
+#[test]
+fn shipped_sources_are_audited_without_treating_compile_flags_as_metadata() -> Result<()> {
+    let scratch = tempfile::tempdir()?;
+    let bundle = scratch.path().canonicalize()?;
+    let sources = Path::new("hgraph-source");
+    let file = sources.join("src/CMakeLists.txt");
+    fs::create_dir_all(bundle.join(sources).join("src"))?;
+    let contents = "target_compile_options(runtime PRIVATE /bigobj)\n";
+    fs::write(bundle.join(&file), contents)?;
+    verify_paths(&bundle, &[], Some(sources))?;
+
+    let build = bundle.join("forbidden-build");
+    fs::write(
+        bundle.join(&file),
+        format!("{contents}include({}/flags.cmake)\n", build.display()),
+    )?;
+    let error = verify_paths(&bundle, &[build], Some(sources))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("build path in "), "{error}");
+
+    fs::write(bundle.join("hgl-sdk.txt"), "path=/some/other/place\n")?;
+    let error = verify_paths(&bundle, &[], Some(sources))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("external path in hgl-sdk.txt"), "{error}");
     Ok(())
 }
 
@@ -105,7 +138,9 @@ fn a_forbidden_path_in_legacy_gnu_compressed_debug_is_detected() -> Result<()> {
     assert!(contains(b".zdebug_info"));
     assert!(!contains(b".debug_"));
     assert!(!contains(build.as_os_str().as_encoded_bytes()));
-    let error = verify_paths(&bundle, &[build]).unwrap_err().to_string();
+    let error = verify_paths(&bundle, &[build], None)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("build path in library.so:"), "{error}");
     Ok(())
 }

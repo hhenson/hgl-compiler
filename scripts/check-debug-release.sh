@@ -15,7 +15,8 @@
 # 2. Both in one tree: the build tool verifies the debug tree. A debug
 #    build links the debug libraries beside hgl, says
 #    so, and runs; a debugger stops in an engine frame of it with its file,
-#    line and locals. The release's optimised engine and fmt libraries
+#    line and locals. The launch's source map makes the engine source readable.
+#    The release's optimised engine and fmt libraries
 #    resolve functions to files and lines through their symbol files. On
 #    Linux the engine's line is also checked in a live process and core file.
 #
@@ -92,6 +93,25 @@ lookup_symbol() {
     else
         "${lldb[@]}" -o "target create '$1'" \
             -o "image lookup -v -n $2" 2>&1
+    fi
+}
+
+# Print engine source through the launch description's installed source path.
+list_engine_source() {
+    local library=$1 source=$2 function=hgraph::NodeView::global_state
+    if [[ $platform == linux-x86_64 ]]; then
+        "${gdb[@]}" -ex "set substitute-path /hgl-release/hgraph \"$source\"" \
+            -ex "list $function" "$library" 2>&1
+    else
+        # Listing by name can choose the declaration in node.h. Use the
+        # function's debug line so the check sees the implementation.
+        local line
+        line=$(lookup_symbol "$library" "$function" |
+            sed -nE 's@^[[:space:]]*LineEntry: .*/node\.cpp:([0-9]+)(:[0-9]+)?$@\1@p')
+        [[ $line =~ ^[0-9]+$ ]] || fail "LLDB did not find the engine implementation line"
+        "${lldb[@]}" -o "target create '$library'" \
+            -o "settings set target.source-map /hgl-release/hgraph \"$source\"" \
+            -o "source list -f /hgl-release/hgraph/src/hgraph/runtime/node.cpp -l $line" 2>&1
     fi
 }
 
@@ -188,6 +208,9 @@ said=$(debug_build "$alone" "$scratch/alone")
 grep -qx "hgl: a debug build, with hgraph's optimised libraries in .*: the \`hgl-debug\` package is not installed beside hgl, and HGL_HGRAPH_DEBUG is not set" <<<"$said" ||
     fail "the release alone said: $said"
 [[ $("${build_tool[@]}" launch-field "$scratch/alone.json" hgraph libraries) == optimised ]] || fail "the release alone did not link the optimised libraries"
+if "${build_tool[@]}" launch-field "$scratch/alone.json" sourceMap /hgl-release/hgraph >/dev/null 2>&1; then
+    fail "the release alone reported an engine source map"
+fi
 "${build_tool[@]}" run-described "$scratch/alone.json"
 looked=$(lookup_symbol "$alone/$name/libexec/hgraph-sdk/lib/libhgraph_runtime.$suffix" hgraph::NodeView::global_state)
 printf '%s\n' "$looked"
@@ -210,6 +233,13 @@ said=$(debug_build "$both" "$scratch/both")
 grep -qx "hgl: a debug build, with hgraph's debug libraries in .*/libexec/hgraph-debug, installed beside hgl" <<<"$said" ||
     fail "the release with hgl-debug said: $said"
 [[ $("${build_tool[@]}" launch-field "$scratch/both.json" hgraph libraries) == debug ]] || fail "the release with hgl-debug did not link the debug libraries"
+mapped=$("${build_tool[@]}" launch-field "$scratch/both.json" sourceMap /hgl-release/hgraph)
+[[ $mapped == "$both/$name/libexec/hgraph-debug/hgraph-source" ]] ||
+    fail "the launch did not map engine source to the installed debug archive"
+listed=$(list_engine_source "$both/$name/libexec/hgraph-debug/hgraph-sdk/lib/libhgraph_runtime.$suffix" "$mapped")
+printf '%s\n' "$listed"
+grep -qF 'return ops().global_state_view_impl(' <<<"$listed" ||
+    fail "the debug archive and launch source map did not give engine source text"
 "${build_tool[@]}" run-described "$scratch/both.json"
 "${build_tool[@]}" launch-command "$scratch/both.json" >"$scratch/both.command"
 stopped=$(stop_in_engine "$scratch/both.command")

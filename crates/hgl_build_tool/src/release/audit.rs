@@ -18,6 +18,7 @@ mod paths;
 const SDK: &str = "libexec/hgraph-sdk";
 const DEPS: &str = "libexec/hgraph-deps";
 const DEBUG: &str = "libexec/hgraph-debug";
+const DEBUG_SOURCES: &str = "libexec/hgraph-debug/hgraph-source";
 const PREFIX_LAYOUT: [&str; 2] = ["include", "lib"];
 
 static MACOS_DEP_LIBRARY: LazyLock<Regex> = LazyLock::new(|| {
@@ -176,7 +177,7 @@ pub(crate) fn verify(bundle: &Path, forbidden: &[PathBuf], target: Target) -> Re
         return Err("system C or C++ runtime bundled on Linux".into());
     }
 
-    paths::verify_paths(&bundle, forbidden)?;
+    paths::verify_paths(&bundle, forbidden, None)?;
     let libraries = canonical_libraries(&libraries)?;
     for binary in std::iter::once(&hgl).chain(&libraries) {
         if macos {
@@ -204,8 +205,13 @@ pub(crate) fn verify_debug(
     let debug = tree.join(DEBUG);
     let sdk = debug.join("hgraph-sdk");
     let deps = debug.join("hgraph-deps");
+    let sources = tree.join(DEBUG_SOURCES);
     let mut required = sdk_paths(&sdk, &deps);
-    required.push(sdk.join("share/licenses/hgraph/LICENSE"));
+    required.extend([
+        sdk.join("share/licenses/hgraph/LICENSE"),
+        sources.join("src/hgraph/runtime/node.cpp"),
+        sources.join("include/hgraph"),
+    ]);
     require_paths(&tree, &required)?;
     let stamp = fs::read_to_string(sdk.join("hgl-sdk.txt"))?;
     if !["build-type=Debug", "dependencies=../hgraph-deps"]
@@ -299,7 +305,7 @@ pub(crate) fn verify_debug(
             failures.extend(binary::elf_debug_problems(&symbols, symbol_path)?);
         }
     }
-    if let Err(error) = paths::verify_paths(&tree, forbidden) {
+    if let Err(error) = paths::verify_paths(&tree, forbidden, Some(Path::new(DEBUG_SOURCES))) {
         failures.push(error.to_string());
     }
     if !failures.is_empty() {

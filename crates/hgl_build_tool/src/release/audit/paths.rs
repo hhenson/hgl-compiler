@@ -160,7 +160,11 @@ fn metadata_paths(bundle: &Path, data: &[u8]) -> Result<bool> {
 }
 
 /// Reject external links, build paths and external paths in release metadata.
-pub(super) fn verify_paths(bundle: &Path, forbidden: &[PathBuf]) -> Result<()> {
+pub(super) fn verify_paths(
+    bundle: &Path,
+    forbidden: &[PathBuf],
+    debug_sources: Option<&Path>,
+) -> Result<()> {
     let forbidden = forbidden_prefixes(forbidden)?;
     let mut failures = Vec::new();
     for entry in WalkDir::new(bundle).min_depth(1).sort_by_file_name() {
@@ -182,10 +186,13 @@ pub(super) fn verify_paths(bundle: &Path, forbidden: &[PathBuf]) -> Result<()> {
                     String::from_utf8_lossy(&bytes[..bytes.len().min(120)]),
                 ));
             }
-            if path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| METADATA.contains(&extension))
+            // A source CMakeLists.txt has compiler options such as /bigobj.
+            // Its paths are audited above, but it is not installed metadata.
+            if debug_sources.is_none_or(|source| !relative.starts_with(source))
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| METADATA.contains(&extension))
                 && !metadata_paths(bundle, &data)?
             {
                 failures.push(format!("external path in {}", relative.display()));
