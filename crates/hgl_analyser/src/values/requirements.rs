@@ -819,6 +819,7 @@ impl<'a> Typer<'a> {
                 type_packs: type_packs.to_vec(),
                 constants: ConstArguments::default(),
                 answers: Vec::new(),
+                test_candidates: self.test_candidates,
                 required: None,
                 at,
                 via: None,
@@ -1444,6 +1445,7 @@ impl<'a> Typer<'a> {
             generics,
             type_packs: Vec::new(),
             requirements,
+            test_candidates: self.test_candidates,
         })
     }
 
@@ -2181,6 +2183,8 @@ pub(super) struct Made {
     /// What answers each requirement the callee states at this call
     /// (`hir::Answer`), with the call's generic arguments in place.
     answers: Vec<hir::Answer>,
+    /// The module whose test candidates are in scope while making this call.
+    test_candidates: Option<crate::TestCandidateScope>,
     /// For a call of an operation the enclosing declaration requires
     /// (`Callee::Required`), the requirement's position: what it calls
     /// is the candidate the instance's caller answers it with. `callee`,
@@ -2475,7 +2479,18 @@ pub(super) fn instances_hold(
         }
         reaching.extend(more);
     }
-    if reaching.is_empty() {
+    let test_body = |(module, declaration): (usize, usize), test_candidates: Option<_>| {
+        test_candidates.is_some()
+            && program.modules[module]
+                .bodies
+                .get(declaration)
+                .is_some_and(Option::is_some)
+    };
+    if reaching.is_empty()
+        && !given
+            .iter()
+            .any(|made| test_body(made.callee, made.test_candidates))
+    {
         return;
     }
     let tables: Vec<_> = program.modules.iter().map(super::tables).collect();
@@ -2490,19 +2505,12 @@ pub(super) fn instances_hold(
     // instance of it.
     let mut roots: Vec<(Made, Vec<InstanceRoot>)> = Vec::new();
     let mut root_of: HashMap<String, usize> = HashMap::new();
-    for mut made in given
-        .into_iter()
-        .filter(|made| reaching.contains(&made.callee))
-    {
+    for mut made in given.into_iter().filter(|made| {
+        reaching.contains(&made.callee) || test_body(made.callee, made.test_candidates)
+    }) {
         // A root whose input could not be read can still check the inputs
         // already known. Only exhaustion while following instances is a limit.
-        let key = instance_key(
-            made.callee,
-            &made.generics,
-            &made.type_packs,
-            &made.answers,
-            &made.constants,
-        );
+        let key = instance_key(&made);
         let from = InstanceRoot {
             at: made.at,
             via: made.via.take(),
@@ -2523,13 +2531,7 @@ pub(super) fn instances_hold(
     // instance a walk follows carries the root's calls not yet told it.
     let mut told = HashSet::<(String, Location)>::new();
     for (root, all_calls) in roots {
-        let root_key = instance_key(
-            root.callee,
-            &root.generics,
-            &root.type_packs,
-            &root.answers,
-            &root.constants,
-        );
+        let root_key = instance_key(&root);
         let untold = |told: &HashSet<(String, Location)>, key: &String, calls: &[usize]| {
             calls
                 .iter()
@@ -2554,13 +2556,7 @@ pub(super) fn instances_hold(
             let root_calls: Vec<InstanceRoot> =
                 making.iter().map(|&call| all_calls[call].clone()).collect();
             let from: Vec<_> = root_calls.iter().map(|call| call.at).collect();
-            let key = instance_key(
-                made.callee,
-                &made.generics,
-                &made.type_packs,
-                &made.answers,
-                &made.constants,
-            );
+            let key = instance_key(&made);
             told.extend(from.iter().map(|&at| (key.clone(), at)));
             let count = followed.entry(made.callee).or_insert(0);
             *count += 1;
@@ -2576,13 +2572,16 @@ pub(super) fn instances_hold(
             });
             let unit = &program.modules[made.callee.0];
             let graph = unit.phases.get(made.callee.1) == Some(&Some(Phase::Graph));
-            let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
+            let recheck_tests = test_body(made.callee, made.test_candidates);
+            let recheck_graph =
+                graph && (recheck_tests || !selecting.is_empty() || !made.answers.is_empty());
             let recheck_results = selecting.iter().any(|call| call.result.is_some());
             let recheck_indices = dependent_indices.contains(&made.callee);
             let constants = made.constants.values.as_slice();
             let recheck_format = dependent_patterns.contains(&made.callee) || !constants.is_empty();
             let inputs = crate::InstanceInputs {
                 constants,
+                test_candidates: made.test_candidates,
                 ..crate::InstanceInputs::default()
             };
             let declared = own(made.callee);
@@ -2620,6 +2619,7 @@ pub(super) fn instances_hold(
                 || recheck_results
                 || recheck_indices
                 || recheck_format
+                || recheck_tests
             {
                 program.checked_instance(
                     made.callee,
@@ -2669,10 +2669,14 @@ pub(super) fn instances_hold(
                     made_after_inference(program, declared_body, instance, &mut instance_calls);
                 }
             }
-            if (recheck_indices || recheck_format) && !recheck_graph && !recheck_endpoints {
+            if (recheck_indices || recheck_format || recheck_tests)
+                && !recheck_graph
+                && !recheck_endpoints
+            {
                 let paths = chain.paths(program, &root_calls);
                 for report in body_reports.as_slice() {
-                    if recheck_format && diagnostics.as_slice().contains(report) {
+                    if (recheck_format || recheck_tests) && diagnostics.as_slice().contains(report)
+                    {
                         continue;
                     }
                     emit_instance_report(report.clone(), &paths, diagnostics);
@@ -2735,6 +2739,7 @@ pub(super) fn instances_hold(
                     constants: call.constants,
                     forwarded: false,
                     answers: call.answers,
+                    test_candidates: call.test_candidates,
                     at: call.at,
                 })
                 .collect();
@@ -2823,6 +2828,7 @@ pub(super) fn instances_hold(
                     constants: call.constants.clone(),
                     forwarded,
                     answers,
+                    test_candidates: call.test_candidates.or(made.test_candidates),
                     at: call.at,
                 });
             }
@@ -2855,6 +2861,7 @@ pub(super) fn instances_hold(
                     },
                     diagnostics,
                 );
+                typer.test_candidates = made.test_candidates.or(typer.test_candidates);
                 typer.instance = declared
                     .iter()
                     .copied()
@@ -2956,6 +2963,7 @@ pub(super) fn instances_hold(
                                 constants,
                                 forwarded: false,
                                 answers,
+                                test_candidates: typer.test_candidates,
                                 at: call.at,
                             });
                         }
@@ -2974,6 +2982,7 @@ pub(super) fn instances_hold(
                 constants,
                 forwarded,
                 answers,
+                test_candidates,
                 at,
             } in calls
             {
@@ -2988,7 +2997,7 @@ pub(super) fn instances_hold(
                     exhausted = true;
                     break;
                 }
-                let key = with_const_inputs(key, &constants);
+                let key = with_test_candidates(with_const_inputs(key, &constants), test_candidates);
                 // GEN-7: a call of a function or a candidate in a generic
                 // body was judged where the body is declared, under what
                 // it states. Struct applications and forwarded parameter
@@ -3030,7 +3039,10 @@ pub(super) fn instances_hold(
                     }
                 }
                 let child_calls = untold(&told, &key, &making);
-                if reaching.contains(&callee) && !child_calls.is_empty() && seen.insert(key) {
+                if (reaching.contains(&callee) || test_body(callee, test_candidates))
+                    && !child_calls.is_empty()
+                    && seen.insert(key)
+                {
                     let caller = *link.get_or_insert_with(|| {
                         let index = parents.len();
                         parents.push((
@@ -3052,6 +3064,7 @@ pub(super) fn instances_hold(
                             type_packs,
                             constants,
                             answers,
+                            test_candidates,
                             required: None,
                             at,
                             via: None,
@@ -3274,13 +3287,7 @@ impl InstanceCallRejections {
             return;
         }
         let made = chain.made;
-        let key = instance_key(
-            made.callee,
-            &made.generics,
-            &made.type_packs,
-            &made.answers,
-            &made.constants,
-        );
+        let key = instance_key(made);
         let reports_of = self.by_instance.entry(key).or_default();
         let instance = instance_note(program, made.callee, &made.generics, &made.type_packs);
         let paths = chain.paths(program, callers);
@@ -3343,17 +3350,19 @@ fn unmet_reported(diagnostics: &Diagnostics, at: Location) -> bool {
 /// arguments and what answers its requirements. A constant argument is
 /// its value however it is written, so `turn<0>` and the `turn<((N + 1)
 /// % 2)>` that comes back to it are one instance.
-fn instance_key(
-    callee: (usize, usize),
-    generics: &[Argument],
-    type_packs: &[hir::TypePackArgument],
-    answers: &[hir::Answer],
-    constants: &ConstArguments,
-) -> String {
-    with_const_inputs(
-        generic_instance_key(callee, generics, type_packs, answers),
-        constants,
+fn instance_key(made: &Made) -> String {
+    let key = generic_instance_key(made.callee, &made.generics, &made.type_packs, &made.answers);
+    with_test_candidates(
+        with_const_inputs(key, &made.constants),
+        made.test_candidates,
     )
+}
+
+fn with_test_candidates(key: String, test_candidates: Option<crate::TestCandidateScope>) -> String {
+    match test_candidates {
+        Some(scope) => format!("{key}:test candidates[{}]", scope.module()),
+        None => key,
+    }
 }
 
 /// The generic part of an instance's identity, within the GEN-13 walk's bounds.
@@ -3502,6 +3511,7 @@ struct Resolved {
     constants: ConstArguments,
     forwarded: bool,
     answers: Vec<hir::Answer>,
+    test_candidates: Option<crate::TestCandidateScope>,
     at: Location,
 }
 
@@ -3701,6 +3711,7 @@ fn applied_in(ty: &Type, at: Location, made: &mut Vec<Made>) {
                 type_packs: Vec::new(),
                 constants: ConstArguments::default(),
                 answers: Vec::new(),
+                test_candidates: None,
                 required: None,
                 at,
                 via: None,
@@ -3813,16 +3824,7 @@ pub(super) fn independent_source_bodies(program: &Program) -> IndependentSourceB
 }
 
 fn source_call_key(call: &Made) -> (Location, String) {
-    (
-        call.at,
-        instance_key(
-            call.callee,
-            &call.generics,
-            &call.type_packs,
-            &call.answers,
-            &call.constants,
-        ),
-    )
+    (call.at, instance_key(call))
 }
 
 /// GEN-7: a failure in a selected result's use points at its call and
@@ -4084,6 +4086,7 @@ fn made_at(program: &Program, expression: &Expr, made: &mut Vec<Made>) {
                 type_packs: Vec::new(),
                 constants: ConstArguments::default(),
                 answers: Vec::new(),
+                test_candidates: None,
                 required: None,
                 at: expression.at,
                 via: None,
@@ -4118,6 +4121,7 @@ fn make_call(callee: &Callee, at: Location, constants: ConstArguments, made: &mu
             ..
         } if !generics.is_empty()
             || !requirements.is_empty()
+            || callee.test_candidates().is_some()
             || constants.limit.is_some()
             || constants.outgrown
             || !constants.values.is_empty() =>
@@ -4128,6 +4132,7 @@ fn make_call(callee: &Callee, at: Location, constants: ConstArguments, made: &mu
                 type_packs: type_packs.clone(),
                 constants,
                 answers: requirements.clone(),
+                test_candidates: callee.test_candidates(),
                 required: None,
                 at,
                 via: None,
@@ -4141,6 +4146,7 @@ fn make_call(callee: &Callee, at: Location, constants: ConstArguments, made: &mu
             type_packs: Vec::new(),
             constants: ConstArguments::default(),
             answers: Vec::new(),
+            test_candidates: None,
             required: Some(*requirement),
             at,
             via: None,

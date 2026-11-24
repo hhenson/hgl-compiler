@@ -11,7 +11,9 @@ parser: done
 
 analyser: done
 
-- Unnamed test contexts share a scope across parts. Each named test binds its own private declarations and selects its candidates only in calls written within that test. A type or operator it declares has identity `(module, test, name)`.
+- Unnamed test contexts share a scope across parts. Each named test binds its own private declarations. A type or operator it declares has identity `(module, test, name)`.
+- A test-declared candidate is visible to every test of its module, including inside functions and operators the tests call. Those calls use ordinary selection (GEN-5, GEN-6). An application run uses production candidates. Another module's tests use the production candidates and their own module's test candidates.
+- Production commands diagnose test bodies. The application and its artifacts use the production candidate view.
 
 ## TST-2
 
@@ -24,9 +26,8 @@ transpiler: partial
 - Application entry units link reachable production pieces. Named tests have separate
   entry units and their own runnable dependency set. Test-local types and
   callables have distinct generated identities. Generic instances retain the
-  test-local candidates that answer their requirements (GEN-16).
-- Left: Production module units can still contain test pieces. The emitter reports a
-  missing test block or a return in a test defensively.
+  test candidates that answer their requirements (GEN-16). Calls within a test get separate instance identities so their candidate scope cannot change production.
+- Left: Production module units can still contain test pieces. When building applications and tests together, a test-view instance can bring another module's test objects into the application link (#773). The emitter reports a missing test block or a return in a test defensively.
 
 ## TST-3
 

@@ -25,7 +25,7 @@ pub(crate) type Demands = HashMap<Declaration, BTreeMap<usize, Demand>>;
 /// Selected value calls or the resolved demand for a generic instance and slot.
 pub(crate) type SelectedDemands = RefCell<HashMap<InstanceSlot, SelectedDemand>>;
 
-type InstanceSlot = (String, usize);
+type InstanceSlot = (String, Option<crate::TestCandidateScope>, usize);
 
 /// A slot followed into an instance: its key, the index of the slot whose
 /// instance made the call, and the instance's declaration.
@@ -277,9 +277,10 @@ impl Program {
                 return true;
             };
             let key = match &pack_inputs {
-                Some(entries) => (format!("{key}entries{entries:?}"), slot),
-                None => (key, slot),
+                Some(entries) => format!("{key}entries{entries:?}"),
+                None => key,
             };
+            let key = (key, callee.test_candidates(), slot);
             let cached = self.selected_const_demands.borrow().get(&key).cloned();
             if let Some(SelectedDemand::Read(read)) = cached {
                 if read {
@@ -386,6 +387,7 @@ impl Program {
             crate::InstanceInputs {
                 type_packs: callee.type_packs(),
                 pack_inputs,
+                test_candidates: callee.test_candidates(),
                 ..crate::InstanceInputs::default()
             },
             &placement_reports,

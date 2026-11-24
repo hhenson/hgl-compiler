@@ -61,6 +61,8 @@ pub struct InstanceInputs<'a> {
     pub pack_inputs: Option<&'a [PackInput]>,
     /// Ordinary const inputs read by a compile-time check, by original slot.
     pub constants: &'a [crate::ConstInput],
+    /// The active test's module when reading this callable for a test run (TST-1).
+    pub test_candidates: Option<crate::TestCandidateScope>,
 }
 
 /// The enclosing declaration and the arguments common to its body and
@@ -73,6 +75,7 @@ struct InstanceArguments<'a> {
     type_packs: &'a [TypePackArgument],
     pack_inputs: &'a [PackInput],
     constants: &'a [crate::ConstInput],
+    test_candidates: Option<crate::TestCandidateScope>,
     requirements: &'a [Answer],
     diagnostics: &'a RefCell<Diagnostics>,
     changed_results: RefCell<Vec<Location>>,
@@ -214,6 +217,7 @@ impl Program {
             type_packs: &[],
             pack_inputs: &[],
             constants: &[],
+            test_candidates: None,
             requirements: &requirements,
             diagnostics: &reports,
             changed_results: RefCell::new(Vec::new()),
@@ -381,6 +385,7 @@ impl Program {
             type_packs: inputs.type_packs,
             pack_inputs: pending_forwards.unwrap_or_default(),
             constants: inputs.constants,
+            test_candidates: inputs.test_candidates,
             requirements,
             diagnostics,
             changed_results: RefCell::new(Vec::new()),
@@ -394,7 +399,8 @@ impl Program {
             pack_inputs: pending_forwards,
             ..inputs
         };
-        if (recheck_endpoints
+        if (inputs.test_candidates.is_some()
+            || recheck_endpoints
             || pending_forwards.is_some()
             || !inputs.constants.is_empty()
             || (!generics.is_empty()
@@ -417,7 +423,8 @@ impl Program {
             reread_body = true;
         }
         let recheck = graph
-            && (!declared.selecting[declaration].is_empty()
+            && (inputs.test_candidates.is_some()
+                || !declared.selecting[declaration].is_empty()
                 || !requirements.is_empty()
                 || pending_forwards.is_some());
         let mut destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
@@ -456,7 +463,7 @@ impl Program {
             destinations.settle(
                 self,
                 (module, declaration),
-                (&taken, &map),
+                (&taken, &map, inputs.test_candidates),
                 &mut body,
                 body_diagnostics,
                 &|expression| self.place(expression, &arguments, &functions),
@@ -493,6 +500,7 @@ impl Program {
             instance.declaration,
             instance.generics,
             instance.packs,
+            instance.test_candidates,
             body,
             &|call| call.walk_mut(&mut |inner| self.place(inner, instance, functions)),
         );
@@ -1096,6 +1104,7 @@ fn place_callee(
                     generics: generics.clone(),
                     type_packs: Vec::new(),
                     requirements: requirements.clone(),
+                    test_candidates: instance.test_candidates,
                 };
             }
         }

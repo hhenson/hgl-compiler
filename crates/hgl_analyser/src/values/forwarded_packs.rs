@@ -936,6 +936,8 @@ pub(crate) struct ForwardingInstance {
     /// The ordinary const inputs a check in the body reads (FN-1, FMT-3),
     /// carried with the entries so the instance is read with both.
     constants: crate::const_inputs::ReadInputs,
+    /// The module's test candidates remain visible through a pack call (TST-1).
+    test_candidates: Option<crate::TestCandidateScope>,
 }
 
 impl crate::Program {
@@ -1039,10 +1041,11 @@ impl ForwardingInstance {
                 .iter()
                 .all(|parameter| parameter.pack.is_none())
             && instance.constants.values.is_empty()
+            && instance.test_candidates.is_none()
         {
             // Concrete bodies supply their own forwarding roots. A call
             // of one does not make those same instances a second time,
-            // unless it gives the body const inputs it reads (FN-1).
+            // unless it supplies const inputs or a test candidate scope.
             return None;
         }
         Some(instance)
@@ -1122,6 +1125,7 @@ impl ForwardingInstance {
             } else {
                 crate::const_inputs::ReadInputs::default()
             },
+            test_candidates: callee.test_candidates(),
         })
     }
 
@@ -1142,6 +1146,7 @@ impl ForwardingInstance {
             type_packs: &self.type_packs,
             pack_inputs: Some(&self.pack_inputs),
             constants: &self.constants.values,
+            test_candidates: self.test_candidates,
         }
     }
 
@@ -1527,6 +1532,7 @@ mod tests {
                 ty,
             }],
             constants: Default::default(),
+            test_candidates: None,
         };
         assert_eq!(PackShape::of(&instance).entries, 3);
         instance.type_packs.clear();

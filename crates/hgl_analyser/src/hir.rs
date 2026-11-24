@@ -1181,6 +1181,8 @@ pub enum Callee {
         /// Written arguments whose places still depend on graph instance
         /// inference, by index and source location (GEN-2, EXPR-9, ERR-2).
         contextual: Vec<ContextualArgument>,
+        /// The test module whose candidates this call and its callees can use (TST-1).
+        test_candidates: Option<crate::TestCandidateScope>,
     },
     /// The value candidate selected for a call of an operator (GEN-5).
     Candidate {
@@ -1206,6 +1208,8 @@ pub enum Callee {
         /// What answers each requirement the candidate states, with
         /// `generics` in place: see [`Answer`].
         requirements: Vec<Answer>,
+        /// The test module whose candidates this call and its callees can use (TST-1).
+        test_candidates: Option<crate::TestCandidateScope>,
     },
     /// An operation the enclosing declaration requires of its generic
     /// parameters (GEN-7, GEN-16): the `add_(lhs, rhs)` of a body under
@@ -1251,6 +1255,19 @@ pub enum Callee {
 }
 
 impl Callee {
+    /// The test module whose candidates are visible while instantiating this call (TST-1).
+    pub fn test_candidates(&self) -> Option<crate::TestCandidateScope> {
+        match self {
+            Self::Function {
+                test_candidates, ..
+            }
+            | Self::Candidate {
+                test_candidates, ..
+            } => *test_candidates,
+            _ => None,
+        }
+    }
+
     /// The function or the candidate the call selected: the position of
     /// its module in `Program::modules` and its position in that
     /// module's `declarations`. `None` for an operation the enclosing

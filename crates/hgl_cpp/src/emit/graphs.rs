@@ -309,7 +309,7 @@ impl Emitter<'_> {
                 },
             );
         }
-        let concrete = if self.instances.instanced(program, module, declaration) {
+        let concrete = if self.instances.instanced_call(program, callee) {
             let instances = self.instances;
             match instances.find_call(program, callee, arguments) {
                 Some(instance) => Some(instance),

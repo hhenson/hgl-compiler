@@ -230,9 +230,11 @@ impl Emitter<'_> {
         let native_pack = NativePack::of(program, callee, arguments);
         let concrete = if origin.is_some()
             && native_pack.is_none()
-            && declared.parameters.iter().any(|parameter| {
-                parameter.pack.is_some() || matches!(parameter.ty, Type::Function(_))
-            }) {
+            && (callee.test_candidates().is_some()
+                && self.instances.instanced_call(program, callee)
+                || declared.parameters.iter().any(|parameter| {
+                    parameter.pack.is_some() || matches!(parameter.ty, Type::Function(_))
+                })) {
             let Some(instance) = self.instances.find_call(program, callee, arguments) else {
                 return self.missing_instance(
                     value.at,
@@ -714,22 +716,23 @@ impl Emitter<'_> {
         else {
             return self.missing(value.at, "a `capture` of this");
         };
-        let concrete =
-            if declared.parameters.iter().any(|parameter| {
+        let concrete = if callee.test_candidates().is_some()
+            && self.instances.instanced_call(program, callee)
+            || declared.parameters.iter().any(|parameter| {
                 parameter.pack.is_some() || matches!(parameter.ty, Type::Function(_))
             }) {
-                let Some(instance) = self.instances.find_call(program, callee, arguments) else {
-                    return self.missing_instance(
-                        value.at,
-                        callee,
-                        arguments,
-                        "a `capture` of an instance that is not written",
-                    );
-                };
-                Some(instance)
-            } else {
-                None
+            let Some(instance) = self.instances.find_call(program, callee, arguments) else {
+                return self.missing_instance(
+                    value.at,
+                    callee,
+                    arguments,
+                    "a `capture` of an instance that is not written",
+                );
             };
+            Some(instance)
+        } else {
+            None
+        };
         let signature = concrete.map_or(declared, |instance| &instance.signature);
         let lifted = call.is_lifted();
         let temporal = matches!(

@@ -1815,8 +1815,8 @@ fn running_an_application_ignores_documentation_examples() {
     assert_eq!(with_example.stdout, without_example.stdout);
 }
 
-/// TST-1 and GEN-16: private declarations and operator candidates are
-/// compiled for their own test, including the evidence for date addition.
+/// TST-1 and GEN-16: private declarations belong to their own test, but
+/// candidates reach sibling tests and the functions and operators they call.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn named_test_declarations_run_on_the_sdk() {
@@ -1829,7 +1829,19 @@ fn named_test_declarations_run_on_the_sdk() {
         "local.hgl",
         include_str!("fixtures/test_local_declarations.hgl"),
     );
-    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let foreign = write(
+        &root,
+        "foreign.hgl",
+        r#"module demo.foreign
+use demo.test_local_declarations::{classify, relay, render_relay}
+test keeps_production_candidate {
+    assert classify(7) == 0
+    assert relay(7) == 0
+    assert render_relay("[{}]", 7) == "production"
+}
+"#,
+    );
+    let output = hgl_in(&["test", &file, &foreign, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -1838,7 +1850,141 @@ fn named_test_declarations_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+
+    let directory = root.join("production");
+    let build = hgl_in(
+        &["build", &file, &foreign, "--out", &argument(&directory)],
+        &[],
+        &[],
+    );
+    assert!(build.status.success(), "{}", text(&build.stderr));
+    let source = fs::read_to_string(directory.join("modules/mod-demo-test_local_declarations.cpp"))
+        .expect("the production module source is written");
+    assert!(!source.contains("test_candidates_"), "{source}");
+}
+
+/// TST-1: withholding candidates from the application does not skip
+/// validation of either a candidate body or another test's assertion.
+#[test]
+fn production_commands_report_test_errors_in_modules_with_test_candidates() {
+    let root = scratch("test-candidate-production-diagnostics");
+    let module = write(
+        &root,
+        "owner.hgl",
+        r#"module demo.diagnostics
+export operator kind<T>(value: T) -> i64
+impl const fn kind<T>(value: T) -> i64 => 0
+export const fn via(value: i64) -> i64 => kind(value)
+test declares {
+    impl const fn kind(value: i64) -> i64 => value + true
+    assert via(1) == 1
+}
+test rejects {
+    assert via(2) == "two"
+}
+"#,
+    );
+    let app = write(
+        &root,
+        "app.hgl",
+        r#"application demo.diagnostics.app
+use demo.diagnostics::{via}
+fn present(const values: list<i64>) -> i64 {
+    for value in values { yield 1s: value }
+}
+eval present(values: [via(7)])
+"#,
+    );
+    for command in ["check", "build", "run"] {
+        let output = hgl_in(&[command, &module, &app], &[], &[]);
+        let stderr = text(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{command}\n{stderr}");
+        assert_eq!(stderr.matches("error[").count(), 2, "{command}\n{stderr}");
+        assert!(stderr.contains("`+` takes no `i64` and `bool`"), "{stderr}");
+        assert!(stderr.contains("`==` takes no `i64` and `str`"), "{stderr}");
+    }
+}
+
+/// ERR-9 and TST-1: a report from a declaration survives a test-view
+/// reread once, even when two tests in another module call its body.
+#[test]
+fn a_test_view_does_not_repeat_an_existing_declaration_error() {
+    let root = scratch("test-candidate-diagnostic-reread");
+    let provider = write(
+        &root,
+        "provider.hgl",
+        r#"module demo.provider
+export operator kind<T>(value: T) -> i64
+impl const fn kind<T>(value: T) -> i64 => 0
+export const fn broken(value: i64) -> i64 => value + true
+"#,
+    );
+    let tests = write(
+        &root,
+        "tests.hgl",
+        r#"module demo.caller
+use demo.provider::{kind, broken}
+test first {
+    impl const fn kind(value: i64) -> i64 => 1
+    assert broken(1) == 1
+}
+test second {
+    assert broken(2) == 2
+}
+"#,
+    );
+    let output = hgl_in(&["check", &provider, &tests], &[], &[]);
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(stderr.matches("error[").count(), 1, "{stderr}");
+    assert!(stderr.contains("`+` takes no `i64` and `bool`"), "{stderr}");
+}
+
+/// GEN-6 and TST-1: conflicting test candidates report one option kind
+/// error during test analysis, and an application still uses production.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn test_candidate_option_conflicts_do_not_affect_an_application() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("test-candidate-option-kind");
+    let file = write(
+        &root,
+        "taste.hgl",
+        include_str!("fixtures/test_candidate_option_kind.hgl"),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert_eq!(checked.status.code(), Some(1));
+    assert!(text(&checked.stderr).contains("error[operator/impl.option_kind]"));
+    let tests = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let outcomes = text(&tests.stdout);
+    assert!(tests.status.success(), "{outcomes}{}", text(&tests.stderr));
+    assert!(
+        outcomes.contains("rejection cases: 1 passed, 0 failed"),
+        "{outcomes}"
+    );
+
+    let app = write(
+        &root,
+        "taste.app.hgl",
+        r#"application demo.taste.app
+use demo.test_candidate_option_kind::{taste}
+fn present(const values: list<i64>) -> i64 {
+    for value in values { yield 1s: value }
+}
+eval present(values: [taste(7)])
+"#,
+    );
+    let run = hgl_in(&["run", &file, &app, "--target", "cpp"], &[], &[]);
+    let stdout = text(&run.stdout);
+    assert!(run.status.success(), "{stdout}{}", text(&run.stderr));
+    assert!(stdout.contains("  0\n"), "{stdout}");
+    assert!(
+        stdout.contains("ran demo.taste.app on cpp: 1 publication\n"),
         "{stdout}"
     );
 }
@@ -2498,6 +2644,7 @@ fn pack_entries_with_unread_constant_keys_decline_cpp_emission() {
 /// FN-17: named, operator and anonymous targets specialize value and
 /// temporal calls. Captured values and connections reach their bodies
 /// through a node hook, a graph and another static function parameter.
+/// MAP-2: map fits its split inputs to an explicit operator's member types.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn function_parameters_run_on_the_sdk() {
@@ -2524,7 +2671,7 @@ fn function_parameters_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
