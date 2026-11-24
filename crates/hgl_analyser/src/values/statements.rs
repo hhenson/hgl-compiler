@@ -179,6 +179,26 @@ impl<'a> Typer<'a> {
 
     // ---- Statements ----
 
+    /// Read a statement list. A `let` pack may contribute several entry
+    /// declarations, while ordinary statements contribute one (FN-19).
+    pub(super) fn read_statements(
+        &mut self,
+        nodes: impl IntoIterator<Item = SyntaxNode>,
+    ) -> Vec<Stmt> {
+        let mut statements = Vec::new();
+        for node in nodes {
+            self.append_statement(&node, &mut statements);
+        }
+        statements
+    }
+
+    /// Read one statement into its containing list.
+    pub(super) fn append_statement(&mut self, node: &SyntaxNode, statements: &mut Vec<Stmt>) {
+        if !self.bind_let_pack(node, statements) {
+            statements.push(self.statement(node));
+        }
+    }
+
     /// A statement of a block. One read where no expression is, is read
     /// once, and has its own allowance of rereads
     /// (`Typer::begin_construct`).
