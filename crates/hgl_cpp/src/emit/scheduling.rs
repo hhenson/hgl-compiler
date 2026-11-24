@@ -167,7 +167,7 @@ impl<'a> DatedCalls<'a> {
         ) {
             return;
         }
-        let body = if self.instances.instanced(self.program, unit, index) {
+        let body = if self.instances.instanced_call(self.program, callee) {
             self.instances
                 .find_call(self.program, callee, arguments)
                 .map(|instance| &instance.body)

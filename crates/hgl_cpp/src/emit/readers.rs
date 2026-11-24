@@ -146,7 +146,7 @@ fn node_reads(
     if signature.reference {
         return None;
     }
-    let instance = if instances.instanced(program, module, declaration) {
+    let instance = if instances.instanced_call(program, callee) {
         Some(instances.find_call(program, callee, arguments)?)
     } else {
         None

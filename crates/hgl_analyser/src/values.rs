@@ -137,8 +137,7 @@ pub(crate) fn walk_body_calls(body: &hir::Body, visit: &mut dyn FnMut(&hir::Expr
         }
     });
 }
-/// Types the body of every value function of the program, filling in
-/// [`Module::bodies`].
+/// Types the bodies of the program, filling in [`Module::bodies`].
 pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     // The signature of what has none: a test, a run statement, a
     // constant.
@@ -470,7 +469,7 @@ pub(crate) fn reread_instance_body(
         ..signature.clone()
     };
     let pack_types = PackTypes::new(&reading.generics, inputs.type_packs);
-    let mut typer = Typer::new(
+    let mut typer = Typer::with_test_candidates(
         program,
         owner,
         declared,
@@ -482,6 +481,7 @@ pub(crate) fn reread_instance_body(
             selecting: &selecting,
         },
         diagnostics,
+        inputs.test_candidates,
     );
     typer.instance = map
         .iter()
@@ -741,6 +741,8 @@ struct Typer<'a> {
     /// them. A chain of symbols asks for the same operator's at every
     /// link.
     candidates: HashMap<(usize, usize, bool), Vec<Candidate<'a>>>,
+    /// Which module's test-only candidates this reading can see (TST-1).
+    test_candidates: Option<crate::TestCandidateScope>,
     /// The values of the module constants this function's constants
     /// have named (UNIT-13): a constant named twice is read once.
     constants: crate::constant::Constants,
@@ -817,7 +819,29 @@ impl<'a> Typer<'a> {
         tables: Tables<'a>,
         diagnostics: &'a mut Diagnostics,
     ) -> Typer<'a> {
+        Self::with_test_candidates(
+            program,
+            module,
+            declaration,
+            signature,
+            tables,
+            diagnostics,
+            None,
+        )
+    }
+
+    /// Begin a lexical reading with the candidates of the calling test in scope.
+    fn with_test_candidates(
+        program: &'a Program,
+        module: &'a Module,
+        declaration: &'a Declaration,
+        signature: &'a Signature,
+        tables: Tables<'a>,
+        diagnostics: &'a mut Diagnostics,
+        test_candidates: Option<crate::TestCandidateScope>,
+    ) -> Typer<'a> {
         let mut typer = Typer::bare(program, module, declaration, signature, tables, diagnostics);
+        typer.test_candidates = test_candidates.or(typer.test_candidates);
         for parameter in &signature.parameters {
             // What a pack holds is for the pass that reads calls.
             let ty = match parameter.pack {
@@ -900,6 +924,10 @@ impl<'a> Typer<'a> {
             requiring: 0,
             identities: HashMap::new(),
             candidates: HashMap::new(),
+            test_candidates: declaration
+                .test_only
+                .then(|| crate::TestCandidateScope::of(program, module))
+                .flatten(),
             constants: Default::default(),
             selecting: tables.selecting,
             instance: Vec::new(),

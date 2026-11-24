@@ -28,12 +28,12 @@ use crate::{codes, error};
 mod native;
 
 /// Checks the signature of every callable of the program.
-pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
+pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics, tests: bool) {
     constant_failures(program, diagnostics);
     generic_defaults(program, diagnostics);
     crate::laws::check_requirements(program, diagnostics);
     crate::laws::check_properties(program, diagnostics);
-    option_kinds(program, diagnostics);
+    option_kinds(program, diagnostics, tests);
     pack_declarations(program, diagnostics);
     configuration_shapes(program, diagnostics);
     crate::values::check_candidate_contracts(program, diagnostics);
@@ -627,7 +627,7 @@ fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
 /// A generic parameter is a value by what `read` settled (GEN-13):
 /// written `const N: i64`, or plain and used as one, the `N` of
 /// `value: list<i64, N>`.
-fn option_kinds(program: &Program, diagnostics: &mut Diagnostics) {
+fn option_kinds(program: &Program, diagnostics: &mut Diagnostics, tests: bool) {
     // The candidates of the program, each with its operator, by the
     // operator's module and declaration.
     let candidates = || {
@@ -643,7 +643,10 @@ fn option_kinds(program: &Program, diagnostics: &mut Diagnostics) {
                     .filter_map(move |(position, declaration)| {
                         let (_, operator) = declaration.kind.candidate()?;
                         let operator = operator?;
-                        let scope = declaration.test_owner.map(|test| (index, test));
+                        let scope = declaration.test_owner.map(|_| index);
+                        if scope.is_some() && !tests {
+                            return None;
+                        }
                         match module.details.get(position) {
                             Some(Detail::Callable(signature)) => {
                                 Some(((operator.module, operator.declaration), scope, signature))
@@ -654,8 +657,8 @@ fn option_kinds(program: &Program, diagnostics: &mut Diagnostics) {
             })
     };
     struct OptionDeclaration {
-        /// The named test where this candidate is visible, when private.
-        scope: Option<(usize, usize)>,
+        /// The module whose tests see this candidate, when private to testing.
+        scope: Option<usize>,
         at: Location,
     }
     // For each operator: the options declared as generic value parameters

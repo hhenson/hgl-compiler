@@ -238,6 +238,7 @@ impl<'a> Typer<'a> {
             requirements,
             defer_pack_members: false,
             contextual: Vec::new(),
+            test_candidates: self.test_candidates,
         };
         Some((callee, actual))
     }
@@ -447,6 +448,7 @@ impl<'a> Typer<'a> {
                 generics: chosen.generics,
                 type_packs: chosen.type_packs,
                 requirements,
+                test_candidates: self.test_candidates,
             };
             return Some((callee, actual));
         }
