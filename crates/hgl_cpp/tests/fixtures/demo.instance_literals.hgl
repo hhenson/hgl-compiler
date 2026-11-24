@@ -144,3 +144,12 @@ test configuration_defaults_keep_their_values {
     assert configured_option_wrapper(3) == 7
     assert configured_option_wrapper(1.5) == 7
 }
+
+# GEN-3, GEN-7: recording a membership-admitted result also retains
+# consumers in an operator chain that has no literal in its generic body.
+const fn membership_chain<V>(a: V, b: V, c: V) -> V requires V in {i64, f64} => a + b * c
+
+test literal_free_membership_results_keep_their_consumers {
+    assert membership_chain(3, 2, 4) == 11
+    assert membership_chain(1.5, 2.0, 0.5) == 2.5
+}
