@@ -272,6 +272,7 @@ impl Typer<'_> {
             Some(key) => self
                 .pack_inputs
                 .as_ref()?
+                .values
                 .iter()
                 .find(|entry| entry.parameter == pack && entry.key == *key)
                 .map(|entry| &entry.ty),
