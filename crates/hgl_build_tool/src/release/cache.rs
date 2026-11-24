@@ -23,8 +23,8 @@ const NATIVE_DIRECTORIES: [&str; 5] = [
 const DEBUG_DIRECTORY: &str = "libexec";
 const DEBUG_CACHE: &str = "debug/libexec";
 
-/// Hash the native recipe and compiler configuration used by the macOS cache.
-pub(crate) fn native_key() -> Result<String> {
+/// Hash the native recipe and the toolchain that built the cached libraries.
+pub(crate) fn native_key(target: Target) -> Result<String> {
     let recipe = [
         "Cargo.lock",
         "Cargo.toml",
@@ -37,41 +37,51 @@ pub(crate) fn native_key() -> Result<String> {
         "scripts/package-release.sh",
         "crates/hgl_build_tool/Cargo.toml",
     ];
-    let environment = [
-        "CC",
-        "CXX",
-        "CFLAGS",
-        "CXXFLAGS",
-        "LDFLAGS",
-        "DEVELOPER_DIR",
-        "SDKROOT",
-        "MACOSX_DEPLOYMENT_TARGET",
-    ];
-    let mut inputs = BTreeMap::from([("target".to_string(), Target::Macos.triple().to_string())]);
+    let environment = ["CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS"];
+    let mut inputs = BTreeMap::from([("target".to_string(), target.triple().to_string())]);
     inputs.extend(
         environment
             .into_iter()
             .map(|key| (key.to_string(), env::var(key).unwrap_or_default())),
     );
 
-    let cxx = env::var_os("CXX")
-        .filter(|compiler| !compiler.is_empty())
-        .unwrap_or_else(|| "/usr/bin/clang++".into());
-    for (key, command) in [
-        ("compiler", Command::new(cxx).arg("--version")),
-        (
-            "sdk",
-            Command::new("/usr/bin/xcrun").args(["--sdk", "macosx", "--show-sdk-version"]),
-        ),
-    ] {
-        let value = command
-            .stderr(Stdio::null())
-            .output()
-            .ok()
-            .filter(|result| result.status.success())
-            .and_then(|result| String::from_utf8(result.stdout).ok())
-            .unwrap_or_else(|| "unavailable".to_string());
-        inputs.insert(key.to_string(), value);
+    match target {
+        Target::Macos => {
+            inputs.extend(
+                ["DEVELOPER_DIR", "SDKROOT", "MACOSX_DEPLOYMENT_TARGET"]
+                    .into_iter()
+                    .map(|key| (key.to_string(), env::var(key).unwrap_or_default())),
+            );
+            for (key, command) in [
+                (
+                    "compiler",
+                    compiler("CXX", "/usr/bin/clang++").arg("--version"),
+                ),
+                (
+                    "sdk",
+                    Command::new("/usr/bin/xcrun").args(["--sdk", "macosx", "--show-sdk-version"]),
+                ),
+            ] {
+                let value = probe(command).unwrap_or_else(|| "unavailable".to_string());
+                inputs.insert(key.to_string(), value);
+            }
+        }
+        Target::Linux => {
+            // The Linux libraries and split debug symbols depend on the
+            // system toolchain. A missing probe cannot identify their cache.
+            for (key, command) in [
+                ("cc", compiler("CC", "gcc-15").arg("--version")),
+                ("compiler", compiler("CXX", "g++-15").arg("--version")),
+                ("glibc", Command::new("getconf").arg("GNU_LIBC_VERSION")),
+                ("cmake", Command::new("cmake").arg("--version")),
+                ("ninja", Command::new("ninja").arg("--version")),
+                ("ld", Command::new("ld").arg("--version")),
+                ("objcopy", Command::new("objcopy").arg("--version")),
+            ] {
+                let value = probe(command).ok_or_else(|| format!("cannot fingerprint {key}"))?;
+                inputs.insert(key.to_string(), value);
+            }
+        }
     }
     for path in recipe {
         inputs.insert(path.to_string(), sha256(fs::read(path)?));
@@ -88,6 +98,23 @@ pub(crate) fn native_key() -> Result<String> {
         }
     }
     Ok(sha256(serde_json::to_vec(&inputs)?))
+}
+
+fn compiler(variable: &str, default: &str) -> Command {
+    Command::new(
+        env::var_os(variable)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| default.into()),
+    )
+}
+
+fn probe(command: &mut Command) -> Option<String> {
+    command
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|result| result.status.success())
+        .and_then(|result| String::from_utf8(result.stdout).ok())
 }
 
 fn sha256(bytes: impl AsRef<[u8]>) -> String {
