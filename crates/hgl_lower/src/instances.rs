@@ -1156,6 +1156,9 @@ impl Instances {
             return Vec::new();
         };
         let mut found = Vec::new();
+        if let Some(reduction) = crate::calls::ordered_list_reduction(program, value) {
+            found.extend(self.asks(program, &reduction.combiner, expanding));
+        }
         // Check the borrowed arguments before cloning them into a request.
         if self.instanced_call(program, callee)
             && let Ok(depths) = request_depths(
