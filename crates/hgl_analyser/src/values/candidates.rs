@@ -1774,11 +1774,12 @@ impl<'a> Typer<'a> {
         }
         // Each combination of members, as an instance would have it.
         let before = std::mem::take(&mut self.instance);
+        let packs = PackTypes::new(&[], &[]);
         let mut failed = None;
         for combination in &combinations {
             self.instance = combination.clone();
             let mark = self.mark();
-            let outcome = match self.select_at_instance(&record, None) {
+            let outcome = match self.select_at_instance(&record, &packs, None) {
                 // What a call is held to once its candidate is selected
                 // (`Typer::called`): a `var` parameter's place among them.
                 AtInstance::Selected(chosen, given) => {
@@ -1895,6 +1896,7 @@ impl<'a> Typer<'a> {
     pub(super) fn select_at_instance(
         &mut self,
         selecting: &Selecting,
+        packs: &PackTypes<'_>,
         values: Option<Vec<Expr>>,
     ) -> AtInstance<'a> {
         let own: Vec<Location> = self.instance.iter().map(|(at, _)| *at).collect();
@@ -1903,7 +1905,9 @@ impl<'a> Typer<'a> {
             .iter()
             .map(|(at, argument)| (*at, argument))
             .collect();
-        let in_place = |ty: &Type| placed(substitute_within(ty, &map), &own);
+        // GEN-17: a reflected member supplies its concrete type before
+        // the requested result and operands are matched against candidates.
+        let in_place = |ty: &Type| placed(packs.project(ty, &map).unwrap_or(Type::Unknown), &own);
         self.graph = selecting.graph;
         let operator = selecting.operator;
         let program = self.program;
@@ -2382,6 +2386,7 @@ pub(crate) fn select_in_instance(
     program: &crate::program::Program,
     (module, declaration): (usize, usize),
     generics: &[Argument],
+    packs: &PackTypes<'_>,
     test_candidates: Option<crate::TestCandidateScope>,
     body: &mut hir::Body,
     after: &dyn Fn(&mut Expr),
@@ -2464,7 +2469,8 @@ pub(crate) fn select_in_instance(
             .iter()
             .map(|argument| argument.value.clone())
             .collect();
-        let AtInstance::Selected(chosen, given) = typer.select_at_instance(call, Some(values))
+        let AtInstance::Selected(chosen, given) =
+            typer.select_at_instance(call, packs, Some(values))
         else {
             return;
         };
@@ -3491,6 +3497,89 @@ impl Specific {
     }
 }
 
+/// A type expanded at the admitted arity, with its declared form retained
+/// so a tuple's pack stays distinguishable even when it captures no entries.
+#[derive(Clone, Copy)]
+struct RankingType<'a, 'candidate> {
+    ty: &'a Type,
+    written: Option<&'a Type>,
+    candidate: &'a Chosen<'candidate>,
+}
+
+impl<'a> RankingType<'a, '_> {
+    fn child(self, ty: &'a Type, index: usize) -> Self {
+        let written = self.written.and_then(|written| match written {
+            Type::Nullable(inner)
+            | Type::Set(inner)
+            | Type::Endpoint(inner)
+            | Type::Atomic(inner)
+            | Type::Delta(inner)
+            | Type::List { element: inner, .. }
+            | Type::RollingWindow { value: inner, .. } => Some(inner.as_ref()),
+            Type::Dict { key, value } => [key.as_ref(), value.as_ref()].get(index).copied(),
+            Type::Result { value, error } => [value.as_ref(), error.as_ref()].get(index).copied(),
+            Type::Named { arguments, .. } => match arguments.get(index)? {
+                Argument::Type(argument) => Some(argument),
+                Argument::Constant(_) => None,
+            },
+            _ => None,
+        });
+        Self {
+            ty,
+            written,
+            ..self
+        }
+    }
+
+    fn tuple_source(self) -> Option<&'a [Type]> {
+        match self.written? {
+            Type::Tuple(elements) => Some(elements),
+            _ => None,
+        }
+    }
+
+    fn pack_index(self, element: &Type) -> Option<usize> {
+        let generics = &self.candidate.declared.generics;
+        bare_parameter(element, generics)
+            .filter(|&index| matches!(generics[index].kind, GenericKind::Pack { .. }))
+    }
+
+    /// Whether the declared tuple needed a pack to reach this arity.
+    /// A still-forwarded pack has no settled arity to compare.
+    fn has_tuple_pack(self) -> Option<bool> {
+        let mut has_pack = false;
+        for element in self.tuple_source()? {
+            if let Some(index) = self.pack_index(element) {
+                ranked_pack_length(self.candidate, index)?;
+                has_pack = true;
+            }
+        }
+        Some(has_pack)
+    }
+
+    fn tuple_children(self, elements: &'a [Type]) -> impl Iterator<Item = Self> {
+        // Follow the same expansion as ranking_type: the written pack
+        // element corresponds to each of the entries it captured.
+        let written = self
+            .tuple_source()
+            .into_iter()
+            .flatten()
+            .flat_map(move |element| {
+                let length = self
+                    .pack_index(element)
+                    .and_then(|index| ranked_pack_length(self.candidate, index))
+                    .unwrap_or(1);
+                std::iter::repeat_n(Some(element), length)
+            })
+            .chain(std::iter::repeat(None));
+        elements.iter().zip(written).map(move |(ty, written)| Self {
+            ty,
+            written,
+            ..self
+        })
+    }
+}
+
 /// How specific `left` is beside `right`, each a type of a candidate's
 /// signature as it is declared, so that a `Type::Parameter` in it is
 /// one of that candidate's generic parameters.
@@ -3499,20 +3588,21 @@ impl Specific {
 /// variables outrank unconstrained ones." GEN-12: "Compare structural
 /// specificity component by component". So `tuple<i64, T>` is more
 /// specific than `tuple<U, V>`, and `list<T>` than `T`.
-fn specificity(left: &Type, right: &Type) -> Specific {
+fn specificity(left: RankingType<'_, '_>, right: RankingType<'_, '_>) -> Specific {
     let all = |pairs: &mut dyn Iterator<Item = Specific>| pairs.fold(Specific::Same, Specific::and);
-    match (left, right) {
+    let compare = |l, r, index| specificity(left.child(l, index), right.child(r, index));
+    match (left.ty, right.ty) {
         (Type::Parameter { .. }, Type::Parameter { .. }) => Specific::Same,
         (Type::Parameter { .. }, _) => Specific::Less,
         (_, Type::Parameter { .. }) => Specific::More,
         // TYPE-14: a `T` is given where a `T?` is expected, so one
         // candidate may take `i64` where another takes `T?`. They are
         // compared as the types under the `?`.
-        (Type::Nullable(left), right) if !matches!(right, Type::Nullable(_)) => {
-            specificity(left, right)
+        (Type::Nullable(inner), other) if !matches!(other, Type::Nullable(_)) => {
+            specificity(left.child(inner, 0), right)
         }
-        (left, Type::Nullable(right)) if !matches!(left, Type::Nullable(_)) => {
-            specificity(left, right)
+        (other, Type::Nullable(inner)) if !matches!(other, Type::Nullable(_)) => {
+            specificity(left, right.child(inner, 0))
         }
         (Type::Nullable(left), Type::Nullable(right))
         | (Type::Set(left), Type::Set(right))
@@ -3521,26 +3611,36 @@ fn specificity(left: &Type, right: &Type) -> Specific {
         | (Type::Delta(left), Type::Delta(right))
         | (Type::List { element: left, .. }, Type::List { element: right, .. })
         | (Type::RollingWindow { value: left, .. }, Type::RollingWindow { value: right, .. }) => {
-            specificity(left, right)
+            compare(left, right, 0)
         }
-        (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => all(&mut left
-            .iter()
-            .zip(right)
-            .map(|(left, right)| specificity(left, right))),
+        (Type::Tuple(left_elements), Type::Tuple(right_elements))
+            if left_elements.len() == right_elements.len() =>
+        {
+            // GEN-5: a fixed-length tuple pattern outranks a tuple with
+            // a pack that admits the same tuple.
+            match (left.has_tuple_pack(), right.has_tuple_pack()) {
+                (Some(false), Some(true)) => Specific::More,
+                (Some(true), Some(false)) => Specific::Less,
+                _ => all(&mut left
+                    .tuple_children(left_elements)
+                    .zip(right.tuple_children(right_elements))
+                    .map(|(left, right)| specificity(left, right))),
+            }
+        }
         (
             Type::Dict { key, value },
             Type::Dict {
                 key: other_key,
                 value: other_value,
             },
-        ) => specificity(key, other_key).and(specificity(value, other_value)),
+        ) => compare(key, other_key, 0).and(compare(value, other_value, 1)),
         (
             Type::Result { value, error },
             Type::Result {
                 value: other_value,
                 error: other_error,
             },
-        ) => specificity(value, other_value).and(specificity(error, other_error)),
+        ) => compare(value, other_value, 0).and(compare(error, other_error, 1)),
         (
             Type::Named {
                 module,
@@ -3560,8 +3660,9 @@ fn specificity(left: &Type, right: &Type) -> Specific {
             all(&mut arguments
                 .iter()
                 .zip(other_arguments)
-                .map(|pair| match pair {
-                    (Argument::Type(left), Argument::Type(right)) => specificity(left, right),
+                .enumerate()
+                .map(|(index, pair)| match pair {
+                    (Argument::Type(left), Argument::Type(right)) => compare(left, right, index),
                     // A constant is as specific as a constant.
                     _ => Specific::Same,
                 }))
@@ -3600,6 +3701,15 @@ fn most_specific(selected: &mut Vec<Chosen>, public: &Signature) {
     });
 }
 
+/// The length admitted for this pack, where it is known at this call.
+fn ranked_pack_length(chosen: &Chosen<'_>, index: usize) -> Option<usize> {
+    let pack = chosen
+        .type_packs
+        .iter()
+        .find(|pack| pack.parameter == index)?;
+    pack.forwarded_from.is_none().then_some(pack.types.len())
+}
+
 /// GEN-5 and GEN-10: compare tuple components at the admitted arity.
 /// Expanding a pack for ranking repeats its variable, not the concrete
 /// inferred types: inference must not make an unconstrained candidate specific.
@@ -3614,19 +3724,12 @@ fn ranking_type(chosen: &Chosen<'_>, ty: &Type) -> Type {
                 .find(|(_, generic)| {
                     generic.at == at && matches!(generic.kind, GenericKind::Pack { .. })
                 })?;
-        let pack = chosen
-            .type_packs
-            .iter()
-            .find(|pack| pack.parameter == index)?;
-        if pack.forwarded_from.is_some() {
-            return None;
-        }
         Some(vec![
             Type::Parameter {
                 at,
                 name: generic.name.clone()
             };
-            pack.types.len()
+            ranked_pack_length(chosen, index)?
         ])
     };
     let weight = chosen
@@ -3649,9 +3752,19 @@ fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
         .filter_map(|(better_index, worse_index)| {
             let better_type = &better.declared.parameters[better_index?].ty;
             let worse_type = &worse.declared.parameters[worse_index?].ty;
+            let better_expanded = ranking_type(better, better_type);
+            let worse_expanded = ranking_type(worse, worse_type);
             Some(specificity(
-                &ranking_type(better, better_type),
-                &ranking_type(worse, worse_type),
+                RankingType {
+                    ty: &better_expanded,
+                    written: Some(better_type),
+                    candidate: better,
+                },
+                RankingType {
+                    ty: &worse_expanded,
+                    written: Some(worse_type),
+                    candidate: worse,
+                },
             ))
         })
         .fold(Specific::Same, Specific::and);

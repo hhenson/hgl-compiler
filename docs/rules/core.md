@@ -901,12 +901,12 @@ analyser: partial
 analyser: partial
 
 - A specifier is checked against the argument's type at compile time.
-- Left: the compiler declines integer `c` with `format.specifier` pending the owner’s decision (#434). The pinned fmt formatter can emit a byte outside UTF-8.
+- The zero flag on `bool` or `str` and the integer `c` specifier reject with `format.specifier`. Boolean width and alignment, including an explicit fill, still apply.
 
 transpiler: partial
 
 - The C++ target gives primitive fields to pinned fmt with compiled specifiers. It emits checked chrono directives with fractional truncation on `%S`, `%T` and `%[S]`, duration totals and padding on the whole field.
-- Left: integer `c` is held at the analyser gate above (#434).
+- Boolean width and alignment without the zero flag use the pinned fmt formatter.
 
 ## FMT-5
 

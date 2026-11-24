@@ -499,6 +499,7 @@ impl Program {
             self,
             instance.declaration,
             instance.generics,
+            instance.packs,
             instance.test_candidates,
             body,
             &|call| call.walk_mut(&mut |inner| self.place(inner, instance, functions)),

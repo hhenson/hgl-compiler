@@ -2915,7 +2915,7 @@ pub(super) fn instances_hold(
                         rejected(&mut typer, vec![report]);
                         continue;
                     }
-                    match typer.select_at_instance(call, None) {
+                    match typer.select_at_instance(call, &enclosing_packs, None) {
                         AtInstance::Selected(chosen, given) => {
                             let (module, declaration, generics) =
                                 (chosen.module, chosen.declaration, chosen.generics.clone());
