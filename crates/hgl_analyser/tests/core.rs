@@ -96,6 +96,50 @@ fn formatting_checks_const_inputs_at_every_call() {
     );
 }
 
+/// FMT-3, FMT-4 and GEN-7: a concrete selection checks its pattern and
+/// reports at the outside call, including through a relay or a capture.
+#[test]
+fn formatting_checks_deferred_const_inputs_at_the_caller() {
+    let checked = with_core(concat!(
+        "const fn show<T>(const pattern: str, value: T) -> str => format(pattern, value)\n",
+        "const fn relay<T>(const pattern: str, value: T) -> str => show(pattern, value)\n",
+        "const fn named<T>(const pattern: str, value: T) -> str => format(pattern, item: value)\n",
+        "operator shown<T>{const pattern: str}(value: T) -> str\n",
+        "impl const fn shown{const pattern: str}(value: f64) -> str => format(pattern, value)\n",
+        "impl const fn shown{const pattern: str}(value: i64) -> str => pattern\n",
+        "const fn choose<T>(const pattern: str, value: T) -> str requires T in {f64, i64} => shown{pattern: pattern}(value)\n",
+        "const fn apply(f: const fn(f64) -> str) -> str => f(1.5)\n",
+        "const fn cap(const pattern: str) -> str => apply(fn(value) => format(pattern, value))\n",
+        "test direct { assert show<f64>(\"{:x}\", 1.5) == \"\" }\n",
+        "test chain { assert relay(\"{:x}\", 1.5) == \"\" }\n",
+        "test option { assert choose(\"{:x}\", 1.5) == \"\" }\n",
+        "test named_argument { assert named(\"{item:x}\", 1.5) == \"\" }\n",
+        "test captured { assert cap(\"{:x}\") == \"\" }\n",
+        "test runtime { assert choose(\"{:x}\", 1) == \"{:x}\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:11:22 type/format.specifier FMT-4",
+            "m.hgl:12:21 type/format.specifier FMT-4",
+            "m.hgl:13:22 type/format.specifier FMT-4",
+            "m.hgl:14:30 type/format.specifier FMT-4",
+            "m.hgl:15:24 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+    for instance in ["show<f64>", "relay<f64>", "shown", "choose<f64>", "cap"] {
+        assert!(
+            checked
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            checked.report,
+        );
+    }
+}
+
 /// GEN-7: an independent const input rejects at its body call once.
 #[test]
 fn formatting_checks_independent_const_inputs_once() {
@@ -200,6 +244,22 @@ fn demanded_const_input_growth_reports_the_instance_limit() {
     assert_eq!(
         checked.summary(),
         ["m.hgl:3:17 type/generic.instance_limit GEN-13"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// GEN-13: each instance reaches the next demanded pattern through a relay.
+#[test]
+fn demanded_const_input_growth_through_a_generic_relay() {
+    let checked = with_core(concat!(
+        "const fn grow<T>(const pattern: str, value: T) -> str => format(pattern, value) + relay(pattern + \"x\", value)\n",
+        "const fn relay<T>(const pattern: str, value: T) -> str => grow(pattern, value)\n",
+        "test t { assert grow(\"{}\", 1) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:17 type/generic.instance_limit GEN-13"],
         "{}",
         checked.report,
     );

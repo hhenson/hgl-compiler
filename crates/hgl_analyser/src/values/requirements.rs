@@ -2345,7 +2345,13 @@ pub(super) fn instances_hold(
                     .bodies
                     .get(position)
                     .and_then(Option::as_ref)
-                    .is_some_and(|body| crate::formatting::has_dependent_formatting(program, body))
+                    .is_some_and(|body| {
+                        crate::formatting::has_dependent_formatting(
+                            program,
+                            (index, position),
+                            body,
+                        )
+                    })
             {
                 dependent_patterns.insert((index, position));
             }

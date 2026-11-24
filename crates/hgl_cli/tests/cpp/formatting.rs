@@ -17,6 +17,17 @@ const HEX: str = hex_prefix() + "x}"
 const fn positional(const pattern: str, value: f64) -> str => format(pattern, value)
 operator configured{const pattern: str = "{}"}(value: f64) -> str
 impl const fn configured{const pattern: str}(value: f64) -> str => format(pattern, value)
+const fn display_typed<T>(const pattern: str, value: T) -> str => format(pattern, value)
+const fn relay_display<T>(const pattern: str, value: T) -> str => display_typed(pattern, value)
+operator show_variant<T>{const pattern: str}(value: T) -> str
+impl const fn show_variant{const pattern: str}(value: f64) -> str => format(pattern, value)
+impl const fn show_variant{const pattern: str}(value: i64) -> str => pattern
+const fn choose_variant<T>(const pattern: str, value: T) -> str
+    requires T in {f64, i64} => show_variant{pattern: pattern}(value)
+const fn identity_text(value: str) -> str => value
+const UNREAD_PATTERN: str = identity_text("{:x}")
+const fn apply_format(f: const fn(f64) -> str) -> str => f(1.5)
+const fn captured_pattern(const pattern: str) -> str => apply_format(fn(value) => format(pattern, value))
 
 struct FormatMember { number: i64 }
 impl const fn convert(value: FormatMember) -> str => convert<str>(value.number)
@@ -59,6 +70,16 @@ test selected_converters {
     assert format("{}", nested) == "[specific members]"
     assert format("{*}", marked) == "*[specific members]"
     assert display_value<"{}">(nested) == "value [specific members]"
+}
+
+test deferred_patterns {
+    assert display_typed("{:x}", 255) == "ff"
+    assert display_typed("{:x}", true) == format("{:x}", true)
+    assert relay_display("{:.2f}", 1.5) == "1.50"
+    assert choose_variant("{:.1f}", 1.25) == "1.2"
+    assert choose_variant("{:.2f}", 1.25) == "1.25"
+    assert choose_variant(UNREAD_PATTERN, 1) == "{:x}"
+    assert captured_pattern("{:.2f}") == "1.50"
 }
 "#;
 
@@ -322,7 +343,12 @@ fn core_format_and_write_run_on_the_sdk() {
     );
     let stdout = text(&report.stdout);
     assert!(report.status.success(), "{stdout}{}", text(&report.stderr));
-    for test in ["stream_bytes", "typed_formats", "selected_converters"] {
+    for test in [
+        "stream_bytes",
+        "typed_formats",
+        "selected_converters",
+        "deferred_patterns",
+    ] {
         assert!(
             stdout.contains(&format!("passed   executable  demo.formatting::{test}")),
             "{stdout}"
