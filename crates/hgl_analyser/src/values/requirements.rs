@@ -2375,7 +2375,7 @@ pub(super) fn instances_hold(
                     passed.entry((index, position)).or_default().push(call);
                 } else {
                     let checks_const_inputs =
-                        call.constants.over_budget || !call.constants.values.is_empty();
+                        call.constants.limit.is_some() || !call.constants.values.is_empty();
                     // A concrete reread checks the calls whose inputs changed.
                     // This call already has its own independent checking root.
                     if call_index < body_calls && (independent.is_some() || checks_const_inputs) {
@@ -2936,7 +2936,11 @@ pub(super) fn instances_hold(
                     break;
                 }
                 let key = generic_instance_key(callee, &generics, &type_packs, &answers);
-                if key.len() > ARGUMENTS || constants.over_budget {
+                // Traversal budgets leave an input unread. A concrete text
+                // that outgrows its argument budget exhausts this walk.
+                if key.len() > ARGUMENTS
+                    || constants.limit == Some(crate::ConstInputFault::TextLimit)
+                {
                     exhausted = true;
                     break;
                 }
@@ -3965,7 +3969,7 @@ fn make_call(callee: &Callee, at: Location, constants: ConstArguments, made: &mu
             ..
         } if !generics.is_empty()
             || !requirements.is_empty()
-            || constants.over_budget
+            || constants.limit.is_some()
             || !constants.values.is_empty() =>
         {
             made.push(Made {

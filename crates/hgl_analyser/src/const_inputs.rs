@@ -34,7 +34,7 @@ pub struct ConstInput {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ReadInputs {
     pub(crate) values: Vec<ConstInput>,
-    pub(crate) over_budget: bool,
+    pub(crate) limit: Option<ConstInputFault>,
 }
 
 /// Why a call's compile-time inputs could not be read.
@@ -42,8 +42,10 @@ pub(crate) struct ReadInputs {
 pub enum ConstInputFault {
     /// The compiler cannot evaluate a required value here.
     Unread,
-    /// A required value's evaluation exceeded the instance argument budget.
-    Limit,
+    /// Reading a required value exceeded the reader's traversal budget.
+    ReaderLimit,
+    /// A required value's text exceeded the instance argument budget.
+    TextLimit,
 }
 
 /// Match the size bound used for a growing generic value argument (GEN-13).
@@ -64,8 +66,8 @@ impl Program {
         arguments: &[Argument],
     ) -> Result<Vec<ConstInput>, ConstInputFault> {
         let known = self.known_const_inputs(callee, arguments);
-        if known.over_budget {
-            return Err(ConstInputFault::Limit);
+        if let Some(limit) = known.limit {
+            return Err(limit);
         }
         let expected = callee
             .declaration()
@@ -81,7 +83,7 @@ impl Program {
     /// Analysis can check the known inputs even when another input remains
     /// unread. Lowering requires the complete set through `call_const_inputs`.
     pub(crate) fn known_const_inputs(&self, callee: &Callee, arguments: &[Argument]) -> ReadInputs {
-        use ConstInputFault::{Limit, Unread};
+        use ConstInputFault::{ReaderLimit, TextLimit, Unread};
 
         let Some((module, declaration)) = callee.declaration() else {
             return ReadInputs::default();
@@ -156,14 +158,16 @@ impl Program {
                 if key.len() > INPUT_BUDGET
                     && !matches!(value.kind, ExprKind::Literal(Value::Str(_)))
                 {
-                    return Err(Limit);
+                    return Err(ReaderLimit);
                 }
                 Ok(ConstInput { slot, value, key })
             })();
             match input {
                 Ok(input) => known.values.push(input),
                 Err(fault) => {
-                    known.over_budget |= fault == Limit;
+                    if fault == TextLimit || (fault == ReaderLimit && known.limit.is_none()) {
+                        known.limit = Some(fault);
+                    }
                     reader.text_left = text_before;
                 }
             }
@@ -205,14 +209,14 @@ impl Reader<'_> {
         depth: usize,
         generics: &[(Location, &GenericArgument)],
     ) -> Result<Expr, ConstInputFault> {
-        use ConstInputFault::{Limit, Unread};
+        use ConstInputFault::{ReaderLimit, TextLimit, Unread};
 
-        let next = depth.checked_sub(1).ok_or(Limit)?;
-        self.steps_left = self.steps_left.checked_sub(1).ok_or(Limit)?;
+        let next = depth.checked_sub(1).ok_or(ReaderLimit)?;
+        self.steps_left = self.steps_left.checked_sub(1).ok_or(ReaderLimit)?;
         let kind = match &expression.kind {
             ExprKind::Literal(value) => {
                 if let Value::Str(text) = value {
-                    self.text_left = self.text_left.checked_sub(text.len()).ok_or(Limit)?;
+                    self.text_left = self.text_left.checked_sub(text.len()).ok_or(TextLimit)?;
                 }
                 ExprKind::Literal(value.clone())
             }
@@ -235,7 +239,7 @@ impl Reader<'_> {
                 };
                 let value = given.value.literal().ok_or(Unread)?;
                 if let Value::Str(text) = &value {
-                    self.text_left = self.text_left.checked_sub(text.len()).ok_or(Limit)?;
+                    self.text_left = self.text_left.checked_sub(text.len()).ok_or(TextLimit)?;
                 }
                 ExprKind::Literal(value)
             }
@@ -483,7 +487,7 @@ impl Reader<'_> {
                 self.steps_left = self
                     .steps_left
                     .checked_sub(1)
-                    .ok_or(ConstInputFault::Limit)?;
+                    .ok_or(ConstInputFault::ReaderLimit)?;
                 pending.extend([right, left]);
             } else {
                 let ConstantValue::Str(piece) = self.scalar(piece, depth, generics)? else {

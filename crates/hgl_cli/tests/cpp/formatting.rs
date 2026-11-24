@@ -117,31 +117,70 @@ test t {
     );
 }
 
-/// FMT-2 and GEN-13: a root can exceed the pattern reader's budget without
-/// making an unbounded set of instances. Keys count the decoded text.
+/// FMT-2 and GEN-13: reader traversal limits do not make an unbounded set
+/// of instances. Keys count the decoded text.
 #[test]
-fn bounds_const_format_patterns_at_a_single_call() {
+fn bounds_const_format_pattern_reads() {
     let root = scratch("const-format-pattern-budget");
-    let mut chain = "const C0: str = \"<{}>\"\n".to_owned();
+    let mut chain = "const C0: str = \"<\"\n".to_owned();
     for level in 1..=70 {
         writeln!(chain, "const C{level}: str = C{}", level - 1).unwrap();
     }
+    let relay = |pattern: &str| {
+        format!("{chain}const fn relay(const pattern: str) -> str => show({pattern}, 1.5)\n")
+    };
+    let deep_left = relay("C70 + pattern");
+    let deep_right = relay("pattern + C70");
+    let short_right = relay("pattern + C60");
     let cases = [
-        ("long", "", format!("\"{{}}{}\"", "a".repeat(69_998)), false),
+        (
+            "long",
+            "",
+            format!("show(\"{{}}{}\", 1.5)", "a".repeat(69_998)),
+            false,
+        ),
         (
             "escaped",
             "",
-            format!("\"{{}}{}\"", "\\n".repeat(33_000)),
+            format!("show(\"{{}}{}\", 1.5)", "\\n".repeat(33_000)),
             true,
         ),
-        ("deep", chain.as_str(), "C70".to_owned(), false),
-        ("shallow", chain.as_str(), "C60".to_owned(), true),
+        (
+            "deep",
+            chain.as_str(),
+            "show(C70 + \"{}\", 1.5)".to_owned(),
+            false,
+        ),
+        (
+            "shallow",
+            chain.as_str(),
+            "show(C60 + \"{}\", 1.5)".to_owned(),
+            true,
+        ),
+        (
+            "relay_left",
+            deep_left.as_str(),
+            "relay(\"{}\")".to_owned(),
+            false,
+        ),
+        (
+            "relay_right",
+            deep_right.as_str(),
+            "relay(\"{}\")".to_owned(),
+            false,
+        ),
+        (
+            "relay_shallow",
+            short_right.as_str(),
+            "relay(\"{}\")".to_owned(),
+            true,
+        ),
     ];
-    for (name, declarations, pattern, supported) in cases {
+    for (name, declarations, call, supported) in cases {
         let source = format!(
             "module {name}\n{declarations}\n\
              const fn show(const pattern: str, value: f64) -> str => format(pattern, value)\n\
-             test t {{ assert show({pattern}, 1.5) != \"\" }}\n"
+             test t {{ assert {call} != \"\" }}\n"
         );
         let file = write(&root, &format!("{name}.hgl"), &source);
         let checked = hgl_in(&["check", &file], &[], &[]);
