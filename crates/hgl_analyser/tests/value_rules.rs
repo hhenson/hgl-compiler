@@ -113,14 +113,17 @@ fn a_call_of_const_is_an_ordinary_call() {
 }
 
 /// FN-4: a pair can be an operand of another pair without repeating
-/// the phase reads of nested calls across operators or local blocks.
+/// the phase reads of nested calls across operators and lexical scopes.
 #[test]
 fn nested_pairs_have_bounded_reads() {
     let operators = (0..21).fold(String::from("1"), |inner, _| format!("scale(1 + {inner})"));
     let blocks = (0..21).fold(String::from("1"), |inner, level| {
         format!("scale({{ let item_{level} = 1\n item_{level} + {inner} }})")
     });
-    for argument in [operators, blocks] {
+    let comprehensions = (0..17).fold(String::from("1"), |inner, level| {
+        format!("scale([for item_{level} in 0..<1: item_{level} + {inner}][0])")
+    });
+    for argument in [operators, blocks, comprehensions] {
         let source = format!(
             "const fn scale(value: i64) -> i64 => value * 2\n\
              fn scale(value: i64) -> i64 => value * 3\n\

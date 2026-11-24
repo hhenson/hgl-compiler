@@ -51,7 +51,6 @@ impl PairPhases {
             matches!(
                 node.kind(),
                 SyntaxKind::FnExpr
-                    | SyntaxKind::ListComprehension
                     | SyntaxKind::PackComprehension
                     | SyntaxKind::EvalExpr
                     | SyntaxKind::RunExpr
@@ -86,6 +85,7 @@ struct PairScope {
     designating: Option<Location>,
     temporal: Option<LocalId>,
     dynamic: Option<LocalId>,
+    range_bindings: Vec<LocalId>,
     returned: bool,
 }
 
@@ -104,6 +104,7 @@ impl PairScope {
             designating: typer.designating,
             temporal: typer.temporal,
             dynamic: typer.dynamic,
+            range_bindings: typer.unrolled_range_bindings.clone(),
             returned: typer.returned,
         }
     }
@@ -121,6 +122,7 @@ impl PairScope {
             && self.designating == typer.designating
             && self.temporal == typer.temporal
             && self.dynamic == typer.dynamic
+            && self.range_bindings == typer.unrolled_range_bindings
             && self.returned == typer.returned
     }
 }
