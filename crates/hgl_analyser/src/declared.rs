@@ -401,9 +401,14 @@ pub(crate) fn names_parameter(ty: &Type) -> bool {
 /// argument.
 type PackMember<'a> = dyn Fn(Location, &str, &Constant) -> Option<Type> + 'a;
 
-fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>) -> Type {
+fn substitute(
+    ty: &Type,
+    map: &[(Location, &Argument)],
+    member: &PackMember<'_>,
+    pack: &dyn Fn(Location) -> Option<Vec<Type>>,
+) -> Type {
     // `Box::new` puts the substituted part where a `Box<Type>` points.
-    let part = |inner: &Type| Box::new(substitute(inner, map, member));
+    let part = |inner: &Type| Box::new(substitute(inner, map, member, pack));
     // The constant given for the generic value parameter declared at
     // `at`, where `map` gives one.
     let given = |at: Location| {
@@ -467,7 +472,9 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>)
             arguments: arguments
                 .iter()
                 .map(|argument| match argument {
-                    Argument::Type(argument) => Argument::Type(substitute(argument, map, member)),
+                    Argument::Type(argument) => {
+                        Argument::Type(substitute(argument, map, member, pack))
+                    }
                     Argument::Constant(argument) => Argument::Constant(constant(argument)),
                 })
                 .collect(),
@@ -475,11 +482,18 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>)
         Type::Tuple(elements) => Type::Tuple(
             elements
                 .iter()
-                .map(|element| substitute(element, map, member))
+                .flat_map(|element| {
+                    if let Type::Parameter { at, .. } = element
+                        && let Some(types) = pack(*at)
+                    {
+                        return types;
+                    }
+                    vec![substitute(element, map, member, pack)]
+                })
                 .collect(),
         ),
         Type::List { element, size } => Type::list(
-            substitute(element, map, member),
+            substitute(element, map, member, pack),
             size.as_ref().map(constant),
         ),
         Type::Set(inner) => Type::Set(part(inner)),
@@ -518,17 +532,17 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>)
             let mut function = function.as_ref().clone();
             for parameter in &mut function.parameters {
                 let ty = parameter.ty_mut();
-                *ty = substitute(ty, map, member);
+                *ty = substitute(ty, map, member, pack);
             }
             function.result = function
                 .result
                 .as_ref()
-                .map(|ty| substitute(ty, map, member));
+                .map(|ty| substitute(ty, map, member, pack));
             Type::Function(Box::new(function))
         }
         // TYPE-16: "In a generic declaration it stays as written until
         // T is known", and is then what the table gives for that T.
-        Type::Delta(inner) => Type::delta(substitute(inner, map, member)),
+        Type::Delta(inner) => Type::delta(substitute(inner, map, member, pack)),
         // TST-5: a tuple's trace cell names its T (`Type::trace_cell`),
         // which the tuple's delta formed again would not. A generic
         // target's parameter that is a tuple naming a parameter,
@@ -541,15 +555,15 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>)
         Type::Trace { cell, style } => {
             let cell = match &**cell {
                 Type::Delta(of) if matches!(**of, Type::Tuple(_)) => {
-                    Type::trace_cell(substitute(of, map, member))
+                    Type::trace_cell(substitute(of, map, member, pack))
                 }
-                own if names_parameter(own) => match substitute(own, map, member) {
+                own if names_parameter(own) => match substitute(own, map, member, pack) {
                     of @ (Type::Tuple(_) | Type::Atomic(_) | Type::RollingWindow { .. }) => {
                         Type::trace_cell(of)
                     }
                     other => other,
                 },
-                other => substitute(other, map, member),
+                other => substitute(other, map, member, pack),
             };
             Type::Trace {
                 cell: Box::new(cell),
@@ -558,7 +572,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>)
         }
         // TYPE-14: "either a T or null". A `T?` whose T is given a
         // nullable type is that type.
-        Type::Nullable(inner) => match substitute(inner, map, member) {
+        Type::Nullable(inner) => match substitute(inner, map, member, pack) {
             inner @ Type::Nullable(_) => inner,
             inner => Type::Nullable(Box::new(inner)),
         },
@@ -649,6 +663,18 @@ pub(crate) fn substitute_with_members(
     member: &PackMember<'_>,
     pack_weight: usize,
 ) -> Type {
+    substitute_with_packs(ty, map, member, &|_| None, pack_weight)
+}
+
+/// GEN-10 and GEN-17: specialize member types and expand type packs in
+/// a tuple's element sequence. A scalar type parameter remains one element.
+pub(crate) fn substitute_with_packs(
+    ty: &Type,
+    map: &[(Location, &Argument)],
+    member: &PackMember<'_>,
+    pack: &dyn Fn(Location) -> Option<Vec<Type>>,
+    pack_weight: usize,
+) -> Type {
     let heaviest = map
         .iter()
         .map(|(_, argument)| match argument {
@@ -660,7 +686,7 @@ pub(crate) fn substitute_with_members(
     if weight(ty).saturating_mul(heaviest.max(pack_weight)) > WEIGHT {
         return Type::Unknown;
     }
-    substitute(ty, map, member)
+    substitute(ty, map, member, pack)
 }
 
 /// TYPE-4: "A field is optional when its type is nullable, `T?`, or an
@@ -2069,7 +2095,7 @@ fn differs(parent: &Introduced, ty: &Type) -> bool {
     }
     // A constant whose value is not known differs from nothing here: a
     // field is in conflict only where its type is known to be another.
-    !agree_as(&parent.ty, ty, true)
+    !agree_as(&parent.ty, ty, Agreement::Possible)
 }
 
 /// True when two types are the same as far as each is known. A constant
@@ -2077,7 +2103,7 @@ fn differs(parent: &Introduced, ty: &Type) -> bool {
 /// ([`ConstantValue::same`]): a type that holds one is not known to be
 /// any type.
 pub(crate) fn agree(left: &Type, right: &Type) -> bool {
-    agree_as(left, right, false)
+    agree_as(left, right, Agreement::Known)
 }
 
 /// Whether two types are one: `Some(true)` where they are known to be,
@@ -2090,13 +2116,38 @@ pub(crate) fn agree(left: &Type, right: &Type) -> bool {
 /// `i64` is not known to be it or to differ from it, while `list<U>`
 /// beside `set<i64>` is known to differ whatever `U` is.
 pub(crate) fn same_type(left: &Type, right: &Type) -> Option<bool> {
-    if agree_as(left, right, false) {
+    if agree_as(left, right, Agreement::Known) {
         Some(true)
-    } else if !agree_as(&opened(left), &opened(right), true) {
+    } else if !agree_as(&opened(left), &opened(right), Agreement::Possible) {
         Some(false)
     } else {
         None
     }
+}
+
+/// GEN-6: a declared result contradicts its operator if a known part
+/// differs. An expected list extent that depends on an unresolved value
+/// leaves that extent open, even when the candidate writes no extent.
+pub(crate) fn result_types_differ(expected: &Type, actual: &Type) -> bool {
+    !agree_as(
+        &opened(expected),
+        &opened(actual),
+        Agreement::CandidateResult,
+    )
+}
+
+/// These forms cannot be judged by outer shape alone. An atomic or a
+/// delta can normalize when its payload is known (TYPE-9, TYPE-16), and
+/// structural equality does not compare an open callback slot on its own.
+fn open_result_form(ty: &Type) -> bool {
+    matches!(ty, Type::Atomic(_) | Type::Delta(_) | Type::Function(_))
+        && ty.any_part(
+            &|part| {
+                matches!(part, Type::Unknown)
+                    || matches!(part, Type::Function(template) if template.named_pack.is_some())
+            },
+            &|constant| constant.value.key().is_none(),
+        )
 }
 
 /// `ty` with each generic type parameter it names replaced by a type
@@ -2124,22 +2175,30 @@ fn opened(ty: &Type) -> Type {
     if map.is_empty() {
         return ty.clone();
     }
-    substitute(ty, &map, &|_, _, _| None)
+    substitute(ty, &map, &|_, _, _| None, &|_| None)
 }
 
-/// [`agree`], with `unknown` what two constants count as where whether
-/// they are one value is not known: false where the question is whether
-/// two types are known to be one, true where it is whether they are
-/// known to differ.
-fn agree_as(left: &Type, right: &Type, unknown: bool) -> bool {
-    let agree = |left: &Type, right: &Type| agree_as(left, right, unknown);
+#[derive(Clone, Copy)]
+enum Agreement {
+    Known,
+    Possible,
+    CandidateResult,
+}
+
+/// Compare the known parts, deciding whether an unresolved constant
+/// can agree according to the kind of comparison.
+fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
+    let agree = |left: &Type, right: &Type| agree_as(left, right, agreement);
     // A constant not known agrees with any, as a type not known does:
     // what is wrong with it has been reported, or it is still to be
     // said (ERR-9).
     let constants_agree = |left: &Constant, right: &Constant| {
         matches!(left.value, ConstantValue::Unknown)
             || matches!(right.value, ConstantValue::Unknown)
-            || left.value.same(&right.value).unwrap_or(unknown)
+            || left
+                .value
+                .same(&right.value)
+                .unwrap_or(!matches!(agreement, Agreement::Known))
     };
     // Two lists of types agree when they are as long as each other and
     // agree place by place.
@@ -2194,6 +2253,9 @@ fn agree_as(left: &Type, right: &Type, unknown: bool) -> bool {
                         || size.value.same_extent(&other_size.value)
                         || other_size.value.same_extent(&size.value)
                 }
+                (Some(size), None) if matches!(agreement, Agreement::CandidateResult) => {
+                    size.value.key().is_none()
+                }
                 (size, other_size) => size == other_size,
             };
             sizes && agree(element, other_element)
@@ -2240,6 +2302,10 @@ fn agree_as(left: &Type, right: &Type, unknown: bool) -> bool {
                 error: other_error,
             },
         ) => agree(value, other_value) && agree(error, other_error),
-        (left, right) => left == right,
+        (left, right) => {
+            left == right
+                || (matches!(agreement, Agreement::CandidateResult)
+                    && (open_result_form(left) || open_result_form(right)))
+        }
     }
 }

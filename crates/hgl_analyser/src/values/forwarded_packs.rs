@@ -6,7 +6,7 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
-use super::requirements::pack_view;
+use super::requirements::{IndependentSourceBodies, called_or_referenced, pack_view};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey};
 use crate::program::{Binding, LocalKind};
@@ -107,6 +107,7 @@ impl Typer<'_> {
                 callee: Callee::DeferredPackCall,
                 arguments: Vec::new(),
                 form: Form::Named,
+                text: None,
                 braced: Vec::new(),
                 lifted: false,
             },
@@ -510,6 +511,18 @@ impl ForwardingInstance {
     /// A static reference can reach a forwarding body even without its own
     /// pack arguments, through the ordinary calls the referenced body makes.
     fn for_check(program: &crate::Program, expression: &Expr) -> Option<Self> {
+        let (module, declaration) = called_or_referenced(expression)?.declaration()?;
+        if let crate::Detail::Callable(signature) = &program.modules[module].details[declaration]
+            && signature.generics.is_empty()
+            && signature
+                .parameters
+                .iter()
+                .all(|parameter| parameter.pack.is_none())
+        {
+            // Concrete bodies supply their own forwarding roots. A call
+            // of one does not make those same instances a second time.
+            return None;
+        }
         match &expression.kind {
             ExprKind::StaticCallable(callee) => Self::from_callee(program, callee, None),
             _ => Self::of(program, expression),
@@ -603,6 +616,7 @@ impl ForwardingInstance {
             functions: &self.functions,
             type_packs: &self.type_packs,
             pack_inputs: Some(&self.pack_inputs),
+            ..crate::InstanceInputs::default()
         }
     }
 }
@@ -628,21 +642,69 @@ pub(super) fn walk_nested_calls(statements: &[crate::hir::Stmt], visit: &mut dyn
     });
 }
 
+/// GEN-13: limit growth along one path without limiting a single pack's
+/// width, independent calls, or recursion over an unchanged pack shape.
+const PACK_GROWTH: usize = 64;
+
+#[derive(Clone, Copy)]
+struct PackShape {
+    declaration: (usize, usize),
+    entries: usize,
+}
+
+impl PackShape {
+    fn of(instance: &ForwardingInstance) -> Self {
+        let typed_entries = instance
+            .type_packs
+            .iter()
+            .map(|pack| pack.types_with_prefix().count())
+            .sum::<usize>();
+        Self {
+            declaration: instance.declaration,
+            entries: instance.pack_inputs.len() + typed_entries,
+        }
+    }
+
+    fn exceeds_growth(self, ancestors: impl Iterator<Item = Self>) -> bool {
+        if self.entries <= PACK_GROWTH {
+            return false;
+        }
+        let mut width = self.entries;
+        ancestors
+            .filter(|ancestor| {
+                if ancestor.declaration == self.declaration && ancestor.entries < width {
+                    width = ancestor.entries;
+                    true
+                } else {
+                    false
+                }
+            })
+            .nth(PACK_GROWTH)
+            .is_some()
+    }
+}
+
+struct ForwardingParent {
+    call: (super::requirements::MakingCall, Option<usize>),
+    shape: PackShape,
+}
+
 /// Check forwarded calls under the concrete shapes that reach them (FN-19).
 /// A forwarding error belongs to the call that supplies that pack shape.
 /// Record the concrete calls it reaches for the ordinary GEN-7 checks.
 pub(super) fn check_instances(
     program: &crate::Program,
     discovered: &mut Vec<super::requirements::Made>,
+    source: &IndependentSourceBodies,
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
     use super::requirements::{
-        MakingCall, called_or_referenced, emit_instance_report, making_path,
+        MakingCall, bounded_instance_key, emit_instance_report, making_path,
+        past_pack_growth_limit, past_the_limit,
     };
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = HashSet::new();
-    let mut deferred_at = HashSet::new();
     let mut callers = HashMap::<_, Vec<_>>::new();
     for (module, unit) in program.modules.iter().enumerate() {
         for (declaration, body) in unit.bodies.iter().enumerate() {
@@ -652,7 +714,6 @@ pub(super) fn check_instances(
                 if let Some(callee) = called_or_referenced(value) {
                     if matches!(callee, Callee::DeferredPackCall) {
                         forwarding.insert(owner);
-                        deferred_at.insert(value.at);
                     } else if let Some(called) = callee.declaration() {
                         callers.entry(called).or_default().push(owner);
                     }
@@ -672,41 +733,49 @@ pub(super) fn check_instances(
         }
     }
     let mut roots = Vec::new();
-    for unit in &program.modules {
-        let mut record = |value: &Expr| {
-            if let Some(instance) = ForwardingInstance::for_check(program, value)
-                && forwarding.contains(&instance.declaration)
-            {
-                roots.push((instance, value.at));
+    let mut independent = HashMap::<Location, Vec<ForwardingInstance>>::new();
+    for (module, unit) in program.modules.iter().enumerate() {
+        let mut record = |value: &Expr, in_forwarding_body: bool| {
+            if let Some(instance) = ForwardingInstance::for_check(program, value) {
+                if in_forwarding_body {
+                    independent
+                        .entry(value.at)
+                        .or_default()
+                        .push(instance.clone());
+                }
+                if forwarding.contains(&instance.declaration) {
+                    roots.push((instance, value.at));
+                }
             }
         };
-        for body in unit
-            .bodies
-            .iter()
-            .flatten()
-            .chain(unit.test_bodies.iter().flatten())
-            .chain(&unit.store_body)
-        {
-            walk_nested_calls(&body.statements, &mut record);
+        for (declaration, body) in unit.bodies.iter().enumerate() {
+            let owner = (module, declaration);
+            if let Some(body) = source.body(owner).or(body.as_ref()) {
+                let in_forwarding_body = forwarding.contains(&owner);
+                super::walk_body_calls(body, &mut |value| record(value, in_forwarding_body));
+            }
+        }
+        for body in unit.test_bodies.iter().flatten().chain(&unit.store_body) {
+            super::walk_body_calls(body, &mut |value| record(value, false));
         }
         if let Some(run) = &unit.run_body {
             run.call
-                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut |part| record(part, false)));
         }
         for constant in unit.constants.iter().flatten() {
             constant
                 .value
-                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut |part| record(part, false)));
         }
         for default in unit.defaults.iter().flatten().flatten() {
             default
                 .value
-                .walk(&mut |value| visit_anonymous_bodies(value, &mut record));
+                .walk(&mut |value| visit_anonymous_bodies(value, &mut |part| record(part, false)));
         }
     }
     for (initial, at) in roots {
-        let mut waiting = VecDeque::from([(initial, at, None)]);
-        let mut parents = Vec::new();
+        let mut waiting = VecDeque::from([(initial, at, None::<usize>)]);
+        let mut parents = Vec::<ForwardingParent>::new();
         let mut seen = Vec::new();
         let mut counts = HashMap::new();
         while let Some((instance, written, parent)) = waiting.pop_front() {
@@ -715,13 +784,23 @@ pub(super) fn check_instances(
             }
             let count = counts.entry(instance.declaration).or_insert(0);
             *count += 1;
-            if *count > crate::INSTANCES {
-                super::requirements::past_the_limit(
-                    &[at],
+            let shape = PackShape::of(&instance);
+            let ancestors = std::iter::successors(parent, |&index| parents[index].call.1)
+                .map(|index| parents[index].shape);
+            if shape.exceeds_growth(ancestors) {
+                past_pack_growth_limit(at, instance.declaration, program, PACK_GROWTH, diagnostics);
+                break;
+            }
+            if *count > crate::INSTANCES
+                || bounded_instance_key(
                     instance.declaration,
-                    program,
-                    diagnostics,
-                );
+                    &instance.generics,
+                    &instance.type_packs,
+                    &instance.requirements,
+                )
+                .is_none()
+            {
+                past_the_limit(&[at], instance.declaration, program, diagnostics);
                 break;
             }
             let reports = std::cell::RefCell::new(hgl_diagnostics::Diagnostics::new());
@@ -749,7 +828,7 @@ pub(super) fn check_instances(
                 }
                 emit_instance_report(
                     report.clone(),
-                    &[making_path(making(), parent, &parents)],
+                    &[making_path(making(), parent, |index| &parents[index].call)],
                     diagnostics,
                 );
             }
@@ -765,19 +844,25 @@ pub(super) fn check_instances(
                             &instance.type_packs,
                         ),
                         result_uses,
-                        &[making_path(making(), parent, &parents)],
+                        &[making_path(making(), parent, |index| &parents[index].call)],
                         diagnostics,
                     );
+                    if result_uses.reports.has_errors() {
+                        seen.push(instance);
+                        continue;
+                    }
                 }
                 let mut link = None;
-                walk_nested_calls(&checked.body.statements, &mut |value| {
+                checked.walk_calls(&mut |value| {
                     let Some(child) = ForwardingInstance::for_check(program, value) else {
                         return;
                     };
-                    // The ordinary walk already sees calls that were resolved
-                    // in the declaration. Only a forwarded call adds an edge.
-                    if deferred_at.contains(&value.at)
-                        && let ExprKind::Call { callee, .. } = &value.kind
+                    // The final body can make new calls wherever the
+                    // entries affect a type, including in a callback.
+                    if !independent
+                        .get(&value.at)
+                        .is_some_and(|calls| calls.contains(&child))
+                        && let Some(callee) = called_or_referenced(value)
                     {
                         let mut path = vec![MakingCall::new(
                             program,
@@ -786,13 +871,16 @@ pub(super) fn check_instances(
                             &child.type_packs,
                             value.at,
                         )];
-                        path.extend(making_path(making(), parent, &parents));
+                        path.extend(making_path(making(), parent, |index| &parents[index].call));
                         super::requirements::made_forwarded_callee(callee, at, path, discovered);
                     }
                     if forwarding.contains(&child.declaration) {
                         let caller = *link.get_or_insert_with(|| {
                             let index = parents.len();
-                            parents.push((making(), parent));
+                            parents.push(ForwardingParent {
+                                call: (making(), parent),
+                                shape,
+                            });
                             index
                         });
                         waiting.push_back((child, value.at, Some(caller)));
@@ -801,5 +889,66 @@ pub(super) fn check_instances(
             }
             seen.push(instance);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ForwardingInstance, PACK_GROWTH, PackInput, PackKey, PackShape, Scalar, Type};
+    use crate::hir::{ReflectedInputs, TypePackArgument};
+    use crate::{Argument, Constant, ConstantValue};
+
+    /// GEN-13: the growth bound follows increasing widths of the same
+    /// declaration across a call path. Unchanged and unrelated shapes do
+    /// not spend that allowance.
+    #[test]
+    fn pack_growth_is_bounded_along_one_path() {
+        let shape = PackShape {
+            declaration: (0, 0),
+            entries: PACK_GROWTH + 1,
+        };
+        let smaller = (0..shape.entries)
+            .rev()
+            .map(|entries| PackShape { entries, ..shape });
+        assert!(!shape.exceeds_growth(smaller.clone().take(PACK_GROWTH)));
+        assert!(shape.exceeds_growth(smaller));
+        assert!(!shape.exceeds_growth(std::iter::repeat_n(shape, PACK_GROWTH * 2)));
+        let other = PackShape {
+            declaration: (0, 1),
+            entries: 0,
+        };
+        assert!(!shape.exceeds_growth(std::iter::repeat_n(other, PACK_GROWTH * 2)));
+    }
+
+    /// GEN-13 and GEN-17: the shape includes both forwarded arguments and
+    /// reflected types, independently of the const arguments beside them.
+    #[test]
+    fn pack_width_counts_bound_and_reflected_entries() {
+        let ty = Type::Scalar(Scalar::I64);
+        let mut reflected = TypePackArgument::positional(1, vec![ty.clone()]);
+        reflected.reflected = Some(ReflectedInputs {
+            fixed: 1,
+            prefix: vec![(None, ty.clone())],
+        });
+        let mut instance = ForwardingInstance {
+            declaration: (0, 0),
+            generics: vec![Argument::Constant(Constant {
+                text: "1".into(),
+                value: ConstantValue::Int(1),
+            })],
+            requirements: Vec::new(),
+            functions: Vec::new(),
+            type_packs: vec![reflected],
+            pack_inputs: vec![PackInput {
+                parameter: 0,
+                key: PackKey::Position(0),
+                ty,
+            }],
+        };
+        assert_eq!(PackShape::of(&instance).entries, 3);
+        instance.type_packs.clear();
+        assert_eq!(PackShape::of(&instance).entries, 1);
+        instance.generics.clear();
+        assert_eq!(PackShape::of(&instance).entries, 1);
     }
 }

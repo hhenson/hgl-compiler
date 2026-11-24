@@ -5,6 +5,7 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
+//! | A `signal` or `signal?` input (TYPE-12, TYPE-14) | hgraph's payload-free `SIGNAL` |
 //! | `price`, a temporal input read in a hook (TIME-1) | its temporal form's checked read of the view, `::hglrt::checked_value(price)` for a scalar |
 //! | `key`, a `const` parameter read in a hook | `key.value()`, the node's `hgraph::Scalar` |
 //! | `valid(a)`, `valid(a, b)`, `valid()`, `valid([])` (END-1) | `::hglrt::fn_valid(a)`, each of them, every temporal input, `true` |
@@ -175,6 +176,12 @@ fn bound_child(value: &Expr) -> bool {
 }
 
 impl Family for Endpoints {
+    fn schema(&self, _emitter: &mut Emitter<'_>, ty: &Type) -> Option<String> {
+        // TYPE-12: a signal only observes ticks. TYPE-14: the optional mark
+        // affects omission and leaves the schema unchanged.
+        matches!(ty.omission_removed(), Type::Signal).then(|| "::hgraph::SIGNAL".to_string())
+    }
+
     fn expression(
         &self,
         emitter: &mut Emitter<'_>,
@@ -464,7 +471,13 @@ fn endpoint(
     let named: &[usize] = inputs.unwrap_or(&every);
     let views: Option<Vec<String>> = named
         .iter()
-        .map(|&local| emitter.view(locals, local))
+        .map(|&local| {
+            if operation == EndpointOperation::Invalidate {
+                emitter.view(locals, local)
+            } else {
+                emitter.metadata_view(locals, local)
+            }
+        })
         .collect();
     let Some(views) = views else {
         return emitter.missing(value.at, &format!("`{}` of this", operation.name()));
@@ -531,7 +544,7 @@ impl Emitter<'_> {
         checked: bool,
         at: hgl_diagnostics::Location,
     ) -> String {
-        let Some(view) = self.view(locals, local) else {
+        let Some(view) = self.metadata_view(locals, local) else {
             return self.missing(at, "`delta_value` of this");
         };
         let ty = match self.role(local) {

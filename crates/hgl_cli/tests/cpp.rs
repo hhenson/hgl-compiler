@@ -17,6 +17,8 @@ mod debug_tests;
 #[cfg(unix)]
 #[path = "common/executable.rs"]
 mod executable;
+#[path = "cpp/formatting.rs"]
+mod formatting;
 
 use std::fs;
 use std::path::Path;
@@ -444,8 +446,8 @@ fn emit_writes_a_unit_a_header_and_an_entry() {
 }
 
 /// `hgl run --target cpp` says what an application needs that the
-/// target does not write, and runs nothing: here a read of the pending
-/// window result while its evaluation holds an arrival (TYPE-11).
+/// target does not write, and runs nothing: here a handler selecting on
+/// its own window result (TIME-7).
 #[test]
 fn run_says_what_an_application_lacks() {
     let root = scratch("run");
@@ -456,7 +458,7 @@ fn run_says_what_an_application_lacks() {
             "application demo.app\n",
             "fn cleared(reading: i64) -> rolling_window<i64, 2> {\n",
             "    inject out\n",
-            "    when { if valid(out) { return reading } }\n",
+            "    when valid(out, reading) { return reading }\n",
             "}\n",
             "fn counted(readings: rolling_window<i64, 2>) -> i64 {\n",
             "    when { return delta_value(readings) }\n",
@@ -476,7 +478,7 @@ fn run_says_what_an_application_lacks() {
     assert_eq!(
         text(&output.stderr),
         format!(
-            "{file}:4:15: the cpp target does not write a read of a node's own window result in its `when` yet\n"
+            "{file}:4:5: the cpp target does not write a handler that selects on a node's own window result yet\n"
         )
     );
 }
@@ -799,7 +801,7 @@ fn direct_operator_literal_options_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.contains("rejection cases: 15 passed, 0 failed\n"),
+        stdout.contains("rejection cases: 17 passed, 0 failed\n"),
         "{stdout}"
     );
     assert!(
@@ -1250,8 +1252,8 @@ fn reflected_eval_inputs_are_replayed_on_the_sdk() {
 /// that holds a list, one that holds a set, one with an optional field,
 /// nullables and lists of them, and a nullable tested
 /// against null (ERR-12), given to sources, nodes, lifted calls and a
-/// branch; and two nodes of one input whose configurations differ, by a
-/// value or by the sign of a zero (hgraph issue 1866), which stay two.
+/// branch. It also checks that a native Float and an opaque tuple each
+/// preserve both zero signs in separate nodes (NUM-2).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn configurations_run_on_the_sdk() {
@@ -1300,7 +1302,16 @@ fn windows_run_on_the_sdk() {
         "src/demo.window_withdrawal.hgl",
         include_str!("fixtures/demo.window_withdrawal.hgl"),
     );
-    let output = hgl_in(&["test", &file, &withdrawal, "--target", "cpp"], &[], &[]);
+    let own_reads = write(
+        &root,
+        "src/demo.own_window_reads.hgl",
+        include_str!("fixtures/demo.own_window_reads.hgl"),
+    );
+    let output = hgl_in(
+        &["test", &file, &withdrawal, &own_reads, "--target", "cpp"],
+        &[],
+        &[],
+    );
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -1309,7 +1320,7 @@ fn windows_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 15 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 20 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -1403,6 +1414,34 @@ fn timing_runs_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 17 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// TYPE-12 and UNIT-8: parameters and configuration observe the ticks of
+/// a signal connection. An omitted signal stays silent when forwarded.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn signal_inputs_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("signals");
+    let file = write(
+        &root,
+        "src/demo.signals.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.signals.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2255,6 +2294,34 @@ fn function_parameters_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// FN-17: a finite chain of static wrappers and a recursive call that
+/// forwards the same target both specialize and run.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn bounded_callable_specializations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("bounded_callable_specializations");
+    let file = write(
+        &root,
+        "demo.callable_specialization.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.callable_specialization.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -4460,11 +4527,10 @@ fn an_interrupt_of_hgl_alone_stops_a_run_in_real_time() {
 }
 
 /// CAP-6 on the SDK: every ordinary value put in the run's store is got
-/// back as itself, a struct, a tuple, a dictionary, a set and a delta among
-/// them, in a node, where a graph is built and by an application. A failure
-/// where a graph is built or in an application's store statements names the
-/// HGL file and line it was raised at, which the generated code sets with
-/// `#line`, and no place of the generated C++.
+/// back as itself, including nullables, structs, tuples, dictionaries,
+/// sets and deltas. Values are written in a node, where a graph is built,
+/// and by an application. Generated `#line` directives give failures
+/// in the graph build and application statements their HGL file and line.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn store_values_and_failure_places_on_the_sdk() {
@@ -4477,7 +4543,7 @@ fn store_values_and_failure_places_on_the_sdk() {
         "demo.store.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.store.hgl"),
     );
-    for (name, application) in [
+    for (name, source) in [
         (
             "demo.store.quotes.hgl",
             include_str!("../../hgl_cpp/tests/fixtures/demo.store.quotes.hgl"),
@@ -4490,14 +4556,26 @@ fn store_values_and_failure_places_on_the_sdk() {
             "demo.store.unbuilt.hgl",
             include_str!("../../hgl_cpp/tests/fixtures/demo.store.unbuilt.hgl"),
         ),
+        (
+            "demo.store.nullable.hgl",
+            include_str!("../../hgl_cpp/tests/fixtures/demo.store.nullable.hgl"),
+        ),
     ] {
-        write(&root, name, application);
+        write(&root, name, source);
     }
+    // Include the rejected source only in the test harness. The ordinary
+    // application runs reject a program with an invalid test context.
+    let rejection = write(
+        &scratch("store_inferred_nullable"),
+        "demo.store.inferred_nullable.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.store.inferred_nullable.hgl"),
+    );
     let kept = root.join("build");
     let output = hgl_in(
         &[
             "test",
             &argument(&root),
+            &rejection,
             "--target",
             "cpp",
             "--keep",
@@ -4514,7 +4592,13 @@ fn store_values_and_failure_places_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "passed   rejection   demo.store.inferred_nullable::an_unwritten_store_read_rejects\n"
+        ),
         "{stdout}"
     );
     let run = |application: &str| {
@@ -4924,6 +5008,36 @@ fn named_law_requirements_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// GEN-3 and GEN-10: category selection and tuple type packs execute on
+/// the SDK, including forwarding and independently typed callbacks.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn category_constraints_and_tuple_packs_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("category-packs");
+    let file = write(
+        &root,
+        "demo.categories.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.categories.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 29 passed, 0 failed\nexecutable cases: 17 passed, 0 failed, 0 not run\n"
+        ),
         "{stdout}"
     );
 }

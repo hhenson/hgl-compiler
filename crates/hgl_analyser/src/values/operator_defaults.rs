@@ -12,7 +12,7 @@ use hgl_parser::HasSpan;
 
 use super::constants::parameter_default_type;
 use super::fit::{open, whole};
-use super::requirements::{Made, concrete_default_calls};
+use super::requirements::{IndependentSourceBodies, Made, concrete_default_calls};
 use super::{Tables, Typer, lifting};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Body, Callee, ConfigurationRead, Expr, ExprKind, Value};
@@ -21,15 +21,23 @@ use crate::types::{Argument, Detail, Parameter, Type};
 use crate::{codes, error};
 
 /// Visit the selected calls once the declaration pass has read every default.
-pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) -> Vec<Made> {
+pub(super) fn check(
+    program: &Program,
+    source: &IndependentSourceBodies,
+    diagnostics: &mut Diagnostics,
+) -> Vec<Made> {
     let mut made = Vec::new();
-    for module in &program.modules {
+    for (unit, module) in program.modules.iter().enumerate() {
         let mut visit = |value: &Expr| check_expression(program, value, &mut made, diagnostics);
+        for (declaration, body) in module.bodies.iter().enumerate() {
+            if let Some(body) = source.body((unit, declaration)).or(body.as_ref()) {
+                hir::walk_statements(&body.statements, &mut visit);
+            }
+        }
         for body in module
-            .bodies
+            .test_bodies
             .iter()
             .flatten()
-            .chain(module.test_bodies.iter().flatten())
             .chain(&module.store_body)
         {
             hir::walk_statements(&body.statements, &mut visit);
@@ -82,7 +90,7 @@ fn check_expression(
     let mut defaults = Defaults::default();
     defaults.visit(program, value, diagnostics);
     while let Some(default) = defaults.pending.pop() {
-        concrete_default_calls(&default, made);
+        concrete_default_calls(program, &default, made);
         default.walk(&mut |value| defaults.visit(program, value, diagnostics));
     }
 }
@@ -193,8 +201,8 @@ pub(super) fn selects_configuration(program: &Program, unit: &Module, declaratio
 pub(super) fn check_instance(
     program: &Program,
     callee: (usize, usize),
-    generics: &[Argument],
-    requirements: &[hir::Answer],
+    (generics, requirements): (&[Argument], &[hir::Answer]),
+    inputs: crate::InstanceInputs<'_>,
     made: &mut Vec<Made>,
     diagnostics: &mut Diagnostics,
     graph_diagnostics: &mut Diagnostics,
@@ -204,13 +212,15 @@ pub(super) fn check_instance(
         callee,
         generics,
         requirements,
-        crate::instance::InstanceInputs::default(),
+        inputs,
         &reports,
         graph_diagnostics,
     )?;
     let mut reports = reports.into_inner();
-    hir::walk_statements(&instance.body.statements, &mut |value| {
-        check_expression(program, value, made, &mut reports)
+    instance.walk_calls(&mut |value| {
+        if matches!(value.kind, ExprKind::Call { .. }) {
+            check_expression(program, value, made, &mut reports);
+        }
     });
     for report in reports.as_slice() {
         if !diagnostics.as_slice().contains(report) {

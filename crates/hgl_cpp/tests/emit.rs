@@ -14,6 +14,7 @@
 //! and read the difference before it is committed. Building and running
 //! the C++ is the build driver's, and is tested with `hgl_cli`.
 
+use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -411,9 +412,8 @@ fn temporal_code_is_written() {
     ] {
         assert!(core.contains(instance), "{instance} in\n{core}");
     }
-    // hgraph issue 1866: a node whose configuration holds an `f64` is a
-    // node of its own, `replay<f64>` among them; one with none is
-    // interned, above.
+    // `replay<f64>` takes an opaque list of timestamp/value tuples; its
+    // value's zero sign is hidden from hgraph's comparison (NUM-2).
     assert!(
         core.contains("add_unique_node(typeid(::hgl::core::m_::n_::i_::replay::of_f64::impl_)")
     );
@@ -976,9 +976,8 @@ fn a_window_not_written_yet_is_reported() {
 /// publication"; TYPE-11: "A window takes at most one value a cycle"): its
 /// handlers run inside `::hglrt::WindowArrival::run`, and each write holds
 /// its value. A write then `invalidate(out)` (END-4: "publish then
-/// invalidate leaves the endpoint invalid") discards the write. A read
-/// of the result in that `when` is still reported, since it
-/// would not see what the evaluation holds.
+/// invalidate leaves the endpoint invalid") discards the write.
+/// Metadata and delta observations use the held arrival (TIME-7).
 #[test]
 fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
     let emitted = emit_with(
@@ -1007,7 +1006,10 @@ fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
                 "    inject out\n",
                 "    when {\n",
                 "        out = reading\n",
-                "        if valid(out) { out = reading + 1 }\n",
+                "        let staged: result<i64, error> = delta_value(out)\n",
+                "        if valid(out) && modified(out) && last_modified(out) != null && is_ok(staged) {\n",
+                "            out = delta_value(out) + 1\n",
+                "        }\n",
                 "    }\n",
                 "}\n",
                 "\n",
@@ -1062,24 +1064,30 @@ fn a_window_result_holds_its_arrival_until_the_evaluation_ends() {
     }
     assert_eq!(emitted.blocked("written_then_invalidated"), None);
     assert!(unit.contains("arrival_.invalidate();"), "{unit}");
-    assert_eq!(
-        emitted.blocked("written_then_read").as_deref(),
-        Some(
-            "m.hgl:23:12 the cpp target does not write a read of a node's own window result in its `when` yet"
-        )
-    );
+    assert_eq!(emitted.blocked("written_then_read"), None);
+    for native in [
+        "fn_valid",
+        "fn_modified",
+        "fn_last_modified",
+        "fn_delta_value",
+        "fn_delta_value_checked",
+    ] {
+        let read = format!("::hglrt::{native}(arrival_)");
+        assert!(unit.contains(&read), "{read} in\n{unit}");
+    }
+    assert!(!unit.contains("arrival_.observe()"), "{unit}");
     // A handler's header that names the window result, whose guard is
     // tested where the evaluation may hold a write of it.
     assert_eq!(
         emitted.blocked("selected_by_its_validity").as_deref(),
         Some(
-            "m.hgl:42:5 the cpp target does not write a handler that selects on a node's own window result yet"
+            "m.hgl:45:5 the cpp target does not write a handler that selects on a node's own window result yet"
         )
     );
     assert_eq!(
         emitted.blocked("selected_by_its_publication").as_deref(),
         Some(
-            "m.hgl:48:5 the cpp target does not write a handler that selects on a node's own window result yet"
+            "m.hgl:51:5 the cpp target does not write a handler that selects on a node's own window result yet"
         )
     );
 }
@@ -1581,8 +1589,7 @@ fn lifting_code_is_written() {
 /// A capture whose configuration holds an `f64` is written (ERR-7): every
 /// boundary is a node of its own, hgraph's `compiled::try_except_`, which
 /// it interns with no other, so that two whose configurations are `0.0`
-/// and `-0.0` stay two (hgraph issue 1866 is of interning; the SDK test of
-/// `demo.configurations` runs two such).
+/// and `-0.0` stay two. The SDK test of `demo.configurations` runs two such.
 #[test]
 fn a_capture_given_an_f64_configuration_is_written() {
     let emitted = emit_with(
@@ -2968,12 +2975,9 @@ fn temporal_structs_and_nullables_are_written() {
     assert!(unit.contains("::hglrt::field_port<0>("), "{unit}");
 }
 
-/// What the target does not write of temporal structs, tuples and
-/// nullables yet is reported, and nothing is miswritten: a struct whose
-/// field has a form the library does not read as a part (a set), a struct
-/// with generic value arguments, a nullable put in the run's store (a `get`
-/// through a nullable place has the payload's type: hgl_spec issue 165),
-/// and a tuple with an atomic position.
+/// Report temporal shapes still beyond the target: a struct whose field
+/// has a form the library does not read as a part (a set), a struct with
+/// generic value arguments, and a tuple with an atomic position.
 #[test]
 fn temporal_structs_not_written_yet_are_reported() {
     let emitted = emit(&[(
@@ -2992,13 +2996,6 @@ fn temporal_structs_not_written_yet_are_reported() {
             "fn boxed(value: Box<2>) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
-            "fn stored(value: i64?) -> bool {\n",
-            "    inject global_state\n",
-            "    when {\n",
-            "        put(global_state, \"kept\", value)\n",
-            "        return true\n",
-            "    }\n",
-            "}\n",
             "struct Plain {\n",
             "    value: i64\n",
             "}\n",
@@ -3012,8 +3009,7 @@ fn temporal_structs_not_written_yet_are_reported() {
         [
             "m.hgl:8:11 the cpp target does not write a temporal value of `Listed` yet",
             "m.hgl:11:10 the cpp target does not write a temporal value of `Box<2>` yet",
-            "m.hgl:17:9 the cpp target does not write a nullable value put in the run's store (hgl_spec issue 165) yet",
-            "m.hgl:24:11 the cpp target does not write a temporal value of `tuple<atomic<Plain>, i64>` yet",
+            "m.hgl:17:11 the cpp target does not write a temporal value of `tuple<atomic<Plain>, i64>` yet",
         ]
     );
 }
@@ -3118,8 +3114,8 @@ fn composite_forms_not_written_yet_are_reported() {
             "}\n",
             "const fn made() -> i64 => Made().value\n",
             "struct Maybe<T> { value: T? }\n",
-            "abstract struct Marked {}\n",
-            "struct Mark<T> : Marked { tag: list<T> = [] }\n",
+            "abstract struct Marker {}\n",
+            "struct Mark<T> : Marker { tag: list<T> = [] }\n",
             "const fn read(box: Maybe<i64?>) -> i64? => box.value\n",
             "const fn marked() -> Mark<delta<i64?>> => Mark<delta<i64?>>()\n",
             "const fn whole(change: delta<Maybe<atomic<list<i64>>>>) -> bool => change.value == null\n",
@@ -3229,4 +3225,219 @@ fn a_struct_of_another_module_is_named_through_its_types_header() {
     assert!(!file("modules/type-demo-b.h").contains("type-demo-a.h"));
     // A generic parameter of another module's enum.
     assert!(file("modules/type-demo-c.h").contains("#include \"type-demo-b.h\""));
+}
+
+/// FN-17: the checker accepts the callable arguments. The target must
+/// finish when specializing a call keeps wrapping its current argument.
+#[test]
+fn growing_callable_specializations_are_reported_at_the_call() {
+    let cases = [
+        (
+            "grow",
+            "4:34",
+            concat!(
+                "module m\n",
+                "struct Harmless { a: i64 = grow(identity, 2) }\n",
+                "const fn grow(f: const fn(i64) -> i64, step: i64) -> i64 =>\n",
+                "    if step == 0 { f(1) } else { grow(fn(n) => f(n + 1), step - 1) }\n",
+                "const fn identity(value: i64) -> i64 => value\n",
+                "test growing { assert Harmless().a == 3 }\n",
+                "test independent { assert 2 + 2 == 4 }\n",
+            ),
+        ),
+        (
+            "first",
+            "5:34",
+            concat!(
+                "module m\n",
+                "const fn first(f: const fn(i64) -> i64, step: i64) -> i64 =>\n",
+                "    if step == 0 { f(1) } else { second(fn(n) => f(n + 1), step - 1) }\n",
+                "const fn second(f: const fn(i64) -> i64, step: i64) -> i64 =>\n",
+                "    if step == 0 { f(1) } else { first(fn(n) => f(n + 1), step - 1) }\n",
+                "const fn identity(value: i64) -> i64 => value\n",
+                "test growing { assert first(identity, 2) == 3 }\n",
+                "test independent { assert 2 + 2 == 4 }\n",
+            ),
+        ),
+    ];
+    for (function, at, source) in cases {
+        let emitted = emit_on_analysis_stack(source);
+        let expected = format!(
+            "m.hgl:{at} the cpp target does not write a function argument to `{function}` with more than 64 deeper specializations on one call chain yet"
+        );
+        assert_eq!(emitted.reported, std::slice::from_ref(&expected));
+        assert_eq!(
+            emitted.blocked("growing").as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(emitted.blocked("independent"), None);
+    }
+}
+
+/// As in `hgl emit`, give nested and synthesized bodies the analyser's
+/// stack budget. The libtest worker's default stack is smaller.
+fn emit_on_analysis_stack(source: &str) -> Emitted {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(hgl_analyser::stack_size(Limits::default()))
+            .spawn_scoped(scope, || {
+                emit_with(&[("m.hgl", source)], &hgl_cpp::runtime::provides)
+            })
+            .expect("allocate the compiler stack")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+/// FN-17: reusing `apply` across a chain allows 64 requests for deeper
+/// arguments and declines the next. A shorter chain checks key growth.
+#[test]
+fn callable_growth_limit_counts_requests_on_one_chain() {
+    for (wrappers, expected) in [
+        (10, None),
+        (66, None),
+        (
+            67,
+            Some(
+                "m.hgl:68:61 the cpp target does not write a function argument to `apply` with more than 64 deeper specializations on one call chain yet",
+            ),
+        ),
+    ] {
+        let mut source = String::from(concat!(
+            "module m\n",
+            "const fn apply(f: const fn(i64) -> i64, value: i64) -> i64 => f(value)\n",
+        ));
+        for index in 1..wrappers {
+            let next = index + 1;
+            writeln!(
+                source,
+                "const fn w{index}(f: const fn(i64) -> i64, value: i64) -> i64 => apply(fn(n) => w{next}(fn(m) => f(m + 1), n), value)"
+            )
+            .unwrap();
+        }
+        writeln!(
+            source,
+            "const fn w{wrappers}(f: const fn(i64) -> i64, value: i64) -> i64 => apply(fn(n) => f(n + 1), value)\n\
+             const fn identity(value: i64) -> i64 => value\n\
+             test chain {{ assert w1(identity, 0) == {wrappers} }}"
+        )
+        .unwrap();
+        let emitted = emit_on_analysis_stack(&source);
+        assert_eq!(emitted.reported, expected.into_iter().collect::<Vec<_>>());
+        assert_eq!(emitted.blocked("chain").as_deref(), expected);
+        if wrappers == 10 {
+            let module = emitted
+                .output
+                .files
+                .iter()
+                .find(|file| file.path == "modules/mod-m.cpp")
+                .expect("the accepted wrapper chain is written");
+            // Escaping an already serialized child key at every layer
+            // makes its spelling, and the names derived from it, grow exponentially.
+            assert!(module.text.len() < 128 * 1024);
+        }
+    }
+}
+
+/// FN-17: every occurrence of the same named target costs space in a
+/// copied anonymous callback. One more block crosses the exact size limit.
+#[test]
+fn callable_size_limit_counts_repeated_targets() {
+    for (returned, expected) in [
+        ("{ f(v1) }", None),
+        (
+            "{ { f(v1) } }",
+            Some(
+                "m.hgl:9:12 the cpp target does not write a function argument to `apply` whose specialization copies more than 200000 nodes yet",
+            ),
+        ),
+    ] {
+        let mut source = String::from(concat!(
+            "module m\n",
+            "const fn apply(f: const fn(i64) -> i64, value: i64) -> i64 {\n",
+            "    let v0 = value\n",
+            "    let v1 = v0\n",
+        ));
+        writeln!(source, "    return {returned}\n}}").unwrap();
+        source.push_str(concat!(
+            "const fn identity(value: i64) -> i64 => value\n",
+            "test wide {\n",
+            "    assert apply(fn(x) {\n",
+        ));
+        for index in 1..=19_998 {
+            writeln!(source, "        let a{index} = identity(x)").unwrap();
+        }
+        source.push_str(concat!(
+            "        return a19998\n",
+            "    }, 3) == 3\n",
+            "}\n",
+        ));
+        let emitted = emit_with(&[("m.hgl", &source)], &hgl_cpp::runtime::provides);
+        assert_eq!(emitted.reported, expected.into_iter().collect::<Vec<_>>());
+        assert_eq!(emitted.blocked("wide").as_deref(), expected);
+    }
+}
+
+/// FN-17: a static argument can be copied only if its insertion into the
+/// called body stays within the structural nesting limit.
+#[test]
+fn callable_depth_limit_counts_the_specialized_body() {
+    for (returned, expected) in [
+        ("{ f(value) }", None),
+        (
+            "{ { f(value) } }",
+            Some(
+                "m.hgl:171:62 the cpp target does not write a function argument to `apply` with a specialized body deeper than 512 nodes yet",
+            ),
+        ),
+    ] {
+        let mut source = String::from("module m\n");
+        writeln!(
+            source,
+            "const fn apply(f: const fn(i64) -> i64, value: i64) -> i64 => {returned}"
+        )
+        .unwrap();
+        for index in 1..169 {
+            let next = index + 1;
+            writeln!(
+                source,
+                "const fn w{index}(f: const fn(i64) -> i64, value: i64) -> i64 => w{next}(fn(n) => f(n + 1), value)"
+            )
+            .unwrap();
+        }
+        source.push_str(concat!(
+            "const fn w169(f: const fn(i64) -> i64, value: i64) -> i64 => apply(fn(n) => f(n + 1), value)\n",
+            "const fn identity(value: i64) -> i64 => value\n",
+            "test chain { assert w1(identity, 0) == 169 }\n",
+        ));
+        let emitted = emit_on_analysis_stack(&source);
+        assert_eq!(emitted.reported, expected.into_iter().collect::<Vec<_>>());
+        assert_eq!(emitted.blocked("chain").as_deref(), expected);
+    }
+}
+
+/// FN-17: instancing a wide wrapper would copy the callback into each of
+/// its calls. Check the copy budget before creating another such instance.
+#[test]
+fn callable_size_limit_checks_wide_growth_before_copying() {
+    let mut source = String::from(concat!(
+        "module m\n",
+        "const fn grow(f: const fn(i64) -> i64, step: i64) -> i64 =>\n",
+        "    if step == 0 { f(1) } else { grow(fn(n) {\n",
+    ));
+    for index in 1..=127 {
+        writeln!(source, "        let a{index} = f(n)").unwrap();
+    }
+    source.push_str(concat!(
+        "        return a127\n",
+        "    }, step - 1) }\n",
+        "const fn identity(value: i64) -> i64 => value\n",
+        "test growing { assert grow(identity, 2) == 1 }\n",
+        "test independent { assert 2 + 2 == 4 }\n",
+    ));
+    let emitted = emit_with(&[("m.hgl", &source)], &hgl_cpp::runtime::provides);
+    let expected = "m.hgl:3:34 the cpp target does not write a function argument to `grow` whose specialization copies more than 200000 nodes yet";
+    assert_eq!(emitted.reported, [expected]);
+    assert_eq!(emitted.blocked("growing").as_deref(), Some(expected));
+    assert_eq!(emitted.blocked("independent"), None);
 }

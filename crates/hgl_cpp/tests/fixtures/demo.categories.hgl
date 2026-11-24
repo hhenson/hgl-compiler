@@ -1,0 +1,303 @@
+module demo.categories
+
+struct Point {
+    x: f64
+    y: f64
+}
+
+struct Label {
+    text: str
+}
+
+operator shown<T>(value: T) -> str
+impl const fn shown<T>(value: T) -> str requires T in struct => "a struct"
+impl const fn shown(value: Point) -> str => "a point"
+impl const fn shown<...Ts>(value: tuple<Ts>) -> str => "a tuple"
+
+test selection {
+    assert shown(Label(text: "a")) == "a struct"
+    assert shown(Point(x: 1.0, y: 2.0)) == "a point"
+    assert shown((1, "a")) == "a tuple"
+}
+
+# GEN-3: enum membership is distinct from struct membership.
+enum Tag { first, second }
+operator kind<T>(value: T) -> str
+impl const fn kind<T>(value: T) -> str requires T in enum => "enum"
+impl const fn kind<T>(value: T) -> str requires T in struct => "struct"
+test nominal_categories {
+    assert kind(Tag.first) == "enum"
+    assert kind(Label(text: "a")) == "struct"
+}
+
+# GEN-10: ordinary specialization and an independently typed callback
+# retain the whole tuple sequence, with no extra tuple nesting.
+const fn echo<...Ts>(value: tuple<Ts>) -> tuple<Ts> => value
+const fn forward<...Us>(value: tuple<Us>) -> tuple<Us> => echo(value)
+const fn suffix<...Us>(value: tuple<Us, str>) -> tuple<Us, str> => echo(value)
+const fn prefix<...Us>(value: tuple<i64, Us>) -> tuple<i64, Us> => echo(value)
+const fn repeated<...Us>(value: tuple<Us, Us>) -> tuple<Us, Us> => echo(value)
+const fn apply(f: const fn(tuple<i64, str>) -> tuple<i64, str>, value: tuple<i64, str>) -> tuple<i64, str> => f(value)
+test specialized_tuples {
+    let direct: tuple<i64, str> = echo((1, "a"))
+    let forwarded: tuple<i64, str> = forward((2, "b"))
+    let callback: tuple<i64, str> = apply(echo, (3, "c"))
+    let last: tuple<i64, str> = suffix((4, "d"))
+    let first: tuple<i64, str, bool> = prefix((5, "e", true))
+    let twice: tuple<i64, str, i64, str> = repeated((6, "f", 7, "g"))
+    assert direct[0] == 1
+    assert forwarded[0] == 2
+    assert callback[0] == 3
+    assert last[0] == 4
+    assert first[1] == "e"
+    assert twice[2] == 7
+}
+
+# GEN-3 and GEN-5: concrete specialization still outranks a category.
+const fn forwarded_category<T>(value: T) -> str requires T in struct => shown(value)
+const fn type_category<T>() -> bool requires T in struct => true
+test category_instances {
+    assert forwarded_category(Label(text: "a")) == "a struct"
+    assert forwarded_category(Point(x: 1.0, y: 2.0)) == "a point"
+    assert type_category<Label>()
+}
+
+# GEN-3 and GEN-10: a forwarded tuple proves its each-category bound.
+const fn structures<...Ts>(value: tuple<Ts>) -> bool
+    requires each T in types(Ts) { T in struct } => true
+const fn bounded<...Us>(value: tuple<Us>) -> bool
+    requires each U in types(Us) { U in struct } => structures(value)
+const fn empty_tail<...Us{0}>(value: tuple<Label, Us>) -> bool => structures(value)
+test tuple_category_requirements {
+    assert bounded((Label(text: "a"), Point(x: 1.0, y: 2.0)))
+    assert empty_tail((Label(text: "a"),))
+}
+
+# GEN-10 and FN-1: the same pack types specialize a temporal function.
+fn temporal_echo<...Ts>(value: tuple<Ts>) -> tuple<Ts> {
+    when all_valid(value) { return value }
+}
+test temporal_tuple {
+    assert eval temporal_echo(value: [(1, "a"), (2, "b")]) == [(1, "a"), (2, "b")]
+}
+
+# GEN-3, GEN-7, GEN-10: rejected forms are checked independently (TST-12).
+const fn only_struct<T>(value: T) -> bool requires T in struct => true
+const fn only_enum<T>(value: T) -> bool requires T in enum => true
+const fn pair<...Ts{2}>(value: tuple<Ts>) -> tuple<Ts> => value
+
+# expect-error(operator, "operator.no_candidate")
+const fn rejected_i64() -> str => shown(1)
+# expect-error(operator, "operator.no_candidate")
+const fn rejected_scalar_category() -> str => kind(1)
+# expect-error(constraint, "requires.unmet")
+const fn rejected_struct() -> bool => only_struct(1)
+# expect-error(constraint, "requires.unmet")
+const fn rejected_enum() -> bool => only_enum(Label(text: "a"))
+# expect-error(constraint, "requires.unmet")
+const fn missing_category_bound<T>(value: T) -> bool => only_struct(value)
+# expect-error(constraint, "requires.unmet")
+const fn missing_pack_bound<...Us>(value: tuple<Us>) -> bool => structures(value)
+# expect-error(type, "pack.cardinality")
+const fn rejected_pack_count() -> tuple<i64> => pair((1,))
+# expect-error(type, "type.not_a_type")
+const fn pack_is_not_one_type<...Ts>(value: list<Ts>) -> bool => true
+# expect-error(type, "generic.argument_kind")
+const fn category_takes_no_value() -> bool => type_category<1>()
+
+# GEN-10: independent enclosing packs both survive tuple forwarding.
+const fn combine<...As, ...Bs>(left: tuple<As>, right: tuple<Bs>, joined: tuple<As, Bs>) -> tuple<As, Bs> => echo(joined)
+test multiple_tuple_sources {
+    let joined: tuple<i64, str, bool, f64> = combine((1, "a"), (true, 2.0), (3, "b", false, 4.0))
+    assert joined[0] == 3
+    assert joined[1] == "b"
+    assert joined[2] == false
+    assert joined[3] == 4.0
+}
+
+# GEN-10: an exact tuple pack supplies an existential witness.
+const fn some_struct<...Ts>(value: tuple<Ts>) -> bool
+    requires any T in types(Ts) { T in struct } => true
+const fn nonempty_structs<...Us>(value: tuple<Us>) -> bool
+    requires each U in types(Us) { U in struct } => some_struct(value)
+test nonempty_tuple_witness {
+    assert nonempty_structs((Label(text: "a"),))
+}
+const fn some_tail_struct<...Ts>(value: tuple<i64, Ts>) -> bool
+    requires any T in types(Ts) { T in struct } => true
+# expect-error(constraint, "requires.unmet")
+const fn missing_tail_witness<...Us>(value: tuple<i64, Us>) -> bool requires each U in types(Us) { U in struct } => some_tail_struct(value)
+
+# GEN-7: ordinary pack forwarding is checked in its instance.
+const fn some_value_struct<...Ts>(args: ...Ts) -> bool
+    requires any T in types(Ts) { T in struct } => true
+const fn forwarded_value_structs<...Us>(args: ...Us) -> bool
+    requires each U in types(Us) { U in struct } => some_value_struct(...args)
+test forwarded_value_witness {
+    assert forwarded_value_structs(Label(text: "a"), Point(x: 1.0, y: 2.0))
+}
+# expect-error(constraint, "requires.unmet")
+const fn rejected_empty_value_forwarding() -> bool => forwarded_value_structs()
+
+# EXPR-7, GEN-7, GEN-10: indices name members, not a whole pack.
+const fn second_exists<...Ts{2}>(value: tuple<Ts>) -> bool {
+    let selected = value[1]
+    return true
+}
+const fn fixed_tail<T, ...Ts{1}>(value: tuple<Ts, T>) -> T => value[1]
+const fn fixed_first<T, ...Ts>(value: tuple<T, Ts>) -> T => value[0]
+test tuple_index_members {
+    assert second_exists((1, "a"))
+    assert fixed_tail((1, "a")) == "a"
+    assert fixed_first((2, "b", true)) == 2
+}
+
+# GEN-5: the concrete bool wins over an unconstrained tuple-pack member.
+operator partial<T>(value: T) -> str
+impl const fn partial<...Ts>(value: tuple<Ts>) -> str => "pack"
+impl const fn partial<T>(value: tuple<T, bool>) -> str => "bool"
+test partial_tuple_ranking {
+    assert partial(("a", true)) == "bool"
+    assert partial((1, 2, 3)) == "pack"
+}
+
+# GEN-3: later evidence resolves earlier tuple partitions to a fixed point.
+const fn later<...As, ...Bs>(joined: tuple<As, Bs>, left: tuple<As>) -> tuple<As, Bs> => joined
+const fn earlier<...As, ...Bs>(left: tuple<As>, joined: tuple<As, Bs>) -> tuple<As, Bs> => joined
+operator split<J, L>(joined: J, left: L) -> bool
+impl const fn split<...As, ...Bs>(joined: tuple<As, Bs>, left: tuple<As>) -> bool => true
+test tuple_partition_order {
+    let joined: tuple<i64, str, bool> = later((1, "a", true), (1,))
+    let reversed: tuple<i64, str, bool> = earlier((1,), (2, "b", false))
+    assert joined[2] == true
+    assert reversed[1] == "b"
+    assert split((3, "c", true), (3,))
+}
+
+# GEN-10: tuple operands and forwarded cardinalities use the captured sequence.
+const fn exact_tuple<...Ts>(value: tuple<Ts>) -> bool requires tuple<Ts> == tuple<i64, str> => true
+const fn nonempty<...Ts{1:*}>(value: tuple<Ts>) -> bool => true
+const fn forwarded_nonempty<...Us>(value: tuple<Us>) -> bool => nonempty(value)
+test tuple_requirement_operands {
+    assert exact_tuple((1, "a"))
+}
+test tuple_nonempty_bounds {
+    assert forwarded_nonempty((1, "a"))
+}
+
+# FN-17 and GEN-8: explicit callback packs keep their declared types.
+const fn apply_pair(f: const fn(tuple<i64, i64>) -> tuple<i64, i64>, v: tuple<i64, i64>) -> tuple<i64, i64> => f(v)
+const fn apply_single(f: const fn(tuple<i64>) -> tuple<i64>, v: tuple<i64>) -> tuple<i64> => f(v)
+const fn invoke_single<...Ps, ...As>(f: const fn(...{Ps}) -> tuple<i64>, args: ...{As for f}) -> tuple<i64>
+    requires each k in arg_keys(As) { As[k] == Ps[k] } => f(...args)
+const fn check_named_single<...Ps, ...As>(f: const fn(...{Ps}) -> tuple<i64>, args: ...{As for f}) -> bool
+    requires each k in arg_keys(As) { As[k] == Ps[k] } => true
+test explicit_callback_packs {
+    assert apply_pair(echo<i64, i64>, (1, 2)) == (1, 2)
+    assert apply_pair(echo, (3, 4)) == (3, 4)
+    assert apply_single(echo<i64>, (5,)) == (5,)
+    assert apply_single(echo, (6,)) == (6,)
+    assert invoke_single(echo<i64>, value: (7,)) == (7,)
+    assert invoke_single(echo, value: (8,)) == (8,)
+}
+
+# Returned wrong constructions reject where their bodies are declared.
+# expect-error(type, "tuple.index")
+const fn wrong_tail<T, ...Ts>(value: tuple<Ts, T>) -> T => value[1]
+# expect-error(type, "type.mismatch")
+const fn wrong_whole_pack<...Ts>(value: tuple<Ts>) -> tuple<Ts> => (value[0],)
+# expect-error(type, "tuple.index")
+const fn out_of_pack<...Ts{2}>(value: tuple<Ts>) -> bool { let selected = value[2]
+    return true }
+# expect-error(type, "type.not_a_type")
+const fn nullable_pack<...Ts>(value: tuple<Ts?>) -> bool => true
+const fn nonempty_tail<...Ts{1:*}>(value: tuple<i64, Ts>) -> bool => true
+# expect-error(type, "pack.cardinality")
+const fn absent_tail<...Us>(value: tuple<i64, Us>) -> bool => nonempty_tail(value)
+# expect-error(constraint, "requires.unmet")
+const fn wrong_tuple_operand() -> bool => exact_tuple((1, 2))
+# expect-error(type, "type.mismatch")
+const fn wrong_partition() -> tuple<i64, bool> => later(("a", true), (1,))
+# expect-error(type, "type.mismatch")
+const fn wrong_pair_callback() -> tuple<i64, i64> => apply_pair(echo<f64, f64>, (1, 2))
+# expect-error(type, "type.mismatch")
+const fn wrong_single_callback() -> tuple<i64> => apply_single(echo<f64>, (1,))
+# expect-error(type, "type.mismatch")
+const fn wrong_named_callback() -> bool => check_named_single(echo<f64>, value: (1,))
+
+# GEN-7/GEN-10: every guaranteed tuple member carries universal category facts.
+const fn first_structure<...Us>(value: tuple<Us>) -> bool
+    requires each U in types(Us) { U in struct } => only_struct(value[0])
+const fn second_structure<...Us{2:*}>(value: tuple<Us>) -> bool
+    requires each U in types(Us) { U in struct } => only_struct(value[1])
+const fn forwarded_structure<...Us>(value: tuple<Us>) -> bool
+    requires each U in types(Us) { U in struct } => first_structure(value)
+const fn listed_structure<...Us>(values: list<tuple<Us>>) -> bool
+    requires each U in types(Us) { U in struct } => only_struct(values[0][0])
+const fn nested_structure<...Us>(value: tuple<tuple<Us>, i64>) -> bool
+    requires each U in types(Us) { U in struct } => only_struct(value[0][0])
+test guaranteed_member_categories {
+    assert first_structure((Label(text: "a"),))
+    assert second_structure((Label(text: "a"), Point(x: 1.0, y: 2.0)))
+    assert forwarded_structure((Point(x: 1.0, y: 2.0),))
+    assert listed_structure([(Label(text: "b"),)])
+    assert nested_structure(((Label(text: "c"),), 1))
+}
+
+# GEN-3: revisit tuple equations in these four input containers only.
+const fn list_partition<...As, ...Bs>(joined: list<tuple<As, Bs>>, left: tuple<As>) -> bool => true
+const fn list_partition_reversed<...As, ...Bs>(left: tuple<As>, joined: list<tuple<As, Bs>>) -> bool => true
+const fn dict_partition<...As, ...Bs>(joined: dict<str, tuple<As, Bs>>, left: tuple<As>) -> bool => true
+const fn optional_partition<...As, ...Bs>(joined: tuple<As, Bs>?, left: tuple<As>?) -> bool => true
+const fn nested_partition<...As, ...Bs>(joined: tuple<tuple<As, Bs>>, left: tuple<As>) -> bool => true
+operator list_partition_op<J, L>(joined: J, left: L) -> bool
+impl const fn list_partition_op<...As, ...Bs>(joined: list<tuple<As, Bs>>, left: tuple<As>) -> bool => true
+operator dict_partition_op<J, L>(joined: J, left: L) -> bool
+impl const fn dict_partition_op<...As, ...Bs>(joined: dict<str, tuple<As, Bs>>, left: tuple<As>) -> bool => true
+operator optional_partition_op<J, L>(joined: J, left: L) -> bool
+impl const fn optional_partition_op<...As, ...Bs>(joined: tuple<As, Bs>?, left: tuple<As>?) -> bool => true
+operator nested_partition_op<J, L>(joined: J, left: L) -> bool
+impl const fn nested_partition_op<...As, ...Bs>(joined: tuple<tuple<As, Bs>>, left: tuple<As>) -> bool => true
+test nested_partition_evidence {
+    let listed: list<tuple<i64, str>> = [(1, "a")]
+    let keyed: dict<str, tuple<i64, str>> = ["k": (2, "b")]
+    let optional: tuple<i64, str>? = (3, "c")
+    let nested: tuple<tuple<i64, str>> = ((4, "d"),)
+    assert list_partition(listed, (1,))
+    assert list_partition_reversed((1,), listed)
+    assert dict_partition(keyed, (2,))
+    assert optional_partition(optional, (3,))
+    assert nested_partition(nested, (4,))
+    assert list_partition_op(listed, (1,))
+    assert dict_partition_op(keyed, (2,))
+    assert optional_partition_op(optional, (3,))
+    assert nested_partition_op(nested, (4,))
+}
+
+# These facts are not supplied, and these keys are not guaranteed.
+# expect-error(constraint, "requires.unmet")
+const fn no_member_category<...Us>(value: tuple<Us>) -> bool => only_struct(value[0])
+# expect-error(constraint, "requires.unmet")
+const fn a_membership_is_not_a_category<...Us>(value: tuple<Us>) -> bool requires each U in types(Us) { U in {i64, str} } => only_struct(value[0])
+# expect-error(constraint, "requires.unmet")
+const fn an_existential_is_not_universal<...Us>(value: tuple<Us>) -> bool requires any U in types(Us) { U in struct } => only_struct(value[0])
+# expect-error(type, "tuple.index")
+const fn no_second_member<...Us>(value: tuple<Us>) -> bool { let selected = value[1]
+    return true }
+# expect-error(type, "tuple.index")
+const fn a_fixed_prefix_proves_no_member<...Us>(value: tuple<i64, Us>) -> bool { let selected = value[1]
+    return true }
+# expect-error(type, "type.mismatch")
+const fn wrong_nested_partition() -> bool => list_partition([("a", true)], (1,))
+
+# hgl_spec#240 leaves tuple arity ranking open: preserve ambiguity.
+operator arity<T>(value: T) -> bool
+impl const fn arity<...Ts>(value: tuple<Ts>) -> bool => true
+impl const fn arity<A, B>(value: tuple<A, B>) -> bool => true
+# expect-error(operator, "operator.ambiguous")
+const fn tuple_arity_stays_ambiguous() -> bool => arity((1, "a"))
+
+# GEN-3: evidence retention never guesses a split between two unknown packs.
+const fn unconstrained_partition<...As, ...Bs>(joined: list<tuple<As, Bs>>) -> bool => true
+# expect-error(type, "generic.unresolved")
+const fn no_partition_evidence() -> bool => unconstrained_partition([(1, "a")])

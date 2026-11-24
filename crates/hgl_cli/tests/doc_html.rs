@@ -121,7 +121,7 @@ fn documentation_site_links_only_visible_declarations_and_local_files() {
     );
     assert!(api.contains("<th scope=\"col\">Default</th>"));
     assert!(api.contains("class=\"keyword\">assert"));
-    assert!(api.contains("<p><strong>Further reading</strong>:"));
+    assert!(api.contains("<h4><strong>Further reading</strong></h4>"));
     assert!(api.contains("$<code class=\"formula-inline\">shared</code>$"));
     assert!(api.contains("class=\"language-math\">a^2+b^2=c^2"));
     assert!(api.contains("class=\"language-mermaid\">graph LR; A --&gt; B"));
@@ -153,6 +153,142 @@ fn documentation_site_links_only_visible_declarations_and_local_files() {
         "a declaration private to another module remains outside this comment's scope"
     );
     internal_link_targets_exist(&private, &snapshot(&private));
+}
+
+/// SDOC-4 and SDOC-7: initializer blocks stay in signatures, and the
+/// parameter table and section headings use the extracted Markdown.
+#[test]
+fn site_renders_initializer_headers_and_entry_markdown() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("extraction.hgl");
+    fs::write(&source, include_str!("fixtures/doc_extraction.hgl")).unwrap();
+    let site = write_site(root.path(), &source, &["--private"]);
+    let page = fs::read_to_string(site.join("modules/mod-extraction_check.html")).unwrap();
+    for signature in [
+        "export const answer: i64 = { 42 }",
+        "count: i64 = { 42 }",
+        "export const fn closed_header() -&gt; i64",
+        "test named_header",
+    ] {
+        assert!(page.contains(&format!(
+            "<pre class=\"signature\"><code>{signature}</code></pre>"
+        )));
+    }
+    assert!(page.contains("<p>First paragraph.</p>"));
+    assert!(page.contains("<th>Key</th><th>Value</th>"));
+    assert!(page.contains("<li>Item"));
+    assert_eq!(page.matches("data-example=\"shown\"").count(), 2);
+    assert!(!page.contains("data-example=\"runnable\""));
+    assert!(page.contains("<p>Last paragraph.</p>"));
+    for heading in ["Options", "Rules", "Status", "Notes for display"] {
+        assert!(page.contains(&format!("<h4>{heading}</h4>")));
+    }
+    assert!(page.contains("<p>A custom section.</p>"));
+}
+
+/// SDOC-3 and SDOC-7: generated titles and Markdown use the containing
+/// module, part, article, or section to set their heading levels.
+#[test]
+fn documentation_headings_follow_their_containing_outline() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    fs::create_dir(&source).unwrap();
+    fs::write(
+        source.join("main.hgl"),
+        r#"/** # Module overview */
+module outline
+
+/**
+# Public overview
+
+Public details
+--------------
+
+Notes:
+    # Public note
+
+    ~~~text
+    # Literal source
+    ~~~
+*/
+export operator echo<T>(value: T) -> T
+
+/**
+# Candidate overview
+
+Type Args:
+    T: The input type.
+
+Args:
+    value: The input value.
+
+        # Argument detail
+
+Returns:
+    # Return detail
+
+    More detail
+    -----------
+
+Examples:
+    ~~~hgl
+    assert true
+    ~~~
+*/
+impl const fn echo<T>(value: T) -> T => value
+
+export struct Packet {
+    /**
+    Member prose.
+
+    **Member note**:
+        # Member detail
+    */
+    value: i64
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        source.join("extra.hgl"),
+        "/** # Part overview */\nmodule outline part details\n",
+    )
+    .unwrap();
+    let site = write_site(root.path(), &source, &[]);
+    let page = fs::read_to_string(site.join("modules/mod-outline.html")).unwrap();
+    for (level, label) in [
+        (2, "Module overview"),
+        (2, "Part details"),
+        (3, "Part overview"),
+        (4, "Public overview"),
+        (5, "Public details"),
+        (5, "Public note"),
+        (4, "Candidates"),
+        (5, "echo"),
+        (6, "Candidate overview"),
+        (6, "Type arguments"),
+        (6, "Arguments"),
+        (6, "Returns"),
+        (6, "Examples"),
+        (4, "Members"),
+        (5, "value"),
+        (6, "<strong>Member note</strong>"),
+    ] {
+        let heading = format!("<h{level}>{label}</h{level}>");
+        assert!(page.contains(&heading), "Missing {heading}");
+    }
+    for (level, label) in [
+        (7, "Argument detail"),
+        (7, "Return detail"),
+        (8, "More detail"),
+        (7, "Member detail"),
+    ] {
+        let heading = format!("<div role=\"heading\" aria-level=\"{level}\">{label}</div>");
+        assert!(page.contains(&heading), "Missing {heading}");
+    }
+    assert_eq!(page.matches("<h1>").count(), 1);
+    assert!(page.contains("<code class=\"language-text\"># Literal source\n</code>"));
+    assert!(page.contains("data-example=\"runnable\""));
 }
 
 #[test]

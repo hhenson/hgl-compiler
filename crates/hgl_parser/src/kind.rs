@@ -73,9 +73,9 @@ define_syntax_kinds! {
         Placeholder, Int, Float, Str, Duration, Tenor, Temporal,
         KwModule, KwPart, KwUse, KwAs, KwExport, KwAbstract, KwImpl,
         KwInstantiate, KwOperator, KwFn, KwStruct, KwEnum, KwRequires, KwIs,
-        KwLet, KwVar, KwState, KwCache, KwInject, KwReturn, KwIf, KwElse,
+        KwLet, KwVar, KwState, KwCache, KwInject, KwReturn, KwIf, KwElse, KwSwitch,
         KwStart, KwWhen, KwStop, KwFor, KwWhile, KwYield, KwTest, KwAssert,
-        KwEval, KwRun, KwTrue, KwFalse, KwNull, KwBool, KwI64, KwF64, KwStr,
+        KwRaises, KwEval, KwRun, KwTrue, KwFalse, KwNull, KwBool, KwI64, KwF64, KwStr,
         KwBytes, KwAny, KwDate, KwTime, KwDatetime, KwDuration, KwTenor,
         KwCivilDatetime, KwZonedDatetime, KwZonedTime, KwTimezone,
         KwAtomic, KwTuple, KwList, KwSet, KwDict, KwRollingWindow, KwResult, KwRef,
@@ -174,6 +174,8 @@ define_syntax_kinds! {
         ConstraintValue,
         /// `{i64, f64}` as a constraint operand
         ConstraintSet,
+        /// `struct` or `enum`, only after a membership's `in` (GEN-3).
+        ConstraintCategory,
 
         /// `export const scale: i64 = 2`
         ConstantDecl,

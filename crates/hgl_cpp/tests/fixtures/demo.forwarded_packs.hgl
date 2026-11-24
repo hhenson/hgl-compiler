@@ -53,11 +53,11 @@ test forward_callback {
     assert relay_callback(callback_target, 3.0, weight: 4.0) == 12.0
 }
 
-operator render<...Args, ...Fields>(format: str, values: ...Args, fields: ...{Fields}) -> i64
-impl const fn render<...Args, ...Fields>(format: str, values: ...Args, fields: ...{Fields}) -> i64 => 42
+operator render<...Args, ...Fields>(pattern: str, values: ...Args, fields: ...{Fields}) -> i64
+impl const fn render<...Args, ...Fields>(pattern: str, values: ...Args, fields: ...{Fields}) -> i64 => 42
 
-const fn forward_both<...Args, ...Fields>(format: str, values: ...Args, fields: ...{Fields}) -> i64 =>
-    render(format, ...values, ...fields)
+const fn forward_both<...Args, ...Fields>(pattern: str, values: ...Args, fields: ...{Fields}) -> i64 =>
+    render(pattern, ...values, ...fields)
 
 test forward_empty_and_mixed_operator_packs {
     assert forward_both("empty") == 42

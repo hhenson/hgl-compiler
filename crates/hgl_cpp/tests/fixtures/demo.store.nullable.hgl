@@ -1,0 +1,16 @@
+module demo.store.nullable
+
+# A present null succeeds in the explicitly typed store result (CAP-6).
+fn stored_nullable(value: i64?) -> bool {
+    inject global_state
+    when {
+        let missing: result<i64?, error> = get<i64?>(global_state, "missing")
+        put(global_state, "nullable", value)
+        let saved: result<i64?, error> = get<i64?>(global_state, "nullable")
+        return is_err(missing) && is_ok(saved) && saved.value == null
+    }
+}
+
+test a_written_null_is_a_success {
+    assert eval stored_nullable(value: [null, 7]) == [true, false]
+}

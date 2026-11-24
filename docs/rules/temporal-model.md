@@ -115,11 +115,14 @@ analyser: partial
 transpiler: partial
 
 - Publishes returns, whole `out` assignments and supported struct or tuple child writes.
-  A source yields whole values or deltas, and a window holds the last arrival of the
-  evaluation.
-- Left: Reports plain reads of `out` or its children, unsupported output writes or child
-  places, and a read of a node's own window in its `when`. Other unsupported publication
-  forms are under TYPE-9.
+  A source yields whole values or deltas. A window result exposes its latest
+  staged arrival to reads in the handler body, and publishes the last arrival once.
+  Validity, modification time, and delta reads use the staged arrival directly.
+  The first read of retained data after each write copies the samples in time
+  and space proportional to their count. A later read reuses that copy until
+  another write or withdrawal.
+- Left: Reports unsupported reads and writes of `out` and its children.
+  Other publication forms are under TYPE-9 and window observation limits are under END-9.
 
 ## TIME-8
 

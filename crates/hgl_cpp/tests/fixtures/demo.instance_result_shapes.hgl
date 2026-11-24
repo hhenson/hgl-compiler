@@ -18,6 +18,55 @@ operator extent_of<C>(items: C) -> i64
 impl const fn extent_of(items: list<i64, 2>) -> i64 => 2
 impl const fn extent_of(items: list<i64, 3>) -> i64 => 3
 
+operator marker_of<T, C>(items: T) -> C
+impl const fn marker_of<T>(items: T) -> list<i64, 1> => [9]
+impl const fn marker_of(items: list<i64, 2>) -> set<i64> => [3]
+
+const fn marker_at_first<T>(items: T) -> i64 => marker_of(items)[0]
+const fn first_marker<T>(value: T) -> i64 {
+    let items = items_of(value)
+    return marker_at_first(items)
+}
+const fn apply_marker<T>(reference: const fn(T) -> i64, items: T) -> i64 => reference(items)
+const fn first_marker_by_reference<T>(value: T) -> i64 {
+    let items = items_of(value)
+    return apply_marker(marker_at_first, items)
+}
+const fn relay_marker<...Args>(items: ...Args) -> i64 => marker_at_first(...items)
+const fn first_marker_by_pack<T>(value: T) -> i64 {
+    let items = items_of(value)
+    return relay_marker(items)
+}
+const fn first_marker_of_pack<...Args>(items: ...Args) -> i64 => marker_at_first(items_of(...items))
+const fn first_marker_from_parameter<T>(value: T) -> i64 =>
+    apply_marker(fn(input) => marker_at_first(input), items_of(value))
+const fn first_marker_from_forwarded_parameter<...Args>(values: ...Args) -> i64 =>
+    apply_marker(fn(input) => marker_at_first(input), items_of(...values))
+const fn first_marker_from_capture<T>(value: T) -> i64 {
+    let items = items_of(value)
+    return apply_marker(fn(input) => marker_at_first(items), value)
+}
+operator rows_of<T, C>(value: T) -> C
+impl const fn rows_of<T>(value: T) -> list<list<i64, 2>, 1> => [[1, 2]]
+impl const fn rows_of(value: i64) -> list<list<i64, 3>, 1> => [[value, value, value]]
+const fn first_marker_in_row<T>(value: T) -> i64 {
+    var total = 0
+    for row in rows_of(value) { total = total + marker_at_first(row) }
+    return total
+}
+const fn first_marker_with_index<T, U>(value: T, extra: U) -> i64 {
+    let index = extra[0]
+    let items = items_of(value)
+    return marker_at_first(items)
+}
+fn first_marker_with_endpoint<T, U>(value: T, extra: U) -> i64 {
+    when all_valid(extra) {
+        let read = extra
+        let items = items_of(value)
+        return marker_at_first(items)
+    }
+}
+
 const fn first_of<T>(value: T) -> i64 => items_of(value)[0]
 const fn first_from_index<T>(values: T) -> i64 => first_of(values[0])
 const fn relay_first<...Args>(values: ...Args) -> i64 => first_of(...values)
@@ -58,6 +107,15 @@ test indexed {
     assert first_from_index([5]) == 5
     assert first_from_index(["string"]) == 1
     assert call_first(relay_instance<i64>, 5) == 5
+    assert first_marker(5) == 9
+    assert first_marker_by_reference(5) == 9
+    assert first_marker_by_pack(5) == 9
+    assert first_marker_of_pack(5) == 9
+    assert first_marker_from_parameter(5) == 9
+    assert first_marker_from_forwarded_parameter(5) == 9
+    assert first_marker_from_capture(5) == 9
+    assert first_marker_in_row(5) == 9
+    assert first_marker_with_index(5, [0]) == 9
 }
 test whole {
     assert extent(5) == 3
@@ -75,6 +133,7 @@ test built_list {
 test node {
     assert eval first_in_node(value: [5, 6]) == [5, 6]
     assert eval first_in_node(value: ["s", "t"]) == [1, 1]
+    assert eval first_marker_with_endpoint(value: [5], extra: [(0, 1)]) == [9]
 }
 test graph {
     assert eval first_in_graph(value: [5, 6]) == [5, 6]

@@ -405,9 +405,9 @@ std::string type_name() {
 /// identical nodes; this holds the value whole, and is registered as an
 /// atomic under `hgl.config.` and the name of the value's C++ type (below),
 /// with the value's hash (`hash_of`) and equality. Two nodes whose
-/// configurations differ are two; the compiler wires one whose
-/// configuration holds an `f64` as a node of its own, since `0.0 == -0.0`
-/// (hgraph issue 1866). A hook reads the value as `held`.
+/// configurations differ are two. The compiler wires opaque configurations
+/// that can hold an `f64` separately because hgraph cannot inspect their
+/// zero signs (NUM-2). A hook reads the value as `held`.
 template <class T>
 struct configured {
     T held;

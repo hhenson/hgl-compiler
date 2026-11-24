@@ -576,6 +576,23 @@ impl Reader<'_> {
         let Some(clause) = child(declaration, SyntaxKind::RequiresClause) else {
             return;
         };
+        // GEN-3 and GEN-13: read category operands before kinds settle.
+        // This also follows a named type's argument kinds in Box<T>.
+        let before = std::mem::replace(&mut self.in_signature, true);
+        for relation in clause.descendants().filter(|node| {
+            node.kind() == SyntaxKind::ConstraintRelation
+                && node
+                    .children()
+                    .any(|child| child.kind() == SyntaxKind::ConstraintCategory)
+        }) {
+            if let Some(left) = relation.children().next()
+                && (is_type(left.kind())
+                    || left.kind() == SyntaxKind::IndexExpr && self.indexed_pack(&left))
+            {
+                self.outermost(&left);
+            }
+        }
+        self.in_signature = before;
         let named: Vec<Location> = clause
             .descendants_with_tokens()
             .filter_map(|element| element.into_token())

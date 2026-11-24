@@ -20,7 +20,7 @@ pub fn attached(node: &SyntaxNode) -> Option<SyntaxToken> {
         .filter(|token| token.kind() == SyntaxKind::DocComment)
 }
 
-const HEADINGS: [&str; 10] = [
+const HEADINGS: [&str; 13] = [
     "Args:",
     "Type Args:",
     "Returns:",
@@ -29,6 +29,9 @@ const HEADINGS: [&str; 10] = [
     "Validity:",
     "Properties:",
     "Requires:",
+    "Options:",
+    "Rules:",
+    "Status:",
     "Notes:",
     "Examples:",
 ];
@@ -46,9 +49,13 @@ impl Line<'_> {
 
     fn without_margin(self) -> Self {
         let text = without_margin(self.text);
+        self.without_prefix(self.text.len() - text.len())
+    }
+
+    fn without_prefix(self, bytes: usize) -> Self {
         Self {
-            text,
-            start: self.start + (self.text.len() - text.len()) as u32,
+            text: &self.text[bytes..],
+            start: self.start + bytes as u32,
         }
     }
 }
@@ -84,9 +91,7 @@ impl<'a> Comment<'a> {
             .min()
             .unwrap_or(0);
         for line in body.iter_mut() {
-            let cut = indent(line.text).min(common);
-            line.text = &line.text[cut..];
-            line.start += cut as u32;
+            *line = line.without_prefix(indent(line.text).min(common));
         }
         let normalized = joined(&lines, |line| line.text);
         let mut sections = vec![Section {
@@ -386,7 +391,7 @@ pub struct Entry<'a> {
 }
 
 impl Entry<'_> {
-    /// The text after the colon, with any more deeply indented continuation.
+    /// Markdown after the colon, with the continuation's common indent removed.
     pub fn text(&self) -> String {
         joined(&self.markdown_lines(), |line| line.text)
     }
@@ -398,8 +403,18 @@ impl Entry<'_> {
             start: self.span.end + 1 + (self.value.len() - text.len()) as u32,
         };
         let following = trim_end_blank(&self.following[..self.continuation_length()]);
+        let common = following
+            .iter()
+            .filter(|line| !line.blank())
+            .map(|line| indent(line.text))
+            .min()
+            .unwrap_or(0);
         std::iter::once(first)
-            .chain(following.iter().copied().map(Line::without_margin))
+            .chain(
+                following
+                    .iter()
+                    .map(|line| line.without_prefix(indent(line.text).min(common))),
+            )
             .skip_while(|line| line.text.is_empty())
             .collect()
     }

@@ -25,7 +25,7 @@ use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, GenericKind, GenericParameter, Pack,
     Parameter, Signature, Type,
 };
-use crate::{codes, error};
+use crate::{Program, codes, error};
 
 impl<'a> Typer<'a> {
     /// FN-17 and GEN-2: the type of the function given can complete its
@@ -370,7 +370,20 @@ impl<'a> Typer<'a> {
             .parameters
             .iter()
             .find(|parameter| parameter.pack == Some(Pack::Positional))
-            .and_then(|parameter| type_pack(parameter, generics));
+            .and_then(|parameter| type_pack(parameter, generics))
+            .or_else(|| {
+                first_pack.filter(|&index| {
+                    signature.parameters.iter().any(|parameter| {
+                        parameter.ty.any_part(
+                            &|part| {
+                                matches!(part, Type::Tuple(elements) if elements.iter()
+                    .any(|ty| bare_parameter(ty, generics) == Some(index)))
+                            },
+                            &|_| false,
+                        )
+                    })
+                })
+            });
         let written = given.map(|given| given.arguments.as_slice());
         let prefix = written.map(|written| {
             if positional.is_some() {
@@ -578,6 +591,10 @@ impl<'a> Typer<'a> {
         // The parameters being resolved. A place's type that still
         // names one once what was found is in place is not known.
         let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
+        if let Some((parameter, types)) = written_pack {
+            found[*parameter] = Some(Argument::Type(Type::Tuple(types.to_vec())));
+        }
+
         let dependent = callable.and_then(|(module, signature)| {
             dependent_slot(&self.program.modules[module], signature)
         });
@@ -640,6 +657,7 @@ impl<'a> Typer<'a> {
             ));
         }
         let mut late = std::collections::HashSet::new();
+        let mut tuple_evidence = Vec::new();
         for &position in &order {
             let Assigned {
                 slot, value: node, ..
@@ -688,6 +706,9 @@ impl<'a> Typer<'a> {
                 let actual = this.inferred_from(listed, value, takes);
                 let actual =
                     this.inference_input(pattern, &actual, generics, found, *result_fallback);
+                if has_tuple_equation(pattern, generics) {
+                    tuple_evidence.push((pattern, actual.clone()));
+                }
                 if let Some(generic) = widenable {
                     if let Some(Argument::Type(decided)) = &found[generic]
                         && this.widens(decided, actual)
@@ -825,10 +846,16 @@ impl<'a> Typer<'a> {
                 self.infer_function_argument(&entry.value, pattern, generics, &mut found);
             }
         }
-        if let Some((result, requested)) = result_fallback {
+        // A nullable place supplies no final bare success type (GEN-2).
+        // The probe of a value given to a ref result still reports the
+        // endpoint mismatch when the value has no fault of its own.
+        if let Some((result, place)) = result_fallback
+            && (!matches!(place, Type::Nullable(_))
+                || self.designating == Some(Location::new(self.file, name.span())))
+        {
             infer(
                 result,
-                not_null(Some(requested)).unwrap_or(requested),
+                not_null(Some(place)).unwrap_or(place),
                 generics,
                 &mut found,
             );
@@ -853,7 +880,7 @@ impl<'a> Typer<'a> {
         }
         // A resolved callback determines its reflected types before
         // another place can use a keyed member of those types (GEN-17).
-        let type_packs = callable.map_or_else(Vec::new, |(module, signature)| {
+        let mut type_packs = callable.map_or_else(Vec::new, |(module, signature)| {
             let unresolved = Argument::Type(Type::Unknown);
             let map: Vec<_> = generics
                 .iter()
@@ -874,6 +901,42 @@ impl<'a> Typer<'a> {
             {
                 infer(patterns[index], &value.ty, generics, &mut found);
             }
+        }
+        // GEN-3: later tuple evidence can determine a partition that an
+        // earlier argument could not yet split. Reuse settled input types;
+        // do not reread literals or change GEN-2 argument precedence.
+        let tuple_inputs = tuple_evidence
+            .iter()
+            .map(|(pattern, actual)| (*pattern, actual))
+            .collect::<Vec<_>>();
+        settle_tuple_inputs(&tuple_inputs, generics, &mut found);
+        for pack in tuple_pack_bindings(generics, &mut found, &self.signature.generics) {
+            self.check_tuple_pack(
+                Location::new(self.file, name.span()),
+                &generics[pack.parameter],
+                &pack,
+            );
+            if pack.forwarded_from.is_none()
+                && written_pack.is_none_or(|(parameter, _)| parameter != pack.parameter)
+            {
+                for (slot, input) in slots.iter().enumerate() {
+                    if input.type_pack == Some(pack.parameter) {
+                        let count = assigned
+                            .iter()
+                            .filter(|entry| entry.slot == Some(slot))
+                            .count() as u64;
+                        let length = pack.types.len() as u64;
+                        self.check_pack_count_at(
+                            Location::new(self.file, name.span()),
+                            &generics[pack.parameter].name,
+                            (length, Some(length)),
+                            count,
+                        );
+                    }
+                }
+            }
+            type_packs.retain(|other| other.parameter != pack.parameter);
+            type_packs.push(pack);
         }
         let pack_types = PackTypes::new(generics, &type_packs);
         // Each argument now takes its place with the resolved parameters.
@@ -926,7 +989,15 @@ impl<'a> Typer<'a> {
                 };
                 let written_type = written_pack
                     .filter(|(generic, _)| slots[index].type_pack == Some(*generic))
-                    .and_then(|(_, types)| types.get(pack.as_ref()?.0));
+                    .and_then(|(_, types)| types.get(pack.as_ref()?.0))
+                    .or_else(|| {
+                        let generic = slots[index].type_pack?;
+                        type_packs
+                            .iter()
+                            .find(|bound| bound.parameter == generic)?
+                            .types
+                            .get(pack.as_ref()?.0)
+                    });
                 let ty = match (written_type, pattern) {
                     (Some(ty), Type::Trace { .. }) => trace_input_type(ty.clone()),
                     (Some(ty), _) => ty.clone(),
@@ -975,7 +1046,7 @@ impl<'a> Typer<'a> {
                 // captured or reflected eval input stays a trace while
                 // its cells' type is settled (TST-5).
                 let unfound_type = match slot.type_pack {
-                    Some(parameter) => written_pack.is_none_or(|(given, _)| given != parameter),
+                    Some(_) => written_type.is_none(),
                     None => mentions(patterns[index], &unfound),
                 };
                 let placeless = *settled
@@ -1111,6 +1182,37 @@ impl<'a> Typer<'a> {
             missing_pack_context,
             type_packs,
         }
+    }
+    /// GEN-10: every length the enclosing tuple admits must fit the
+    /// callee's pack, rather than counting one symbolic marker as one type.
+    pub(super) fn check_tuple_pack(
+        &mut self,
+        at: Location,
+        generic: &GenericParameter,
+        pack: &hir::TypePackArgument,
+    ) -> bool {
+        if tuple_pack_fits(pack, generic, &self.signature.generics, self.program) {
+            return true;
+        }
+        let GenericKind::Pack { minimum, maximum } = generic.kind else {
+            return true;
+        };
+        let (lower, upper) = tuple_pack_cardinality(pack, &self.signature.generics, self.program);
+        if upper == Some(lower) {
+            self.check_pack_count_at(at, &generic.name, (minimum, maximum), lower);
+        } else {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::PACK_CARDINALITY,
+                at,
+                format!(
+                    "the tuple's forwarded pack does not guarantee the cardinality of `{}`",
+                    generic.name
+                ),
+                "GEN-10",
+            ));
+        }
+        false
     }
 }
 
@@ -1267,6 +1369,189 @@ pub(super) fn bare_parameter(ty: &Type, generics: &[GenericParameter]) -> Option
     }
 }
 
+/// GEN-10: a pack in a tuple captures a sequence, while an ordinary
+/// type parameter captures one element. A repeated pack keeps one length
+/// and one binding; unresolved distinct packs do not guess a partition.
+fn infer_tuple(
+    patterns: &[Type],
+    actuals: &[Type],
+    generics: &[GenericParameter],
+    found: &mut [Option<Argument>],
+) {
+    let pack = |ty: &Type| {
+        bare_parameter(ty, generics)
+            .filter(|&index| matches!(generics[index].kind, GenericKind::Pack { .. }))
+    };
+    let mut unknown = Vec::new();
+    let mut fixed = 0usize;
+    for pattern in patterns {
+        if let Some(index) = pack(pattern) {
+            if let Some(Argument::Type(Type::Tuple(types))) = &found[index] {
+                fixed = fixed.saturating_add(types.len());
+            } else {
+                unknown.push(index);
+            }
+        } else {
+            fixed = fixed.saturating_add(1);
+        }
+    }
+    let count = match unknown.first() {
+        Some(first)
+            if unknown.iter().all(|index| index == first)
+                && actuals.len() >= fixed
+                && (actuals.len() - fixed).is_multiple_of(unknown.len()) =>
+        {
+            (actuals.len() - fixed) / unknown.len()
+        }
+        None if actuals.len() == fixed => 0,
+        _ => return,
+    };
+    let mut position = 0;
+    for pattern in patterns {
+        if let Some(index) = pack(pattern) {
+            let length = match &found[index] {
+                Some(Argument::Type(Type::Tuple(types))) => types.len(),
+                _ => count,
+            };
+            let Some(types) = actuals.get(position..position + length) else {
+                return;
+            };
+            if found[index].is_none() {
+                found[index] = Some(Argument::Type(Type::Tuple(types.to_vec())));
+            }
+            position += length;
+        } else {
+            let Some(actual) = actuals.get(position) else {
+                return;
+            };
+            infer(pattern, actual, generics, found);
+            position += 1;
+        }
+    }
+}
+
+/// GEN-3 and GEN-10: retain tuple-pack equations in these input
+/// containers. This discovers evidence; infer still performs every binding.
+pub(super) fn has_tuple_equation(ty: &Type, generics: &[GenericParameter]) -> bool {
+    match ty {
+        Type::Tuple(elements) => elements.iter().any(|element| {
+            bare_parameter(element, generics)
+                .is_some_and(|index| matches!(generics[index].kind, GenericKind::Pack { .. }))
+                || has_tuple_equation(element, generics)
+        }),
+        Type::List { element, .. } | Type::Nullable(element) => {
+            has_tuple_equation(element, generics)
+        }
+        Type::Dict { value, .. } => has_tuple_equation(value, generics),
+        _ => false,
+    }
+}
+
+/// GEN-3: revisit only tuple equations until no new generic is bound.
+/// Each pass adds a binding or terminates; it never guesses a partition.
+pub(super) fn settle_tuple_inputs(
+    inputs: &[(&Type, &Type)],
+    generics: &[GenericParameter],
+    found: &mut [Option<Argument>],
+) {
+    loop {
+        let before = found.iter().filter(|argument| argument.is_some()).count();
+        for (pattern, actual) in inputs {
+            if generics.iter().zip(found.iter()).any(|(generic, value)| {
+                value.is_none()
+                    && matches!(generic.kind, GenericKind::Pack { .. })
+                    && mentions(pattern, &[generic.at])
+            }) {
+                infer(pattern, actual, generics, found);
+            }
+        }
+        if before == found.iter().filter(|argument| argument.is_some()).count() {
+            break;
+        }
+    }
+}
+
+/// The length range of a tuple capture, including repeated forwarded packs.
+fn tuple_pack_cardinality(
+    pack: &hir::TypePackArgument,
+    enclosing: &[GenericParameter],
+    program: &Program,
+) -> (u64, Option<u64>) {
+    pack.types
+        .iter()
+        .fold((0u64, Some(0u64)), |(low, high), ty| {
+            let bounds = match ty {
+                Type::Parameter { at, .. } => enclosing
+                    .iter()
+                    .find(|generic| generic.at == *at)
+                    .and_then(|generic| match generic.kind {
+                        GenericKind::Pack { minimum, maximum } => {
+                            super::requirements::type_pack_bounds(program, generic.at)
+                                .or(Some((minimum, maximum)))
+                        }
+                        _ => None,
+                    }),
+                _ => None,
+            }
+            .unwrap_or((1, Some(1)));
+            (
+                low.saturating_add(bounds.0),
+                high.zip(bounds.1)
+                    .map(|(left, right)| left.saturating_add(right)),
+            )
+        })
+}
+
+/// GEN-7 and GEN-10: a tuple capture satisfies the callee's cardinality
+/// for all lengths admitted by the declaration that forwards it.
+pub(super) fn tuple_pack_fits(
+    pack: &hir::TypePackArgument,
+    generic: &GenericParameter,
+    enclosing: &[GenericParameter],
+    program: &Program,
+) -> bool {
+    let GenericKind::Pack { minimum, maximum } = generic.kind else {
+        return true;
+    };
+    let (lower, upper) = tuple_pack_cardinality(pack, enclosing, program);
+    lower >= minimum && maximum.is_none_or(|maximum| upper.is_some_and(|upper| upper <= maximum))
+}
+
+/// Move tuple-captured sequences into the same pack table used by value
+/// packs and reflection. Generic argument slots retain the existing unknown
+/// marker: a pack is never substituted as a single tuple-valued type.
+pub(super) fn tuple_pack_bindings(
+    generics: &[GenericParameter],
+    found: &mut [Option<Argument>],
+    enclosing: &[GenericParameter],
+) -> Vec<hir::TypePackArgument> {
+    let mut packs = Vec::new();
+    for (index, generic) in generics.iter().enumerate() {
+        if matches!(generic.kind, GenericKind::Pack { .. })
+            && let Some(Argument::Type(Type::Tuple(types))) = &mut found[index]
+        {
+            let mut sources = Vec::new();
+            for ty in types.iter() {
+                if let Type::Parameter { at, .. } = ty
+                    && enclosing.iter().any(|generic| {
+                        generic.at == *at && matches!(generic.kind, GenericKind::Pack { .. })
+                    })
+                    && !sources.contains(at)
+                {
+                    sources.push(*at);
+                }
+            }
+            let types = std::mem::take(types);
+            let mut captured = hir::TypePackArgument::positional(index, types);
+            captured.forwarded_from = sources.first().copied();
+            captured.tuple_sources = sources;
+            packs.push(captured);
+            found[index] = Some(Argument::Type(Type::Unknown));
+        }
+    }
+    packs
+}
+
 /// Finds what generic parameters stand for from a field's type,
 /// `pattern`, and the type of the value the field is given, `actual`:
 /// `T` is `i64` when `list<T>` is given a `list<i64>`, and `N` is 2
@@ -1282,7 +1567,13 @@ pub(super) fn infer(
     match (pattern, actual) {
         (_, Type::Unknown) => {}
         (Type::Parameter { at, .. }, actual) => {
-            find(*at, Argument::Type(actual.clone()), generics, found);
+            // GEN-2: a pack is a sequence. Its tuple capture is bound by
+            // infer_tuple; one ordinary type is never its whole binding.
+            if !generics.iter().any(|generic| {
+                generic.at == *at && matches!(generic.kind, GenericKind::Pack { .. })
+            }) {
+                find(*at, Argument::Type(actual.clone()), generics, found);
+            }
         }
         (Type::Function(pattern), Type::Function(actual)) => {
             for (pattern, actual) in pattern
@@ -1326,10 +1617,8 @@ pub(super) fn infer(
                 }
             }
         }
-        (Type::Tuple(patterns), Type::Tuple(actuals)) if patterns.len() == actuals.len() => {
-            for (pattern, actual) in patterns.iter().zip(actuals) {
-                infer(pattern, actual, generics, found);
-            }
+        (Type::Tuple(patterns), Type::Tuple(actuals)) => {
+            infer_tuple(patterns, actuals, generics, found);
         }
         (
             Type::List { element, size },
@@ -1416,7 +1705,7 @@ pub(super) fn infer(
 /// fallible result can also be read from a nullable success (ERR-12,
 /// ERR-15). In that case a bare success parameter can be decided by
 /// the inputs first, such as a dictionary's value type in `get`.
-/// The returned pair supplies the output constraint during inference.
+/// The returned pair preserves that argument context during inference.
 pub(super) fn infer_from_place<'r, 'p>(
     result: &'r Type,
     requested: &'p Type,
@@ -1433,7 +1722,6 @@ pub(super) fn infer_from_place<'r, 'p>(
     };
     if !written && matches!(result, Type::Parameter { .. }) {
         if fallible {
-            // A store read's inputs say nothing of V (core CAP-6).
             return Some((result, requested));
         }
         if matches!(requested, Type::Nullable(_)) {

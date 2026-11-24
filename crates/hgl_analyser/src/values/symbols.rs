@@ -11,7 +11,9 @@ use super::candidates::{Given, Key, Settled, Wanted, typed_by_place};
 use super::control::joined;
 use super::expressions::{takes_its_type, written_null};
 use super::fit::{open, whole};
-use super::operators::{from_place, has_generic_configuration_default, options_of, unreadable};
+use super::operators::{
+    bare_result_parameter, from_place, has_generic_configuration_default, options_of, unreadable,
+};
 use super::{BOOL, Typer};
 use crate::constant::is_least_magnitude;
 use crate::hir::{
@@ -423,6 +425,7 @@ impl<'a> Typer<'a> {
                     callee: Callee::DeferredOperator(Box::new(deferred)),
                     arguments,
                     form,
+                    text: None,
                     braced: Vec::new(),
                     lifted: false,
                 },
@@ -1187,6 +1190,15 @@ impl<'a> Typer<'a> {
         if untold || self.rereads == 0 && given.iter().any(|given| given.by_place) {
             return (self.unselected(given, symbol.form), symbol.unjudged);
         }
+        let nullable_place = match wanted.place {
+            Some(Type::Nullable(payload)) if self.designating != Some(symbol.at) => {
+                Some(payload.as_ref())
+            }
+            _ => None,
+        };
+        if selected.is_empty() && unsettled.is_empty() && nullable_place.is_some() {
+            selected.extend(self.nullable_result_candidate(operator, &candidates, &given, &wanted));
+        }
         if selected.len() == 1
             && let Some(chosen) = selected.pop()
         {
@@ -1194,12 +1206,27 @@ impl<'a> Typer<'a> {
                 self.diagnostics.emit(diagnostic);
                 return (self.unselected(given, symbol.form), Type::Unknown);
             }
-            return self.called(
+            let unresolved = nullable_place
+                .filter(|_| chosen.nullable_result_fallback)
+                .map(|payload| {
+                    let name =
+                        &program.modules[operator.module].declarations[operator.declaration].name;
+                    self.unresolved_operator_result(
+                        (name, symbol.at),
+                        public,
+                        &given,
+                        vec![None; public.generics.len()],
+                        bare_result_parameter(public),
+                        payload,
+                    )
+                });
+            return self.called_with_result_diagnostic(
                 operator,
                 chosen,
                 given,
                 operator_generics,
                 (symbol.form, symbol.at),
+                unresolved,
             );
         }
         // `i64` and `f64`, and after them what the configuration gives:
@@ -1399,6 +1426,18 @@ fn logical_call(operator: BinaryOperator, operands: usize) -> &'static str {
         (BinaryOperator::Or, true) => "any_",
         _ => operator.identity(),
     }
+}
+
+/// The token at which a source symbol call is diagnosed.
+pub(super) fn symbol_span(node: &SyntaxNode) -> Option<Span> {
+    let token = match node.kind() {
+        SyntaxKind::BinaryExpr => {
+            tokens(node).find(|token| binary_operator(token.kind()).is_some())
+        }
+        SyntaxKind::UnaryExpr => tokens(node).next(),
+        _ => None,
+    }?;
+    Some(token.span())
 }
 
 /// The operator a token is, between two operands.

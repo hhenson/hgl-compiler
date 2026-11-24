@@ -51,34 +51,32 @@ struct Constant {
 
 /// FN-3: "An ordinary value of type T is accepted where composition expects
 /// a connection of T, and is wired as a constant, one publication when the
-/// graph starts." Each constant is a node of its own, which hgraph does not
-/// intern (`Wiring::add_unique_node`): hgraph takes two nodes for one where
-/// their scalar configurations are equal under `==`, which holds of `0.0`
-/// and `-0.0`, and of a list or a tuple that holds either, though NUM-2 keeps
-/// them apart ("preserves IEEE special values, including signed zero"), so
-/// that one constant would publish the other's value. A constant publishes
-/// once, at the start: two of one value give each reader the same
-/// publication in the same cycle, and no reader can tell two nodes from one.
+/// graph starts." hgraph distinguishes native Float zero signs when it
+/// interns nodes (NUM-2). Other constants keep separate nodes because
+/// opaque values such as HGL lists can hide a signed zero from hgraph.
 template <class T, class Schema = hgraph::TS<T>>
 hgraph::Port<Schema> constant(hgraph::Wiring& wiring, const T& value) {
     using Node = Constant<T, Schema>;
-    using Signature = hgraph::StaticNodeSignature<Node>;
-    // The node's scalar configuration, as `hgraph::wire` makes it.
-    hgraph::Value scalars{
-        hgraph::value_type_for_wiring(Signature::scalar_schema(), wiring.realization_options())};
-    {
-        auto fields = scalars.as_bundle().begin_mutation();
-        if constexpr (Node::atomic) {
-            fields["value"].set(value);
-        } else {
-            fields["value"].set(typename Node::Storage{value});
+    if constexpr (Node::atomic && std::is_same_v<T, hgraph::Float>) {
+        return hgraph::wire<Node>(wiring, value);
+    } else {
+        using Signature = hgraph::StaticNodeSignature<Node>;
+        hgraph::Value scalars{
+            hgraph::value_type_for_wiring(Signature::scalar_schema(), wiring.realization_options())};
+        {
+            auto fields = scalars.as_bundle().begin_mutation();
+            if constexpr (Node::atomic) {
+                fields["value"].set(value);
+            } else {
+                fields["value"].set(typename Node::Storage{value});
+            }
         }
+        hgraph::NodeBuilder builder;
+        builder.implementation<Node>();
+        return hgraph::Port<Schema>{wiring, wiring.add_unique_node(typeid(Node), std::move(builder),
+                                                                   std::span<const hgraph::WiringPortRef>{},
+                                                                   std::move(scalars))};
     }
-    hgraph::NodeBuilder builder;
-    builder.implementation<Node>();
-    return hgraph::Port<Schema>{wiring, wiring.add_unique_node(typeid(Node), std::move(builder),
-                                                               std::span<const hgraph::WiringPortRef>{},
-                                                               std::move(scalars))};
 }
 
 // ---- Sources (SOURCE-1 to SOURCE-4) --------------------------------------

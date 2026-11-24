@@ -192,7 +192,7 @@ analyser: partial
 - It is not left out though its type is nullable (`argument.missing`)
 - A place is of the parameter's type exactly: one of a type the parameter's only admits, an `i64` place for an `i64?` parameter or a struct's for its abstract parent's, is `type.mismatch`
 - The call is held to what an assignment of the place is: a property of a native value or of a delta is `binding.immutable` (NATIVE-6, TYPE-16), and in a graph a `var` of an ordinary value in a branch selected at runtime is `binding.category` (CTRL-14) and one declared outside a loop that still makes a child for each member local `loop.carried` (CTRL-15, #373)
-- Left: a native implementation part's `var` marks matched with its declaration's (NATIVE-2)
+- A native implementation part's `var` marks match its declaration's (NATIVE-2)
 
 transpiler: partial
 
@@ -217,7 +217,7 @@ analyser: partial
 - An assignment to a part of `out` of a `ref` result in a `when`, `out.bid = x`, `out[0] = x`, at any depth and compound, is `binding.immutable`: "A `ref` result designates one endpoint whole"; the place is named and not read, so no `ref.read` is reported beside it
 - In a hook a `ref` parameter, a child of one and `out` of a `ref` result are endpoints: the endpoint operations take them, and a read of the value or the `delta_value` of any of them is `ref.read`, and so is the `removed_value` of a window that is a child of one; an atomic projection, an iteration, a comparison and a call that reads one among them
 - A `return` to a `ref` result, and `out =` of one, names a temporal input of the node, `ref` or not, or a child of one: it is read as the designation it is (`EndpointOf`, `ChildEndpointOf`), of the result's type (EXPR-5), reads no payload and needs no admission; a value there is `type.mismatch`, and so is a source's `yield` to a `ref` result: a source has no temporal input to name (TIME-7: "A `ref` result takes no value")
-- Left: a native implementation part's marks matched with its declaration's (NATIVE-2)
+- A native implementation part's parameter and result `ref` marks match its declaration's (NATIVE-2)
 
 transpiler: partial
 
@@ -249,6 +249,8 @@ analyser: partial
 transpiler: partial
 
 - A static target specializes the called body. The C++ target emits ordinary value helpers and composed graph calls; anonymous functions carry their permitted lexical captures as inputs.
+- An anonymous target's identity also carries the normalized const inputs of its enclosing instance when those inputs determined its code (FN-1, FMT-3).
+- The C++ target bounds the size and structural depth of the bodies it copies when specializing static callable arguments, including each use of a named or anonymous target and the body of an anonymous target. It also bounds deeper requests of one declaration along a call chain. Exceeding a limit reports the request as unsupported.
 - The C++ target specializes reflected templates by the static callback and the dependent argument shape. It does not yet write `valid` on a temporal input captured by a value callback (#397).
 
 ## FN-18

@@ -16,6 +16,7 @@ use super::forwarded_packs::{visit_anonymous_bodies, walk_nested_calls};
 use super::inference::{fixed, mentions, placed, unsaid};
 use super::operators::{Requested, from_place, has_generic_configuration_default, unreadable};
 use super::{REQUIRING, Typer};
+use crate::constant::Scope;
 use crate::declared::{
     names_parameter, same_type, substitute_with_members, substitute_within, weight,
 };
@@ -542,7 +543,16 @@ impl<'a> Typer<'a> {
         generics: &[Argument],
         type_packs: &[hir::TypePackArgument],
     ) -> bool {
-        if type_packs.iter().any(|pack| pack.forwarded_from.is_some()) {
+        if type_packs.iter().any(|pack| {
+            pack.forwarded_from.is_some_and(|source| {
+                !pack
+                    .types
+                    .iter()
+                    .any(|ty| matches!(ty, Type::Parameter { at, .. } if *at == source))
+            })
+        }) {
+            // GEN-10 tuple captures keep a marker and must prove the
+            // callee's requirements under the body's own constraints.
             // GEN-17: a function parameter's reflected shape is supplied
             // by the caller of the enclosing declaration.
             return true;
@@ -806,6 +816,7 @@ impl<'a> Typer<'a> {
                 callee,
                 generics: generics.to_vec(),
                 type_packs: type_packs.to_vec(),
+                constants: ConstArguments::default(),
                 answers: Vec::new(),
                 required: None,
                 at,
@@ -1375,6 +1386,66 @@ impl<'a> Typer<'a> {
             .map(|answered| !matches!(answered, Answered::Unmet))
     }
 
+    /// FMT-5 asks for the normal value conversion to `str` for a type
+    /// that the native formatter does not directly format.
+    pub(super) fn text_converter(&mut self, operand: SyntaxNode, ty: &Type) -> Option<Callee> {
+        let program = self.program;
+        let module = program.core()?;
+        let core = &program.modules[module];
+        let declaration = core
+            .scope
+            .get("convert")?
+            .iter()
+            .copied()
+            .find(|&index| core.declarations[index].kind == DeclarationKind::Operator)?;
+        let operator = OperatorRef {
+            module,
+            declaration,
+        };
+        let result = Type::Scalar(crate::Scalar::Str);
+        let Answered::Selected {
+            module,
+            declaration,
+            generics,
+        } = self.answered(
+            operator,
+            (self.file, vec![(operand, ty.clone())]),
+            Some(&result),
+        )?
+        else {
+            return None;
+        };
+        let Detail::Callable(signature) = &program.modules[module].details[declaration] else {
+            return None;
+        };
+        let given: Vec<_> = fixed(&signature.generics).zip(&generics).collect();
+        let supplied = signature
+            .parameters
+            .iter()
+            .find(|parameter| !parameter.configuration)?;
+        // The formatter holds the whole argument and needs the text
+        // itself. Ordinary deferred reads may admit either payload.
+        if !self.admits(&substitute_within(&supplied.ty, &given), ty)
+            || substitute_within(signature.result.as_ref()?, &given) != result
+        {
+            return None;
+        }
+        let requirements = self.answers(module, declaration, &generics);
+        Some(Callee::Candidate {
+            operator: (operator.module, operator.declaration),
+            operator_generics: vec![
+                Argument::Type(result.clone()),
+                Argument::Type(ty.clone()),
+                Argument::Type(result),
+            ],
+            module,
+            declaration,
+            generics,
+            type_packs: Vec::new(),
+            requirements,
+        })
+    }
+
     /// What answers a requirement that `operator` is callable with
     /// values of the types `operands`, to give `result` where one is
     /// stated: see [`Typer::callable`], which says when it holds.
@@ -1910,6 +1981,7 @@ impl<'a> Typer<'a> {
             },
             arguments,
             form,
+            text: None,
             braced: Vec::new(),
             lifted: false,
         };
@@ -2104,6 +2176,7 @@ pub(super) struct Made {
     callee: (usize, usize),
     generics: Vec<Argument>,
     type_packs: Vec<hir::TypePackArgument>,
+    constants: ConstArguments,
     /// What answers each requirement the callee states at this call
     /// (`hir::Answer`), with the call's generic arguments in place.
     answers: Vec<hir::Answer>,
@@ -2116,6 +2189,8 @@ pub(super) struct Made {
     /// A concrete forwarding path that exposed this call to the walk.
     via: Option<Box<[MakingCall]>>,
 }
+
+type ConstArguments = crate::const_inputs::ReadInputs;
 
 /// How many instances one call is followed to ([`crate::INSTANCES`]). A
 /// recursion that gives new arguments each time, `grow<N * 2>` and
@@ -2198,6 +2273,7 @@ fn nesting<'t>(ty: &'t Type) -> usize {
 pub(super) fn instances_hold(
     program: &Program,
     mut given: Vec<Made>,
+    source: &IndependentSourceBodies,
     diagnostics: &mut Diagnostics,
 ) {
     // The generic parameters of `(module, declaration)`, by where each
@@ -2213,18 +2289,26 @@ pub(super) fn instances_hold(
     // declaration it is the body of; and what every body makes that
     // gives every argument.
     let mut passed: HashMap<(usize, usize), Vec<Made>> = HashMap::new();
+    let mut independent_roots: HashMap<_, HashSet<_>> = HashMap::new();
     // The declarations whose body gives a callee a generic argument it
     // works out from its own generic parameters.
     let mut computing: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
     let mut configured = std::collections::HashSet::new();
     let mut endpoint_reads = std::collections::HashSet::new();
     let mut dependent_indices = std::collections::HashSet::new();
+    let mut dependent_patterns = std::collections::HashSet::new();
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let mut made = Vec::new();
             if let Some(Some(body)) = module.bodies.get(position) {
-                made_in(&body.statements, &mut made);
+                made_in(program, body, &mut made);
             }
+            let body_calls = made.len();
+            let independent = source.body((index, position)).map(|body| {
+                let mut calls = Vec::new();
+                made_in(program, body, &mut calls);
+                calls.iter().map(source_call_key).collect::<HashSet<_>>()
+            });
             for default in module
                 .defaults
                 .get(position)
@@ -2232,7 +2316,7 @@ pub(super) fn instances_hold(
                 .flatten()
                 .flatten()
             {
-                made_by(&default.value, &mut made);
+                made_by(program, &default.value, &mut made);
             }
             // A struct a type written in it applies, a field's or a
             // parameter's (GEN-3: "an application of a struct whose
@@ -2265,7 +2349,22 @@ pub(super) fn instances_hold(
             {
                 dependent_indices.insert((index, position));
             }
-            for call in made {
+            if !declared.is_empty()
+                && module
+                    .bodies
+                    .get(position)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|body| {
+                        crate::formatting::has_dependent_formatting(
+                            program,
+                            (index, position),
+                            body,
+                        )
+                    })
+            {
+                dependent_patterns.insert((index, position));
+            }
+            for (call_index, call) in made.into_iter().enumerate() {
                 // ERR-9: a generic argument the body works out from its
                 // own parameters, `times<(M * 2)>`, may fail where an
                 // instance gives them: each is followed.
@@ -2276,7 +2375,12 @@ pub(super) fn instances_hold(
                 {
                     computing.insert((index, position));
                 }
+                let needs_instance = call_index < body_calls
+                    && independent
+                        .as_ref()
+                        .is_some_and(|calls| !calls.contains(&source_call_key(&call)));
                 if call.required.is_some()
+                    || needs_instance
                     || passes_on(&call.generics, &declared)
                     || call
                         .type_packs
@@ -2285,6 +2389,16 @@ pub(super) fn instances_hold(
                 {
                     passed.entry((index, position)).or_default().push(call);
                 } else {
+                    let checks_const_inputs =
+                        call.constants.limit.is_some() || !call.constants.values.is_empty();
+                    // A concrete reread checks the calls whose inputs changed.
+                    // This call already has its own independent checking root.
+                    if call_index < body_calls && (independent.is_some() || checks_const_inputs) {
+                        independent_roots
+                            .entry((index, position))
+                            .or_default()
+                            .insert(source_call_key(&call));
+                    }
                     given.push(call);
                 }
             }
@@ -2295,13 +2409,13 @@ pub(super) fn instances_hold(
             .flatten()
             .chain(&module.store_body)
         {
-            made_in(&body.statements, &mut given);
+            made_in(program, body, &mut given);
         }
         if let Some(run) = &module.run_body {
-            made_by(&run.call, &mut given);
+            made_by(program, &run.call, &mut given);
         }
         for constant in module.constants.iter().flatten() {
-            made_by(&constant.value, &mut given);
+            made_by(program, &constant.value, &mut given);
         }
     }
     // The declarations whose calls reach a `requires` with what they
@@ -2327,6 +2441,8 @@ pub(super) fn instances_hold(
         .chain(configured.iter().copied())
         .chain(endpoint_reads.iter().copied())
         .chain(dependent_indices.iter().copied())
+        .chain(dependent_patterns.iter().copied())
+        .chain(program.const_demands.keys().copied())
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -2367,7 +2483,15 @@ pub(super) fn instances_hold(
         .into_iter()
         .filter(|made| reaching.contains(&made.callee))
     {
-        let key = instance_key(made.callee, &made.generics, &made.type_packs, &made.answers);
+        // A root whose input could not be read can still check the inputs
+        // already known. Only exhaustion while following instances is a limit.
+        let key = instance_key(
+            made.callee,
+            &made.generics,
+            &made.type_packs,
+            &made.answers,
+            &made.constants,
+        );
         let from = InstanceRoot {
             at: made.at,
             via: made.via.take(),
@@ -2391,6 +2515,7 @@ pub(super) fn instances_hold(
                 &root.generics,
                 &root.type_packs,
                 &root.answers,
+                &root.constants,
             )]);
         let mut waiting = std::collections::VecDeque::from([(root, None)]);
         let mut parents = Vec::new();
@@ -2415,6 +2540,12 @@ pub(super) fn instances_hold(
             let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
             let recheck_results = selecting.iter().any(|call| call.result.is_some());
             let recheck_indices = dependent_indices.contains(&made.callee);
+            let constants = made.constants.values.as_slice();
+            let recheck_format = dependent_patterns.contains(&made.callee) || !constants.is_empty();
+            let inputs = crate::InstanceInputs {
+                constants,
+                ..crate::InstanceInputs::default()
+            };
             let declared = own(made.callee);
             let map: Vec<(Location, &Argument)> =
                 declared.iter().copied().zip(&made.generics).collect();
@@ -2439,25 +2570,29 @@ pub(super) fn instances_hold(
                 super::operator_defaults::check_instance(
                     program,
                     made.callee,
-                    &made.generics,
-                    &made.answers,
+                    (&made.generics, &made.answers),
+                    inputs,
                     &mut instance_calls,
                     diagnostics,
                     &mut body_reports,
                 )
-            } else if recheck_graph || recheck_endpoints || recheck_results || recheck_indices {
+            } else if recheck_graph
+                || recheck_endpoints
+                || recheck_results
+                || recheck_indices
+                || recheck_format
+            {
                 program.checked_instance(
                     made.callee,
                     &made.generics,
                     &made.answers,
-                    crate::instance::InstanceInputs::default(),
+                    inputs,
                     &RefCell::new(Diagnostics::new()),
                     &mut body_reports,
                 )
             } else {
                 None
             };
-            let mut reread_calls = HashSet::new();
             if let Some(instance) = &instance
                 && let Some(result_uses) = &instance.result_uses
             {
@@ -2473,19 +2608,40 @@ pub(super) fn instances_hold(
                 if result_uses.reports.has_errors() {
                     continue;
                 }
-                reread_calls = made_after_result_recheck(&instance.body, &mut instance_calls);
             }
-            if (recheck_graph || recheck_indices)
-                && let Some(instance) = &instance
-                && instance.result_uses.is_none()
-                && let Some(Some(source)) = unit.bodies.get(made.callee.1)
+            let mut replaced = HashSet::new();
+            let reread_body = instance
+                .as_ref()
+                .is_some_and(|instance| instance.reread_body);
+            if let Some(instance) = &instance
+                && let Some(Some(declared_body)) = unit.bodies.get(made.callee.1)
             {
-                made_after_inference(source, &instance.body, &mut instance_calls);
+                if reread_body || source.body(made.callee).is_some() {
+                    super::walk_body_calls(declared_body, &mut |call| {
+                        replaced.insert(call.at);
+                    });
+                    concrete_body_calls(
+                        program,
+                        instance,
+                        independent_roots.get(&made.callee),
+                        &mut instance_calls,
+                    );
+                } else if recheck_graph || recheck_indices {
+                    made_after_inference(program, declared_body, instance, &mut instance_calls);
+                }
             }
-            if recheck_indices && !recheck_graph && !recheck_endpoints {
+            if (recheck_indices || recheck_format) && !recheck_graph && !recheck_endpoints {
                 let paths = chain.paths(program, &root_calls);
                 for report in body_reports.as_slice() {
+                    if recheck_format && diagnostics.as_slice().contains(report) {
+                        continue;
+                    }
                     emit_instance_report(report.clone(), &paths, diagnostics);
+                }
+                if body_reports.has_errors() {
+                    // An ill-typed value body does not make calls its
+                    // reread could only partially type (ERR-9).
+                    continue;
                 }
             }
             if recheck_graph && let Some(instance) = &instance {
@@ -2537,6 +2693,7 @@ pub(super) fn instances_hold(
                     callee: call.callee,
                     generics: call.generics,
                     type_packs: call.type_packs,
+                    constants: call.constants,
                     forwarded: false,
                     answers: call.answers,
                     at: call.at,
@@ -2549,7 +2706,7 @@ pub(super) fn instances_hold(
             };
             let enclosing_packs =
                 super::dependent_packs::PackTypes::new(enclosing_packs, &made.type_packs);
-            for call in inner.iter().filter(|call| !reread_calls.contains(&call.at)) {
+            for call in inner.iter().filter(|call| !replaced.contains(&call.at)) {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with
                 // (GEN-16); any other has the instance's arguments and
@@ -2624,6 +2781,7 @@ pub(super) fn instances_hold(
                     callee,
                     generics,
                     type_packs,
+                    constants: call.constants.clone(),
                     forwarded,
                     answers,
                     at: call.at,
@@ -2632,7 +2790,7 @@ pub(super) fn instances_hold(
             // GEN-5: a call whose candidate a generic parameter of the
             // body selects is selected here, with this instance's types
             // ([`Typer::select_at_instance`]).
-            if !selecting.is_empty() {
+            if !reread_body && !selecting.is_empty() {
                 let (module, declaration) = made.callee;
                 let unit = &program.modules[module];
                 // GEN-13: the body is read as the instance has it, each
@@ -2675,10 +2833,9 @@ pub(super) fn instances_hold(
                     .iter()
                     .enumerate()
                     .filter(|(index, call)| {
-                        !reread_calls.contains(&call.at)
-                            && !selecting[index + 1..]
-                                .iter()
-                                .any(|later| later.at == call.at)
+                        !selecting[index + 1..]
+                            .iter()
+                            .any(|later| later.at == call.at)
                     })
                     .map(|(_, call)| call);
                 for call in standing {
@@ -2729,6 +2886,12 @@ pub(super) fn instances_hold(
                                 Vec::new(),
                                 (call.form, call.name),
                             );
+                            let constants = match &kind {
+                                ExprKind::Call {
+                                    callee, arguments, ..
+                                } => program.known_const_inputs(callee, arguments),
+                                _ => ConstArguments::default(),
+                            };
                             typer.fit_selected_result(
                                 call,
                                 Expr {
@@ -2751,6 +2914,7 @@ pub(super) fn instances_hold(
                                 callee: (module, declaration),
                                 generics,
                                 type_packs,
+                                constants,
                                 forwarded: false,
                                 answers,
                                 at: call.at,
@@ -2768,28 +2932,24 @@ pub(super) fn instances_hold(
                 callee,
                 generics,
                 type_packs,
+                constants,
                 forwarded,
                 answers,
                 at,
             } in calls
             {
-                let deep = generics.iter().any(
-                    |argument| matches!(argument, Argument::Type(ty) if nesting(ty) > NESTING),
-                );
-                if deep
-                    || type_packs
-                        .iter()
-                        .flat_map(|pack| &pack.types)
-                        .any(|ty| nesting(ty) > NESTING)
-                {
+                let Some(key) = bounded_instance_key(callee, &generics, &type_packs, &answers)
+                else {
+                    exhausted = true;
+                    break;
+                };
+                // Traversal budgets leave an input unread. A concrete text
+                // that outgrows its argument budget exhausts this walk.
+                if constants.limit == Some(crate::ConstInputFault::TextLimit) {
                     exhausted = true;
                     break;
                 }
-                let key = instance_key(callee, &generics, &type_packs, &answers);
-                if key.len() > ARGUMENTS {
-                    exhausted = true;
-                    break;
-                }
+                let key = with_const_inputs(key, &constants);
                 // GEN-7: a call of a function or a candidate in a generic
                 // body was judged where the body is declared, under what
                 // it states. Struct applications and forwarded parameter
@@ -2850,6 +3010,7 @@ pub(super) fn instances_hold(
                             callee,
                             generics,
                             type_packs,
+                            constants,
                             answers,
                             required: None,
                             at,
@@ -2897,14 +3058,14 @@ impl MakingCall {
 }
 
 /// Walk the saved parent indices from the innermost call to the root.
-pub(super) fn making_path(
+pub(super) fn making_path<'a>(
     current: MakingCall,
     mut parent: Option<usize>,
-    parents: &[(MakingCall, Option<usize>)],
+    parent_at: impl Fn(usize) -> &'a (MakingCall, Option<usize>),
 ) -> Vec<MakingCall> {
     let mut path = vec![current];
     while let Some(index) = parent {
-        let (caller, previous) = &parents[index];
+        let (caller, previous) = parent_at(index);
         path.push(caller.clone());
         parent = *previous;
     }
@@ -2933,7 +3094,7 @@ impl InstanceChain<'_> {
             &self.made.type_packs,
             self.made.at,
         );
-        let path = making_path(current, self.parent, self.parents);
+        let path = making_path(current, self.parent, |index| &self.parents[index]);
         let (root, inner) = path
             .split_last()
             .expect("the path contains its current call");
@@ -3023,7 +3184,13 @@ impl InstanceCallRejections {
             return;
         }
         let made = chain.made;
-        let key = instance_key(made.callee, &made.generics, &made.type_packs, &made.answers);
+        let key = instance_key(
+            made.callee,
+            &made.generics,
+            &made.type_packs,
+            &made.answers,
+            &made.constants,
+        );
         let reports_of = self.by_instance.entry(key).or_default();
         let instance = instance_note(program, made.callee, &made.generics, &made.type_packs);
         let paths = chain.paths(program, callers);
@@ -3091,6 +3258,40 @@ fn instance_key(
     generics: &[Argument],
     type_packs: &[hir::TypePackArgument],
     answers: &[hir::Answer],
+    constants: &ConstArguments,
+) -> String {
+    with_const_inputs(
+        generic_instance_key(callee, generics, type_packs, answers),
+        constants,
+    )
+}
+
+/// The generic part of an instance's identity, within the GEN-13 walk's bounds.
+pub(crate) fn bounded_instance_key(
+    callee: (usize, usize),
+    generics: &[Argument],
+    type_packs: &[hir::TypePackArgument],
+    answers: &[hir::Answer],
+) -> Option<String> {
+    if generics
+        .iter()
+        .any(|argument| matches!(argument, Argument::Type(ty) if nesting(ty) > NESTING))
+        || type_packs
+            .iter()
+            .flat_map(hir::TypePackArgument::types_with_prefix)
+            .any(|ty| nesting(ty) > NESTING)
+    {
+        return None;
+    }
+    let key = generic_instance_key(callee, generics, type_packs, answers);
+    (key.len() <= ARGUMENTS).then_some(key)
+}
+
+fn generic_instance_key(
+    callee: (usize, usize),
+    generics: &[Argument],
+    type_packs: &[hir::TypePackArgument],
+    answers: &[hir::Answer],
 ) -> String {
     let generics: Vec<String> = generics
         .iter()
@@ -3119,6 +3320,21 @@ fn instance_key(
         })
         .collect::<Vec<_>>();
     format!("{callee:?}{generics:?}{packs:?}{answers:?}")
+}
+
+fn with_const_inputs(mut key: String, constants: &ConstArguments) -> String {
+    use std::fmt::Write;
+
+    for input in &constants.values {
+        let _ = write!(
+            key,
+            "const[{}]:{}:{}",
+            input.slot,
+            input.key.len(),
+            input.key
+        );
+    }
+    key
 }
 
 /// `ty` with each constant in it, a size or a constant argument at any
@@ -3193,6 +3409,7 @@ struct Resolved {
     callee: (usize, usize),
     generics: Vec<Argument>,
     type_packs: Vec<hir::TypePackArgument>,
+    constants: ConstArguments,
     forwarded: bool,
     answers: Vec<hir::Answer>,
     at: Location,
@@ -3317,6 +3534,44 @@ pub(super) fn past_the_limit(
     diagnostics: &mut Diagnostics,
 ) {
     let name = &program.modules[module].declarations[declaration].name;
+    let arguments = if program.needs_const_inputs((module, declaration)) {
+        "compile-time arguments"
+    } else {
+        "generic arguments"
+    };
+    instance_limit(
+        from,
+        format!(
+            "the instances of `{name}` this call makes do not end within the \
+             {INSTANCES} this compiler follows, with {arguments} no longer than \
+             {ARGUMENTS} characters written out and types in them no deeper than \
+             {NESTING}: the `requires` and the {arguments} of those past them are \
+             not told"
+        ),
+        diagnostics,
+    );
+}
+
+/// Report the GEN-13 bound on pack shapes that keep growing along one call path.
+pub(super) fn past_pack_growth_limit(
+    at: Location,
+    (module, declaration): (usize, usize),
+    program: &Program,
+    growth: usize,
+    diagnostics: &mut Diagnostics,
+) {
+    let name = &program.modules[module].declarations[declaration].name;
+    instance_limit(
+        &[at],
+        format!(
+            "the instances of `{name}` this call makes keep adding pack entries beyond the \
+             {growth} increases this compiler follows"
+        ),
+        diagnostics,
+    );
+}
+
+fn instance_limit(from: &[Location], message: String, diagnostics: &mut Diagnostics) {
     for &at in from {
         let rejected = diagnostics.as_slice().iter().any(|earlier| {
             earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
@@ -3330,13 +3585,7 @@ pub(super) fn past_the_limit(
                 Category::Type,
                 codes::INSTANCE_LIMIT,
                 at,
-                format!(
-                    "the instances of `{name}` this call makes do not end within the \
-                     {INSTANCES} this compiler follows, with generic arguments no longer than \
-                     {ARGUMENTS} characters written out and types in them no deeper than \
-                     {NESTING}: the `requires` and the generic arguments of those past them are \
-                     not told"
-                ),
+                message.clone(),
                 "GEN-13",
             ));
         }
@@ -3354,6 +3603,7 @@ fn applied_in(ty: &Type, at: Location, made: &mut Vec<Made>) {
                 callee,
                 generics,
                 type_packs: Vec::new(),
+                constants: ConstArguments::default(),
                 answers: Vec::new(),
                 required: None,
                 at,
@@ -3416,8 +3666,67 @@ fn given_in(argument: &Argument, map: &[(Location, &Argument)], declared: &[Loca
 }
 
 /// The calls of generic declarations `statements` make, at any depth.
-fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
-    walk_nested_calls(statements, &mut |expression| made_at(expression, made));
+fn made_in(program: &Program, body: &hir::Body, made: &mut Vec<Made>) {
+    super::walk_body_calls(body, &mut |expression| made_at(program, expression, made));
+}
+
+/// The body as declared, read with provisional operator and pack results
+/// unknown. Calls whose arguments still resolve can be checked at their
+/// written sites, including in a generic declaration that is never made.
+pub(super) struct IndependentSourceBodies(Vec<Vec<Option<hir::Body>>>);
+
+impl IndependentSourceBodies {
+    pub(super) fn body(&self, (module, declaration): (usize, usize)) -> Option<&hir::Body> {
+        self.0.get(module)?.get(declaration)?.as_ref()
+    }
+}
+
+pub(super) fn independent_source_bodies(program: &Program) -> IndependentSourceBodies {
+    IndependentSourceBodies(
+        program
+            .modules
+            .iter()
+            .map(|module| {
+                module
+                    .bodies
+                    .iter()
+                    .zip(&module.selecting)
+                    .enumerate()
+                    .map(|(position, (body, selecting))| {
+                        let body = body.as_ref()?;
+                        let mut unsettled: HashSet<_> = selecting
+                            .iter()
+                            .filter(|call| call.result.is_some())
+                            .map(|call| call.at)
+                            .collect();
+                        super::walk_body_calls(body, &mut |value| {
+                            if matches!(called_or_referenced(value), Some(Callee::DeferredPackCall))
+                            {
+                                unsettled.insert(value.at);
+                            }
+                        });
+                        if unsettled.is_empty() {
+                            return None;
+                        }
+                        super::independent_source_body(program, module, position, &unsettled)
+                    })
+                    .collect()
+            })
+            .collect(),
+    )
+}
+
+fn source_call_key(call: &Made) -> (Location, String) {
+    (
+        call.at,
+        instance_key(
+            call.callee,
+            &call.generics,
+            &call.type_packs,
+            &call.answers,
+            &call.constants,
+        ),
+    )
 }
 
 /// GEN-7: a failure in a selected result's use points at its call and
@@ -3488,7 +3797,7 @@ fn instance_name(
     format!("{name}<{}>", arguments.join(", "))
 }
 
-/// Locate a changed call inside this use or through immutable bindings.
+/// Locate a changed call inside this use or through a local's initializer.
 fn changed_result_source(
     body: &hir::Body,
     use_at: Location,
@@ -3512,13 +3821,13 @@ fn changed_result_source(
             kind: ExprKind::Local(local),
             at,
             ..
-        }) if body.locals[*local].kind == LocalKind::Let => {
+        }) if matches!(body.locals[*local].kind, LocalKind::Let | LocalKind::Var) => {
             reads.insert(*at, *local);
         }
         hir::Node::Statement(hir::Stmt::Declare {
             local: declared,
             value: Some(value),
-        }) if body.locals[*declared].kind == LocalKind::Let => {
+        }) if matches!(body.locals[*declared].kind, LocalKind::Let | LocalKind::Var) => {
             initializers.insert(*declared, value.at);
         }
         _ => {}
@@ -3546,31 +3855,45 @@ fn unique_location(mut locations: impl Iterator<Item = Location>) -> Option<Loca
     locations.all(|location| location == first).then_some(first)
 }
 
-/// Use the concrete calls found by the result reread instead of following
-/// their edges in the original body (GEN-7).
-fn made_after_result_recheck(body: &hir::Body, made: &mut Vec<Made>) -> HashSet<Location> {
-    let mut reread = HashSet::new();
-    walk_nested_calls(&body.statements, &mut |expression| {
-        if let Some(callee @ (Callee::Function { .. } | Callee::Candidate { .. })) =
-            called_or_referenced(expression)
-            && callee.generics().iter().all(resolved_default_argument)
-            && callee
-                .type_packs()
+/// A reread makes its own calls. The same final HIR is used regardless
+/// of what caused the reread (GEN-7).
+fn concrete_body_calls(
+    program: &Program,
+    instance: &crate::instance::CheckedInstance,
+    independent: Option<&HashSet<(Location, String)>>,
+    made: &mut Vec<Made>,
+) {
+    let mut calls = Vec::new();
+    instance.walk_calls(&mut |expression| made_at(program, expression, &mut calls));
+    made.extend(calls.into_iter().filter(|call| {
+        call.required.is_none()
+            && !independent.is_some_and(|calls| calls.contains(&source_call_key(call)))
+            && call.type_packs.iter().all(|pack| {
+                pack.forwarded_from.is_none() && pack.types_with_prefix().all(super::fit::whole)
+            })
+            && call
+                .generics
                 .iter()
-                .all(|pack| pack.forwarded_from.is_none())
-        {
-            reread.insert(expression.at);
-            made_at(expression, made);
-        }
-    });
-    reread
+                .enumerate()
+                .all(|(position, argument)| {
+                    resolved_default_argument(argument)
+                        || call
+                            .type_packs
+                            .iter()
+                            .any(|pack| pack.parameter == position)
+                })
+    }));
 }
 
-/// Follow calls that settlement or rereading has made concrete through the same
-/// bounded admission traversal as other calls. A source call already
-/// concrete there does not create a new edge here (GEN-3, GEN-13).
-fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<Made>) {
-    let mut pending = std::collections::HashSet::new();
+/// Graph settlement can finish an unresolved call without rereading
+/// the body. The source's already-resolved calls still stand there.
+fn made_after_inference(
+    program: &Program,
+    source: &hir::Body,
+    settled: &crate::instance::CheckedInstance,
+    made: &mut Vec<Made>,
+) {
+    let mut pending = HashSet::new();
     walk_nested_calls(&source.statements, &mut |expression| {
         if super::calls::pending_function_inference(&expression.kind)
             || matches!(
@@ -3588,30 +3911,28 @@ fn made_after_inference(source: &hir::Body, settled: &hir::Body, made: &mut Vec<
     if pending.is_empty() {
         return;
     }
-    walk_nested_calls(&settled.statements, &mut |expression| {
+    settled.walk_calls(&mut |expression| {
         if pending.contains(&expression.at)
-            && let ExprKind::Call {
-                callee: Callee::Function { generics, .. } | Callee::Candidate { generics, .. },
-                ..
-            } = &expression.kind
-            && generics.iter().all(resolved_default_argument)
+            && let Some(callee @ (Callee::Function { .. } | Callee::Candidate { .. })) =
+                called_or_referenced(expression)
+            && callee.generics().iter().all(resolved_default_argument)
         {
-            made_at(expression, made);
+            made_at(program, expression, made);
         }
     });
 }
 
 /// The calls of generic declarations `expression` makes, at any depth.
-fn made_by(expression: &Expr, made: &mut Vec<Made>) {
+fn made_by(program: &Program, expression: &Expr, made: &mut Vec<Made>) {
     expression.walk(&mut |expression| {
-        visit_anonymous_bodies(expression, &mut |part| made_at(part, made));
+        visit_anonymous_bodies(expression, &mut |part| made_at(program, part, made));
     });
 }
 
 /// The calls an omitted, specialized default makes with resolved arguments
 /// and evidence. Follow these as ordinary instances, including helper bodies
 /// that can themselves omit an inherited default (GEN-16, UNIT-8).
-pub(super) fn concrete_default_calls(expression: &Expr, made: &mut Vec<Made>) {
+pub(super) fn concrete_default_calls(program: &Program, expression: &Expr, made: &mut Vec<Made>) {
     fn concrete(answer: &hir::Answer) -> bool {
         match answer {
             hir::Answer::Candidate {
@@ -3625,7 +3946,7 @@ pub(super) fn concrete_default_calls(expression: &Expr, made: &mut Vec<Made>) {
         }
     }
     let mut calls = Vec::new();
-    made_by(expression, &mut calls);
+    made_by(program, expression, &mut calls);
     made.extend(calls.into_iter().filter(|call| {
         call.required.is_none()
             && call.generics.iter().all(resolved_default_argument)
@@ -3643,9 +3964,16 @@ pub(super) fn called_or_referenced(expression: &Expr) -> Option<&Callee> {
 }
 
 /// The instance a call, function reference, or struct construction makes.
-fn made_at(expression: &Expr, made: &mut Vec<Made>) {
+fn made_at(program: &Program, expression: &Expr, made: &mut Vec<Made>) {
     match &expression.kind {
-        ExprKind::Call { callee, .. } => made_callee(callee, expression.at, made),
+        ExprKind::Call {
+            callee, arguments, ..
+        } => make_call(
+            callee,
+            expression.at,
+            program.known_const_inputs(callee, arguments),
+            made,
+        ),
         ExprKind::StaticCallable(callee) => made_callee(callee, expression.at, made),
         ExprKind::Construct {
             module,
@@ -3658,6 +3986,7 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
                 callee: (*module, *declaration),
                 generics: arguments.clone(),
                 type_packs: Vec::new(),
+                constants: ConstArguments::default(),
                 answers: Vec::new(),
                 required: None,
                 at: expression.at,
@@ -3671,6 +4000,10 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
 /// Record the instance reached by a concrete call or static reference (GEN-7).
 /// A call exposed by forwarding carries the supplying call's location.
 pub(super) fn made_callee(callee: &Callee, at: Location, made: &mut Vec<Made>) {
+    make_call(callee, at, ConstArguments::default(), made);
+}
+
+fn make_call(callee: &Callee, at: Location, constants: ConstArguments, made: &mut Vec<Made>) {
     match callee {
         Callee::Function {
             module,
@@ -3687,21 +4020,29 @@ pub(super) fn made_callee(callee: &Callee, at: Location, made: &mut Vec<Made>) {
             type_packs,
             requirements,
             ..
-        } if !generics.is_empty() || !requirements.is_empty() => made.push(Made {
-            callee: (*module, *declaration),
-            generics: generics.clone(),
-            type_packs: type_packs.clone(),
-            answers: requirements.clone(),
-            required: None,
-            at,
-            via: None,
-        }),
+        } if !generics.is_empty()
+            || !requirements.is_empty()
+            || constants.limit.is_some()
+            || !constants.values.is_empty() =>
+        {
+            made.push(Made {
+                callee: (*module, *declaration),
+                generics: generics.clone(),
+                type_packs: type_packs.clone(),
+                constants,
+                answers: requirements.clone(),
+                required: None,
+                at,
+                via: None,
+            })
+        }
         // GEN-16: an operation the enclosing declaration requires, whose
         // candidate a call of that declaration answers.
         Callee::Required { requirement, .. } => made.push(Made {
             callee: (usize::MAX, usize::MAX),
             generics: Vec::new(),
             type_packs: Vec::new(),
+            constants: ConstArguments::default(),
             answers: Vec::new(),
             required: Some(*requirement),
             at,
@@ -3764,8 +4105,147 @@ fn answered_in(
     }
 }
 
+/// GEN-3: only a nominal declaration has a category. An unresolved
+/// parameter can use facts stated by its own declaration's requirement.
+pub(super) fn category_holds(program: &Program, ty: &Type, category: SyntaxKind) -> Option<bool> {
+    if let Some(known) = known_category(ty, category) {
+        return Some(known);
+    }
+    let at = match ty {
+        Type::Parameter { at, .. } => *at,
+        Type::PackMember { pack, key, .. } if guaranteed_member(program, *pack, key) => *pack,
+        _ => return None,
+    };
+    for (index, module) in program.modules.iter().enumerate() {
+        for position in 0..module.declarations.len() {
+            let Some((parameters, condition)) = required(program, (index, position)) else {
+                continue;
+            };
+            if parameters.iter().any(|generic| generic.at == at) {
+                let file = module.declarations[position].at.file;
+                return category_facts(&condition, module, file, at, true)
+                    .into_iter()
+                    .find_map(|(stated, positive)| {
+                        if stated == category {
+                            Some(positive)
+                        } else if positive {
+                            Some(false)
+                        } else {
+                            None
+                        }
+                    });
+            }
+        }
+    }
+    None
+}
+
+/// GEN-7 and GEN-10: only an existing member inherits universal facts.
+/// A known nonnegative key must be below the pack's effective minimum.
+fn guaranteed_member(program: &Program, pack: Location, key: &Constant) -> bool {
+    let ConstantValue::Int(position) = key.value else {
+        return false;
+    };
+    u64::try_from(position).ok().is_some_and(|position| {
+        type_pack_bounds(program, pack).is_some_and(|(minimum, _)| position < minimum)
+    })
+}
+
+fn known_category(ty: &Type, category: SyntaxKind) -> Option<bool> {
+    match ty {
+        Type::Unknown | Type::Parameter { .. } | Type::PackMember { .. } => None,
+        Type::Named { kind, .. } => Some(matches!(
+            (kind, category),
+            (NamedKind::Struct, SyntaxKind::KwStruct) | (NamedKind::Enum, SyntaxKind::KwEnum)
+        )),
+        _ => Some(false),
+    }
+}
+
+/// Facts implied by a true clause. Conjunction collects facts; a
+/// disjunction keeps only facts shared by both alternatives. Negation
+/// reverses these operations rather than turning a non-struct into an enum.
+fn category_facts(
+    node: &SyntaxNode,
+    module: &crate::Module,
+    file: FileId,
+    at: Location,
+    positive: bool,
+) -> Vec<(SyntaxKind, bool)> {
+    match node.kind() {
+        SyntaxKind::ConstraintParen => node.children().next().map_or_else(Vec::new, |inner| {
+            category_facts(&inner, module, file, at, positive)
+        }),
+        SyntaxKind::ConstraintNot => node.children().next().map_or_else(Vec::new, |inner| {
+            category_facts(&inner, module, file, at, !positive)
+        }),
+        SyntaxKind::ConstraintBinary => {
+            let mut children = node.children();
+            let (Some(left), Some(right)) = (children.next(), children.next()) else {
+                return Vec::new();
+            };
+            let mut left = category_facts(&left, module, file, at, positive);
+            let right = category_facts(&right, module, file, at, positive);
+            if has_token(node, SyntaxKind::AmpAmp) == positive {
+                left.extend(right);
+            } else {
+                left.retain(|fact| right.contains(fact));
+            }
+            left
+        }
+        SyntaxKind::ConstraintEach if positive => {
+            let mut children = node.children();
+            let (Some(view), Some(body)) = (children.next(), children.next()) else {
+                return Vec::new();
+            };
+            let Some((view, name)) = pack_view(view) else {
+                return Vec::new();
+            };
+            if view.text() != "types" || !module.uses.iter().any(|used|
+                used.at == Location::new(file, name.span())
+                    && matches!(&used.binding, Binding::Local { at: declared, .. } if *declared == at)) {
+                return Vec::new();
+            }
+            let Some(bound) = tokens(node)
+                .filter(|token| token.kind() == SyntaxKind::Ident)
+                .nth(1)
+            else {
+                return Vec::new();
+            };
+            category_facts(&body, module, file, Location::new(file, bound.span()), true)
+        }
+        SyntaxKind::ConstraintRelation if tokens(node).any(|token| token.text() == "in") => {
+            let mut children = node.children();
+            let (Some(left), Some(right)) = (children.next(), children.next()) else {
+                return Vec::new();
+            };
+            if right.kind() != SyntaxKind::ConstraintCategory {
+                return Vec::new();
+            }
+            let Some(name) = name_token(&left) else {
+                return Vec::new();
+            };
+            if !module.uses.iter().any(|used| used.at == Location::new(file, name.span())
+                && matches!(&used.binding, Binding::Local { at: declared, .. } if *declared == at)) {
+                return Vec::new();
+            }
+            vec![(
+                if has_token(&right, SyntaxKind::KwStruct) {
+                    SyntaxKind::KwStruct
+                } else {
+                    SyntaxKind::KwEnum
+                },
+                positive,
+            )]
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// What a candidate's condition is checked against at a call.
 pub(super) struct Condition<'c> {
+    /// Declaration identities used to prove category facts of symbolic types.
+    pub(super) program: &'c Program,
     /// The value an option has at the call: what the call gives it, or
     /// its default. `None` when it is no constant this pass reads.
     pub(super) value_of: &'c dyn Fn(&str) -> Option<ConstantValue>,
@@ -3783,6 +4263,8 @@ pub(super) struct Condition<'c> {
     /// Whether a named operator requirement written in the condition
     /// holds at the call (GEN-16). `None` when it cannot be told.
     pub(super) callable: &'c dyn Fn(&SyntaxNode) -> Option<bool>,
+    /// A category fact, including a caller's stated generic requirement.
+    pub(super) category: &'c dyn Fn(&SyntaxNode, SyntaxKind) -> Option<bool>,
     /// Set where a comparison is not told because a value it compares
     /// is one this compiler does not work out: a constant held by its
     /// name, or one not worked out. Such a constant is not taken as
@@ -3895,6 +4377,30 @@ struct Told<'t> {
     member_fault: Option<&'t std::cell::RefCell<Option<super::dependent_packs::MemberFault>>>,
 }
 
+/// GEN-6: what the operator's condition says of the types and values
+/// bound by the candidate's declared parameters. Callability requirements
+/// and options the declaration leaves open still need call-site facts.
+pub(super) fn declared_requirement(
+    scope: &Scope,
+    operator: (usize, usize),
+    arguments: &[Argument],
+) -> Option<bool> {
+    let (_, condition) = required(scope.program, operator)?;
+    requires_holds(
+        scope.program,
+        operator,
+        arguments,
+        &condition,
+        &Told {
+            constant: &|node, ty| crate::constant::read(node, ty, scope).ok(),
+            callable: &|_| None,
+            unvalued: &std::cell::Cell::new(false),
+            type_packs: &[],
+            member_fault: None,
+        },
+    )
+}
+
 /// Whether `condition`, the `requires` of `declaration` of `module`,
 /// holds with `generics` for the declaration's generic parameters
 /// (GEN-3). `None` when it cannot be told: a generic argument is not
@@ -3971,13 +4477,8 @@ fn requires_holds(
                 Some(ty)
             }
         };
-        if !matches!(read.ty, Type::PackMember { .. })
-            && !read
-                .ty
-                .any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false)
-        {
-            return projected(substitute_within(&read.ty, &map));
-        }
+        // GEN-10: tuple operands expand captures even without an indexed
+        // PackMember; a pack's ordinary generic slot is deliberately unknown.
         match pack_types.project(&read.ty, &map) {
             Ok(ty) => projected(ty),
             Err(fault) => {
@@ -3998,14 +4499,39 @@ fn requires_holds(
         };
         (place.constant)(node, Some(&ty))
     };
+    let category = |node: &SyntaxNode, category| {
+        let raw = (node.kind() == SyntaxKind::NamedType)
+            .then(|| name_token(node))
+            .flatten()
+            .and_then(|name| {
+                parameters
+                    .iter()
+                    .position(|generic| generic.name == name.text())
+            })
+            .and_then(|index| generics.get(index))
+            .and_then(|argument| match argument {
+                Argument::Type(ty) => Some(ty.clone()),
+                Argument::Constant(_) => None,
+            })
+            .or_else(|| {
+                let read = declared_in
+                    .written
+                    .iter()
+                    .find(|read| read.at.file == file && read.at.span.start == node.span().start)?;
+                pack_types.project(&read.ty, &map).ok()
+            })?;
+        category_holds(program, &raw, category)
+    };
     holds_with_packs(
         condition,
         &Condition {
+            program,
             value_of: &value_of,
             constant: &constant,
             type_of: &type_of,
             written: &written,
             callable: place.callable,
+            category: &category,
             unvalued: place.unvalued,
         },
         Some(&PackScope {
@@ -4250,6 +4776,38 @@ fn holds_with_packs(
                     .then(|| operand.text().to_string().trim().to_string())
             };
             let within = tokens(node).any(|token| token.text() == "in");
+            if within && right.kind() == SyntaxKind::ConstraintCategory {
+                let category = if has_token(right, SyntaxKind::KwStruct) {
+                    SyntaxKind::KwStruct
+                } else {
+                    SyntaxKind::KwEnum
+                };
+                if option(left).and_then(|name| (of.value_of)(&name)).is_some()
+                    || (left.kind() != SyntaxKind::NamedType
+                        && !is_type(left.kind())
+                        && scope.is_some_and(|scope| (scope.constant)(left, None).is_some()))
+                {
+                    return Some(false);
+                }
+                let ty = option(left)
+                    .and_then(|name| {
+                        keys.iter()
+                            .rev()
+                            .find(|key| key.name == name)
+                            .and_then(|key| match &key.argument {
+                                Argument::Type(ty) => Some(ty.clone()),
+                                _ => None,
+                            })
+                    })
+                    .or_else(|| option(left).and_then(|name| (of.type_of)(&name)))
+                    .or_else(|| (scope?.written)(left, keys));
+                if let Some(ty) = ty
+                    && let Some(held) = category_holds(of.program, &ty, category)
+                {
+                    return Some(held);
+                }
+                return (of.category)(left, category);
+            }
             let key = |operand: &SyntaxNode| {
                 let name = option(operand)?;
                 keys.iter()
@@ -4427,6 +4985,20 @@ fn each_holds(
         return held;
     }
     for ty in &pack.types {
+        // GEN-10: a zero-length forwarded pack contributes no element
+        // to an each/any view, even while its tuple marker is symbolic.
+        let source = match ty {
+            Type::Parameter { at, .. }
+                if pack.tuple_sources.contains(at) || pack.forwarded_from == Some(*at) =>
+            {
+                Some(*at)
+            }
+            _ => None,
+        };
+        let bounds = source.and_then(|at| type_pack_bounds(of.program, at));
+        if bounds.is_some_and(|(_, maximum)| maximum == Some(0)) {
+            continue;
+        }
         let mut nested = keys.to_vec();
         nested.push(ConstraintKey {
             name: bound.text(),
@@ -4453,12 +5025,62 @@ fn each_holds(
             ..*of
         };
         match holds_with_packs(&body, &here, Some(scope), &nested) {
-            Some(value) if value == existential => return Some(value),
+            Some(value) if value == existential => {
+                // A decisive any-true or each-false answer needs an
+                // actual element. A symbolic pack may still be empty.
+                if source.is_some() && bounds.is_none_or(|(minimum, _)| minimum == 0) {
+                    held = None;
+                } else {
+                    return Some(value);
+                }
+            }
             Some(_) => {}
             None => held = None,
         }
     }
     held
+}
+
+/// GEN-10: explicit bounds and exact tuple<Us> occurrences anywhere in
+/// a non-packed parameter type guarantee lengths. Fixed tuple items do not.
+pub(super) fn type_pack_bounds(program: &Program, at: Location) -> Option<(u64, Option<u64>)> {
+    for detail in program.modules.iter().flat_map(|module| &module.details) {
+        let (generics, parameters) = match detail {
+            Detail::Callable(signature) => (&signature.generics, &signature.parameters[..]),
+            Detail::Struct(structure) => (&structure.generics, &[][..]),
+            _ => continue,
+        };
+        let Some(generic) = generics.iter().find(|generic| generic.at == at) else {
+            continue;
+        };
+        let GenericKind::Pack {
+            mut minimum,
+            mut maximum,
+        } = generic.kind
+        else {
+            return None;
+        };
+        for parameter in parameters {
+            if parameter.pack.is_some()
+                && matches!(parameter.ty, Type::Parameter { at: declared, .. } if declared == at)
+            {
+                minimum = minimum.max(parameter.pack_bounds.0);
+                maximum = maximum.into_iter().chain(parameter.pack_bounds.1).min();
+            } else if parameter.pack.is_none()
+                && parameter.ty.any_part(
+                    &|part| {
+                        matches!(part, Type::Tuple(elements) if matches!(elements.as_slice(),
+                        [Type::Parameter { at: declared, .. }] if *declared == at))
+                    },
+                    &|_| false,
+                )
+            {
+                minimum = minimum.max(1);
+            }
+        }
+        return Some((minimum, maximum));
+    }
+    None
 }
 
 /// The view name and pack name in a `types(Ts)` or `arg_keys(Ps)` form.

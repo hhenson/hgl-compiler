@@ -830,14 +830,15 @@ impl<'a> Typer<'a> {
                 defer_pack_members: false,
                 contextual: Vec::new(),
             };
-            let kind = ExprKind::Call {
+            let mut kind = ExprKind::Call {
                 callee,
                 arguments,
                 form: Form::Named,
+                text: None,
                 braced: Vec::new(),
                 lifted: false,
             };
-            self.finished_call(&kind, evaluating);
+            self.finished_call(&mut kind, evaluating);
             return (kind, ty);
         };
 
@@ -1027,7 +1028,8 @@ impl<'a> Typer<'a> {
         let requires_rejects = judged
             && !unresolved.is_empty()
             && self.pack_requires_rejects(at, (module, declaration), &found, &known_packs);
-        if judged && !unresolved.is_empty() && !requires_rejects {
+        let reports_unresolved = judged && !unresolved.is_empty() && !requires_rejects;
+        if reports_unresolved {
             let names: Vec<String> = unresolved.iter().map(|name| format!("`{name}`")).collect();
             self.diagnostics.emit(
                 error(
@@ -1130,14 +1132,23 @@ impl<'a> Typer<'a> {
                 Vec::new()
             },
         };
-        let kind = ExprKind::Call {
+        let mut kind = ExprKind::Call {
             callee,
             arguments,
             form: Form::Named,
+            text: None,
             braced: Vec::new(),
             lifted: false,
         };
-        self.finished_call(&kind, evaluating);
+        self.finished_call(&mut kind, evaluating);
+        // An already-rejected bare success supplies no result type for
+        // the nullable place to check again (ERR-9).
+        if reports_unresolved
+            && result_fallback.is_some_and(|(_, place)| matches!(place, Type::Nullable(_)))
+            && matches!(&ty, Type::Result { value, .. } if **value == Type::Unknown)
+        {
+            return (kind, Type::Unknown);
+        }
         (kind, ty)
     }
 
@@ -1493,7 +1504,7 @@ impl<'a> Typer<'a> {
         *generics = resolved;
         *type_packs = packs;
         contextual.clear();
-        self.finished_call(&call.kind, false);
+        self.finished_call(&mut call.kind, false);
         true
     }
 
@@ -1625,13 +1636,14 @@ fn unread_call_kind(arguments: Vec<hir::Argument>) -> ExprKind {
         callee: Callee::Unread,
         arguments,
         form: Form::Named,
+        text: None,
         braced: Vec::new(),
         lifted: false,
     }
 }
 
 /// The callable expression, as it is written before the arguments.
-fn call_callee(node: &SyntaxNode) -> Option<SyntaxNode> {
+pub(super) fn call_callee(node: &SyntaxNode) -> Option<SyntaxNode> {
     if node.kind() == SyntaxKind::CallExpr {
         node.children().next()
     } else {
