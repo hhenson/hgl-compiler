@@ -11,6 +11,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
 use super::arguments::{Slot, Takes};
+use super::children::ChildOrigin;
 use super::constants::generic_default;
 use super::dependent_packs::{PackTypes, dependent_slot};
 use super::evals::{trace_input_type, trace_pack_type};
@@ -77,6 +78,7 @@ struct PairScope {
     assigned: Vec<bool>,
     facts: Vec<Fact>,
     aliases: HashMap<LocalId, LocalId>,
+    children: HashMap<LocalId, ChildOrigin>,
     captures: HashMap<LocalId, CapturedOutput>,
     callable: Option<SyntaxNode>,
     naming: Option<Location>,
@@ -94,6 +96,7 @@ impl PairScope {
             assigned: typer.assigned.clone(),
             facts: typer.present.clone(),
             aliases: typer.aliases.clone(),
+            children: typer.bound_children.clone(),
             captures: typer.captures.clone(),
             callable: typer.callable.clone(),
             naming: typer.naming,
@@ -110,6 +113,7 @@ impl PairScope {
             && self.assigned == typer.assigned
             && self.facts == typer.present
             && self.aliases == typer.aliases
+            && self.children == typer.bound_children
             && self.captures == typer.captures
             && self.callable == typer.callable
             && self.naming == typer.naming
@@ -580,7 +584,7 @@ impl<'a> Typer<'a> {
         let cache = self
             .pair_phases
             .as_ref()
-            .filter(|phases| phases.contains(at) && self.bound_children.is_empty());
+            .filter(|phases| phases.contains(at));
         if let Some((scope, category)) = cache.and_then(|phases| phases.categories.get(&at))
             && scope.matches(self)
         {
