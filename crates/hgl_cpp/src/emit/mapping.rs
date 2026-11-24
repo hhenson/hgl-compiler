@@ -236,6 +236,8 @@ impl Emitter<'_> {
                 "const {written_type} map_argument_{source}_ = {expression}; "
             ));
         }
+        // MAP-5, MAP-8: an explicit set drives lifecycle even where an entry
+        // is absent. hgraph leaves that child's split input invalid until it arrives.
         let keys = map.keys.map_or("::std::nullopt".to_string(), |keys| {
             format!("map_argument_{keys}_.erased()")
         });

@@ -2481,8 +2481,9 @@ fn let_bound_packs_run_on_the_sdk() {
 }
 
 /// MAP-1, RED-1, RED-4 and RED-5: C++ reports the remaining native forms.
-/// A capture-free ordered fold is written, and FN-14 permits the captured
-/// callback even though the engine cannot wire it in an ordered reduction.
+/// A map of one split dictionary and a capture-free ordered fold are written.
+/// FN-14 permits the captured callback even though the engine cannot wire it
+/// in an ordered reduction.
 #[test]
 fn native_mapping_forms_decline_cpp_emission() {
     let root = scratch("native-mapping-forms");
@@ -2492,10 +2493,13 @@ fn native_mapping_forms_decline_cpp_emission() {
         r#"module demo.native_mapping
 
 fn twice_for_map(item: i64) -> i64 => item * 2
+fn sum_for_map(left: i64, right: i64) -> i64 => left + right
 const fn fold_digit(accumulated: i64, member: i64) -> i64 => accumulated * 10 + member
 
 export fn keyed_map(values: dict<str, i64>, selected: set<str>) -> dict<str, i64> =>
     map{keys: selected}(twice_for_map, values)
+export fn joined_map(left: dict<str, i64>, right: dict<str, i64>) -> dict<str, i64> =>
+    map(sum_for_map, left, right)
 export fn growing_map(values: list<i64>) -> list<i64> => map(twice_for_map, values)
 export fn growing_tree(values: list<i64>) -> i64 => reduce(add_, values, 0)
 export fn ordered_growing(values: list<i64>) -> i64 => reduce(fold_digit, values, 0)
@@ -2524,6 +2528,8 @@ export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values,
         !stderr.contains("reduce(fold_digit, values, 0)"),
         "{stderr}"
     );
+    assert!(!stderr.contains("map{keys: selected}"), "{stderr}");
+    assert!(stderr.contains("map(sum_for_map, left, right)"), "{stderr}");
     assert_eq!(
         stderr.matches("error[build/target.unsupported]").count(),
         6,

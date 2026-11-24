@@ -758,7 +758,7 @@ transpiler: partial
 
 - A fixed-size map binds positional and named inputs, splits the fitted list inputs, and supplies whole inputs to each child. An explicitly specialized operator can supply the callback's member types (FN-17). An omitted callback input uses the callback's default (FN-8, UNIT-8).
 - The native one-dictionary map binds the callback's checked arguments, passes the selected dictionary entry, and gives each whole input to every child.
-- Left: multiple split dictionaries and growing lists (#370).
+- Left: multiple split dictionaries and growing lists (#370). Bare operator selection is tracked in #776 and inline dictionary argument fitting in #826.
 
 ## MAP-3
 

@@ -154,6 +154,7 @@ pub fn one_dictionary_map(program: &Program, value: &Expr) -> Option<KeyedMap> {
     else {
         return None;
     };
+    // MAP-4: the selected result carries the split dictionary's key type.
     let Type::Dict { key, value: result } = &value.ty else {
         return None;
     };
