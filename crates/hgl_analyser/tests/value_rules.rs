@@ -123,7 +123,10 @@ fn nested_pairs_have_bounded_reads() {
     let comprehensions = (0..17).fold(String::from("1"), |inner, level| {
         format!("scale([for item_{level} in 0..<1: item_{level} + {inner}][0])")
     });
-    for argument in [operators, blocks, comprehensions] {
+    let anonymous = (0..21).fold(String::from("(fn(x: i64) -> i64 => x)(1)"), |inner, _| {
+        format!("scale({inner})")
+    });
+    for argument in [operators, blocks, comprehensions, anonymous] {
         let source = format!(
             "const fn scale(value: i64) -> i64 => value * 2\n\
              fn scale(value: i64) -> i64 => value * 3\n\

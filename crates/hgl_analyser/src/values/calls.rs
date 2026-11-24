@@ -50,10 +50,7 @@ impl PairPhases {
         let changes_scope = call.descendants().any(|node| {
             matches!(
                 node.kind(),
-                SyntaxKind::FnExpr
-                    | SyntaxKind::PackComprehension
-                    | SyntaxKind::EvalExpr
-                    | SyntaxKind::RunExpr
+                SyntaxKind::PackComprehension | SyntaxKind::EvalExpr | SyntaxKind::RunExpr
             )
         });
         (!changes_scope).then(|| Self {
@@ -79,6 +76,8 @@ struct PairScope {
     aliases: HashMap<LocalId, LocalId>,
     children: HashMap<LocalId, ChildOrigin>,
     captures: HashMap<LocalId, CapturedOutput>,
+    anonymous: Option<(LocalId, Type)>,
+    hook: Option<Hook>,
     callable: Option<SyntaxNode>,
     naming: Option<Location>,
     binding_child: Option<Location>,
@@ -98,6 +97,11 @@ impl PairScope {
             aliases: typer.aliases.clone(),
             children: typer.bound_children.clone(),
             captures: typer.captures.clone(),
+            anonymous: typer
+                .anonymous
+                .as_ref()
+                .map(|scope| (scope.first_local, scope.result.clone())),
+            hook: typer.hook,
             callable: typer.callable.clone(),
             naming: typer.naming,
             binding_child: typer.binding_child,
@@ -110,12 +114,22 @@ impl PairScope {
     }
 
     fn matches(&self, typer: &Typer<'_>) -> bool {
+        let anonymous = typer
+            .anonymous
+            .as_ref()
+            .map(|scope| (scope.first_local, &scope.result));
+        let probed_anonymous = self
+            .anonymous
+            .as_ref()
+            .map(|(first_local, result)| (*first_local, result));
         self.locals == typer.locals
             && self.assigned == typer.assigned
             && self.facts == typer.present
             && self.aliases == typer.aliases
             && self.children == typer.bound_children
             && self.captures == typer.captures
+            && probed_anonymous == anonymous
+            && self.hook == typer.hook
             && self.callable == typer.callable
             && self.naming == typer.naming
             && self.binding_child == typer.binding_child
