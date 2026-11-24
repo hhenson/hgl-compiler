@@ -1141,8 +1141,9 @@ writes, then what its place expects, then its arguments, and a default
 where none of them says (GEN-8). The output requested is matched as far
 as it is known, so `window(x)` asks for a list of three of any type.
 
-Not read yet: a function with a type pack or a pack parameter, whose
-generic types are then not known; the type of a generic argument written
+A function's type pack is captured from a value pack or a tuple's element
+sequence (GEN-10); explicit positional types constrain either capture.
+Not read yet: the type of a generic argument written
 after the callee's name, `scale<"wide">(n)`, against its parameter's; an
 operator's own generic value parameter given by name.
 
@@ -1365,8 +1366,8 @@ judged.
 
 A candidate outranks another when it is as specific in every parameter
 and more specific in one. One that nothing outranks is selected; two
-are `operator.ambiguous`. Not read yet: a candidate with a generic value
-parameter or a type pack, which leaves the whole call unread.
+are `operator.ambiguous`. A candidate's generic values and captured type
+sequences specialize its signature before the operands are fitted.
 
 An argument that is read as the type of its place, `null`,
 `.member`, or a sequence or tuple written out, is tried against each
@@ -1391,6 +1392,27 @@ null, an input is valid, a result is a success or a failure. A
 condition gives the facts that hold where it does and where it does
 not, and a branch, the right operand of a connective and what follows a
 branch that returns each read under theirs.
+
+### Categories and tuple type packs
+
+GEN-3 category keywords are separate constraint operands, admitted only
+after `in`. Their predicate tests a nominal struct or enum declaration;
+a nullable type, another composite or a native type has neither category.
+A symbolic parameter uses category facts stated by its own declaration.
+Conjunction collects facts, while disjunction retains only facts common
+to its alternatives; negation does not identify every non-enum as a struct.
+An `each` category bound also authorizes a forwarded tuple's generic call.
+Unstated wrappers reject where declared (GEN-7).
+
+GEN-10 tuple inference captures a sequence of element types into the
+existing `TypePackArgument` table. Ordinary generic slots do not treat that
+sequence as one tuple-valued type. `PackTypes::project` expands tuple
+elements during ordinary and callback specialization, under the existing
+type-size limit. Forwarded tuple captures retain their symbolic splice
+position among fixed elements until the caller supplies the pack; the
+ordinary type-substitution pass preserves that marker. A reflected callback
+with an unknown suffix leaves the tuple's arity unresolved. Tuple forwarding
+proves its requirements, separately from the deferred reflected-pack path.
 
 ### Compile-time laws and existential constraints
 
@@ -2171,10 +2193,13 @@ conda-forge's libc++ in place of the system's.
 A program's workspace is `programs/<hash>` under the cache, keyed by its
 source roots, or the directory named by `--out` or `--keep`. Both flags
 work on `hgl build`, `hgl run` and `hgl test`. The driver holds the workspace
-lock through the build and until its last executable ends. The program's
-Ninja process inherits the lock so that the next command waits if `hgl`
-dies. On Linux Ninja also gets a termination signal when `hgl` dies.
-On macOS an already started Ninja build can finish under the inherited lock.
+lock through the build and until its last executable ends. A stop during
+preparation exits immediately. A first stop while waiting for a native tool
+lets that tool exit before the driver exits. A second stop exits immediately.
+Ninja inherits the workspace lock, and tools building the SDK runtime and
+precompiled header inherit the toolchain lock. On Linux those processes also
+receive a termination signal when `hgl` dies. On macOS a started build can
+finish under its inherited lock.
 
 `hgl build ROOT...` checks the program, writes the generated files
 and builds its units and application executables. `--tests` builds a
@@ -2580,8 +2605,8 @@ the job the way the design needs is dropped.
 | `serde_json` | `hgl_cli`, `hgl_doc` | check diagnostics, API documentation and native build records as JSON |
 | `blake3` | `hgl_cli` | content fingerprints for native build reuse |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
-| `ctrlc` | `hgl_cli` | waiting for an interrupted native build to finish, or passing a stop request to an application |
-| `nix` | `hgl_cli` on Linux | delivers a termination signal to Ninja if the build driver dies |
+| `ctrlc` | `hgl_cli` | handles stops during preparation, native builds and application execution |
+| `nix` | `hgl_cli` on Linux | delivers a termination signal to a native build tool if the build driver dies |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `pulldown-cmark` | `hgl_parser`, `hgl_doc` | CommonMark fenced block ranges and HTML rendering of documentation comments |

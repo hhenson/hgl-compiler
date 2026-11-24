@@ -101,6 +101,15 @@ impl Reader<'_> {
             SyntaxKind::OperatorProperties => {
                 Position::value("the domain of an operator's properties", "GEN-9")
             }
+            // GEN-3 and GEN-13: a category determines the left operand's
+            // kind even where the generic occurs nowhere in a signature.
+            SyntaxKind::ConstraintRelation
+                if parent
+                    .children()
+                    .any(|child| child.kind() == SyntaxKind::ConstraintCategory) =>
+            {
+                Position::PLAIN
+            }
             // TYPE-12: `signal` is the whole type of a function's
             // temporal parameter, and neither a local's annotation nor
             // an anonymous function's parameter. Which other types
@@ -139,7 +148,17 @@ impl Reader<'_> {
             SyntaxKind::TupleType => Type::Tuple(
                 node.children()
                     .filter(|element| is_type(element.kind()))
-                    .map(|element| self.type_(&element, position.part()))
+                    // GEN-10: a tuple's element list expands type packs.
+                    // Its nested element types still require one type.
+                    .map(|element| {
+                        self.type_(
+                            &element,
+                            Position {
+                                pack: element.kind() == SyntaxKind::NamedType,
+                                ..position.part()
+                            },
+                        )
+                    })
                     .collect(),
             ),
             SyntaxKind::ListType => self.list(node, position),

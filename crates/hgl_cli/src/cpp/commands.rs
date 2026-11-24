@@ -80,8 +80,9 @@ impl<'a> BuildRequest<'a> {
     pub(super) fn keyed_session(
         &self,
         inputs: &ProgramSources,
+        interrupt: &Interrupt,
     ) -> Result<(BuildSession, String), String> {
-        let session = BuildSession::open(self.roots, self.keep, self.debug)?;
+        let session = BuildSession::open(self.roots, self.keep, self.debug, interrupt)?;
         self.with_key(session, inputs)
     }
 
@@ -94,8 +95,13 @@ impl<'a> BuildRequest<'a> {
         Ok((session, key))
     }
 
-    pub(super) fn start(&self, paths: Option<&[PathBuf]>) -> Result<BuildStart, ExitCode> {
-        let session = BuildSession::open(self.roots, self.keep, self.debug);
+    pub(super) fn start(
+        &self,
+        paths: Option<&[PathBuf]>,
+        interrupt: &Interrupt,
+    ) -> Result<BuildStart, ExitCode> {
+        let session = BuildSession::open(self.roots, self.keep, self.debug, interrupt);
+        interrupt.check().map_err(build_error)?;
         let inputs = match paths {
             Some(paths) => ProgramSources::read_paths(paths),
             None => ProgramSources::read(self.roots),
@@ -125,7 +131,7 @@ impl<'a> BuildRequest<'a> {
     }
 
     fn build(&self, interrupt: &Interrupt) -> Result<(BuildSession, BuiltProgram), ExitCode> {
-        let (inputs, session) = match self.start(None)? {
+        let (inputs, session) = match self.start(None, interrupt)? {
             BuildStart::Hit(session, built) => {
                 interrupt.finish().map_err(build_error)?;
                 return Ok((session, built));
@@ -391,8 +397,8 @@ fn legacy_debug(
         chosen.ok_or_else(|| build_error("the program has no application to run".into()))?;
     let app = runnable_application(&program, &chosen, true)?;
     let directory = debug_session(directory).map_err(build_error)?;
-    let session =
-        BuildSession::open(request.roots, Some(directory.path()), true).map_err(build_error)?;
+    let session = BuildSession::open(request.roots, Some(directory.path()), true, &interrupt)
+        .map_err(build_error)?;
     let key = session
         .key(&inputs, request.limits, &request.replacements)
         .map_err(build_error)?;

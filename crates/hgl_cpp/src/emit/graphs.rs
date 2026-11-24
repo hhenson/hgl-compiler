@@ -18,8 +18,8 @@
 //!
 //! Not written yet, and reported: `if`, `switch` and `for` over
 //! connections (CTRL-7), a `var` connection, and a call that leaves out a
-//! temporal input (UNIT-8). `inject global_state` in a graph (FN-9) is
-//! the `apps` family's.
+//! temporal input other than a signal (UNIT-8). `inject global_state` in a
+//! graph (FN-9) is the `apps` family's.
 
 use hgl_analyser::hir::{Argument, Body, Callee, Expr, ExprKind, Stmt, ValueCategory};
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Role as Phase, Signature, Type};
@@ -33,6 +33,7 @@ use super::names::{self, identifier};
 use super::nodes::{Context, IMPLEMENTATION, Kind, Placed, ResultForm, Role, nested};
 use super::statements::Scope;
 use super::values::INDENT;
+use crate::runtime;
 
 /// The name of the wiring a graph's `compose`, a wiring function and an
 /// eval's entry are given: hgraph's `Wiring`. No HGL name gives it
@@ -394,11 +395,12 @@ impl Emitter<'_> {
                 return self.missing(argument.value.at, "an argument given to a pack");
             };
             let parameter = &signature.parameters[index];
+            let signal = matches!(parameter.ty.omission_removed(), Type::Signal);
             let port = given
                 .iter()
                 .find(|(at, _)| *at == position)
                 .map(|(_, port)| port.clone());
-            written[index] = Some(match port {
+            let input = match port {
                 Some(port) => port,
                 None if parameter.constant => self.expression(scope, &argument.value),
                 None if reads
@@ -406,7 +408,15 @@ impl Emitter<'_> {
                 {
                     self.wiring_form(scope, super::lifting::reader_operand(&argument.value))
                 }
+                None if signal => self.connection(scope, &argument.value, &argument.value.ty),
                 None => self.connection(scope, &argument.value, &parameter.ty),
+            };
+            // TYPE-12: observe the producer's publications without reading
+            // its payload, including when the test runner wired its replay.
+            written[index] = Some(if signal {
+                format!("({input}).as<::hgraph::SIGNAL>()")
+            } else {
+                input
             });
             order.push(index);
             failing += usize::from(may_fail(&argument.value));
@@ -416,11 +426,21 @@ impl Emitter<'_> {
             if matches!(parameter.ty, Type::Function(_)) || written[index].is_some() {
                 continue;
             }
+            let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
             if !parameter.constant {
-                // UNIT-8: "an omitted temporal input is never valid".
+                // UNIT-8: an omitted optional temporal input is never valid.
+                // A silent signal supplies no publication to `modified`.
+                if matches!(parameter.ty.omission_removed(), Type::Signal)
+                    && left_out(program, callee, declared, parameter).is_some()
+                {
+                    written[index] = Some(format!(
+                        "::{}::never<::hgraph::SIGNAL>({WIRING})",
+                        runtime::NAMESPACE
+                    ));
+                    continue;
+                }
                 return self.missing(value.at, "a call that leaves out a temporal input");
             }
-            let declared = concrete.map_or(index, |instance| instance.original_parameter(index));
             if let Some((_, held)) = defaults.iter().find(|(at, _)| *at == declared) {
                 written[index] = Some(held.clone());
                 continue;
