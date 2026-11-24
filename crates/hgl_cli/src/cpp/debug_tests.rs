@@ -197,7 +197,9 @@ fn prepare(
     };
     // A warm call can validate selectors from the complete stamped inventory.
     // A new directory is opened only after validation finds work to build.
-    let existing = directory.is_dir().then(|| request.keyed_session(&inputs));
+    let existing = directory
+        .is_dir()
+        .then(|| request.keyed_session(&inputs, &interrupt));
     if let Some(Ok((session, key))) = &existing
         && let Some(previous) = &session.previous
         && let Some(cases) = previous.test_inventory(key)
@@ -226,7 +228,7 @@ fn prepare(
         return Ok(selected.plan(Vec::new()));
     }
     let (session, key) = existing
-        .unwrap_or_else(|| request.keyed_session(&inputs))
+        .unwrap_or_else(|| request.keyed_session(&inputs, &interrupt))
         .map_err(build_error)?;
     session.begin().map_err(build_error)?;
     let description = session
