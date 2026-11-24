@@ -174,7 +174,7 @@ analyser: partial
 - GEN-17 adds quantification over pack keys. `any` succeeds for at least one entry and rejects an empty pack. Type and key bindings project within nested type expressions.
 - An `any` equality can infer a const generic nested in a type, such as a fixed list length, from either equality operand; an explicitly supplied value is preserved (GEN-3).
 - Tuple candidate ranking expands captured arities into declared variables before comparing components; a concrete component outranks an unconstrained tuple-pack member (GEN-5, GEN-12). Explicit callback packs keep their supplied function types, and a template mismatch is reported at the argument (FN-17, GEN-8).
-- Left: a homogeneous candidate pack does not yet bind a public tuple-pack result in the declaration contract (GEN-6/GEN-10, #716; follows #684).
+- In a declaration contract, a homogeneous positional candidate pack with a known nonempty arity supplies the elements of a public tuple-pack result (GEN-6, GEN-10). Concrete result mismatches use `impl.result`.
 - Guaranteed indexed tuple members retain their pack's universal category facts only where the effective minimum guarantees that key. Exact tuple-pack occurrences inside parameter containers also prove a positive minimum. Tuple equations are retained inside lists, dictionary values, nullable types and nested tuples without changing argument reading.
 - Left: key-preserving universal finite-membership and named-call inheritance for indexed members (#723); ordinary membership proof rows do not represent independent pack keys.
 - Left: positive existential constraints do not yet prove a nonempty pack for tuple indexing (#724).
