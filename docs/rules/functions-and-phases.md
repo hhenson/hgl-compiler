@@ -315,4 +315,4 @@ transpiler: partial
 - Lowers the concrete arguments of an inline computed spread. An anonymous body is specialized for the enclosing pack keys even when each pass supplies a value of the same type. The SDK cases also cover mixed entry types, named and positional keys, selected nested conditions, and written pack-member types.
 - Stores each computed entry once where its `let` runs. Bindings of an existing pack reuse the same entries. SDK cases cover all four forwarding examples, constructor fields, reuse, and a fixed graph loop that carries a connection binding.
 
-Left: C++ declines a spread whose pass condition does not supply a known constant `bool`. Direct pack-entry `is_active` and deferred-key guards are tracked in #784. Reading a guarded position of a fixed-list field is tracked in #799.
+Left: C++ declines a spread whose pass condition does not supply a known constant `bool`. Direct pack-entry `is_active` and deferred-key guards are tracked in #784.

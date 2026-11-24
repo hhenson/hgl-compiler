@@ -813,7 +813,8 @@ transpiler: partial
 
 transpiler: partial
 
-- Fixed-size results hold the children's publications and propagate an error leaving a child. A callback with no result needs the Core declaration tracked in [hgl_core#147](https://github.com/hhenson/hgl_core/issues/147). Native result shapes await #370.
+- Fixed-size results hold the children's publications. A callback with no result runs at each fixed position, and the map gives no result. A failure that leaves a child leaves either form. The native forms await #370.
+- The C++ target's existing [size-zero temporal list limit](https://github.com/hhenson/hgl-compiler/issues/829) applies to both fixed-size forms (TYPE-10).
 
 ## RED-1
 
