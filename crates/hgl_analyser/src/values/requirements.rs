@@ -2354,7 +2354,13 @@ pub(super) fn instances_hold(
                     .bodies
                     .get(position)
                     .and_then(Option::as_ref)
-                    .is_some_and(|body| crate::formatting::has_dependent_formatting(program, body))
+                    .is_some_and(|body| {
+                        crate::formatting::has_dependent_formatting(
+                            program,
+                            (index, position),
+                            body,
+                        )
+                    })
             {
                 dependent_patterns.insert((index, position));
             }
@@ -2932,24 +2938,14 @@ pub(super) fn instances_hold(
                 at,
             } in calls
             {
-                let deep = generics.iter().any(
-                    |argument| matches!(argument, Argument::Type(ty) if nesting(ty) > NESTING),
-                );
-                if deep
-                    || type_packs
-                        .iter()
-                        .flat_map(|pack| &pack.types)
-                        .any(|ty| nesting(ty) > NESTING)
-                {
+                let Some(key) = bounded_instance_key(callee, &generics, &type_packs, &answers)
+                else {
                     exhausted = true;
                     break;
-                }
-                let key = generic_instance_key(callee, &generics, &type_packs, &answers);
+                };
                 // Traversal budgets leave an input unread. A concrete text
                 // that outgrows its argument budget exhausts this walk.
-                if key.len() > ARGUMENTS
-                    || constants.limit == Some(crate::ConstInputFault::TextLimit)
-                {
+                if constants.limit == Some(crate::ConstInputFault::TextLimit) {
                     exhausted = true;
                     break;
                 }
@@ -3062,14 +3058,14 @@ impl MakingCall {
 }
 
 /// Walk the saved parent indices from the innermost call to the root.
-pub(super) fn making_path(
+pub(super) fn making_path<'a>(
     current: MakingCall,
     mut parent: Option<usize>,
-    parents: &[(MakingCall, Option<usize>)],
+    parent_at: impl Fn(usize) -> &'a (MakingCall, Option<usize>),
 ) -> Vec<MakingCall> {
     let mut path = vec![current];
     while let Some(index) = parent {
-        let (caller, previous) = &parents[index];
+        let (caller, previous) = parent_at(index);
         path.push(caller.clone());
         parent = *previous;
     }
@@ -3098,7 +3094,7 @@ impl InstanceChain<'_> {
             &self.made.type_packs,
             self.made.at,
         );
-        let path = making_path(current, self.parent, self.parents);
+        let path = making_path(current, self.parent, |index| &self.parents[index]);
         let (root, inner) = path
             .split_last()
             .expect("the path contains its current call");
@@ -3268,6 +3264,27 @@ fn instance_key(
         generic_instance_key(callee, generics, type_packs, answers),
         constants,
     )
+}
+
+/// The generic part of an instance's identity, within the GEN-13 walk's bounds.
+pub(crate) fn bounded_instance_key(
+    callee: (usize, usize),
+    generics: &[Argument],
+    type_packs: &[hir::TypePackArgument],
+    answers: &[hir::Answer],
+) -> Option<String> {
+    if generics
+        .iter()
+        .any(|argument| matches!(argument, Argument::Type(ty) if nesting(ty) > NESTING))
+        || type_packs
+            .iter()
+            .flat_map(hir::TypePackArgument::types_with_prefix)
+            .any(|ty| nesting(ty) > NESTING)
+    {
+        return None;
+    }
+    let key = generic_instance_key(callee, generics, type_packs, answers);
+    (key.len() <= ARGUMENTS).then_some(key)
 }
 
 fn generic_instance_key(
@@ -3522,6 +3539,39 @@ pub(super) fn past_the_limit(
     } else {
         "generic arguments"
     };
+    instance_limit(
+        from,
+        format!(
+            "the instances of `{name}` this call makes do not end within the \
+             {INSTANCES} this compiler follows, with {arguments} no longer than \
+             {ARGUMENTS} characters written out and types in them no deeper than \
+             {NESTING}: the `requires` and the {arguments} of those past them are \
+             not told"
+        ),
+        diagnostics,
+    );
+}
+
+/// Report the GEN-13 bound on pack shapes that keep growing along one call path.
+pub(super) fn past_pack_growth_limit(
+    at: Location,
+    (module, declaration): (usize, usize),
+    program: &Program,
+    growth: usize,
+    diagnostics: &mut Diagnostics,
+) {
+    let name = &program.modules[module].declarations[declaration].name;
+    instance_limit(
+        &[at],
+        format!(
+            "the instances of `{name}` this call makes keep adding pack entries beyond the \
+             {growth} increases this compiler follows"
+        ),
+        diagnostics,
+    );
+}
+
+fn instance_limit(from: &[Location], message: String, diagnostics: &mut Diagnostics) {
     for &at in from {
         let rejected = diagnostics.as_slice().iter().any(|earlier| {
             earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
@@ -3535,13 +3585,7 @@ pub(super) fn past_the_limit(
                 Category::Type,
                 codes::INSTANCE_LIMIT,
                 at,
-                format!(
-                    "the instances of `{name}` this call makes do not end within the \
-                     {INSTANCES} this compiler follows, with {arguments} no longer than \
-                     {ARGUMENTS} characters written out and types in them no deeper than \
-                     {NESTING}: the `requires` and the {arguments} of those past them are \
-                     not told"
-                ),
+                message.clone(),
                 "GEN-13",
             ));
         }

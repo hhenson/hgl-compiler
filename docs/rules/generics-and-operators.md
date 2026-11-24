@@ -216,6 +216,7 @@ analyser: partial
 - Generic arguments that are the same, each type canonical and each value one constant (UNIT-13), make one type or one instance, and arguments that differ another: of the worked fragment, `Scaled<1>`, `Scaled<1.0>` and `Scaled<1.00>` are one type, and a `Scaled<-0.0>` where a `Scaled<0.0>` is expected is `type.mismatch`
 - Calls and symbolic operations whose candidates become known in a graph instance contribute to the same bounded traversal of instances and their requirements (GEN-3, GEN-7).
 - "Where the instances of one declaration never end when the program is compiled, the program rejects": no more than `hgl_analyser::INSTANCES` (4096) instances of one declaration are followed from one call, by the analyser and by `hgl_lower`, and a call past that is `generic.instance_limit`, at the call that makes the first of them: the worked fragment's `climbed`; through constants worked out from the body's own parameters, and through a type that grows, `nest<list<T>>`
+- The forwarding walk uses the same argument size and nesting limits. It also reports `generic.instance_limit` at the initiating call after more than 64 increases in the pack width of one declaration along a path.
 - Left: a default that names anything else; the kind a constraint gives; `type(N)`; a call that supplies no type for a function's parameter its signature does not settle
 
 ## GEN-14

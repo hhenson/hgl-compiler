@@ -477,8 +477,42 @@ pub fn collection_members<'a>(
     }
 }
 
+/// The pattern of a Core format call whose value candidate is selected
+/// during specialization. Use the public signature while the call is open.
+pub(crate) fn deferred_pattern<'a>(
+    program: &Program,
+    call: &'a crate::values::Selecting,
+) -> Option<&'a Expr> {
+    let operator = call.operator;
+    if call.graph || Some(operator.module) != program.core() {
+        return None;
+    }
+    let core = &program.modules[operator.module];
+    if core.declarations[operator.declaration].name != "format" {
+        return None;
+    }
+    let Detail::Callable(signature) = core.details.get(operator.declaration)? else {
+        return None;
+    };
+    let slot = signature
+        .parameters
+        .iter()
+        .position(|parameter| parameter.name == "fmt_str")?;
+    call.argument_for(signature, slot)
+}
+
 /// Whether a pattern or text conversion needs an instance's arguments.
-pub(crate) fn has_dependent_formatting(program: &Program, body: &crate::hir::Body) -> bool {
+pub(crate) fn has_dependent_formatting(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    body: &crate::hir::Body,
+) -> bool {
+    if program.modules[module].selecting[declaration]
+        .iter()
+        .any(|call| deferred_pattern(program, call).is_some())
+    {
+        return true;
+    }
     let mut dependent = false;
     crate::values::walk_body_calls(body, &mut |call| {
         if dependent {

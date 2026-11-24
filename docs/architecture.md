@@ -1727,7 +1727,7 @@ analysed program.
 | Module | What it decides | Rules |
 | --- | --- | --- |
 | `copies` | Where a value is copied: which `let`s and loops take a copy, what a name refers into, whether what a call gives is its own; which structs are values (`by_value`) | the owner's rule (compiler issue 151), FN-13, FN-15 |
-| `instances`, `canonical`, `packs` | Which instances a program asks for, including generic value functions and packed calls. A pack's captured types and keys identify its instance, and each capture becomes an individual parameter. An ordinary const input identifies an instance only where a compile-time check reads it. The analyser and lowering use the same normalized value key. These modules also describe what an eval's run and an application's run are wired with. | FN-1, FN-8, GEN-2, GEN-10, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
+| `instances`, `canonical`, `packs` | Which instances a program asks for, including generic value functions and packed calls. A pack's captured types and keys identify its instance, and each capture becomes an individual parameter. Ordinary const inputs identify the instance where a compile-time check reads them. For a deferred candidate, the compiler follows the call with the instance's types in place to discover that demand. The analyser and lowering use the same normalized value key. These modules also describe what an eval's run and an application's run are wired with. | FN-1, FN-8, GEN-2, GEN-10, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
 | `pieces` | What a piece a target writes reaches (`Reach`), and whether a test or an application reaches a form the target does not write (`blocked`) | |
 | `graphs` | What a child graph of a graph's `if`, `switch` or `for` takes, the value of a `switch` label, the `var`s a branch assigns, which paths return | CTRL-6, CTRL-7, CTRL-11, CTRL-14 |
 | `types` | A struct's fields and descendants, whether a struct has none, and which values are read whole only where they are all valid | TYPE-3, TYPE-4, TYPE-9, TIME-1 |
@@ -2193,10 +2193,13 @@ conda-forge's libc++ in place of the system's.
 A program's workspace is `programs/<hash>` under the cache, keyed by its
 source roots, or the directory named by `--out` or `--keep`. Both flags
 work on `hgl build`, `hgl run` and `hgl test`. The driver holds the workspace
-lock through the build and until its last executable ends. The program's
-Ninja process inherits the lock so that the next command waits if `hgl`
-dies. On Linux Ninja also gets a termination signal when `hgl` dies.
-On macOS an already started Ninja build can finish under the inherited lock.
+lock through the build and until its last executable ends. A stop during
+preparation exits immediately. A first stop while waiting for a native tool
+lets that tool exit before the driver exits. A second stop exits immediately.
+Ninja inherits the workspace lock, and tools building the SDK runtime and
+precompiled header inherit the toolchain lock. On Linux those processes also
+receive a termination signal when `hgl` dies. On macOS a started build can
+finish under its inherited lock.
 
 `hgl build ROOT...` checks the program, writes the generated files
 and builds its units and application executables. `--tests` builds a
@@ -2602,8 +2605,8 @@ the job the way the design needs is dropped.
 | `serde_json` | `hgl_cli`, `hgl_doc` | check diagnostics, API documentation and native build records as JSON |
 | `blake3` | `hgl_cli` | content fingerprints for native build reuse |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
-| `ctrlc` | `hgl_cli` | waiting for an interrupted native build to finish, or passing a stop request to an application |
-| `nix` | `hgl_cli` on Linux | delivers a termination signal to Ninja if the build driver dies |
+| `ctrlc` | `hgl_cli` | handles stops during preparation, native builds and application execution |
+| `nix` | `hgl_cli` on Linux | delivers a termination signal to a native build tool if the build driver dies |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `pulldown-cmark` | `hgl_parser`, `hgl_doc` | CommonMark fenced block ranges and HTML rendering of documentation comments |

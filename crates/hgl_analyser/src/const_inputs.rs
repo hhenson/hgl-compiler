@@ -3,13 +3,15 @@
 //! A const parameter can also be read at run time. Only a check that
 //! needs its value during analysis adds its slot to the instance inputs.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 
-use hgl_diagnostics::Location;
+use hgl_diagnostics::{Diagnostics, Location};
 
 use crate::formatting;
 use crate::hir::{
-    Argument, BinaryOperator, Callee, Expr, ExprKind, Form, Stmt, Value, ValueCategory,
+    Answer, Argument, BinaryOperator, Callee, Expr, ExprKind, Form, Stmt, Value, ValueCategory,
 };
 use crate::{
     Argument as GenericArgument, Binding, ConstantValue, Detail, Program, Role, Scalar, Type,
@@ -17,7 +19,25 @@ use crate::{
 
 type Declaration = (usize, usize);
 type Slot = (Declaration, usize);
-pub(crate) type Demands = HashMap<Declaration, BTreeSet<usize>>;
+pub(crate) type Demands = HashMap<Declaration, BTreeMap<usize, Demand>>;
+
+/// Selected value calls or the resolved demand for a generic instance and slot.
+pub(crate) type SelectedDemands = RefCell<HashMap<InstanceSlot, SelectedDemand>>;
+
+type InstanceSlot = (String, usize);
+
+#[derive(Clone, Debug)]
+pub(crate) enum SelectedDemand {
+    Read(bool),
+    Calls(Rc<[(Callee, usize)]>),
+}
+
+/// A deferred operator can select a body that only uses this value at run time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Demand {
+    IfSelected,
+    Always,
+}
 
 /// A known ordinary const input that participates in the instance identity.
 #[derive(Clone, Debug)]
@@ -69,15 +89,19 @@ impl Program {
         if let Some(limit) = known.limit {
             return Err(limit);
         }
-        let expected = callee
+        let demands = callee
             .declaration()
-            .and_then(|declaration| self.const_demands.get(&declaration))
-            .map_or(0, BTreeSet::len);
-        if known.values.len() == expected {
-            Ok(known.values)
-        } else {
-            Err(ConstInputFault::Unread)
+            .and_then(|declaration| self.const_demands.get(&declaration));
+        if demands.is_some_and(|demands| {
+            demands.iter().any(|(&slot, &demand)| {
+                demand == Demand::Always && !known.values.iter().any(|input| input.slot == slot)
+            })
+        }) {
+            return Err(ConstInputFault::Unread);
         }
+        // A deferred call only needs the conditional value where its
+        // selected candidate reads it. That candidate checks its own inputs.
+        Ok(known.values)
     }
 
     /// Analysis can check the known inputs even when another input remains
@@ -102,7 +126,14 @@ impl Program {
             reading: Vec::new(),
         };
         let mut known = ReadInputs::default();
-        for &slot in demand {
+        // Give unconditional inputs the first use of the read budget.
+        let ordered = [Demand::Always, Demand::IfSelected]
+            .into_iter()
+            .flat_map(|mode| demand.iter().filter(move |(_, demand)| **demand == mode));
+        for (&slot, &demand) in ordered {
+            if demand == Demand::IfSelected && !self.instance_reads_const(callee, slot) {
+                continue;
+            }
             let text_before = reader.text_left;
             let input = (|| {
                 let parameter = signature.parameters.get(slot).ok_or(Unread)?;
@@ -165,7 +196,9 @@ impl Program {
             match input {
                 Ok(input) => known.values.push(input),
                 Err(fault) => {
-                    if fault == TextLimit || (fault == ReaderLimit && known.limit.is_none()) {
+                    if demand == Demand::Always
+                        && (fault == TextLimit || (fault == ReaderLimit && known.limit.is_none()))
+                    {
                         known.limit = Some(fault);
                     }
                     reader.text_left = text_before;
@@ -173,6 +206,199 @@ impl Program {
             }
         }
         known
+    }
+
+    /// Follow a possible demand with the instance's types in place and its
+    /// ordinary consts still unread. A forwarded value only enters the key
+    /// if a selected candidate reads it, or selection remains unresolved.
+    fn instance_reads_const(&self, callee: &Callee, slot: usize) -> bool {
+        let mut pending = VecDeque::from([(callee.clone(), slot, None)]);
+        let mut followed = HashMap::<Declaration, usize>::new();
+        let mut seen = HashSet::new();
+        // Parent indices record the path that proves a slot is read.
+        let mut paths = Vec::new();
+        while let Some((callee, slot, parent)) = pending.pop_front() {
+            let (Callee::Candidate {
+                module,
+                declaration,
+                requirements,
+                ..
+            }
+            | Callee::Function {
+                module,
+                declaration,
+                requirements,
+                ..
+            }) = &callee
+            else {
+                self.remember_read(parent, &paths);
+                return true;
+            };
+            let declaration = (*module, *declaration);
+            let Some(key) = crate::values::bounded_instance_key(
+                declaration,
+                callee.generics(),
+                callee.type_packs(),
+                requirements,
+            ) else {
+                // The instance walk will report its own limit.
+                self.remember_read(parent, &paths);
+                return true;
+            };
+            let key = (key, slot);
+            let cached = self.selected_const_demands.borrow().get(&key).cloned();
+            if let Some(SelectedDemand::Read(read)) = cached {
+                if read {
+                    self.remember_read(parent, &paths);
+                    return true;
+                }
+                continue;
+            }
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            let count = followed.entry(declaration).or_default();
+            *count += 1;
+            if *count > crate::INSTANCES {
+                // Only the root used this traversal's full budget.
+                let (root, _) = &paths[0];
+                self.selected_const_demands
+                    .borrow_mut()
+                    .insert(root.clone(), SelectedDemand::Read(true));
+                return true;
+            }
+            let direct = cached.unwrap_or_else(|| {
+                let direct = self.selected_const_calls(&callee, declaration, requirements, slot);
+                self.selected_const_demands
+                    .borrow_mut()
+                    .insert(key.clone(), direct.clone());
+                direct
+            });
+            match direct {
+                SelectedDemand::Read(true) => {
+                    self.remember_read(parent, &paths);
+                    return true;
+                }
+                SelectedDemand::Read(false) => {}
+                SelectedDemand::Calls(calls) => {
+                    let index = paths.len();
+                    paths.push((key, parent));
+                    pending.extend(
+                        calls
+                            .iter()
+                            .cloned()
+                            .map(|(callee, slot)| (callee, slot, Some(index))),
+                    );
+                }
+            }
+        }
+        // No path reached a read, including paths that only cycle.
+        self.selected_const_demands.borrow_mut().extend(
+            paths
+                .into_iter()
+                .map(|(key, _)| (key, SelectedDemand::Read(false))),
+        );
+        false
+    }
+
+    fn remember_read(&self, mut parent: Option<usize>, paths: &[(InstanceSlot, Option<usize>)]) {
+        let mut cache = self.selected_const_demands.borrow_mut();
+        while let Some(index) = parent {
+            let (key, earlier) = &paths[index];
+            cache.insert(key.clone(), SelectedDemand::Read(true));
+            parent = *earlier;
+        }
+    }
+
+    /// Read one concrete body for this slot and keep its direct demand edges.
+    fn selected_const_calls(
+        &self,
+        callee: &Callee,
+        (module, declaration): Declaration,
+        requirements: &[Answer],
+        slot: usize,
+    ) -> SelectedDemand {
+        let unit = &self.modules[module];
+        let Some(Detail::Callable(signature)) = unit.details.get(declaration) else {
+            return SelectedDemand::Read(true);
+        };
+        let Some(parameter) = signature.parameters.get(slot) else {
+            return SelectedDemand::Read(true);
+        };
+        let placement_reports = RefCell::new(Diagnostics::new());
+        let mut body_reports = Diagnostics::new();
+        let Some(instance) = self.checked_instance(
+            (module, declaration),
+            callee.generics(),
+            requirements,
+            crate::InstanceInputs {
+                type_packs: callee.type_packs(),
+                ..crate::InstanceInputs::default()
+            },
+            &placement_reports,
+            &mut body_reports,
+        ) else {
+            return SelectedDemand::Read(true);
+        };
+        if body_reports.has_errors() || placement_reports.borrow().has_errors() {
+            return SelectedDemand::Read(true);
+        }
+        let bindings = local_bindings(unit);
+        let slots = HashMap::from([(parameter.at, slot)]);
+        let reads_parameter = |argument: &Expr| {
+            let mut reads = false;
+            slots_read(argument, &bindings, &slots, |_| reads = true);
+            reads
+        };
+        let mut calls = Vec::new();
+        let mut required = false;
+        instance.walk_calls(&mut |call| {
+            let ExprKind::Call {
+                callee, arguments, ..
+            } = &call.kind
+            else {
+                return;
+            };
+            if required {
+                return;
+            }
+            if let Some(signature) = formatting::value_signature(self, callee) {
+                required = formatting::argument(signature, arguments, "fmt_str")
+                    .is_some_and(|pattern| reads_parameter(&pattern.value));
+                return;
+            }
+            if matches!(callee, Callee::DeferredPackCall) {
+                required = true;
+                return;
+            }
+            for argument in arguments
+                .iter()
+                .filter(|argument| reads_parameter(&argument.value))
+            {
+                let (Some(declaration), Some(slot)) = (callee.declaration(), argument.parameter)
+                else {
+                    required = true;
+                    break;
+                };
+                match self
+                    .const_demands
+                    .get(&declaration)
+                    .and_then(|slots| slots.get(&slot))
+                {
+                    Some(Demand::Always) => {
+                        required = true;
+                        break;
+                    }
+                    Some(Demand::IfSelected) => calls.push((callee.clone(), slot)),
+                    None => {}
+                }
+            }
+        });
+        if required || calls.is_empty() {
+            SelectedDemand::Read(required)
+        } else {
+            SelectedDemand::Calls(calls.into())
+        }
     }
 }
 
@@ -563,17 +789,21 @@ fn key_value(value: &Expr, output: &mut String) -> Result<(), ConstInputFault> {
 /// Follow demand for a compile-time value back through its call arguments.
 pub(crate) fn demands(program: &Program) -> Demands {
     let mut required = Demands::new();
-    let mut uses: HashMap<Slot, Vec<Slot>> = HashMap::new();
+    let mut uses: HashMap<Slot, Vec<(Slot, Demand)>> = HashMap::new();
     let mut pending = VecDeque::new();
+    let mut candidates: HashMap<Declaration, Vec<Declaration>> = HashMap::new();
+    for (module, unit) in program.modules.iter().enumerate() {
+        for (declaration, declared) in unit.declarations.iter().enumerate() {
+            if let Some((Role::Value, Some(operator))) = declared.kind.candidate() {
+                candidates
+                    .entry((operator.module, operator.declaration))
+                    .or_default()
+                    .push((module, declaration));
+            }
+        }
+    }
     for (module_index, module) in program.modules.iter().enumerate() {
-        let bindings: HashMap<_, _> = module
-            .uses
-            .iter()
-            .filter_map(|used| match &used.binding {
-                Binding::Local { at, .. } => Some(((used.at.file, used.at.span.start), *at)),
-                _ => None,
-            })
-            .collect();
+        let bindings = local_bindings(module);
         for (declaration, body) in module.bodies.iter().enumerate() {
             let (Some(body), Some(Detail::Callable(signature))) =
                 (body, module.details.get(declaration))
@@ -591,7 +821,64 @@ pub(crate) fn demands(program: &Program) -> Demands {
                 continue;
             }
             let caller = (module_index, declaration);
+            let mut read_pattern = |pattern: &Expr| {
+                if crate::values::fixed_expression(pattern, &|_, at| {
+                    bindings
+                        .get(&(at.file, at.span.start))
+                        .is_some_and(|at| slots.contains_key(at))
+                }) {
+                    slots_read(pattern, &bindings, &slots, |slot| {
+                        pending.push_back(((caller, slot), Demand::Always));
+                    });
+                }
+            };
+            let mut deferred_at = HashSet::new();
+            for selection in &module.selecting[declaration] {
+                if selection.graph {
+                    continue;
+                }
+                deferred_at.insert(selection.at);
+                if let Some(pattern) = formatting::deferred_pattern(program, selection) {
+                    read_pattern(pattern);
+                    continue;
+                }
+                let operator = selection.operator;
+                let Some(alternatives) = candidates.get(&(operator.module, operator.declaration))
+                else {
+                    continue;
+                };
+                for &(unit, member) in alternatives {
+                    let candidate = &program.modules[unit];
+                    if let Some(test) = candidate.declarations[member].test_owner
+                        && (unit != module_index
+                            || module.declarations[declaration].test_owner != Some(test))
+                    {
+                        continue;
+                    }
+                    let Some(Detail::Callable(parameters)) = candidate.details.get(member) else {
+                        continue;
+                    };
+                    for (position, _) in parameters
+                        .parameters
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, parameter)| parameter.constant)
+                    {
+                        if let Some(argument) = selection.argument_for(parameters, position) {
+                            slots_read(argument, &bindings, &slots, |slot| {
+                                uses.entry(((unit, member), position))
+                                    .or_default()
+                                    .push(((caller, slot), Demand::IfSelected));
+                            });
+                        }
+                    }
+                }
+            }
             crate::values::walk_body_calls(body, &mut |call| {
+                // A provisional candidate does not make its demands unconditional.
+                if deferred_at.contains(&call.at) {
+                    return;
+                }
                 let ExprKind::Call {
                     callee, arguments, ..
                 } = &call.kind
@@ -603,13 +890,8 @@ pub(crate) fn demands(program: &Program) -> Demands {
                 };
                 if let Some(signature) = formatting::value_signature(program, callee)
                     && let Some(pattern) = formatting::argument(signature, arguments, "fmt_str")
-                    && crate::values::fixed_expression(&pattern.value, &|slot| {
-                        slots.values().any(|position| *position == slot)
-                    })
                 {
-                    slots_read(&pattern.value, &bindings, &slots, |slot| {
-                        pending.push_back((caller, slot));
-                    });
+                    read_pattern(&pattern.value);
                 }
                 for argument in arguments {
                     let Some(position) = argument.parameter else {
@@ -618,20 +900,38 @@ pub(crate) fn demands(program: &Program) -> Demands {
                     slots_read(&argument.value, &bindings, &slots, |slot| {
                         uses.entry((called, position))
                             .or_default()
-                            .push((caller, slot));
+                            .push(((caller, slot), Demand::Always));
                     });
                 }
             });
         }
     }
-    while let Some((declaration, slot)) = pending.pop_front() {
-        if required.entry(declaration).or_default().insert(slot)
-            && let Some(callers) = uses.remove(&(declaration, slot))
-        {
-            pending.extend(callers);
+    while let Some(((declaration, slot), demand)) = pending.pop_front() {
+        let slots = required.entry(declaration).or_default();
+        if slots.get(&slot).is_some_and(|earlier| *earlier >= demand) {
+            continue;
+        }
+        slots.insert(slot, demand);
+        if let Some(callers) = uses.get(&(declaration, slot)) {
+            pending.extend(
+                callers
+                    .iter()
+                    .map(|&(caller, edge)| (caller, demand.min(edge))),
+            );
         }
     }
     required
+}
+
+fn local_bindings(module: &crate::Module) -> HashMap<(hgl_source::FileId, u32), Location> {
+    module
+        .uses
+        .iter()
+        .filter_map(|used| match &used.binding {
+            Binding::Local { at, .. } => Some(((used.at.file, used.at.span.start), *at)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Use lexical bindings so a captured parameter keeps its original slot.

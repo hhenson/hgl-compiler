@@ -96,6 +96,55 @@ fn formatting_checks_const_inputs_at_every_call() {
     );
 }
 
+/// FMT-3, FMT-4 and GEN-7: a concrete selection checks its pattern and
+/// reports at the outside call, including through a relay or a capture.
+#[test]
+fn formatting_checks_deferred_const_inputs_at_the_caller() {
+    let checked = with_core(concat!(
+        "const fn show<T>(const pattern: str, value: T) -> str => format(pattern, value)\n",
+        "const fn relay<T>(const pattern: str, value: T) -> str => show(pattern, value)\n",
+        "const fn named<T>(const pattern: str, value: T) -> str => format(pattern, item: value)\n",
+        "operator shown<T>{const pattern: str}(value: T) -> str\n",
+        "impl const fn shown{const pattern: str}(value: f64) -> str => format(pattern, value)\n",
+        "impl const fn shown{const pattern: str}(value: i64) -> str => pattern\n",
+        "const fn choose<T>(const pattern: str, value: T) -> str requires T in {f64, i64} => shown{pattern: pattern}(value)\n",
+        "const fn apply(f: const fn(f64) -> str) -> str => f(1.5)\n",
+        "const fn cap(const pattern: str) -> str => apply(fn(value) => format(pattern, value))\n",
+        "test direct { assert show<f64>(\"{:x}\", 1.5) == \"\" }\n",
+        "test chain { assert relay(\"{:x}\", 1.5) == \"\" }\n",
+        "test option { assert choose(\"{:x}\", 1.5) == \"\" }\n",
+        "test named_argument { assert named(\"{item:x}\", 1.5) == \"\" }\n",
+        "test captured { assert cap(\"{:x}\") == \"\" }\n",
+        "test runtime { assert choose(\"{:x}\", 1) == \"{:x}\" }\n",
+        "const fn repeat<T>(const pattern: str, value: T, turns: i64) -> str requires T in {f64, i64} {\n",
+        "    if turns == 0 { return choose(pattern, value) }\n",
+        "    return repeat(pattern + \"x\", value, turns - 1)\n",
+        "}\n",
+        "test runtime_recursion { assert repeat(\"\", 1, 3) == \"xxx\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:11:22 type/format.specifier FMT-4",
+            "m.hgl:12:21 type/format.specifier FMT-4",
+            "m.hgl:13:22 type/format.specifier FMT-4",
+            "m.hgl:14:30 type/format.specifier FMT-4",
+            "m.hgl:15:24 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+    for instance in ["show<f64>", "relay<f64>", "shown", "choose<f64>", "cap"] {
+        assert!(
+            checked
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            checked.report,
+        );
+    }
+}
+
 /// GEN-7: an independent const input rejects at its body call once.
 #[test]
 fn formatting_checks_independent_const_inputs_once() {
@@ -203,6 +252,53 @@ fn demanded_const_input_growth_reports_the_instance_limit() {
         "{}",
         checked.report,
     );
+}
+
+/// GEN-13: each instance reaches the next demanded pattern through a relay.
+#[test]
+fn demanded_const_input_growth_through_a_generic_relay() {
+    let checked = with_core(concat!(
+        "const fn grow<T>(const pattern: str, value: T) -> str => format(pattern, value) + relay(pattern + \"x\", value)\n",
+        "const fn relay<T>(const pattern: str, value: T) -> str => grow(pattern, value)\n",
+        "test t { assert grow(\"{}\", 1) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:17 type/generic.instance_limit GEN-13"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// GEN-13: following a possible const demand shares the instance walk's bounds.
+#[test]
+fn demanded_const_input_growth_bounds_conditional_selection() {
+    for next in ["[w]", "(w, w)"] {
+        let source = format!(
+            "operator variant<T>{{const pattern: str}}(value: T) -> str\n\
+             impl const fn variant{{const pattern: str}}(value: f64) -> str => format(pattern, value)\n\
+             impl const fn variant{{const pattern: str}}(value: i64) -> str => pattern\n\
+             const fn grow<T, V, U>(const p: str, v: T, other: V, w: U, turns: i64) -> str\n\
+                 requires T in {{f64, i64}} && V in {{f64, i64}} {{\n\
+                 if turns == 0 {{ return variant{{pattern: p}}(v) }}\n\
+                 return grow(p, other, v, {next}, turns - 1)\n\
+             }}\n\
+             test integer {{ assert grow(\"<{{}}>\", 1, 2, 1, 2) == \"<{{}}>\" }}\n\
+             test float {{ assert grow(\"<{{}}>\", 1.5, 2.5, 1, 2) == \"<1.5>\" }}\n\
+             test alternating {{ assert grow(\"<{{}}>\", 1, 2.5, 1, 2) == \"<{{}}>\" }}\n"
+        );
+        let checked = with_core(&source);
+        assert_eq!(
+            checked.summary(),
+            [
+                "m.hgl:10:23 type/generic.instance_limit GEN-13",
+                "m.hgl:11:21 type/generic.instance_limit GEN-13",
+                "m.hgl:12:27 type/generic.instance_limit GEN-13",
+            ],
+            "{next}: {}",
+            checked.report,
+        );
+    }
 }
 
 /// FN-1: const instancing does not change the admission of projections

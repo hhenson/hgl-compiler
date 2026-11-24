@@ -610,7 +610,7 @@ impl<'a> Typer<'a> {
     /// the enclosing function's own `const` parameters." CTRL-16 also
     /// supplies constants from active unrolled passes to range bounds.
     pub(super) fn is_fixed(&self, value: &Expr, range_bindings: &[LocalId]) -> bool {
-        fixed_expression(value, &|local| {
+        fixed_expression(value, &|local, _| {
             range_bindings.contains(&local)
                 || self
                     .signature
@@ -690,15 +690,17 @@ impl<'a> Typer<'a> {
 const RUN_OUTPUT_KEY: &str = "run.output";
 
 /// Whether a typed expression of fixed locals meets FN-1.
-pub(crate) fn fixed_expression(value: &Expr, fixed_local: &dyn Fn(LocalId) -> bool) -> bool {
+pub(crate) fn fixed_expression(
+    value: &Expr,
+    fixed_local: &dyn Fn(LocalId, Location) -> bool,
+) -> bool {
     let fixed = |operand: &Expr| fixed_expression(operand, fixed_local);
     match &value.kind {
         ExprKind::Literal(_)
         | ExprKind::EnumMember { .. }
         | ExprKind::GenericValue { .. }
         | ExprKind::Constant { .. } => true,
-        // A parameter's local has its position among the parameters.
-        ExprKind::Local(local) => fixed_local(*local),
+        ExprKind::Local(local) => fixed_local(*local, value.at),
         ExprKind::Widen(inner) => fixed(inner),
         // ERR-12 and ERR-15 read the argument's existing value.
         ExprKind::Raised { result, .. } | ExprKind::OrNull { result, .. } => fixed(result),
