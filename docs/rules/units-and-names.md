@@ -56,7 +56,7 @@ analyser: done
 
 analyser: partial
 
-- A default resolves in the enclosing scope, excluding its callable's formal parameters and its struct's fields. It can read an outer declaration with the same name. Its own block bindings stay in scope during specialization.
+- A default resolves in the enclosing scope. A reference to a formal parameter of its callable or a field of its struct reports `default.formal_argument` before outer lookup. Its own block bindings stay in scope during specialization.
 - An imported default retains its defining module's private bindings, even where the caller binds the same name.
 - GEN-18 law-predicate defaults alone may name a formal function parameter; the call reads its declared metadata.
 

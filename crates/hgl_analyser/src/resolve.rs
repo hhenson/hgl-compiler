@@ -1111,6 +1111,10 @@ impl Resolver<'_> {
             return self.used(token, Binding::Local { at: bound, kind });
         }
 
+        if self.reject_default_name(token) {
+            return None;
+        }
+
         // A `use` of the file (UNIT-2: imports bind in their own file).
         let import = self.module.files[self.file]
             .imports
@@ -1193,8 +1197,8 @@ impl Resolver<'_> {
             );
         }
 
-        // Defaults and earlier statements can still see a prelude name
-        // that an out-of-scope parameter or later local would hide.
+        // Earlier statements can still see a prelude name that a later
+        // local would hide when declared (UNIT-6, UNIT-12).
         if let Some(core) = self.program.core()
             && core != self.index
         {
@@ -1227,21 +1231,6 @@ impl Resolver<'_> {
                     "UNIT-6",
                 )
                 .with_related(later, "declared here"),
-            );
-            return None;
-        }
-
-        // UNIT-7: what a default may not read.
-        if let Some(hidden) = self.hidden.iter().find(|hidden| hidden.name == name) {
-            self.diagnostics.emit(
-                error(
-                    Category::Name,
-                    codes::DEFAULT_FORMAL_ARGUMENT,
-                    at,
-                    format!("a default cannot read `{name}`, {}", hidden.what),
-                    "UNIT-7",
-                )
-                .with_related(hidden.at, "declared here"),
             );
             return None;
         }
@@ -1287,9 +1276,37 @@ impl Resolver<'_> {
         None
     }
 
+    /// UNIT-7 rejects a formal or field name in a default before looking
+    /// for the same name in the enclosing scope.
+    fn reject_default_name(&mut self, token: &SyntaxToken) -> bool {
+        let name = token.text();
+        let Some(hidden) = self.hidden.iter().find(|hidden| hidden.name == name) else {
+            return false;
+        };
+        self.diagnostics.emit(
+            error(
+                Category::Name,
+                codes::DEFAULT_FORMAL_ARGUMENT,
+                self.at(token),
+                format!("a default cannot read `{name}`, {}", hidden.what),
+                "UNIT-7",
+            )
+            .with_related(hidden.at, "declared here"),
+        );
+        true
+    }
+
     /// UNIT-2: "an alias qualifies a public interface with
     /// `alias::name`."
     fn qualified(&mut self, alias: &SyntaxToken, name: &SyntaxToken) -> Option<Binding> {
+        let bound = self
+            .frames
+            .iter()
+            .rev()
+            .find_map(|frame| frame.bound.get(alias.text()).copied());
+        if bound.is_none() && self.reject_default_name(alias) {
+            return None;
+        }
         let import = self.module.files[self.file]
             .imports
             .iter()
@@ -1310,12 +1327,7 @@ impl Resolver<'_> {
             );
             return None;
         };
-        if let Some(&(at, kind)) = self
-            .frames
-            .iter()
-            .rev()
-            .find_map(|frame| frame.bound.get(alias.text()))
-        {
+        if let Some((at, kind)) = bound {
             self.diagnostics.emit(
                 error(
                     Category::Name,

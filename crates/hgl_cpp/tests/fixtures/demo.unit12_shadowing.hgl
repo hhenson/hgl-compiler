@@ -20,7 +20,7 @@ const fn callback(helper: const fn(i64) -> i64) -> i64 => helper(4)
 @suppress_warning("name.hides_function")
 const fn quiet(helper: const fn(i64) -> i64) -> i64 => helper(5)
 
-const fn prelude_name(format: str = format("seed")) -> str => format
+const fn prelude_name(text: str = format("seed")) -> str => text
 
 const fn prelude_local() -> str {
     let before = format("{}", 3)

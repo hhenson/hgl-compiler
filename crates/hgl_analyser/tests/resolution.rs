@@ -236,7 +236,7 @@ fn blocks_that_do_not_enclose_one_another_may_reuse_a_name() {
 fn the_chapters_rejections_are_rejected() {
     let accepted = module(concat!(
         "const fn seed() -> i64 => 7\n",
-        "const fn choose(base: i64, seed: i64 = seed()) -> i64 => base + seed\n",
+        "const fn choose(base: i64, value: i64 = seed()) -> i64 => base + value\n",
         "test defining_closure {\n    assert choose(1) == 8\n}\n",
     ));
     assert_eq!(accepted.summary(), NONE);
@@ -836,8 +836,8 @@ fn annotations_and_defaults_see_the_outer_scope() {
 const fn seed() -> i64 => 11
 const fn same_name(n: i64, items: list<f64, n>) -> list<f64, n> => items
 const fn lambda() -> list<f64, 2> => (fn(n: i64, items: list<f64, n>) => items)(3, [1.0, 2.0])
-const fn module_default(seed: i64 = seed()) -> i64 => seed
-const fn prelude_default(format: str = format("seed")) -> str => format
+const fn module_default(data: i64 = seed()) -> i64 => data
+const fn prelude_default(answer: str = format("seed")) -> str => answer
 const fn missing_formal(parameter: i64 = 1, value: i64 = parameter) -> i64 => value"#,
     );
     assert_eq!(checked.findings.len(), 1, "{}", checked.report);
@@ -1081,6 +1081,72 @@ const fn wrong_label(bad: i64) -> i64 => label_only(bad: bad)"#,
             "m.hgl:6:21 name/name.captured FN-14",
             "m.hgl:9:42 type/argument.missing EXPR-2",
             "m.hgl:9:53 name/argument.unknown EXPR-2",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// UNIT-7 prohibits names of formals and fields in defaults, including
+/// when UNIT-12 allows a formal to take a callable's name.
+#[test]
+fn a_default_checks_formal_and_field_names_before_outer_lookup() {
+    let checked = module(
+        r#"struct S {
+    format: str = "a"
+    b: str = format
+}
+struct S2 {
+    format: str = "a"
+    b: str = format("{}", 1)
+}
+const fn d2(format: str, b: str = format) -> str => b
+const fn helper() -> i64 => 1
+const fn e(helper: i64, c: i64 = helper) -> i64 => c
+const fn g(helper: i64, c: i64 = helper()) -> i64 => c
+struct U3 {
+    helper: i64 = 5
+    c: i64 = helper()
+}"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:14 name/default.formal_argument UNIT-7",
+            "m.hgl:8:14 name/default.formal_argument UNIT-7",
+            "m.hgl:10:35 name/default.formal_argument UNIT-7",
+            "m.hgl:12:34 name/default.formal_argument UNIT-7",
+            "m.hgl:13:34 name/default.formal_argument UNIT-7",
+            "m.hgl:16:14 name/default.formal_argument UNIT-7",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// UNIT-7 also holds when the formal shares a name with a file import.
+#[test]
+fn a_default_checks_formal_names_before_resolving_file_imports() {
+    let checked = check(&[
+        (
+            "lib.hgl",
+            "module lib\nexport const fn marker() -> i64 => 7\n",
+        ),
+        (
+            "m.hgl",
+            r#"module m
+use lib::{marker}
+use lib as dep
+const fn first(marker: i64, value: i64 = marker()) -> i64 => value
+const fn second(dep: i64, value: i64 = dep::marker()) -> i64 => value
+const fn outer(value: i64 = dep::marker()) -> i64 => value"#,
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:42 name/default.formal_argument UNIT-7",
+            "m.hgl:5:40 name/default.formal_argument UNIT-7",
         ],
         "{}",
         checked.report
