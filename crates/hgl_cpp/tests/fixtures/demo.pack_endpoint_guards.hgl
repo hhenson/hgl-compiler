@@ -1,0 +1,65 @@
+module demo.pack_endpoint_guards
+
+fn positional(items: ...i64) -> i64 {
+    when valid(items[0]) { return items[0] }
+}
+fn positional_graph(first: i64, other: i64) -> i64 => positional(first, other)
+
+fn named<...As>(items: ...{As}) -> i64 {
+    when modified(items["first"]) && valid([]) { return items["first"] }
+}
+fn named_graph(first: i64, other: i64) -> i64 => named(first: first, other: other)
+
+fn fixed_list(items: ...list<i64, 2>) -> list<i64, 2> {
+    when all_valid(items[0]) { return items[0] }
+}
+fn fixed_graph(input: list<i64, 2>) -> list<i64, 2> => fixed_list(input)
+
+fn ordinary_fixed_list(input: list<i64, 2>) -> list<i64, 2> {
+    when all_valid(input) { return input }
+}
+
+fn mixed(probe: i64, items: ...i64) -> i64 {
+    when modified(probe) && valid(probe, items[0]) { return probe + items[0] }
+}
+fn mixed_graph(probe: i64, first: i64, other: i64) -> i64 =>
+    mixed(probe, first, other)
+
+fn either(probe: i64, items: ...i64) -> i64 {
+    when modified(probe, items[0]) && valid([]) { return 1 }
+}
+fn either_graph(probe: i64, first: i64, other: i64) -> i64 =>
+    either(probe, first, other)
+
+fn body_guard(tick: signal, items: ...i64) -> i64 {
+    when modified(tick) && valid([]) {
+        if valid(items[0]) { return items[0] }
+    }
+}
+fn body_graph(tick: bool, first: i64, other: i64) -> i64 =>
+    body_guard(tick, first, other)
+
+test pack_guards {
+    assert eval positional_graph(first: [_, 5], other: [_, _]) == [_, 5]
+    assert eval named_graph(first: [5, _, 7, _], other: [_, 42, _, 43]) == [5, _, 7, _]
+    assert eval fixed_graph(input: [
+        delta<list<i64, 2>>(updated: [1: 7]),
+        delta<list<i64, 2>>(updated: [0: 9]),
+    ]) == [_, [9, 7]]
+    assert eval ordinary_fixed_list(input: [
+        delta<list<i64, 2>>(updated: [1: 7]),
+        delta<list<i64, 2>>(updated: [0: 9]),
+    ]) == [_, [9, 7]]
+    assert eval mixed_graph(probe: [7, 8, 9], first: [_, 5, _], other: [_, _, _]) == [_, 13, 14]
+    assert eval either_graph(probe: [_, _, 8], first: [_, 5, _], other: [9, _, _]) == [_, 1, 1]
+    assert eval body_graph(tick: [true, true, true], first: [_, 5, _], other: [7, 8, 9]) == [_, 5, 5]
+}
+
+fn selected<const Key: i64>(values: ...i64) -> i64 {
+    when valid(values[Key]) { return values[0] }
+}
+fn selected_graph(first: i64, other: i64) -> i64 => selected<0>(first, other)
+
+test a_const_key_selects_the_entry {
+    assert eval selected_graph(first: [_, 5], other: [_, _]) == [_, 5]
+}

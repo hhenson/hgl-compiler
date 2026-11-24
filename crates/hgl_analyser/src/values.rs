@@ -1199,4 +1199,6 @@ enum Fact {
     /// This child of a collection is valid: `valid(parts[1])`, which
     /// admits "that one" (TIME-1).
     ChildValid(children::ChildPath),
+    /// A guard selects an entry, but its key needs the instance (GEN-7).
+    DeferredPackGuard { pack: LocalId, all_valid: bool },
 }

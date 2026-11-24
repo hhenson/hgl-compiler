@@ -24,7 +24,8 @@ use super::fit::{not_null, nullable, window_value};
 use super::node::RefRead;
 use super::{BOOL, Fact, Typer};
 use crate::hir::{
-    EndpointOperation, Expr, ExprKind, Hook, LabelValue, LocalId, PackKey, ValueCategory,
+    EndpointOperation, Expr, ExprKind, Hook, LabelValue, LocalId, PackEndpointSelection, PackKey,
+    ValueCategory,
 };
 use crate::syntax::{tokens, ungrouped};
 use crate::types::{ConstantValue, Detail, NamedKind, Scalar, Type};
@@ -43,6 +44,15 @@ pub(super) struct ChildPath {
 }
 
 impl ChildPath {
+    /// The root of one selected input, rather than the whole pack.
+    pub(super) fn pack_entry(input: LocalId, entry: PackKey) -> Self {
+        Self {
+            input,
+            entry: Some(entry),
+            steps: Vec::new(),
+        }
+    }
+
     /// The collection the child is of: the path less its last step.
     fn parent(&self) -> ChildPath {
         let mut steps = self.steps.clone();
@@ -264,7 +274,7 @@ impl Typer<'_> {
 
     /// The selected temporal entry's endpoint type before a hook
     /// projects it to its payload (TYPE-9, TYPE-11).
-    fn packed_input_type(&self, pack: LocalId, key: Option<&PackKey>) -> Option<&Type> {
+    pub(super) fn packed_input_type(&self, pack: LocalId, key: Option<&PackKey>) -> Option<&Type> {
         if !self.is_temporal_input(pack) {
             return None;
         }
@@ -803,6 +813,21 @@ pub(super) fn child_facts(operation: EndpointOperation, path: ChildPath) -> Vec<
         facts.push(Fact::AllValid(path));
     }
     facts
+}
+
+/// What a direct-entry guard proves. An unread key defers admission to
+/// the instance, without proving validity for the entire pack (GEN-7).
+pub(super) fn pack_guard_facts(
+    operation: EndpointOperation,
+    entry: PackEndpointSelection,
+) -> Vec<Fact> {
+    match entry.key {
+        Some(key) => child_facts(operation, ChildPath::pack_entry(entry.pack, key)),
+        None => vec![Fact::DeferredPackGuard {
+            pack: entry.pack,
+            all_valid: operation == EndpointOperation::AllValid,
+        }],
+    }
 }
 
 /// What `all_valid` of a temporal input proves where it holds: each of

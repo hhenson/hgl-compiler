@@ -4912,3 +4912,82 @@ fn symbol_operands_skip_the_public_configuration_slots() {
         .collect();
     assert_eq!(slots, [Some(1), Some(0), Some(2)]);
 }
+
+/// FN-19, TIME-1 and TIME-4: validity facts name the selected entry.
+#[test]
+fn temporal_pack_guards_do_not_admit_unselected_payloads() {
+    for (source, hint) in [
+        (
+            "fn read(items: ...i64) -> i64 {\n\
+             when valid(items[0]) { return items[1] }\n\
+             }",
+            "if valid(items[1])",
+        ),
+        (
+            "fn read<...As>(items: ...{As}) -> i64 {\n\
+             when valid(items[\"left\"]) { return items[\"right\"] }\n\
+             }",
+            "if valid(items[\"right\"])",
+        ),
+        (
+            "fn read(items: ...i64) -> i64 {\n\
+             when modified(items[0], items[1]) && valid([]) { return items[0] }\n\
+             }",
+            "if valid(items[0])",
+        ),
+        (
+            "fn read(tick: signal, items: ...i64) -> i64 {\n\
+             when modified(tick) && valid([]) { return items[0] }\n\
+             }",
+            "if valid(items[0])",
+        ),
+        (
+            "fn read(items: ...list<i64, 2>) -> list<i64, 2> {\n\
+             when valid(items[0]) { return items[0] }\n\
+             }",
+            "when all_valid(items[0])",
+        ),
+        (
+            "fn choose<const Key: i64>(items: ...i64) -> i64 {\n\
+             when valid(items[Key]) { return items[0] }\n\
+             }\n\
+             fn read(a: i64, b: i64) -> i64 => choose<1>(a, b)",
+            "if valid(items[0])",
+        ),
+    ] {
+        let checked = module(source);
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, "phase/payload.unguarded");
+        assert!(checked.report.contains(hint), "{}", checked.report);
+    }
+}
+
+/// TIME-5 and TIME-9: a packed input has the ordinary lifecycle and
+/// a scalar fails the same all-valid shape check as a direct input.
+#[test]
+fn temporal_pack_endpoints_keep_shape_and_lifecycle_checks() {
+    let checked = module(
+        r#"fn manage(items: ...i64) -> i64 {
+    when all_valid(items[0]) { return 1 }
+    stop {
+        activate(items[0])
+        passivate(items[0])
+    }
+}"#,
+    );
+    let codes: Vec<_> = checked
+        .findings
+        .iter()
+        .map(|finding| finding.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "phase/endpoint.argument",
+            "phase/input.lifecycle",
+            "phase/input.lifecycle",
+        ],
+        "{}",
+        checked.report,
+    );
+}

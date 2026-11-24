@@ -2355,6 +2355,29 @@ fn pack_entries_run_on_the_sdk() {
     );
 }
 
+/// FN-19, TIME-1, TIME-4 and TIME-9: guards and subscriptions use the
+/// selected temporal input after pack expansion.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn packed_input_guards_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("pack-endpoint-guards");
+    let file = write(
+        &root,
+        "demo.pack_endpoint_guards.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.pack_endpoint_guards.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-19: a range pass supplies a constant key (CTRL-16), and UNIT-13
 /// lets a module constant be computed by a call. Both checks succeed
 /// even when C++ cannot yet write the lookup.
