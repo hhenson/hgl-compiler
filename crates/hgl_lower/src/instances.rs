@@ -55,7 +55,7 @@ use hgl_analyser::{
 };
 use hgl_diagnostics::Location;
 
-use crate::calls::{DefaultValue, LeftOut, left_out, runtime_arguments};
+use crate::calls::{DefaultValue, LeftOut, applied_field_default, left_out, runtime_arguments};
 use crate::canonical::{canonical, canonical_argument};
 use crate::packs::{Captures, Slot};
 
@@ -203,6 +203,8 @@ struct Asked {
     generics: Vec<GenericArgument>,
     /// The concrete type sequences of the call's generic packs.
     type_packs: Vec<TypePackArgument>,
+    /// Ordinary const values needed by a compile-time check in the body.
+    constants: Vec<hgl_analyser::ConstInput>,
     /// Which arguments the call captures in its parameter packs.
     captures: Captures,
     /// What answers each requirement it states there.
@@ -281,6 +283,7 @@ pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring>
                 functions: &functions_of(arguments),
                 type_packs: callee.type_packs(),
                 pack_inputs: Some(&captures.inputs()),
+                ..hgl_analyser::InstanceInputs::default()
             },
         )
     };
@@ -592,9 +595,9 @@ fn answer_key(program: &Program, answer: &Answer) -> Option<String> {
     ))
 }
 
-/// Identify a concrete function or operator candidate, including what
-/// its generics and requirements stand for (GEN-13, GEN-16, FN-17).
-fn function_key(program: &Program, target: &Callee) -> Option<String> {
+/// Identify a concrete function or operator candidate and whether its key
+/// holds an anonymous body's const inputs (GEN-13, GEN-16, FN-17).
+fn function_key(program: &Program, target: &Callee) -> Option<(String, bool)> {
     if let Callee::Anonymous(function) = target {
         let types = function
             .body
@@ -656,16 +659,23 @@ fn function_key(program: &Program, target: &Callee) -> Option<String> {
         // A nested key is already encoded. Quoting it again would escape
         // the escapes at every level. Its byte length frames it as-is.
         let mut encoded = String::new();
+        let mut has_const = !function.specialization.const_inputs.is_empty();
         for target in targets {
-            let target = target?;
+            let (target, target_has_const) = target?;
+            has_const |= target_has_const;
             write!(encoded, "{}#{target}", target.len()).expect("writing to a string succeeds");
         }
-        return Some(format!(
+        for (slot, key) in &function.specialization.const_inputs {
+            write!(encoded, "const[{slot}]:{}#{key}", key.len())
+                .expect("writing to a string succeeds");
+        }
+        let key = format!(
             "anonymous:{}:{}:{}:{types:?}:{result:?}:{generic_arguments:?}:{type_packs:?}:{pack_inputs:?}:{encoded}",
             function.at.file.index(),
             function.at.span.start,
             function.template.value,
-        ));
+        );
+        return Some((key, has_const));
     }
     let declared = target.declaration()?;
     let Detail::Callable(signature) = &program.modules[declared.0].details[declared.1] else {
@@ -681,8 +691,14 @@ fn function_key(program: &Program, target: &Callee) -> Option<String> {
         }
         _ => return None,
     };
-    Some(format!("{declared:?}:{arguments:?}:{requirements:?}"))
+    Some((
+        format!("{declared:?}:{arguments:?}:{requirements:?}"),
+        false,
+    ))
 }
+
+/// Marks a function key with const text that should stay out of its C++ name.
+const CONST_FUNCTION_PREFIX: &str = "function with const inputs[";
 
 /// An instance that uses a test's candidate has different evidence from
 /// the same call with another test's candidate or with the module's (TST-1).
@@ -716,7 +732,7 @@ fn key<'a>(
     type_packs: &[TypePackArgument],
     captures: &Captures,
     functions: impl Iterator<Item = (usize, &'a Callee)> + Clone,
-    requirements: &[Answer],
+    (requirements, constants): (&[Answer], &[hgl_analyser::ConstInput]),
 ) -> Option<Vec<String>> {
     let Some(Detail::Callable(signature)) = program.modules.get(module)?.details.get(declaration)
     else {
@@ -736,10 +752,12 @@ fn key<'a>(
             continue;
         }
         let (_, target) = functions.clone().find(|(index, _)| *index == slot)?;
-        key.push(format!(
-            "function[{slot}]:{}",
-            function_key(program, target)?
-        ));
+        let (target, has_const) = function_key(program, target)?;
+        if has_const {
+            key.push(format!("{CONST_FUNCTION_PREFIX}{slot}]:{target}"));
+        } else {
+            key.push(format!("function[{slot}]:{target}"));
+        }
     }
     if requirements
         .iter()
@@ -753,6 +771,11 @@ fn key<'a>(
                 .collect::<Option<Vec<_>>>()?,
         );
     }
+    key.extend(
+        constants
+            .iter()
+            .map(|input| format!("const[{}]:{}", input.slot, input.key)),
+    );
     Some(key)
 }
 
@@ -844,6 +867,7 @@ impl Instances {
                         declaration,
                         generics: vec![GenericArgument::Type(result)],
                         type_packs: Vec::new(),
+                        constants: Vec::new(),
                         captures: Captures::default(),
                         requirements: Vec::new(),
                         functions: Vec::new(),
@@ -857,9 +881,20 @@ impl Instances {
             if let Some(body) = &module.store_body {
                 waiting.extend(instances.asked(program, &body.statements));
             }
-            // What is worked out with no body around it: a constant's
-            // value, and a default (UNIT-13, UNIT-8).
-            let defaults = module.defaults.iter().flatten().flatten();
+            // Generic struct defaults ask for instances at omitted
+            // fields, with the struct's arguments in place (TYPE-5).
+            let defaults = module
+                .defaults
+                .iter()
+                .zip(&module.details)
+                .filter_map(|(defaults, detail)| match detail {
+                    Detail::Struct(shape) if !shape.generics.is_empty() => None,
+                    _ => Some(defaults),
+                })
+                .flatten()
+                .flatten();
+            // Constants and other defaults are read in their defining
+            // scope (UNIT-13, UNIT-8).
             for value in module.constants.iter().flatten().chain(defaults) {
                 waiting.extend(instances.asked_in(program, &value.value));
             }
@@ -883,7 +918,7 @@ impl Instances {
                 &next.type_packs,
                 &next.captures,
                 next.functions.iter().map(|(slot, target)| (*slot, target)),
-                &next.requirements,
+                (&next.requirements, &next.constants),
             ) else {
                 continue;
             };
@@ -921,13 +956,24 @@ impl Instances {
                     functions: &next.functions,
                     type_packs: &next.type_packs,
                     pack_inputs: Some(&next.captures.inputs()),
+                    constants: &next.constants,
                 },
             ) else {
                 continue;
             };
             let (slots, pack_use) = next.captures.expand(&mut signature, &mut body);
             // The arguments as part of a name.
-            let plain: String = key
+            let mut plain: String = key[..key.len() - next.constants.len()]
+                .iter()
+                .map(|part| {
+                    if part.starts_with(CONST_FUNCTION_PREFIX) {
+                        part.split_once(':')
+                            .map_or(part.as_str(), |(binding, _)| binding)
+                    } else {
+                        part.as_str()
+                    }
+                })
+                .collect::<Vec<_>>()
                 .join("_")
                 .chars()
                 .map(|character| {
@@ -938,6 +984,11 @@ impl Instances {
                     }
                 })
                 .collect();
+            if !next.constants.is_empty() {
+                // The suffix distinguishes const instances without embedding
+                // the text of a potentially long pattern in an identifier.
+                plain.push_str("_const");
+            }
             // Two sets of arguments may differ only in characters that
             // are no letter or digit: a number then tells them apart.
             let mut suffix = plain.clone();
@@ -990,6 +1041,41 @@ impl Instances {
         value: &Expr,
         expanding: &mut Vec<(usize, usize, usize)>,
     ) -> Vec<Asked> {
+        if let ExprKind::Construct {
+            module,
+            declaration,
+            arguments,
+            ..
+        } = &value.kind
+        {
+            let Some(fields) = crate::types::fields_of(program, &value.ty) else {
+                return Vec::new();
+            };
+            let mut found = Vec::new();
+            for (slot, (member, expected)) in fields.into_iter().enumerate() {
+                let Some(field) = member.default else {
+                    continue;
+                };
+                let key = (*module, *declaration, usize::MAX - slot);
+                if arguments
+                    .iter()
+                    .any(|argument| argument.parameter == Some(slot))
+                    || expanding.contains(&key)
+                {
+                    continue;
+                }
+                if let Some(DefaultValue::Specialized(default)) =
+                    applied_field_default(program, field, &value.ty, &expected)
+                {
+                    expanding.push(key);
+                    default
+                        .value
+                        .walk(&mut |value| found.extend(self.asks(program, value, expanding)));
+                    expanding.pop();
+                }
+            }
+            return found;
+        }
         if let ExprKind::Eval { call, .. } = &value.kind {
             let Some(wiring) = run_wiring(program, call, &value.ty) else {
                 return Vec::new();
@@ -1000,6 +1086,7 @@ impl Instances {
                     declaration,
                     generics: vec![GenericArgument::Type(ty.clone())],
                     type_packs: Vec::new(),
+                    constants: Vec::new(),
                     captures: Captures::default(),
                     requirements: Vec::new(),
                     functions: Vec::new(),
@@ -1058,12 +1145,14 @@ impl Instances {
                 arguments,
                 &self.callable_limits,
             )
+            && let Ok(constants) = program.call_const_inputs(callee, arguments)
         {
             found.push(Asked {
                 module: *module,
                 declaration: *declaration,
                 generics: generics.clone(),
                 type_packs: callee.type_packs().to_vec(),
+                constants,
                 captures: Captures::of(program, callee, signature, arguments),
                 requirements: requirements.clone(),
                 functions: functions_of(arguments),
@@ -1126,6 +1215,7 @@ impl Instances {
     pub fn instanced(&self, program: &Program, module: usize, declaration: usize) -> bool {
         generic_temporal(program, module, declaration)
             || self.requiring.contains(&(module, declaration))
+            || program.needs_const_inputs((module, declaration))
     }
 
     /// The instances of `declaration` of `module`, in the order they
@@ -1152,7 +1242,7 @@ impl Instances {
             &[],
             &Captures::default(),
             std::iter::empty(),
-            &[],
+            (&[], &[]),
         )?;
         self.declared(module, declaration)
             .iter()
@@ -1213,6 +1303,7 @@ fn call_key(program: &Program, callee: &Callee, arguments: &[Argument]) -> Optio
         return None;
     };
     let captures = Captures::of(program, callee, signature, arguments);
+    let constants = program.call_const_inputs(callee, arguments).ok()?;
     let requirements = match callee {
         Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
             requirements.as_slice()
@@ -1226,6 +1317,6 @@ fn call_key(program: &Program, callee: &Callee, arguments: &[Argument]) -> Optio
         callee.type_packs(),
         &captures,
         function_arguments(arguments),
-        requirements,
+        (requirements, &constants),
     )
 }

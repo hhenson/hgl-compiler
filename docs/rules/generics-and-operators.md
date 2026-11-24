@@ -38,8 +38,13 @@ transpiler: partial
 
 ## GEN-3
 
+parser: done
+
+- Category keywords `struct` and `enum` occur only after a membership's `in`.
+
 analyser: partial
 
+- Category membership tests the nominal kind, including generic structs, and excludes nullable types, other composites, native types and ordinary constants. Stated category facts are preserved through generic calls; negation and disjunction do not invent positive category evidence. The complete `examples.categories` illustration executes all three selections, with the separate `i64` call rejected.
 - A positive conjunctive `any` equality binds one unresolved generic from the first matching pack entry, with tentative bindings discarded on a failed trial and conjuncts revisited to a fixed point. Negation and disjunction only test supplied bindings.
 - Bare bool generic terms and their negations are checked at calls and candidates; positive terms also state a bool bound in a generic body.
 - Inequality constraints parse and test resolved operands, including named module constants, without binding.
@@ -98,7 +103,7 @@ transpiler: done
 analyser: partial
 
 - In a value function a named call is matched against each value candidate's own signature
-- Outside a generic body, literals in named and symbolic operator calls are fitted independently by each candidate, with or without a selecting option. A typed argument still fixes its generic in a requested result; another literal argument does not erase that type. Public generic defaults, result requirements and reflected-pack checks keep their complete inference; inherited configuration defaults use the fitted input type (GEN-2, GEN-8, GEN-13, UNIT-8). Calls written in generic bodies retain the existing output request pending the GEN-7 result/literal work.
+- Outside a generic body, literals in named and symbolic operator calls are fitted independently by each candidate, with or without a selecting option. A typed argument still fixes its generic in a requested result; another literal argument does not erase that type. Public generic defaults, result requirements and reflected-pack checks keep their complete inference; inherited configuration defaults use the fitted input type (GEN-2, GEN-8, GEN-13, UNIT-8). Generic-dependent literals use the selected instance's type (GEN-7); fully concrete calls lexically inside a generic declaration and generic configuration-default metadata retain their existing handling.
 - Each value or temporal candidate supplies the function type of a fixed callback, including its phase (FN-17).
 - An option that selects is a generic value parameter, given by name or by its default, and the candidate's `requires` is checked against its value; one that does not select is a parameter, by name or position
 - An option's name is one kind across an operator's candidates
@@ -106,7 +111,9 @@ analyser: partial
 - A value candidate may mark a parameter `var`, which takes no part in selecting it (FN-15)
 - An option given a generic value parameter of the enclosing function, `step(v, mode: M)` in `go<const M: Mode>`, admits a candidate where the function's `requires` binds the parameter, `requires M == .slow` (GEN-3); where it states nothing of it, a default of it included, no candidate is known to admit the call, which is `operator.no_candidate` where the function is declared (GEN-7)
 - A fixed parameter in an operator pack's place reports the proposed `impl.pack` code at the candidate parameter name. A pack with cardinality one is accepted. Bare Boolean requirements await #367.
-- Left: a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidates
+- A candidate whose result is missing or contradicts the result its operator gives for its parameters reports `impl.result`. The report points to the written result type or to the candidate's name if it has no result.
+- The types and values bound by a candidate's declared parameters can show that the operator's `requires` does not hold. The candidate's name then reports `impl.requires`.
+- Left: other checks of a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidate selection
 
 ## GEN-7
 
@@ -118,6 +125,8 @@ analyser: partial
 - The call records the position of the requirement it is (`Callee::Required`), so that a call of the declaration says which candidate it calls
 - "It is judged once, where it is declared, by what its `requires` states, and never again for the generic arguments a call of it gives": a call of an operator in it is admitted where a candidate takes every generic argument the requirements admit, where a named operator requirement states it, or under a membership where each listed type has one (GEN-3), and otherwise the declaration rejects (`operator.no_candidate`, with a note), by name and by symbol, in a value function and a graph: the fragments `less` and `wrap` with no `requires`
 - Each instance selects again for an operator call whose operand types use the enclosing declaration's generic parameters, including when a generic candidate admitted the body. The new selection uses the instance's operands and the operator binding at the call (GEN-5), including private operators, symbols, and calls in nodes and graphs.
+- The covered function, node and graph calls fit integer, float and negative literals to each selected instance's candidate, with or without an operator option. Membership admission records a provisional result type; instance rechecks reach consumers that the declaration already admits with the literal's provisional `i64`. The supplied sum of calls using a typed seed and a literal seed gives `4.5` in its `f64` instance. Literal-free membership-admitted operator chains retain their result consumers too. A contextual result precedes input inference (GEN-2, EXPR-5). Unsupported or unstated memberships still reject the declaration.
+- Left: a literal-call result used as another call's argument, or multiplied by another literal-call result, can still reject where the generic body is declared although each admitted instance has fitting candidates (#734).
 - Instance checks reach named function references, calls in anonymous bodies, and concrete calls produced by pack forwarding, including forwarding reached through a reference. They enforce a selected candidate's `var` place (FN-15), `const` argument (FN-1, FN-3), and configuration (EXPR-14). A rejection keeps its ordinary code at the call that makes the instance, with the instance and failing body call named in related sites. Nested instances report at each outermost making call and name each instance in the chain.
 - An instance selects with the call's written or contextual output request. It rechecks uses when the selected result changes type, including inferred locals, calls, indexing and loops. A consumer of a selected result is checked in the enclosing instances that make it. A failed use retains its ordinary diagnostic code and gives the selected operator call as the failing site in its body (GEN-7).
 - A generic body reads a fixed list's inferred size `N` as an `i64` constant (GEN-13, TYPE-10). The C++ target executes it in arithmetic, range bounds, subscripts and local initializers in value code, node handlers and graph composition.
@@ -160,11 +169,18 @@ parser: partial
 
 analyser: partial
 
+- `tuple<Ts>` captures and expands a type pack in element order, including nested types, explicit arguments, cardinalities and repeated captures. Ordinary type parameters remain one element even when their type is itself a tuple. Tuple captures share the existing specialization path with ordinary calls and independently typed callbacks. Forwarded sequences retain their splice position among fixed tuple elements, and must prove the callee's category requirements under the wrapper's stated bounds. Every independent source pack survives specialization. A decisive existential witness or false conjunction needs a guaranteed element: declared bounds and an exact `tuple<Us>` parameter can supply that minimum; a pack beside fixed tuple elements cannot. Ordinary value-pack forwarding remains checked in the concrete instance (GEN-7). Tuple indices select a guaranteed member by its pack key, never a sequence marker; positions whose member cannot be determined for every admitted length reject at the declaration. The same effective minimum proves call cardinality. Tuple partition equations reuse settled argument types to a fixed point, tuple operands expand in requirements, and a pack cannot stand beneath an element's `?`.
 - A cardinality bounds the arguments a generic type's pack takes, and has its upper bound at least its lower
 - Function and operator calls check the cardinality of captured arguments against the value parameter and its generic type pack. Explicit positional type sequences also constrain the argument count. The HIR records the resolved sequence of types for each captured type pack.
 - A function's `each T in types(Ts)` checks its condition for every resolved type in the pack. An empty capture satisfies it. Equality and membership can test the bound type by name. A verdict the analyser cannot give rejects as untold (GEN-3).
 - GEN-17 adds quantification over pack keys. `any` succeeds for at least one entry and rejects an empty pack. Type and key bindings project within nested type expressions.
 - An `any` equality can infer a const generic nested in a type, such as a fixed list length, from either equality operand; an explicitly supplied value is preserved (GEN-3).
+- Tuple candidate ranking expands captured arities into declared variables before comparing components; a concrete component outranks an unconstrained tuple-pack member (GEN-5, GEN-12). Explicit callback packs keep their supplied function types, and a template mismatch is reported at the argument (FN-17, GEN-8).
+- Left: a homogeneous candidate pack does not yet bind a public tuple-pack result in the declaration contract (GEN-6/GEN-10, #716; follows #684).
+- Guaranteed indexed tuple members retain their pack's universal category facts only where the effective minimum guarantees that key. Exact tuple-pack occurrences inside parameter containers also prove a positive minimum. Tuple equations are retained inside lists, dictionary values, nullable types and nested tuples without changing argument reading.
+- Left: key-preserving universal finite-membership and named-call inheritance for indexed members (#723); ordinary membership proof rows do not represent independent pack keys.
+- Left: positive existential constraints do not yet prove a nonempty pack for tuple indexing (#724).
+- Left: fixed tuple arity versus variadic tuple ranking is unresolved in hgl_spec#240; neither outranks the other solely by arity.
 - Left: named operator requirements bound by a quantifier.
 - An ordinary value context rejects the borrowed view from `schemas(pack)`.
 
@@ -202,6 +218,7 @@ analyser: partial
 - Generic arguments that are the same, each type canonical and each value one constant (UNIT-13), make one type or one instance, and arguments that differ another: of the worked fragment, `Scaled<1>`, `Scaled<1.0>` and `Scaled<1.00>` are one type, and a `Scaled<-0.0>` where a `Scaled<0.0>` is expected is `type.mismatch`
 - Calls and symbolic operations whose candidates become known in a graph instance contribute to the same bounded traversal of instances and their requirements (GEN-3, GEN-7).
 - "Where the instances of one declaration never end when the program is compiled, the program rejects": no more than `hgl_analyser::INSTANCES` (4096) instances of one declaration are followed from one call, by the analyser and by `hgl_lower`, and a call past that is `generic.instance_limit`, at the call that makes the first of them: the worked fragment's `climbed`; through constants worked out from the body's own parameters, and through a type that grows, `nest<list<T>>`
+- The forwarding walk uses the same argument size and nesting limits. It also reports `generic.instance_limit` at the initiating call after more than 64 increases in the pack width of one declaration along a path.
 - Left: a default that names anything else; the kind a constraint gives; `type(N)`; a call that supplies no type for a function's parameter its signature does not settle
 
 ## GEN-14

@@ -249,6 +249,7 @@ analyser: partial
 transpiler: partial
 
 - A static target specializes the called body. The C++ target emits ordinary value helpers and composed graph calls; anonymous functions carry their permitted lexical captures as inputs.
+- An anonymous target's identity also carries the normalized const inputs of its enclosing instance when those inputs determined its code (FN-1, FMT-3).
 - The C++ target bounds the size and structural depth of the bodies it copies when specializing static callable arguments, including each use of a named or anonymous target and the body of an anonymous target. It also bounds deeper requests of one declaration along a call chain. Exceeding a limit reports the request as unsupported.
 - The C++ target specializes reflected templates by the static callback and the dependent argument shape. It does not yet write `valid` on a temporal input captured by a value callback (#397).
 
@@ -280,6 +281,11 @@ parser: partial
 
 analyser: partial
 
+- Reads a parameter pack entry by a constant name or position. The instance supplies the entry type. A missing key reports `pack.name` using its written spelling, with an instantiated generic parameter shown as the value supplied (GEN-17, UNIT-13).
+- In a hook, the entry follows ordinary input admission and lifecycle rules (TIME-1, TIME-4, TIME-5) and reads the whole payload of an atomic or the list held by a window (TYPE-9, TYPE-11).
+- A checked whole read from a window, an unsized list or a dictionary takes the result or nullable form of its place (ERR-14, ERR-15).
+- A child of a structural pack entry uses the ordinary child admission check. A guard proves a child of that entry only (TIME-1, TIME-4).
+- Keeps an entry read pending when its constant key needs an unrolled range pass (CTRL-16) or a module constant the compiler has not evaluated (UNIT-13). C++ declines the pending read.
 - Resolves spreads of parameter packs when the enclosing callable is instantiated. Written arguments bind first, then named entries, then positional entries fill the remaining parameter slots in order.
 - Checks function, operator and static callback arguments with the ordinary call diagnostics (EXPR-2) and uses the names written by a callback template (FN-17).
 - A forwarded name that binds a generic value parameter or a selecting operator option reports `generic.argument_constant` at the runtime entry (GEN-6, GEN-8). Generic value names take priority over a callee's ordinary named pack.
@@ -289,6 +295,6 @@ analyser: partial
 
 transpiler: partial
 
-- Lowers each forwarded entry from its own pack input slot, using the analyser's concrete entry shape. The SDK cases exercise values, connections, operator selection, static callbacks, constructors and anonymous captures.
+- Lowers forwarded entries and constant-key reads from the same fitted pack input slots, including captured values and connections. The SDK cases also exercise operator selection, static callbacks and constructors.
 
-Left: Pack indexing, unrolling a generic pack comprehension, and spreading a pack bound with `let` are tracked in #368. Generic unrolling awaits the GEN-7 decision.
+Left: Unrolling a generic pack comprehension and spreading a pack bound with `let` are tracked in #368. Generic unrolling awaits the GEN-7 decision. The packed signal payload diagnostic is tracked in #731, and guards on the pack entry itself in #732.

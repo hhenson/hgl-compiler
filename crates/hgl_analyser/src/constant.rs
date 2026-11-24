@@ -1935,7 +1935,7 @@ fn binary_type(
 }
 
 /// `-value` or `!value`, worked out where it can be.
-fn negated_or_not(operator: UnaryOperator, value: &ConstantValue) -> ConstantValue {
+pub(crate) fn negated_or_not(operator: UnaryOperator, value: &ConstantValue) -> ConstantValue {
     use ConstantValue as V;
     // `checked_` operations give `None` where the result does not fit:
     // NUM-2, "An unrepresentable i64 result produces an HGL error".

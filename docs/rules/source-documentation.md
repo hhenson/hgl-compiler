@@ -23,7 +23,9 @@ analyser: partial
 
 docs: partial
 
-- Recognized headings, prose and Args/Type Args entries in JSON and HTML
+- Recognized headings, including `Options:`, `Rules:` and `Status:`, in JSON and HTML
+- Authored headings with an indented body keep their headings in HTML and remain unrecognized in JSON, including when the body starts after a blank line
+- `Args:` and `Type Args:` descriptions remove their common continuation indent for Markdown while preserving relative indentation
 - Fenced Markdown preserves literal text in headings and entries
 - Left: key spelling of Requires, Properties and a struct’s Args
 
@@ -32,6 +34,7 @@ docs: partial
 docs: done
 
 - JSON and HTML keep interfaces, candidates and members distinct, with their own signatures, comments and source parts
+- HTML signatures include block initializers of constants and fields
 
 ## SDOC-5
 
@@ -55,6 +58,7 @@ docs: done
 
 - The JSON model carries Markdown text, preserving fenced blocks
 - HTML renders CommonMark tables and displays authored HTML as text
+- HTML places section titles and Markdown headings beneath their containing module, part or declaration
 - Inline and fenced formulas and Mermaid fences render with local assets, with source text remaining visible on rendering failure
 
 ## SDOC-8
@@ -62,6 +66,7 @@ docs: done
 docs: done
 
 - HTML links a code span found in its comment's scope to the named declaration, when present in the site
+- Declaration links use the declared name, with a suffix for repeated names. Module filenames use the module name, including when the name needs a shorter filename.
 
 ## SDOC-9
 

@@ -486,7 +486,6 @@ fn prose_sections(text: &str, sections: &mut Vec<Section>, summary: Option<&mut 
             at += 1;
             continue;
         }
-        let prose_start = at;
         let heading = heading_at(at);
         let start = at + usize::from(heading.is_some());
         at = start + 1;
@@ -502,11 +501,15 @@ fn prose_sections(text: &str, sections: &mut Vec<Section>, summary: Option<&mut 
             at += 1;
         }
         let contents = &lines[start..at];
+        let first = contents
+            .iter()
+            .position(|line| !blank(line))
+            .unwrap_or(contents.len());
         let end = contents
             .iter()
             .rposition(|line| !blank(line))
-            .map_or(0, |last| last + 1);
-        let text = contents[..end]
+            .map_or(first, |last| last + 1);
+        let text = contents[first..end]
             .iter()
             .map(|line| {
                 if heading.is_some() {
@@ -522,18 +525,21 @@ fn prose_sections(text: &str, sections: &mut Vec<Section>, summary: Option<&mut 
             recognized: false,
             text,
             entries: Vec::new(),
-            prose: lines[prose_start..start + end].join("\n"),
+            prose: String::new(),
         });
     }
 }
 
 fn authored_heading<'a>(lines: &[&'a str]) -> Option<&'a str> {
-    let [line, contents, ..] = lines else {
-        return None;
-    };
+    let (line, remaining) = lines.split_first()?;
     let heading = line.trim_end();
-    (!line.starts_with([' ', '\t']) && heading.ends_with(':') && contents.starts_with("    "))
-        .then_some(heading)
+    (!line.starts_with([' ', '\t'])
+        && heading.ends_with(':')
+        && remaining
+            .iter()
+            .find(|line| !blank(line))
+            .is_some_and(|line| line.starts_with("    ")))
+    .then_some(heading)
 }
 
 fn blank(line: &str) -> bool {
@@ -561,9 +567,13 @@ fn default(node: &SyntaxNode) -> Option<String> {
         .map(|node| written(&node))
 }
 
-/// Takes the written header, excluding the attached comment and the body.
-/// Parameter and result syntax stays exactly as the declaration writes it.
+/// Takes the written header and its initializers (SDOC-4). Callable and
+/// test bodies, member lists, and the attached comment are separate.
 fn signature(node: &SyntaxNode, source: &str) -> String {
+    let before_body = matches!(
+        node.kind(),
+        SyntaxKind::FnDecl | SyntaxKind::NativeFnDecl | SyntaxKind::TestDecl
+    );
     let before_members = matches!(
         node.kind(),
         SyntaxKind::StructDecl | SyntaxKind::EnumDecl | SyntaxKind::NativeTypeDecl
@@ -578,10 +588,12 @@ fn signature(node: &SyntaxNode, source: &str) -> String {
     let end = node
         .children_with_tokens()
         .find(|element| {
-            matches!(
-                element.kind(),
-                SyntaxKind::ArrowBody | SyntaxKind::Block | SyntaxKind::NativeContractBody
-            ) || (before_members && element.kind() == SyntaxKind::LBrace)
+            (before_body
+                && matches!(
+                    element.kind(),
+                    SyntaxKind::ArrowBody | SyntaxKind::Block | SyntaxKind::NativeContractBody
+                ))
+                || (before_members && element.kind() == SyntaxKind::LBrace)
         })
         .map_or_else(
             || node.span().end,

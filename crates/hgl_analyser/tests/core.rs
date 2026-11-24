@@ -25,6 +25,387 @@ fn with_core(text: &str) -> Checked {
     check(&[("m.hgl", &format!("module m\n{text}"))])
 }
 
+/// FMT-4 implementation gate pending #434: fmt's integer character
+/// formatter can emit bytes that are outside UTF-8.
+#[test]
+fn integer_character_formatting_is_temporarily_unavailable() {
+    let checked = with_core(concat!(
+        "const fn character() -> str => format(\"{:c}\", 233)\n",
+        "const fn padded_character() -> str => format(\"{:>3c}\", 256)\n",
+        "const fn number() -> str => format(\"{:+d} {:04x}\", 233, 233)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:42 type/format.specifier FMT-4",
+            "m.hgl:3:49 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// FMT-1, FMT-3, FMT-4 and FMT-9: check a generic format pattern
+/// against the argument types of the same instance.
+#[test]
+fn formatting_checks_a_generic_pattern_and_argument_together() {
+    let checked = with_core(concat!(
+        "const fn show<const P: str, T>(value: T) -> str => format(P, value)\n",
+        "test mark { assert show<\"{*}\">(1) == \"1\" }\n",
+        "test hex { assert show<\"{:x}\">(1.5) == \"1.5\" }\n",
+        "test character { assert show<\"{:c}\">(65) == \"A\" }\n",
+        "test clock { assert show<\"{engine_time}\">(1) == \"1\" }\n",
+        "test unused { assert show<\"none\">(1) == \"none\" }\n",
+        "test valid { assert show<\"{:x}\">(42) == \"2a\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:20 type/format.specifier FMT-9",
+            "m.hgl:4:19 type/format.specifier FMT-4",
+            "m.hgl:5:25 type/format.specifier FMT-4",
+            "m.hgl:6:21 type/format.argument FMT-9",
+            "m.hgl:7:22 type/format.unused FMT-3",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// FN-1, FMT-3 and GEN-7: report each call whose const input makes the
+/// body reject, even when two callers supply the same bad pattern.
+#[test]
+fn formatting_checks_const_inputs_at_every_call() {
+    let checked = with_core(concat!(
+        "const fn show(const pattern: str, value: f64) -> str => format(pattern, value)\n",
+        "const fn relay<const P: str>(value: f64) -> str => show(P, value)\n",
+        "test first { assert show(\"{:x}\", 1.5) == \"\" }\n",
+        "test second { assert show(\"{:x}\", 2.5) == \"\" }\n",
+        "test relay_call { assert relay<\"{:x}\">(2.5) == \"\" }\n",
+        "test good { assert show(\"{:.1f}\", 1.5) == \"1.5\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:21 type/format.specifier FMT-4",
+            "m.hgl:5:22 type/format.specifier FMT-4",
+            "m.hgl:6:26 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// FMT-3, FMT-4 and GEN-7: a concrete selection checks its pattern and
+/// reports at the outside call, including through a relay or a capture.
+#[test]
+fn formatting_checks_deferred_const_inputs_at_the_caller() {
+    let checked = with_core(concat!(
+        "const fn show<T>(const pattern: str, value: T) -> str => format(pattern, value)\n",
+        "const fn relay<T>(const pattern: str, value: T) -> str => show(pattern, value)\n",
+        "const fn named<T>(const pattern: str, value: T) -> str => format(pattern, item: value)\n",
+        "operator shown<T>{const pattern: str}(value: T) -> str\n",
+        "impl const fn shown{const pattern: str}(value: f64) -> str => format(pattern, value)\n",
+        "impl const fn shown{const pattern: str}(value: i64) -> str => pattern\n",
+        "const fn choose<T>(const pattern: str, value: T) -> str requires T in {f64, i64} => shown{pattern: pattern}(value)\n",
+        "const fn apply(f: const fn(f64) -> str) -> str => f(1.5)\n",
+        "const fn cap(const pattern: str) -> str => apply(fn(value) => format(pattern, value))\n",
+        "test direct { assert show<f64>(\"{:x}\", 1.5) == \"\" }\n",
+        "test chain { assert relay(\"{:x}\", 1.5) == \"\" }\n",
+        "test option { assert choose(\"{:x}\", 1.5) == \"\" }\n",
+        "test named_argument { assert named(\"{item:x}\", 1.5) == \"\" }\n",
+        "test captured { assert cap(\"{:x}\") == \"\" }\n",
+        "test runtime { assert choose(\"{:x}\", 1) == \"{:x}\" }\n",
+        "const fn repeat<T>(const pattern: str, value: T, turns: i64) -> str requires T in {f64, i64} {\n",
+        "    if turns == 0 { return choose(pattern, value) }\n",
+        "    return repeat(pattern + \"x\", value, turns - 1)\n",
+        "}\n",
+        "test runtime_recursion { assert repeat(\"\", 1, 3) == \"xxx\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:11:22 type/format.specifier FMT-4",
+            "m.hgl:12:21 type/format.specifier FMT-4",
+            "m.hgl:13:22 type/format.specifier FMT-4",
+            "m.hgl:14:30 type/format.specifier FMT-4",
+            "m.hgl:15:24 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+    for instance in ["show<f64>", "relay<f64>", "shown", "choose<f64>", "cap"] {
+        assert!(
+            checked
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            checked.report,
+        );
+    }
+}
+
+/// GEN-7: an independent const input rejects at its body call once.
+#[test]
+fn formatting_checks_independent_const_inputs_once() {
+    let body = concat!(
+        "const fn show(const pattern: str, value: f64) -> str => format(pattern, value)\n",
+        "const fn outer<T>(w: f64, v: T) -> str => show(\"{:x}\", w)\n",
+        "test first { assert outer(1.5, 4) == \"\" }\n",
+    );
+    for additional_call in ["", "test second { assert outer(1.5, true) == \"\" }\n"] {
+        let checked = with_core(&format!("{body}{additional_call}"));
+        assert_eq!(
+            checked.summary(),
+            ["m.hgl:3:43 type/format.specifier FMT-4"],
+            "{}",
+            checked.report,
+        );
+    }
+}
+
+/// GEN-7: a separate const-input call does not replay a direct rejection.
+#[test]
+fn formatting_reread_keeps_one_direct_source_rejection() {
+    let checked = with_core(concat!(
+        "const fn show(const pattern: str, value: f64) -> str => format(pattern, value)\n",
+        "const fn outer<T>(w: f64, v: T) -> str => format(\"{:x}\", w) + show(\"{}\", w)\n",
+        "test outer_call { assert outer(1.5, 4) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:53 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// GEN-7: a call that passes its type parameter still checks at the caller.
+#[test]
+fn formatting_checks_type_dependent_const_inputs_at_the_caller() {
+    let checked = with_core(concat!(
+        "const fn show<T>(const pattern: str, value: f64, witness: T) -> str => format(pattern, value)\n",
+        "const fn outer<T>(w: f64, v: T) -> str => show(\"{:x}\", w, v)\n",
+        "test outside { assert outer(1.5, 4) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:23 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+    assert!(
+        checked
+            .report
+            .contains("this call makes the instance `show<i64>`")
+    );
+    assert!(
+        checked
+            .report
+            .contains("this call makes the instance `outer<i64>`")
+    );
+}
+
+/// FMT-3: an independent unread pattern does not hide a known error.
+#[test]
+fn formatting_checks_known_const_inputs_when_another_is_unread() {
+    let checked = with_core(concat!(
+        "const fn pattern(value: str) -> str => value\n",
+        "const P: str = pattern(\"{}\")\n",
+        "const fn join(const a: str, const b: str, value: f64) -> str => format(a, value) + format(b, value)\n",
+        "test t { assert join(\"{:x}\", P, 1.5) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:17 type/format.specifier FMT-4"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// UNIT-13 rejects a cyclic const input without a second instance limit.
+#[test]
+fn cyclic_const_input_keeps_its_constant_cycle_diagnostic() {
+    let checked = with_core(concat!(
+        "const Pattern: str = Pattern\n",
+        "const fn show(const pattern: str) -> str => format(pattern)\n",
+        "test t { assert show(Pattern) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:7 name/constant.cycle UNIT-13"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// GEN-13: a growing const input must stop making new instances.
+#[test]
+fn demanded_const_input_growth_reports_the_instance_limit() {
+    let checked = with_core(concat!(
+        "const fn grow(const pattern: str) -> str => format(pattern) + grow(pattern + \"x\")\n",
+        "test t { assert grow(\"\") == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:17 type/generic.instance_limit GEN-13"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// GEN-13: each instance reaches the next demanded pattern through a relay.
+#[test]
+fn demanded_const_input_growth_through_a_generic_relay() {
+    let checked = with_core(concat!(
+        "const fn grow<T>(const pattern: str, value: T) -> str => format(pattern, value) + relay(pattern + \"x\", value)\n",
+        "const fn relay<T>(const pattern: str, value: T) -> str => grow(pattern, value)\n",
+        "test t { assert grow(\"{}\", 1) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:17 type/generic.instance_limit GEN-13"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// GEN-13: following a possible const demand shares the instance walk's bounds.
+#[test]
+fn demanded_const_input_growth_bounds_conditional_selection() {
+    for next in ["[w]", "(w, w)"] {
+        let source = format!(
+            "operator variant<T>{{const pattern: str}}(value: T) -> str\n\
+             impl const fn variant{{const pattern: str}}(value: f64) -> str => format(pattern, value)\n\
+             impl const fn variant{{const pattern: str}}(value: i64) -> str => pattern\n\
+             const fn grow<T, V, U>(const p: str, v: T, other: V, w: U, turns: i64) -> str\n\
+                 requires T in {{f64, i64}} && V in {{f64, i64}} {{\n\
+                 if turns == 0 {{ return variant{{pattern: p}}(v) }}\n\
+                 return grow(p, other, v, {next}, turns - 1)\n\
+             }}\n\
+             test integer {{ assert grow(\"<{{}}>\", 1, 2, 1, 2) == \"<{{}}>\" }}\n\
+             test float {{ assert grow(\"<{{}}>\", 1.5, 2.5, 1, 2) == \"<1.5>\" }}\n\
+             test alternating {{ assert grow(\"<{{}}>\", 1, 2.5, 1, 2) == \"<{{}}>\" }}\n"
+        );
+        let checked = with_core(&source);
+        assert_eq!(
+            checked.summary(),
+            [
+                "m.hgl:10:23 type/generic.instance_limit GEN-13",
+                "m.hgl:11:21 type/generic.instance_limit GEN-13",
+                "m.hgl:12:27 type/generic.instance_limit GEN-13",
+            ],
+            "{next}: {}",
+            checked.report,
+        );
+    }
+}
+
+/// FN-1: const instancing does not change the admission of projections
+/// as const arguments. See #697 for those expressions.
+#[test]
+fn const_instance_checks_leave_aggregate_admission_as_written() {
+    let checked = with_core(concat!(
+        "struct Settings { pattern: str }\n",
+        "const fn field(const settings: Settings) -> str => format(settings.pattern)\n",
+        "const fn entry(const settings: tuple<str, i64>) -> str => format(settings[0])\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:59 type/argument.constant FN-1",
+            "m.hgl:4:66 type/argument.constant FN-1",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// FMT-5: the selected conversion must consume the whole value and
+/// yield `str`, including when a native collection converts its parts.
+#[test]
+fn formatting_requires_a_conversion_of_the_whole_argument_to_text() {
+    let checked = with_core(concat!(
+        "const fn number(x: i64?) -> str => format(\"{}\", x)\n",
+        "const fn optional_list(x: list<i64>?) -> str => format(\"{}\", x)\n",
+        "const fn failed() -> str => format(\"{}\", convert<i64>(\"3\"))\n",
+        "const fn bytes_text(x: bytes) -> str => format(\"{}\", x)\n",
+        "const fn byte_parts(x: list<bytes>) -> str => format(\"{}\", x)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:49 operator/operator.no_candidate FMT-5",
+            "m.hgl:3:62 operator/operator.no_candidate FMT-5",
+            "m.hgl:4:42 operator/operator.no_candidate FMT-5",
+            "m.hgl:5:54 operator/operator.no_candidate FMT-5",
+            "m.hgl:6:60 operator/operator.no_candidate FMT-5",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// UNIT-13, FMT-4: a pattern returned by a value function is checked
+/// when the module constant supplies it to a formatting call.
+#[test]
+fn formatting_checks_a_pattern_returned_to_a_module_constant() {
+    let checked = with_core(concat!(
+        "const fn pattern() -> str => \"{:x}\"\n",
+        "const P: str = pattern()\n",
+        "const fn display() -> str => format(P, 1.5)\n",
+        "const fn prefix() -> str => \"{:\"\n",
+        "const Q: str = prefix() + \"x}\"\n",
+        "const fn joined() -> str => format(Q, 1.5)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:37 type/format.specifier FMT-4",
+            "m.hgl:7:36 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// FMT-5: an implicit conversion reaches the same instance and
+/// dependency checks as a written call (GEN-7, UNIT-13).
+#[test]
+fn formatting_checks_implicit_conversion_instances_and_dependencies() {
+    let checked = check(&[
+        (
+            "generic.hgl",
+            r#"module formatting_instance
+struct Wrapper<T> { field: T }
+impl const fn convert<T>(value: Wrapper<T>) -> str => format("{:x}", value.field)
+test t {
+    let wrapped = Wrapper<f64>(field: 1.5)
+    assert format("{}", wrapped) == "1.5"
+}
+"#,
+        ),
+        (
+            "constant.hgl",
+            r#"module formatting_dependency
+struct Wrapper<T> { field: T }
+impl const fn convert<T>(value: Wrapper<T>) -> str => A
+const A: str = format("{}", Wrapper<i64>(field: 1))
+test t { assert A == "first" }
+"#,
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "constant.hgl:4:7 name/constant.cycle UNIT-13",
+            "generic.hgl:6:25 type/format.specifier FMT-4",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 /// The module the compiler supplies is the pinned core's, whole: every
 /// `.hgl` file under `spec/hgl_core/hgl`, with its text as it stands
 /// there. A pin that adds a file fails this until

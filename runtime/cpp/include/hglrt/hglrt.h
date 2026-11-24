@@ -3,7 +3,7 @@
 //
 // The library holds what the generated code calls and hgraph does not have:
 // core's native declarations written in C++ (scalar.h, temporal.h, text.h,
-// conversions.h, tenors.h, lists.h, endpoints.h, capabilities.h), HGL's failures
+// conversions.h, tenors.h, lists.h, endpoints.h, capabilities.h, output.h), HGL's failures
 // (failure.h), a capture and the temporal values of errors and results
 // (capture.h), sets, dictionaries and what a struct tells the library
 // (collections.h), the temporal forms of a nullable scalar (nullables.h), of
@@ -33,6 +33,7 @@
 #include <hglrt/list_endpoints.h>
 #include <hglrt/lists.h>
 #include <hglrt/nullables.h>
+#include <hglrt/output.h>
 #include <hglrt/references.h>
 #include <hglrt/scalar.h>
 #include <hglrt/sources.h>

@@ -69,12 +69,7 @@ const PENDING_MODULES: &[(&str, &str, &str)] = &[
     (
         "hgl_core/spec/formatting.md",
         "examples.formatting",
-        "FMT-1 to FMT-6 (#434)",
-    ),
-    (
-        "hgl_core/spec/output.md",
-        "examples.output",
-        "OUT-1, OUT-2 and FMT-1 (#434)",
+        "FMT-6 and FMT-8 graph candidate (#434)",
     ),
     (
         "hgl_core/spec/mapping.md",
@@ -85,11 +80,6 @@ const PENDING_MODULES: &[(&str, &str, &str)] = &[
         "hgl_spec/spec/language/functions-and-phases.md",
         "examples.pack_forms",
         "LEX-29, EXPR-16, EXPR-17 and FN-19 (#368)",
-    ),
-    (
-        "hgl_spec/spec/language/generics-and-operators.md",
-        "examples.categories",
-        "GEN-3 type category and GEN-10 tuple type pack (#512)",
     ),
 ];
 

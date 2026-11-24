@@ -198,7 +198,19 @@ impl<'a> Typer<'a> {
             .filter(|(generic, _)| !matches!(generic.kind, GenericKind::Pack { .. }))
             .map(|(generic, argument)| (generic.at, argument))
             .collect::<Vec<_>>();
-        let taken = in_instance(signature, &map);
+        let mut taken = in_instance(signature, &map);
+        // GEN-10: ordinary specialization above keeps each scalar
+        // generic as one type; pack projection expands tuple sequences.
+        let packs = PackTypes::new(&signature.generics, &type_packs);
+        for parameter in &mut taken.parameters {
+            parameter.ty = packs.project(&parameter.ty, &map).ok()?;
+        }
+        taken.result = taken
+            .result
+            .as_ref()
+            .map(|ty| packs.project(ty, &map))
+            .transpose()
+            .ok()?;
         let actual = function_type(&taken, declared.kind.role() == Some(Role::Value));
         if matches_template(template, &actual) {
             let target = (module, declaration);
@@ -614,6 +626,28 @@ impl<'a> Typer<'a> {
             return None;
         }
         let mut type_packs: Vec<_> = pack.into_iter().collect();
+        for captured in super::inference::tuple_pack_bindings(
+            &signature.generics,
+            &mut found,
+            &self.signature.generics,
+        ) {
+            if !self.check_tuple_pack(
+                self.at(node),
+                &signature.generics[captured.parameter],
+                &captured,
+            ) {
+                return None;
+            }
+            // GEN-8: an explicit pack decides the referenced function's
+            // type. Keep it through declared_target so the final FN-17
+            // template check reports both complete function types.
+            if !type_packs
+                .iter()
+                .any(|written| written.parameter == captured.parameter)
+            {
+                type_packs.push(captured);
+            }
+        }
         if template.named_pack.is_some() {
             // FN-8, GEN-8: the callback's own supplied entries determine
             // its type packs. A named pack with none supplied is empty.
@@ -914,6 +948,7 @@ impl<'a> Typer<'a> {
                 },
                 arguments,
                 form: Form::Named,
+                text: None,
                 braced: Vec::new(),
                 lifted: false,
             },
@@ -1119,14 +1154,15 @@ impl<'a> Typer<'a> {
             })
             .collect();
         let result = signature.result.as_ref().map_or(Type::Unknown, project);
-        let kind = ExprKind::Call {
+        let mut kind = ExprKind::Call {
             callee: target,
             arguments,
             form: Form::Named,
+            text: None,
             braced: Vec::new(),
             lifted: false,
         };
-        self.finished_call(&kind, false);
+        self.finished_call(&mut kind, false);
         (kind, result)
     }
 

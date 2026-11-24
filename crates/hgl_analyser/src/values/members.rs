@@ -7,16 +7,18 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
-use super::fit::{not_null, open, whole};
+use super::constants::constant_text;
+use super::dependent_packs::MemberFault;
+use super::fit::{hook_payload_type, not_null, open, whole};
 use super::forms::received_type;
-use super::inference::{fixed, placed};
+use super::inference::{fixed, placed, type_pack};
 use super::results::{captured_output, proof_binding};
 use crate::constant::Fault;
 use crate::declared::substitute_within;
-use crate::hir::{Body, Expr, ExprKind, Value, ValueCategory};
+use crate::hir::{Body, Expr, ExprKind, PackKey, Value, ValueCategory};
 use crate::program::DeclarationKind;
-use crate::syntax::{name_token, tokens};
-use crate::types::{Argument, ConstantValue, Detail, NamedKind, Scalar, Type};
+use crate::syntax::{name_token, tokens, ungrouped};
+use crate::types::{Argument, Constant, ConstantValue, Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
 
 /// EXPR-7 and GEN-7: the type of an indexed parameter is known only in
@@ -346,12 +348,42 @@ impl<'a> Typer<'a> {
 
     /// `base[index]`: an element of a list or a tuple, or the value a
     /// dictionary has for a key (EXPR-7; ERR-6: "Ordinary/atomic
-    /// dictionary brackets ... are strict point-in-time reads").
+    /// dictionary brackets ... are strict point-in-time reads"), or a
+    /// pack entry under a constant key (FN-19).
     pub(super) fn index(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
         let mut parts = node.children();
         let (Some(base), Some(index)) = (parts.next(), parts.next()) else {
             return (ExprKind::Unread, Type::Unknown);
         };
+        let root = ungrouped(base.clone());
+        if let Some(pack) = self.local_of(&root)
+            && self
+                .signature
+                .parameters
+                .get(pack)
+                .is_some_and(|parameter| parameter.pack.is_some())
+        {
+            let (kind, ty) = self.pack_entry(pack, &index);
+            let at = self.at(node);
+            let input = self.is_temporal_input(pack);
+            let child = self.reads_children() && self.continues_chain(node, &ty);
+            if !matches!(kind, ExprKind::Unread)
+                && input
+                && !child
+                && self.naming != Some(self.at(&root))
+            {
+                // FN-19 selects one input. In a hook its payload has
+                // the same admission and lifecycle requirements (TIME-1,
+                // TIME-4, TIME-5) as a non-packed input.
+                self.input_read(pack, at, super::children::read_whole_all_valid(&ty));
+            }
+            let ty = if input && self.hook.is_some() {
+                hook_payload_type(&ty)
+            } else {
+                ty
+            };
+            return (kind, ty);
+        }
         let base = self.expression(&base, None);
         // ERR-15, ERR-12: what an index is read from expects the T: a
         // result's, and a nullable list's, tuple's or dictionary's.
@@ -380,6 +412,133 @@ impl<'a> Typer<'a> {
             index: Box::new(index),
         };
         (kind, ty)
+    }
+
+    /// FN-19 and GEN-17: read an entry under a compile-time key. A
+    /// specialization supplies the pack's actual keys and fitted types.
+    fn pack_entry(&mut self, pack: usize, index: &SyntaxNode) -> (ExprKind, Type) {
+        let unread = (ExprKind::Unread, Type::Unknown);
+        let at = self.at(index);
+        let text = constant_text(index);
+        let source = match self.typed_in(self.file, index, None) {
+            Ok(read)
+                if read.ty().is_none_or(|ty| {
+                    !whole(ty) || matches!(ty, Type::Scalar(Scalar::Str | Scalar::I64))
+                }) =>
+            {
+                read.value
+            }
+            // CTRL-16: the analyser sees a range body before the
+            // target can supply the constant of each unrolled pass.
+            Err(Fault::NotConstant) if self.range_pack_key(index) => {
+                return self.deferred_pack_entry(pack);
+            }
+            Err(Fault::Reported | Fault::Failed) => return unread,
+            _ => {
+                let key = Constant {
+                    text,
+                    value: ConstantValue::Unknown,
+                };
+                self.pack_member_fault(at, &MemberFault::KeyKind { key });
+                return unread;
+            }
+        };
+        let value = source.substituted(&|at| {
+            self.instance
+                .iter()
+                .chain(&self.bound)
+                .find_map(|(declared, given)| match given {
+                    Argument::Constant(given) if *declared == at => Some(given.value.clone()),
+                    _ => None,
+                })
+        });
+        // GEN-17 reports the written key. A generic parameter used as
+        // the key instead names the value this instance supplies.
+        let text = if matches!(source, ConstantValue::Parameter { .. }) {
+            value.key().unwrap_or(text)
+        } else {
+            text
+        };
+        let parameter = &self.signature.parameters[pack];
+        let wanted = match &value {
+            ConstantValue::Str(name) => Some(PackKey::Name(name.clone())),
+            ConstantValue::Int(position) => usize::try_from(*position).ok().map(PackKey::Position),
+            ConstantValue::Unknown => return unread,
+            // UNIT-13: a call can compute a module constant. The
+            // constant reader holds that value by its declaration even
+            // when it cannot work it out for this lookup.
+            _ if named_key(&value) => return self.deferred_pack_entry(pack),
+            _ if self.pack_inputs.is_none()
+                && self
+                    .signature
+                    .generics
+                    .iter()
+                    .any(|generic| value.names_one_of(&[generic.at])) =>
+            {
+                return self.deferred_pack_entry(pack);
+            }
+            _ => {
+                self.pack_member_fault(
+                    at,
+                    &MemberFault::KeyKind {
+                        key: Constant { text, value },
+                    },
+                );
+                return unread;
+            }
+        };
+        let Some(inputs) = &self.pack_inputs else {
+            return self.deferred_pack_entry(pack);
+        };
+        let entry = wanted.as_ref().and_then(|key| {
+            inputs
+                .iter()
+                .find(|input| input.parameter == pack && input.key == *key)
+        });
+        let Some(entry) = entry else {
+            self.pack_member_fault(
+                at,
+                &MemberFault::Missing {
+                    pack: parameter.name.clone(),
+                    key: Constant { text, value },
+                },
+            );
+            return unread;
+        };
+        (
+            ExprKind::PackEntry {
+                pack,
+                key: entry.key.clone(),
+            },
+            entry.ty.clone(),
+        )
+    }
+
+    /// A graph range's constant binding can be part of an FN-19 key
+    /// (CTRL-16). The ordinary expression reader still checks its type.
+    fn range_pack_key(&mut self, index: &SyntaxNode) -> bool {
+        if !index.descendants().any(|part| {
+            part.kind() == SyntaxKind::NameExpr
+                && self
+                    .local_of(&part)
+                    .is_some_and(|local| self.unrolled_range_bindings.contains(&local))
+        }) {
+            return false;
+        }
+        let value = self.expression(index, None);
+        matches!(value.ty, Type::Scalar(Scalar::Str | Scalar::I64))
+            && self.is_fixed(&value, &self.unrolled_range_bindings)
+    }
+
+    /// The entry awaits either its concrete pack or its constant key.
+    fn deferred_pack_entry(&self, pack: usize) -> (ExprKind, Type) {
+        let parameter = &self.signature.parameters[pack];
+        let ty = if type_pack(parameter, &self.signature.generics).is_some() {
+            Type::Unknown
+        } else {
+            parameter.ty.clone()
+        };
+        (ExprKind::DeferredPackRead, ty)
     }
 
     /// EXPR-7: brackets read a list, tuple or dictionary. A base whose
@@ -447,10 +606,10 @@ impl<'a> Typer<'a> {
         };
         match found {
             Ok(ConstantValue::Int(position)) => {
-                if let Some(ty) = index_result(base, Some(position)) {
+                if let Some(ty) = tuple_element(self.program, elements, position) {
                     index.kind = ExprKind::Literal(Value::Int(position));
                     index.ty = integer.clone();
-                    return ty.clone();
+                    return ty;
                 }
             }
             Err(Fault::NotConstant) => {}
@@ -463,14 +622,30 @@ impl<'a> Typer<'a> {
                 Category::Type,
                 codes::TUPLE_INDEX,
                 index.at,
-                format!(
-                    "a tuple's index is a constant, here one of 0 to {}: it selects the element's type",
-                    elements.len().saturating_sub(1)
-                ),
+                if elements.iter().any(|ty| matches!(ty, Type::Parameter { at, .. }
+                    if super::requirements::type_pack_bounds(self.program, *at).is_some())) {
+                    "the index must select an element for every admitted tuple-pack length; its element is not determined here".to_string()
+                } else {
+                    format!(
+                        "a tuple's index is a constant, here one of 0 to {}: it selects the element's type",
+                        elements.len().saturating_sub(1)
+                    )
+                },
                 "EXPR-7",
             ));
         }
         Type::Unknown
+    }
+}
+
+/// An FN-19 key can name a module constant that the constant reader
+/// has not evaluated, directly or in arithmetic or string concatenation.
+fn named_key(value: &ConstantValue) -> bool {
+    match value {
+        ConstantValue::Named { .. } => true,
+        ConstantValue::Unary(_, operand) => named_key(operand),
+        ConstantValue::Binary(_, left, right) => named_key(left) || named_key(right),
+        _ => false,
     }
 }
 
@@ -504,6 +679,39 @@ pub(super) fn index_result(ty: &Type, position: Option<i64>) -> Option<&Type> {
         Type::Tuple(elements) => elements.get(usize::try_from(position?).ok()?),
         _ => None,
     }
+}
+
+/// GEN-7, GEN-10 and EXPR-7: a pack marker denotes a sequence, never
+/// one tuple element. A guaranteed member retains its source and key for
+/// specialization; a position that can cross a variable boundary is unknown.
+fn tuple_element(program: &crate::Program, elements: &[Type], position: i64) -> Option<Type> {
+    let mut remaining = u64::try_from(position).ok()?;
+    for ty in elements {
+        if let Type::Parameter { at, name } = ty
+            && let Some((minimum, maximum)) = super::requirements::type_pack_bounds(program, *at)
+        {
+            if remaining < minimum {
+                let position = i64::try_from(remaining).ok()?;
+                return Some(Type::PackMember {
+                    pack: *at,
+                    name: name.clone(),
+                    key: Constant {
+                        text: position.to_string(),
+                        value: ConstantValue::Int(position),
+                    },
+                });
+            }
+            if maximum != Some(minimum) {
+                return None;
+            }
+            remaining -= minimum;
+        } else if remaining == 0 {
+            return Some(ty.clone());
+        } else {
+            remaining -= 1;
+        }
+    }
+    None
 }
 
 /// True when a value of `ty` has members that `value.member` reads: a

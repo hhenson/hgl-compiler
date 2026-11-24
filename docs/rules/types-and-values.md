@@ -72,8 +72,10 @@ transpiler: partial
 
 - Constructs concrete structs by name and in argument order, using inherited defaults
   and implicit nulls.
-- Left: Reports a generic field default the emitter cannot specialize, a default that
-  runs statements or propagates failure, and a default that recursively omits itself.
+- Writes omitted field defaults in their defining scope, including statement blocks
+  and defaults whose type is supplied by a generic struct application.
+- Left: Reports field defaults whose specialization cannot be emitted, defaults
+  that propagate failure, and defaults that recursively omit themselves.
   Unmapped fields and missing required constructor inputs have defensive reports.
 
 ## TYPE-6
@@ -200,8 +202,11 @@ transpiler: partial
 - Maps a mode-marked node parameter or result to reference wiring while preserving the
   parameter's payload type in ordinary code. Endpoint arguments are borrowed by
   supported natives.
-- Left: a `signal` input has no supported temporal schema. Reference designations and
-  borrowed endpoint calls are limited to the forms under FN-16 and TIME-9.
+- Maps a temporal parameter or configuration of `signal` or `signal?` to hgraph's
+  `SIGNAL`. A supplied connection is observed for publications without reading its
+  payload. An omitted optional signal never ticks (UNIT-8, END-2).
+- Left: reference designations and borrowed endpoint calls are limited to the forms
+  under FN-16 and TIME-9.
 
 ## TYPE-13
 

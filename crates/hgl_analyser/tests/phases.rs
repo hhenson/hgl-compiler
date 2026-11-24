@@ -99,7 +99,7 @@ fn graph_instances_recheck_store_arguments() {
             "operator helper<T>(input: T) -> i64\n",
             "impl const fn helper<T>(input: T) -> i64 => 5\n",
             "impl fn helper(input: i64) -> i64 { when { return input } }\n",
-            "fn write<T>(const input: T) -> i64 {\n",
+            "fn stash<T>(const input: T) -> i64 {\n",
             "    inject global_state\n",
             "    put(global_state, \"direct\", helper(input))\n",
             "    return 7\n",
@@ -116,9 +116,9 @@ fn graph_instances_recheck_store_arguments() {
             "    put(global_state, \"known\", given)\n",
             "    return helper(input)\n",
             "}\n",
-            "fn temporal() -> i64 => write(1)\n",
+            "fn temporal() -> i64 => stash(1)\n",
             "fn aliased_temporal() -> i64 => write_aliased(1)\n",
-            "fn ordinary() -> i64 => write(\"s\")\n",
+            "fn ordinary() -> i64 => stash(\"s\")\n",
             "fn aliased_ordinary() -> i64 => write_aliased(\"s\")\n",
             "fn check_once() -> i64 => already_rejected(\"s\", 1)\n",
         ),
@@ -647,4 +647,29 @@ fn a_test_is_a_composition_block_with_assertions() {
             "m.hgl:31:19 type/test.raises_code TST-10",
         ]
     );
+}
+
+/// TST-10: the parser reports an absent raises argument once. Analyser
+/// validation applies to a supplied argument.
+#[test]
+fn a_missing_raises_argument_is_reported_once() {
+    for (tail, expected) in [
+        (" {\n    boom(3)\n}\n}", "expected `(`, found `{`"),
+        (" }", "expected `(`, found `}`"),
+        ("", "expected `(`, found end of file"),
+        (" == 1 }", "expected `(`, found `==`"),
+        ("() {} }", "expected an expression, found `)`"),
+    ] {
+        let source = format!("module m\nconst fn boom(n: i64) {{}}\ntest t {{ assert raises{tail}");
+        let checked = check_broken(&[("m.hgl", &source)]);
+        assert_eq!(checked.front_end_errors, 1, "{}", checked.report);
+        assert!(checked.findings.is_empty(), "{}", checked.report);
+        assert!(
+            checked
+                .report
+                .contains(&format!("error[parse/syntax.expected_token]: {expected}")),
+            "{}",
+            checked.report
+        );
+    }
 }

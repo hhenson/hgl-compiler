@@ -861,45 +861,62 @@ transpiler: planned
 
 ## OUT-1
 
-transpiler: planned
+transpiler: done
 
-- #434.
+- `write` selects standard output by default or standard error with `.err`. A value function or a node handler writes the given bytes to that stream. The run's publications remain in its independent record.
 
 ## OUT-2
 
-transpiler: planned
+transpiler: done
 
-- #434.
+- `flush: true` flushes the selected stream before `write` returns.
 
 ## FMT-1
 
-analyser: planned
+analyser: partial
 
-- #434.
+- Direct native calls take a constant `str` pattern followed by positional and named packs. A generic value pattern and dependent argument types are checked together at their concrete call.
+- An enclosing function can pass or capture an ordinary `const` parameter as the pattern. A generic value body carries the demand through deferred operator selection to the concrete call (FN-1, #695, #704).
+- Left: const inputs through forwarded packs (#706) and the graph and diagnostic candidates (#368, #434).
 
 ## FMT-2
 
-analyser: planned
+analyser: done
 
-- #434.
+- The pattern is split into literal text and positional or named places. Doubled braces become literal braces.
 
 ## FMT-3
 
-analyser: planned
+analyser: partial
 
-- #434.
+- A direct value call is checked for braces, missing and unused arguments, and specifiers. A dependent string is checked in its concrete instance. Diagnostics use `format.syntax`, `format.argument`, `format.unused` and `format.specifier`.
+- The current compile-time pattern reader builds up to 64 KiB of text per result. The C++ target declines calls whose patterns exceed that support limit (#695).
+- The analyser checks demanded const inputs and concrete argument conversions after selecting the value candidate. GEN-7 reports failures that depend on the instance at its outside call. Lowering uses the same concrete values to select the checked body.
+- Left: patterns made by general constant function evaluation (#695), and patterns reached through forwarded calls (#706).
 
 ## FMT-4
 
-transpiler: planned
+analyser: partial
 
-- #434.
+- A specifier is checked against the argument's type at compile time.
+- Left: the compiler declines integer `c` with `format.specifier` pending the owner’s decision (#434). The pinned fmt formatter can emit a byte outside UTF-8.
+
+transpiler: partial
+
+- The C++ target gives primitive fields to pinned fmt with compiled specifiers. It emits checked chrono directives with fractional truncation on `%S`, `%T` and `%[S]`, duration totals and padding on the whole field.
+- Left: integer `c` is held at the analyser gate above (#434).
 
 ## FMT-5
 
-transpiler: planned
+analyser: partial
 
-- #434.
+- A user type uses its selected `convert<str>` and rejects if there is no candidate.
+- Left: tuple and struct text candidates (#434, #512).
+
+transpiler: partial
+
+- Value defaults are written in Core's scalar forms. The growing list, fixed list, set and dictionary candidates use each member's conversion and traversal order, quote and escape strings and render absent members as `null`.
+- Left: tuple and struct text candidates (#434, #512).
 
 ## FMT-6
 
@@ -909,9 +926,9 @@ transpiler: planned
 
 ## FMT-7
 
-transpiler: planned
+transpiler: done
 
-- #434.
+- A `Marked<T>` renders its payload with the payload's specifier or uses `not_valid` for an absent payload.
 
 ## FMT-8
 
@@ -921,13 +938,15 @@ transpiler: planned
 
 ## FMT-9
 
-analyser: planned
+analyser: partial
 
-- #434. The value-code rejections and marked argument behavior are proposed.
+- Value calls admit `{wall_time}` and reject `{engine_time}` with `format.argument`. A marked place accepts `Marked<T>`.
+- Left: a graph supplies evaluation time and the arguments' tick state (#434).
 
-transpiler: planned
+transpiler: partial
 
-- #434.
+- `{wall_time}` reads the process clock. A marked place writes the configured tick prefix when its argument ticked.
+- Left: a graph supplies evaluation time and the arguments' tick state (#434).
 
 ## DBG-1
 

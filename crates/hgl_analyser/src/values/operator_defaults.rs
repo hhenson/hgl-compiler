@@ -90,7 +90,7 @@ fn check_expression(
     let mut defaults = Defaults::default();
     defaults.visit(program, value, diagnostics);
     while let Some(default) = defaults.pending.pop() {
-        concrete_default_calls(&default, made);
+        concrete_default_calls(program, &default, made);
         default.walk(&mut |value| defaults.visit(program, value, diagnostics));
     }
 }
@@ -201,8 +201,8 @@ pub(super) fn selects_configuration(program: &Program, unit: &Module, declaratio
 pub(super) fn check_instance(
     program: &Program,
     callee: (usize, usize),
-    generics: &[Argument],
-    requirements: &[hir::Answer],
+    (generics, requirements): (&[Argument], &[hir::Answer]),
+    inputs: crate::InstanceInputs<'_>,
     made: &mut Vec<Made>,
     diagnostics: &mut Diagnostics,
     graph_diagnostics: &mut Diagnostics,
@@ -212,7 +212,7 @@ pub(super) fn check_instance(
         callee,
         generics,
         requirements,
-        crate::instance::InstanceInputs::default(),
+        inputs,
         &reports,
         graph_diagnostics,
     )?;

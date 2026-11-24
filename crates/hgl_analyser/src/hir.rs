@@ -541,6 +541,9 @@ pub enum ExprKind {
         /// The entry's original name or position.
         key: PackKey,
     },
+    /// An indexed pack read awaiting the concrete entries and key of an
+    /// instance. The source expression is read again there (FN-19).
+    DeferredPackRead,
     /// An immutable graph binding read where a null test proved its
     /// presence, before the instance has determined its ordinary type (ERR-12).
     DeferredPresent(LocalId),
@@ -706,6 +709,9 @@ pub enum ExprKind {
         arguments: Vec<Argument>,
         /// How the call is written.
         form: Form,
+        /// The checked pattern and selected conversions for a native
+        /// formatter or collection conversion (FMT-3, FMT-5).
+        text: Option<Box<TextCall>>,
         /// Values explicitly supplied in braces (EXPR-10), by source
         /// location, for the instance's wiring-time check (EXPR-14).
         braced: Vec<Location>,
@@ -1304,6 +1310,8 @@ pub struct AnonymousSpecialization {
     pub type_packs: Vec<TypePackArgument>,
     /// The shape of its value packs used in forwarding (FN-19).
     pub pack_inputs: Vec<PackInput>,
+    /// The original slots and normalized keys of its compile-time const inputs.
+    pub const_inputs: Vec<(usize, String)>,
 }
 
 impl AnonymousFunction {
@@ -1358,7 +1366,13 @@ pub struct TypePackArgument {
     pub infer_from_arguments: bool,
     /// The enclosing type pack that supplies the rest of this reflected
     /// parameter pack when the static function argument is known (GEN-17).
+    /// A tuple capture retains this pack's marker in `types`, which gives
+    /// its splice position among fixed elements (GEN-10).
     pub forwarded_from: Option<Location>,
+    /// Every enclosing pack whose marker occurs in a tuple capture's
+    /// `types`. `forwarded_from` mirrors the first unresolved source so
+    /// existing deferred-instance detection still sees the capture.
+    pub tuple_sources: Vec<Location>,
     /// The fixed inputs left out of this reflection, kept for a receiver
     /// whose function type divides the same inputs at another place (GEN-17).
     pub reflected: Option<ReflectedInputs>,
@@ -1385,6 +1399,7 @@ impl TypePackArgument {
             types,
             infer_from_arguments: false,
             forwarded_from: None,
+            tuple_sources: Vec::new(),
             reflected: None,
             keys,
         }
@@ -1398,6 +1413,7 @@ impl TypePackArgument {
             types,
             infer_from_arguments: false,
             forwarded_from: None,
+            tuple_sources: Vec::new(),
             reflected: None,
             keys,
         }
@@ -1415,7 +1431,14 @@ impl TypePackArgument {
     /// Specialize the pack's member types and any fixed inputs it can forward.
     pub(crate) fn place_types(&mut self, mut place: impl FnMut(&Type) -> Type) {
         for ty in &mut self.types {
-            *ty = place(ty);
+            // A sequence marker is expanded by PackTypes after ordinary
+            // type substitution. It must not become the pack's unknown
+            // single generic slot in the meantime (GEN-10).
+            if !matches!(ty, Type::Parameter { at, .. }
+                if self.tuple_sources.contains(at) || Some(*at) == self.forwarded_from)
+            {
+                *ty = place(ty);
+            }
         }
         if let Some(inputs) = &mut self.reflected {
             for (_, ty) in &mut inputs.prefix {
@@ -1517,6 +1540,16 @@ pub struct Cell {
     pub time: Option<Expr>,
     /// What is published. None for `_`, no publication.
     pub value: Option<Expr>,
+}
+
+/// Analysed text work carried by a formatting or collection call.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextCall {
+    /// The compile-time pattern of `format`; a collection has none.
+    pub pattern: Option<String>,
+    /// Selected FMT-5 conversions, indexed by arguments for `format`
+    /// or by members for a collection conversion.
+    pub conversions: Box<[Option<Expr>]>,
 }
 
 /// One argument of a call or a constructor.
@@ -1709,6 +1742,7 @@ impl Expr {
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
             | ExprKind::PackEntry { .. }
+            | ExprKind::DeferredPackRead
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
@@ -1804,9 +1838,19 @@ impl Expr {
                 left.walk_nodes_at(child, visit)?;
                 right.walk_nodes_at(child, visit)?;
             }
-            ExprKind::Call { arguments, .. }
-            | ExprKind::Construct { arguments, .. }
-            | ExprKind::Delta { arguments } => {
+            ExprKind::Call {
+                arguments, text, ..
+            } => {
+                for argument in arguments {
+                    argument.value.walk_nodes_at(child, visit)?;
+                }
+                if let Some(text) = text {
+                    for conversion in text.conversions.iter().flatten() {
+                        conversion.walk_nodes_at(child, visit)?;
+                    }
+                }
+            }
+            ExprKind::Construct { arguments, .. } | ExprKind::Delta { arguments } => {
                 for argument in arguments {
                     argument.value.walk_nodes_at(child, visit)?;
                 }
@@ -1865,6 +1909,7 @@ impl Expr {
             | ExprKind::Endpoint { .. }
             | ExprKind::Local(_)
             | ExprKind::PackEntry { .. }
+            | ExprKind::DeferredPackRead
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
@@ -1960,9 +2005,19 @@ impl Expr {
                 left.walk_nodes_mut(visit);
                 right.walk_nodes_mut(visit);
             }
-            ExprKind::Call { arguments, .. }
-            | ExprKind::Construct { arguments, .. }
-            | ExprKind::Delta { arguments } => {
+            ExprKind::Call {
+                arguments, text, ..
+            } => {
+                for argument in arguments {
+                    argument.value.walk_nodes_mut(visit);
+                }
+                if let Some(text) = text {
+                    for conversion in text.conversions.iter_mut().flatten() {
+                        conversion.walk_nodes_mut(visit);
+                    }
+                }
+            }
+            ExprKind::Construct { arguments, .. } | ExprKind::Delta { arguments } => {
                 for argument in arguments {
                     argument.value.walk_nodes_mut(visit);
                 }

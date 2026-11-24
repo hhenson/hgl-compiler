@@ -72,16 +72,16 @@ analyser: partial
 - Known required-constant failures reject at the parameter or field default (ERR-9). A window default is checked as an arrival and an atomic default as its whole payload (TYPE-9, TYPE-11).
 - Required-constant failures in parameter and field defaults use `constant.failure` (ERR-9).
 - Omitted parameter defaults are checked against the concrete parameter type after generic selection, including in a call made by a generic body.
-- A field or parameter default that needs itself through omitted arguments reports `default.cycle` at its expression and names the dependency path through checked calls and concrete forwarded packs.
+- A field or parameter default that needs itself through omitted arguments reports `default.cycle` at its expression. Its dependency path follows checked calls, concrete forwarded packs and the static callables those bodies invoke (FN-17).
 - The default and constant dependency checks follow the written branches (UNIT-13).
-- Left: cyclic dependencies reached only by invoking a callable parameter (FN-17, #635).
 
 transpiler: partial
 
 - Binds omitted defaults or null after explicit arguments. A literal null default is held as the selected nullable parameter type, including when its declaration names a generic. Wires an omitted temporal
   default as a constant or leaves an optional input silent.
 - A callable default, including an inherited operator configuration default, can run a block in its own lexical scope.
-- Left: blocks with statements in field defaults, and nonempty field defaults whose type depends on a generic struct argument. A graph call leaving out a nullable temporal input is reported (#399). The target retains defensive reports for recursively omitted defaults and defaults whose emitted evaluation needs failure-handling statements.
+- Field defaults with statement blocks use their own cold scope. An omitted generic field default uses the field's applied type and the arguments of the struct that declares the default (TYPE-5).
+- Left: a graph call leaving out a nullable temporal input is reported (#399). The target retains defensive reports for recursively omitted defaults and defaults whose emitted evaluation needs failure-handling statements.
 
 ## UNIT-9
 

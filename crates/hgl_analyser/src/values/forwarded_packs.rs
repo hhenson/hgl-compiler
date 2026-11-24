@@ -107,6 +107,7 @@ impl Typer<'_> {
                 callee: Callee::DeferredPackCall,
                 arguments: Vec::new(),
                 form: Form::Named,
+                text: None,
                 braced: Vec::new(),
                 lifted: false,
             },
@@ -397,22 +398,22 @@ pub(super) fn has_computed_spread(list: &SyntaxNode) -> bool {
     spread_operands(list).any(|spread| ungrouped(spread).kind() == SyntaxKind::PackComprehension)
 }
 
-/// Whether the shape of a parameter pack still needs to be applied.
+/// Whether a body needs its concrete pack inputs for a spread or entry read.
 pub(crate) fn has_forwarded_calls(body: &crate::hir::Body) -> bool {
     let mut pending = false;
     walk_nested_calls(&body.statements, &mut |value| {
-        pending |= is_forwarded_call(value);
+        pending |= needs_pack_inputs(value);
     });
     pending
 }
 
-fn is_forwarded_call(value: &Expr) -> bool {
+fn needs_pack_inputs(value: &Expr) -> bool {
     matches!(
         &value.kind,
         ExprKind::Call {
             callee: Callee::DeferredPackCall,
             ..
-        }
+        } | ExprKind::DeferredPackRead
     )
 }
 
@@ -615,6 +616,7 @@ impl ForwardingInstance {
             functions: &self.functions,
             type_packs: &self.type_packs,
             pack_inputs: Some(&self.pack_inputs),
+            ..crate::InstanceInputs::default()
         }
     }
 }
@@ -640,8 +642,55 @@ pub(super) fn walk_nested_calls(statements: &[crate::hir::Stmt], visit: &mut dyn
     });
 }
 
-/// Check forwarded calls under the concrete shapes that reach them (FN-19).
-/// A forwarding error belongs to the call that supplies that pack shape.
+/// GEN-13: limit growth along one path without limiting a single pack's
+/// width, independent calls, or recursion over an unchanged pack shape.
+const PACK_GROWTH: usize = 64;
+
+#[derive(Clone, Copy)]
+struct PackShape {
+    declaration: (usize, usize),
+    entries: usize,
+}
+
+impl PackShape {
+    fn of(instance: &ForwardingInstance) -> Self {
+        let typed_entries = instance
+            .type_packs
+            .iter()
+            .map(|pack| pack.types_with_prefix().count())
+            .sum::<usize>();
+        Self {
+            declaration: instance.declaration,
+            entries: instance.pack_inputs.len() + typed_entries,
+        }
+    }
+
+    fn exceeds_growth(self, ancestors: impl Iterator<Item = Self>) -> bool {
+        if self.entries <= PACK_GROWTH {
+            return false;
+        }
+        let mut width = self.entries;
+        ancestors
+            .filter(|ancestor| {
+                if ancestor.declaration == self.declaration && ancestor.entries < width {
+                    width = ancestor.entries;
+                    true
+                } else {
+                    false
+                }
+            })
+            .nth(PACK_GROWTH)
+            .is_some()
+    }
+}
+
+struct ForwardingParent {
+    call: (super::requirements::MakingCall, Option<usize>),
+    shape: PackShape,
+}
+
+/// Check pack spreads and reads under the concrete shapes that reach them
+/// (FN-19). A pack error belongs to the call that supplies its shape.
 /// Record the concrete calls it reaches for the ordinary GEN-7 checks.
 pub(super) fn check_instances(
     program: &crate::Program,
@@ -649,7 +698,11 @@ pub(super) fn check_instances(
     source: &IndependentSourceBodies,
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
-    use super::requirements::{MakingCall, emit_instance_report, making_path};
+    use super::requirements::{
+        MakingCall, bounded_instance_key, emit_instance_report, making_path,
+        past_pack_growth_limit, past_the_limit,
+    };
+    use hgl_diagnostics::Code;
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = HashSet::new();
@@ -659,12 +712,11 @@ pub(super) fn check_instances(
             let Some(body) = body else { continue };
             let owner = (module, declaration);
             walk_nested_calls(&body.statements, &mut |value| {
-                if let Some(callee) = called_or_referenced(value) {
-                    if matches!(callee, Callee::DeferredPackCall) {
-                        forwarding.insert(owner);
-                    } else if let Some(called) = callee.declaration() {
-                        callers.entry(called).or_default().push(owner);
-                    }
+                if needs_pack_inputs(value) {
+                    forwarding.insert(owner);
+                }
+                if let Some(called) = called_or_referenced(value).and_then(Callee::declaration) {
+                    callers.entry(called).or_default().push(owner);
                 }
             });
         }
@@ -721,9 +773,15 @@ pub(super) fn check_instances(
                 .walk(&mut |value| visit_anonymous_bodies(value, &mut |part| record(part, false)));
         }
     }
+    let rejected_pack_calls: HashSet<_> = diagnostics
+        .as_slice()
+        .iter()
+        .filter(|report| report.code == Code::Catalogued(codes::PACK_NAME))
+        .map(|report| report.primary)
+        .collect();
     for (initial, at) in roots {
-        let mut waiting = VecDeque::from([(initial, at, None)]);
-        let mut parents = Vec::new();
+        let mut waiting = VecDeque::from([(initial, at, None::<usize>)]);
+        let mut parents = Vec::<ForwardingParent>::new();
         let mut seen = Vec::new();
         let mut counts = HashMap::new();
         while let Some((instance, written, parent)) = waiting.pop_front() {
@@ -732,13 +790,23 @@ pub(super) fn check_instances(
             }
             let count = counts.entry(instance.declaration).or_insert(0);
             *count += 1;
-            if *count > crate::INSTANCES {
-                super::requirements::past_the_limit(
-                    &[at],
+            let shape = PackShape::of(&instance);
+            let ancestors = std::iter::successors(parent, |&index| parents[index].call.1)
+                .map(|index| parents[index].shape);
+            if shape.exceeds_growth(ancestors) {
+                past_pack_growth_limit(at, instance.declaration, program, PACK_GROWTH, diagnostics);
+                break;
+            }
+            if *count > crate::INSTANCES
+                || bounded_instance_key(
                     instance.declaration,
-                    program,
-                    diagnostics,
-                );
+                    &instance.generics,
+                    &instance.type_packs,
+                    &instance.requirements,
+                )
+                .is_none()
+            {
+                past_the_limit(&[at], instance.declaration, program, diagnostics);
                 break;
             }
             let reports = std::cell::RefCell::new(hgl_diagnostics::Diagnostics::new());
@@ -761,12 +829,18 @@ pub(super) fn check_instances(
                 )
             };
             for report in graph_reports.as_slice() {
-                if diagnostics.as_slice().contains(report) {
+                // A missing member in the written signature rejects the
+                // making call already. Its body supplies no second pack
+                // diagnostic at the same call (ERR-9).
+                if diagnostics.as_slice().contains(report)
+                    || (report.code == Code::Catalogued(codes::PACK_NAME)
+                        && rejected_pack_calls.contains(&at))
+                {
                     continue;
                 }
                 emit_instance_report(
                     report.clone(),
-                    &[making_path(making(), parent, &parents)],
+                    &[making_path(making(), parent, |index| &parents[index].call)],
                     diagnostics,
                 );
             }
@@ -782,7 +856,7 @@ pub(super) fn check_instances(
                             &instance.type_packs,
                         ),
                         result_uses,
-                        &[making_path(making(), parent, &parents)],
+                        &[making_path(making(), parent, |index| &parents[index].call)],
                         diagnostics,
                     );
                     if result_uses.reports.has_errors() {
@@ -809,13 +883,16 @@ pub(super) fn check_instances(
                             &child.type_packs,
                             value.at,
                         )];
-                        path.extend(making_path(making(), parent, &parents));
+                        path.extend(making_path(making(), parent, |index| &parents[index].call));
                         super::requirements::made_forwarded_callee(callee, at, path, discovered);
                     }
                     if forwarding.contains(&child.declaration) {
                         let caller = *link.get_or_insert_with(|| {
                             let index = parents.len();
-                            parents.push((making(), parent));
+                            parents.push(ForwardingParent {
+                                call: (making(), parent),
+                                shape,
+                            });
                             index
                         });
                         waiting.push_back((child, value.at, Some(caller)));
@@ -824,5 +901,66 @@ pub(super) fn check_instances(
             }
             seen.push(instance);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ForwardingInstance, PACK_GROWTH, PackInput, PackKey, PackShape, Scalar, Type};
+    use crate::hir::{ReflectedInputs, TypePackArgument};
+    use crate::{Argument, Constant, ConstantValue};
+
+    /// GEN-13: the growth bound follows increasing widths of the same
+    /// declaration across a call path. Unchanged and unrelated shapes do
+    /// not spend that allowance.
+    #[test]
+    fn pack_growth_is_bounded_along_one_path() {
+        let shape = PackShape {
+            declaration: (0, 0),
+            entries: PACK_GROWTH + 1,
+        };
+        let smaller = (0..shape.entries)
+            .rev()
+            .map(|entries| PackShape { entries, ..shape });
+        assert!(!shape.exceeds_growth(smaller.clone().take(PACK_GROWTH)));
+        assert!(shape.exceeds_growth(smaller));
+        assert!(!shape.exceeds_growth(std::iter::repeat_n(shape, PACK_GROWTH * 2)));
+        let other = PackShape {
+            declaration: (0, 1),
+            entries: 0,
+        };
+        assert!(!shape.exceeds_growth(std::iter::repeat_n(other, PACK_GROWTH * 2)));
+    }
+
+    /// GEN-13 and GEN-17: the shape includes both forwarded arguments and
+    /// reflected types, independently of the const arguments beside them.
+    #[test]
+    fn pack_width_counts_bound_and_reflected_entries() {
+        let ty = Type::Scalar(Scalar::I64);
+        let mut reflected = TypePackArgument::positional(1, vec![ty.clone()]);
+        reflected.reflected = Some(ReflectedInputs {
+            fixed: 1,
+            prefix: vec![(None, ty.clone())],
+        });
+        let mut instance = ForwardingInstance {
+            declaration: (0, 0),
+            generics: vec![Argument::Constant(Constant {
+                text: "1".into(),
+                value: ConstantValue::Int(1),
+            })],
+            requirements: Vec::new(),
+            functions: Vec::new(),
+            type_packs: vec![reflected],
+            pack_inputs: vec![PackInput {
+                parameter: 0,
+                key: PackKey::Position(0),
+                ty,
+            }],
+        };
+        assert_eq!(PackShape::of(&instance).entries, 3);
+        instance.type_packs.clear();
+        assert_eq!(PackShape::of(&instance).entries, 1);
+        instance.generics.clear();
+        assert_eq!(PackShape::of(&instance).entries, 1);
     }
 }

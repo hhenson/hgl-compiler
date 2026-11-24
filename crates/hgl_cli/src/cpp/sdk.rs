@@ -44,7 +44,9 @@ use std::process::Command;
 use serde_json::Value;
 use walkdir::WalkDir;
 
-use super::build::{lock, quoted, write_if_changed};
+use super::build::{
+    Interrupt, lock, native_command, native_tool_command, quoted, write_if_changed,
+};
 use super::stamp::file_digest;
 
 mod package;
@@ -154,8 +156,8 @@ const FOUND_PACKAGES: [&str; 6] = ["hgraph", "fmt", "spdlog", "simdjson", "Threa
 
 /// `cmake`, to be run with none of what [`CMAKE_READS`] and
 /// [`FOUND_PACKAGES`] name in its environment.
-fn cmake_command(program: &Path) -> Command {
-    let mut command = Command::new(program);
+fn cmake_command(program: &Path, held: &fs::File) -> Result<Command, String> {
+    let mut command = native_command(program, held)?;
     for variable in CMAKE_READS {
         command.env_remove(variable);
     }
@@ -170,12 +172,12 @@ fn cmake_command(program: &Path) -> Command {
             command.env_remove(variable);
         }
     }
-    command
+    Ok(command)
 }
 
 /// A version of what is made for a toolchain: raised when what this
 /// driver makes changes, so that what an older `hgl` made is not used.
-const FORMAT: u32 = 4;
+const FORMAT: u32 = 5;
 
 /// The family of compilers a platform builds the cpp target with
 /// (`docs/cpp-target.md`): GCC on Linux, Apple clang on macOS. Each way
@@ -442,8 +444,8 @@ pub(super) struct Description {
 impl Toolchain {
     /// The configured or bundled toolchain of an ordinary build, or why
     /// it could not be used.
-    pub(super) fn find() -> Result<Toolchain, String> {
-        Toolchain::with(chosen(false)?)
+    pub(super) fn find(interrupt: &Interrupt) -> Result<Toolchain, String> {
+        Toolchain::with(chosen(false)?, interrupt)
     }
 
     /// The toolchain of a debug build: hgraph's libraries built for
@@ -452,8 +454,8 @@ impl Toolchain {
     /// optimisation; and the runtime library built as CMake's `Debug`.
     /// The libraries, the flags and the debug build distinguish the
     /// toolchain's cache.
-    pub(super) fn find_debug() -> Result<Toolchain, String> {
-        let mut toolchain = Toolchain::with(chosen(true)?)?;
+    pub(super) fn find_debug(interrupt: &Interrupt) -> Result<Toolchain, String> {
+        let mut toolchain = Toolchain::with(chosen(true)?, interrupt)?;
         toolchain
             .flags
             .extend(["-O0".to_string(), "-g".to_string()]);
@@ -468,14 +470,14 @@ impl Toolchain {
 
     /// The toolchain that links `hgraph`, with the compiler and the
     /// tools found as the environment says.
-    fn with(hgraph: Hgraph) -> Result<Toolchain, String> {
+    fn with(hgraph: Hgraph, interrupt: &Interrupt) -> Result<Toolchain, String> {
         let family = Family::of_platform();
-        let (compiler, version, banner) = compiler(family)?;
+        let (compiler, version, banner) = compiler(family, interrupt)?;
         let ninja = which::which("ninja").ok();
         let lld = if family.links_with_lld() {
             which::which("ld.lld")
                 .ok()
-                .map(|path| linker_version(&path))
+                .map(|path| linker_version(&path, interrupt))
         } else {
             None
         };
@@ -587,6 +589,7 @@ impl Toolchain {
         cache: &Path,
         key: &str,
         jobs: Option<&str>,
+        interrupt: &Interrupt,
     ) -> Result<Description, String> {
         if !hgl_cpp::runtime::available() {
             return Err(
@@ -599,7 +602,7 @@ impl Toolchain {
         fs::create_dir_all(&directory)
             .map_err(|error| format!("{} could not be made: {error}", directory.display()))?;
         // Two runs that both find the toolchain unprepared make it once.
-        let _held = lock(&directory)?;
+        let held = lock(&directory)?;
         let described = directory.join(DESCRIPTION);
         if let Some(description) = self.prepared(cache, key) {
             return Ok(description);
@@ -609,10 +612,10 @@ impl Toolchain {
              for each SDK (https://cmake.org)"
                 .to_string()
         })?;
-        let runtime = self.build_runtime(&cmake, &directory, jobs)?;
-        let mut description = self.describe(&cmake, &directory, &runtime)?;
+        let runtime = self.build_runtime(&cmake, &directory, jobs, &held, interrupt)?;
+        let mut description = self.describe(&cmake, &directory, &runtime, &held, interrupt)?;
         description.header = self
-            .precompile(&directory, &description)?
+            .precompile(&directory, &description, &held, interrupt)?
             .display()
             .to_string();
         let json = serde_json::json!({
@@ -665,6 +668,8 @@ impl Toolchain {
         cmake: &Path,
         directory: &Path,
         jobs: Option<&str>,
+        held: &fs::File,
+        interrupt: &Interrupt,
     ) -> Result<PathBuf, String> {
         let source = directory.join("runtime-source");
         let build = directory.join("runtime-build");
@@ -686,7 +691,7 @@ impl Toolchain {
             fs::write(&file, bytes)
                 .map_err(|error| format!("{} could not be written: {error}", file.display()))?;
         }
-        let mut configure = cmake_command(cmake);
+        let mut configure = cmake_command(cmake, held)?;
         configure
             .arg("-S")
             .arg(&source)
@@ -714,17 +719,22 @@ impl Toolchain {
             // description's program finds it.
             .arg("-DCMAKE_INSTALL_LIBDIR=lib")
             .arg("-DBUILD_TESTING=OFF");
-        run("the runtime library's configuration", &mut configure)
-            .map_err(|reason| self.incomplete(reason))?;
-        let mut built = cmake_command(cmake);
+        run(
+            "the runtime library's configuration",
+            &mut configure,
+            interrupt,
+        )
+        .map_err(|reason| self.incomplete(reason))?;
+        let mut built = cmake_command(cmake, held)?;
         built.arg("--build").arg(&build);
         if let Some(jobs) = jobs {
             built.arg("--parallel").arg(jobs);
         }
-        run("the runtime library's build", &mut built)?;
+        run("the runtime library's build", &mut built, interrupt)?;
         run(
             "the runtime library's installation",
-            cmake_command(cmake).arg("--install").arg(&build),
+            cmake_command(cmake, held)?.arg("--install").arg(&build),
+            interrupt,
         )?;
         Ok(installed)
     }
@@ -737,6 +747,8 @@ impl Toolchain {
         cmake: &Path,
         directory: &Path,
         runtime: &Path,
+        held: &fs::File,
+        interrupt: &Interrupt,
     ) -> Result<Description, String> {
         let source = directory.join("probe-source");
         let build = directory.join("probe-build");
@@ -749,7 +761,7 @@ impl Toolchain {
         // A file under `.cmake/api/v1/query` asks CMake to describe the
         // build; an empty one named `codemodel-v2` asks for the targets.
         write_if_changed(&build.join(".cmake/api/v1/query/codemodel-v2"), "")?;
-        let mut configure = cmake_command(cmake);
+        let mut configure = cmake_command(cmake, held)?;
         configure
             .arg("-S")
             .arg(&source)
@@ -770,8 +782,12 @@ impl Toolchain {
                 self.build_type().to_uppercase()
             ))
             .arg(format!("-DHGL_RUNTIME={}", runtime.display()));
-        run("the description of a build against the SDK", &mut configure)
-            .map_err(|reason| self.incomplete(reason))?;
+        run(
+            "the description of a build against the SDK",
+            &mut configure,
+            interrupt,
+        )
+        .map_err(|reason| self.incomplete(reason))?;
         let target = probe_target(&build.join(".cmake/api/v1/reply"))?;
         let mut description = description_of(&target, self.family, &self.compiler)?;
         description
@@ -792,7 +808,13 @@ impl Toolchain {
     /// flags, and gives the header units are compiled with: the compiler
     /// takes the precompiled form beside it in its place, `hgl_pch.h.gch`
     /// for GCC and `hgl_pch.h.pch` for clang.
-    fn precompile(&self, directory: &Path, description: &Description) -> Result<PathBuf, String> {
+    fn precompile(
+        &self,
+        directory: &Path,
+        description: &Description,
+        held: &fs::File,
+        interrupt: &Interrupt,
+    ) -> Result<PathBuf, String> {
         let header = directory.join("pch").join("hgl_pch.h");
         write_if_changed(
             &header,
@@ -815,7 +837,10 @@ impl Toolchain {
         );
         run(
             "the precompiled header",
-            Command::new("/bin/sh").arg("-c").arg(command),
+            native_command(Path::new("/bin/sh"), held)?
+                .arg("-c")
+                .arg(command),
+            interrupt,
         )?;
         Ok(header)
     }
@@ -1088,11 +1113,16 @@ fn dependency_library(path: &Path) -> bool {
 
 /// The stable version line from the preprocessor's verbose output. The
 /// macros establish the compiler family even when a wrapper omits its banner.
-fn probe_compiler(driver: &Path) -> Option<(Family, String, Option<String>)> {
-    let output = Command::new(driver)
-        .args(["-dM", "-E", "-v", "-x", "c++", "/dev/null"])
-        .env("LC_ALL", "C")
-        .output()
+fn probe_compiler(
+    driver: &Path,
+    interrupt: &Interrupt,
+) -> Option<(Family, String, Option<String>)> {
+    let output = interrupt
+        .output(
+            native_tool_command(driver)
+                .args(["-dM", "-E", "-v", "-x", "c++", "/dev/null"])
+                .env("LC_ALL", "C"),
+        )
         .ok()
         .filter(|output| output.status.success())?;
     let (family, version) = Family::identify(&String::from_utf8_lossy(&output.stdout))?;
@@ -1109,11 +1139,13 @@ fn probe_compiler(driver: &Path) -> Option<(Family, String, Option<String>)> {
 }
 
 /// An absent version leaves the linker's selection unchanged.
-fn linker_version(linker: &Path) -> String {
-    Command::new(linker)
-        .arg("--version")
-        .env("LC_ALL", "C")
-        .output()
+fn linker_version(linker: &Path, interrupt: &Interrupt) -> String {
+    interrupt
+        .output(
+            native_tool_command(linker)
+                .arg("--version")
+                .env("LC_ALL", "C"),
+        )
         .ok()
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
@@ -1123,7 +1155,10 @@ fn linker_version(linker: &Path) -> String {
 /// The compiler `CXX` names, or the first of `family`'s candidates on
 /// the `PATH`, with its version and build banner; or why there is none
 /// of the family at its oldest version or later.
-fn compiler(family: Family) -> Result<(PathBuf, String, Option<String>), String> {
+fn compiler(
+    family: Family,
+    interrupt: &Interrupt,
+) -> Result<(PathBuf, String, Option<String>), String> {
     let named = std::env::var_os("CXX").filter(|named| !named.is_empty());
     let candidates: Vec<PathBuf> = match &named {
         Some(named) => vec![which::which(named).map_err(|_| {
@@ -1146,7 +1181,9 @@ fn compiler(family: Family) -> Result<(PathBuf, String, Option<String>), String>
                 .next()
                 .and_then(|major| major.parse::<u32>().ok())
         };
-        match probe_compiler(&candidate) {
+        let probed = probe_compiler(&candidate, interrupt);
+        interrupt.check()?;
+        match probed {
             // The path as found, and not where a link leads: a wrapper
             // such as `ccache` linked as `g++` knows the compiler by it.
             Some((of, version, banner))
@@ -1213,10 +1250,10 @@ fn missing_package(printed: &str) -> Option<&str> {
 
 /// Runs `command` to its end; `what` names it in the reason it failed,
 /// with the last lines it printed.
-fn run(what: &str, command: &mut Command) -> Result<(), String> {
-    let output = command
-        .output()
-        .map_err(|error| format!("{what} could not be started: {error}"))?;
+fn run(what: &str, command: &mut Command, interrupt: &Interrupt) -> Result<(), String> {
+    let output = interrupt.output(command);
+    interrupt.check()?;
+    let output = output.map_err(|error| format!("{what} could not be started: {error}"))?;
     if output.status.success() {
         return Ok(());
     }
@@ -1575,7 +1612,11 @@ mod tests {
         // The optimised libraries, named as debug ones.
         assert_eq!(
             named(&|directory| {
-                fs::write(directory.join("hgraph-sdk/hgl-sdk.txt"), "tag=0.9.23\n").unwrap()
+                fs::write(
+                    directory.join("hgraph-sdk/hgl-sdk.txt"),
+                    format!("tag={HGRAPH_TAG}\n"),
+                )
+                .unwrap()
             }),
             "is not built for debugging: its `hgraph-sdk/hgl-sdk.txt` names no build type, as an \
              optimised build's does"
@@ -1845,19 +1886,23 @@ mod tests {
         );
         fs::write(root.join("defines"), GCC).unwrap();
         fs::write(root.join("banner"), "gcc version 15.2.0 (Test build 1)\n").unwrap();
-        let (family, version, banner) = super::probe_compiler(&toolchain.compiler).unwrap();
+        let interrupt = super::Interrupt::default();
+        let (family, version, banner) =
+            super::probe_compiler(&toolchain.compiler, &interrupt).unwrap();
         assert_eq!(family, Family::Gcc);
         assert_eq!(version, toolchain.version);
         toolchain.banner = banner;
         let original = toolchain.key();
 
-        let (_, same_version, same_banner) = super::probe_compiler(&toolchain.compiler).unwrap();
+        let (_, same_version, same_banner) =
+            super::probe_compiler(&toolchain.compiler, &interrupt).unwrap();
         assert_eq!(same_version, toolchain.version);
         assert_eq!(same_banner, toolchain.banner);
         assert_eq!(original, toolchain.key());
 
         fs::write(root.join("banner"), "gcc version 15.2.0 (Test build 2)\n").unwrap();
-        let (_, same_version, new_banner) = super::probe_compiler(&toolchain.compiler).unwrap();
+        let (_, same_version, new_banner) =
+            super::probe_compiler(&toolchain.compiler, &interrupt).unwrap();
         assert_eq!(same_version, toolchain.version);
         toolchain.banner = new_banner;
         assert_ne!(original, toolchain.key());
@@ -1894,12 +1939,13 @@ mod tests {
              cat \"$(dirname \"$0\")/version\"\n",
         );
         fs::write(root.join("version"), "LLD 21.0.0\n").unwrap();
-        toolchain.lld = Some(super::linker_version(&linker));
+        let interrupt = super::Interrupt::default();
+        toolchain.lld = Some(super::linker_version(&linker, &interrupt));
         let original = toolchain.key();
         assert_eq!(original, toolchain.key());
 
         fs::write(root.join("version"), "LLD 21.0.1\n").unwrap();
-        toolchain.lld = Some(super::linker_version(&linker));
+        toolchain.lld = Some(super::linker_version(&linker, &interrupt));
         assert_ne!(original, toolchain.key());
     }
 
@@ -1991,7 +2037,8 @@ mod tests {
 
     #[test]
     fn cmake_runs_with_none_of_its_own_variables_of_the_environment() {
-        let command = cmake_command(Path::new("cmake"));
+        let held = tempfile::tempfile().unwrap();
+        let command = cmake_command(Path::new("cmake"), &held).unwrap();
         let removed: Vec<String> = command
             .get_envs()
             .filter(|(_, value)| value.is_none())
