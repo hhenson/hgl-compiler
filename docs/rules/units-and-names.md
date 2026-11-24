@@ -72,9 +72,8 @@ analyser: partial
 - Known required-constant failures reject at the parameter or field default (ERR-9). A window default is checked as an arrival and an atomic default as its whole payload (TYPE-9, TYPE-11).
 - Required-constant failures in parameter and field defaults use `constant.failure` (ERR-9).
 - Omitted parameter defaults are checked against the concrete parameter type after generic selection, including in a call made by a generic body.
-- A field or parameter default that needs itself through omitted arguments reports `default.cycle` at its expression and names the dependency path through checked calls and concrete forwarded packs.
+- A field or parameter default that needs itself through omitted arguments reports `default.cycle` at its expression. Its dependency path follows checked calls, concrete forwarded packs and the static callables those bodies invoke (FN-17).
 - The default and constant dependency checks follow the written branches (UNIT-13).
-- Left: cyclic dependencies reached only by invoking a callable parameter (FN-17, #635).
 
 transpiler: partial
 

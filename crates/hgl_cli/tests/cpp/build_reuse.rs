@@ -756,6 +756,62 @@ fn a_test_waits_for_its_workspaces_build() {
     assert_eq!(ninja.calls(), 1);
 }
 
+/// A stop during preparation exits even when the workspace lock is held.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_stop_while_preparing_exits_without_waiting_for_the_workspace() {
+    let root = scratch("stop-before-build");
+    let source = write(&root, "calc.hgl", CALC);
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).unwrap();
+    let lock_path = workspace.join(".hgl-lock");
+    let lock = File::create(&lock_path).unwrap();
+    lock.lock().unwrap();
+    let lock_path = lock_path.canonicalize().unwrap();
+    let mut build = Command::new(env!("CARGO_BIN_EXE_hgl"))
+        .args(["build", &source, "--out", &argument(&workspace)])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let open_files = format!("/proc/{}/fd", build.id());
+    let ready = wait_until(|| {
+        fs::read_dir(&open_files).is_ok_and(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .any(|entry| fs::read_link(entry.path()).is_ok_and(|path| path == lock_path))
+        })
+    });
+    let signalled = ready
+        && Command::new("kill")
+            .args(["-TERM", &build.id().to_string()])
+            .status()
+            .unwrap()
+            .success();
+    let mut stopped = false;
+    let start = Instant::now();
+    while signalled && start.elapsed() < Duration::from_secs(2) {
+        if build.try_wait().unwrap().is_some() {
+            stopped = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if !stopped {
+        let _ = build.kill();
+    }
+    let output = build.wait_with_output().unwrap();
+    assert!(ready, "hgl reached its workspace lock");
+    assert!(
+        stopped,
+        "hgl stopped while the workspace lock was still held"
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(text(&output.stderr).contains("build was interrupted"));
+    assert!(!workspace.join(".hgl-built.json").exists());
+    drop(lock);
+}
+
 /// An interrupt of the builder alone leaves no successful stamp behind.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
@@ -846,6 +902,63 @@ fn a_run_interrupted_during_the_build_leaves_no_stamp() {
     assert!(!stamp.exists());
     assert!(success(ninja.hgl(&arguments).output().unwrap()).contains("Z  52\n"));
     assert!(stamp.is_file());
+}
+
+/// The first stop waits for Ninja. A second stop exits the driver and
+/// the native builder receives the existing parent-death signal.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn a_second_stop_exits_while_waiting_for_ninja() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("second-build-stop");
+    let source = write(&root, "calc.hgl", CALC);
+    let ninja = NinjaTrace::new(&root);
+    let workspace = argument(&ninja.workspace);
+    let arguments = ["build", &source, "--out", &workspace];
+    let stopped = root.join("ninja-stopped");
+    let mut build = ninja
+        .hgl(&arguments)
+        .env("HGL_TEST_BUILD_TERM", &stopped)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let signal = |name: &str, pid: u32| {
+        Command::new("kill")
+            .args([name, &pid.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    };
+    let started = wait_until(|| ninja.calls() == 1);
+    let first = started && signal("-INT", build.id());
+    std::thread::sleep(Duration::from_millis(100));
+    let waiting = first && build.try_wait().unwrap().is_none() && !stopped.exists();
+    let second = waiting && signal("-TERM", build.id());
+    let mut exited = false;
+    let start = Instant::now();
+    while second && start.elapsed() < Duration::from_secs(2) {
+        if build.try_wait().unwrap().is_some() {
+            exited = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if !exited {
+        let _ = build.kill();
+    }
+    let output = build.wait_with_output().unwrap();
+    let child_exited = started && wait_until(|| stopped.is_file());
+    fs::write(stopped.with_extension("release"), "").unwrap();
+    assert!(waiting, "the first stop waits for Ninja");
+    assert!(exited, "the second stop exits hgl promptly");
+    assert!(child_exited, "Ninja was told its parent exited");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(text(&output.stderr).contains("build was interrupted"));
+    assert!(!ninja.workspace.join(".hgl-built.json").exists());
 }
 
 /// On Linux the native builder receives a termination signal even when

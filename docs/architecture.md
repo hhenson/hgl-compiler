@@ -1705,7 +1705,7 @@ analysed program.
 | Module | What it decides | Rules |
 | --- | --- | --- |
 | `copies` | Where a value is copied: which `let`s and loops take a copy, what a name refers into, whether what a call gives is its own; which structs are values (`by_value`) | the owner's rule (compiler issue 151), FN-13, FN-15 |
-| `instances`, `canonical`, `packs` | Which instances a program asks for, including generic value functions and packed calls. A pack's captured types and keys identify its instance, and each capture becomes an individual parameter. These modules also describe what an eval's run and an application's run are wired with. | FN-8, GEN-2, GEN-10, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
+| `instances`, `canonical`, `packs` | Which instances a program asks for, including generic value functions and packed calls. A pack's captured types and keys identify its instance, and each capture becomes an individual parameter. Ordinary const inputs identify the instance where a compile-time check reads them. For a deferred candidate, the compiler follows the call with the instance's types in place to discover that demand. The analyser and lowering use the same normalized value key. These modules also describe what an eval's run and an application's run are wired with. | FN-1, FN-8, GEN-2, GEN-10, GEN-13, GEN-16, CEVAL-1, CRUN-8 |
 | `pieces` | What a piece a target writes reaches (`Reach`), and whether a test or an application reaches a form the target does not write (`blocked`) | |
 | `graphs` | What a child graph of a graph's `if`, `switch` or `for` takes, the value of a `switch` label, the `var`s a branch assigns, which paths return | CTRL-6, CTRL-7, CTRL-11, CTRL-14 |
 | `types` | A struct's fields and descendants, whether a struct has none, and which values are read whole only where they are all valid | TYPE-3, TYPE-4, TYPE-9, TIME-1 |
@@ -1901,10 +1901,10 @@ call of its wiring function (`graphs::temporal_call`), so no other
 unit instantiates hgraph's templates of a node, and a node's struct and
 state never leave its unit. A generic one is written for each instance
 `hgl_lower::instances` collects, `n_::i_::f::of_i64::impl_` and
-`w_::i_::f::of_i64`. A node whose configuration holds an `f64` (at any
-depth, `nodes::holds_f64`) is wired with `Wiring::add_unique_node`
-(`nodes::unique`) and not `hgraph::wire`, until hgraph tells `0.0` from
-`-0.0` in its interning ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866)).
+`w_::i_::f::of_i64`. hgraph 0.9.29 compares native Float zero signs when it
+interns nodes. When an opaque HGL configuration can hide an `f64`,
+`nodes::opaque_float_configuration` selects `Wiring::add_unique_node`
+to preserve the zero signs (NUM-2).
 The target's own names in this code end with `_` after a part that has
 an `_` not followed by `1`, or a plain word: `wiring_`, `state_`,
 `kept_`, `out_`, `state_type_`, `capability_03_`; `names::identifier`
@@ -2171,10 +2171,13 @@ conda-forge's libc++ in place of the system's.
 A program's workspace is `programs/<hash>` under the cache, keyed by its
 source roots, or the directory named by `--out` or `--keep`. Both flags
 work on `hgl build`, `hgl run` and `hgl test`. The driver holds the workspace
-lock through the build and until its last executable ends. The program's
-Ninja process inherits the lock so that the next command waits if `hgl`
-dies. On Linux Ninja also gets a termination signal when `hgl` dies.
-On macOS an already started Ninja build can finish under the inherited lock.
+lock through the build and until its last executable ends. A stop during
+preparation exits immediately. A first stop while waiting for a native tool
+lets that tool exit before the driver exits. A second stop exits immediately.
+Ninja inherits the workspace lock, and tools building the SDK runtime and
+precompiled header inherit the toolchain lock. On Linux those processes also
+receive a termination signal when `hgl` dies. On macOS a started build can
+finish under its inherited lock.
 
 `hgl build ROOT...` checks the program, writes the generated files
 and builds its units and application executables. `--tests` builds a
@@ -2322,8 +2325,8 @@ use hosted runners only.
 `runtime/cpp` is `libhglrt`, the C++ library that the code of the
 [C++ target](cpp-target.md) links: what that code calls and hgraph does
 not have. It is
-a skeleton that the target's first step fills. It is built on hgraph's
-runtime and wiring libraries alone (`hgraph::runtime`, `hgraph::wiring`):
+a skeleton that the target's first step fills. It uses hgraph's runtime
+and wiring libraries (`hgraph::runtime`, `hgraph::wiring`) and the SDK's fmt:
 `hgraph::core` would bring hgraph's standard library, which no generated
 code uses. Its headers take hgraph's front end for generated code,
 `<hgraph/types/generated.h>` (static nodes, `wire<Node>` with complete
@@ -2334,7 +2337,7 @@ fails where a public header brings it in.
 
 | Header (`include/hglrt/`) | Holds | Rules |
 | --- | --- | --- |
-| `hglrt.h` | The one header generated code includes: all below | |
+| `hglrt.h` | The common header generated code includes | |
 | `values.h` | HGL's scalars as hgraph's types (`i64`, `f64`, `bool`, `str`, `bytes`, `date`, `time`, `datetime`, `duration`, `civil_datetime`, `zoned_datetime`, `tenor`); `list<T>`, a `std::vector<T>` with a hash, registered with hgraph as an atomic; `delta_t<T>`, a scalar's, a nullable's (`nullable_delta`), a tuple's and a list's delta (`list_delta`); an enum's names, `EnumNames`, which the enum gives through `hgl_enum` (found by argument-dependent lookup) and by which the library names it, prints its members (`Side.buy`) and registers it with hgraph as an atomic; `value_form<T>`, the name, text and hash of a type another header declares (keyed.h's sets and dictionaries, capture.h's errors and results) | TYPE-1, TYPE-2, TYPE-4, TYPE-7, TYPE-16 |
 | `failure.h` | `error` (hgraph's `CanonicalError`), `result<T>` (`std::expected`); `Failure`, hgraph's `ExecutionFailure` with the place it was raised at; `fail`, `fail_uncoded`, `raise`; the catalogued codes it raises | ERR-1, ERR-2, ERR-4, ERR-5, ERR-8 |
 | `capture.h` | `capture<G>`, hgraph's `compiled::try_except_` of the graph the compiler writes for a captured call, compiled with `compile_subgraph` given the call's other arguments, with canonical errors; `captured_value`, `captured_error`; a `result` registered with hgraph as an atomic; the name, text and hash of an `error` and of a `result` (`value_form`) | ERR-2, ERR-4, ERR-7, ERR-8 |
@@ -2342,6 +2345,8 @@ fails where a public header brings it in.
 | `scalar.h` | Core's natives of numbers and the ordered types: checked `i64` arithmetic, `f64` and mixed arithmetic, every division of numbers under each zero policy, exact numeric equality with tolerances, order and `compare_`, the Boolean forms; core's `ZeroPolicy` and `CmpResult` | NUM-1 to NUM-12, OPS-2, OPS-3, OPS-5 |
 | `temporal.h` | Core's natives of durations and instants: a duration's arithmetic, rounded and checked; a `datetime`, `civil_datetime`, `date` or `zoned_datetime` moved by a duration, and the duration between two; `date + time`; zoned equality; a zone's literals, checked against the provider's catalogue and a `zoned_datetime`'s offset against its zone | OPS-1, OPS-2, OPS-10, NUM-12, LEX-12 |
 | `text.h` | Core's natives of `str`: concatenation and repetition | OPS-1 |
+| `output.h` | `write` and `Stream`, with ordinary stream buffering and an explicit flush | OUT-1, OUT-2 |
+| `formatting.h` | Core's value formatter and native collection text. Only units that use them include the header. Lowering and emission use the analyser's checked pattern text and selected text conversions. Generated code supplies typed arguments, compiled fmt specifiers and checked chrono directives. | FMT-1 to FMT-5, FMT-7, FMT-9 |
 | `conversions.h` | Every `convert` of core's: those that cannot fail, and those that can under `invalid`; core's `Rounding` and `InvalidPolicy` | OPS-4, OPS-6 to OPS-8 |
 | `tenors.h` | Core's natives of `tenor`, which is hgraph's `Tenor` (counts and form alone): its arithmetic, order and text, and the parts core's calendar candidates use, `business_days`, `moved`, `weekend`, `same_month` | TYPE-17, TEN-1 to TEN-9 |
 | `lists.h` | `append`, `extend` | LIST-1 to LIST-3 |
@@ -2353,7 +2358,7 @@ fails where a public header brings it in.
 | `capabilities.h` | `Logger`, `Clock`, `Scheduler`, `Alarm`, `GlobalState`, each made from its hook's hgraph view, a member function for each property; `log`, `schedule` four ways, `un_schedule`, `reset`, the store's `get`, `has`, `put` of every ordinary value; core's `LogLevel` | CAP-1 to CAP-6, TIME-8 |
 | `windows.h` | A window, hgraph's `TSW` and `TSWDuration`: `endpoint_read` of one (its delta the value that arrived, none at an exit alone; `all_valid` at its minimum); `WindowArrival`, what an evaluation writes of its window result, held and pushed once (END-5, TYPE-11), or discarded with the samples and their times on `invalidate(out)` (END-4); `window_push`; its value read checked, `window_value` and `window_value_checked`, which stand for the one read in which hgraph differs, reading the values held below the minimum (`tests/hgraph_window_read.cpp` shows it on hgraph alone); `fn_removed_value_checked` | TYPE-11, END-3, END-9, ERR-14 |
 | `control.h` | What a branch of an `if` or a `switch` over a connection wires where the language gives it nothing: `never`, a connection that never ticks, the branch of no `else`; `unmatched`, the branch of no `default`, which fails with the selector's value as it is selected | CTRL-3, CTRL-6, CTRL-13 |
-| `list_endpoints.h` | The temporal form of a list: what it holds whole (`schema_value`), how it is read whole (`whole`), published (`publisher`, `publish`), and read as its delta and its `all_valid` (`endpoint_read`), each element through its own form's; a child of one (`Child`, `child`) and the port of an element (`element_port`, through `GrowingElement` for a growing list's). A tuple's form is `structs.h`'s. hgraph 0.9.23's `TSL` is built on as it is: none of TIME-7's ticks, TIME-9's validity or TYPE-16's deltas needs an adaptation (hgraph issues 1822, 1827) | TYPE-9, TYPE-10, TYPE-16, TIME-1, TIME-7, TIME-9, END-3, END-7, END-8, ERR-14, TST-5 |
+| `list_endpoints.h` | The temporal form of a list: what it holds whole (`schema_value`), how it is read whole (`whole`), published (`publisher`, `publish`), and read as its delta and its `all_valid` (`endpoint_read`), each element through its own form's; a child of one (`Child`, `child`) and the port of an element (`element_port`, through `GrowingElement` for a growing list's). A tuple's form is `structs.h`'s. hgraph's `TSL` is built on as it is: none of TIME-7's ticks, TIME-9's validity or TYPE-16's deltas needs an adaptation (hgraph issues 1822, 1827) | TYPE-9, TYPE-10, TYPE-16, TIME-1, TIME-7, TIME-9, END-3, END-7, END-8, ERR-14, TST-5 |
 | `sources.h` | `constant`, a node that publishes a value once at the start, each a node of its own (hgraph would intern two whose values are equal under `==`, `0.0` and `-0.0` among them); `resume`, which drives a source's body under the timing of `yield` | FN-3, SOURCE-1 to SOURCE-4 |
 | `references.h` | `designation`, what a `REF` input designates now, or the empty reference: what a `ref` result is given; `designated_position`, an index of a fixed list a `ref` result designates, checked, and `designation_of`, the position it names; `select_entry`, a dictionary's entry a key selects in a graph, designated | FN-16, TIME-10, END-10, EXPR-3, EXPR-7 |
 | `timing.h` | `ticked`, whether an input published or lost its value in the evaluation, by which a node with a timer tells its wakes apart; `Lent` and `Lending`, a capability lent to a source's body for one resumption | TIME-3, TIME-9, SOURCE-1, TIME-8 |
@@ -2578,8 +2583,8 @@ the job the way the design needs is dropped.
 | `serde_json` | `hgl_cli`, `hgl_doc` | check diagnostics, API documentation and native build records as JSON |
 | `blake3` | `hgl_cli` | content fingerprints for native build reuse |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
-| `ctrlc` | `hgl_cli` | waiting for an interrupted native build to finish, or passing a stop request to an application |
-| `nix` | `hgl_cli` on Linux | delivers a termination signal to Ninja if the build driver dies |
+| `ctrlc` | `hgl_cli` | handles stops during preparation, native builds and application execution |
+| `nix` | `hgl_cli` on Linux | delivers a termination signal to a native build tool if the build driver dies |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `pulldown-cmark` | `hgl_parser`, `hgl_doc` | CommonMark fenced block ranges and HTML rendering of documentation comments |

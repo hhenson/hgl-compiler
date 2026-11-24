@@ -106,7 +106,9 @@ analyser: partial
 - A value candidate may mark a parameter `var`, which takes no part in selecting it (FN-15)
 - An option given a generic value parameter of the enclosing function, `step(v, mode: M)` in `go<const M: Mode>`, admits a candidate where the function's `requires` binds the parameter, `requires M == .slow` (GEN-3); where it states nothing of it, a default of it included, no candidate is known to admit the call, which is `operator.no_candidate` where the function is declared (GEN-7)
 - A fixed parameter in an operator pack's place reports the proposed `impl.pack` code at the candidate parameter name. A pack with cardinality one is accepted. Bare Boolean requirements await #367.
-- Left: a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidates
+- A candidate whose result is missing or contradicts the result its operator gives for its parameters reports `impl.result`. The report points to the written result type or to the candidate's name if it has no result.
+- The types and values bound by a candidate's declared parameters can show that the operator's `requires` does not hold. The candidate's name then reports `impl.requires`.
+- Left: other checks of a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidate selection
 
 ## GEN-7
 
@@ -202,6 +204,7 @@ analyser: partial
 - Generic arguments that are the same, each type canonical and each value one constant (UNIT-13), make one type or one instance, and arguments that differ another: of the worked fragment, `Scaled<1>`, `Scaled<1.0>` and `Scaled<1.00>` are one type, and a `Scaled<-0.0>` where a `Scaled<0.0>` is expected is `type.mismatch`
 - Calls and symbolic operations whose candidates become known in a graph instance contribute to the same bounded traversal of instances and their requirements (GEN-3, GEN-7).
 - "Where the instances of one declaration never end when the program is compiled, the program rejects": no more than `hgl_analyser::INSTANCES` (4096) instances of one declaration are followed from one call, by the analyser and by `hgl_lower`, and a call past that is `generic.instance_limit`, at the call that makes the first of them: the worked fragment's `climbed`; through constants worked out from the body's own parameters, and through a type that grows, `nest<list<T>>`
+- The forwarding walk uses the same argument size and nesting limits. It also reports `generic.instance_limit` at the initiating call after more than 64 increases in the pack width of one declaration along a path.
 - Left: a default that names anything else; the kind a constraint gives; `type(N)`; a call that supplies no type for a function's parameter its signature does not settle
 
 ## GEN-14

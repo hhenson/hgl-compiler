@@ -20,6 +20,10 @@ pub struct Program {
     /// The modules. A module's position here is how other records refer
     /// to it ([`Import::module`], [`OperatorRef::module`]).
     pub modules: Vec<Module>,
+    /// Ordinary const slots observed by compile-time checks, by declaration.
+    pub(crate) const_demands: crate::const_inputs::Demands,
+    /// Concrete selected calls already examined for an ordinary const slot.
+    pub(crate) selected_const_demands: crate::const_inputs::SelectedDemands,
 }
 
 impl Program {

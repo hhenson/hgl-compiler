@@ -41,11 +41,6 @@ const PENDING: &[Pending] = &[
         reason: "GEN-3 type category and GEN-10 tuple type pack (#512)",
     },
     Pending {
-        file: "hgl_core/spec/formatting.md",
-        opening: "export operator format<...As, ...Ks>(",
-        reason: "FMT-6 and FMT-8 graph candidate body (#434)",
-    },
-    Pending {
         file: DIAGNOSTICS,
         opening: "export operator debug_print<...As, ...Ks>(",
         reason: "FN-19 pack spreading (#434)",

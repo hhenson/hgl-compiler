@@ -400,10 +400,11 @@ fn typed_inputs_keep_result_requests_with_every_flag_spelling() {
             "module m\noperator fixed<T, const on: bool = true>(value: T, flag: bool) -> T\nimpl const fn fixed(value: i64, flag: bool) -> f64 => 2.5\ntest observed {{ let value: i64 = 3\nlet flag: bool = true\nlet picked = {call} }}\n"
         );
         let checked = check(&[("m.hgl", &source)]);
-        assert_eq!(checked.findings.len(), 1, "{call}: {}", checked.report);
-        assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+        assert_eq!(checked.findings.len(), 2, "{call}: {}", checked.report);
+        assert_eq!(checked.findings[0].code, "operator/impl.result");
+        assert_eq!(checked.findings[1].code, "operator/operator.no_candidate");
         assert!(
-            checked.findings[0].message.ends_with("and gives `i64`"),
+            checked.findings[1].message.ends_with("and gives `i64`"),
             "{}",
             checked.report
         );
@@ -425,8 +426,9 @@ test observed {
 }
 "#,
     )]);
-    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
-    assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+    assert_eq!(checked.findings.len(), 2, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "operator/impl.result");
+    assert_eq!(checked.findings[1].code, "operator/operator.no_candidate");
     let checked = check(&[(
         "m.hgl",
         r#"module m

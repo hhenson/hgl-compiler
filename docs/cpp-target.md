@@ -53,13 +53,13 @@ one executable for each test module or application
 | Scalars | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes`, `Date`, `Time`, `DateTime`, `TimeDelta`, `ZonedDateTime` and `Tenor`. Tenor literals keep their calendar or business-day form |
 | Struct | A generated struct with HGL's equality. As a temporal value, a nominal bundle whose whole value is the struct |
 | Enum, tuple, optional, list, fixed list, result | `enum class`, `std::tuple`, `std::optional`, `std::vector`, `std::array`, `std::expected` |
-| Set, dictionary | `hglrt::set`, `hglrt::dict`: hash containers, as no order of iteration is promised (CTRL-12), equal whatever the order (OPS-2). A key is told apart by `==` of its type. As a temporal value, hgraph's `TSS` and `TSD`, published through hgraph's own whole write and delta write, whose ticks on hgraph 0.9.23 are TIME-7's; a temporal one's order is hgraph's |
+| Set, dictionary | `hglrt::set`, `hglrt::dict`: hash containers, as no order of iteration is promised (CTRL-12), equal whatever the order (OPS-2). A key is told apart by `==` of its type. As a temporal value, hgraph's `TSS` and `TSD`, published through hgraph's own whole write and delta write, with TIME-7's ticks and hgraph's ordering |
 | Abstract struct | A class that holds any struct that inherits from it, read through a function of each field's name |
 | `delta<T>` | As a value: `hglrt::nullable_delta`, a type of its own and no optional, `hglrt::list_delta`, `set_delta`, `dict_delta`, a struct's own delta struct, a tuple. Converting to and from hgraph's delta value is each temporal form's: a struct's and a tuple's are read from and published to hgraph's bundle field by field (`hglrt/structs.h`), a set's and a dictionary's are in `hglrt/keyed.h`, a list's in `hglrt/list_endpoints.h` |
 | Temporal struct, tuple, nullable | A struct is hgraph's `NativeTSB<S>` (an `hgraph::native_bundle<S>` written beside the aggregate), or its `NominalTSB` of each field's own form where a field is optional; a tuple an `UnNamedTSB` of its positions; `atomic<S>` a `TS<S>`; a nullable `TS<Optional<T>>`. A field is a child endpoint, in a hook and in a graph (EXPR-7) |
 | Temporal list, fixed list | hgraph's `TSL<S>` and `TSL<S, N>`, built on as they are |
 | Node | A struct with `eval`, `start` and `stop`, in its module's unit, and a wiring function, in its header, that wires it: other units call the wiring function and instantiate none of hgraph's templates of the node. A handler header is the input's declared activity and validity; handlers are tested in source order. State and cache are one generated struct for each node |
-| Graph | A struct with static `compose` over `Wiring&` and typed ports, calling the wiring functions of what it wires, and a wiring function as a node has. Identical value nodes are interned by hgraph, but where a node's configuration holds an `f64` ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866): `0.0 == -0.0`) |
+| Graph | A struct with static `compose` over `Wiring&` and typed ports, calling the wiring functions of what it wires, and a wiring function as a node has. hgraph interns identical nodes and compares native Float zero signs. Nodes with opaque configurations that can hold a float use separate wiring (NUM-2) |
 | `if`, `switch`, `for` over connections | hgraph's `compiled::switch_` and `compiled::map_` wiring of compiled children (`types/compiled_subgraph.h`), each child a compiled sub-graph with its captures |
 | Lifted call | A generated node that calls the instance |
 | Source | A node with no input that schedules itself. The body is a C++23 coroutine, an `hglrt::generator` of a time and a payload (`<hglrt/generator.h>`: `std::generator`'s shape, written once for every platform because Apple clang 21's standard library has no `std::generator`), held in the node's state, made in `start` and destroyed in `stop`: `yield` inside loops and branches is written as it reads, with the body's locals in the coroutine's frame. A trial ran one on hgraph: the trace was right, a failure inside the body was the node's failure, and the frame was freed after a finished and after a failed run |
@@ -208,12 +208,10 @@ failure from old results.
 
 ## What hgraph is asked for
 
-The SDK is hgraph 0.9.23. One request is open:
-[1866](https://github.com/hhenson/hgraph/issues/1866), hgraph's interning
-takes two nodes whose configurations are `0.0` and `-0.0` for one, so a
-node whose configuration holds an `f64` is wired as a node of its own.
-What else was asked is in it, and each is taken up where the order of
-work reaches it:
+The SDK is hgraph 0.9.29. It compares native Float zero signs during
+interning ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866)).
+HGL tuples and lists can still hide their floats from that comparison,
+so their nodes use unique wiring.
 
 | Issue | In hgraph | Here |
 | --- | --- | --- |
@@ -237,9 +235,8 @@ parameter. Where the pinned specification and hgraph differ, this target
 builds the specification's rule, and the difference goes to the
 specification's issue tracker to be decided there, not here.
 
-The scheduler was such a case (CAP-4), and hgraph 0.9.23 has core's
-rule: in the evaluation a wake brings about, that wake is due and no
-longer pending, so `un_schedule()` cancels the next one, and
+Under CAP-4, the scheduler removes a wake from pending wakes when it
+starts its evaluation. `un_schedule()` cancels the next one, and
 `is_scheduled_now` holds after `reset`. hgraph keeps no wake under the
 empty tag, so a tag is given to it after a mark of its own. The
 wall-clock option is hgraph's own, as CAP-4 has it since the owner's

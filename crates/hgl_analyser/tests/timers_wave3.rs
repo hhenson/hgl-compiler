@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::module;
+use common::{check, module};
 
 /// TIME-9: "A node that injects neither rejects it (`inject.no_scheduler`),
 /// and so do `start` and `stop` (`scheduled.lifecycle`)." Wherever it
@@ -144,13 +144,10 @@ fn a_duration_the_compiler_sees_is_held_to_its_hook() {
 /// before the evaluation time. A value function given the scheduler is
 /// held to what no hook admits, a negative duration; whether a zero there
 /// is in `start` the rule does not say, and it is accepted for the
-/// target to report. A candidate of the operator `schedule` that is not
-/// core's is not held to it.
+/// target to report. Only Core's `schedule` has this timing contract.
 #[test]
 fn a_duration_known_only_as_the_program_runs_is_accepted() {
     let checked = module(concat!(
-        "struct Ticket { n: i64 }\n",
-        "impl const fn schedule(capability: Ticket, at: duration) { }\n",
         "fn at_run_time(value: i64, delay: duration, const every: duration = 0s) -> i64 {\n",
         "    inject scheduler\n",
         "    start { schedule(scheduler, every) }\n",
@@ -160,7 +157,6 @@ fn a_duration_known_only_as_the_program_runs_is_accepted() {
         "        schedule(scheduler, every)\n",
         "        schedule(scheduler, none)\n",
         "        schedule(scheduler, never)\n",
-        "        schedule(Ticket(n: value), 0s)\n",
         "        return value\n",
         "    }\n",
         "}\n",
@@ -178,6 +174,23 @@ fn a_duration_known_only_as_the_program_runs_is_accepted() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:26:25 type/schedule.duration_bounds TIME-8"]
+        ["m.hgl:23:25 type/schedule.duration_bounds TIME-8"]
     );
+
+    let local = check(&[
+        ("core.hgl", "module core\n"),
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "struct Ticket { n: i64 }\n",
+                "operator schedule(capability: Ticket, at: duration)\n",
+                "impl const fn schedule(capability: Ticket, at: duration) {}\n",
+                "const fn locally(value: i64) {\n",
+                "    schedule(Ticket(n: value), -1s)\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert!(local.summary().is_empty(), "{}", local.report);
 }

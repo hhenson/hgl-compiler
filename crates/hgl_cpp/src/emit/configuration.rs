@@ -15,8 +15,9 @@
 //! hgraph's under the name of its C++ type, with the hash and the
 //! equality of the value. So two nodes whose configurations differ
 //! stay two, and two whose configurations are equal are one, as for any
-//! other configuration; one that holds an `f64` is a node of its own
-//! (hgraph issue 1866, `nodes::unique`).
+//! other configuration. hgraph compares native Float zero signs when
+//! interning nodes. The compiler uses `nodes::unique` when an opaque HGL
+//! configuration may hide an `f64` from that comparison (NUM-2).
 //!
 //! | Held | The `Scalar`'s type | Given where the node is wired | Read in a hook |
 //! | --- | --- | --- | --- |

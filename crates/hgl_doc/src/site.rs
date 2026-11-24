@@ -231,13 +231,16 @@ impl<'a> Site<'a> {
             html: page(module.name, "../"),
             renderers: Renderers::default(),
         };
-        writeln!(output.html, "<h1>{}</h1>", escaped(module.name)).unwrap();
+        output.heading(1, module.name);
         for part in &module.parts {
             if let Some(comment) = &part.documentation {
-                if let Some(name) = part.name {
-                    writeln!(output.html, "<h2>Part {}</h2>", escaped(name)).unwrap();
-                }
-                self.documentation(&mut output, comment, &part.source, page_name, None);
+                let level = if let Some(name) = part.name {
+                    output.heading(2, &format!("Part {name}"));
+                    2
+                } else {
+                    1
+                };
+                self.documentation(&mut output, comment, &part.source, page_name, level, None);
             }
         }
 
@@ -249,7 +252,7 @@ impl<'a> Site<'a> {
                 .push(declaration);
         }
         for (kind, declarations) in kinds {
-            writeln!(output.html, "<h2>{kind}</h2>").unwrap();
+            output.heading(2, kind);
             for declaration in declarations {
                 self.declaration(&mut output, declaration, page_name, 3);
             }
@@ -262,15 +265,15 @@ impl<'a> Site<'a> {
         output: &mut Markup,
         declaration: &Declaration<'_>,
         page: &str,
-        level: u8,
+        level: usize,
     ) {
         let Target { anchor, .. } = &self.targets[&declaration.source.at];
+        writeln!(output.html, "<article id=\"{}\">", escaped(anchor)).unwrap();
+        output.heading(level, declaration.name);
         writeln!(
             output.html,
-            "<article id=\"{}\">\n<h{level}>{}</h{level}>\n<pre class=\"signature\"><code>{}</code></pre>\n\
+            "<pre class=\"signature\"><code>{}</code></pre>\n\
              <p class=\"source\">{}:{}</p>",
-            escaped(anchor),
-            escaped(declaration.name),
             escaped(&declaration.signature),
             escaped(&declaration.source.file),
             declaration.source.line,
@@ -283,20 +286,21 @@ impl<'a> Site<'a> {
                 comment,
                 &declaration.source,
                 page,
+                level,
                 Some(&declaration.interface),
             );
         } else {
-            generic_table(output, &declaration.interface, None, |_| None);
-            parameter_tables(output, &declaration.interface, None, |_| None);
+            generic_table(output, &declaration.interface, level + 1, None, |_| None);
+            parameter_tables(output, &declaration.interface, level + 1, None, |_| None);
         }
         for (label, nested) in [
             ("Candidates", &declaration.candidates),
             ("Members", &declaration.members),
         ] {
             if !nested.is_empty() {
-                writeln!(output.html, "<h4>{label}</h4>").unwrap();
+                output.heading(level + 1, label);
                 for item in nested {
-                    self.declaration(output, item, page, 5);
+                    self.declaration(output, item, page, level + 2);
                 }
             }
         }
@@ -309,6 +313,7 @@ impl<'a> Site<'a> {
         comment: &Documentation,
         source: &Source<'_>,
         page: &str,
+        level: usize,
         interface: Option<&Interface<'_>>,
     ) {
         let context = LinkContext {
@@ -322,44 +327,42 @@ impl<'a> Site<'a> {
             Some(format!("{prefix}#{}", target.anchor))
         };
 
-        render(output, &comment.summary, link);
+        render(output, &comment.summary, level, link);
+        let section_level = level + 1;
         let mut wrote_generics = false;
         let mut wrote_parameters = false;
         for section in &comment.sections {
-            if !section.recognized {
-                // SDOC-3 leaves unrecognized headings as authored prose.
-                render(output, &section.prose, link);
-                continue;
-            }
             match (section.heading.as_deref(), interface) {
                 (Some("Type Args:"), Some(interface))
-                    if !interface.generic_parameters.is_empty() =>
+                    if section.recognized && !interface.generic_parameters.is_empty() =>
                 {
-                    generic_table(output, interface, Some(section), link);
-                    render(output, &section.prose, link);
+                    generic_table(output, interface, section_level, Some(section), link);
+                    render(output, &section.prose, section_level, link);
                     wrote_generics = true;
                 }
                 (Some("Args:"), Some(interface))
-                    if !interface.parameters.is_empty()
-                        || !interface.configuration_parameters.is_empty() =>
+                    if section.recognized
+                        && (!interface.parameters.is_empty()
+                            || !interface.configuration_parameters.is_empty()) =>
                 {
-                    parameter_tables(output, interface, Some(section), link);
-                    render(output, &section.prose, link);
+                    parameter_tables(output, interface, section_level, Some(section), link);
+                    render(output, &section.prose, section_level, link);
                     wrote_parameters = true;
                 }
                 _ => {
-                    if let Some(heading) = &section.heading {
-                        writeln!(
-                            output.html,
-                            "<h4>{}</h4>",
-                            escaped(heading.trim_end_matches(':'))
-                        )
-                        .unwrap();
-                    }
+                    let parent_level = if let Some(heading) = &section.heading {
+                        // Use the same inline Markdown rules as the section text.
+                        let title = heading.strip_suffix(':').unwrap_or(heading);
+                        render(output, &format!("# {title} #"), level, link);
+                        section_level
+                    } else {
+                        level
+                    };
                     render_section(
                         output,
                         &section.text,
-                        section.heading.as_deref() == Some("Examples:"),
+                        parent_level,
+                        section.recognized && section.heading.as_deref() == Some("Examples:"),
                         link,
                     );
                 }
@@ -367,10 +370,10 @@ impl<'a> Site<'a> {
         }
         if let Some(interface) = interface {
             if !wrote_generics {
-                generic_table(output, interface, None, link);
+                generic_table(output, interface, section_level, None, link);
             }
             if !wrote_parameters {
-                parameter_tables(output, interface, None, link);
+                parameter_tables(output, interface, section_level, None, link);
             }
         }
     }
@@ -399,12 +402,14 @@ struct Row<'a> {
 fn generic_table(
     output: &mut Markup,
     interface: &Interface<'_>,
+    level: usize,
     section: Option<&Section>,
     link: impl Fn(&str) -> Option<String> + Copy,
 ) {
     table(
         output,
         "Type arguments",
+        level,
         interface.generic_parameters.iter().map(|parameter| Row {
             name: parameter.name,
             ty: parameter.ty.as_deref().unwrap_or(match parameter.kind {
@@ -421,6 +426,7 @@ fn generic_table(
 fn parameter_tables(
     output: &mut Markup,
     interface: &Interface<'_>,
+    level: usize,
     section: Option<&Section>,
     link: impl Fn(&str) -> Option<String> + Copy,
 ) {
@@ -431,6 +437,7 @@ fn parameter_tables(
         table(
             output,
             heading,
+            level,
             parameters.iter().map(|parameter| Row {
                 name: parameter.name,
                 ty: &parameter.ty,
@@ -445,6 +452,7 @@ fn parameter_tables(
 fn table<'a>(
     output: &mut Markup,
     heading: &str,
+    level: usize,
     rows: impl ExactSizeIterator<Item = Row<'a>>,
     section: Option<&Section>,
     link: impl Fn(&str) -> Option<String> + Copy,
@@ -452,9 +460,10 @@ fn table<'a>(
     if rows.len() == 0 {
         return;
     }
+    output.heading(level, heading);
     writeln!(
         output.html,
-        "<h4>{heading}</h4>\n<table><thead><tr><th scope=\"col\">Name</th><th scope=\"col\">Type</th>\n\
+        "<table><thead><tr><th scope=\"col\">Name</th><th scope=\"col\">Type</th>\n\
          <th scope=\"col\">Default</th><th scope=\"col\">Description</th></tr></thead><tbody>"
     )
     .unwrap();
@@ -474,7 +483,7 @@ fn table<'a>(
         output.html.push_str("</td><td>");
         for entry in section.into_iter().flat_map(|section| &section.entries) {
             if entry.key == row.name {
-                render(output, &entry.text, link);
+                render(output, &entry.text, level, link);
             }
         }
         output.html.push_str("</td></tr>\n");

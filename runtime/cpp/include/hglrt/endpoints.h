@@ -329,7 +329,7 @@ class Child {
 };
 
 /// The plain read of a held endpoint raises at the consuming use
-/// (ERR-14). hgraph 0.9.23 keeps the canonical error but discards the
+/// (ERR-14). hgraph keeps the canonical error but discards the
 /// exception subclass during node evaluation. Carry the HGL location in
 /// this read's message so it survives that boundary.
 template <class T>

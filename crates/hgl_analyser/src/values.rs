@@ -59,8 +59,11 @@ pub(crate) use anonymous::remap_locals;
 mod arguments;
 // What every call is held to once it is built (FN-1, FN-9, FN-15, TIME-8).
 mod call_checks;
+pub(crate) use call_checks::fixed_expression;
 // A call by name: of a value function, a form, or an enum's member (FN-4, EXPR-2).
 mod calls;
+mod candidate_contracts;
+pub(crate) use candidate_contracts::check_candidate_contracts;
 // The candidate of an operator a call selects (GEN-5).
 mod candidates;
 // Capabilities, and the uses of one that reject (TIME-8).
@@ -84,6 +87,7 @@ mod evals;
 mod expressions;
 // What a place expects of a value, and the values that fit it (EXPR-5, TYPE-14).
 mod fit;
+mod format_calls;
 // The form a result takes from its place, and a `T?` read where a T is expected (ERR-12, ERR-15).
 mod forms;
 mod forwarded_packs;
@@ -112,6 +116,7 @@ mod operators;
 // `requires`, and what a generic body may call by it (GEN-3, GEN-7, GEN-16).
 mod quantifiers;
 mod requirements;
+pub(crate) use requirements::bounded_instance_key;
 // The result forms, the parts of a result and of an error, and `capture` (ERR-2 to ERR-7).
 mod results;
 // The sizes a struct application or a call gives a list or a window (TYPE-10, TYPE-11).
@@ -369,6 +374,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
     operators::inherit_configuration_defaults(program);
+    program.const_demands = crate::const_inputs::demands(program);
     let source = requirements::independent_source_bodies(program);
     let mut instance_calls = operator_defaults::check(program, &source, diagnostics);
     forwarded_packs::check_instances(program, &mut instance_calls, &source, diagnostics);
@@ -414,7 +420,7 @@ pub(crate) fn reread_instance_body(
     program: &Program,
     (module, declaration): (usize, usize),
     (signature, map): (&Signature, &[(Location, &crate::Argument)]),
-    (functions, pack_inputs): (&[(usize, hir::Callee)], Option<&[hir::PackInput]>),
+    inputs: crate::InstanceInputs<'_>,
     project: &dyn Fn(&Type) -> Type,
     diagnostics: &mut Diagnostics,
 ) -> Option<hir::Body> {
@@ -480,8 +486,18 @@ pub(crate) fn reread_instance_body(
         .iter()
         .map(|(at, argument)| (*at, (*argument).clone()))
         .collect();
-    typer.pack_inputs = pack_inputs.map(|inputs| inputs.to_vec());
-    typer.pack_functions = functions.to_vec();
+    typer.const_inputs = inputs
+        .constants
+        .iter()
+        .filter_map(|input| {
+            Some((
+                signature.parameters.get(input.slot)?.at,
+                input.value.clone(),
+            ))
+        })
+        .collect();
+    typer.pack_inputs = inputs.pack_inputs.map(|inputs| inputs.to_vec());
+    typer.pack_functions = inputs.functions.to_vec();
     typer.body_at_phase(owner.phases[declaration])
 }
 
@@ -729,6 +745,8 @@ struct Typer<'a> {
     /// ([`candidates::Selecting`]): where each is declared, with its
     /// argument. Empty otherwise.
     instance: Vec<(Location, crate::types::Argument)>,
+    /// Known const parameter values in this reread, by lexical binding.
+    const_inputs: Vec<(Location, Expr)>,
     /// Concrete entries of the enclosing instance's pack parameters.
     pack_inputs: Option<Vec<hir::PackInput>>,
     /// Compile-time callbacks available to forwarded calls.
@@ -867,6 +885,7 @@ impl<'a> Typer<'a> {
             constants: Default::default(),
             selecting: tables.selecting,
             instance: Vec::new(),
+            const_inputs: Vec::new(),
             pack_inputs: None,
             pack_functions: Vec::new(),
             bound: Vec::new(),

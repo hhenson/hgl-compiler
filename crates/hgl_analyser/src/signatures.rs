@@ -36,6 +36,7 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
     option_kinds(program, diagnostics);
     pack_declarations(program, diagnostics);
     configuration_shapes(program, diagnostics);
+    crate::values::check_candidate_contracts(program, diagnostics);
     var_parameters(program, diagnostics);
     ref_marks(program, diagnostics);
     native::check(program, diagnostics);

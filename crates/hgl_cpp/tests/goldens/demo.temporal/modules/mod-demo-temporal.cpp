@@ -105,19 +105,7 @@ struct impl_
 
     static ::hgraph::Port<::hgraph::TS<::hgraph::Float>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Float>> value)
     {
-        return [&]() {
-        // hgraph issue 1866: wired as a node of its own, since hgraph would take
-        // two whose configurations hold `0.0` and `-0.0` for one.
-        ::hgraph::Value scalars_{::hgraph::value_type_for_wiring(::hgraph::StaticNodeSignature<lifted_00_>::scalar_schema(), wiring_.realization_options())};
-        {
-            auto configured_ = scalars_.as_bundle().begin_mutation();
-            configured_["rhs"].set(static_cast<::hgraph::Float>(2.5));
-        }
-        ::hgraph::NodeBuilder builder_;
-        builder_.implementation<lifted_00_>();
-        const ::std::array<::hgraph::WiringPortRef, 1> inputs_{value.erased()};
-        return ::hgraph::Port<::hgraph::TS<::hgraph::Float>>{wiring_, wiring_.add_unique_node(typeid(lifted_00_), ::std::move(builder_), ::std::span<const ::hgraph::WiringPortRef>{inputs_}, ::std::move(scalars_))};
-    }();
+        return ::hgraph::wire<lifted_00_>(wiring_, value, static_cast<::hgraph::Float>(2.5));
     }
 };
 }  // namespace n_::scaled

@@ -107,8 +107,8 @@ fn holders(probe: bool) -> i64 {
     return first(probe, Holder(xs: [5], n: 1)) + first(probe, Holder(xs: [50], n: 10))
 }
 
-# Two nodes whose configurations differ by the sign of a zero alone, which
-# hgraph's interning would take for one (hgraph issue 1866).
+# Two opaque tuple configurations that differ by the sign of a zero alone
+# (NUM-2). hgraph cannot see the float inside the tuple.
 fn above(x: f64, const by: tuple<f64, f64>) -> bool {
     when { return x /{zero: .ieee} by[0] > 0.0 }
 }
@@ -119,12 +119,18 @@ fn differ(a: bool, b: bool) -> bool {
 
 fn signs(x: f64) -> bool => differ(above(x, (0.0, 1.0)), above(x, (-0.0, 1.0)))
 
-# The same of one capture in a graph called twice (ERR-7): each boundary
-# is a node of its own.
 fn over(x: f64, const by: f64) -> bool {
     when { return x /{zero: .ieee} by > 0.0 }
 }
 
+# Native Float configurations preserve the zero signs in ordinary wiring.
+fn native_signs(x: f64) -> bool => differ(over(x, 0.0), over(x, -0.0))
+
+const fn over_value(x: f64, by: f64) -> bool => x /{zero: .ieee} by > 0.0
+
+fn lifted_signs(x: f64) -> bool => differ(over_value(x, -0.0), over_value(x, 0.0))
+
+# Each capture boundary is a node of its own (ERR-7).
 fn captured_over(x: f64, const by: f64) -> bool => capture(over, x, by).value
 
 fn captured_signs(x: f64) -> bool => differ(captured_over(x, 0.0), captured_over(x, -0.0))
@@ -192,6 +198,8 @@ test configurations_that_differ_are_two_nodes {
     assert eval both(x: [1]) == [35]
     assert eval holders(probe: [true]) == [66]
     assert eval signs(x: [1.0]) == [true]
+    assert eval native_signs(x: [1.0]) == [true]
+    assert eval lifted_signs(x: [1.0]) == [true]
     assert eval captured_signs(x: [1.0]) == [true]
 }
 

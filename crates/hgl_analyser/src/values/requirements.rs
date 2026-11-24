@@ -16,6 +16,7 @@ use super::forwarded_packs::{visit_anonymous_bodies, walk_nested_calls};
 use super::inference::{fixed, mentions, placed, unsaid};
 use super::operators::{Requested, from_place, has_generic_configuration_default, unreadable};
 use super::{REQUIRING, Typer};
+use crate::constant::Scope;
 use crate::declared::{
     names_parameter, same_type, substitute_with_members, substitute_within, weight,
 };
@@ -806,6 +807,7 @@ impl<'a> Typer<'a> {
                 callee,
                 generics: generics.to_vec(),
                 type_packs: type_packs.to_vec(),
+                constants: ConstArguments::default(),
                 answers: Vec::new(),
                 required: None,
                 at,
@@ -1375,6 +1377,66 @@ impl<'a> Typer<'a> {
             .map(|answered| !matches!(answered, Answered::Unmet))
     }
 
+    /// FMT-5 asks for the normal value conversion to `str` for a type
+    /// that the native formatter does not directly format.
+    pub(super) fn text_converter(&mut self, operand: SyntaxNode, ty: &Type) -> Option<Callee> {
+        let program = self.program;
+        let module = program.core()?;
+        let core = &program.modules[module];
+        let declaration = core
+            .scope
+            .get("convert")?
+            .iter()
+            .copied()
+            .find(|&index| core.declarations[index].kind == DeclarationKind::Operator)?;
+        let operator = OperatorRef {
+            module,
+            declaration,
+        };
+        let result = Type::Scalar(crate::Scalar::Str);
+        let Answered::Selected {
+            module,
+            declaration,
+            generics,
+        } = self.answered(
+            operator,
+            (self.file, vec![(operand, ty.clone())]),
+            Some(&result),
+        )?
+        else {
+            return None;
+        };
+        let Detail::Callable(signature) = &program.modules[module].details[declaration] else {
+            return None;
+        };
+        let given: Vec<_> = fixed(&signature.generics).zip(&generics).collect();
+        let supplied = signature
+            .parameters
+            .iter()
+            .find(|parameter| !parameter.configuration)?;
+        // The formatter holds the whole argument and needs the text
+        // itself. Ordinary deferred reads may admit either payload.
+        if !self.admits(&substitute_within(&supplied.ty, &given), ty)
+            || substitute_within(signature.result.as_ref()?, &given) != result
+        {
+            return None;
+        }
+        let requirements = self.answers(module, declaration, &generics);
+        Some(Callee::Candidate {
+            operator: (operator.module, operator.declaration),
+            operator_generics: vec![
+                Argument::Type(result.clone()),
+                Argument::Type(ty.clone()),
+                Argument::Type(result),
+            ],
+            module,
+            declaration,
+            generics,
+            type_packs: Vec::new(),
+            requirements,
+        })
+    }
+
     /// What answers a requirement that `operator` is callable with
     /// values of the types `operands`, to give `result` where one is
     /// stated: see [`Typer::callable`], which says when it holds.
@@ -1910,6 +1972,7 @@ impl<'a> Typer<'a> {
             },
             arguments,
             form,
+            text: None,
             braced: Vec::new(),
             lifted: false,
         };
@@ -2104,6 +2167,7 @@ pub(super) struct Made {
     callee: (usize, usize),
     generics: Vec<Argument>,
     type_packs: Vec<hir::TypePackArgument>,
+    constants: ConstArguments,
     /// What answers each requirement the callee states at this call
     /// (`hir::Answer`), with the call's generic arguments in place.
     answers: Vec<hir::Answer>,
@@ -2116,6 +2180,8 @@ pub(super) struct Made {
     /// A concrete forwarding path that exposed this call to the walk.
     via: Option<Box<[MakingCall]>>,
 }
+
+type ConstArguments = crate::const_inputs::ReadInputs;
 
 /// How many instances one call is followed to ([`crate::INSTANCES`]). A
 /// recursion that gives new arguments each time, `grow<N * 2>` and
@@ -2221,16 +2287,17 @@ pub(super) fn instances_hold(
     let mut configured = std::collections::HashSet::new();
     let mut endpoint_reads = std::collections::HashSet::new();
     let mut dependent_indices = std::collections::HashSet::new();
+    let mut dependent_patterns = std::collections::HashSet::new();
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let mut made = Vec::new();
             if let Some(Some(body)) = module.bodies.get(position) {
-                made_in(body, &mut made);
+                made_in(program, body, &mut made);
             }
             let body_calls = made.len();
             let independent = source.body((index, position)).map(|body| {
                 let mut calls = Vec::new();
-                made_in(body, &mut calls);
+                made_in(program, body, &mut calls);
                 calls.iter().map(source_call_key).collect::<HashSet<_>>()
             });
             for default in module
@@ -2240,7 +2307,7 @@ pub(super) fn instances_hold(
                 .flatten()
                 .flatten()
             {
-                made_by(&default.value, &mut made);
+                made_by(program, &default.value, &mut made);
             }
             // A struct a type written in it applies, a field's or a
             // parameter's (GEN-3: "an application of a struct whose
@@ -2273,6 +2340,21 @@ pub(super) fn instances_hold(
             {
                 dependent_indices.insert((index, position));
             }
+            if !declared.is_empty()
+                && module
+                    .bodies
+                    .get(position)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|body| {
+                        crate::formatting::has_dependent_formatting(
+                            program,
+                            (index, position),
+                            body,
+                        )
+                    })
+            {
+                dependent_patterns.insert((index, position));
+            }
             for (call_index, call) in made.into_iter().enumerate() {
                 // ERR-9: a generic argument the body works out from its
                 // own parameters, `times<(M * 2)>`, may fail where an
@@ -2298,7 +2380,11 @@ pub(super) fn instances_hold(
                 {
                     passed.entry((index, position)).or_default().push(call);
                 } else {
-                    if call_index < body_calls && independent.is_some() {
+                    let checks_const_inputs =
+                        call.constants.limit.is_some() || !call.constants.values.is_empty();
+                    // A concrete reread checks the calls whose inputs changed.
+                    // This call already has its own independent checking root.
+                    if call_index < body_calls && (independent.is_some() || checks_const_inputs) {
                         independent_roots
                             .entry((index, position))
                             .or_default()
@@ -2314,13 +2400,13 @@ pub(super) fn instances_hold(
             .flatten()
             .chain(&module.store_body)
         {
-            made_in(body, &mut given);
+            made_in(program, body, &mut given);
         }
         if let Some(run) = &module.run_body {
-            made_by(&run.call, &mut given);
+            made_by(program, &run.call, &mut given);
         }
         for constant in module.constants.iter().flatten() {
-            made_by(&constant.value, &mut given);
+            made_by(program, &constant.value, &mut given);
         }
     }
     // The declarations whose calls reach a `requires` with what they
@@ -2346,6 +2432,8 @@ pub(super) fn instances_hold(
         .chain(configured.iter().copied())
         .chain(endpoint_reads.iter().copied())
         .chain(dependent_indices.iter().copied())
+        .chain(dependent_patterns.iter().copied())
+        .chain(program.const_demands.keys().copied())
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -2386,7 +2474,15 @@ pub(super) fn instances_hold(
         .into_iter()
         .filter(|made| reaching.contains(&made.callee))
     {
-        let key = instance_key(made.callee, &made.generics, &made.type_packs, &made.answers);
+        // A root whose input could not be read can still check the inputs
+        // already known. Only exhaustion while following instances is a limit.
+        let key = instance_key(
+            made.callee,
+            &made.generics,
+            &made.type_packs,
+            &made.answers,
+            &made.constants,
+        );
         let from = InstanceRoot {
             at: made.at,
             via: made.via.take(),
@@ -2410,6 +2506,7 @@ pub(super) fn instances_hold(
                 &root.generics,
                 &root.type_packs,
                 &root.answers,
+                &root.constants,
             )]);
         let mut waiting = std::collections::VecDeque::from([(root, None)]);
         let mut parents = Vec::new();
@@ -2434,6 +2531,12 @@ pub(super) fn instances_hold(
             let recheck_graph = graph && (!selecting.is_empty() || !made.answers.is_empty());
             let recheck_results = selecting.iter().any(|call| call.result.is_some());
             let recheck_indices = dependent_indices.contains(&made.callee);
+            let constants = made.constants.values.as_slice();
+            let recheck_format = dependent_patterns.contains(&made.callee) || !constants.is_empty();
+            let inputs = crate::InstanceInputs {
+                constants,
+                ..crate::InstanceInputs::default()
+            };
             let declared = own(made.callee);
             let map: Vec<(Location, &Argument)> =
                 declared.iter().copied().zip(&made.generics).collect();
@@ -2458,18 +2561,23 @@ pub(super) fn instances_hold(
                 super::operator_defaults::check_instance(
                     program,
                     made.callee,
-                    &made.generics,
-                    &made.answers,
+                    (&made.generics, &made.answers),
+                    inputs,
                     &mut instance_calls,
                     diagnostics,
                     &mut body_reports,
                 )
-            } else if recheck_graph || recheck_endpoints || recheck_results || recheck_indices {
+            } else if recheck_graph
+                || recheck_endpoints
+                || recheck_results
+                || recheck_indices
+                || recheck_format
+            {
                 program.checked_instance(
                     made.callee,
                     &made.generics,
                     &made.answers,
-                    crate::instance::InstanceInputs::default(),
+                    inputs,
                     &RefCell::new(Diagnostics::new()),
                     &mut body_reports,
                 )
@@ -2504,17 +2612,21 @@ pub(super) fn instances_hold(
                         replaced.insert(call.at);
                     });
                     concrete_body_calls(
+                        program,
                         instance,
                         independent_roots.get(&made.callee),
                         &mut instance_calls,
                     );
                 } else if recheck_graph || recheck_indices {
-                    made_after_inference(declared_body, instance, &mut instance_calls);
+                    made_after_inference(program, declared_body, instance, &mut instance_calls);
                 }
             }
-            if recheck_indices && !recheck_graph && !recheck_endpoints {
+            if (recheck_indices || recheck_format) && !recheck_graph && !recheck_endpoints {
                 let paths = chain.paths(program, &root_calls);
                 for report in body_reports.as_slice() {
+                    if recheck_format && diagnostics.as_slice().contains(report) {
+                        continue;
+                    }
                     emit_instance_report(report.clone(), &paths, diagnostics);
                 }
                 if body_reports.has_errors() {
@@ -2572,6 +2684,7 @@ pub(super) fn instances_hold(
                     callee: call.callee,
                     generics: call.generics,
                     type_packs: call.type_packs,
+                    constants: call.constants,
                     forwarded: false,
                     answers: call.answers,
                     at: call.at,
@@ -2659,6 +2772,7 @@ pub(super) fn instances_hold(
                     callee,
                     generics,
                     type_packs,
+                    constants: call.constants.clone(),
                     forwarded,
                     answers,
                     at: call.at,
@@ -2763,6 +2877,12 @@ pub(super) fn instances_hold(
                                 Vec::new(),
                                 (call.form, call.name),
                             );
+                            let constants = match &kind {
+                                ExprKind::Call {
+                                    callee, arguments, ..
+                                } => program.known_const_inputs(callee, arguments),
+                                _ => ConstArguments::default(),
+                            };
                             typer.fit_selected_result(
                                 call,
                                 Expr {
@@ -2785,6 +2905,7 @@ pub(super) fn instances_hold(
                                 callee: (module, declaration),
                                 generics,
                                 type_packs,
+                                constants,
                                 forwarded: false,
                                 answers,
                                 at: call.at,
@@ -2802,28 +2923,24 @@ pub(super) fn instances_hold(
                 callee,
                 generics,
                 type_packs,
+                constants,
                 forwarded,
                 answers,
                 at,
             } in calls
             {
-                let deep = generics.iter().any(
-                    |argument| matches!(argument, Argument::Type(ty) if nesting(ty) > NESTING),
-                );
-                if deep
-                    || type_packs
-                        .iter()
-                        .flat_map(|pack| &pack.types)
-                        .any(|ty| nesting(ty) > NESTING)
-                {
+                let Some(key) = bounded_instance_key(callee, &generics, &type_packs, &answers)
+                else {
+                    exhausted = true;
+                    break;
+                };
+                // Traversal budgets leave an input unread. A concrete text
+                // that outgrows its argument budget exhausts this walk.
+                if constants.limit == Some(crate::ConstInputFault::TextLimit) {
                     exhausted = true;
                     break;
                 }
-                let key = instance_key(callee, &generics, &type_packs, &answers);
-                if key.len() > ARGUMENTS {
-                    exhausted = true;
-                    break;
-                }
+                let key = with_const_inputs(key, &constants);
                 // GEN-7: a call of a function or a candidate in a generic
                 // body was judged where the body is declared, under what
                 // it states. Struct applications and forwarded parameter
@@ -2884,6 +3001,7 @@ pub(super) fn instances_hold(
                             callee,
                             generics,
                             type_packs,
+                            constants,
                             answers,
                             required: None,
                             at,
@@ -2931,14 +3049,14 @@ impl MakingCall {
 }
 
 /// Walk the saved parent indices from the innermost call to the root.
-pub(super) fn making_path(
+pub(super) fn making_path<'a>(
     current: MakingCall,
     mut parent: Option<usize>,
-    parents: &[(MakingCall, Option<usize>)],
+    parent_at: impl Fn(usize) -> &'a (MakingCall, Option<usize>),
 ) -> Vec<MakingCall> {
     let mut path = vec![current];
     while let Some(index) = parent {
-        let (caller, previous) = &parents[index];
+        let (caller, previous) = parent_at(index);
         path.push(caller.clone());
         parent = *previous;
     }
@@ -2967,7 +3085,7 @@ impl InstanceChain<'_> {
             &self.made.type_packs,
             self.made.at,
         );
-        let path = making_path(current, self.parent, self.parents);
+        let path = making_path(current, self.parent, |index| &self.parents[index]);
         let (root, inner) = path
             .split_last()
             .expect("the path contains its current call");
@@ -3057,7 +3175,13 @@ impl InstanceCallRejections {
             return;
         }
         let made = chain.made;
-        let key = instance_key(made.callee, &made.generics, &made.type_packs, &made.answers);
+        let key = instance_key(
+            made.callee,
+            &made.generics,
+            &made.type_packs,
+            &made.answers,
+            &made.constants,
+        );
         let reports_of = self.by_instance.entry(key).or_default();
         let instance = instance_note(program, made.callee, &made.generics, &made.type_packs);
         let paths = chain.paths(program, callers);
@@ -3125,6 +3249,40 @@ fn instance_key(
     generics: &[Argument],
     type_packs: &[hir::TypePackArgument],
     answers: &[hir::Answer],
+    constants: &ConstArguments,
+) -> String {
+    with_const_inputs(
+        generic_instance_key(callee, generics, type_packs, answers),
+        constants,
+    )
+}
+
+/// The generic part of an instance's identity, within the GEN-13 walk's bounds.
+pub(crate) fn bounded_instance_key(
+    callee: (usize, usize),
+    generics: &[Argument],
+    type_packs: &[hir::TypePackArgument],
+    answers: &[hir::Answer],
+) -> Option<String> {
+    if generics
+        .iter()
+        .any(|argument| matches!(argument, Argument::Type(ty) if nesting(ty) > NESTING))
+        || type_packs
+            .iter()
+            .flat_map(hir::TypePackArgument::types_with_prefix)
+            .any(|ty| nesting(ty) > NESTING)
+    {
+        return None;
+    }
+    let key = generic_instance_key(callee, generics, type_packs, answers);
+    (key.len() <= ARGUMENTS).then_some(key)
+}
+
+fn generic_instance_key(
+    callee: (usize, usize),
+    generics: &[Argument],
+    type_packs: &[hir::TypePackArgument],
+    answers: &[hir::Answer],
 ) -> String {
     let generics: Vec<String> = generics
         .iter()
@@ -3153,6 +3311,21 @@ fn instance_key(
         })
         .collect::<Vec<_>>();
     format!("{callee:?}{generics:?}{packs:?}{answers:?}")
+}
+
+fn with_const_inputs(mut key: String, constants: &ConstArguments) -> String {
+    use std::fmt::Write;
+
+    for input in &constants.values {
+        let _ = write!(
+            key,
+            "const[{}]:{}:{}",
+            input.slot,
+            input.key.len(),
+            input.key
+        );
+    }
+    key
 }
 
 /// `ty` with each constant in it, a size or a constant argument at any
@@ -3227,6 +3400,7 @@ struct Resolved {
     callee: (usize, usize),
     generics: Vec<Argument>,
     type_packs: Vec<hir::TypePackArgument>,
+    constants: ConstArguments,
     forwarded: bool,
     answers: Vec<hir::Answer>,
     at: Location,
@@ -3351,6 +3525,44 @@ pub(super) fn past_the_limit(
     diagnostics: &mut Diagnostics,
 ) {
     let name = &program.modules[module].declarations[declaration].name;
+    let arguments = if program.needs_const_inputs((module, declaration)) {
+        "compile-time arguments"
+    } else {
+        "generic arguments"
+    };
+    instance_limit(
+        from,
+        format!(
+            "the instances of `{name}` this call makes do not end within the \
+             {INSTANCES} this compiler follows, with {arguments} no longer than \
+             {ARGUMENTS} characters written out and types in them no deeper than \
+             {NESTING}: the `requires` and the {arguments} of those past them are \
+             not told"
+        ),
+        diagnostics,
+    );
+}
+
+/// Report the GEN-13 bound on pack shapes that keep growing along one call path.
+pub(super) fn past_pack_growth_limit(
+    at: Location,
+    (module, declaration): (usize, usize),
+    program: &Program,
+    growth: usize,
+    diagnostics: &mut Diagnostics,
+) {
+    let name = &program.modules[module].declarations[declaration].name;
+    instance_limit(
+        &[at],
+        format!(
+            "the instances of `{name}` this call makes keep adding pack entries beyond the \
+             {growth} increases this compiler follows"
+        ),
+        diagnostics,
+    );
+}
+
+fn instance_limit(from: &[Location], message: String, diagnostics: &mut Diagnostics) {
     for &at in from {
         let rejected = diagnostics.as_slice().iter().any(|earlier| {
             earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
@@ -3364,13 +3576,7 @@ pub(super) fn past_the_limit(
                 Category::Type,
                 codes::INSTANCE_LIMIT,
                 at,
-                format!(
-                    "the instances of `{name}` this call makes do not end within the \
-                     {INSTANCES} this compiler follows, with generic arguments no longer than \
-                     {ARGUMENTS} characters written out and types in them no deeper than \
-                     {NESTING}: the `requires` and the generic arguments of those past them are \
-                     not told"
-                ),
+                message.clone(),
                 "GEN-13",
             ));
         }
@@ -3388,6 +3594,7 @@ fn applied_in(ty: &Type, at: Location, made: &mut Vec<Made>) {
                 callee,
                 generics,
                 type_packs: Vec::new(),
+                constants: ConstArguments::default(),
                 answers: Vec::new(),
                 required: None,
                 at,
@@ -3450,8 +3657,8 @@ fn given_in(argument: &Argument, map: &[(Location, &Argument)], declared: &[Loca
 }
 
 /// The calls of generic declarations `statements` make, at any depth.
-fn made_in(body: &hir::Body, made: &mut Vec<Made>) {
-    super::walk_body_calls(body, &mut |expression| made_at(expression, made));
+fn made_in(program: &Program, body: &hir::Body, made: &mut Vec<Made>) {
+    super::walk_body_calls(body, &mut |expression| made_at(program, expression, made));
 }
 
 /// The body as declared, read with provisional operator and pack results
@@ -3503,7 +3710,13 @@ pub(super) fn independent_source_bodies(program: &Program) -> IndependentSourceB
 fn source_call_key(call: &Made) -> (Location, String) {
     (
         call.at,
-        instance_key(call.callee, &call.generics, &call.type_packs, &call.answers),
+        instance_key(
+            call.callee,
+            &call.generics,
+            &call.type_packs,
+            &call.answers,
+            &call.constants,
+        ),
     )
 }
 
@@ -3636,12 +3849,13 @@ fn unique_location(mut locations: impl Iterator<Item = Location>) -> Option<Loca
 /// A reread makes its own calls. The same final HIR is used regardless
 /// of what caused the reread (GEN-7).
 fn concrete_body_calls(
+    program: &Program,
     instance: &crate::instance::CheckedInstance,
     independent: Option<&HashSet<(Location, String)>>,
     made: &mut Vec<Made>,
 ) {
     let mut calls = Vec::new();
-    instance.walk_calls(&mut |expression| made_at(expression, &mut calls));
+    instance.walk_calls(&mut |expression| made_at(program, expression, &mut calls));
     made.extend(calls.into_iter().filter(|call| {
         call.required.is_none()
             && !independent.is_some_and(|calls| calls.contains(&source_call_key(call)))
@@ -3665,6 +3879,7 @@ fn concrete_body_calls(
 /// Graph settlement can finish an unresolved call without rereading
 /// the body. The source's already-resolved calls still stand there.
 fn made_after_inference(
+    program: &Program,
     source: &hir::Body,
     settled: &crate::instance::CheckedInstance,
     made: &mut Vec<Made>,
@@ -3693,22 +3908,22 @@ fn made_after_inference(
                 called_or_referenced(expression)
             && callee.generics().iter().all(resolved_default_argument)
         {
-            made_at(expression, made);
+            made_at(program, expression, made);
         }
     });
 }
 
 /// The calls of generic declarations `expression` makes, at any depth.
-fn made_by(expression: &Expr, made: &mut Vec<Made>) {
+fn made_by(program: &Program, expression: &Expr, made: &mut Vec<Made>) {
     expression.walk(&mut |expression| {
-        visit_anonymous_bodies(expression, &mut |part| made_at(part, made));
+        visit_anonymous_bodies(expression, &mut |part| made_at(program, part, made));
     });
 }
 
 /// The calls an omitted, specialized default makes with resolved arguments
 /// and evidence. Follow these as ordinary instances, including helper bodies
 /// that can themselves omit an inherited default (GEN-16, UNIT-8).
-pub(super) fn concrete_default_calls(expression: &Expr, made: &mut Vec<Made>) {
+pub(super) fn concrete_default_calls(program: &Program, expression: &Expr, made: &mut Vec<Made>) {
     fn concrete(answer: &hir::Answer) -> bool {
         match answer {
             hir::Answer::Candidate {
@@ -3722,7 +3937,7 @@ pub(super) fn concrete_default_calls(expression: &Expr, made: &mut Vec<Made>) {
         }
     }
     let mut calls = Vec::new();
-    made_by(expression, &mut calls);
+    made_by(program, expression, &mut calls);
     made.extend(calls.into_iter().filter(|call| {
         call.required.is_none()
             && call.generics.iter().all(resolved_default_argument)
@@ -3740,9 +3955,16 @@ pub(super) fn called_or_referenced(expression: &Expr) -> Option<&Callee> {
 }
 
 /// The instance a call, function reference, or struct construction makes.
-fn made_at(expression: &Expr, made: &mut Vec<Made>) {
+fn made_at(program: &Program, expression: &Expr, made: &mut Vec<Made>) {
     match &expression.kind {
-        ExprKind::Call { callee, .. } => made_callee(callee, expression.at, made),
+        ExprKind::Call {
+            callee, arguments, ..
+        } => make_call(
+            callee,
+            expression.at,
+            program.known_const_inputs(callee, arguments),
+            made,
+        ),
         ExprKind::StaticCallable(callee) => made_callee(callee, expression.at, made),
         ExprKind::Construct {
             module,
@@ -3755,6 +3977,7 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
                 callee: (*module, *declaration),
                 generics: arguments.clone(),
                 type_packs: Vec::new(),
+                constants: ConstArguments::default(),
                 answers: Vec::new(),
                 required: None,
                 at: expression.at,
@@ -3768,6 +3991,10 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
 /// Record the instance reached by a concrete call or static reference (GEN-7).
 /// A call exposed by forwarding carries the supplying call's location.
 pub(super) fn made_callee(callee: &Callee, at: Location, made: &mut Vec<Made>) {
+    make_call(callee, at, ConstArguments::default(), made);
+}
+
+fn make_call(callee: &Callee, at: Location, constants: ConstArguments, made: &mut Vec<Made>) {
     match callee {
         Callee::Function {
             module,
@@ -3784,21 +4011,29 @@ pub(super) fn made_callee(callee: &Callee, at: Location, made: &mut Vec<Made>) {
             type_packs,
             requirements,
             ..
-        } if !generics.is_empty() || !requirements.is_empty() => made.push(Made {
-            callee: (*module, *declaration),
-            generics: generics.clone(),
-            type_packs: type_packs.clone(),
-            answers: requirements.clone(),
-            required: None,
-            at,
-            via: None,
-        }),
+        } if !generics.is_empty()
+            || !requirements.is_empty()
+            || constants.limit.is_some()
+            || !constants.values.is_empty() =>
+        {
+            made.push(Made {
+                callee: (*module, *declaration),
+                generics: generics.clone(),
+                type_packs: type_packs.clone(),
+                constants,
+                answers: requirements.clone(),
+                required: None,
+                at,
+                via: None,
+            })
+        }
         // GEN-16: an operation the enclosing declaration requires, whose
         // candidate a call of that declaration answers.
         Callee::Required { requirement, .. } => made.push(Made {
             callee: (usize::MAX, usize::MAX),
             generics: Vec::new(),
             type_packs: Vec::new(),
+            constants: ConstArguments::default(),
             answers: Vec::new(),
             required: Some(*requirement),
             at,
@@ -3990,6 +4225,30 @@ struct Told<'t> {
     type_packs: &'t [hir::TypePackArgument],
     /// A failed pack member lookup while judging this condition.
     member_fault: Option<&'t std::cell::RefCell<Option<super::dependent_packs::MemberFault>>>,
+}
+
+/// GEN-6: what the operator's condition says of the types and values
+/// bound by the candidate's declared parameters. Callability requirements
+/// and options the declaration leaves open still need call-site facts.
+pub(super) fn declared_requirement(
+    scope: &Scope,
+    operator: (usize, usize),
+    arguments: &[Argument],
+) -> Option<bool> {
+    let (_, condition) = required(scope.program, operator)?;
+    requires_holds(
+        scope.program,
+        operator,
+        arguments,
+        &condition,
+        &Told {
+            constant: &|node, ty| crate::constant::read(node, ty, scope).ok(),
+            callable: &|_| None,
+            unvalued: &std::cell::Cell::new(false),
+            type_packs: &[],
+            member_fault: None,
+        },
+    )
 }
 
 /// Whether `condition`, the `requires` of `declaration` of `module`,

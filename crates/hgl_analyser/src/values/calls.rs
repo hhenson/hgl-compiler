@@ -830,14 +830,15 @@ impl<'a> Typer<'a> {
                 defer_pack_members: false,
                 contextual: Vec::new(),
             };
-            let kind = ExprKind::Call {
+            let mut kind = ExprKind::Call {
                 callee,
                 arguments,
                 form: Form::Named,
+                text: None,
                 braced: Vec::new(),
                 lifted: false,
             };
-            self.finished_call(&kind, evaluating);
+            self.finished_call(&mut kind, evaluating);
             return (kind, ty);
         };
 
@@ -1131,14 +1132,15 @@ impl<'a> Typer<'a> {
                 Vec::new()
             },
         };
-        let kind = ExprKind::Call {
+        let mut kind = ExprKind::Call {
             callee,
             arguments,
             form: Form::Named,
+            text: None,
             braced: Vec::new(),
             lifted: false,
         };
-        self.finished_call(&kind, evaluating);
+        self.finished_call(&mut kind, evaluating);
         // An already-rejected bare success supplies no result type for
         // the nullable place to check again (ERR-9).
         if reports_unresolved
@@ -1502,7 +1504,7 @@ impl<'a> Typer<'a> {
         *generics = resolved;
         *type_packs = packs;
         contextual.clear();
-        self.finished_call(&call.kind, false);
+        self.finished_call(&mut call.kind, false);
         true
     }
 
@@ -1634,6 +1636,7 @@ fn unread_call_kind(arguments: Vec<hir::Argument>) -> ExprKind {
         callee: Callee::Unread,
         arguments,
         form: Form::Named,
+        text: None,
         braced: Vec::new(),
         lifted: false,
     }

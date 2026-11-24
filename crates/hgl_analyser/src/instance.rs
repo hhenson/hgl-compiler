@@ -51,7 +51,7 @@ type Map<'a> = [(Location, &'a Argument)];
 use crate::values::PackTypes;
 
 /// The compile-time call inputs that specialize a declaration (FN-17, FN-19).
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub struct InstanceInputs<'a> {
     /// Each function supplied at an original parameter slot.
     pub functions: &'a [(usize, Callee)],
@@ -59,6 +59,8 @@ pub struct InstanceInputs<'a> {
     pub type_packs: &'a [TypePackArgument],
     /// Concrete entries held by the caller's packs, including an empty shape.
     pub pack_inputs: Option<&'a [PackInput]>,
+    /// Ordinary const inputs read by a compile-time check, by original slot.
+    pub constants: &'a [crate::ConstInput],
 }
 
 /// The enclosing declaration and the arguments common to its body and
@@ -70,6 +72,7 @@ struct InstanceArguments<'a> {
     packs: &'a PackTypes<'a>,
     type_packs: &'a [TypePackArgument],
     pack_inputs: &'a [PackInput],
+    constants: &'a [crate::ConstInput],
     requirements: &'a [Answer],
     diagnostics: &'a RefCell<Diagnostics>,
     changed_results: RefCell<Vec<Location>>,
@@ -210,6 +213,7 @@ impl Program {
             packs: &PackTypes::new(&[], &[]),
             type_packs: &[],
             pack_inputs: &[],
+            constants: &[],
             requirements: &requirements,
             diagnostics: &reports,
             changed_results: RefCell::new(Vec::new()),
@@ -376,6 +380,7 @@ impl Program {
             packs: &packs,
             type_packs: inputs.type_packs,
             pack_inputs: pending_forwards.unwrap_or_default(),
+            constants: inputs.constants,
             requirements,
             diagnostics,
             changed_results: RefCell::new(Vec::new()),
@@ -384,14 +389,26 @@ impl Program {
         let recheck_endpoints =
             crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
         let mut reread_body = false;
+        let reread_inputs = InstanceInputs {
+            functions: &functions,
+            pack_inputs: pending_forwards,
+            ..inputs
+        };
         if (recheck_endpoints
             || pending_forwards.is_some()
-            || (!generics.is_empty() && crate::values::has_dependent_index(&body)))
+            || !inputs.constants.is_empty()
+            || (!generics.is_empty()
+                && (crate::values::has_dependent_index(&body)
+                    || crate::formatting::has_dependent_formatting(
+                        self,
+                        (module, declaration),
+                        &body,
+                    ))))
             && let Some(reread) = crate::values::reread_instance_body(
                 self,
                 (module, declaration),
                 (&taken, &map),
-                (&functions, pending_forwards),
+                reread_inputs,
                 &project,
                 body_diagnostics,
             )
@@ -417,7 +434,7 @@ impl Program {
                 self,
                 (module, declaration),
                 (&taken, &map),
-                (&functions, pending_forwards),
+                reread_inputs,
                 &project,
                 &mut reports,
             ) {
@@ -686,6 +703,12 @@ impl Program {
             specialization
                 .pack_inputs
                 .extend_from_slice(instance.pack_inputs);
+            specialization.const_inputs.extend(
+                instance
+                    .constants
+                    .iter()
+                    .map(|input| (input.slot, input.key.clone())),
+            );
             self.place_body(&mut function.body, instance, &functions);
             crate::values::record(self, &mut function.body, !function.template.value);
         } else {

@@ -193,6 +193,9 @@ TEST_CASE("constants equal under `==` but of different values publish each its o
                 minus = hglrt::constant(wiring, -0.0);
                 plus = hglrt::constant(wiring, 0.0);
             }
+            const auto again = hglrt::constant(wiring, 0.0);
+            CHECK(plus->erased().peered_node() != minus->erased().peered_node());
+            CHECK(plus->erased().peered_node() == again.erased().peered_node());
             hgraph::wire<hglrt_test::RecordOf<f64>>(wiring, hgraph::wire<Reciprocal>(wiring, *plus),
                                                     hglrt::str{"plus"});
             hgraph::wire<hglrt_test::RecordOf<f64>>(wiring, hgraph::wire<Reciprocal>(wiring, *minus),

@@ -53,6 +53,7 @@ mod configuration;
 mod control;
 mod endpoints;
 mod expressions;
+mod formatting;
 mod forms;
 mod graphs;
 mod keyed;
@@ -109,6 +110,8 @@ pub(crate) struct Piece {
     /// nothing: an operator, or a native function, which the runtime
     /// library defines.
     pub(crate) text: String,
+    /// Whether the piece uses the Core value-formatting header.
+    pub(crate) formatting: bool,
     /// What it reaches (`hgl_lower::pieces`): the first form in it that
     /// the target does not write yet, which leaves it out of the files,
     /// and the declarations of the program it names, whose definitions
