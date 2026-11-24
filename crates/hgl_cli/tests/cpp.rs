@@ -2320,6 +2320,34 @@ fn reflected_pack_followups_run_on_the_sdk() {
     );
 }
 
+/// FN-19, CTRL-16 and GEN-7: computed passes give only the entries that
+/// exist, including when a callee supplies its own default.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn computed_pack_passes_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("computed-pack-passes");
+    let file = write(
+        &root,
+        "demo.computed_pack_passes.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.computed_pack_passes.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// GEN-8 and GEN-17: explicitly written reflected types specialize calls
 /// in value and graph bodies and still carry their stated requirements (GEN-7).
 #[test]

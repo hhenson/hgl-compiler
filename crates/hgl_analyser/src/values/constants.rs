@@ -310,6 +310,7 @@ impl<'a> Typer<'a> {
             binding: &binding,
             parameter,
             arguments,
+            type_packs: &[],
             constants: &self.constants,
         };
         crate::constant::typed(node, expected, &scope)

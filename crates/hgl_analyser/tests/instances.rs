@@ -71,6 +71,98 @@ fn selected_arguments_are_checked_through_functions_and_forwarded_packs() {
     assert_eq!(accepted.summary(), NONE, "{}", accepted.report);
 }
 
+/// FN-19, CTRL-16 and GEN-7: the selected pass has ordinary argument
+/// checking. An unselected branch is never checked.
+#[test]
+fn computed_pack_passes_check_selected_calls_at_the_making_call() {
+    for (entry, codes) in [
+        ("ident_i(cb)", &["local:type/function.value"][..]),
+        ("holder(x: cb).x", &["local:type/function.value"][..]),
+        (
+            "identity(1, 2, 3)",
+            &["type/argument.unexpected", "type/argument.unexpected"][..],
+        ),
+        (
+            "if k == 0 { cb(args[k]) } else { identity(1, 2, 3) }",
+            &[][..],
+        ),
+        (
+            "if k == \"named\" { identity(1, 2, 3) } else { cb(args[k]) }",
+            &[][..],
+        ),
+        (
+            "if \"named\" != (k) { cb(args[k]) } else { identity(1, 2, 3) }",
+            &[][..],
+        ),
+        (
+            "if k == 0 { identity(1, 2, 3) } else { cb(args[k]) }",
+            &["type/argument.unexpected", "type/argument.unexpected"][..],
+        ),
+    ] {
+        let checked = module(&format!(
+            "const fn identity(x: i64) -> i64 => x\n\
+             const fn ident_i(x: i64) -> i64 => x\n\
+             struct holder {{ x: i64 }}\n\
+             const fn over<...A>(cb: const fn(i64) -> i64, args: ...A) -> i64 =>\n\
+                 identity(...{{for k in arg_keys(A): {entry}}})\n\
+             test invoke {{ over(identity, 5) }}\n"
+        ));
+        let reported: Vec<_> = checked
+            .findings
+            .iter()
+            .map(|finding| (finding.at.as_str(), finding.code.as_str()))
+            .collect();
+        let expected: Vec<_> = codes.iter().map(|code| ("m.hgl:7:15", *code)).collect();
+        assert_eq!(reported, expected, "{entry}: {}", checked.report);
+        if !codes.is_empty() {
+            assert!(
+                checked.report.contains("`over<[i64]>`"),
+                "{}",
+                checked.report
+            );
+            assert!(
+                checked.report.contains("the instance's body rejects here"),
+                "{}",
+                checked.report
+            );
+        }
+    }
+}
+
+/// GEN-7: a call reached only through a computed entry sees the result
+/// type its selected candidate gives. Its error reports both instances.
+#[test]
+fn a_computed_pack_entry_checks_its_nested_instance() {
+    for (extent, rejects) in [(2, false), (3, true)] {
+        let checked = module(&format!(
+            "operator items_of<T, C>(value: T) -> C\n\
+             impl const fn items_of<T>(value: T) -> list<i64, 2> => [1, 2]\n\
+             impl const fn items_of(value: i64) -> list<i64, 3> => [value, value + 1, value + 2]\n\
+             operator marker<T, C>(value: T) -> C\n\
+             impl const fn marker<T>(value: T) -> list<i64, 1> => [9]\n\
+             impl const fn marker(value: list<i64, {extent}>) -> set<i64> => [3]\n\
+             const fn first<T>(value: T) -> i64 => marker(value)[0]\n\
+             const fn take_one(x: i64) -> i64 => x\n\
+             const fn over<...A>(xs: ...A) -> i64 =>\n\
+                 take_one(...{{for k in arg_keys(A): first(items_of(xs[k]))}})\n\
+             test invoke {{ over(5) }}\n"
+        ));
+        if rejects {
+            assert_eq!(
+                checked.summary(),
+                ["m.hgl:12:15 type/type.mismatch EXPR-7"],
+                "{}",
+                checked.report
+            );
+            for instance in ["first<list<i64, 3>>", "over<[i64]>"] {
+                assert!(checked.report.contains(instance), "{}", checked.report);
+            }
+        } else {
+            assert_eq!(checked.summary(), NONE, "{}", checked.report);
+        }
+    }
+}
+
 /// GEN-7: each distinct outer caller gets one report with its call chain.
 #[test]
 fn a_rejected_instance_reports_each_making_call() {

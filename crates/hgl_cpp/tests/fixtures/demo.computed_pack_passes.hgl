@@ -1,0 +1,25 @@
+module demo.computed_pack_passes
+
+# FN-19 and CTRL-16: omitted positional entries leave the remaining slots
+# available, and omitted named entries let the callee use its own defaults.
+const fn increment(value: i64) -> i64 => value + 1
+const fn weighted(price: i64, weight: i64 = 2) -> i64 => price * weight
+
+const fn take_second<...A>(items: ...A) -> i64 =>
+    increment(...{for key in arg_keys(A): if key == 1 { items[key] }})
+
+const fn forward<...Ps, ...As>(
+    f: const fn(...{Ps}) -> i64,
+    args: ...{As for f},
+) -> i64 =>
+    f(...{for key in arg_keys(Ps):
+        if key in arg_keys(As) && key != "unused" { args[key] }})
+
+test an_omitted_position_leaves_a_slot {
+    assert take_second(3, 5) == 6
+}
+
+test an_omitted_name_leaves_a_default {
+    assert forward(weighted, price: 7) == 14
+    assert forward(weighted, 7, 3) == 21
+}

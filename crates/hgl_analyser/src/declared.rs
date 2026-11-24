@@ -69,6 +69,7 @@ pub(crate) fn number_enums(program: &mut Program, diagnostics: &mut Diagnostics)
                     binding: &binding,
                     parameter: &|_| None,
                     arguments: &[],
+                    type_packs: &[],
                     constants: &constants,
                 };
                 Detail::Enum(enum_members(&declaration.syntax, &scope, diagnostics))

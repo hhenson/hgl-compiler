@@ -740,6 +740,7 @@ impl Reader<'_> {
             binding: &binding,
             parameter: &parameter,
             arguments: &[],
+            type_packs: &[],
             constants: &self.constants,
         };
         read(&scope)
@@ -854,6 +855,7 @@ impl Reader<'_> {
                     binding: &binding,
                     parameter: &|_| None,
                     arguments: &[],
+                    type_packs: &[],
                     constants: &self.constants,
                 };
                 crate::constant::read(&default, expected.as_ref(), &scope)
