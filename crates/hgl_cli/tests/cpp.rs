@@ -745,7 +745,8 @@ fn field_defaults_run_on_the_sdk() {
 }
 
 /// EXPR-5, TYPE-14, UNIT-8: a generic null default is written using
-/// the selected nullable value parameter's concrete type.
+/// the selected nullable value parameter's concrete type. An omitted
+/// temporal input supplies a connection with no publication.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn generic_null_defaults_run_on_the_sdk() {
@@ -771,7 +772,7 @@ fn generic_null_defaults_run_on_the_sdk() {
         "{stdout}"
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2237,6 +2238,46 @@ fn let_bound_packs_run_on_the_sdk() {
             "rejection cases: 10 passed, 0 failed\nexecutable cases: 6 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
+    );
+}
+
+/// MAP-1, RED-1, RED-4 and RED-5: Core declares the native forms and
+/// C++ reports the work still tracked by #370.
+#[test]
+fn native_mapping_forms_decline_cpp_emission() {
+    let root = scratch("native-mapping-forms");
+    let file = write(
+        &root,
+        "demo.native_mapping.hgl",
+        r#"module demo.native_mapping
+
+fn twice_for_map(item: i64) -> i64 => item * 2
+const fn fold_digit(accumulated: i64, member: i64) -> i64 => accumulated * 10 + member
+
+export fn keyed_map(values: dict<str, i64>, selected: set<str>) -> dict<str, i64> =>
+    map{keys: selected}(twice_for_map, values)
+export fn growing_map(values: list<i64>) -> list<i64> => map(twice_for_map, values)
+export fn growing_tree(values: list<i64>) -> i64 => reduce(add_, values, 0)
+export fn ordered_growing(values: list<i64>) -> i64 => reduce(fold_digit, values, 0)
+export fn set_tree(values: set<i64>) -> i64 => reduce(add_, values, 0)
+export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values, 0)
+"#,
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr));
+
+    let out = root.join("emitted");
+    let emitted = hgl_in(
+        &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
+        &[],
+        &[],
+    );
+    let stderr = text(&emitted.stderr);
+    assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        stderr.matches("error[build/target.unsupported]").count(),
+        6,
+        "{stderr}"
     );
 }
 
