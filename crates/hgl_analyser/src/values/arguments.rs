@@ -60,7 +60,7 @@ impl<'a> Typer<'a> {
             }
         }
         // The type the `read` pass gave `Name<arguments>`.
-        let written = self.written.get(&(self.file, start)).copied();
+        let written = self.written_type_at(start);
         match written {
             Some(Type::Named {
                 module,
@@ -83,7 +83,7 @@ impl<'a> Typer<'a> {
             // generic constructor does, `count<i64>(3)`." The `read`
             // pass kept them, the name being a function or an operator.
             _ => {
-                let generics = self.calls.get(&(self.file, start)).copied();
+                let generics = self.call_arguments_at(start);
                 // TIME-9: an endpoint operation written with its generic
                 // argument, `delta_value<i64>(out)`, is the form it is
                 // without one, and is held to the same rules; so is one

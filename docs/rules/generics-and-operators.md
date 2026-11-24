@@ -8,7 +8,9 @@ analyser: partial
 
 - Generic scope covers the whole declaration; a repeated type parameter is one type at a call of a value function
 - A repeated generic value parameter is one constant (UNIT-13) at a call of a value function and of a temporal one: `Scaled<1>` and `Scaled<1.00>` given to two `Scaled<k>` are one, and so are two NaNs, and `Scaled<0.0>` beside `Scaled<-0.0>`, or `list<i64, 2>` beside `list<i64, 3>`, is `type.mismatch`
-- Left: occurrence requirements; temporal bodies
+- A generic used only as a complete, unqualified result can bind to no result from a supplied callback (FN-17). A nested type, ordinary input, `ref` result or constraint still needs a type.
+- An instance with no result is called as a statement. A call in a value position and a written type in the body that needs the absent generic report `type.mismatch` (FN-7, GEN-7).
+- Left: the other occurrence requirements in temporal bodies
 
 ## GEN-2
 
@@ -26,6 +28,7 @@ analyser: partial
 - A nullable temporal result preserves an unresolved bare call result when checking a publication. A call whose declared result has a delta shape can still take the publication's delta context (TIME-7).
 - A plain result place can resolve the success type of a fallible generic call and let a bare parameter read the success of a result argument (ERR-15).
 - A generic value parameter takes its default where nothing else says what it is: a function's and a candidate's at a call, a struct's where it is named bare or constructed, an operator's in the output requested
+- Discarding a call leaves a generic result unresolved if nothing else supplies it (GEN-1).
 - Left: packs; solvable equalities; temporal bodies
 
 transpiler: partial
@@ -117,7 +120,7 @@ analyser: partial
 - A value candidate may mark a parameter `var`, which takes no part in selecting it (FN-15)
 - An option given a generic value parameter of the enclosing function, `step(v, mode: M)` in `go<const M: Mode>`, admits a candidate where the function's `requires` binds the parameter, `requires M == .slow` (GEN-3); where it states nothing of it, a default of it included, no candidate is known to admit the call, which is `operator.no_candidate` where the function is declared (GEN-7)
 - A fixed parameter in an operator pack's place reports the proposed `impl.pack` code at the candidate parameter name. A pack with cardinality one is accepted. Bare Boolean requirements await #367.
-- A candidate whose result is missing or contradicts the result its operator gives for its parameters reports `impl.result`. The report points to the written result type or to the candidate's name if it has no result.
+- A candidate's own result or callback result can be absent when the operator permits a result-only generic to bind to none (GEN-1). A candidate whose result disagrees with its operator reports `impl.result` at the result type or at the candidate's name when it has no result.
 - The types and values bound by a candidate's declared parameters can show that the operator's `requires` does not hold. The candidate's name then reports `impl.requires`.
 - Left: other checks of a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidate selection
 
@@ -131,6 +134,7 @@ analyser: partial
 - The call records the position of the requirement it is (`Callee::Required`), so that a call of the declaration says which candidate it calls
 - "It is judged once, where it is declared, by what its `requires` states, and never again for the generic arguments a call of it gives": a call of an operator in it is admitted where a candidate takes every generic argument the requirements admit, where a named operator requirement states it, or under a membership where each listed type has one (GEN-3), and otherwise the declaration rejects (`operator.no_candidate`, with a note), by name and by symbol, in a value function and a graph: the fragments `less` and `wrap` with no `requires`
 - Each instance selects again for an operator call whose operand types use the enclosing declaration's generic parameters, including when a generic candidate admitted the body. The new selection uses the instance's operands and the operator binding at the call (GEN-5), including private operators, symbols, and calls in nodes and graphs.
+- An instance with no result reads an arrow body as a statement. An explicit `return` with a value reports `type.mismatch` at the call and names the instance (FN-7).
 - The instance projects reflected pack-member types in operator operands and written generic arguments before checking and emitting the selected candidate (GEN-8, GEN-17).
 - The covered function, node and graph calls fit integer, float and negative literals to each selected instance's candidate, with or without an operator option. Membership admission records a provisional result type; instance rechecks reach consumers that the declaration already admits with the literal's provisional `i64`. The supplied sum of calls using a typed seed and a literal seed gives `4.5` in its `f64` instance. Literal-free membership-admitted operator chains retain their result consumers too. A contextual result precedes input inference (GEN-2, EXPR-5). Unsupported or unstated memberships still reject the declaration.
 - Left: a literal-call result used as another call's argument, or multiplied by another literal-call result, can still reject where the generic body is declared although each admitted instance has fitting candidates (#734).
@@ -212,6 +216,7 @@ analyser: partial
 - Among the candidates a named call admits in a value function, each of the operator's parameters is compared with the other candidate's part for part: a concrete type or a structure over a bare variable in the same place; a candidate as specific everywhere and more in one place outranks
 - A candidate's generics are bound in declared parameter order
 - A named function call preserves declared parameter order when an earlier graph argument settles in an instance (GEN-7).
+- A callback result explicitly absent is more specific than one that can bind to none (GEN-1). The inputs still take part in the comparison.
 - A `ref` mark adds no priority: candidates are compared by their types, which hold none (FN-16)
 - Left: a repeated variable counting once; temporal bodies
 
@@ -222,6 +227,7 @@ analyser: partial
 - A plain parameter is a type or a value by its uses in the signature; uses that disagree are rejected, and a struct's parameter nothing uses; a value parameter or a pack is not named as a type; a generic value parameter's default, a callable's or a struct's, is of its declared type, as far as how the default is written says what it is, and of the type a call resolves where that names a type parameter: an implied member, `.slow`, is held to the enum the call resolves, so is no `i64` and no member of an enum that lacks it (`type.mismatch`, TYPE-7)
 - A default that names a generic parameter before its own is of what that one takes, at a call and in a struct written with no arguments (`W2` of `<const A: i64 = 1, const B: i64 = A>` is `W2<1, 1>`); one that names its own, or one after it, gives it no value, so a call that leaves it is `generic.unresolved` (GEN-8); a call in the function's own body that gives a parameter its own, `rec<N>(v)`, gives the default that one and a struct written with no arguments `generic.argument_count`
 - Generic arguments that are the same, each type canonical and each value one constant (UNIT-13), make one type or one instance, and arguments that differ another: of the worked fragment, `Scaled<1>`, `Scaled<1.0>` and `Scaled<1.00>` are one type, and a `Scaled<-0.0>` where a `Scaled<0.0>` is expected is `type.mismatch`
+- A result-only parameter bound to none denotes no result and identifies a separate instance (GEN-1).
 - Calls and symbolic operations whose candidates become known in a graph instance contribute to the same bounded traversal of instances and their requirements (GEN-3, GEN-7).
 - "Where the instances of one declaration never end when the program is compiled, the program rejects": no more than `hgl_analyser::INSTANCES` (4096) instances of one declaration are followed from one call, by the analyser and by `hgl_lower`, and a call past that is `generic.instance_limit`, at the call that makes the first of them: the worked fragment's `climbed`; through constants worked out from the body's own parameters, and through a type that grows, `nest<list<T>>`
 - The forwarding walk uses the same argument size and nesting limits. It also reports `generic.instance_limit` at the initiating call after more than 64 increases in the pack width of one declaration along a path.

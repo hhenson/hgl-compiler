@@ -1051,6 +1051,35 @@ fn a_graph_instance_checks_the_phase_of_a_deferred_capture() {
     assert!(checked.report.contains("`helper` is ordinary work here"));
 }
 
+/// ERR-7 and GEN-1: the instantiated result determines the capture's fields.
+#[test]
+fn a_capture_reads_the_bound_result_of_a_generic_call() {
+    let checked = module(concat!(
+        "fn record(value: i64) { when {} }\n",
+        "fn through<R>(f: fn(i64) -> R, value: i64) -> R => f(value)\n",
+        "fn plus_one(value: i64) -> i64 => value + 1\n",
+        "fn failures(failure: error) -> bool { when { return true } }\n",
+        "fn rejected(value: i64) {\n",
+        "    let seen = capture(through, record, value)\n",
+        "    let wrong = seen.value\n",
+        "}\n",
+        "fn accepted(value: i64) -> bool {\n",
+        "    let seen = capture(through, record, value)\n",
+        "    failures(seen.error)\n",
+        "}\n",
+        "fn valued(value: i64) -> i64 {\n",
+        "    let seen = capture(through, plus_one, value)\n",
+        "    seen.value\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:8:22 type/capture.output_field ERR-7"],
+        "{}",
+        checked.report
+    );
+}
+
 /// ERR-7: both projections keep their types when a graph instance
 /// resolves the first type argument of the temporal call under a capture.
 #[test]

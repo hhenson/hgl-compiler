@@ -41,6 +41,7 @@ fn instances(checked: &Checked, name: &str) -> Vec<String> {
             .map(|argument| match argument {
                 Argument::Type(ty) => ty.to_string(),
                 Argument::Constant(constant) => constant.text.clone(),
+                Argument::NoResult => "none".to_string(),
             })
             .collect();
         let callee = &checked.program.modules[*module].declarations[*declaration].name;

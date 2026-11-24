@@ -11,6 +11,7 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
+use super::anonymous::Anonymous;
 use super::arguments::{Slot, Takes};
 use super::children::ChildOrigin;
 use super::constants::generic_default;
@@ -26,7 +27,7 @@ use super::lifting::{fill_type, join_categories, preferred_call_role};
 use super::node::RefRead;
 use super::sizes;
 use super::{CapturedOutput, Fact, Typer};
-use crate::declared::names_parameter;
+use crate::declared::{bind_result, names_parameter};
 use crate::hir::{
     self, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, Local, LocalId, ValueCategory,
 };
@@ -113,7 +114,7 @@ struct PairScope {
     aliases: HashMap<LocalId, LocalId>,
     children: HashMap<LocalId, ChildOrigin>,
     captures: HashMap<LocalId, CapturedOutput>,
-    anonymous: Option<(LocalId, Type)>,
+    anonymous: Option<Anonymous>,
     hook: Option<Hook>,
     callable: Option<SyntaxNode>,
     naming: Option<Location>,
@@ -169,10 +170,7 @@ impl PairScope {
             aliases: typer.aliases.clone(),
             children: typer.bound_children.clone(),
             captures: typer.captures.clone(),
-            anonymous: typer
-                .anonymous
-                .as_ref()
-                .map(|scope| (scope.first_local, scope.result.clone())),
+            anonymous: typer.anonymous.clone(),
             hook: typer.hook,
             callable: typer.callable.clone(),
             naming: typer.naming,
@@ -203,14 +201,6 @@ impl PairScope {
     }
 
     fn matches(&self, typer: &Typer<'_>, phases: &PairPhases, call: Location) -> bool {
-        let anonymous = typer
-            .anonymous
-            .as_ref()
-            .map(|scope| (scope.first_local, &scope.result));
-        let probed_anonymous = self
-            .anonymous
-            .as_ref()
-            .map(|(first_local, result)| (*first_local, result));
         let project_formals = self.projected_formals && Self::can_project_formals(typer);
         self.locals.len() == typer.locals.len()
             && self
@@ -233,7 +223,7 @@ impl PairScope {
             && self.aliases == typer.aliases
             && self.children == typer.bound_children
             && self.captures == typer.captures
-            && probed_anonymous == anonymous
+            && self.anonymous == typer.anonymous
             && self.hook == typer.hook
             && self.callable == typer.callable
             && self.naming == typer.naming
@@ -296,6 +286,17 @@ impl<'a> Typer<'a> {
         used: bool,
     ) -> (ExprKind, Type) {
         self.call_read(node, expected, used)
+    }
+
+    /// A direct call uses its selected signature. A callback parameter
+    /// uses the function type in its local binding.
+    pub(super) fn call_has_no_result(&self, callee: &Callee) -> bool {
+        match callee {
+            Callee::Parameter { parameter, .. } => self.locals.get(*parameter).is_some_and(
+                |local| matches!(&local.ty, Type::Function(template) if template.result.is_none()),
+            ),
+            callee => callee.has_result(self.program) == Some(false),
+        }
     }
 
     /// A call, as the form or the function its callee names.
@@ -1543,7 +1544,7 @@ impl<'a> Typer<'a> {
         );
         let type_packs: Vec<_> = type_packs.into_iter().flatten().collect();
         let pack_types = PackTypes::new(generics, &type_packs);
-        let ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
+        let ty = bind_result(signature.result.as_ref(), &map).map_or(Type::Unknown, |result| {
             placed(
                 pack_types.project(result, &map).unwrap_or(Type::Unknown),
                 &own,
@@ -1961,7 +1962,7 @@ impl<'a> Typer<'a> {
         if packs.is_empty() {
             *requirements = self.answers(callee.0, callee.1, &resolved);
         }
-        call.ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
+        call.ty = bind_result(signature.result.as_ref(), &map).map_or(Type::Unknown, |result| {
             placed(
                 pack_types.project(result, &map).unwrap_or(Type::Unknown),
                 &own,

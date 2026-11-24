@@ -877,7 +877,7 @@ impl Reader<'_> {
                 let before = own.iter().position(|own| *own == at)?;
                 match arguments.get(before)? {
                     Argument::Constant(given) => Some(given.value.clone()),
-                    Argument::Type(_) => None,
+                    Argument::Type(_) | Argument::NoResult => None,
                 }
             });
             if value.names_one_of(&own) {

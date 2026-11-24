@@ -20,9 +20,12 @@ use crate::syntax::{child, tokens};
 use crate::types::Type;
 
 /// What belongs to the anonymous function currently being checked.
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct Anonymous {
-    /// The result the body must give, or unknown without result context.
-    pub(super) result: Type,
+    /// The result the body must give, if any.
+    pub(super) result: Option<Type>,
+    /// FN-17: infer whether a complete, unwritten result exists.
+    pub(super) infer_result: bool,
     /// The first of its own locals. Earlier locals would be captures.
     pub(super) first_local: LocalId,
 }
@@ -63,9 +66,7 @@ impl Typer<'_> {
     pub(super) fn anonymous_type(&mut self, annotation: &SyntaxNode) -> Option<Type> {
         let written = annotation.children().find(|part| is_type(part.kind()))?;
         let ty = self
-            .written
-            .get(&(self.file, written.span().start))
-            .copied()
+            .written_type_at(written.span().start)
             .unwrap_or(&Type::Unknown);
         let ty = self.project_pack_pass_type(ty, self.at(&written));
         if self.instance.is_empty() {
@@ -99,7 +100,7 @@ impl Typer<'_> {
         parameters: Vec<(SyntaxToken, Option<Type>)>,
         result: &Type,
     ) {
-        self.checked_anonymous(function, parameters, Some(result), None);
+        self.checked_anonymous(function, parameters, (Some(result), false), None);
     }
 
     /// Read a static anonymous argument in the phase supplied by FN-17.
@@ -107,7 +108,7 @@ impl Typer<'_> {
         &mut self,
         function: &SyntaxNode,
         parameters: Vec<(SyntaxToken, Option<Type>)>,
-        result: Option<&Type>,
+        result: (Option<&Type>, bool),
         temporal: bool,
     ) -> Option<AnonymousDefinition> {
         self.checked_anonymous(function, parameters, result, Some(temporal))
@@ -117,7 +118,7 @@ impl Typer<'_> {
         &mut self,
         function: &SyntaxNode,
         parameters: Vec<(SyntaxToken, Option<Type>)>,
-        result: Option<&Type>,
+        (result, infer_result): (Option<&Type>, bool),
         specialization: Option<bool>,
     ) -> Option<AnonymousDefinition> {
         // CTRL-5: a return belongs to this function alone.
@@ -125,7 +126,8 @@ impl Typer<'_> {
         let mut mark = self.mark();
         let first_local = mark.locals;
         let outer = self.anonymous.replace(Anonymous {
-            result: result.cloned().unwrap_or(Type::Unknown),
+            result: result.cloned(),
+            infer_result,
             first_local,
         });
         let temporal = self.temporal.take();

@@ -404,6 +404,11 @@ impl<'a> Typer<'a> {
                 .iter()
                 .map(|(at, argument)| match argument {
                     Argument::Type(ty) => self.project_pack_pass_type(ty, *at),
+                    Argument::NoResult => {
+                        faulty = true;
+                        self.diagnostics.emit(super::absent_type_argument(*at));
+                        Type::Unknown
+                    }
                     Argument::Constant(_) => {
                         faulty = true;
                         self.diagnostics.emit(error(
@@ -468,6 +473,11 @@ impl<'a> Typer<'a> {
         let mut rejected = false;
         for (position, (at, argument)) in given.iter().enumerate() {
             let generic = &generics[position];
+            if matches!(argument, Argument::NoResult) && !generic.result_only {
+                self.diagnostics.emit(super::absent_type_argument(*at));
+                rejected = true;
+                continue;
+            }
             let mismatch = match (&generic.kind, argument) {
                 // Reported where it is written.
                 (_, Argument::Type(Type::Unknown)) => {
@@ -511,7 +521,7 @@ impl<'a> Typer<'a> {
                     }
                     found[position] = Some(match argument {
                         Argument::Type(ty) => Argument::Type(self.project_pack_pass_type(ty, *at)),
-                        Argument::Constant(_) => argument.clone(),
+                        Argument::Constant(_) | Argument::NoResult => argument.clone(),
                     });
                     None
                 }
@@ -1608,8 +1618,14 @@ pub(super) fn infer(
             {
                 infer(pattern.ty(), actual.ty(), generics, found);
             }
-            if let (Some(pattern), Some(actual)) = (&pattern.result, &actual.result) {
-                infer(pattern, actual, generics, found);
+            match (&pattern.result, &actual.result) {
+                (Some(pattern), Some(actual)) => infer(pattern, actual, generics, found),
+                (Some(Type::Parameter { at, .. }), None) if pattern.result_admits_none => {
+                    // FN-17: a result-only parameter takes the absence
+                    // of a result from an actual callback.
+                    find(*at, Argument::NoResult, generics, found);
+                }
+                _ => {}
             }
         }
         (Type::Nullable(pattern), Type::Nullable(actual)) => {
@@ -1845,6 +1861,7 @@ fn find(
     let position = generics.iter().position(|generic| generic.at == at);
     if let Some(position) = position
         && found[position].is_none()
+        && (!matches!(argument, Argument::NoResult) || generics[position].result_only)
     {
         found[position] = Some(argument);
     }

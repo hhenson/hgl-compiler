@@ -12,7 +12,7 @@ use super::{BOOL, CapturedOutput, Fact, Typer};
 use crate::hir::{ErrorPart, Expr, ExprKind, ValueCategory};
 use crate::program::{LocalKind, Program};
 use crate::syntax::{child, name_token, tokens};
-use crate::types::{Detail, Scalar, Type};
+use crate::types::{Scalar, Type};
 use crate::{codes, error};
 
 /// The immutable name a tag or null test can prove. An inferred child
@@ -42,14 +42,10 @@ pub(super) fn captured_binding(kind: LocalKind, value: &Expr) -> Option<&Expr> {
 
 /// ERR-7: `.value` keeps the call's normal output, when it has one.
 pub(super) fn captured_output(program: &Program, call: &Expr) -> CapturedOutput {
-    let callable = match &call.kind {
-        ExprKind::Call { callee, .. } => callee.declaration(),
-        _ => None,
-    };
-    match callable
-        .and_then(|(module, declaration)| program.modules[module].details.get(declaration))
-    {
-        Some(Detail::Callable(signature)) if signature.result.is_none() => CapturedOutput::None,
+    match &call.kind {
+        ExprKind::Call { callee, .. } if callee.has_result(program) == Some(false) => {
+            CapturedOutput::None
+        }
         _ => CapturedOutput::Of(call.ty.clone()),
     }
 }

@@ -15,8 +15,8 @@ use hgl_diagnostics::Location;
 // A tenor's value is the lexer's: a later stage reads it from here.
 pub use hgl_lexer::literal::Tenor;
 
-use crate::program::{LocalKind, OperatorRef};
-use crate::types::{Argument as GenericArgument, CallArguments, Constant, Type};
+use crate::program::{LocalKind, OperatorRef, Program};
+use crate::types::{Argument as GenericArgument, CallArguments, Constant, Detail, Type};
 
 /// An application's run statement, typed (RUN-1): "its run statement
 /// is `run call` or `eval call`, where the call is of an entry, written
@@ -1266,6 +1266,19 @@ impl Callee {
             } => *test_candidates,
             _ => None,
         }
+    }
+
+    /// Whether the selected call gives a result. An indirect or deferred
+    /// call still needs its binding to answer this question.
+    pub fn has_result(&self, program: &Program) -> Option<bool> {
+        if let Self::Anonymous(function) = self {
+            return Some(function.template.result.is_some());
+        }
+        let (module, declaration) = self.declaration()?;
+        let Detail::Callable(signature) = program.modules[module].details.get(declaration)? else {
+            return None;
+        };
+        Some(signature.result_at_call(self.generics()).is_some())
     }
 
     /// The function or the candidate the call selected: the position of
