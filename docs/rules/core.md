@@ -957,7 +957,7 @@ transpiler: partial
 
 - `{wall_time}` reads the process clock. A marked place writes the configured tick prefix when its argument ticked.
 - A lifted native format call reads `{engine_time}` from its node's output endpoint, once per call, with the checked pattern retained through lifting.
-- Left: the HGL graph candidate supplies the arguments' tick state and its trigger (#434); an evaluation-time place without a lifted node is explicitly unsupported.
+- Left: the HGL graph candidate supplies the arguments' tick state and its trigger (#434 step 2, FMT-6); an `{engine_time}` place without a lifted node is explicitly unsupported until that candidate provides the graph-start tick.
 
 ## DBG-1
 

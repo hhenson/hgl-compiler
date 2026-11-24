@@ -660,3 +660,29 @@ fn engine_time_formatting_follows_the_lifted_nodes_ticks() {
         "{stdout}"
     );
 }
+
+/// FMT-9 admits the graph call; FMT-6's graph-start trigger is left to
+/// the HGL graph candidate (#434), so emission must decline explicitly.
+#[test]
+fn engine_time_without_a_temporal_input_declines_without_a_cycle_context() {
+    let root = scratch("engine-time-without-cycle");
+    for (name, call) in [
+        ("no_values", r#"format("{engine_time}")"#),
+        ("scalar_value", r#"format("{engine_time} {}", 7)"#),
+    ] {
+        let source = format!(
+            "module {name}\nfn describe() -> str => {call}\ntest clock {{ assert eval describe() == [\"\"] }}\n"
+        );
+        let file = write(&root, &format!("{name}.hgl"), &source);
+        let checked = hgl_in(&["check", &file], &[], &[]);
+        assert!(checked.status.success(), "{}", text(&checked.stderr));
+        let target = root.join(name);
+        let emitted = emit_format_program(&file, &target);
+        let stderr = text(&emitted.stderr);
+        assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+        assert!(stderr.contains("build/target.unsupported"), "{stderr}");
+        assert!(stderr.contains("{engine_time}"), "{stderr}");
+        assert!(stderr.contains("cycle context"), "{stderr}");
+        assert!(!target.exists());
+    }
+}

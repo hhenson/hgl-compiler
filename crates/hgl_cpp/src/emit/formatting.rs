@@ -85,48 +85,50 @@ impl Emitter<'_> {
             match part {
                 Piece::Text(text) => append_text(&mut statements, &output, text),
                 Piece::Place(place) => {
-                    let (held, ty, at, conversion) =
-                        if matches!(place.name, "wall_time" | "engine_time") {
-                            // FMT-9: the lifted node already owns its cycle's
-                            // time through its output endpoint, not a native
-                            // argument. Read each reserved clock only once.
-                            let (clock, source) = if place.name == "engine_time" {
-                                if self.kind() != Some(Kind::Lifted) {
-                                    return self.missing(
+                    let (held, ty, at, conversion) = if matches!(
+                        place.name,
+                        "wall_time" | "engine_time"
+                    ) {
+                        // FMT-9: the lifted node already owns its cycle's
+                        // time through its output endpoint, not a native
+                        // argument. Read each reserved clock only once.
+                        let (clock, source) = if place.name == "engine_time" {
+                            if self.kind() != Some(Kind::Lifted) {
+                                return self.missing(
                                         pattern.value.at,
-                                        "an evaluation-time format place outside a lifted node",
+                                        "an {engine_time} format place without a lifted node's cycle context",
                                     );
-                                }
-                                (&mut engine_time, format!("{OUT}.evaluation_time()"))
-                            } else {
-                                (&mut wall_time, "::hglrt::format_wall_time()".to_string())
-                            };
-                            let held = clock.get_or_insert_with(|| {
-                                let name = temporary(place.name, self.temporary());
-                                let _ = write!(statements, "const auto {name} = {source}; ");
-                                name
-                            });
-                            (
-                                held.as_str(),
-                                &Type::Scalar(Scalar::Datetime),
-                                pattern.value.at,
-                                None,
-                            )
+                            }
+                            (&mut engine_time, format!("{OUT}.evaluation_time()"))
                         } else {
-                            let position = next_position;
-                            next_position += usize::from(place.name.is_empty());
-                            let Some(index) =
-                                formatting::argument_index(arguments, place.name, position)
-                            else {
-                                return self.missing(pattern.value.at, "an unchecked format place");
-                            };
-                            (
-                                held[index].as_str(),
-                                &arguments[index].value.ty,
-                                arguments[index].value.at,
-                                conversions.get(index).and_then(Option::as_ref),
-                            )
+                            (&mut wall_time, "::hglrt::format_wall_time()".to_string())
                         };
+                        let held = clock.get_or_insert_with(|| {
+                            let name = temporary(place.name, self.temporary());
+                            let _ = write!(statements, "const auto {name} = {source}; ");
+                            name
+                        });
+                        (
+                            held.as_str(),
+                            &Type::Scalar(Scalar::Datetime),
+                            pattern.value.at,
+                            None,
+                        )
+                    } else {
+                        let position = next_position;
+                        next_position += usize::from(place.name.is_empty());
+                        let Some(index) =
+                            formatting::argument_index(arguments, place.name, position)
+                        else {
+                            return self.missing(pattern.value.at, "an unchecked format place");
+                        };
+                        (
+                            held[index].as_str(),
+                            &arguments[index].value.ty,
+                            arguments[index].value.at,
+                            conversions.get(index).and_then(Option::as_ref),
+                        )
+                    };
                     if let Some(payload) = formatting::marked_payload(self.program, ty) {
                         if place.marked {
                             let _ = write!(
