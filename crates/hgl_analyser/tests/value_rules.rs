@@ -112,6 +112,20 @@ fn a_call_of_const_is_an_ordinary_call() {
     assert_eq!(role("wired"), DeclarationKind::Function(Role::Temporal));
 }
 
+/// FN-4: a pair can be an operand of another pair without duplicating
+/// the phase reads of the intervening ordinary operator calls.
+#[test]
+fn nested_pairs_have_bounded_reads() {
+    let argument = (0..21).fold(String::from("1"), |inner, _| format!("scale(1 + {inner})"));
+    let source = format!(
+        "const fn scale(value: i64) -> i64 => value * 2\n\
+         fn scale(value: i64) -> i64 => value * 3\n\
+         fn wired(tick: i64) -> i64 => tick + {argument}\n"
+    );
+    let checked = module(&source);
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
 /// FN-5: "`const(argument)` is an ordinary call resolved by the usual
 /// naming and phase rules". With nothing named `const` it names
 /// nothing (UNIT-10); a value function does not call a temporal

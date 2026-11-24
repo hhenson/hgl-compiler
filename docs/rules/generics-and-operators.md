@@ -84,10 +84,10 @@ analyser: partial
 - In a value function, a call of an operator, by name or by the symbol that stands for it, selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened, which the candidates' types settle before their conditions, and candidates that tie in which literals they widen give way to the one that widens every one; no candidate and a tie rejected
 - A generic candidate is admitted with its parameters resolved from the call, and the most specific admitted one is selected (GEN-12). A fallible candidate can meet a T or `T?` place. The selected candidate determines the result before its form is taken (ERR-15).
 - Operand forms are tried at integer precision before widening literals. A nullable candidate result can meet a place for its payload under ERR-12. [Specification decision #182](https://github.com/hhenson/hgl_spec/pull/182)
-- In a graph a call selects among temporal and value candidates, and a temporal candidate outranks a value one of the same parameter types
+- In a graph a call selects among temporal and value candidates. With the same parameter types, a temporal candidate is preferred for a call with a connection and a value candidate is preferred for an all-scalar call (FN-4, FN-6).
 - In value code, a test's outside an `eval` or a `run` and an application's statements, a call selects among both too, a value candidate outranking a temporal one of the same parameter types; a temporal candidate it selects is `call.role`, the code proposed (TST-3, UNIT-14)
 - A packed candidate matches each captured argument and checks the pack's bounds. Equally specific candidates stay tied when their admitted cardinalities overlap.
-- Left: an argument that is itself a call only its requested output selects; composition, where a temporal candidate outranks a value one of the same parameter types, and runtime bodies
+- Left: an argument that is itself a call only its requested output selects
 
 transpiler: done
 

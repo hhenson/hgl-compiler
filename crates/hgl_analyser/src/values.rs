@@ -596,6 +596,8 @@ struct Typer<'a> {
     calls: &'a HashMap<(FileId, u32), &'a CallArguments>,
     /// The parameters and locals found so far.
     locals: Vec<Local>,
+    /// Operand categories learned while probing a pair in a fixed scope.
+    pair_phases: Option<calls::PairPhases>,
     /// Call results unavailable when reading a body for independent calls.
     unsettled_results: Option<&'a HashSet<Location>>,
     /// The local each declaration is, by where its name is declared.
@@ -843,6 +845,7 @@ impl<'a> Typer<'a> {
             written: tables.written,
             calls: tables.calls,
             locals: Vec::new(),
+            pair_phases: None,
             unsettled_results: None,
             declared: HashMap::new(),
             assigned: Vec::new(),

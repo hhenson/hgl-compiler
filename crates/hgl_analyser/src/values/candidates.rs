@@ -22,6 +22,7 @@ use super::function_arguments::{CallbackInputs, matches_template};
 use super::inference::{
     bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
 };
+use super::lifting::preferred_call_role;
 use super::operators::unreadable;
 use super::requirements::{Condition, holds};
 use super::{Candidate, Typer};
@@ -737,37 +738,35 @@ impl<'a> Typer<'a> {
         if widening && selected.len() > 1 {
             Self::prefer_widened(&mut selected, given);
         }
-        // GEN-5: in composition "a temporal candidate outranks a value
-        // candidate of the same parameter types, as composition chooses
-        // the temporal definition of a pair (FN-4)"; in a test's or an
-        // application's value code "a value candidate outranking a
-        // temporal one of the same parameter types".
+        // GEN-5: of candidates with the same parameter types, prefer
+        // the one the operands can call directly (FN-4, FN-6).
         if (self.graph || self.value_code) && selected.len() > 1 {
-            let composing = self.graph;
-            let temporal = |chosen: &Chosen| {
-                matches!(
-                    program.modules[chosen.module].declarations[chosen.declaration]
-                        .kind
-                        .candidate(),
-                    Some((Role::Temporal, _))
-                )
-            };
-            let types = |chosen: &Chosen| -> Vec<Type> {
-                chosen
-                    .taken
-                    .parameters
-                    .iter()
-                    .map(|parameter| parameter.ty.clone())
-                    .collect()
+            let preferred = preferred_call_role(
+                self.graph,
+                given.iter().map(|given| self.category(&given.value)),
+            );
+            let role = |chosen: &Chosen| {
+                program.modules[chosen.module].declarations[chosen.declaration]
+                    .kind
+                    .candidate()
+                    .map(|(role, _)| role)
             };
             let outranked: Vec<bool> = selected
                 .iter()
                 .map(|chosen| {
-                    // The role that yields: the value one in composition,
-                    // the temporal one in value code.
-                    temporal(chosen) != composing
+                    role(chosen) != Some(preferred)
                         && selected.iter().any(|other| {
-                            temporal(other) == composing && types(other) == types(chosen)
+                            role(other) == Some(preferred)
+                                && other
+                                    .taken
+                                    .parameters
+                                    .iter()
+                                    .map(|parameter| &parameter.ty)
+                                    .eq(chosen
+                                        .taken
+                                        .parameters
+                                        .iter()
+                                        .map(|parameter| &parameter.ty))
                         })
                 })
                 .collect();

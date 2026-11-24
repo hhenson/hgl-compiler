@@ -4843,6 +4843,31 @@ fn callable_block_defaults_run_on_the_sdk() {
     );
 }
 
+/// FN-4, FN-6, and GEN-5: pairs and operator candidates prefer the
+/// direct role in composition and preserve ordinary and eval roles.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn call_role_preferences_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("call-role-preference");
+    let file = write(
+        &root,
+        "demo.call_roles.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.call_roles.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with(
+            "rejection cases: 2 passed, 0 failed\nexecutable cases: 7 passed, 0 failed, 0 not run\n"
+        ),
+        "{stdout}"
+    );
+}
+
 /// GEN-16, UNIT-8: a required symbol keeps the public generic arguments
 /// that its selected candidate's inherited configuration default reads.
 #[test]

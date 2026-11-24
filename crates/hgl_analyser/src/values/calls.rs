@@ -4,6 +4,8 @@
 //! typing pass ([`super`]); a call of an operator is read in
 //! [`super::operators`].
 
+use std::collections::HashMap;
+
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
@@ -13,16 +15,19 @@ use super::constants::generic_default;
 use super::dependent_packs::{PackTypes, dependent_slot};
 use super::evals::{trace_input_type, trace_pack_type};
 use super::fit::{not_null, open, whole};
+use super::forwarded_packs::spread_operands;
 use super::inference::{
     ExplicitGenerics, Inferred, Places, bare_parameter, infer, infer_from_place, mentions,
     pack_bounds, placed, type_pack,
 };
-use super::lifting::fill_type;
+use super::lifting::{fill_type, join_categories, preferred_call_role};
 use super::node::RefRead;
 use super::sizes;
 use super::{Fact, Typer};
 use crate::declared::names_parameter;
-use crate::hir::{self, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, ValueCategory};
+use crate::hir::{
+    self, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, Local, ValueCategory,
+};
 use crate::program::{Binding, DeclarationKind, OperatorRef, Program, Role};
 use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
 use crate::types::{
@@ -30,6 +35,62 @@ use crate::types::{
     Signature, Type,
 };
 use crate::{codes, error};
+
+/// One tentative read of a pair's arguments without introducing local
+/// bindings or changing flow. Memoizing only neutral phase reads keeps
+/// parent and child probes from rereading the same nested argument.
+pub(super) struct PairPhases {
+    scope: Location,
+    locals: Vec<Local>,
+    assigned: Vec<bool>,
+    facts: Vec<Fact>,
+    callable: Option<SyntaxNode>,
+    naming: Option<Location>,
+    binding_child: Option<Location>,
+    categories: HashMap<Location, ValueCategory>,
+}
+
+impl PairPhases {
+    fn at(typer: &Typer<'_>, list: &SyntaxNode) -> Option<Self> {
+        let call = list.parent()?;
+        let changes_scope = call.descendants().any(|node| {
+            matches!(
+                node.kind(),
+                SyntaxKind::Block
+                    | SyntaxKind::IfExpr
+                    | SyntaxKind::FnExpr
+                    | SyntaxKind::ListComprehension
+                    | SyntaxKind::PackComprehension
+                    | SyntaxKind::EvalExpr
+                    | SyntaxKind::RunExpr
+            )
+        });
+        (!changes_scope).then(|| Self {
+            scope: typer.at(&call),
+            locals: typer.locals.clone(),
+            assigned: typer.assigned.clone(),
+            facts: typer.present.clone(),
+            callable: typer.callable.clone(),
+            naming: typer.naming,
+            binding_child: typer.binding_child,
+            categories: HashMap::new(),
+        })
+    }
+
+    /// A call with a `var` parameter can assign an enclosing local,
+    /// and candidate trials may supply different proof or endpoint contexts.
+    fn matches(&self, typer: &Typer<'_>, at: Location) -> bool {
+        at.file == self.scope.file
+            && self.scope.span.start <= at.span.start
+            && at.span.end <= self.scope.span.end
+            && self.locals == typer.locals
+            && self.assigned == typer.assigned
+            && self.facts == typer.present
+            && self.callable == typer.callable
+            && self.naming == typer.naming
+            && self.binding_child == typer.binding_child
+    }
+}
 
 impl<'a> Typer<'a> {
     // ---- Calls and constructions ----
@@ -221,27 +282,20 @@ impl<'a> Typer<'a> {
     ) -> (ExprKind, Type) {
         let program = self.program;
         let kind_of = |declaration: usize| program.modules[module].declarations[declaration].kind;
-        // FN-4: "Composition and eval choose the temporal definition if
-        // one exists; runtime/value evaluation chooses the value
-        // definition." FN-3: "A composition body calls any function".
-        let temporal_function = declarations.iter().copied().find(|&declaration| {
-            matches!(
-                kind_of(declaration),
-                DeclarationKind::Function(Role::Temporal)
-                    | DeclarationKind::NativeFunction(Role::Temporal)
-            )
-        });
-        if let (true, Some(declaration)) = (self.graph, temporal_function) {
-            return self.call_function(name, list, (module, declaration), expected, generics);
-        }
-        let value_function = declarations.iter().copied().find(|&declaration| {
-            matches!(
-                kind_of(declaration),
-                DeclarationKind::Function(Role::Value)
-                    | DeclarationKind::NativeFunction(Role::Value)
-            )
-        });
-        if let Some(declaration) = value_function {
+        let (value, temporal) = function_pair(program, module, declarations);
+        // FN-4: a composition call takes the direct match before a
+        // lifted one. Only the selected definition checks the signature.
+        let function = match (self.graph, value, temporal) {
+            (true, Some(value), Some(temporal)) => {
+                match preferred_call_role(true, [self.pair_operands(list)]) {
+                    Role::Value => Some(value),
+                    Role::Temporal => Some(temporal),
+                }
+            }
+            (true, None, temporal) => temporal,
+            (_, value, _) => value,
+        };
+        if let Some(declaration) = function {
             return self.call_function(name, list, (module, declaration), expected, generics);
         }
         let structure = declarations
@@ -284,13 +338,6 @@ impl<'a> Typer<'a> {
             };
             return self.call_operator(name, list, operator, expected, generics);
         }
-        let temporal = declarations.iter().any(|&declaration| {
-            matches!(
-                kind_of(declaration),
-                DeclarationKind::Function(Role::Temporal)
-                    | DeclarationKind::NativeFunction(Role::Temporal)
-            )
-        });
         // NATIVE-6: "a native type is not constructed in HGL: a call of
         // its name rejects."
         let native = declarations
@@ -311,7 +358,7 @@ impl<'a> Typer<'a> {
                 .with_note("a value of a native type comes from a native function"),
             );
         }
-        if temporal {
+        if temporal.is_some() {
             // FN-3: "A runtime body calls only value functions, and so
             // does a value function." FN-4: "A bad selected signature
             // is an error, not fallback to the other role." TST-3, and
@@ -495,6 +542,64 @@ impl<'a> Typer<'a> {
                     .map(|(name, value)| (false, name, value)),
             )
             .collect()
+    }
+
+    /// Read the category of the supplied arguments before choosing a
+    /// role. Omitted arguments are filled only by the selected signature.
+    fn pair_operands(&mut self, list: &SyntaxNode) -> ValueCategory {
+        let at = self.at(list);
+        let matching = self
+            .pair_phases
+            .as_ref()
+            .filter(|phases| phases.matches(self, at));
+        if let Some(category) = matching.and_then(|phases| phases.categories.get(&at)) {
+            return *category;
+        }
+        let can_cache = matching.is_some();
+        let mut started = false;
+        if self.pair_phases.is_none() {
+            self.pair_phases = PairPhases::at(self, list);
+            started = self.pair_phases.is_some();
+        }
+        let mark = self.mark();
+        let categories: Vec<_> = self.locals.iter().map(|local| local.category).collect();
+        let must_return = self.must_return;
+        let returning_tails = self.returning_tails.clone();
+        let mut category = if self.pack_inputs.is_none() && spread_operands(list).next().is_some() {
+            ValueCategory::Unsettled
+        } else {
+            self.forwarded_arguments(list)
+                .iter()
+                .map(|argument| self.category(&argument.value))
+                .fold(ValueCategory::Value, join_categories)
+        };
+        for (_, _, node) in self.call_entries(list) {
+            if category == ValueCategory::Connection {
+                break;
+            }
+            if !self.may_reread() {
+                category = ValueCategory::Unsettled;
+                break;
+            }
+            let value = self.expression(&node, None);
+            category = join_categories(category, self.category(&value));
+        }
+        let clean = self.take_back(mark, false);
+        for (local, category) in self.locals.iter_mut().zip(categories) {
+            local.category = category;
+        }
+        self.must_return = must_return;
+        self.returning_tails = returning_tails;
+        if started {
+            self.pair_phases = None;
+        } else if can_cache
+            && clean
+            && category != ValueCategory::Unsettled
+            && let Some(phases) = &mut self.pair_phases
+        {
+            phases.categories.insert(at, category);
+        }
+        category
     }
 
     /// Whether a name occupies a call's callee or a written argument
@@ -1640,6 +1745,30 @@ fn unread_call_kind(arguments: Vec<hir::Argument>) -> ExprKind {
         braced: Vec::new(),
         lifted: false,
     }
+}
+
+/// The value and temporal definitions of one name, where declared.
+fn function_pair(
+    program: &Program,
+    module: usize,
+    declarations: &[usize],
+) -> (Option<usize>, Option<usize>) {
+    let mut value = None;
+    let mut temporal = None;
+    for &index in declarations {
+        match program.modules[module].declarations[index].kind {
+            DeclarationKind::Function(Role::Value)
+            | DeclarationKind::NativeFunction(Role::Value) => {
+                value.get_or_insert(index);
+            }
+            DeclarationKind::Function(Role::Temporal)
+            | DeclarationKind::NativeFunction(Role::Temporal) => {
+                temporal.get_or_insert(index);
+            }
+            _ => {}
+        }
+    }
+    (value, temporal)
 }
 
 /// The callable expression, as it is written before the arguments.
