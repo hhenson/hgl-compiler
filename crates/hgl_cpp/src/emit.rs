@@ -64,6 +64,7 @@ mod names;
 mod nodes;
 mod nullables;
 pub(crate) mod readers;
+mod reduction;
 mod references;
 mod scalars;
 mod scheduling;

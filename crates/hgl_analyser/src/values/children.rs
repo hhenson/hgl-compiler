@@ -631,12 +631,12 @@ impl Typer<'_> {
         self.read_child_endpoint(node, false)
     }
 
-    /// Like [`Typer::child_endpoint`], with deferral for guards on
-    /// projections whose selected entry's shape is unknown (GEN-7).
+    /// Like [`Typer::child_endpoint`], with deferral for endpoint operations
+    /// on projections whose selected entry's shape is unknown (GEN-7).
     pub(super) fn read_child_endpoint(
         &mut self,
         node: &SyntaxNode,
-        defer_guard: bool,
+        defer_child: bool,
     ) -> Option<Option<Expr>> {
         let named = super::endpoint_argument(node);
         let mut root = named.clone();
@@ -660,7 +660,9 @@ impl Typer<'_> {
         let child = self.expression(&named, None);
         self.naming = before;
         let has_child = self.child_of(&child).is_some()
-            || (defer_guard && self.deferred_pack_selection(&child).is_some());
+            || (defer_child
+                && !matches!(child.kind, ExprKind::DeferredPackRead)
+                && self.deferred_pack_selection(&child).is_some());
         Some(has_child.then_some(child))
     }
 
@@ -762,6 +764,7 @@ impl Typer<'_> {
             // END-3: "`delta_value(x)` returns what `x` published this
             // cycle, a `delta<T>` for an endpoint of T". TYPE-16:
             // "`signal`: None".
+            EndpointOperation::DeltaValue if child.ty == Type::Unknown => Type::Unknown,
             EndpointOperation::DeltaValue => {
                 if matches!(not_null(Some(&child.ty)), Some(Type::Signal)) {
                     self.diagnostics.emit(
