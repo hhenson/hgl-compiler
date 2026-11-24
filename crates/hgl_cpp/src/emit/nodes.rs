@@ -308,23 +308,23 @@ impl Emitter<'_> {
             self.unsupported(at, "a temporal function with no body");
             return;
         };
-        if self.instances.instanced(program, self.module, index) {
-            let instances = self.instances;
-            for instance in instances.declared(self.module, index) {
-                if let Some(at) = instance.pack_use {
-                    self.unsupported(at, "a read of a pack as a whole");
-                } else {
-                    self.temporal_piece(
-                        index,
-                        phase,
-                        Some(&instance.suffix),
-                        &instance.signature,
-                        &instance.body,
-                    );
-                }
-                let piece = self.close();
-                self.instanced.push((index, instance.suffix.clone(), piece));
+        let instances = self.instances;
+        for instance in instances.declared(self.module, index) {
+            if let Some(at) = instance.pack_use {
+                self.unsupported(at, "a read of a pack as a whole");
+            } else {
+                self.temporal_piece(
+                    index,
+                    phase,
+                    Some(&instance.suffix),
+                    &instance.signature,
+                    &instance.body,
+                );
             }
+            let piece = self.close();
+            self.instanced.push((index, instance.suffix.clone(), piece));
+        }
+        if instances.instanced(program, self.module, index) {
             return;
         }
         self.temporal_piece(index, phase, None, signature, body);

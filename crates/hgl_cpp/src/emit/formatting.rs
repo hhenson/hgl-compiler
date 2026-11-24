@@ -186,6 +186,18 @@ impl Emitter<'_> {
         specifier: &str,
     ) {
         match ty {
+            Type::Nullable(inner) => {
+                let _ = write!(text, "if ({value}) {{ ");
+                self.format_field(
+                    scope,
+                    text,
+                    output,
+                    &format!("(*{value})"),
+                    (inner, at, conversion),
+                    specifier,
+                );
+                let _ = write!(text, "}} else {{ {output} += \"null\"; }} ");
+            }
             Type::Scalar(
                 scalar @ (Scalar::Date | Scalar::Time | Scalar::Datetime | Scalar::Duration),
             ) => {
@@ -241,8 +253,38 @@ impl Emitter<'_> {
                     "{output} += ::hglrt::convert_{ty}<::hglrt::str>({value}); "
                 );
             }
-            Type::Scalar(Scalar::I64 | Scalar::F64 | Scalar::Str | Scalar::Bool) => {
-                format_scalar(text, output, value, specifier);
+            Type::Scalar(scalar @ (Scalar::I64 | Scalar::F64 | Scalar::Str | Scalar::Bool)) => {
+                if let Some(layout) = formatting::text_layout(*scalar, specifier) {
+                    let fill = names::string(layout.fill);
+                    let padding = format!(
+                        "::hglrt::TextPadding{{::std::string_view{{{fill}, {}}}, {}, '{}'}}",
+                        layout.fill.len(),
+                        layout.width,
+                        layout.align
+                    );
+                    if *scalar == Scalar::F64 {
+                        let sign = layout.sign.map_or_else(
+                            || "::std::nullopt".to_string(),
+                            |flag| format!("'{flag}'"),
+                        );
+                        let _ = write!(
+                            text,
+                            "::hglrt::format_float_text({output}, {value}, {padding}, {sign}, {}); ",
+                            layout.zero
+                        );
+                    } else {
+                        let precision = layout.precision.map_or_else(
+                            || "::std::nullopt".to_string(),
+                            |length| length.to_string(),
+                        );
+                        let _ = write!(
+                            text,
+                            "::hglrt::format_text({output}, {value}, {padding}, {precision}); "
+                        );
+                    }
+                } else {
+                    format_scalar(text, output, value, specifier);
+                }
             }
             _ => {
                 let converted = self.convert_to_text(scope, value, ty, at, conversion);

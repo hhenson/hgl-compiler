@@ -214,7 +214,7 @@ impl Emitter<'_> {
         let (called, signature): (String, &Signature) = match declared.kind {
             DeclarationKind::Function(Role::Value)
             | DeclarationKind::Implementation(Role::Value, _) => {
-                if !self.instances.instanced(program, module, declaration) {
+                if !self.instances.instanced_call(program, callee) {
                     self.piece.reach.uses.insert((module, declaration, None));
                     (
                         names::function(program, module, declaration, None),

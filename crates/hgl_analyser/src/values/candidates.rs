@@ -1117,6 +1117,7 @@ impl<'a> Typer<'a> {
                 generics,
                 type_packs,
                 requirements,
+                test_candidates: self.test_candidates,
             },
             arguments,
             form,
@@ -2393,6 +2394,7 @@ pub(crate) fn select_in_instance(
     (module, declaration): (usize, usize),
     generics: &[Argument],
     packs: &PackTypes<'_>,
+    test_candidates: Option<crate::TestCandidateScope>,
     body: &mut hir::Body,
     after: &dyn Fn(&mut Expr),
 ) -> Vec<Location> {
@@ -2432,6 +2434,7 @@ pub(crate) fn select_in_instance(
         },
         &mut diagnostics,
     );
+    typer.test_candidates = test_candidates.or(typer.test_candidates);
     typer.instance = signature
         .generics
         .iter()

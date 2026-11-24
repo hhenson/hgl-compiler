@@ -1364,11 +1364,10 @@ impl<'a> Typer<'a> {
         let mut candidates = Vec::new();
         for (module, declared) in program.modules.iter().enumerate() {
             for (declaration, candidate) in declared.declarations.iter().enumerate() {
-                // TST-1: both direct calls and the requirements they ask
-                // use the candidates visible to the calling named test.
-                if let Some(owner) = candidate.test_owner
-                    && (self.declaration.test_owner != Some(owner)
-                        || declared.path != self.module.path)
+                // TST-1: a test-declared candidate is visible to every test
+                // of its module and to the bodies those tests call.
+                if candidate.test_owner.is_some()
+                    && self.test_candidates.map(crate::TestCandidateScope::module) != Some(module)
                 {
                     continue;
                 }

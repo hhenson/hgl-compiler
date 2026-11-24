@@ -10,7 +10,7 @@ use super::candidates::{
 };
 use super::constants::generic_default;
 use super::dependent_packs::PackTypes;
-use super::fit::{accepts_float, is_integer_literal, whole};
+use super::fit::{accepts_float, is_integer_literal, open, whole};
 use super::forwarded_packs::spread_operands;
 use super::inference::{ExplicitGenerics, infer, mentions, pack_bounds, type_pack};
 use crate::declared::{agree, names_parameter, substitute_within};
@@ -238,6 +238,7 @@ impl<'a> Typer<'a> {
             requirements,
             defer_pack_members: false,
             contextual: Vec::new(),
+            test_candidates: self.test_candidates,
         };
         Some((callee, actual))
     }
@@ -306,6 +307,19 @@ impl<'a> Typer<'a> {
                     .enumerate()
                     .map(|(index, input)| callback_operand(index, node, at, input.ty().clone())),
             );
+        } else if explicit.is_some() {
+            // FN-17: use the reference's known fixed input types to
+            // select the callback. The dependent call binds its own
+            // argument types separately (MAP-2 gives a list to a
+            // scalar callback input).
+            for argument in &mut given {
+                if let Some(index) = argument.key.public_parameter(public) {
+                    let input = request.parameters[index].ty();
+                    if !input.any_part(&open, &|_| false) {
+                        argument.value.ty = input.clone();
+                    }
+                }
+            }
         }
         let graph = std::mem::replace(&mut self.graph, !template.value);
         let value_code = std::mem::replace(&mut self.value_code, false);
@@ -434,6 +448,7 @@ impl<'a> Typer<'a> {
                 generics: chosen.generics,
                 type_packs: chosen.type_packs,
                 requirements,
+                test_candidates: self.test_candidates,
             };
             return Some((callee, actual));
         }
