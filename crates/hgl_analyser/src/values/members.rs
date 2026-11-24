@@ -452,6 +452,13 @@ impl<'a> Typer<'a> {
                     _ => None,
                 })
         });
+        // GEN-17 reports the written key. A generic parameter used as
+        // the key instead names the value this instance supplies.
+        let text = if matches!(source, ConstantValue::Parameter { .. }) {
+            value.key().unwrap_or(text)
+        } else {
+            text
+        };
         let parameter = &self.signature.parameters[pack];
         let wanted = match &value {
             ConstantValue::Str(name) => Some(PackKey::Name(name.clone())),

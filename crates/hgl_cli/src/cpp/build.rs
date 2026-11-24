@@ -294,7 +294,7 @@ impl Workspace {
     /// Exports Ninja's compile rules for modules and entry units without
     /// building anything. An unchanged database keeps its time.
     pub(super) fn compile_commands(&self, ninja: &Path) -> Result<PathBuf, String> {
-        let commands = Command::new(ninja)
+        let commands = native_tool_command(ninja)
             .arg("-C")
             .arg(&self.directory)
             .args(["-t", "compdb", "unit", "entry"])
@@ -439,13 +439,29 @@ impl Workspace {
     }
 }
 
+/// Use the SDK's include and link paths for every native build tool.
+pub(super) fn native_tool_command(program: &Path) -> Command {
+    let mut command = Command::new(program);
+    for variable in [
+        "CPATH",
+        "C_INCLUDE_PATH",
+        "CPLUS_INCLUDE_PATH",
+        "OBJC_INCLUDE_PATH",
+        "OBJCPLUS_INCLUDE_PATH",
+        "LIBRARY_PATH",
+    ] {
+        command.env_remove(variable);
+    }
+    command
+}
+
 /// A build process inherits the open workspace lock on its unused stdin.
 /// If hgl dies, the next build waits while the native process exits.
 pub(super) fn native_command(program: &Path, lock: &fs::File) -> Result<Command, String> {
     #[cfg(target_os = "linux")]
     let mut command = {
         let hgl = std::env::current_exe().map_err(|error| format!("cannot find hgl: {error}"))?;
-        let mut command = Command::new(hgl);
+        let mut command = native_tool_command(&hgl);
         command
             .arg("native-build-child")
             .arg(std::process::id().to_string())
@@ -454,7 +470,7 @@ pub(super) fn native_command(program: &Path, lock: &fs::File) -> Result<Command,
         command
     };
     #[cfg(not(target_os = "linux"))]
-    let mut command = Command::new(program);
+    let mut command = native_tool_command(program);
     let inherited = lock
         .try_clone()
         .map_err(|error| format!("cannot share the build lock: {error}"))?;
@@ -462,7 +478,7 @@ pub(super) fn native_command(program: &Path, lock: &fs::File) -> Result<Command,
     Ok(command)
 }
 
-/// Sets a parent-death signal before replacing this helper with Ninja.
+/// Sets a parent-death signal before replacing this helper with the build tool.
 #[cfg(target_os = "linux")]
 pub(crate) fn native_build_child(
     parent: u32,
@@ -483,7 +499,7 @@ pub(crate) fn native_build_child(
     if u32::try_from(getppid().as_raw()) != Ok(parent) {
         return std::process::ExitCode::FAILURE;
     }
-    let error = Command::new(program).args(arguments).exec();
+    let error = native_tool_command(program).args(arguments).exec();
     eprintln!("hgl: `{}` could not be started: {error}", program.display());
     std::process::ExitCode::FAILURE
 }

@@ -144,7 +144,7 @@ fn documentation_site_links_only_visible_declarations_and_local_files() {
     );
     let api = fs::read_to_string(private.join("modules/mod-guide.api.html")).unwrap();
     assert!(api.contains("Private implementation detail."));
-    assert!(hrefs(&api).any(|href| href.starts_with("#decl-private_marker-")));
+    assert!(hrefs(&api).any(|href| href == "#decl-private_marker"));
     assert_eq!(
         hrefs(&api)
             .filter(|href| href.contains("mod-guide.types.html#"))
@@ -352,6 +352,100 @@ fn modules_that_differ_in_case_have_distinct_paths() {
             .unwrap()
             .contains("<h1>guide.types</h1>")
     );
+}
+
+/// SDOC-8 and SDOC-10: private declarations and unrelated additions leave
+/// public links intact. Names repeated on a page still have separate anchors.
+#[test]
+fn declaration_anchors_survive_private_and_unrelated_declarations() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source.hgl");
+    let declarations = r#"
+struct Hidden { shared: i64 }
+/** The field is `Shown.shared` and the operator is `choose`. */
+export struct Shown { shared: i64 }
+export operator choose<T>(value: T) -> i64
+impl const fn choose(value: i64) -> i64 => value
+impl const fn choose(value: str) -> i64 => 0
+"#;
+    fs::write(&source, format!("module anchors\n{declarations}")).unwrap();
+    let public = write_site(root.path(), &source, &[]);
+    write_site(root.path(), &source, &["--out", "private", "--private"]);
+    fs::write(
+        &source,
+        format!("module anchors\nexport const earlier: i64 = 1\n{declarations}"),
+    )
+    .unwrap();
+    write_site(root.path(), &source, &["--out", "expanded"]);
+    for (site, private) in [
+        (public, false),
+        (root.path().join("private"), true),
+        (root.path().join("expanded"), false),
+    ] {
+        let page = fs::read_to_string(site.join("modules/mod-anchors.html")).unwrap();
+        for anchor in ["Shown", "shared", "choose", "choose-2", "choose-3"] {
+            assert_eq!(page.matches(&format!("id=\"decl-{anchor}\"")).count(), 1);
+        }
+        assert_eq!(page.contains("id=\"decl-shared-2\""), private);
+        assert!(page.contains(r##"<a href="#decl-shared"><code>Shown.shared</code></a>"##));
+        assert!(page.contains(r##"<a href="#decl-choose"><code>choose</code></a>"##));
+        let search = fs::read_to_string(site.join("search-index.js")).unwrap();
+        assert!(search.contains(r#""href":"modules/mod-anchors.html#decl-Shown""#));
+        assert!(search.contains(r#""href":"modules/mod-anchors.html#decl-choose""#));
+        internal_link_targets_exist(&site, &snapshot(&site));
+    }
+}
+
+/// SDOC-8: paths for long module names stay distinct even on a
+/// case-insensitive filesystem and do not depend on the other modules.
+#[test]
+fn long_module_paths_survive_unrelated_modules() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    fs::create_dir(&source).unwrap();
+    let prefix = format!("zz.{}", "long_module_part_for_reference.".repeat(8));
+    let lower = format!("{prefix}values");
+    let upper = format!("{prefix}Values");
+    for (file, module) in [("lower.hgl", &lower), ("upper.hgl", &upper)] {
+        fs::write(
+            source.join(file),
+            format!("module {module}\nexport const answer: i64 = 13\n"),
+        )
+        .unwrap();
+    }
+    fs::write(
+        source.join("reference.hgl"),
+        format!(
+            "/** See `lower::answer` and `upper::answer`. */\n\
+             module reference\nuse {lower} as lower\nuse {upper} as upper\n"
+        ),
+    )
+    .unwrap();
+    let original = write_site(root.path(), &source, &[]);
+    fs::write(source.join("earlier.hgl"), "module a.first\n").unwrap();
+    write_site(root.path(), &source, &["--out", "expanded"]);
+    let references = |site: &Path| {
+        let page = fs::read_to_string(site.join("modules/mod-reference.html")).unwrap();
+        hrefs(&page)
+            .filter_map(|link| link.strip_suffix("#decl-answer").map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    let paths = references(&original);
+    let [lower_path, upper_path] = paths.as_slice() else {
+        panic!("Expected two cross-module destinations, found {paths:?}");
+    };
+    assert_ne!(
+        lower_path.to_ascii_lowercase(),
+        upper_path.to_ascii_lowercase()
+    );
+    let expanded = root.path().join("expanded");
+    assert_eq!(references(&expanded), paths);
+    for (path, module) in [(lower_path, lower), (upper_path, upper)] {
+        assert!(path.len() <= 205, "{path}");
+        let contents = fs::read_to_string(expanded.join("modules").join(path)).unwrap();
+        assert!(contents.contains(&format!("<h1>{module}</h1>")));
+    }
+    internal_link_targets_exist(&expanded, &snapshot(&expanded));
 }
 
 #[test]
