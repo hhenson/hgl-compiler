@@ -35,6 +35,7 @@ docs: done
 
 - JSON and HTML keep interfaces, candidates and members distinct, with their own signatures, comments and source parts
 - HTML signatures include block initializers of constants and fields
+- HTML parameter tables show argument modes and pack marks
 
 ## SDOC-5
 
@@ -58,6 +59,7 @@ docs: done
 
 - The JSON model carries Markdown text, preserving fenced blocks
 - HTML renders CommonMark tables and displays authored HTML as text
+- HTML shows Markdown link and image destinations as text, with navigation on HTTP and HTTPS link labels
 - HTML places section titles and Markdown headings beneath their containing module, part or declaration
 - Inline and fenced formulas and Mermaid fences render with local assets, with source text remaining visible on rendering failure
 
