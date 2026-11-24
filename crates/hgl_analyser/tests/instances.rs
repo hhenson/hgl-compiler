@@ -38,13 +38,18 @@ const fn size(xs: list<i64>) -> i64 => 7
         ("maybe", "null", "i64", "type/null.context_type"),
         ("size", "[]", "i64", "type/sequence.context_type"),
     ] {
-        let found = module(&format!(
-            "{definitions}const fn through<...A>(items: ...A) -> {result} =>\n    \
-             {function}(...{{for key in arg_keys(A): if key == 0 {{ {entry} }}}})\n\
-             test computed {{ through(1) }}\n"
-        ));
-        assert_eq!(found.findings.len(), 1, "{}", found.report);
-        assert_eq!(found.findings[0].code, code, "{}", found.report);
+        let pack = format!("{{for key in arg_keys(A): if key == 0 {{ {entry} }}}}");
+        for body in [
+            format!("=> {function}(...{pack})"),
+            format!("{{\n    let given = {pack}\n    return {function}(...given)\n}}"),
+        ] {
+            let found = module(&format!(
+                "{definitions}const fn through<...A>(items: ...A) -> {result} {body}\n\
+                 test computed {{ through(1) }}\n"
+            ));
+            assert_eq!(found.findings.len(), 1, "{body}: {}", found.report);
+            assert_eq!(found.findings[0].code, code, "{body}: {}", found.report);
+        }
     }
 }
 

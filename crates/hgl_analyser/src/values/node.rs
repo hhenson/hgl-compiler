@@ -121,7 +121,7 @@ impl<'a> Typer<'a> {
                     // returned.
                     self.returned = false;
                     self.generating = true;
-                    statements.push(self.statement(&statement));
+                    self.append_statement(&statement, &mut statements);
                     self.generating = false;
                 }
             }

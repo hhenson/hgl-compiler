@@ -26,7 +26,7 @@ specification says which is which.
 | parser | `hgl_parser` | Tokens to a syntax tree |
 | formatter | planned | Syntax tree to source text |
 | analyser | `hgl_analyser` | Names, types, phases and constants: every source rejection the parser cannot make |
-| optimiser | planned | Rewrites that keep what a program is observed to do |
+| optimiser | `hgl_lower::optimise` | Plans changes that preserve a program's result and evaluation order |
 | transpiler | `hgl_lower`, `hgl_cpp` | The generated program and the runtime it runs on. A rule here may need a change to the runtime, not to generated code |
 | runner | `hgl_runner` | `hgl test`: selects cases, matches `# expect-error`, runs eval |
 | driver | `hgl_cli` | The `hgl` command: source roots, target, entry and run configuration |

@@ -187,6 +187,10 @@ impl EndpointOperation {
 /// The position of a local in [`Body::locals`].
 pub type LocalId = usize;
 
+/// Prefix of a generated local that holds a let-bound pack entry. The
+/// prefix cannot occur in a name written in HGL (LEX-1).
+pub const PACK_ENTRY_LOCAL_PREFIX: &str = "$pack_entry_";
+
 /// A parameter or a local of a body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Local {
