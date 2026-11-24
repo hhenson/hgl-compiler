@@ -22,6 +22,7 @@ use super::function_arguments::{CallbackInputs, matches_template};
 use super::inference::{
     bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
 };
+use super::lifting::preferred_call_role;
 use super::operators::unreadable;
 use super::requirements::{Condition, holds};
 use super::{Candidate, Typer};
@@ -124,6 +125,20 @@ impl<'a> Typer<'a> {
             .0
     }
 
+    /// FN-17: the receiving template supplies the phase of a callback.
+    /// The synthetic operands used to match its types have no phase.
+    pub(super) fn admitted_for_callback(
+        &mut self,
+        operator: OperatorRef,
+        candidates: &[Candidate<'a>],
+        given: &[Given],
+        wanted: &Wanted,
+        role: Role,
+    ) -> (Vec<Chosen<'a>>, bool) {
+        self.admit_candidates(operator, candidates, given, wanted, Some(role))
+            .0
+    }
+
     /// A named call can report what rejected its callback when the rest
     /// of the call picks one candidate and no callback trial succeeds.
     pub(super) fn admitted_with_function_errors(
@@ -132,6 +147,17 @@ impl<'a> Typer<'a> {
         candidates: &[Candidate<'a>],
         given: &[Given],
         wanted: &Wanted,
+    ) -> ((Vec<Chosen<'a>>, bool), Vec<Diagnostic>) {
+        self.admit_candidates(operator, candidates, given, wanted, None)
+    }
+
+    fn admit_candidates(
+        &mut self,
+        operator: OperatorRef,
+        candidates: &[Candidate<'a>],
+        given: &[Given],
+        wanted: &Wanted,
+        template_role: Option<Role>,
     ) -> ((Vec<Chosen<'a>>, bool), Vec<Diagnostic>) {
         let has_checked_children = given.iter().any(Given::reads_child);
         let has_results = given
@@ -189,14 +215,16 @@ impl<'a> Typer<'a> {
                     continue;
                 }
                 let takes_types = admitted.fits;
-                let (selected, unknown) = self.rank_admitted(operator, given, widening, admitted);
+                let (selected, unknown) =
+                    self.rank_admitted(operator, given, widening, admitted, template_role);
                 if !selected.is_empty() || unknown && takes_types {
                     return ((selected, unknown), Vec::new());
                 }
                 untold |= unknown;
             }
             let takes_types = result_forms.fits;
-            let (selected, unknown) = self.rank_admitted(operator, given, widening, result_forms);
+            let (selected, unknown) =
+                self.rank_admitted(operator, given, widening, result_forms, template_role);
             if !selected.is_empty() || unknown && takes_types {
                 return ((selected, unknown), Vec::new());
             }
@@ -704,6 +732,7 @@ impl<'a> Typer<'a> {
         given: &[Given],
         widening: bool,
         admitted: Admissions<'a>,
+        template_role: Option<Role>,
     ) -> (Vec<Chosen<'a>>, bool) {
         let program = self.program;
         let Some(Detail::Callable(public)) = program.modules[operator.module]
@@ -746,37 +775,37 @@ impl<'a> Typer<'a> {
         if widening && selected.len() > 1 {
             Self::prefer_widened(&mut selected, given);
         }
-        // GEN-5: in composition "a temporal candidate outranks a value
-        // candidate of the same parameter types, as composition chooses
-        // the temporal definition of a pair (FN-4)"; in a test's or an
-        // application's value code "a value candidate outranking a
-        // temporal one of the same parameter types".
+        // GEN-5: of candidates with the same parameter types, prefer
+        // the one the operands can call directly (FN-4, FN-6).
         if (self.graph || self.value_code) && selected.len() > 1 {
-            let composing = self.graph;
-            let temporal = |chosen: &Chosen| {
-                matches!(
-                    program.modules[chosen.module].declarations[chosen.declaration]
-                        .kind
-                        .candidate(),
-                    Some((Role::Temporal, _))
+            let preferred = template_role.unwrap_or_else(|| {
+                preferred_call_role(
+                    self.graph,
+                    given.iter().map(|given| self.category(&given.value)),
                 )
-            };
-            let types = |chosen: &Chosen| -> Vec<Type> {
-                chosen
-                    .taken
-                    .parameters
-                    .iter()
-                    .map(|parameter| parameter.ty.clone())
-                    .collect()
+            });
+            let role = |chosen: &Chosen| {
+                program.modules[chosen.module].declarations[chosen.declaration]
+                    .kind
+                    .candidate()
+                    .map(|(role, _)| role)
             };
             let outranked: Vec<bool> = selected
                 .iter()
                 .map(|chosen| {
-                    // The role that yields: the value one in composition,
-                    // the temporal one in value code.
-                    temporal(chosen) != composing
+                    role(chosen) != Some(preferred)
                         && selected.iter().any(|other| {
-                            temporal(other) == composing && types(other) == types(chosen)
+                            role(other) == Some(preferred)
+                                && other
+                                    .taken
+                                    .parameters
+                                    .iter()
+                                    .map(|parameter| &parameter.ty)
+                                    .eq(chosen
+                                        .taken
+                                        .parameters
+                                        .iter()
+                                        .map(|parameter| &parameter.ty))
                         })
                 })
                 .collect();

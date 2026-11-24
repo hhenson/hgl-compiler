@@ -112,6 +112,31 @@ fn a_call_of_const_is_an_ordinary_call() {
     assert_eq!(role("wired"), DeclarationKind::Function(Role::Temporal));
 }
 
+/// FN-4: a pair can be an operand of another pair without repeating
+/// the phase reads of nested calls across operators and lexical scopes.
+#[test]
+fn nested_pairs_have_bounded_reads() {
+    let operators = (0..21).fold(String::from("1"), |inner, _| format!("scale(1 + {inner})"));
+    let blocks = (0..21).fold(String::from("1"), |inner, level| {
+        format!("scale({{ let item_{level} = 1\n item_{level} + {inner} }})")
+    });
+    let comprehensions = (0..17).fold(String::from("1"), |inner, level| {
+        format!("scale([for item_{level} in 0..<1: item_{level} + {inner}][0])")
+    });
+    let anonymous = (0..21).fold(String::from("(fn(x: i64) -> i64 => x)(1)"), |inner, _| {
+        format!("scale({inner})")
+    });
+    for argument in [operators, blocks, comprehensions, anonymous] {
+        let source = format!(
+            "const fn scale(value: i64) -> i64 => value * 2\n\
+             fn scale(value: i64) -> i64 => value * 3\n\
+             fn wired(tick: i64) -> i64 => tick + {argument}\n"
+        );
+        let checked = module(&source);
+        assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    }
+}
+
 /// FN-5: "`const(argument)` is an ordinary call resolved by the usual
 /// naming and phase rules". With nothing named `const` it names
 /// nothing (UNIT-10); a value function does not call a temporal
@@ -456,4 +481,72 @@ fn a_conversions_options_and_the_result_its_policy_returns() {
             "f: result<i64, error>",
         ]
     );
+}
+
+/// FN-4, FN-17 and ERR-9: an unrelated error in a callback still leaves
+/// its temporal calls visible to role selection.
+#[test]
+fn temporal_callback_body_errors_keep_the_selected_roles_diagnostics() {
+    let value = "const fn apply(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 2";
+    let temporal = "fn apply(f: fn(i64) -> i64, x: i64) -> i64 => f(x) * 3";
+    for (body, ordinary_error, depth) in [
+        (
+            "apply(fn(a) => later(a) + product(1), 1)",
+            "type/argument.missing",
+            1,
+        ),
+        (
+            "apply(fn(a) => later(a) + apply(fn(b) => later(b) + apply(fn(c) => later(c) + product(1), 1), 1), 1)",
+            "type/argument.missing",
+            3,
+        ),
+        (
+            "apply(fn(a) => later(a) + product(1, \"wrong\"), 1)",
+            "type/type.mismatch",
+            1,
+        ),
+    ] {
+        for (definitions, role_errors) in [
+            (format!("{value}\n{temporal}"), 0),
+            (temporal.to_string(), 0),
+            (value.to_string(), depth),
+        ] {
+            let checked = module(&format!(
+                "{definitions}\n\
+                 const fn product(a: i64, b: i64) -> i64 => a * b\n\
+                 fn later(n: i64) -> i64 {{ when {{ return n + 10 }} }}\n\
+                 fn graph(tick: i64) -> i64 => tick + {body}\n"
+            ));
+            let codes: Vec<_> = checked
+                .findings
+                .iter()
+                .map(|finding| finding.code.as_str())
+                .collect();
+            let mut expected = vec!["function-kind/call.role"; role_errors];
+            expected.push(ordinary_error);
+            assert_eq!(codes, expected, "{}", checked.report);
+        }
+    }
+}
+
+/// FN-17: a declaration restricted to the value template rejects
+/// a temporal function name or a temporal call inside its argument.
+#[test]
+fn value_only_callback_twins_still_reject_temporal_arguments() {
+    let definitions = concat!(
+        "const fn named(f: const fn(str) -> i64, x: i64) -> i64 => f(\"a\") * 2\n",
+        "const fn generic<T>(f: const fn(T) -> T, x: T) -> T requires T in {i64} => f(x) * 2\n",
+        "fn later(n: i64) -> i64 { when { return n + 10 } }\n",
+    );
+    for (body, expected) in [
+        ("named(later, 1)", "type/type.mismatch"),
+        ("generic(later, 1)", "type/type.mismatch"),
+        ("generic(fn(n) => later(n), 1)", "function-kind/call.role"),
+    ] {
+        let checked = module(&format!(
+            "{definitions}fn graph(tick: i64) -> i64 => tick + {body}\n"
+        ));
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, expected, "{}", checked.report);
+    }
 }

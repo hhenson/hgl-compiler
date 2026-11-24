@@ -4,32 +4,182 @@
 //! typing pass ([`super`]); a call of an operator is read in
 //! [`super::operators`].
 
+use std::collections::HashMap;
+
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
 use super::arguments::{Slot, Takes};
+use super::children::ChildOrigin;
 use super::constants::generic_default;
 use super::dependent_packs::{PackTypes, dependent_slot};
 use super::evals::{trace_input_type, trace_pack_type};
 use super::fit::{not_null, open, whole};
+use super::forwarded_packs::spread_operands;
 use super::inference::{
     ExplicitGenerics, Inferred, Places, bare_parameter, infer, infer_from_place, mentions,
     pack_bounds, placed, type_pack,
 };
-use super::lifting::fill_type;
+use super::lifting::{fill_type, join_categories, preferred_call_role};
 use super::node::RefRead;
 use super::sizes;
-use super::{Fact, Typer};
+use super::{CapturedOutput, Fact, Typer};
 use crate::declared::names_parameter;
-use crate::hir::{self, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, ValueCategory};
+use crate::hir::{
+    self, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, Local, LocalId, ValueCategory,
+};
 use crate::program::{Binding, DeclarationKind, OperatorRef, Program, Role};
 use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
 use crate::types::{
-    Argument, CallArguments, ConstantValue, Detail, GenericKind, NamedKind, Parameter, Scalar,
-    Signature, Type,
+    Argument, CallArguments, ConstantValue, Detail, FunctionType, GenericKind, NamedKind,
+    Parameter, Scalar, Signature, Type,
 };
 use crate::{codes, error};
+
+/// One pair call, including its tentative and committed readings.
+/// Descendant probes can reuse categories in the same lexical scope.
+pub(super) struct PairPhases {
+    scope: Location,
+    categories: HashMap<Location, (PairScope, ValueCategory)>,
+}
+
+impl PairPhases {
+    fn at(typer: &Typer<'_>, list: &SyntaxNode) -> Option<Self> {
+        let call = list.parent()?;
+        #[cfg(test)]
+        tests::PHASE_ROOTS.with(|count| count.set(count.get() + 1));
+        Some(Self {
+            scope: typer.at(&call),
+            categories: HashMap::new(),
+        })
+    }
+
+    fn contains(&self, at: Location) -> bool {
+        at.file == self.scope.file
+            && self.scope.span.start <= at.span.start
+            && at.span.end <= self.scope.span.end
+    }
+}
+
+/// The state a phase read starts with. A repeated read can be in a
+/// different block, branch, or candidate trial, with different local
+/// types, assignments or proof of presence.
+struct PairScope {
+    locals: Vec<Local>,
+    assigned: Vec<bool>,
+    facts: Vec<Fact>,
+    aliases: HashMap<LocalId, LocalId>,
+    children: HashMap<LocalId, ChildOrigin>,
+    captures: HashMap<LocalId, CapturedOutput>,
+    anonymous: Option<(LocalId, Type)>,
+    hook: Option<Hook>,
+    callable: Option<SyntaxNode>,
+    naming: Option<Location>,
+    binding_child: Option<Location>,
+    designating: Option<Location>,
+    temporal: Option<LocalId>,
+    dynamic: Option<LocalId>,
+    range_bindings: Vec<LocalId>,
+    generic_bindings: Vec<(Location, Argument)>,
+    instance: Vec<(Location, Argument)>,
+    evaluation: PairEvaluation,
+    returned: bool,
+    must_return: bool,
+    unsure: bool,
+}
+
+/// Reading a callback, a pack pass, or an eval can change the context of
+/// nested expressions without changing their written location.
+#[derive(PartialEq, Eq)]
+struct PairEvaluation {
+    graph: bool,
+    testing: bool,
+    value_code: bool,
+    evaluating: bool,
+    integration: bool,
+    generating: bool,
+    valued: u32,
+    requiring: u32,
+}
+
+impl PairEvaluation {
+    fn of(typer: &Typer<'_>) -> Self {
+        Self {
+            graph: typer.graph,
+            testing: typer.testing,
+            value_code: typer.value_code,
+            evaluating: typer.evaluating,
+            integration: typer.integration,
+            generating: typer.generating,
+            valued: typer.valued,
+            requiring: typer.requiring,
+        }
+    }
+}
+
+impl PairScope {
+    fn of(typer: &Typer<'_>) -> Self {
+        Self {
+            locals: typer.locals.clone(),
+            assigned: typer.assigned.clone(),
+            facts: typer.present.clone(),
+            aliases: typer.aliases.clone(),
+            children: typer.bound_children.clone(),
+            captures: typer.captures.clone(),
+            anonymous: typer
+                .anonymous
+                .as_ref()
+                .map(|scope| (scope.first_local, scope.result.clone())),
+            hook: typer.hook,
+            callable: typer.callable.clone(),
+            naming: typer.naming,
+            binding_child: typer.binding_child,
+            designating: typer.designating,
+            temporal: typer.temporal,
+            dynamic: typer.dynamic,
+            range_bindings: typer.unrolled_range_bindings.clone(),
+            generic_bindings: typer.bound.clone(),
+            instance: typer.instance.clone(),
+            evaluation: PairEvaluation::of(typer),
+            returned: typer.returned,
+            must_return: typer.must_return,
+            unsure: typer.unsure,
+        }
+    }
+
+    fn matches(&self, typer: &Typer<'_>) -> bool {
+        let anonymous = typer
+            .anonymous
+            .as_ref()
+            .map(|scope| (scope.first_local, &scope.result));
+        let probed_anonymous = self
+            .anonymous
+            .as_ref()
+            .map(|(first_local, result)| (*first_local, result));
+        self.locals == typer.locals
+            && self.assigned == typer.assigned
+            && self.facts == typer.present
+            && self.aliases == typer.aliases
+            && self.children == typer.bound_children
+            && self.captures == typer.captures
+            && probed_anonymous == anonymous
+            && self.hook == typer.hook
+            && self.callable == typer.callable
+            && self.naming == typer.naming
+            && self.binding_child == typer.binding_child
+            && self.designating == typer.designating
+            && self.temporal == typer.temporal
+            && self.dynamic == typer.dynamic
+            && self.range_bindings == typer.unrolled_range_bindings
+            && self.generic_bindings == typer.bound
+            && self.instance == typer.instance
+            && self.evaluation == PairEvaluation::of(typer)
+            && self.returned == typer.returned
+            && self.must_return == typer.must_return
+            && self.unsure == typer.unsure
+    }
+}
 
 impl<'a> Typer<'a> {
     // ---- Calls and constructions ----
@@ -242,27 +392,32 @@ impl<'a> Typer<'a> {
     ) -> (ExprKind, Type) {
         let program = self.program;
         let kind_of = |declaration: usize| program.modules[module].declarations[declaration].kind;
-        // FN-4: "Composition and eval choose the temporal definition if
-        // one exists; runtime/value evaluation chooses the value
-        // definition." FN-3: "A composition body calls any function".
-        let temporal_function = declarations.iter().copied().find(|&declaration| {
-            matches!(
-                kind_of(declaration),
-                DeclarationKind::Function(Role::Temporal)
-                    | DeclarationKind::NativeFunction(Role::Temporal)
-            )
-        });
-        if let (true, Some(declaration)) = (self.graph, temporal_function) {
-            return self.call_function(name, list, (module, declaration), expected, generics);
-        }
-        let value_function = declarations.iter().copied().find(|&declaration| {
-            matches!(
-                kind_of(declaration),
-                DeclarationKind::Function(Role::Value)
-                    | DeclarationKind::NativeFunction(Role::Value)
-            )
-        });
-        if let Some(declaration) = value_function {
+        let (value, temporal) = function_pair(program, module, declarations);
+        // FN-4: a composition call takes the direct match before a
+        // lifted one. Only the selected definition checks the signature.
+        let function = match (self.graph, value, temporal) {
+            (true, Some(value), Some(temporal)) => {
+                let root = self.pair_phases.is_none();
+                if root {
+                    self.pair_phases = PairPhases::at(self, list);
+                }
+                let selected = match preferred_call_role(
+                    true,
+                    [self.pair_operands(name, list, module, (value, temporal))],
+                ) {
+                    Role::Value => value,
+                    Role::Temporal => temporal,
+                };
+                let result = self.call_function(name, list, (module, selected), expected, generics);
+                if root {
+                    self.pair_phases = None;
+                }
+                return result;
+            }
+            (true, None, temporal) => temporal,
+            (_, value, _) => value,
+        };
+        if let Some(declaration) = function {
             return self.call_function(name, list, (module, declaration), expected, generics);
         }
         let structure = declarations
@@ -305,13 +460,6 @@ impl<'a> Typer<'a> {
             };
             return self.call_operator(name, list, operator, expected, generics);
         }
-        let temporal = declarations.iter().any(|&declaration| {
-            matches!(
-                kind_of(declaration),
-                DeclarationKind::Function(Role::Temporal)
-                    | DeclarationKind::NativeFunction(Role::Temporal)
-            )
-        });
         // NATIVE-6: "a native type is not constructed in HGL: a call of
         // its name rejects."
         let native = declarations
@@ -332,7 +480,7 @@ impl<'a> Typer<'a> {
                 .with_note("a value of a native type comes from a native function"),
             );
         }
-        if temporal {
+        if temporal.is_some() {
             // FN-3: "A runtime body calls only value functions, and so
             // does a value function." FN-4: "A bad selected signature
             // is an error, not fallback to the other role." TST-3, and
@@ -516,6 +664,210 @@ impl<'a> Typer<'a> {
                     .map(|(name, value)| (false, name, value)),
             )
             .collect()
+    }
+
+    /// Read the category of the supplied arguments before choosing a
+    /// role. Omitted arguments are filled only by the selected signature.
+    fn pair_operands(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        module: usize,
+        (value, temporal): (usize, usize),
+    ) -> ValueCategory {
+        let at = self.at(list);
+        let cache = self
+            .pair_phases
+            .as_ref()
+            .filter(|phases| phases.contains(at));
+        if let Some((scope, category)) = cache.and_then(|phases| phases.categories.get(&at))
+            && scope.matches(self)
+        {
+            return *category;
+        }
+        #[cfg(test)]
+        tests::PHASE_PROBES.with(|count| count.set(count.get() + 1));
+        let scope = cache.map(|_| PairScope::of(self));
+        let mark = self.mark();
+        let categories: Vec<_> = self.locals.iter().map(|local| local.category).collect();
+        let must_return = self.must_return;
+        let returning_tails = self.returning_tails.clone();
+        let callbacks = self.pair_callback_templates(name, list, module, (value, temporal));
+        let mut category = if self.pack_inputs.is_none() && spread_operands(list).next().is_some() {
+            ValueCategory::Unsettled
+        } else {
+            self.forwarded_arguments(list)
+                .iter()
+                .map(|argument| self.category(&argument.value))
+                .fold(ValueCategory::Value, join_categories)
+        };
+        for (_, _, node) in self.call_entries(list) {
+            if category == ValueCategory::Connection {
+                break;
+            }
+            if !self.may_reread() {
+                category = ValueCategory::Unsettled;
+                break;
+            }
+            let operand = if let Some(&(value, temporal)) = callbacks.get(&self.at(&node)) {
+                self.pair_callback_category(&node, value, temporal)
+            } else {
+                let value = self.expression(&node, None);
+                self.category(&value)
+            };
+            category = join_categories(category, operand);
+        }
+        self.take_back(mark, false);
+        for (local, category) in self.locals.iter_mut().zip(categories) {
+            local.category = category;
+        }
+        self.must_return = must_return;
+        self.returning_tails = returning_tails;
+        // A probe can be unresolved or report a diagnostic the selected
+        // signature must read for itself. Reuse only its category, and
+        // never reuse a result cut short by the reading allowance.
+        if !self.spent
+            && let Some(scope) = scope
+            && let Some(phases) = &mut self.pair_phases
+        {
+            phases.categories.insert(at, (scope, category));
+        }
+        category
+    }
+
+    /// GEN-6 and FN-17: find the written arguments that take callable
+    /// templates of different roles. The selected signature checks the
+    /// template's ordinary types (FN-4).
+    fn pair_callback_templates(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        module: usize,
+        (value, temporal): (usize, usize),
+    ) -> HashMap<Location, (&'a FunctionType, &'a FunctionType)> {
+        let program = self.program;
+        let details = &program.modules[module].details;
+        let (Some(Detail::Callable(value)), Some(Detail::Callable(temporal))) =
+            (details.get(value), details.get(temporal))
+        else {
+            return HashMap::new();
+        };
+        let any_template = |signature: &Signature, value_role| {
+            signature.parameters.iter().any(
+                |parameter| matches!(&parameter.ty, Type::Function(ty) if ty.value == value_role),
+            )
+        };
+        if !any_template(value, true) || !any_template(temporal, false) {
+            return HashMap::new();
+        }
+        let given = |typer: &mut Self, signature: &'a Signature| {
+            let slots: Vec<_> = signature
+                .parameters
+                .iter()
+                .map(|parameter| Slot {
+                    name: &parameter.name,
+                    configuration: parameter.configuration,
+                    ty: Type::Unknown,
+                    required: false,
+                    pack: parameter.pack,
+                    pack_bounds: (0, None),
+                    type_pack: None,
+                    listed: false,
+                })
+                .collect();
+            let options: Vec<_> = signature
+                .generics
+                .iter()
+                .filter(|generic| matches!(generic.kind, GenericKind::Value(_)))
+                .map(|generic| generic.name.as_str())
+                .collect();
+            let mark = typer.mark();
+            let arguments = typer.assign(name, list, &slots, Takes::Parameters, &options);
+            typer.take_back(mark, false);
+            arguments.into_iter().filter_map(move |argument| {
+                let parameter = signature.parameters.get(argument.slot?)?;
+                match &parameter.ty {
+                    Type::Function(template) if argument.forwarded.is_none() => {
+                        Some((argument.value, template.as_ref()))
+                    }
+                    _ => None,
+                }
+            })
+        };
+        let values: HashMap<_, _> = given(self, value)
+            .map(|(node, template)| (self.at(&node), template))
+            .collect();
+        given(self, temporal)
+            .filter_map(|(node, temporal)| {
+                let at = self.at(&node);
+                let value = *values.get(&at)?;
+                (value.value && !temporal.value).then_some((at, (value, temporal)))
+            })
+            .collect()
+    }
+
+    /// A value callable that either template admits leaves the role to the
+    /// other arguments. A temporal-only callable or a connection capture
+    /// selects the temporal definition (FN-4, GEN-6, FN-17).
+    fn pair_callback_category(
+        &mut self,
+        node: &SyntaxNode,
+        value: &FunctionType,
+        temporal: &FunctionType,
+    ) -> ValueCategory {
+        let node = ungrouped(node.clone());
+        if node.kind() == SyntaxKind::FnExpr {
+            return self.anonymous_pair_category(&node, temporal);
+        }
+        if !matches!(
+            node.kind(),
+            SyntaxKind::NameExpr | SyntaxKind::FunctionReference
+        ) {
+            return ValueCategory::Value;
+        }
+        if let Some(local) = self.local_of(&node) {
+            return match &self.locals[local].ty {
+                Type::Function(template) if !template.value => ValueCategory::Connection,
+                _ => ValueCategory::Value,
+            };
+        }
+        let Some((module, declarations)) =
+            name_token(&node).and_then(|token| self.declarations(&token))
+        else {
+            return ValueCategory::Value;
+        };
+        match function_pair(self.program, module, declarations) {
+            (None, Some(_)) => return ValueCategory::Connection,
+            (Some(_), _) => return ValueCategory::Value,
+            _ => {}
+        }
+        if !declarations.iter().any(|&index| {
+            self.program.modules[module].declarations[index].kind == DeclarationKind::Operator
+        }) {
+            return ValueCategory::Value;
+        }
+
+        // An operator reference names a set of candidates. The two
+        // receiving templates still determine which candidates fit.
+        let mark = self.mark();
+        let read = self.function_argument(&node, value);
+        let fits_value =
+            self.take_back(mark, false) && matches!(read.kind, ExprKind::StaticCallable(_));
+        if fits_value {
+            return ValueCategory::Value;
+        }
+        if !self.may_reread() {
+            return ValueCategory::Unsettled;
+        }
+        let mark = self.mark();
+        let read = self.function_argument(&node, temporal);
+        let fits_temporal =
+            self.take_back(mark, false) && matches!(read.kind, ExprKind::StaticCallable(_));
+        if fits_temporal {
+            ValueCategory::Connection
+        } else {
+            ValueCategory::Value
+        }
     }
 
     /// Whether a name occupies a call's callee or a written argument
@@ -1663,6 +2015,30 @@ fn unread_call_kind(arguments: Vec<hir::Argument>) -> ExprKind {
     }
 }
 
+/// The value and temporal definitions of one name, where declared.
+fn function_pair(
+    program: &Program,
+    module: usize,
+    declarations: &[usize],
+) -> (Option<usize>, Option<usize>) {
+    let mut value = None;
+    let mut temporal = None;
+    for &index in declarations {
+        match program.modules[module].declarations[index].kind {
+            DeclarationKind::Function(Role::Value)
+            | DeclarationKind::NativeFunction(Role::Value) => {
+                value.get_or_insert(index);
+            }
+            DeclarationKind::Function(Role::Temporal)
+            | DeclarationKind::NativeFunction(Role::Temporal) => {
+                temporal.get_or_insert(index);
+            }
+            _ => {}
+        }
+    }
+    (value, temporal)
+}
+
 /// The callable expression, as it is written before the arguments.
 pub(super) fn call_callee(node: &SyntaxNode) -> Option<SyntaxNode> {
     if node.kind() == SyntaxKind::CallExpr {
@@ -1706,4 +2082,78 @@ pub(super) fn removes(program: &Program, (module, declaration): (usize, usize)) 
     Some(module) == program.core()
         && target.kind == DeclarationKind::NativeFunction(Role::Value)
         && target.name == "removed_value"
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use hgl_diagnostics::Diagnostics;
+    use hgl_parser::{Entry, Limits, parse};
+    use hgl_source::SourceMap;
+
+    use crate::{ParsedFile, analyse};
+
+    thread_local! {
+        pub(super) static PHASE_PROBES: Cell<usize> = const { Cell::new(0) };
+        pub(super) static PHASE_ROOTS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn check_with_phase_count(body: &str) -> (Diagnostics, usize, usize) {
+        let source = format!(
+            "module m\n\
+             const fn scale(value: i64) -> i64 => value * 2\n\
+             fn scale(value: i64) -> i64 => value * 3\n{body}"
+        );
+        let mut sources = SourceMap::new();
+        let mut diagnostics = Diagnostics::new();
+        let file = sources.add("m.hgl", &source).unwrap();
+        let tokens = hgl_lexer::lex(&sources, file, &mut diagnostics);
+        let tree = parse(
+            &sources,
+            file,
+            &tokens,
+            Entry::SourceFile,
+            Limits::default(),
+            &mut diagnostics,
+        );
+        PHASE_PROBES.set(0);
+        PHASE_ROOTS.set(0);
+        analyse(&[ParsedFile::new(file, tree.syntax())], &mut diagnostics);
+        (diagnostics, PHASE_ROOTS.get(), PHASE_PROBES.get())
+    }
+
+    /// FN-4: phase probes can cross a computed spread without probing
+    /// the same three calls again during the selected call's reading.
+    #[test]
+    fn phased_pairs_share_reads_around_a_pack_comprehension() {
+        let (diagnostics, roots, probes) = check_with_phase_count(
+            "fn compose<...Inputs>(cb: fn(...{Inputs}) -> i64, value: i64) -> i64 {
+                return value + scale(scale(scale(cb(...{for key in arg_keys(Inputs): 7}))))
+            }\n",
+        );
+        assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");
+        // The computed spread is read in two analysis passes. Each
+        // has its own memo, with one probe per written pair call.
+        assert_eq!((roots, probes), (2, 6));
+    }
+
+    /// FN-4 and TST-5: an eval inside a pair's argument retains its
+    /// ordinary type diagnostic when the same phase probe is reused.
+    #[test]
+    fn phased_pairs_share_reads_around_an_eval_operand() {
+        let (diagnostics, roots, probes) = check_with_phase_count(
+            "fn probe(value: i64) -> i64 => value
+            fn configured(const bias: i64, value: i64) -> i64 => bias + value
+            test nested {
+                eval configured(bias: scale(scale(scale(eval probe(value: [1])))), value: [1])
+            }\n",
+        );
+        assert_eq!(diagnostics.as_slice().len(), 1, "{diagnostics:?}");
+        assert_eq!(
+            diagnostics.as_slice()[0].code,
+            hgl_diagnostics::Code::Catalogued(crate::codes::TYPE_MISMATCH),
+        );
+        assert_eq!((roots, probes), (1, 3));
+    }
 }

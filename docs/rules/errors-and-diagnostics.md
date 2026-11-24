@@ -207,3 +207,4 @@ analyser: partial
 transpiler: done
 
 - C++ follows the recorded whole, success or nullable form. A lifted call or node publishes the chosen form. A held failure taken as a value fails on its publication cycle, before the consumer runs a handler. Consumers that need child tracking use a projected endpoint. [Compiler issue #355](https://github.com/hhenson/hgl-compiler/issues/355)
+- The SDK cases check that generic `i64` and `f64` instances read checked division into a nullable return in value functions, node handlers and graphs. [Compiler issue #465](https://github.com/hhenson/hgl-compiler/issues/465)

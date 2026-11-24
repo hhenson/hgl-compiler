@@ -74,7 +74,12 @@ fn internal_link_targets_exist(directory: &Path, files: &BTreeMap<PathBuf, Vec<u
             .split("src=\"")
             .skip(1)
             .filter_map(|tail| tail.split_once('"').map(|(src, _)| src));
-        for href in hrefs(html).chain(scripts) {
+        let links = hrefs(html).filter(|href| {
+            !href.split_once(':').is_some_and(|(scheme, _)| {
+                scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+            })
+        });
+        for href in links.chain(scripts) {
             let (target, anchor) = href
                 .split_once('#')
                 .map_or((href, None), |(path, id)| (path, Some(id)));
@@ -99,7 +104,7 @@ fn internal_link_targets_exist(directory: &Path, files: &BTreeMap<PathBuf, Vec<u
 }
 
 #[test]
-fn documentation_site_links_only_visible_declarations_and_local_files() {
+fn documentation_site_links_visible_declarations_and_web_destinations() {
     let root = tempdir().unwrap();
     let source = root.path().join("source");
     input(&source, "\n");
@@ -113,8 +118,11 @@ fn documentation_site_links_only_visible_declarations_and_local_files() {
     assert!(api.contains("<table") && api.contains("The options are evaluated once."));
     assert_eq!(api.matches("The input value.").count(), 1);
     assert!(api.contains("&lt;script&gt;") && !api.contains("<script>alert"));
-    assert!(api.contains("External label") && api.contains("External picture"));
-    assert!(!api.contains("example.invalid"));
+    assert!(api.contains(
+        "<a href=\"https://example.invalid/external\">External label</a> (<code>https://example.invalid/external</code>)"
+    ));
+    assert!(api.contains("External picture (<code>https://example.invalid/picture.png</code>)"));
+    assert!(!api.contains("<img"));
     assert!(
         api.contains("<code>private_marker</code>")
             && !api.contains("Private implementation detail.")
@@ -153,6 +161,97 @@ fn documentation_site_links_only_visible_declarations_and_local_files() {
         "a declaration private to another module remains outside this comment's scope"
     );
     internal_link_targets_exist(&private, &snapshot(&private));
+}
+
+/// SDOC-4: separate table columns preserve modes (FN-1, FN-15 and FN-16)
+/// on names and keep both FN-8 pack marks with their types.
+#[test]
+fn documentation_site_shows_parameter_modes_and_packs() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("parameters.hgl");
+    fs::write(
+        &source,
+        concat!(
+            "module parameters\n",
+            "export const fn modes{const offset: i64 = 1}(const count: i64, var values: list<i64>) -> i64 => count + offset\n",
+            "export const fn packs<...Names>(items: ...bool, fields: ...{Names}) -> i64 => 0\n",
+            "export fn observe(ref input: i64) { when {} }\n",
+        ),
+    )
+    .unwrap();
+    let site = write_site(root.path(), &source, &[]);
+    let page = fs::read_to_string(site.join("modules/mod-parameters.html")).unwrap();
+    for (name, ty, default) in [
+        ("const offset", "i64", "<code>1</code>"),
+        ("const count", "i64", "—"),
+        ("var values", "list&lt;i64&gt;", "—"),
+        ("ref input", "i64", "—"),
+        ("items", "...bool", "—"),
+        ("fields", "...{Names}", "—"),
+    ] {
+        assert!(
+            page.contains(&format!(
+                "<th scope=\"row\"><code>{name}</code></th><td><code>{ty}</code></td><td>{default}</td>"
+            )),
+            "no table row for {name}: {ty}"
+        );
+    }
+}
+
+/// SDOC-7: Markdown destinations are visible, and only HTTP(S) link
+/// labels carry external anchors.
+#[test]
+fn documentation_site_shows_markdown_destinations_as_text() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("destinations.hgl");
+    fs::write(
+        &source,
+        r#"module destinations
+
+/** [**Web**](HTTPS://example.invalid/page?x=1&y=2)
+
+[`home`](http://example.invalid/home)
+
+[Relative](../guide)
+[Fragment](#fragment)
+[Other](custom:inert)
+[Script](javascript:inert)
+[Data](data:text/plain,inert)
+[Quoted](<https://example.invalid/"q">)
+
+[![Picture](https://example.invalid/picture.png)](https://example.invalid/gallery)
+*/
+export const fn home() -> i64 => 1
+"#,
+    )
+    .unwrap();
+    let site = write_site(root.path(), &source, &[]);
+    let page = fs::read_to_string(site.join("modules/mod-destinations.html")).unwrap();
+    assert!(page.contains(concat!(
+        "<a href=\"HTTPS://example.invalid/page?x=1&amp;y=2\"><strong>Web</strong></a> ",
+        "(<code>HTTPS://example.invalid/page?x=1&amp;y=2</code>)",
+    )));
+    assert!(page.contains(concat!(
+        "<a href=\"http://example.invalid/home\"><code>home</code></a> ",
+        "(<code>http://example.invalid/home</code>)",
+    )));
+    assert!(page.contains(concat!(
+        "<a href=\"https://example.invalid/gallery\">Picture</a> ",
+        "(<code>https://example.invalid/picture.png</code>) ",
+        "(<code>https://example.invalid/gallery</code>)",
+    )));
+    assert!(page.contains("(<code>https://example.invalid/&quot;q&quot;</code>)"));
+    assert!(!page.contains("<img"));
+    for (label, destination) in [
+        ("Relative", "../guide"),
+        ("Fragment", "#fragment"),
+        ("Other", "custom:inert"),
+        ("Script", "javascript:inert"),
+        ("Data", "data:text/plain,inert"),
+    ] {
+        assert!(page.contains(&format!("{label} (<code>{destination}</code>)")));
+        assert!(!hrefs(&page).any(|href| href == destination));
+    }
 }
 
 /// SDOC-4 and SDOC-7: initializer blocks stay in signatures, and the
