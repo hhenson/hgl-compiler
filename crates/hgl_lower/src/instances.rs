@@ -659,7 +659,9 @@ fn function_key(program: &Program, target: &Callee) -> Option<(String, bool)> {
         // A nested key is already encoded. Quoting it again would escape
         // the escapes at every level. Its byte length frames it as-is.
         let mut encoded = String::new();
-        let mut has_const = !function.specialization.const_inputs.is_empty();
+        let pass_keys = &function.specialization.pack_pass_keys;
+        let mut has_const =
+            !function.specialization.const_inputs.is_empty() || !pass_keys.is_empty();
         for target in targets {
             let (target, target_has_const) = target?;
             has_const |= target_has_const;
@@ -668,6 +670,9 @@ fn function_key(program: &Program, target: &Callee) -> Option<(String, bool)> {
         for (slot, key) in &function.specialization.const_inputs {
             write!(encoded, "const[{slot}]:{}#{key}", key.len())
                 .expect("writing to a string succeeds");
+        }
+        if !pass_keys.is_empty() {
+            write!(encoded, "pack passes:{pass_keys:?}").expect("writing to a string succeeds");
         }
         let key = format!(
             "anonymous:{}:{}:{}:{types:?}:{result:?}:{generic_arguments:?}:{type_packs:?}:{pack_inputs:?}:{encoded}",

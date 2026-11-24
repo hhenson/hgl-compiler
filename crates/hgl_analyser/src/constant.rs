@@ -58,9 +58,12 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
 use crate::codes;
-use crate::hir::{BinaryOperator, CalendarDate, ClockTime, Temporal, Tenor, UnaryOperator, Value};
+use crate::hir::{
+    BinaryOperator, CalendarDate, ClockTime, Temporal, Tenor, TypePackArgument, UnaryOperator,
+    Value,
+};
 use crate::program::{Binding, DeclarationKind, LocalKind, Program};
-use crate::syntax::{name_token, tokens};
+use crate::syntax::{name_token, tokens, ungrouped};
 use crate::types::{Argument, ConstantValue, Detail, EnumOf, MemberOf, NamedKind, Scalar, Type};
 
 // ---- What a reading is given ----
@@ -83,6 +86,8 @@ pub(crate) struct Scope<'s> {
     pub(crate) parameter: &'s dyn Fn(Location) -> Option<Type>,
     /// The arguments already given to the generic parameters of this declaration.
     pub(crate) arguments: &'s [(Location, &'s Argument)],
+    /// The resolved type packs of this instance, by declaration (GEN-17).
+    pub(crate) type_packs: &'s [(Location, &'s TypePackArgument)],
     /// The constants of modules followed so far.
     pub(crate) constants: &'s Constants,
 }
@@ -611,6 +616,9 @@ fn value(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Ty
         }
         SyntaxKind::MemberExpr => qualified_member(node, scope),
         SyntaxKind::CallExpr => constructed_member(node, scope),
+        SyntaxKind::PackKeyMembership if !scope.type_packs.is_empty() => {
+            pack_key_membership(node, scope)
+        }
         SyntaxKind::UnaryExpr => unary(node, expected, scope),
         SyntaxKind::BinaryExpr => binary(node, expected, scope),
         SyntaxKind::SequenceExpr => sequence(node, expected, scope),
@@ -753,6 +761,59 @@ fn bound<'s>(node: &SyntaxNode, scope: &Scope<'s>) -> Option<(SyntaxToken, &'s B
     let name = name_token(node)?;
     let binding = (scope.binding)(scope.file, name.span().start)?;
     Some((name, binding))
+}
+
+/// The compile-time name of a reflected pack key (GEN-17).
+fn is_pack_key(node: &SyntaxNode, scope: &Scope) -> bool {
+    let node = ungrouped(node.clone());
+    matches!(
+        bound(&node, scope),
+        Some((
+            _,
+            Binding::Local {
+                kind: LocalKind::PackKey | LocalKind::PackIterationKey,
+                ..
+            }
+        ))
+    )
+}
+
+/// GEN-17: a positional key and a named key are unequal across kinds.
+pub(crate) fn different_pack_key_kinds(left: &ConstantValue, right: &ConstantValue) -> bool {
+    matches!(
+        (left, right),
+        (ConstantValue::Int(_), ConstantValue::Str(_))
+            | (ConstantValue::Str(_), ConstantValue::Int(_))
+    )
+}
+
+/// GEN-17: a guard in a concrete pass can test whether its key is in a
+/// resolved type pack. Its result is an ordinary constant `bool`.
+fn pack_key_membership(node: &SyntaxNode, scope: &Scope) -> Result<Typed, Fault> {
+    let mut operands = node.children();
+    let (Some(key), Some(pack)) = (operands.next(), operands.next()) else {
+        return Err(Fault::Reported);
+    };
+    let (_, binding) = bound(&pack, scope).ok_or(Fault::Reported)?;
+    let Binding::Local { at, .. } = binding else {
+        return Err(Fault::NotConstant);
+    };
+    let (_, pack) = scope
+        .type_packs
+        .iter()
+        .find(|(declared, _)| declared == at)
+        .ok_or(Fault::NotConstant)?;
+    let key = name(&key, scope)?;
+    if pack.forwarded_from.is_some()
+        || pack.infer_from_arguments
+        || !matches!(key.value, ConstantValue::Int(_) | ConstantValue::Str(_))
+    {
+        return Ok(Typed::unevaluated(Some(Type::Scalar(Scalar::Bool))));
+    }
+    Ok(Typed::scalar(
+        ConstantValue::Bool(pack.member(&key.value).is_some()),
+        Scalar::Bool,
+    ))
 }
 
 /// A name: a generic value parameter, or a constant of a module.
@@ -944,6 +1005,7 @@ fn constant_expression(
         binding: scope.binding,
         parameter: &|_| None,
         arguments: &[],
+        type_packs: &[],
         constants: scope.constants,
     };
     let Some(expression) = &expression else {
@@ -1014,6 +1076,7 @@ pub(crate) fn written_type<'s>(
                         binding: &binding,
                         parameter: &|_| None,
                         arguments: &[],
+                        type_packs: &[],
                         constants,
                     };
                     let value = read(&size, Some(&Type::Scalar(Scalar::I64)), &scope)
@@ -1564,9 +1627,9 @@ fn joined(
     expected: Option<&Type>,
     scope: &Scope,
 ) -> Result<Typed, Fault> {
-    let (_, right, operator) = operands(node)?;
+    let (left_node, right_node, operator) = operands(node)?;
     let mut left = left;
-    let mut right = value(&right, operand_hint(operator, expected), scope)?;
+    let mut right = value(&right_node, operand_hint(operator, expected), scope)?;
     // EXPR-6: "Boolean connectives short-circuit left to right": the
     // right operand of `false &&` and of `true ||` is not evaluated, so
     // a failure of its evaluation is none, and the connective is the
@@ -1605,6 +1668,16 @@ fn joined(
         return Ok(Typed::unevaluated(None));
     }
     if equality {
+        // GEN-17: a positional key differs from a name. Ordinary `i64`
+        // and `str` values still need the same scalar type for equality.
+        if different_pack_key_kinds(&left.value, &right.value)
+            && (is_pack_key(&left_node, scope) || is_pack_key(&right_node, scope))
+        {
+            return Ok(Typed::scalar(
+                ConstantValue::Bool(operator == BinaryOperator::NotEqual),
+                Scalar::Bool,
+            ));
+        }
         // TYPE-7: an implied member is of the enum its place expects:
         // `Mode.fast == .slow` compares two of `Mode`, as core's `==`
         // is selected for them, and `[Mode.fast] == [.slow]` two lists

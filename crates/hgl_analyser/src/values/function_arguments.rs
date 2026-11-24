@@ -15,8 +15,8 @@ use super::forwarded_packs::spread_operands;
 use super::inference::{ExplicitGenerics, infer, mentions, pack_bounds, type_pack};
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{
-    AnonymousFunction, Callee, Expr, ExprKind, Form, LocalId, Node, Stmt, TypePackArgument,
-    ValueCategory, walk_statement_nodes,
+    AnonymousFunction, AnonymousSpecialization, Callee, Expr, ExprKind, Form, LocalId, Node, Stmt,
+    TypePackArgument, ValueCategory, walk_statement_nodes,
 };
 use crate::program::{Declaration, OperatorRef, Role};
 use crate::syntax::{child, name_token, ungrouped};
@@ -899,7 +899,14 @@ impl<'a> Typer<'a> {
             body,
             captures,
             pack_captures,
-            specialization: Default::default(),
+            specialization: AnonymousSpecialization {
+                pack_pass_keys: self
+                    .pack_passes
+                    .iter()
+                    .map(|(_, key)| key.clone())
+                    .collect(),
+                ..Default::default()
+            },
         }));
         Some((callee, actual))
     }

@@ -414,6 +414,36 @@ impl<'a> Typer<'a> {
             return (unread, Outcome::Value(Type::Unknown));
         };
         let otherwise = parts.next();
+        if let Some(selected) = self.active_pack_condition(&condition) {
+            // CTRL-16: a constant condition in a concrete pack pass
+            // composes only the selected branch.
+            if selected {
+                return self.flow(&then, expected, used);
+            }
+            if let Some(otherwise) = otherwise {
+                return self.flow(&otherwise, expected, used);
+            }
+            let (kind, outcome) = if used {
+                (ExprKind::Literal(hir::Value::Null), Outcome::Null)
+            } else {
+                (
+                    ExprKind::Block {
+                        statements: Vec::new(),
+                        value: None,
+                    },
+                    Outcome::Nothing,
+                )
+            };
+            return (
+                Expr {
+                    kind,
+                    ty: Type::Unknown,
+                    at,
+                    category: ValueCategory::Value,
+                },
+                outcome,
+            );
+        }
         let condition = self.condition(&condition);
         // CTRL-1: "A wiring-time condition chooses which branch to
         // compose. A temporal condition in composition selects a child

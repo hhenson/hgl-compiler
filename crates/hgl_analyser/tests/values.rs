@@ -4434,7 +4434,7 @@ fn a_computed_spread_preserves_the_written_function_argument_types() {
             panic!("expected the function to return the call");
         };
         let ExprKind::Call {
-            callee: Callee::Unread,
+            callee: Callee::DeferredPackCall,
             arguments,
             ..
         } = &value.kind
