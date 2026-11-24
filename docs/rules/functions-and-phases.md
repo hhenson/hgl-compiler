@@ -292,6 +292,7 @@ analyser: partial
 - Follows concrete calls in parameter and field defaults and anonymous bodies. Struct fields bind by name, and positional entries reject (TYPE-5). An enum constructor with a spread reports the argument during analysis (TYPE-7).
 - Checks where a pack comprehension is held and requires its iterable to name a type pack's keys. At the declaration it checks condition chains for runtime bindings, assignments to the iteration key, and ordinary reads of a type pack or callback. In an instance an inline computed spread visits the concrete keys, reads only each selected branch, and omits keys whose chain selects no entry (GEN-7, CTRL-16).
 - Reads a declared function's written arguments, including its configuration, through their parameter types before the computed entries are known.
+- Keeps the compile-time key comparison in anonymous bodies that capture a concrete key. A key differs from a constant of the other kind (FN-14, GEN-17).
 
 transpiler: partial
 

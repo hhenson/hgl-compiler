@@ -38,3 +38,31 @@ const fn capture_key<...Ps>(f: const fn(...{Ps}) -> i64) -> i64 =>
 test an_entry_can_capture_its_key {
     assert capture_key(tagged) == 42
 }
+
+# GEN-17 and FN-14: a captured key keeps its compile-time comparison
+# with a constant of the other kind, in either operand order.
+const other_name: str = "tag"
+
+const fn capture_position<...A>(items: ...A) -> i64 =>
+    increment(...{for key in arg_keys(A): invoke(fn() =>
+        if key == other_name { 41 }
+        else if "tag" == key { 42 }
+        else if !(key != "tag") { 43 }
+        else if !("tag" != key) { 44 }
+        else if key == 0 { 13 } else { 45 })})
+
+const fn capture_name<...Ps>(f: const fn(...{Ps}) -> i64) -> i64 =>
+    f(...{for key in arg_keys(Ps): invoke(fn() =>
+        if 0 == key { 41 }
+        else if key == 0 { 42 }
+        else if !(0 != key) { 43 }
+        else if !(key != 0) { 44 }
+        else if key == "tag" { 13 } else { 45 })})
+
+test a_captured_position_differs_from_a_name {
+    assert capture_position(7) == 14
+}
+
+test a_captured_name_differs_from_a_position {
+    assert capture_name(tagged) == 13
+}

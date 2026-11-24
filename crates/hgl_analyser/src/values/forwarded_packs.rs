@@ -9,7 +9,9 @@ use super::Typer;
 use super::requirements::{IndependentSourceBodies, called_or_referenced, pack_view};
 use crate::constant::{Fault, Scope};
 use crate::declared::{names_parameter, substitute_within};
-use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey, TypePackArgument};
+use crate::hir::{
+    BinaryOperator, Callee, Expr, ExprKind, Form, PackInput, PackKey, TypePackArgument,
+};
 use crate::program::{Binding, LocalKind};
 use crate::syntax::{child, has_token, is_arg_keys_call, name_token, pack_member_names, ungrouped};
 use crate::types::{Argument, Constant, ConstantValue, GenericKind, Scalar, Type};
@@ -514,13 +516,77 @@ impl<'a> Typer<'a> {
         condition: &SyntaxNode,
         key: (Location, &Argument),
     ) -> Result<bool, Fault> {
+        let expected = Type::Scalar(Scalar::Bool);
+        match self.pack_pass_constant(condition, &expected, Some(key))? {
+            ConstantValue::Bool(value) => Ok(value),
+            _ => Err(Fault::NotConstant),
+        }
+    }
+
+    /// GEN-17: keep a pass key's comparison with a constant of the other
+    /// kind, also inside a nested body that captures that key (FN-14).
+    pub(super) fn pack_pass_key_comparison(
+        &self,
+        operator: BinaryOperator,
+        left: &SyntaxNode,
+        right: &SyntaxNode,
+    ) -> Option<bool> {
+        if self.bound.is_empty()
+            || !matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual)
+        {
+            return None;
+        }
+        let (key, other) = self
+            .pack_iteration_key(left)
+            .map(|key| (key, right))
+            .or_else(|| self.pack_iteration_key(right).map(|key| (key, left)))?;
+        let other_type = Type::Scalar(match key {
+            ConstantValue::Int(_) => Scalar::Str,
+            ConstantValue::Str(_) => Scalar::I64,
+            _ => return None,
+        });
+        let other = self.pack_pass_constant(other, &other_type, None).ok()?;
+        crate::constant::different_pack_key_kinds(key, &other)
+            .then_some(operator == BinaryOperator::NotEqual)
+    }
+
+    fn pack_iteration_key(&self, node: &SyntaxNode) -> Option<&ConstantValue> {
+        let node = ungrouped(node.clone());
+        if node.kind() != SyntaxKind::NameExpr {
+            return None;
+        }
+        let name = name_token(&node)?;
+        let Binding::Local {
+            at,
+            kind: LocalKind::PackIterationKey,
+        } = self.bindings.get(&(self.file, name.span().start))?
+        else {
+            return None;
+        };
+        self.bound_pack_key(*at)
+    }
+
+    /// The lexical constant for a key bound while reading a concrete pass.
+    pub(super) fn bound_pack_key(&self, declared: Location) -> Option<&ConstantValue> {
+        self.bound.iter().find_map(|(at, argument)| match argument {
+            Argument::Constant(constant) if *at == declared => Some(&constant.value),
+            _ => None,
+        })
+    }
+
+    fn pack_pass_constant(
+        &self,
+        node: &SyntaxNode,
+        expected: &Type,
+        key: Option<(Location, &Argument)>,
+    ) -> Result<ConstantValue, Fault> {
         let inputs = self.pack_inputs.ok_or(Fault::NotConstant)?;
         let arguments: Vec<_> = self
             .instance
             .iter()
             .chain(&self.bound)
             .map(|(at, value)| (*at, value))
-            .chain(std::iter::once(key))
+            .chain(key)
             .collect();
         let binding = |file, start| self.binding_at(file, start);
         let parameter = |at| {
@@ -543,12 +609,8 @@ impl<'a> Typer<'a> {
             type_packs: inputs.types,
             constants: &self.constants,
         };
-        let expected = Type::Scalar(Scalar::Bool);
-        let read = crate::constant::typed(condition, Some(&expected), &scope)?;
-        match crate::constant::fit(read, Some(&expected), self.program)? {
-            ConstantValue::Bool(value) => Ok(value),
-            _ => Err(Fault::NotConstant),
-        }
+        let read = crate::constant::typed(node, Some(expected), &scope)?;
+        crate::constant::fit(read, Some(expected), self.program)
     }
 }
 

@@ -341,19 +341,13 @@ impl<'a> Typer<'a> {
         if *kind == LocalKind::PackIterationKey {
             // CTRL-16: a computed pass binds its key as a constant, also
             // when an anonymous body inside the pass reads the key.
-            let literal = self.bound.iter().find_map(|(binding, argument)| {
-                let Argument::Constant(given) = argument else {
-                    return None;
-                };
-                if binding != declared {
-                    return None;
-                }
-                match &given.value {
+            let literal = self
+                .bound_pack_key(*declared)
+                .and_then(|value| match value {
                     ConstantValue::Int(position) => Some((Value::Int(*position), Scalar::I64)),
                     ConstantValue::Str(name) => Some((Value::Str(name.clone()), Scalar::Str)),
                     _ => None,
-                }
-            });
+                });
             return literal.map_or(unread, |(value, scalar)| Expr {
                 kind: ExprKind::Literal(value),
                 ty: Type::Scalar(scalar),

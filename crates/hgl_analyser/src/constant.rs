@@ -778,6 +778,15 @@ fn is_pack_key(node: &SyntaxNode, scope: &Scope) -> bool {
     )
 }
 
+/// GEN-17: a positional key and a named key are unequal across kinds.
+pub(crate) fn different_pack_key_kinds(left: &ConstantValue, right: &ConstantValue) -> bool {
+    matches!(
+        (left, right),
+        (ConstantValue::Int(_), ConstantValue::Str(_))
+            | (ConstantValue::Str(_), ConstantValue::Int(_))
+    )
+}
+
 /// GEN-17: a guard in a concrete pass can test whether its key is in a
 /// resolved type pack. Its result is an ordinary constant `bool`.
 fn pack_key_membership(node: &SyntaxNode, scope: &Scope) -> Result<Typed, Fault> {
@@ -1661,12 +1670,7 @@ fn joined(
     if equality {
         // GEN-17: a positional key differs from a name. Ordinary `i64`
         // and `str` values still need the same scalar type for equality.
-        let different_key_kinds = matches!(
-            (&left.value, &right.value),
-            (ConstantValue::Int(_), ConstantValue::Str(_))
-                | (ConstantValue::Str(_), ConstantValue::Int(_))
-        );
-        if different_key_kinds
+        if different_pack_key_kinds(&left.value, &right.value)
             && (is_pack_key(&left_node, scope) || is_pack_key(&right_node, scope))
         {
             return Ok(Typed::scalar(
