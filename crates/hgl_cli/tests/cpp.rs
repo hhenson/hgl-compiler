@@ -1984,7 +1984,7 @@ fn operator_instance_results_take_their_context_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
