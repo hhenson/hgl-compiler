@@ -48,7 +48,7 @@ one executable for each test module or application
 
 | HGL | C++ |
 | --- | --- |
-| Module | One translation unit and one header; its generic instances with it, collected for the whole program before anything is written |
+| Module | A declaration header, a types header where needed, and a translation unit for its definitions and generic instances. A mixed application and test build may add a `test-mod-<module>.cpp` unit for its test definitions |
 | Value function, each concrete instance | A function. `var` parameters are references; a `let` or a parameter is a `const` reference; a copy is made where the copy rule says and nowhere else |
 | Scalars | hgraph's `Int`, `Float`, `Bool`, `Str`, `Bytes`, `Date`, `Time`, `DateTime`, `TimeDelta`, `ZonedDateTime` and `Tenor`. Tenor literals keep their calendar or business-day form |
 | Struct | A generated struct with HGL's equality. As a temporal value, a nominal bundle whose whole value is the struct |
@@ -112,10 +112,11 @@ SDK with Arrow and `graph_wiring.h`, as before):
 | Whole suite (about 135 modules), 12 jobs, estimated from the trial | 40 to 55 s |
 | Whole suite on a four-core CI runner, estimated | about 100 s |
 
-The driver keeps these by: one unit for each module; `libhglrt` and core's
-instances built once for an SDK; a precompiled header of the fixed include
-set; one executable for each test module with its cases chosen when it
-runs; `ninja` for what changed; `lld` on Linux. A rejection case never
+The driver compiles production module units in an ordinary build and adds
+test units and entries when requested. It builds `libhglrt` and core's
+instances once for an SDK and precompiles the fixed include set. A test
+executable runs the cases requested for its module. `ninja` rebuilds changed
+inputs, and `lld` links on Linux. A rejection case never
 builds. A unit with no precompiled header still takes about twice as long
 as one against it, so the header stays.
 

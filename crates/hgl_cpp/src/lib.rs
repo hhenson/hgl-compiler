@@ -100,6 +100,8 @@ pub struct Output {
 pub struct Unit {
     /// The module's path.
     pub module: String,
+    /// Whether the unit holds only the module's test definitions (TST-2).
+    pub test_only: bool,
     /// The unit's file, one of [`Output::files`].
     pub source: String,
     /// Its header's file, which the units that call into the module
@@ -311,6 +313,7 @@ pub fn transpile_with_positions(
             source: Some(position),
             debugger: false,
         },
+        true,
         diagnostics,
     )
 }
@@ -329,6 +332,27 @@ pub fn transpile_for_debugger(
             source: Some(position),
             debugger: true,
         },
+        true,
+        diagnostics,
+    )
+}
+
+/// Writes production units with source positions for the driver (TST-2).
+/// When debugging, also marks the ends of HGL functions.
+pub fn transpile_production(
+    program: &Program,
+    position: SourcePosition,
+    debugger: bool,
+    diagnostics: &mut Diagnostics,
+) -> Output {
+    transpile_with(
+        program,
+        &runtime::provides,
+        Positions {
+            source: Some(position),
+            debugger,
+        },
+        false,
         diagnostics,
     )
 }
@@ -356,6 +380,7 @@ pub fn transpile_for(
             source: file_name.map(|_| &position as SourcePosition),
             debugger: false,
         },
+        true,
         diagnostics,
     )
 }
@@ -370,6 +395,7 @@ fn transpile_with(
     program: &Program,
     provides: &dyn Fn(&str) -> bool,
     positions: Positions<'_>,
+    include_tests: bool,
     diagnostics: &mut Diagnostics,
 ) -> Output {
     let core = program.core();
@@ -403,7 +429,7 @@ fn transpile_with(
             }
         })
         .collect();
-    let (output, blocking) = assemble::output(program, &written);
+    let (output, blocking) = assemble::output(program, &written, include_tests);
     // A piece of the program that reaches a piece of core's that is not
     // written is reported with what that piece lacks, once.
     for diagnostic in blocking {

@@ -23,9 +23,11 @@ analyser: done
 
 transpiler: partial
 
-- Application entry units link reachable production pieces. A mixed build writes
-  test bodies, helpers and test-only instances to separate objects. Named tests
-  have separate entry units and their own runnable dependency set. Test-local types and
+- A plain build or run writes and compiles production units alone. A mixed
+  build includes both a runnable application and tests. It writes test bodies,
+  helpers and test-only instances to separate `test-mod-` objects. An
+  application entry links reachable production units. A module's test entry
+  links its own runnable dependency set. Test-local types and
   callables have distinct generated identities. Generic instances retain the
   test candidates that answer their requirements (GEN-16). Calls within a test get separate instance identities so their candidate scope cannot change production.
 - Left: Modules in a mixed build share declaration headers across their

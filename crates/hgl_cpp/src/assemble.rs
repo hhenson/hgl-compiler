@@ -50,7 +50,11 @@ struct Blocks {
 /// `written`, and the form that blocks each piece of a module other
 /// than core's that is blocked by a piece it names: core's pieces are
 /// reported where the program reaches them.
-pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Diagnostic>) {
+pub(crate) fn output(
+    program: &Program,
+    written: &[Written],
+    include_tests: bool,
+) -> (Output, Vec<Diagnostic>) {
     let core = program.core();
     // What each piece a declaration or an instance is written as
     // reaches: the declaration's own, and the instance's.
@@ -95,10 +99,11 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
     // TST-2: an application and a test built together may use different
     // instances of a declaration. Classify the instances reached by ordinary
     // declarations and applications before adding the test roots.
-    let split_tests = written
-        .iter()
-        .zip(&blocks)
-        .any(|(module, blocked)| module.application.is_some() && blocked.application.is_none());
+    let split_tests = include_tests
+        && written
+            .iter()
+            .zip(&blocks)
+            .any(|(module, blocked)| module.application.is_some() && blocked.application.is_none());
     let mut production = Vec::new();
     let mut testing = Vec::new();
     for (index, (module, blocked)) in written.iter().zip(&blocks).enumerate() {
@@ -108,13 +113,13 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             .zip(&blocked.declarations)
             .enumerate()
         {
-            if blocked.is_none() {
-                let roots =
-                    if split_tests && program.modules[index].declarations[declaration].test_only {
-                        &mut testing
-                    } else {
-                        &mut production
-                    };
+            let test_only = program.modules[index].declarations[declaration].test_only;
+            if blocked.is_none() && (include_tests || !test_only) {
+                let roots = if split_tests && test_only {
+                    &mut testing
+                } else {
+                    &mut production
+                };
                 roots.extend(piece.reach.uses.iter().cloned());
             }
         }
@@ -123,9 +128,11 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
         {
             production.extend(piece.reach.uses.iter().cloned());
         }
-        for (piece, blocked) in module.tests.iter().zip(&blocked.tests) {
-            if blocked.is_none() {
-                testing.extend(piece.reach.uses.iter().cloned());
+        if include_tests {
+            for (piece, blocked) in module.tests.iter().zip(&blocked.tests) {
+                if blocked.is_none() {
+                    testing.extend(piece.reach.uses.iter().cloned());
+                }
             }
         }
     }
@@ -134,11 +141,13 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
     let production_reached = split_tests.then(|| reached.clone());
     follow_uses(testing, &mut reached, pieces);
     let test_only = |used: &Used| {
-        production_reached.as_ref().is_some_and(|production| {
-            let (module, declaration, instance) = used;
-            program.modules[*module].declarations[*declaration].test_only
-                || (instance.is_some() && !production.contains(used))
-        })
+        let (module, declaration, instance) = used;
+        ((!include_tests || split_tests)
+            && program.modules[*module].declarations[*declaration].test_only)
+            || (instance.is_some()
+                && production_reached
+                    .as_ref()
+                    .is_some_and(|production| !production.contains(used)))
     };
     let mut files = Vec::new();
     let mut units = Vec::new();
@@ -173,8 +182,9 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
                             .then(|| (test_only(&used), piece, blocked))
                     }),
             )
-            .filter(|(_, piece, blocked)| {
-                blocked.is_none()
+            .filter(|(test_only, piece, blocked)| {
+                (include_tests || !test_only)
+                    && blocked.is_none()
                     && !(piece.text.is_empty()
                         && piece.declaration.is_empty()
                         && piece.layout.is_none())
@@ -185,7 +195,7 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             .tests
             .iter()
             .enumerate()
-            .filter(|(test, _)| blocks[index].tests[*test].is_none())
+            .filter(|(test, _)| include_tests && blocks[index].tests[*test].is_none())
             .collect();
         // An application's run statement, where it is clear (UNIT-14).
         let application = module
@@ -306,6 +316,7 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             });
             units.push(Unit {
                 module: path.clone(),
+                test_only: tests_only,
                 source,
                 header: module_header.clone(),
             });
@@ -317,7 +328,7 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
     // each unit whole, so every function needs what it calls.
     let mut executables = Vec::new();
     let mut tests = Vec::new();
-    for (index, module) in written.iter().enumerate() {
+    for (index, module) in written.iter().enumerate().filter(|_| include_tests) {
         let declared = &program.modules[index];
         let clear: Vec<(usize, &Piece)> = module
             .tests
@@ -414,7 +425,13 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             .declarations
             .iter()
             .zip(&blocks[index].declarations)
-            .chain(module.tests.iter().zip(&blocks[index].tests))
+            .chain(
+                module
+                    .tests
+                    .iter()
+                    .zip(&blocks[index].tests)
+                    .filter(|_| include_tests),
+            )
             .chain(module.application.iter().zip([&blocks[index].application]))
             .chain(
                 module

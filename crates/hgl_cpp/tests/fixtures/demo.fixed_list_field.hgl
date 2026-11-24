@@ -1,0 +1,35 @@
+module demo.fixed_list_field
+
+struct Book {
+    top: i64
+    levels: list<i64, 2>
+}
+
+# TIME-1: validity of the selected position admits its payload even
+# though the list field is never all valid.
+fn guarded(book: Book) -> i64 {
+    when valid(book.levels[1]) { return book.levels[1] }
+}
+
+test a_guarded_position_reads_only_its_endpoint {
+    assert eval guarded(book: [
+        delta<Book>(top: 3),
+        delta<Book>(levels: delta<list<i64, 2>>(updated: [1: 5])),
+        delta<Book>(top: 1),
+    ]) == [_, 5, 5]
+}
+
+# FN-19: the fitted temporal pack entry supplies the same struct and list views.
+fn guarded_pack<...As>(items: ...As) -> i64 {
+    when valid(items[0].levels[1]) { return items[0].levels[1] }
+}
+
+fn fitted(book: Book) -> i64 => guarded_pack(book)
+
+test the_fitted_pack_reads_the_same_position {
+    assert eval fitted(book: [
+        delta<Book>(top: 3),
+        delta<Book>(levels: delta<list<i64, 2>>(updated: [1: 5])),
+        delta<Book>(top: 1),
+    ]) == [_, 5, 5]
+}
