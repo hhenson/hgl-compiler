@@ -66,6 +66,7 @@ docs: done
 docs: done
 
 - HTML links a code span found in its comment's scope to the named declaration, when present in the site
+- Declaration links use the declared name, with a suffix for repeated names. Module filenames use the module name, including when the name needs a shorter filename.
 
 ## SDOC-9
 
