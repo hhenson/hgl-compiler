@@ -230,6 +230,15 @@ pub(crate) fn output(program: &Program, written: &[Written]) -> (Output, Vec<Dia
             ));
         }
         let mut unit = format!("{WRITTEN}\n#include \"{}\"\n", header_name(path));
+        if defined
+            .iter()
+            .copied()
+            .chain(tests.iter().map(|(_, piece)| *piece))
+            .chain(application)
+            .any(|piece| piece.formatting)
+        {
+            unit.push_str("#include <hglrt/formatting.h>\n");
+        }
         for &used in &included {
             unit.push_str(&format!(
                 "#include \"{}\"\n",

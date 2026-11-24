@@ -107,6 +107,7 @@ impl Typer<'_> {
                 callee: Callee::DeferredPackCall,
                 arguments: Vec::new(),
                 form: Form::Named,
+                text: None,
                 braced: Vec::new(),
                 lifted: false,
             },
@@ -615,6 +616,7 @@ impl ForwardingInstance {
             functions: &self.functions,
             type_packs: &self.type_packs,
             pack_inputs: Some(&self.pack_inputs),
+            ..crate::InstanceInputs::default()
         }
     }
 }

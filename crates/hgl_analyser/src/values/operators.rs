@@ -1719,6 +1719,7 @@ impl<'a> Typer<'a> {
             callee: Callee::Unread,
             arguments,
             form,
+            text: None,
             braced: Vec::new(),
             lifted: false,
         }

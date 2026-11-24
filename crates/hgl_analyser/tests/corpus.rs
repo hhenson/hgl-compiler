@@ -69,12 +69,7 @@ const PENDING_MODULES: &[(&str, &str, &str)] = &[
     (
         "hgl_core/spec/formatting.md",
         "examples.formatting",
-        "FMT-1 to FMT-6 (#434)",
-    ),
-    (
-        "hgl_core/spec/output.md",
-        "examples.output",
-        "OUT-1, OUT-2 and FMT-1 (#434)",
+        "FMT-6 and FMT-8 graph candidate (#434)",
     ),
     (
         "hgl_core/spec/mapping.md",

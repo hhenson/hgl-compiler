@@ -523,6 +523,17 @@ impl<'a> Typer<'a> {
             Type::Nullable(inner) if present => inner.as_ref().clone(),
             ty => ty.clone(),
         };
+        if let Some((_, value)) = self
+            .const_inputs
+            .iter()
+            .find(|(parameter, _)| *parameter == self.locals[local].at)
+        {
+            return Expr {
+                at,
+                ty,
+                ..value.clone()
+            };
+        }
         let kind = if present && !whole(&ty) && self.deferred_presence(local) {
             ExprKind::DeferredPresent(local)
         } else {

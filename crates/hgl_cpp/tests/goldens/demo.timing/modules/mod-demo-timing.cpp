@@ -68,6 +68,7 @@
 #undef second
 #undef shortened
 #undef the_wake_delivered_is_pending_no_longer
+#undef ticked
 #undef ticker
 #undef time_before_each_delay
 #undef times

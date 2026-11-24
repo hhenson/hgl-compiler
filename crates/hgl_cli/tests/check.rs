@@ -366,7 +366,7 @@ fn the_conformance_cases_are_one_module() {
     assert!(
         stdout.contains(&format!(
             "rejection cases: {} passed, {} failed\n",
-            25 - listed.len(),
+            44 - listed.len(),
             listed.len()
         )),
         "{stdout}"
@@ -424,7 +424,7 @@ fn core_is_supplied_when_the_roots_hold_none() {
     let stdout = text(&own.stdout);
     assert!(own.status.success(), "{}", text(&own.stderr));
     assert!(
-        stdout.contains("checked 8 files in 2 modules: no errors\n"),
+        stdout.contains("checked 10 files in 2 modules: no errors\n"),
         "{stdout}"
     );
     assert!(stdout.contains("module core\n"), "{stdout}");

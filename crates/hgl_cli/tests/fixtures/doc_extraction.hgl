@@ -1,0 +1,44 @@
+module extraction_check
+
+export const answer: i64 = { 42 }
+export struct Panel { count: i64 = { 42 } }
+export const fn closed_header() -> i64 { return 42 }
+test named_header { assert true }
+
+/** Presents a value.
+Args:
+    value: First paragraph.
+
+        | Key | Value |
+        | --- | ----- |
+        | one | two   |
+
+        - Item
+          Second line
+
+        ~~~hgl no-run
+        assert true
+        ~~~
+
+        Last paragraph.
+Options:
+
+    - Preserve the option as a list.
+Rules:
+    SDOC-7.
+Status:
+    Covered.
+Notes for display:
+
+    A custom section.
+*/
+export const fn describe_value(value: i64) -> i64 => value
+
+/** Examples:
+    ~~~hgl
+    assert false
+    ~~~
+Notes:
+    The same-line heading remains prose in the model.
+*/
+export const prose_example: i64 = 42

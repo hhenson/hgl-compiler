@@ -1302,19 +1302,15 @@ impl Emitter<'_> {
             ""
         };
         let prototype = format!("{result} {}({})", placed.name, parameters.join(", "));
-        // hgraph issue 1866: a node whose configuration holds an `f64` is
-        // wired as a node of its own (`unique`).
-        let configured: Vec<&Type> = signature
-            .parameters
-            .iter()
-            .filter(|parameter| parameter.constant)
-            .map(|parameter| &parameter.ty)
-            .collect();
+        // Keep each opaque configuration containing an `f64` distinct.
+        let opaque_float = signature.parameters.iter().any(|parameter| {
+            parameter.constant && opaque_float_configuration(program, &parameter.ty)
+        });
         let called = match wired
             .strip_prefix("::hgraph::wire<")
             .and_then(|node| node.strip_suffix('>'))
         {
-            Some(node) if configured.iter().any(|ty| holds_f64(program, ty, 0)) => {
+            Some(node) if opaque_float => {
                 let node_schema =
                     form.map_or(schema.as_deref(), |(forms, _)| Some(forms.schema.as_str()));
                 unique(node, node_schema, &wired_arguments)
@@ -1411,11 +1407,17 @@ impl Emitter<'_> {
     }
 }
 
+/// True where a configuration of `ty` can hide an `f64` from hgraph's
+/// wiring comparison. hgraph distinguishes the signs of native Float zeros.
+pub(super) fn opaque_float_configuration(program: &hgl_analyser::Program, ty: &Type) -> bool {
+    !matches!(ty, Type::Scalar(hgl_analyser::Scalar::F64)) && holds_f64(program, ty, 0)
+}
+
 /// True where a value of `ty` holds an `f64`: is one, or holds one in a
 /// tuple, a list, a set, a dictionary, an optional, a result, a delta, or
 /// a field of a struct, at any depth up to the analyser's bound of a
 /// type's depth.
-pub(super) fn holds_f64(program: &hgl_analyser::Program, ty: &Type, depth: usize) -> bool {
+fn holds_f64(program: &hgl_analyser::Program, ty: &Type, depth: usize) -> bool {
     if depth > 32 {
         return true;
     }
@@ -1440,12 +1442,9 @@ pub(super) fn holds_f64(program: &hgl_analyser::Program, ty: &Type, depth: usize
 /// `schema`, where it has one. An expression, a lambda called where it
 /// is written.
 ///
-/// hgraph issue 1866: hgraph takes two nodes for one where their scalar
-/// configurations are equal under `==`, which holds of `0.0` and `-0.0`
-/// though NUM-2 keeps them apart ("preserves IEEE special values,
-/// including signed zero"). A node whose configuration holds an `f64` is
-/// wired so until hgraph tells the two apart, as the runtime library
-/// wires its constants (`hglrt::constant`).
+/// hgraph distinguishes native Float zero signs but still uses `==` for
+/// opaque HGL configurations. The runtime library takes the same care
+/// when wiring constants (`hglrt::constant`, NUM-2).
 pub(super) fn unique(
     node: &str,
     schema: Option<&str>,
@@ -1453,7 +1452,7 @@ pub(super) fn unique(
 ) -> String {
     let wiring = super::graphs::WIRING;
     let mut text = format!(
-        "[&]() {{\n{INDENT}{INDENT}// hgraph issue 1866: wired as a node of its own, since hgraph would take\n{INDENT}{INDENT}// two whose configurations hold `0.0` and `-0.0` for one.\n"
+        "[&]() {{\n{INDENT}{INDENT}// Keep signed zeros in opaque configurations distinct (NUM-2).\n"
     );
     text.push_str(&format!(
         "{INDENT}{INDENT}::hgraph::Value scalars_{{::hgraph::value_type_for_wiring(::hgraph::StaticNodeSignature<{node}>::scalar_schema(), {wiring}.realization_options())}};\n"

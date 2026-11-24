@@ -949,6 +949,7 @@ impl<'a> Typer<'a> {
                 },
                 arguments,
                 form: Form::Named,
+                text: None,
                 braced: Vec::new(),
                 lifted: false,
             },
@@ -1154,14 +1155,15 @@ impl<'a> Typer<'a> {
             })
             .collect();
         let result = signature.result.as_ref().map_or(Type::Unknown, project);
-        let kind = ExprKind::Call {
+        let mut kind = ExprKind::Call {
             callee: target,
             arguments,
             form: Form::Named,
+            text: None,
             braced: Vec::new(),
             lifted: false,
         };
-        self.finished_call(&kind, false);
+        self.finished_call(&mut kind, false);
         (kind, result)
     }
 
