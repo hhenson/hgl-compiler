@@ -32,6 +32,7 @@
 #undef counted_all
 #undef counts
 #undef demo
+#undef dictionary
 #undef edit_book
 #undef entry_x
 #undef fill

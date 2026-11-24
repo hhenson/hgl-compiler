@@ -25,6 +25,7 @@
 #undef chosen
 #undef core
 #undef demo
+#undef dictionary
 #undef entry_a
 #undef flag
 #undef follow
