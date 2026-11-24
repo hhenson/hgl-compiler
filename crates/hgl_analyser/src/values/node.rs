@@ -771,10 +771,8 @@ impl<'a> Typer<'a> {
         needs_all_valid: bool,
         packed: Option<(Option<hir::PackKey>, String)>,
     ) {
-        let name = packed.as_ref().map_or_else(
-            || self.locals[local].name.clone(),
-            |(_, written)| written.clone(),
-        );
+        let is_packed = packed.is_some();
+        let (key, name) = packed.unwrap_or_else(|| (None, self.locals[local].name.clone()));
         if self.initializing {
             self.diagnostics.emit(error(
                 Category::Phase,
@@ -823,7 +821,7 @@ impl<'a> Typer<'a> {
         // is a test of `all_valid` of what it reads". TIME-9: `valid` of
         // a collection "admits no child's read", and a whole read is one
         // of every child.
-        if packed.is_some()
+        if is_packed
             && self.present.iter().any(|fact| {
                 matches!(fact, Fact::DeferredPackGuard { pack, all_valid }
                 if *pack == local && (!needs_all_valid || *all_valid))
@@ -832,9 +830,7 @@ impl<'a> Typer<'a> {
             // The instance resolves its selector before it checks this read.
             return;
         }
-        let pack_path = packed
-            .and_then(|(key, _)| key)
-            .map(|key| children::ChildPath::pack_entry(local, key));
+        let pack_path = key.map(|key| children::ChildPath::pack_entry(local, key));
         let valid = pack_path
             .as_ref()
             .map_or(Fact::Valid(local), |path| Fact::ChildValid(path.clone()));

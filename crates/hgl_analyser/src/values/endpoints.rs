@@ -4,7 +4,7 @@
 //! Part of the typing pass ([`super`]); a child of a collection named as
 //! an endpoint is read in [`super::children`].
 
-use hgl_diagnostics::{Category, Location};
+use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::calls::arguments_of;
@@ -281,17 +281,8 @@ impl<'a> Typer<'a> {
             && let Some(inputs) = &inputs
         {
             for &input in inputs {
-                self.diagnostics.emit(error(
-                    Category::Phase,
-                    codes::INPUT_LIFECYCLE,
-                    at,
-                    format!(
-                        "`{}` cannot change the activity of `{}` in `stop`: every input is passive",
-                        operation.name(),
-                        self.locals[input].name
-                    ),
-                    "TIME-5",
-                ));
+                self.diagnostics
+                    .emit(activity_in_stop(operation, at, &self.locals[input].name));
             }
         }
         // TIME-9: "`all_valid` takes only a collection or a window;
@@ -305,7 +296,8 @@ impl<'a> Typer<'a> {
             for (input, given) in inputs.iter().zip(&arguments) {
                 let ty = &self.locals[*input].ty;
                 if !all_valid_shape(ty) {
-                    self.invalid_all_valid_shape(&ty.clone(), self.at(given));
+                    self.diagnostics
+                        .emit(invalid_all_valid_shape(ty, self.at(given)));
                 }
             }
         }
@@ -382,21 +374,6 @@ impl<'a> Typer<'a> {
             | EndpointOperation::Passivate => Type::Unknown,
         };
         (ExprKind::Endpoint { operation, inputs }, ty)
-    }
-
-    fn invalid_all_valid_shape(&mut self, ty: &Type, at: Location) {
-        self.diagnostics.emit(
-            error(
-                Category::Phase,
-                codes::ENDPOINT_ARGUMENT,
-                at,
-                format!("`all_valid` takes a collection or a window, and `{ty}` is neither"),
-                "TIME-9",
-            )
-            .with_note(
-                "a collection is a list, a tuple, a struct or a dictionary; a window is a `rolling_window`",
-            ),
-        );
     }
 
     /// FN-19: a direct selection of one of this node's temporal inputs.
@@ -494,19 +471,12 @@ impl<'a> Typer<'a> {
                     EndpointOperation::Activate | EndpointOperation::Passivate
                 )
             {
-                self.diagnostics.emit(error(
-                    Category::Phase,
-                    codes::INPUT_LIFECYCLE,
-                    at,
-                    format!(
-                        "`{}` cannot change the activity of `{written}` in `stop`: every input is passive",
-                        operation.name(),
-                    ),
-                    "TIME-5",
-                ));
+                self.diagnostics
+                    .emit(activity_in_stop(operation, at, &written));
             }
             if operation == EndpointOperation::AllValid && !all_valid_shape(&input.ty) {
-                self.invalid_all_valid_shape(&input.ty, input.at);
+                self.diagnostics
+                    .emit(invalid_all_valid_shape(&input.ty, input.at));
             }
             inputs.push(input);
         }
@@ -980,5 +950,32 @@ fn all_valid_shape(ty: &Type) -> bool {
             | Type::RollingWindow { .. }
             | Type::Parameter { .. }
             | Type::Unknown
+    )
+}
+
+fn invalid_all_valid_shape(ty: &Type, at: Location) -> Diagnostic {
+    error(
+        Category::Phase,
+        codes::ENDPOINT_ARGUMENT,
+        at,
+        format!("`all_valid` takes a collection or a window, and `{ty}` is neither"),
+        "TIME-9",
+    )
+    .with_note(
+        "a collection is a list, a tuple, a struct or a dictionary; a window is a `rolling_window`",
+    )
+}
+
+/// TIME-5: every input is passive in `stop`.
+fn activity_in_stop(operation: EndpointOperation, at: Location, input: &str) -> Diagnostic {
+    error(
+        Category::Phase,
+        codes::INPUT_LIFECYCLE,
+        at,
+        format!(
+            "`{}` cannot change the activity of `{input}` in `stop`: every input is passive",
+            operation.name(),
+        ),
+        "TIME-5",
     )
 }
