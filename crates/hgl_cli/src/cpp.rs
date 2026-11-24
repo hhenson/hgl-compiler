@@ -35,7 +35,7 @@ use results::{Said, read_results};
 use sdk::{Description, Toolchain};
 use stamp::{PreviousBuild, Stamp};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) use build::native_build_child;
 pub(super) use commands::{build, run};
 pub(super) use plan::CaseOutcome;
