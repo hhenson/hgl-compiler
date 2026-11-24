@@ -227,10 +227,6 @@ void format_float_text(str& output, f64 value, TextPadding padding,
         output.append(text, sign_width);
         return;
     }
-    // Numeric zero padding of a non-finite value uses spaces.
-    if (!std::isfinite(value) && padding.fill == "0") {
-        padding.fill = " ";
-    }
     format_text(output, text, padding, std::nullopt);
 }
 

@@ -91,6 +91,11 @@ test text_layout {
     assert format("{:06}", -3.0) == "-003.0"
     assert format("{:+06}", 3.0) == "+003.0"
     assert format("{:>06}", 3.0) == "   3.0"
+    let infinity = 1.0 / 0.0
+    assert format("{:06}", infinity) == "   inf"
+    assert format("{:0>6}", infinity) == "000inf"
+    assert format("{:0^7}", infinity) == "00inf00"
+    assert format("{:0<6}", infinity) == "inf000"
     assert format("{:>6.1f}", 3.0) == "   3.0"
 }
 
