@@ -37,10 +37,8 @@ fn lexical_call(tick: i64) -> i64 {
         let local = saved
         1 + doubled(1 + local)
     })
-    let temporal = doubled({
-        let local = tick
-        1 + doubled(1 + local)
-    })
+    let local = tick
+    let temporal = doubled(1 + doubled(1 + local))
     return scalar + temporal
 }
 
