@@ -5111,7 +5111,7 @@ fn call_role_preferences_run_on_the_sdk() {
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
         stdout.ends_with(
-            "rejection cases: 3 passed, 0 failed\nexecutable cases: 12 passed, 0 failed, 0 not run\n"
+            "rejection cases: 3 passed, 0 failed\nexecutable cases: 13 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );
