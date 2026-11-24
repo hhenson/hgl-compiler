@@ -46,9 +46,11 @@ transpiler: done
 
 transpiler: partial
 
-- Applications and evals start a fresh run and use its own store and lifecycle. Failures
-  retain runtime provenance and trigger cleanup.
-- Left: Construction and stop failures have the provenance limits under CRUN-6.
+- Applications and evals start a fresh run with its own store and lifecycle.
+  Start, evaluation and stop failures retain the node and phase, and the run
+  cleans up after failure.
+- Left: A graph construction failure can report its code and source location
+  without the construction phase (CRUN-6, #816).
 
 ## RUN-5
 
