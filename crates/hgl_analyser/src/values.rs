@@ -1229,4 +1229,7 @@ enum Fact {
     ChildValid(children::ChildPath),
     /// A guard selects an entry, but its key needs the instance (GEN-7).
     DeferredPackGuard { pack: LocalId, all_valid: bool },
+    /// A guard names a child of this entry before its shape is fitted.
+    /// The instance still checks the child's own admission (TIME-4, GEN-7).
+    DeferredChildGuard { pack: LocalId, key: hir::PackKey },
 }

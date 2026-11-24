@@ -241,7 +241,13 @@ impl<'a> Typer<'a> {
             )
         {
             let reported = self.diagnostics.len();
-            if let Some(found) = self.child_endpoint(only) {
+            let guard = matches!(
+                operation,
+                EndpointOperation::Valid
+                    | EndpointOperation::Modified
+                    | EndpointOperation::AllValid
+            );
+            if let Some(found) = self.read_child_endpoint(only, guard) {
                 return self.child_operation(operation, at, only, found, reported);
             }
         }
