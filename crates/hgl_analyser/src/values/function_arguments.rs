@@ -638,14 +638,13 @@ impl<'a> Typer<'a> {
             ) {
                 return None;
             }
-            if let Some(written) = type_packs
+            // GEN-8: an explicit pack decides the referenced function's
+            // type. Keep it through declared_target so the final FN-17
+            // template check reports both complete function types.
+            if !type_packs
                 .iter()
-                .find(|pack| pack.parameter == captured.parameter)
+                .any(|written| written.parameter == captured.parameter)
             {
-                if written.types != captured.types {
-                    return None;
-                }
-            } else {
                 type_packs.push(captured);
             }
         }

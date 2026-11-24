@@ -33,13 +33,11 @@ struct Pending {
 
 const DIAGNOSTICS: &str = "hgl_core/spec/diagnostics.md";
 
-const PENDING: &[Pending] = &[
-    Pending {
-        file: DIAGNOSTICS,
-        opening: "export operator debug_print<...As, ...Ks>(",
-        reason: "FN-19 pack spreading (#434)",
-    },
-];
+const PENDING: &[Pending] = &[Pending {
+    file: DIAGNOSTICS,
+    opening: "export operator debug_print<...As, ...Ks>(",
+    reason: "FN-19 pack spreading (#434)",
+}];
 
 #[test]
 fn the_specification_corpus_parses_cleanly() {

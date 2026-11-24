@@ -25,7 +25,7 @@ use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, GenericKind, GenericParameter, Pack,
     Parameter, Signature, Type,
 };
-use crate::{codes, error};
+use crate::{Program, codes, error};
 
 impl<'a> Typer<'a> {
     /// FN-17 and GEN-2: the type of the function given can complete its
@@ -657,6 +657,7 @@ impl<'a> Typer<'a> {
             ));
         }
         let mut late = std::collections::HashSet::new();
+        let mut tuple_evidence = Vec::new();
         for &position in &order {
             let Assigned {
                 slot, value: node, ..
@@ -705,6 +706,9 @@ impl<'a> Typer<'a> {
                 let actual = this.inferred_from(listed, value, takes);
                 let actual =
                     this.inference_input(pattern, &actual, generics, found, *result_fallback);
+                if matches!(pattern, Type::Tuple(_)) {
+                    tuple_evidence.push((pattern, actual.clone()));
+                }
                 if let Some(generic) = widenable {
                     if let Some(Argument::Type(decided)) = &found[generic]
                         && this.widens(decided, actual)
@@ -898,6 +902,14 @@ impl<'a> Typer<'a> {
                 infer(patterns[index], &value.ty, generics, &mut found);
             }
         }
+        // GEN-3: later tuple evidence can determine a partition that an
+        // earlier argument could not yet split. Reuse settled input types;
+        // do not reread literals or change GEN-2 argument precedence.
+        let tuple_inputs = tuple_evidence
+            .iter()
+            .map(|(pattern, actual)| (*pattern, actual))
+            .collect::<Vec<_>>();
+        settle_tuple_inputs(&tuple_inputs, generics, &mut found);
         for pack in tuple_pack_bindings(generics, &mut found, &self.signature.generics) {
             self.check_tuple_pack(
                 Location::new(self.file, name.span()),
@@ -1179,13 +1191,13 @@ impl<'a> Typer<'a> {
         generic: &GenericParameter,
         pack: &hir::TypePackArgument,
     ) -> bool {
-        if tuple_pack_fits(pack, generic, &self.signature.generics) {
+        if tuple_pack_fits(pack, generic, &self.signature.generics, self.program) {
             return true;
         }
         let GenericKind::Pack { minimum, maximum } = generic.kind else {
             return true;
         };
-        let (lower, upper) = tuple_pack_cardinality(pack, &self.signature.generics);
+        let (lower, upper) = tuple_pack_cardinality(pack, &self.signature.generics, self.program);
         if upper == Some(lower) {
             self.check_pack_count_at(at, &generic.name, (minimum, maximum), lower);
         } else {
@@ -1418,10 +1430,35 @@ fn infer_tuple(
     }
 }
 
+/// GEN-3: revisit only tuple equations until no new generic is bound.
+/// Each pass adds a binding or terminates; it never guesses a partition.
+pub(super) fn settle_tuple_inputs(
+    inputs: &[(&Type, &Type)],
+    generics: &[GenericParameter],
+    found: &mut [Option<Argument>],
+) {
+    loop {
+        let before = found.iter().filter(|argument| argument.is_some()).count();
+        for (pattern, actual) in inputs {
+            if generics.iter().zip(found.iter()).any(|(generic, value)| {
+                value.is_none()
+                    && matches!(generic.kind, GenericKind::Pack { .. })
+                    && mentions(pattern, &[generic.at])
+            }) {
+                infer(pattern, actual, generics, found);
+            }
+        }
+        if before == found.iter().filter(|argument| argument.is_some()).count() {
+            break;
+        }
+    }
+}
+
 /// The length range of a tuple capture, including repeated forwarded packs.
 fn tuple_pack_cardinality(
     pack: &hir::TypePackArgument,
     enclosing: &[GenericParameter],
+    program: &Program,
 ) -> (u64, Option<u64>) {
     pack.types
         .iter()
@@ -1431,7 +1468,10 @@ fn tuple_pack_cardinality(
                     .iter()
                     .find(|generic| generic.at == *at)
                     .and_then(|generic| match generic.kind {
-                        GenericKind::Pack { minimum, maximum } => Some((minimum, maximum)),
+                        GenericKind::Pack { minimum, maximum } => {
+                            super::requirements::type_pack_bounds(program, generic.at)
+                                .or(Some((minimum, maximum)))
+                        }
                         _ => None,
                     }),
                 _ => None,
@@ -1451,11 +1491,12 @@ pub(super) fn tuple_pack_fits(
     pack: &hir::TypePackArgument,
     generic: &GenericParameter,
     enclosing: &[GenericParameter],
+    program: &Program,
 ) -> bool {
     let GenericKind::Pack { minimum, maximum } = generic.kind else {
         return true;
     };
-    let (lower, upper) = tuple_pack_cardinality(pack, enclosing);
+    let (lower, upper) = tuple_pack_cardinality(pack, enclosing, program);
     lower >= minimum && maximum.is_none_or(|maximum| upper.is_some_and(|upper| upper <= maximum))
 }
 

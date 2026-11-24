@@ -303,3 +303,138 @@ fn a_decisive_false_each_also_needs_an_element() {
         "{inner}const fn outer<...Us{{1:*}}>(x: tuple<i64, Us>) -> bool requires each U in types(Us) {{ !(U in struct) }} => inner(x)"
     ));
 }
+
+#[test]
+fn tuple_indices_select_members_not_pack_markers() {
+    // GEN-7, GEN-10, EXPR-7: one indexed value is never an entire pack.
+    rejects(
+        "module m\nconst fn last<T, ...Ts>(value: tuple<Ts, T>) -> T => value[1]",
+        "type/tuple.index",
+    );
+    rejects(
+        "module m\nconst fn first_only<...Ts>(value: tuple<Ts>) -> tuple<Ts> => (value[0],)",
+        "type/type.mismatch",
+    );
+    accepts(
+        "module m\nconst fn second<...Ts{2}>(value: tuple<Ts>) -> bool { let y = value[1]\n return true }\ntest t { assert second((1, \"a\")) }",
+    );
+    rejects(
+        "module m\nconst fn third<...Ts{2}>(value: tuple<Ts>) -> bool { let y = value[2]\n return true }",
+        "type/tuple.index",
+    );
+    accepts(
+        "module m\nconst fn tail<T, ...Ts{1}>(value: tuple<Ts, T>) -> T => value[1]\ntest t { assert tail((1, \"a\")) == \"a\" }",
+    );
+}
+
+#[test]
+fn sole_tuple_pack_nonemptiness_also_proves_cardinality() {
+    // GEN-10: the same effective bounds govern witnesses and pack lengths.
+    let inner = "module m\nconst fn inner<...Ts{1:*}>(value: tuple<Ts>) -> bool => true\n";
+    accepts(&format!(
+        "{inner}const fn outer<...Us>(value: tuple<Us>) -> bool => inner(value)"
+    ));
+    rejects(
+        &format!(
+            "{inner}const fn outer<...Us>(value: tuple<i64, Us>) -> bool => inner_tail(value)\nconst fn inner_tail<...Vs{{1:*}}>(value: tuple<i64, Vs>) -> bool => true"
+        ),
+        "type/pack.cardinality",
+    );
+}
+
+#[test]
+fn a_concrete_tuple_component_outranks_a_pack_variable() {
+    // GEN-5, GEN-12: ranking uses declared variables, not inferred scalars.
+    accepts(
+        "module m\noperator shown<T>(value: T) -> str\nimpl const fn shown<...Ts>(value: tuple<Ts>) -> str => \"pack\"\nimpl const fn shown<T>(value: tuple<T, bool>) -> str => \"bool\"\ntest t { assert shown((\"a\", true)) == \"bool\"\n assert shown((1, 2, 3)) == \"pack\" }",
+    );
+}
+
+#[test]
+fn tuple_partition_equations_reach_a_fixed_point() {
+    // GEN-3: later independent evidence can solve an earlier partition.
+    let declarations = "module m\nconst fn later<...As, ...Bs>(joined: tuple<As, Bs>, left: tuple<As>) -> bool => true\nconst fn earlier<...As, ...Bs>(left: tuple<As>, joined: tuple<As, Bs>) -> bool => true\noperator split<J, L>(joined: J, left: L) -> bool\nimpl const fn split<...As, ...Bs>(joined: tuple<As, Bs>, left: tuple<As>) -> bool => true\n";
+    accepts(&format!(
+        "{declarations}test t {{ assert later((1, \"a\", true), (1,))\n assert earlier((1,), (1, \"a\", true))\n assert split((1, \"a\", true), (1,)) }}"
+    ));
+    rejects(
+        &format!("{declarations}test t {{ assert later((\"a\", true), (1,)) }}"),
+        "type/type.mismatch",
+    );
+}
+
+#[test]
+fn requirements_expand_tuple_operands_from_the_capture() {
+    // GEN-3, GEN-10: a captured pack is a sequence even in a requirement.
+    let f = "module m\nconst fn f<...Ts>(x: tuple<Ts>) -> bool requires tuple<Ts> == tuple<i64, str> => true\n";
+    accepts(&format!("{f}test t {{ assert f((1, \"x\")) }}"));
+    rejects(
+        &format!("{f}test t {{ assert f((1, 2)) }}"),
+        "constraint/requires.unmet",
+    );
+}
+
+#[test]
+fn a_nullable_tuple_element_cannot_wrap_a_pack() {
+    // GEN-10: only a direct tuple element expands a sequence of types.
+    rejects(
+        "module m\nconst fn f<...Ts>(x: tuple<Ts?>) -> bool => true",
+        "type/type.not_a_type",
+    );
+    accepts(
+        "module m\nconst fn f<T>(x: tuple<T?>) -> bool => true\ntest t { assert f<i64>((1,)) }",
+    );
+}
+
+#[test]
+fn explicit_callback_pack_conflicts_report_the_two_function_types() {
+    // FN-17, GEN-8: an explicit callback pack must match its receiving template.
+    let f = "module m\nconst fn echo<...Ts>(x: tuple<Ts>) -> tuple<Ts> => x\nconst fn apply(f: const fn(tuple<i64, i64>) -> tuple<i64, i64>, v: tuple<i64, i64>) -> tuple<i64, i64> => f(v)\n";
+    accepts(&format!(
+        "{f}test t {{ assert apply(echo<i64, i64>, (1, 2)) == (1, 2)\n assert apply(echo, (1, 2)) == (1, 2) }}"
+    ));
+    let result = check(&[(
+        "m.hgl",
+        &format!("{f}test t {{ assert apply(f: echo<f64, f64>, v: (1, 2)) == (1, 2) }}"),
+    )]);
+    assert!(
+        result
+            .findings
+            .iter()
+            .any(|finding| finding.code == "type/type.mismatch"),
+        "{}",
+        result.report
+    );
+    assert!(
+        result.report.contains("tuple<f64, f64>") && result.report.contains("tuple<i64, i64>"),
+        "{}",
+        result.report
+    );
+}
+
+#[test]
+fn callback_pack_commitments_cover_singletons_and_named_arguments() {
+    // FN-17, GEN-8: fixed and reflected named arguments keep explicit packs.
+    let f = "module m\nconst fn echo<...Ts>(x: tuple<Ts>) -> tuple<Ts> => x\nconst fn apply(f: const fn(tuple<i64>) -> tuple<i64>, v: tuple<i64>) -> tuple<i64> => f(v)\nconst fn invoke<...Ps, ...As>(f: const fn(...{Ps}) -> tuple<i64>, args: ...{As for f}) -> tuple<i64> requires each k in arg_keys(As) { As[k] == Ps[k] } => f(...args)\n";
+    accepts(&format!(
+        "{f}test t {{ assert apply(echo<i64>, (1,)) == (1,)\n assert apply(echo, (2,)) == (2,)\n assert invoke(echo<i64>, x: (3,)) == (3,)\n assert invoke(echo, x: (4,)) == (4,) }}"
+    ));
+    // #713 tracks a follow-on instance report after this primary
+    // failure. Check the argument mismatch, never the number of reports.
+    for call in ["apply(echo<f64>, (1,))", "invoke(echo<f64>, x: (1,))"] {
+        let source = format!("{f}test t {{ let x = {call} }}");
+        let result = check(&[("m.hgl", &source)]);
+        let mismatch = result
+            .findings
+            .iter()
+            .find(|finding| finding.code == "type/type.mismatch")
+            .unwrap_or_else(|| panic!("{}", result.report));
+        assert!(
+            mismatch.message.contains("const fn")
+                && mismatch.message.contains("tuple<f64>")
+                && mismatch.message.contains("tuple<i64>"),
+            "{}",
+            result.report
+        );
+    }
+}

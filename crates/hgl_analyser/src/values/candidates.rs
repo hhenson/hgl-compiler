@@ -26,7 +26,7 @@ use super::operators::unreadable;
 use super::requirements::{Condition, holds};
 use super::{Candidate, Typer};
 use crate::constant::Fault;
-use crate::declared::{agree, names_parameter, substitute_within};
+use crate::declared::{agree, names_parameter, substitute_with_packs, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
 use crate::syntax::{child, name_token, tokens, ungrouped};
@@ -3166,6 +3166,7 @@ fn candidate_bindings(
     // or its place expects, is not widened (GEN-2).
     let mut by_argument = vec![false; generics.len()];
     let mut type_packs = Vec::new();
+    let mut tuple_inputs = Vec::new();
     for (index, parameter) in signature.parameters.iter().enumerate() {
         if let Type::Function(template) = &parameter.ty
             && let Some(reflects) = &template.named_pack
@@ -3240,6 +3241,9 @@ fn candidate_bindings(
                 found[generic] = Some(Argument::Type(actual.clone()));
                 continue;
             }
+            if matches!(parameter.ty, Type::Tuple(_)) {
+                tuple_inputs.push((&parameter.ty, actual));
+            }
             let before: Vec<bool> = found.iter().map(Option::is_some).collect();
             infer(&parameter.ty, actual, generics, &mut found);
             for (generic, was) in before.into_iter().enumerate() {
@@ -3247,6 +3251,7 @@ fn candidate_bindings(
             }
         }
     }
+    super::inference::settle_tuple_inputs(&tuple_inputs, generics, &mut found);
     for pack in
         super::inference::tuple_pack_bindings(generics, &mut found, &typer.signature.generics)
     {
@@ -3254,6 +3259,7 @@ fn candidate_bindings(
             &pack,
             &generics[pack.parameter],
             &typer.signature.generics,
+            typer.program,
         ) {
             return None;
         }
@@ -3547,6 +3553,44 @@ fn most_specific(selected: &mut Vec<Chosen>, public: &Signature) {
     });
 }
 
+/// GEN-5 and GEN-10: compare tuple components at the admitted arity.
+/// Expanding a pack for ranking repeats its variable, not the concrete
+/// inferred types: inference must not make an unconstrained candidate specific.
+fn ranking_type(chosen: &Chosen<'_>, ty: &Type) -> Type {
+    let sequence = |at| {
+        let (index, generic) =
+            chosen
+                .declared
+                .generics
+                .iter()
+                .enumerate()
+                .find(|(_, generic)| {
+                    generic.at == at && matches!(generic.kind, GenericKind::Pack { .. })
+                })?;
+        let pack = chosen
+            .type_packs
+            .iter()
+            .find(|pack| pack.parameter == index)?;
+        if pack.forwarded_from.is_some() {
+            return None;
+        }
+        Some(vec![
+            Type::Parameter {
+                at,
+                name: generic.name.clone()
+            };
+            pack.types.len()
+        ])
+    };
+    let weight = chosen
+        .type_packs
+        .iter()
+        .map(|pack| pack.types.len().saturating_add(1))
+        .max()
+        .unwrap_or(1);
+    substitute_with_packs(ty, &[], &|_, _, _| None, &sequence, weight)
+}
+
 /// True when `better` outranks `worse`, each a candidate a call admits
 /// or may admit: as specific in each of the operator's own parameters,
 /// compared place for place ([`specificity`]), and more
@@ -3556,9 +3600,12 @@ fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
         .candidate_parameters(better.declared)
         .zip(public.candidate_parameters(worse.declared))
         .filter_map(|(better_index, worse_index)| {
-            let better = &better.declared.parameters[better_index?];
-            let worse = &worse.declared.parameters[worse_index?];
-            Some(specificity(&better.ty, &worse.ty))
+            let better_type = &better.declared.parameters[better_index?].ty;
+            let worse_type = &worse.declared.parameters[worse_index?].ty;
+            Some(specificity(
+                &ranking_type(better, better_type),
+                &ranking_type(worse, worse_type),
+            ))
         })
         .fold(Specific::Same, Specific::and);
     whole == Specific::More

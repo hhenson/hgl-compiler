@@ -138,3 +138,89 @@ test forwarded_value_witness {
 }
 # expect-error(constraint, "requires.unmet")
 const fn rejected_empty_value_forwarding() -> bool => forwarded_value_structs()
+
+# EXPR-7, GEN-7, GEN-10: indices name members, not a whole pack.
+const fn second_exists<...Ts{2}>(value: tuple<Ts>) -> bool {
+    let selected = value[1]
+    return true
+}
+const fn fixed_tail<T, ...Ts{1}>(value: tuple<Ts, T>) -> T => value[1]
+const fn fixed_first<T, ...Ts>(value: tuple<T, Ts>) -> T => value[0]
+test tuple_index_members {
+    assert second_exists((1, "a"))
+    assert fixed_tail((1, "a")) == "a"
+    assert fixed_first((2, "b", true)) == 2
+}
+
+# GEN-5: the concrete bool wins over an unconstrained tuple-pack member.
+operator partial<T>(value: T) -> str
+impl const fn partial<...Ts>(value: tuple<Ts>) -> str => "pack"
+impl const fn partial<T>(value: tuple<T, bool>) -> str => "bool"
+test partial_tuple_ranking {
+    assert partial(("a", true)) == "bool"
+    assert partial((1, 2, 3)) == "pack"
+}
+
+# GEN-3: later evidence resolves earlier tuple partitions to a fixed point.
+const fn later<...As, ...Bs>(joined: tuple<As, Bs>, left: tuple<As>) -> tuple<As, Bs> => joined
+const fn earlier<...As, ...Bs>(left: tuple<As>, joined: tuple<As, Bs>) -> tuple<As, Bs> => joined
+operator split<J, L>(joined: J, left: L) -> bool
+impl const fn split<...As, ...Bs>(joined: tuple<As, Bs>, left: tuple<As>) -> bool => true
+test tuple_partition_order {
+    let joined: tuple<i64, str, bool> = later((1, "a", true), (1,))
+    let reversed: tuple<i64, str, bool> = earlier((1,), (2, "b", false))
+    assert joined[2] == true
+    assert reversed[1] == "b"
+    assert split((3, "c", true), (3,))
+}
+
+# GEN-10: tuple operands and forwarded cardinalities use the captured sequence.
+const fn exact_tuple<...Ts>(value: tuple<Ts>) -> bool requires tuple<Ts> == tuple<i64, str> => true
+const fn nonempty<...Ts{1:*}>(value: tuple<Ts>) -> bool => true
+const fn forwarded_nonempty<...Us>(value: tuple<Us>) -> bool => nonempty(value)
+test tuple_requirement_operands {
+    assert exact_tuple((1, "a"))
+}
+test tuple_nonempty_bounds {
+    assert forwarded_nonempty((1, "a"))
+}
+
+# FN-17 and GEN-8: explicit callback packs keep their declared types.
+const fn apply_pair(f: const fn(tuple<i64, i64>) -> tuple<i64, i64>, v: tuple<i64, i64>) -> tuple<i64, i64> => f(v)
+const fn apply_single(f: const fn(tuple<i64>) -> tuple<i64>, v: tuple<i64>) -> tuple<i64> => f(v)
+const fn invoke_single<...Ps, ...As>(f: const fn(...{Ps}) -> tuple<i64>, args: ...{As for f}) -> tuple<i64>
+    requires each k in arg_keys(As) { As[k] == Ps[k] } => f(...args)
+const fn check_named_single<...Ps, ...As>(f: const fn(...{Ps}) -> tuple<i64>, args: ...{As for f}) -> bool
+    requires each k in arg_keys(As) { As[k] == Ps[k] } => true
+test explicit_callback_packs {
+    assert apply_pair(echo<i64, i64>, (1, 2)) == (1, 2)
+    assert apply_pair(echo, (3, 4)) == (3, 4)
+    assert apply_single(echo<i64>, (5,)) == (5,)
+    assert apply_single(echo, (6,)) == (6,)
+    assert invoke_single(echo<i64>, value: (7,)) == (7,)
+    assert invoke_single(echo, value: (8,)) == (8,)
+}
+
+# Returned wrong constructions reject where their bodies are declared.
+# expect-error(type, "tuple.index")
+const fn wrong_tail<T, ...Ts>(value: tuple<Ts, T>) -> T => value[1]
+# expect-error(type, "type.mismatch")
+const fn wrong_whole_pack<...Ts>(value: tuple<Ts>) -> tuple<Ts> => (value[0],)
+# expect-error(type, "tuple.index")
+const fn out_of_pack<...Ts{2}>(value: tuple<Ts>) -> bool { let selected = value[2]
+    return true }
+# expect-error(type, "type.not_a_type")
+const fn nullable_pack<...Ts>(value: tuple<Ts?>) -> bool => true
+const fn nonempty_tail<...Ts{1:*}>(value: tuple<i64, Ts>) -> bool => true
+# expect-error(type, "pack.cardinality")
+const fn absent_tail<...Us>(value: tuple<i64, Us>) -> bool => nonempty_tail(value)
+# expect-error(constraint, "requires.unmet")
+const fn wrong_tuple_operand() -> bool => exact_tuple((1, 2))
+# expect-error(type, "type.mismatch")
+const fn wrong_partition() -> tuple<i64, bool> => later(("a", true), (1,))
+# expect-error(type, "type.mismatch")
+const fn wrong_pair_callback() -> tuple<i64, i64> => apply_pair(echo<f64, f64>, (1, 2))
+# expect-error(type, "type.mismatch")
+const fn wrong_single_callback() -> tuple<i64> => apply_single(echo<f64>, (1,))
+# expect-error(type, "type.mismatch")
+const fn wrong_named_callback() -> bool => check_named_single(echo<f64>, value: (1,))

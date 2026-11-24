@@ -154,7 +154,7 @@ impl Reader<'_> {
                         self.type_(
                             &element,
                             Position {
-                                pack: true,
+                                pack: element.kind() == SyntaxKind::NamedType,
                                 ..position.part()
                             },
                         )

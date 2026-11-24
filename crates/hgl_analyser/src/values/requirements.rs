@@ -4420,13 +4420,8 @@ fn requires_holds(
                 Some(ty)
             }
         };
-        if !matches!(read.ty, Type::PackMember { .. })
-            && !read
-                .ty
-                .any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false)
-        {
-            return projected(substitute_within(&read.ty, &map));
-        }
+        // GEN-10: tuple operands expand captures even without an indexed
+        // PackMember; a pack's ordinary generic slot is deliberately unknown.
         match pack_types.project(&read.ty, &map) {
             Ok(ty) => projected(ty),
             Err(fault) => {
@@ -4991,7 +4986,7 @@ fn each_holds(
 
 /// GEN-10: explicit pack bounds and a non-packed parameter exactly of
 /// type tuple<Us> guarantee lengths. A tuple with other elements does not.
-fn type_pack_bounds(program: &Program, at: Location) -> Option<(u64, Option<u64>)> {
+pub(super) fn type_pack_bounds(program: &Program, at: Location) -> Option<(u64, Option<u64>)> {
     for detail in program.modules.iter().flat_map(|module| &module.details) {
         let (generics, parameters) = match detail {
             Detail::Callable(signature) => (&signature.generics, &signature.parameters[..]),
