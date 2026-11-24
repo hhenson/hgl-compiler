@@ -9,10 +9,15 @@ analyser: partial
 - Scalar type identities
 - Left: capabilities
 
+optimiser: done
+
+- Splits a string append's `+` chain into ordered pieces where their reads are independent of the destination and evaluation order is preserved (EXPR-3).
+
 transpiler: partial
 
 - Uses distinct C++ representations for bool, i64, f64, Unicode strings and byte
   sequences and the admitted ordinary collection types.
+- A declared `str` variable appends in place with `+=`, so each piece is copied amortised once as the destination grows.
 - Left: The unstable key restriction for f64 and types containing it is pending. An
   ordinary type with no C++ representation is reported.
 

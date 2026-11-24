@@ -18,8 +18,8 @@ syntax tree ---------> formatter (planned) ---------> source text
     |  hgl_analyser
 analysed program ----> error reporting (`check`)
     |            ----> hgl_doc ----> HTML reference or JSON model (`doc`)
-    |  hgl_lower (in the optimiser's place)
-analysed program, and the facts every target decides the same way
+    |  hgl_lower (lowering and optimisation)
+analysed program, lowering facts, and optimisation plans
     |  one transpiler per target (`hgl_cpp`)
 target output
 ```
@@ -46,8 +46,8 @@ Rules for every stage:
 | `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases handed to a target to run |
 | `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl doc`, `hgl test`, `hgl emit`, `hgl run` |
 | formatter | Syntax tree to source text | planned |
-| optimiser | Analysed program to analysed program | planned |
-| `hgl_lower` | Lowering, in the optimiser's place: the facts every target decides the same way, read from the analysed program | implemented for what the cpp target needs: see "Lowering" below |
+| optimiser | Typed bodies to target-independent optimisation plans | The first pass plans in-place string appends (`hgl_lower::optimise`) |
+| `hgl_lower` | Lowering and optimisation of the analysed program | see "Lowering" below |
 | `hgl_cpp` | The cpp target: the analysed program to C++ against hgraph's C++ API; its build driver is in `hgl_cli` | in part: it runs core's cases but those its list names; see "cpp" below |
 
 A crate is created when its stage is built, not before.
@@ -1728,10 +1728,11 @@ names one (LEX-12, LEX-25):
 ## Lowering
 
 `hgl_lower` says what follows from the language's rules alone, before
-any target writes a program: no target works it out again. It depends on
-`hgl_analyser` and `hgl_diagnostics`, and on no target; a transpiler
-depends on it. It rewrites nothing: each module answers questions of the
-analysed program.
+any target writes a program. It depends on `hgl_analyser` and
+`hgl_diagnostics`. Each module reads the analysed body, and the optimiser
+returns plans that preserve its places and source spans. The first pass
+uses the checked Core string operator and the body's local declarations.
+Further passes belong beside it in `hgl_lower::optimise`.
 
 | Module | What it decides | Rules |
 | --- | --- | --- |
@@ -1741,6 +1742,7 @@ analysed program.
 | `graphs` | What a child graph of a graph's `if`, `switch` or `for` takes, the value of a `switch` label, the `var`s a branch assigns, which paths return | CTRL-6, CTRL-7, CTRL-11, CTRL-14 |
 | `types` | A struct's fields and descendants, whether a struct has none, and which values are read whole only where they are all valid | TYPE-3, TYPE-4, TYPE-9, TIME-1 |
 | `nodes` | A `when`'s subscriptions and requirements, what a node's handlers ask together, its timer, which inputs a `ref` result designates and how | TIME-3, TIME-4, TIME-9, FN-16 |
+| `optimise` | Which `str` assignments append in place, and which concatenations are written as ordered append pieces | TYPE-1, EXPR-3 |
 | `calls` | What a parameter left out is given, and a field's default | UNIT-7, UNIT-8, TYPE-5 |
 
 The analyser exports what it works out and a target would otherwise
