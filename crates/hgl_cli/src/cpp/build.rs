@@ -467,14 +467,6 @@ pub(super) fn native_command(program: &Path, lock: &fs::File) -> Result<Command,
             .arg(std::process::id().to_string())
             .arg(program)
             .arg("--");
-        #[cfg(target_os = "macos")]
-        {
-            use std::os::unix::process::CommandExt as _;
-
-            // CMake on macOS closes extra descriptors when starting a child.
-            // Let CMake drain its own jobs under its lock after a terminal stop.
-            command.process_group(0);
-        }
         command
     };
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]

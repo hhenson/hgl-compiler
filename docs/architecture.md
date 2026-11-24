@@ -2208,8 +2208,8 @@ Ninja inherits the workspace lock, and tools building the SDK runtime and
 precompiled header inherit the toolchain lock. A second descriptor keeps the
 lock available to jobs after Ninja replaces their standard input. On Linux
 the tools started by the driver receive a termination signal when `hgl`
-dies. On macOS the tools run in a separate process group, so CMake can
-finish its jobs under its inherited lock after a terminal stop.
+dies. On macOS CMake closes extra descriptors when starting Ninja, so a
+launcher restores the lock descriptor from stdin immediately before Ninja.
 
 `hgl build ROOT...` checks the program, writes the generated files
 and builds its units and application executables. `--tests` builds a
