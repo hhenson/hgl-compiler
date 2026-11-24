@@ -374,6 +374,7 @@ impl Emitter<'_> {
     }
 
     /// The wiring function supplied for a native temporal candidate of core.
+    /// SET-1 wires the provider's dictionary membership projection this way.
     fn native_wiring_name(&self, module: usize, index: usize) -> Option<String> {
         let owner = &self.program.modules[module];
         let declaration = &owner.declarations[index];
