@@ -61,3 +61,16 @@ test optional_configurations {
     assert eval relay_configuration(value: [7, _, 8]) == [false, _, false]
     assert eval defaulted_configuration(value: [7, _, 8]) == [false, _, false]
 }
+
+# FN-19 and TYPE-12: composition passes a selected entry's connection.
+fn packed_signal(triggers: ...signal) -> i64 => required_parameter(7, triggers[0])
+fn fitted_pack_signal<...As>(inputs: ...As) -> i64 => required_parameter(7, inputs[0])
+fn relay_fitted_pack_signal(trigger: signal) -> i64 => fitted_pack_signal(trigger, 0)
+
+fn trigger_from_pack(beat: bool) -> i64 => packed_signal(beat)
+fn trigger_from_fitted_pack(beat: bool) -> i64 => relay_fitted_pack_signal(beat)
+
+test packed_connections {
+    assert eval trigger_from_pack(beat: [true, _, false]) == [7, _, 7]
+    assert eval trigger_from_fitted_pack(beat: [true, _, false]) == [7, _, 7]
+}

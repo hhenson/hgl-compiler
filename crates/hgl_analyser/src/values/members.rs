@@ -376,6 +376,7 @@ impl<'a> Typer<'a> {
                 // the same admission and lifecycle requirements (TIME-1,
                 // TIME-4, TIME-5) as a non-packed input.
                 self.input_read(pack, at, super::children::read_whole_all_valid(&ty));
+                self.signal_read(pack, at, Some((&ty, node)));
             }
             let ty = if input && self.hook.is_some() {
                 hook_payload_type(&ty)
