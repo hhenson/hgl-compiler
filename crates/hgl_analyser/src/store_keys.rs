@@ -18,12 +18,11 @@ use crate::program::Program;
 use crate::types::{Argument, Type};
 use crate::{codes, error};
 
-/// One use of a key: the key, the type the use binds it to, whether it
-/// is a `get`, and where the use is written.
+/// One use of a key: the key, the type the use binds it to, and where
+/// the use is written.
 struct KeyUse {
     key: String,
     ty: Type,
-    read: bool,
     at: Location,
 }
 
@@ -67,13 +66,6 @@ pub(crate) fn key_types(program: &Program, diagnostics: &mut Diagnostics) {
         if earlier.ty == found.ty {
             continue;
         }
-        if alike_awaiting_165(earlier, found) {
-            // A `put` says what the key is where a `get` may not have.
-            if earlier.read && !found.read {
-                first.insert(found.key.as_str(), found);
-            }
-            continue;
-        }
         diagnostics.emit(
             error(
                 Category::Injectable,
@@ -89,17 +81,6 @@ pub(crate) fn key_types(program: &Program, diagnostics: &mut Diagnostics) {
             .with_related(earlier.at, "used here before"),
         );
     }
-}
-
-/// True where two uses of a key differ only as `T` and `T?`, one of them
-/// a `get`: awaiting hhenson/hgl_spec#165, which asks whether a nullable
-/// place makes the `V` of `get<V>(...) -> V` a `T?` or a `T`. The
-/// analyser takes the `T` under the `?` until it says (`a_store_read_
-/// into_a_nullable_place_awaits_hgl_spec_165`), so a `get` of `T` may be
-/// a use of a key of `T?`, and is not judged against one.
-fn alike_awaiting_165(earlier: &KeyUse, later: &KeyUse) -> bool {
-    let under = |nullable: &Type, plain: &Type| matches!(nullable, Type::Nullable(inner) if **inner == *plain);
-    (earlier.read || later.read) && (under(&earlier.ty, &later.ty) || under(&later.ty, &earlier.ty))
 }
 
 /// The use of a key `expression` is, where it is a call of core's `put`
@@ -163,7 +144,6 @@ fn key_use(program: &Program, expression: &Expr) -> Option<KeyUse> {
     Some(KeyUse {
         key,
         ty,
-        read: name == "get",
         at: expression.at,
     })
 }

@@ -396,7 +396,7 @@ fn deferred_callback_captures<T>(const value: T) -> f64 {
 
 # ERR-3 and GEN-7: a tag-only use works with the selected result,
 # even when its success type differs from the generic candidate's.
-operator tagged_shape<T>(value: T) -> result<i64, error>
+operator tagged_shape<T, R>(value: T) -> result<R, error>
 impl const fn tagged_shape<T>(value: T) -> result<i64, error> => err(error(message: "generic"))
 impl const fn tagged_shape(value: i64) -> result<str, error> => ok("concrete")
 
@@ -733,18 +733,18 @@ test instance_uses_whole_result {
     assert through_result(passed) == five
 }
 
-# GEN-7: an inferred local retains the type established by the body.
+# GEN-5 and GEN-7: an annotation supplies the call's expected result.
 operator get_value<T, O>(value: T) -> O
 impl const fn get_value<T>(value: T) -> i64 => 5
 impl const fn get_value(value: i64) -> str => "other output"
 
-const fn into_inferred_local<T>(value: T) -> i64 {
-    let answer = get_value(value)
+const fn into_annotated_local<T>(value: T) -> i64 {
+    let answer: i64 = get_value(value)
     return answer
 }
 
-test instance_preserves_the_inferred_result_type {
-    assert into_inferred_local(3) == 5
+test instance_uses_the_annotated_result_type {
+    assert into_annotated_local(3) == 5
     assert get_value(3) == "other output"
 }
 

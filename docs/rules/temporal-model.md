@@ -115,11 +115,14 @@ analyser: partial
 transpiler: partial
 
 - Publishes returns, whole `out` assignments and supported struct or tuple child writes.
-  A source yields whole values or deltas, and a window holds the last arrival of the
-  evaluation.
-- Left: Reports plain reads of `out` or its children, unsupported output writes or child
-  places, and a read of a node's own window in its `when`. Other unsupported publication
-  forms are under TYPE-9.
+  A source yields whole values or deltas. A window result exposes its latest
+  staged arrival to reads in the handler body, and publishes the last arrival once.
+  Validity, modification time, and delta reads use the staged arrival directly.
+  The first read of retained data after each write copies the samples in time
+  and space proportional to their count. A later read reuses that copy until
+  another write or withdrawal.
+- Left: Reports unsupported reads and writes of `out` and its children.
+  Other publication forms are under TYPE-9 and window observation limits are under END-9.
 
 ## TIME-8
 
@@ -138,8 +141,9 @@ transpiler: partial
 - Supplies the declared node, source and application capabilities, including timers and
   run configuration. Wires them before initializers that read them.
 - Drops a graph-time `datetime` wake at or before the evaluation time, except
-  for an equal-time request in `start`. The first drop warns once per node,
-  and the node logs the number of further drops at stop.
+  for an equal-time request in `start`. The first drop warns once per node
+  with its display name and the requested time. At stop, the node logs the
+  number of further drops.
 - Left: Unknown or unavailable injections are reported, including graph injections other
   than the store. A nested child graph cannot read capabilities captured from its parent
   (CTRL-2).
@@ -181,5 +185,5 @@ analyser: done
 transpiler: partial
 
 - Uses hgraph reference ports to follow endpoint rebinding without re-evaluating the
-  designating node. Supports sampled, whole-input and fixed-list child designations.
+  designating node. Supports sampled, whole-input, fixed-list child and dictionary entry designations.
 - Left: Unsupported targets and output combinations are listed under FN-16.

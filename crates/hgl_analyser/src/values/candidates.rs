@@ -234,6 +234,60 @@ impl<'a> Typer<'a> {
         ((Vec::new(), untold), errors)
     }
 
+    /// GEN-2 and GEN-8: give a bare nonfallible result a plain place
+    /// solely to diagnose an otherwise valid call. Fallible results
+    /// already participated in ranking with their contextual success.
+    pub(super) fn nullable_result_candidate(
+        &mut self,
+        operator: OperatorRef,
+        candidates: &[Candidate<'a>],
+        given: &[Given],
+        wanted: &Wanted,
+    ) -> Option<Chosen<'a>> {
+        let Type::Nullable(payload) = wanted.place? else {
+            return None;
+        };
+        if wanted.written {
+            return None;
+        }
+        let candidates: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|(_, _, signature)| {
+                let parameter = signature
+                    .result
+                    .as_ref()
+                    .and_then(|result| bare_parameter(result, &signature.generics));
+                // An input mentioning this parameter may already decide it.
+                parameter.is_some_and(|index| {
+                    let at = signature.generics[index].at;
+                    signature
+                        .parameters
+                        .iter()
+                        .all(|input| !mentions(&input.ty, &[at]))
+                })
+            })
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        let plain = Wanted {
+            place: Some(payload),
+            among: wanted.among.clone(),
+            written: false,
+            callback: None,
+        };
+        let mark = self.mark();
+        let (mut selected, untold) = self.admitted(operator, &candidates, given, &plain);
+        self.take_back(mark, false);
+        if untold || selected.len() != 1 {
+            return None;
+        }
+        let mut chosen = selected.pop()?;
+        chosen.nullable_result_fallback = true;
+        Some(chosen)
+    }
+
     /// Read each candidate's static arguments once, before ranking the
     /// ordinary arguments' precisions and result forms (FN-17, GEN-5).
     fn function_trials(
@@ -462,7 +516,13 @@ impl<'a> Typer<'a> {
                     }
                     self.default_constant(candidate, generic)
                 };
-                let Some((mut taken, generics, mut type_packs, defaulted)) = instance(
+                let Some((
+                    mut taken,
+                    generics,
+                    mut type_packs,
+                    defaulted,
+                    nullable_result_fallback,
+                )) = instance(
                     self,
                     signature,
                     (module, candidate),
@@ -474,7 +534,8 @@ impl<'a> Typer<'a> {
                         converting.then_some((self, forms, &payload_parameters, &rejects_form)),
                     ),
                     &mut choose,
-                ) else {
+                )
+                else {
                     continue;
                 };
                 let mut callbacks = Vec::new();
@@ -595,6 +656,7 @@ impl<'a> Typer<'a> {
                     bound: bound.clone(),
                     callbacks,
                     ambiguous_reads: false,
+                    nullable_result_fallback,
                     selecting: None,
                 };
                 if admits == Admits::Unknown {
@@ -853,6 +915,7 @@ impl<'a> Typer<'a> {
                 callee: Callee::Unread,
                 arguments,
                 form,
+                text: None,
                 braced: Vec::new(),
                 lifted: false,
             };
@@ -1007,7 +1070,7 @@ impl<'a> Typer<'a> {
             }
         }
         let requirements = self.answers(module, declaration, &generics);
-        let kind = ExprKind::Call {
+        let mut kind = ExprKind::Call {
             callee: Callee::Candidate {
                 operator: (operator.module, operator.declaration),
                 operator_generics,
@@ -1019,10 +1082,11 @@ impl<'a> Typer<'a> {
             },
             arguments,
             form,
+            text: None,
             braced,
             lifted: false,
         };
-        self.finished_call(&kind, false);
+        self.finished_call(&mut kind, false);
         let kind = if let Some(selecting) = selecting {
             if self.graph {
                 self.constants_of(&kind);
@@ -1067,6 +1131,7 @@ impl<'a> Typer<'a> {
                 },
                 form,
                 arguments,
+                text: None,
                 braced,
                 lifted: false,
             }
@@ -1417,7 +1482,7 @@ impl<'a> Typer<'a> {
         // A function already known contributes its types in declaration
         // order, before any later argument can decide them (GEN-2).
         // An unresolved callback contributes only what the probe knows.
-        let (mut found, type_packs) = candidate_bindings(
+        let (mut found, type_packs, _) = candidate_bindings(
             self,
             signature,
             (module, candidate),
@@ -1823,19 +1888,19 @@ impl<'a> Typer<'a> {
                 given
             })
             .collect();
-        // ERR-3 checks the selected result. A tag test does not supply
-        // the provisional result type as the operator's expected place.
+        // GEN-7: select with the instance's inputs and the actual output
+        // request. The provisional candidate supplied the type used to
+        // check the generic body.
         let place = selecting
             .place
             .as_ref()
             .or_else(|| {
-                if let Some(read) = &selecting.result_read {
-                    read.expected.as_ref().map(|(ty, _)| ty)
-                } else if selecting.tag_test.is_none() {
-                    selecting.result.as_ref()
-                } else {
-                    None
-                }
+                selecting
+                    .result_read
+                    .as_ref()?
+                    .expected
+                    .as_ref()
+                    .map(|(ty, _)| ty)
             })
             .map(in_place);
         let wanted = Wanted {
@@ -1928,13 +1993,11 @@ impl<'a> Typer<'a> {
             }
             return self.compared_with_null(value, Some(&scope));
         }
-        if let Some(test) = call.tag_test
-            && (self.check_tag_test(test.success, &value.ty, test.at)
-                || !test.keeps_result_type && matches!(value.ty, Type::Result { .. }))
-        {
+        if let Some(test) = call.tag_test {
+            self.check_tag_test(test.success, &value.ty, test.at);
             return value;
         }
-        if let Some(expected) = call.result.as_ref().map(in_place)
+        if let Some(expected) = call.place.as_ref().map(in_place)
             && expected != value.ty
         {
             return self.fit(
@@ -2109,6 +2172,16 @@ pub(crate) struct Selecting {
     tag_test: Option<InstanceTagTest>,
 }
 
+impl Selecting {
+    /// The written argument that fills this parameter before selection.
+    pub(crate) fn argument_for(&self, signature: &Signature, slot: usize) -> Option<&Expr> {
+        self.arguments
+            .iter()
+            .find(|given| given.key.public_parameter(signature) == Some(slot))
+            .map(|given| &given.value)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct InstanceTagTest {
     success: bool,
@@ -2253,23 +2326,24 @@ pub(crate) fn in_instance(signature: &Signature, map: &[(Location, &Argument)]) 
 /// each call so put, for the instance's arguments to be put in place in
 /// what it holds. A call that selects no one candidate is left with no
 /// callee; the analyser has reported it (`instances_hold`).
+/// Returns the calls that changed the result type used to check their uses.
 pub(crate) fn select_in_instance(
     program: &crate::program::Program,
     (module, declaration): (usize, usize),
     generics: &[Argument],
     body: &mut hir::Body,
     after: &dyn Fn(&mut Expr),
-) {
+) -> Vec<Location> {
     let unit = &program.modules[module];
     let Some(calls) = unit
         .selecting
         .get(declaration)
         .filter(|calls| !calls.is_empty())
     else {
-        return;
+        return Vec::new();
     };
     let Some(Detail::Callable(declared)) = unit.details.get(declaration) else {
-        return;
+        return Vec::new();
     };
     let map: Vec<(Location, &Argument)> = declared
         .generics
@@ -2306,6 +2380,7 @@ pub(crate) fn select_in_instance(
     // value where a call reads it (EXPR-3).
     typer.use_instance_locals(body.locals.clone());
     let mut retagged = HashSet::new();
+    let mut changed_results = Vec::new();
     hir::walk_statements_mut(&mut body.statements, &mut |expression| {
         // A source read of the provisional result can be obsolete.
         // Replace it with the selected call in the actual place's form.
@@ -2345,6 +2420,7 @@ pub(crate) fn select_in_instance(
             .iter()
             .map(|argument| crate::instance::placed(argument, &map))
             .collect();
+        let before = typer.diagnostics.len();
         let (kind, ty) = typer.called(
             call.operator,
             *chosen,
@@ -2358,7 +2434,14 @@ pub(crate) fn select_in_instance(
             at: expression.at,
             category: expression.category,
         };
-        *expression = typer.fit_selected_result(call, selected, |ty| substitute_within(ty, &map));
+        let selected = typer.fit_selected_result(call, selected, |ty| substitute_within(ty, &map));
+        if call.result.is_some()
+            && expression.ty != selected.ty
+            && typer.diagnostics.len() == before
+        {
+            changed_results.push(call.at);
+        }
+        *expression = selected;
         after(expression);
         if let Some(test) = call.tag_test
             && !test.keeps_result_type
@@ -2382,6 +2465,7 @@ pub(crate) fn select_in_instance(
         });
     }
     body.locals = typer.locals;
+    changed_results
 }
 
 /// One argument of an operator's call, before a candidate is selected.
@@ -2860,6 +2944,9 @@ pub(super) struct Chosen<'s> {
     callbacks: Vec<(usize, hir::TypePackArgument)>,
     /// Equally preferred choices of which operands to read (ERR-15).
     pub(super) ambiguous_reads: bool,
+    /// A nullable place supplied an unresolved bare success type for
+    /// ranking. A named call cannot use that type to settle the result.
+    pub(super) nullable_result_fallback: bool,
     /// The call to select again after its generic operand types are known (GEN-7).
     selecting: Option<Box<Selecting>>,
 }
@@ -2909,6 +2996,7 @@ fn instance<'s>(
     Vec<Argument>,
     Vec<hir::TypePackArgument>,
     Vec<usize>,
+    bool,
 )> {
     let generics = &signature.generics;
     if generics.is_empty() {
@@ -2917,9 +3005,10 @@ fn instance<'s>(
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            false,
         ));
     }
-    let (mut found, type_packs) = candidate_bindings(
+    let (mut found, type_packs, nullable_result_fallback) = candidate_bindings(
         typer,
         signature,
         (module, declaration),
@@ -2991,6 +3080,7 @@ fn instance<'s>(
         resolved,
         type_packs,
         defaulted,
+        nullable_result_fallback,
     ))
 }
 
@@ -3014,7 +3104,7 @@ fn candidate_bindings(
         )>,
     ),
     choose: &mut dyn FnMut([Option<ResultBinding>; 3]) -> ResultBinding,
-) -> Option<(Vec<Option<Argument>>, Vec<hir::TypePackArgument>)> {
+) -> Option<(Vec<Option<Argument>>, Vec<hir::TypePackArgument>, bool)> {
     let generics = &signature.generics;
     let mut found: Vec<Option<Argument>> = vec![None; generics.len()];
     if let Some(callback) = &wanted.callback {
@@ -3181,14 +3271,23 @@ fn candidate_bindings(
     // type says anything of takes its default (GEN-2). GEN-6: "a
     // candidate whose option has none is admitted only when the call
     // gives it."
-    if let Some((result, requested)) = result_fallback {
+    // Keep the payload binding for admission and ranking. A nullable
+    // place alone leaves the bare result unresolved (GEN-2).
+    let provisional_result = result_fallback.and_then(|(result, place)| {
+        let provisional = match place {
+            Type::Nullable(_) => {
+                bare_parameter(result, generics).filter(|&index| found[index].is_none())
+            }
+            _ => None,
+        };
         infer(
             result,
-            not_null(Some(requested)).unwrap_or(requested),
+            not_null(Some(place)).unwrap_or(place),
             generics,
             &mut found,
         );
-    }
+        provisional
+    });
     // GEN-10: reflected packs are known before a positive existential
     // equality chooses its first binding. Unresolved non-pack arguments
     // remain placeholders during this projection.
@@ -3212,14 +3311,36 @@ fn candidate_bindings(
         }
         type_packs.sort_by_key(|pack| pack.parameter);
     }
-    super::quantifiers::bind(
-        &typer.program.modules[module],
-        declaration,
-        generics,
-        &type_packs,
-        &mut found,
-    );
-    Some((found, type_packs))
+    let bind = |found: &mut [Option<Argument>]| {
+        super::quantifiers::bind(
+            &typer.program.modules[module],
+            declaration,
+            generics,
+            &type_packs,
+            found,
+        );
+    };
+    // GEN-3: a positive equality can solve the result without the
+    // nullable place's guess. Keep the original admission bindings
+    // when that trial does not resolve the result.
+    let solved_result = provisional_result.is_some_and(|index| {
+        let mut evidence = found.clone();
+        evidence[index] = None;
+        bind(&mut evidence);
+        if evidence[index].is_none() {
+            return false;
+        }
+        found = evidence;
+        true
+    });
+    if !solved_result {
+        bind(&mut found);
+    }
+    Some((
+        found,
+        type_packs,
+        provisional_result.is_some() && !solved_result,
+    ))
 }
 
 /// ERR-12 and ERR-15: a result of a nullable value can supply the

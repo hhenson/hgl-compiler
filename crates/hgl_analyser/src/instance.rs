@@ -51,7 +51,7 @@ type Map<'a> = [(Location, &'a Argument)];
 use crate::values::PackTypes;
 
 /// The compile-time call inputs that specialize a declaration (FN-17, FN-19).
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub struct InstanceInputs<'a> {
     /// Each function supplied at an original parameter slot.
     pub functions: &'a [(usize, Callee)],
@@ -59,6 +59,8 @@ pub struct InstanceInputs<'a> {
     pub type_packs: &'a [TypePackArgument],
     /// Concrete entries held by the caller's packs, including an empty shape.
     pub pack_inputs: Option<&'a [PackInput]>,
+    /// Ordinary const inputs read by a compile-time check, by original slot.
+    pub constants: &'a [crate::ConstInput],
 }
 
 /// The enclosing declaration and the arguments common to its body and
@@ -70,13 +72,52 @@ struct InstanceArguments<'a> {
     packs: &'a PackTypes<'a>,
     type_packs: &'a [TypePackArgument],
     pack_inputs: &'a [PackInput],
+    constants: &'a [crate::ConstInput],
     requirements: &'a [Answer],
     diagnostics: &'a RefCell<Diagnostics>,
+    changed_results: RefCell<Vec<Location>>,
 }
 
 impl InstanceArguments<'_> {
     fn project(&self, ty: &Type) -> Type {
-        self.packs.project(ty, self.types).unwrap_or(Type::Unknown)
+        if ty.any_part(
+            &|part| matches!(part, Type::Parameter { .. } | Type::PackMember { .. }),
+            &|constant| constant.value.key().is_none(),
+        ) {
+            self.packs.project(ty, self.types).unwrap_or(Type::Unknown)
+        } else {
+            // A reread can already supply a concrete type. Substitution's
+            // growth bound applies only when there is something to place.
+            ty.clone()
+        }
+    }
+}
+
+/// A specialized callable, with any reports from rechecking the uses
+/// of an operator result whose type changed (GEN-7).
+pub(crate) struct CheckedInstance {
+    /// The concrete signature used to read the body.
+    pub(crate) signature: Signature,
+    /// The body with its concrete types and callees.
+    pub(crate) body: Body,
+    /// The instance read the body from its syntax with concrete types.
+    pub(crate) reread_body: bool,
+    /// Checks made when a selected result differs from the admitting result.
+    pub(crate) result_uses: Option<ResultUseChecks>,
+}
+
+/// The calls whose results changed and the checks their new types caused.
+pub(crate) struct ResultUseChecks {
+    /// Written locations of the calls that selected a different result.
+    pub(crate) changed_results: Vec<Location>,
+    /// Type checks from reading the body with the selected results.
+    pub(crate) reports: Diagnostics,
+}
+
+impl CheckedInstance {
+    /// Visit calls and references in the final body, including nested functions.
+    pub(crate) fn walk_calls(&self, visit: &mut dyn FnMut(&crate::hir::Expr)) {
+        crate::values::walk_body_calls(&self.body, visit);
     }
 }
 
@@ -172,8 +213,10 @@ impl Program {
             packs: &PackTypes::new(&[], &[]),
             type_packs: &[],
             pack_inputs: &[],
+            constants: &[],
             requirements: &requirements,
             diagnostics: &reports,
+            changed_results: RefCell::new(Vec::new()),
         };
         // UNIT-7: a default has no formal parameters in scope. Run the
         // same membership-based selection here as in a specialized body.
@@ -283,6 +326,7 @@ impl Program {
             &RefCell::new(Diagnostics::new()),
             &mut Diagnostics::new(),
         )
+        .map(|instance| (instance.signature, instance.body))
     }
 
     /// Instantiate a body and report any configuration that fails to fit
@@ -296,7 +340,7 @@ impl Program {
         inputs: InstanceInputs<'_>,
         diagnostics: &RefCell<Diagnostics>,
         body_diagnostics: &mut Diagnostics,
-    ) -> Option<(Signature, Body)> {
+    ) -> Option<CheckedInstance> {
         let declared = self.modules.get(module)?;
         let Some(Detail::Callable(signature)) = declared.details.get(declaration) else {
             return None;
@@ -336,30 +380,75 @@ impl Program {
             packs: &packs,
             type_packs: inputs.type_packs,
             pack_inputs: pending_forwards.unwrap_or_default(),
+            constants: inputs.constants,
             requirements,
             diagnostics,
+            changed_results: RefCell::new(Vec::new()),
         };
         let graph = declared.phases.get(declaration) == Some(&Some(Phase::Graph));
         let recheck_endpoints =
             crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
-        if (recheck_endpoints || pending_forwards.is_some())
+        let mut reread_body = false;
+        let reread_inputs = InstanceInputs {
+            functions: &functions,
+            pack_inputs: pending_forwards,
+            ..inputs
+        };
+        if (recheck_endpoints
+            || pending_forwards.is_some()
+            || !inputs.constants.is_empty()
+            || (!generics.is_empty()
+                && (crate::values::has_dependent_index(&body)
+                    || crate::formatting::has_dependent_formatting(
+                        self,
+                        (module, declaration),
+                        &body,
+                    ))))
             && let Some(reread) = crate::values::reread_instance_body(
                 self,
                 (module, declaration),
                 (&taken, &map),
-                (&functions, pending_forwards),
+                reread_inputs,
                 &project,
                 body_diagnostics,
             )
         {
             body = reread;
+            reread_body = true;
         }
         let recheck = graph
             && (!declared.selecting[declaration].is_empty()
                 || !requirements.is_empty()
                 || pending_forwards.is_some());
-        let destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
+        let mut destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
+        let mut result_uses = None;
+        let before = diagnostics.borrow().len();
         self.place_body(&mut body, &arguments, &functions);
+        let changed_results = std::mem::take(&mut *arguments.changed_results.borrow_mut());
+        if !changed_results.is_empty() {
+            // GEN-7: the original body used the admitting candidate's
+            // result. Read its uses with the selected type in place,
+            // including inferred locals and the calls that consume them.
+            let mut reports = Diagnostics::new();
+            if let Some(reread) = crate::values::reread_instance_body(
+                self,
+                (module, declaration),
+                (&taken, &map),
+                reread_inputs,
+                &project,
+                &mut reports,
+            ) {
+                diagnostics.borrow_mut().truncate(before);
+                body = reread;
+                reread_body = true;
+                destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
+                self.place_body(&mut body, &arguments, &functions);
+            }
+            result_uses = Some(ResultUseChecks {
+                changed_results,
+                reports,
+            });
+        }
         // FN-3, FN-6: what each expression is, and which calls are
         // lifted, with the candidates in place, which the generic body
         // could not say of an operation it requires or a pack it forwards.
@@ -375,7 +464,12 @@ impl Program {
         } else {
             crate::values::record(self, &mut body, graph);
         }
-        Some((taken, body))
+        Some(CheckedInstance {
+            signature: taken,
+            body,
+            reread_body,
+            result_uses,
+        })
     }
 
     /// Specialize one lexical body using its own local table. A call
@@ -394,13 +488,14 @@ impl Program {
         walk_statements_mut(&mut body.statements, &mut |expression| {
             self.place(expression, instance, functions);
         });
-        crate::values::select_in_instance(
+        let changed = crate::values::select_in_instance(
             self,
             instance.declaration,
             instance.generics,
             body,
             &|call| call.walk_mut(&mut |inner| self.place(inner, instance, functions)),
         );
+        instance.changed_results.borrow_mut().extend(changed);
     }
 
     /// Puts the instance's arguments in place in an expression's type,
@@ -608,6 +703,12 @@ impl Program {
             specialization
                 .pack_inputs
                 .extend_from_slice(instance.pack_inputs);
+            specialization.const_inputs.extend(
+                instance
+                    .constants
+                    .iter()
+                    .map(|input| (input.slot, input.key.clone())),
+            );
             self.place_body(&mut function.body, instance, &functions);
             crate::values::record(self, &mut function.body, !function.template.value);
         } else {

@@ -72,6 +72,8 @@ analyser: partial
 - Known required-constant failures reject at the parameter or field default (ERR-9). A window default is checked as an arrival and an atomic default as its whole payload (TYPE-9, TYPE-11).
 - Required-constant failures in parameter and field defaults use `constant.failure` (ERR-9).
 - Omitted parameter defaults are checked against the concrete parameter type after generic selection, including in a call made by a generic body.
+- A field or parameter default that needs itself through omitted arguments reports `default.cycle` at its expression. Its dependency path follows checked calls, concrete forwarded packs and the static callables those bodies invoke (FN-17).
+- The default and constant dependency checks follow the written branches (UNIT-13).
 
 transpiler: partial
 
@@ -79,7 +81,7 @@ transpiler: partial
   default as a constant or leaves an optional input silent.
 - A callable default, including an inherited operator configuration default, can run a block in its own lexical scope.
 - Field defaults with statement blocks use their own cold scope. An omitted generic field default uses the field's applied type and the arguments of the struct that declares the default (TYPE-5).
-- Left: a graph call leaving out a nullable temporal input is reported (#399). The target also reports a recursively omitted default and retains a defensive report for defaults whose emitted evaluation needs failure-handling statements.
+- Left: a graph call leaving out a nullable temporal input is reported (#399). The target retains defensive reports for recursively omitted defaults and defaults whose emitted evaluation needs failure-handling statements.
 
 ## UNIT-9
 
@@ -96,6 +98,7 @@ analyser: partial
 - Every name in a signature, body, type and constraint resolved to its one binding, and one that nothing binds is `name.unknown`
 - Clock properties resolve on the capability, and `types(Ts)` supplies the selections in an `each` constraint (GEN-10).
 - An unqualified call of `scheduled()` retains the wake selector's meaning when a binding has the same name (TIME-9).
+- A function named `scheduled` reports `name.reserved` at the declaration. Reserving the name for other declaration kinds remains proposed.
 
 ## UNIT-11
 

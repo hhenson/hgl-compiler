@@ -35,6 +35,32 @@ fn document(arguments: &[&str]) -> Vec<u8> {
     output.stdout
 }
 
+/// TYPE-10: both spellings present the same analysed type in the API model.
+#[test]
+fn growing_list_spellings_have_one_api_type() {
+    let root = scratch("documentation-list-identity");
+    let source = write(
+        &root,
+        "lists.hgl",
+        concat!(
+            "module lists\n",
+            "export struct Packet<T> { value: T }\n",
+            "export const fn plain(value: Packet<list<i64>>) -> list<i64> => value.value\n",
+            "export const fn explicit(value: Packet<list<i64, unbounded>>) -> list<i64, unbounded> => value.value\n",
+        ),
+    );
+    let model: Value = serde_json::from_slice(&document(&[&source])).unwrap();
+    let lists = module(&model, "lists");
+    let plain = declaration(lists, "plain");
+    let explicit = declaration(lists, "explicit");
+    assert_eq!(
+        plain["parameters"][0]["type"],
+        explicit["parameters"][0]["type"]
+    );
+    assert_eq!(plain["result"]["type"], "list<i64>");
+    assert_eq!(explicit["result"]["type"], "list<i64>");
+}
+
 /// SDOC-1, SDOC-2, SDOC-3 and SDOC-10. The module, functions, operator, struct,
 /// field, enum, member, native type and named test keep their own comments.
 #[test]
@@ -83,7 +109,7 @@ fn declaration_fixture_preserves_interfaces_and_comment_structure() {
                 "recognized": true,
                 "text": "input: A café value with  two spaces.\n    A continuation that keeps its indent.\ncount:",
                 "entries": [
-                    {"key": "input", "text": "A café value with  two spaces.\n    A continuation that keeps its indent."},
+                    {"key": "input", "text": "A café value with  two spaces.\nA continuation that keeps its indent."},
                     {"key": "count", "text": ""}
                 ]
             },
@@ -195,8 +221,8 @@ export const one: i64 = 1
     assert_eq!(
         test["sections"],
         json!([
-            {"heading": "Rules:", "recognized": false, "text": "A check must pass.", "entries": []},
-            {"heading": "Status:", "recognized": false, "text": "Covered.", "entries": []}
+            {"heading": "Rules:", "recognized": true, "text": "A check must pass.", "entries": []},
+            {"heading": "Status:", "recognized": true, "text": "Covered.", "entries": []}
         ])
     );
     let function = &declaration(sections, "retain")["documentation"];
@@ -212,7 +238,7 @@ export const one: i64 = 1
             },
             {
                 "heading": "Options:",
-                "recognized": false,
+                "recognized": true,
                 "text": "fallback: Prose, even with a key-like name.\n    Keep the relative indentation.\n\nA second paragraph about the option.",
                 "entries": []
             },
@@ -235,6 +261,43 @@ export const one: i64 = 1
             },
             {"heading": "Notes:", "recognized": true, "text": "More detail.", "entries": []}
         ])
+    );
+}
+
+/// SDOC-2, SDOC-3 and SDOC-7: entry continuations use their own common
+/// margin, and headings keep their place and declared status after blank lines.
+#[test]
+fn documentation_extracts_entry_markdown_and_section_headings() {
+    let root = scratch("documentation-entry-markdown");
+    let source = write(
+        &root,
+        "extraction.hgl",
+        include_str!("fixtures/doc_extraction.hgl"),
+    );
+    let model: Value = serde_json::from_slice(&document(&[&source])).unwrap();
+    let comment =
+        &declaration(module(&model, "extraction_check"), "describe_value")["documentation"];
+    let sections = comment["sections"].as_array().unwrap();
+    assert_eq!(sections.len(), 5);
+    assert_eq!(
+        sections[0]["entries"],
+        json!([{"key": "value", "text": concat!(
+            "First paragraph.\n\n| Key | Value |\n| --- | ----- |\n| one | two   |\n\n",
+            "- Item\n  Second line\n\n~~~hgl no-run\nassert true\n~~~\n\nLast paragraph."
+        )}])
+    );
+    assert_eq!(
+        sections[1..],
+        [
+            json!({"heading": "Options:", "recognized": true, "text": "- Preserve the option as a list.", "entries": []}),
+            json!({"heading": "Rules:", "recognized": true, "text": "SDOC-7.", "entries": []}),
+            json!({"heading": "Status:", "recognized": true, "text": "Covered.", "entries": []}),
+            json!({"heading": "Notes for display:", "recognized": false, "text": "A custom section.", "entries": []}),
+        ]
+    );
+    assert_eq!(
+        comment["examples"],
+        json!([{"code": "assert true\n", "position": null, "runnable": false}])
     );
 }
 

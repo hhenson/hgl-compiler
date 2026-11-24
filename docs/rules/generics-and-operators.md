@@ -22,7 +22,8 @@ analyser: partial
 - A graph instance fills unresolved inferred struct type arguments from settled fields in written order and checks the concrete application (GEN-3, GEN-7). An earlier unsettled field can defer a later field's binding. Explicit and expected type arguments and types needed to read a contextual field or generic default keep their source treatment.
 - A graph instance can infer a named function's type arguments from settled operands and use the resulting parameter types to read context-dependent arguments (EXPR-9, ERR-2).
 - A nullable type the call writes for an operator's result that is a type parameter is given whole to a generic candidate whose result is one: `get<i64?>(...)` gives core's candidate an `i64?`
-- A nullable place leaves a bare result parameter for the inputs to decide. A fallible dictionary read resolves its success type from the dictionary. A store read can infer it from its place (CAP-6).
+- A nullable place leaves a bare result parameter for the inputs, a written type, or a solvable equality to decide (GEN-3, GEN-8). A fallible dictionary read resolves its success type from the dictionary. A plain value place can decide a store read's success type (CAP-6, ERR-15).
+- A nullable temporal result preserves an unresolved bare call result when checking a publication. A call whose declared result has a delta shape can still take the publication's delta context (TIME-7).
 - A plain result place can resolve the success type of a fallible generic call and let a bare parameter read the success of a result argument (ERR-15).
 - A generic value parameter takes its default where nothing else says what it is: a function's and a candidate's at a call, a struct's where it is named bare or constructed, an operator's in the output requested
 - Left: packs; solvable equalities; temporal bodies
@@ -105,7 +106,9 @@ analyser: partial
 - A value candidate may mark a parameter `var`, which takes no part in selecting it (FN-15)
 - An option given a generic value parameter of the enclosing function, `step(v, mode: M)` in `go<const M: Mode>`, admits a candidate where the function's `requires` binds the parameter, `requires M == .slow` (GEN-3); where it states nothing of it, a default of it included, no candidate is known to admit the call, which is `operator.no_candidate` where the function is declared (GEN-7)
 - A fixed parameter in an operator pack's place reports the proposed `impl.pack` code at the candidate parameter name. A pack with cardinality one is accepted. Bare Boolean requirements await #367.
-- Left: a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidates
+- A candidate whose result is missing or contradicts the result its operator gives for its parameters reports `impl.result`. The report points to the written result type or to the candidate's name if it has no result.
+- The types and values bound by a candidate's declared parameters can show that the operator's `requires` does not hold. The candidate's name then reports `impl.requires`.
+- Left: other checks of a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidate selection
 
 ## GEN-7
 
@@ -117,7 +120,8 @@ analyser: partial
 - The call records the position of the requirement it is (`Callee::Required`), so that a call of the declaration says which candidate it calls
 - "It is judged once, where it is declared, by what its `requires` states, and never again for the generic arguments a call of it gives": a call of an operator in it is admitted where a candidate takes every generic argument the requirements admit, where a named operator requirement states it, or under a membership where each listed type has one (GEN-3), and otherwise the declaration rejects (`operator.no_candidate`, with a note), by name and by symbol, in a value function and a graph: the fragments `less` and `wrap` with no `requires`
 - Each instance selects again for an operator call whose operand types use the enclosing declaration's generic parameters, including when a generic candidate admitted the body. The new selection uses the instance's operands and the operator binding at the call (GEN-5), including private operators, symbols, and calls in nodes and graphs.
-- Instance checks reach named function references, calls in anonymous bodies, and concrete calls produced by pack forwarding. The same checks enforce a selected candidate's `var` place (FN-15).
+- Instance checks reach named function references, calls in anonymous bodies, and concrete calls produced by pack forwarding, including forwarding reached through a reference. They enforce a selected candidate's `var` place (FN-15), `const` argument (FN-1, FN-3), and configuration (EXPR-14). A rejection keeps its ordinary code at the call that makes the instance, with the instance and failing body call named in related sites. Nested instances report at each outermost making call and name each instance in the chain.
+- An instance selects with the call's written or contextual output request. It rechecks uses when the selected result changes type, including inferred locals, calls, indexing and loops. A consumer of a selected result is checked in the enclosing instances that make it. A failed use retains its ordinary diagnostic code and gives the selected operator call as the failing site in its body (GEN-7).
 - A generic body reads a fixed list's inferred size `N` as an `i64` constant (GEN-13, TYPE-10). The C++ target executes it in arithmetic, range bounds, subscripts and local initializers in value code, node handlers and graph composition.
 - Left: a requirement met by widening an argument, and checking misuse of a type or size parameter as a runtime value
 
@@ -143,7 +147,7 @@ analyser: partial
 analyser: done
 
 - Property domains are ordinary concrete value types. A generic domain rejects with local `property.domain`.
-- Each domain in a clause gets its laws and expects its own identity type (EXPR-5). A later clause naming an earlier domain rejects at that domain with `property.duplicate`. Checks for repeated domains or properties within one clause are pending.
+- Each domain in a clause gets its laws and expects its own identity type (EXPR-5). A repeated domain in one or more clauses, or a repeated property in one clause, rejects at the later domain or property (`property.duplicate`).
 - Law queries read the public operator's metadata for the concrete operand type; an ordinary or anonymous function declares no guarantee. Metadata performs no arithmetic transformation.
 
 optimiser: planned

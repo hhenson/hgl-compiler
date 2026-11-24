@@ -78,15 +78,18 @@
 //! and the rest is analysed.
 
 mod assemble;
+mod const_inputs;
 mod constant;
 mod cycles;
 mod declare;
 mod declared;
 mod documentation;
+pub mod formatting;
 mod forms;
 pub mod hir;
 mod imports;
 mod instance;
+pub use const_inputs::{ConstInput, ConstInputFault};
 pub use instance::InstanceInputs;
 mod laws;
 mod phases;
@@ -185,6 +188,10 @@ pub mod codes {
     pub const PROPERTY_DUPLICATE: &str = "property.duplicate";
     /// A candidate declares a fixed parameter in its operator's pack slot (GEN-6).
     pub const IMPL_PACK: &str = "impl.pack";
+    /// A candidate's result disagrees with its operator's result for its parameters (GEN-6).
+    pub const IMPL_RESULT: &str = "impl.result";
+    /// A candidate's parameter types fall outside its operator's stated type set (GEN-6).
+    pub const IMPL_REQUIRES: &str = "impl.requires";
     /// A native implementation completes no declaration (NATIVE-2).
     pub const NATIVE_MISSING_DECLARATION: &str = "native.missing_declaration";
     /// A local is used before the statement that declares it (UNIT-6).
@@ -204,6 +211,8 @@ pub mod codes {
     pub const ALIAS_UNKNOWN: &str = "alias.unknown";
     /// A name that nothing in scope binds (UNIT-10).
     pub const NAME_UNKNOWN: &str = "name.unknown";
+    /// A function declared with a reserved activation form's name (UNIT-10).
+    pub const NAME_RESERVED: &str = "name.reserved";
     /// A generic type's name stands before a `<` that does not open its
     /// arguments (GEN-14).
     pub const GENERIC_INVALID_APPLICATION: &str = "generic.invalid_application";
@@ -346,6 +355,8 @@ pub mod codes {
     pub const RUN_CONFIGURATION: &str = "run.configuration";
     /// A constant's value depends on itself (UNIT-13).
     pub const CONSTANT_CYCLE: &str = "constant.cycle";
+    /// A field or parameter default depends on itself (UNIT-8).
+    pub const DEFAULT_CYCLE: &str = "default.cycle";
     /// A module constant or parameter/field default whose evaluation
     /// fails (UNIT-13, UNIT-8, ERR-9).
     /// The catalogue row is proposed.
@@ -510,6 +521,14 @@ pub mod codes {
     /// In a hook or a value function, a `const` parameter given what is
     /// no constant expression (FN-1).
     pub const ARGUMENT_CONSTANT: &str = "argument.constant";
+    /// A format-string brace opens or closes no place (FMT-3).
+    pub const FORMAT_SYNTAX: &str = "format.syntax";
+    /// A format place has no argument (FMT-3, FMT-9).
+    pub const FORMAT_ARGUMENT: &str = "format.argument";
+    /// No format place takes the argument (FMT-3).
+    pub const FORMAT_UNUSED: &str = "format.unused";
+    /// The value type does not admit the specifier or mark (FMT-3, FMT-4, FMT-9).
+    pub const FORMAT_SPECIFIER: &str = "format.specifier";
     /// A `var` parameter is given what is no place (FN-15).
     pub const ARGUMENT_PLACE: &str = "argument.place";
     /// A `var` parameter of a temporal function, an operator or a
@@ -737,7 +756,7 @@ fn warning(
 /// `include_str!` puts a file's text in the compiler when the compiler
 /// is built, so the module is the one at the `spec/hgl_core` pin. A
 /// test fails when the pin adds a file this list does not have.
-pub const CORE_FILES: [(&str, &str); 7] = [
+pub const CORE_FILES: [(&str, &str); 9] = [
     (
         "<core>/core/calendar.hgl",
         include_str!("../../../spec/hgl_core/hgl/core/calendar.hgl"),
@@ -755,8 +774,16 @@ pub const CORE_FILES: [(&str, &str); 7] = [
         include_str!("../../../spec/hgl_core/hgl/native/endpoints.hgl"),
     ),
     (
+        "<core>/native/formatting.hgl",
+        include_str!("../../../spec/hgl_core/hgl/native/formatting.hgl"),
+    ),
+    (
         "<core>/native/lists.hgl",
         include_str!("../../../spec/hgl_core/hgl/native/lists.hgl"),
+    ),
+    (
+        "<core>/native/output.hgl",
+        include_str!("../../../spec/hgl_core/hgl/native/output.hgl"),
     ),
     (
         "<core>/native/scalar_operators.hgl",

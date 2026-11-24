@@ -326,22 +326,18 @@ impl<'a> Site<'a> {
         let mut wrote_generics = false;
         let mut wrote_parameters = false;
         for section in &comment.sections {
-            if !section.recognized {
-                // SDOC-3 leaves unrecognized headings as authored prose.
-                render(output, &section.prose, link);
-                continue;
-            }
             match (section.heading.as_deref(), interface) {
                 (Some("Type Args:"), Some(interface))
-                    if !interface.generic_parameters.is_empty() =>
+                    if section.recognized && !interface.generic_parameters.is_empty() =>
                 {
                     generic_table(output, interface, Some(section), link);
                     render(output, &section.prose, link);
                     wrote_generics = true;
                 }
                 (Some("Args:"), Some(interface))
-                    if !interface.parameters.is_empty()
-                        || !interface.configuration_parameters.is_empty() =>
+                    if section.recognized
+                        && (!interface.parameters.is_empty()
+                            || !interface.configuration_parameters.is_empty()) =>
                 {
                     parameter_tables(output, interface, Some(section), link);
                     render(output, &section.prose, link);
@@ -349,17 +345,14 @@ impl<'a> Site<'a> {
                 }
                 _ => {
                     if let Some(heading) = &section.heading {
-                        writeln!(
-                            output.html,
-                            "<h4>{}</h4>",
-                            escaped(heading.trim_end_matches(':'))
-                        )
-                        .unwrap();
+                        // Use the same inline Markdown rules as the section text.
+                        let title = heading.strip_suffix(':').unwrap_or(heading);
+                        render(output, &format!("#### {title} ####"), link);
                     }
                     render_section(
                         output,
                         &section.text,
-                        section.heading.as_deref() == Some("Examples:"),
+                        section.recognized && section.heading.as_deref() == Some("Examples:"),
                         link,
                     );
                 }

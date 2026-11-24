@@ -28,6 +28,8 @@
 //! Duration arithmetic (OPS-10) and tenor arithmetic, comparison,
 //! movement primitives and text (TEN-1, TEN-2, TEN-3, TEN-4, TEN-9)
 //! use the selected binding in the same way.
+//! Core's `write` uses the ordinary native function binding, with its
+//! stream and flush arguments (OUT-1, OUT-2).
 //!
 //! EXPR-2: the arguments are evaluated in the order written, and then
 //! the defaults of those left out. C++ evaluates a call's arguments in
@@ -43,6 +45,7 @@ use hgl_analyser::{
 use hgl_diagnostics::Location;
 use hgl_lower::calls::{DefaultValue, LeftOut, left_out, runtime_arguments};
 use hgl_lower::copies::place_of;
+use hgl_lower::instances::CallableLimit;
 
 use super::Emitter;
 use super::anonymous::{anonymous_arguments, anonymous_signature};
@@ -61,6 +64,39 @@ struct ValueTarget<'a> {
 }
 
 impl Emitter<'_> {
+    /// Reports the missing instance at the call that asks for it.
+    pub(super) fn missing_instance(
+        &mut self,
+        at: Location,
+        callee: &Callee,
+        arguments: &[Argument],
+        otherwise: &str,
+    ) -> String {
+        if let Some(limit) = self
+            .instances
+            .callable_limit(self.program, callee, arguments)
+            && let Some((module, declaration)) = callee.declaration()
+        {
+            let name = &self.program.modules[module].declarations[declaration].name;
+            let reason = match limit {
+                CallableLimit::Size => format!(
+                    "a function argument to `{name}` whose specialization copies more than {} nodes",
+                    crate::CALLABLE_LIMITS.size,
+                ),
+                CallableLimit::Depth => format!(
+                    "a function argument to `{name}` with a specialized body deeper than {} nodes",
+                    crate::CALLABLE_LIMITS.depth,
+                ),
+                CallableLimit::Growth => format!(
+                    "a function argument to `{name}` with more than {} deeper specializations on one call chain",
+                    crate::CALLABLE_LIMITS.growth,
+                ),
+            };
+            return self.missing(at, &reason);
+        }
+        self.missing(at, otherwise)
+    }
+
     /// Respect expression order when an apparent local read is a
     /// contextual connection read in the consuming handler (EXPR-2).
     pub(super) fn may_fail_here(&self, value: &Expr) -> bool {
@@ -92,6 +128,23 @@ impl Emitter<'_> {
         let at = whole.at;
         // True for the call that is the whole of a statement.
         let statement = std::mem::take(&mut scope.statement_call);
+        let text = match &whole.kind {
+            ExprKind::Call { text, .. } => text.as_deref(),
+            _ => None,
+        };
+        if let Some(signature) = hgl_analyser::formatting::value_signature(self.program, callee) {
+            return self.format_call(scope, callee, signature, arguments, text, whole);
+        }
+        if let [argument] = arguments
+            && let Some(members) = hgl_analyser::formatting::collection_members(
+                self.program,
+                callee,
+                &argument.value.ty,
+            )
+        {
+            let conversions = text.map_or(&[][..], |text| text.conversions.as_ref());
+            return self.collection_text(scope, &argument.value, &members, conversions);
+        }
         if let Callee::Anonymous(function) = callee {
             if !function.template.value {
                 return self.missing(at, "a call of a temporal function");
@@ -166,7 +219,12 @@ impl Emitter<'_> {
                 } else {
                     let instances = self.instances;
                     let Some(instance) = instances.find_call(program, callee, arguments) else {
-                        return self.missing(at, "a call of an instance that is not written");
+                        return self.missing_instance(
+                            at,
+                            callee,
+                            arguments,
+                            "a call of an instance that is not written",
+                        );
                     };
                     self.piece.reach.uses.insert((
                         module,

@@ -1575,7 +1575,11 @@ mod tests {
         // The optimised libraries, named as debug ones.
         assert_eq!(
             named(&|directory| {
-                fs::write(directory.join("hgraph-sdk/hgl-sdk.txt"), "tag=0.9.23\n").unwrap()
+                fs::write(
+                    directory.join("hgraph-sdk/hgl-sdk.txt"),
+                    format!("tag={HGRAPH_TAG}\n"),
+                )
+                .unwrap()
             }),
             "is not built for debugging: its `hgraph-sdk/hgl-sdk.txt` names no build type, as an \
              optimised build's does"

@@ -13,11 +13,25 @@ use super::inference::{fixed, placed};
 use super::results::{captured_output, proof_binding};
 use crate::constant::Fault;
 use crate::declared::substitute_within;
-use crate::hir::{Expr, ExprKind, Value, ValueCategory};
+use crate::hir::{Body, Expr, ExprKind, Value, ValueCategory};
 use crate::program::DeclarationKind;
 use crate::syntax::{name_token, tokens};
 use crate::types::{Argument, ConstantValue, Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
+
+/// EXPR-7 and GEN-7: the type of an indexed parameter is known only in
+/// the instance. Reread the bracket and any call it supplies there.
+pub(crate) fn has_dependent_index(body: &Body) -> bool {
+    let mut dependent = false;
+    super::forwarded_packs::walk_nested_calls(&body.statements, &mut |value| {
+        if let ExprKind::Index { base, .. } = &value.kind
+            && matches!(base.ty, Type::Parameter { .. } | Type::PackMember { .. })
+        {
+            dependent = true;
+        }
+    });
+    dependent
+}
 
 impl<'a> Typer<'a> {
     // ---- Members and elements ----

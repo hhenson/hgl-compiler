@@ -430,6 +430,10 @@ fn raises_code(assertion: &SyntaxNode, file: FileId, diagnostics: &mut Diagnosti
         .children()
         .filter(|part| part.kind() != SyntaxKind::Block)
         .collect();
+    let Some(first) = arguments.first() else {
+        // The parser already reported a missing argument.
+        return;
+    };
     let code = match arguments.as_slice() {
         [literal] if literal.kind() == SyntaxKind::Literal => tokens(literal)
             .next()
@@ -443,14 +447,6 @@ fn raises_code(assertion: &SyntaxNode, file: FileId, diagnostics: &mut Diagnosti
     {
         return;
     }
-    // The argument, or the word `raises` where there is none.
-    let at = arguments
-        .first()
-        .map(|argument| argument.span())
-        .or_else(|| tokens(assertion).next().map(|word| word.span()));
-    let Some(at) = at else {
-        return;
-    };
     let message = match &code {
         Some(code) => format!("`{code}` is no execution code of the catalogue"),
         None => "`raises` names one execution code, as a string literal".to_string(),
@@ -459,7 +455,7 @@ fn raises_code(assertion: &SyntaxNode, file: FileId, diagnostics: &mut Diagnosti
         error(
             Category::Type,
             codes::TEST_RAISES_CODE,
-            Location::new(file, at),
+            Location::new(file, first.span()),
             message,
             "TST-10",
         )

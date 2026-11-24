@@ -310,11 +310,10 @@ fn an_application_the_target_cannot_write_is_not_run() {
         "app.hgl",
         concat!(
             "application demo.app\n",
-            // A read of a node's own window result in its `when` is not
-            // written yet.
+            // A handler selecting on its own window result is not written yet.
             "fn cleared(reading: i64) -> rolling_window<i64, 2> {\n",
             "    inject out\n",
-            "    when { if valid(out) { return reading } }\n",
+            "    when valid(out, reading) { return reading }\n",
             "}\n",
             "fn counted(readings: rolling_window<i64, 2>) -> i64 {\n",
             "    when { return delta_value(readings) }\n",
@@ -330,7 +329,7 @@ fn an_application_the_target_cannot_write_is_not_run() {
     assert_eq!(
         text(&output.stderr),
         format!(
-            "{file}:4:15: the cpp target does not write a read of a node's own window result in its `when` yet\n"
+            "{file}:4:5: the cpp target does not write a handler that selects on a node's own window result yet\n"
         )
     );
     assert_eq!(

@@ -1,0 +1,21 @@
+module demo.callable_specialization
+
+const fn apply(f: const fn(i64) -> i64, value: i64) -> i64 => f(value)
+
+const fn first(f: const fn(i64) -> i64, value: i64) -> i64 =>
+    second(fn(n) => f(n + 1), value)
+
+const fn second(f: const fn(i64) -> i64, value: i64) -> i64 =>
+    third(fn(n) => f(n + 1), value)
+
+const fn third(f: const fn(i64) -> i64, value: i64) -> i64 =>
+    apply(fn(n) => f(n + 1), value)
+
+const fn identity(value: i64) -> i64 => value
+
+const fn repeat(f: const fn(i64) -> i64, value: i64) -> i64 =>
+    if value == 0 { f(value) } else { repeat(f, value - 1) }
+
+test three_wrappers { assert first(identity, 1) == 4 }
+
+test same_callback { assert repeat(fn(n) => n + 1, 3) == 1 }
