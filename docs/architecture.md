@@ -2137,6 +2137,14 @@ these, it is given on the command line. Kept, and under the toolchain's
 hash: `MACOSX_DEPLOYMENT_TARGET` and `SDKROOT`. Kept, and not under it:
 `PATH`, which finds no package, and `CMAKE_BUILD_PARALLEL_LEVEL`, how
 many jobs, which changes nothing made.
+
+Native build tools start without `CPATH`, `C_INCLUDE_PATH`,
+`CPLUS_INCLUDE_PATH`, `OBJC_INCLUDE_PATH`, `OBJCPLUS_INCLUDE_PATH`, or
+`LIBRARY_PATH`. The include variables can shadow SDK headers, and
+`LIBRARY_PATH` can add link inputs from outside the SDK. The prepared
+toolchain's format version invalidates caches made with the previous
+search environment.
+
 `HGL_HGRAPH_BUILD_TYPE=Debug scripts/provision-hgraph-sdk.sh TAG
 DIR/hgraph-sdk`, with `HGL_HGRAPH_SOURCE` naming a checkout of `TAG` for
 a debugger to read, makes a debug SDK for `HGL_HGRAPH_DEBUG` to name,
