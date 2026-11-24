@@ -17,7 +17,7 @@ use super::inference::placed;
 use super::{Tables, Typer, tables};
 use crate::constant::{Fault, Scope, Typed};
 use crate::declared::{names_parameter, substitute_within};
-use crate::hir::{DefaultExpr, Expr, ExprKind, Value};
+use crate::hir::{Body, Callee, DefaultExpr, Expr, ExprKind, Value, walk_statements_mut};
 use crate::program::{Declaration, Program, Role};
 use crate::read::{default_of, parameters};
 use crate::syntax::{child, name_token, tokens};
@@ -536,9 +536,29 @@ impl Program {
         if failed || diagnostics.has_errors() {
             return None;
         }
+        record_field_default_lambda_arguments(&mut body, arguments);
         super::record(self, &mut body, false);
         Some(DefaultExpr::from_body(body))
     }
+}
+
+/// GEN-13 and FN-17: the same lambda in a reread field default can hold
+/// different values and types for different applications of its struct.
+fn record_field_default_lambda_arguments(body: &mut Body, arguments: &[Argument]) {
+    walk_statements_mut(&mut body.statements, &mut |expression| {
+        let callee = match &mut expression.kind {
+            ExprKind::Call { callee, .. } => callee,
+            ExprKind::StaticCallable(callee) => callee.as_mut(),
+            _ => return,
+        };
+        if let Callee::Anonymous(function) = callee {
+            function
+                .specialization
+                .generics
+                .extend_from_slice(arguments);
+            record_field_default_lambda_arguments(&mut function.body, arguments);
+        }
+    });
 }
 
 /// The member that writes the initializer, identified by its first token.

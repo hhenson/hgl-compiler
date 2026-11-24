@@ -52,3 +52,73 @@ test generic_field_places_its_literal {
 test specialized_default_reaches_a_function_instance {
     assert Instanced<7>().value == 10
 }
+
+const fn apply_default(f: const fn(i64) -> i64) -> i64 => f(1)
+
+const fn multiply_default<const Scale: i64>(value: i64) -> i64 => value * Scale
+
+struct LambdaDefault<const Offset: i64> {
+    value: i64 = apply_default(fn(x) => x + Offset)
+}
+
+struct GenericCallDefault<const Scale: i64> {
+    value: i64 = apply_default(fn(x) => multiply_default<Scale>(x))
+}
+
+struct NestedStructDefault<const Offset: i64> {
+    inner: LambdaDefault<Offset> = LambdaDefault<Offset>()
+}
+
+struct NestedLambdaDefault<const Offset: i64> {
+    value: i64 = apply_default(fn(x) => apply_default(fn(y) => x + y + Offset))
+}
+
+struct TypedLambdaDefault<T> {
+    optional: T? = null
+    value: i64 = apply_default(fn(x) => {
+        let item: T? = null
+        return if item == null { x } else { 0 }
+    })
+}
+
+struct ComprehensionDefault<const Count: i64> {
+    items: list<i64> = [for i in 0..<Count: i + Count]
+}
+
+const fn default_from_generic<const Offset: i64>() -> i64 => LambdaDefault<Offset>().value
+
+test default_specializations_forward_order {
+    assert LambdaDefault<9>(value: 99).value == 99
+    assert LambdaDefault<1>().value == 2
+    assert LambdaDefault<2>().value == 3
+    assert GenericCallDefault<3>().value == 3
+    assert GenericCallDefault<4>().value == 4
+    assert TypedLambdaDefault<i64>().value == 1
+    assert TypedLambdaDefault<f64>().value == 1
+    assert NestedStructDefault<1>().inner.value == 2
+    assert NestedStructDefault<2>().inner.value == 3
+    assert NestedLambdaDefault<1>().value == 3
+    assert NestedLambdaDefault<2>().value == 4
+    assert default_from_generic<1>() == 2
+    assert default_from_generic<2>() == 3
+    assert ComprehensionDefault<2>().items == [2, 3]
+    assert ComprehensionDefault<3>().items == [3, 4, 5]
+}
+
+test default_specializations_reverse_order {
+    assert LambdaDefault<9>(value: 99).value == 99
+    assert LambdaDefault<2>().value == 3
+    assert LambdaDefault<1>().value == 2
+    assert GenericCallDefault<4>().value == 4
+    assert GenericCallDefault<3>().value == 3
+    assert TypedLambdaDefault<f64>().value == 1
+    assert TypedLambdaDefault<i64>().value == 1
+    assert NestedStructDefault<2>().inner.value == 3
+    assert NestedStructDefault<1>().inner.value == 2
+    assert NestedLambdaDefault<2>().value == 4
+    assert NestedLambdaDefault<1>().value == 3
+    assert default_from_generic<2>() == 3
+    assert default_from_generic<1>() == 2
+    assert ComprehensionDefault<3>().items == [3, 4, 5]
+    assert ComprehensionDefault<2>().items == [2, 3]
+}

@@ -3073,6 +3073,30 @@ fn composite_values_are_written() {
     assert!(point < line, "{types}");
 }
 
+/// GEN-13 and FN-17: a field default's lambda keeps the struct's type
+/// arguments even if neither its parameter nor its result depends on them.
+#[test]
+fn generic_field_defaults_write_both_lambda_types() {
+    let emitted = emit_with(
+        &[(
+            "demo.field_defaults.hgl",
+            include_str!("fixtures/demo.field_defaults.hgl"),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    let module = emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/mod-demo-field_defaults.cpp")
+        .unwrap();
+    for ty in ["Int", "Float"] {
+        let local = format!("::std::optional<::hgraph::{ty}> item = ::std::nullopt;");
+        assert!(module.text.contains(&local), "Missing lambda local {local}");
+    }
+}
+
 /// What the target does not write of the composites yet is reported
 /// where it is written, and nothing is miswritten: a struct that holds
 /// itself (TYPE-6), a field of an abstract struct assigned, a dictionary

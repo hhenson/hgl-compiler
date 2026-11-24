@@ -715,7 +715,7 @@ fn block_constants_run_on_the_sdk() {
 }
 
 /// TYPE-5, UNIT-7 and EXPR-5: omitted fields use their defining scope and
-/// their applied type, including statement blocks and generic calls.
+/// their applied type, including statement blocks, generic calls and lambdas.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn field_defaults_run_on_the_sdk() {
@@ -737,7 +737,7 @@ fn field_defaults_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

@@ -881,9 +881,20 @@ impl Instances {
             if let Some(body) = &module.store_body {
                 waiting.extend(instances.asked(program, &body.statements));
             }
-            // What is worked out with no body around it: a constant's
-            // value, and a default (UNIT-13, UNIT-8).
-            let defaults = module.defaults.iter().flatten().flatten();
+            // Generic struct defaults ask for instances at omitted
+            // fields, with the struct's arguments in place (TYPE-5).
+            let defaults = module
+                .defaults
+                .iter()
+                .zip(&module.details)
+                .filter_map(|(defaults, detail)| match detail {
+                    Detail::Struct(shape) if !shape.generics.is_empty() => None,
+                    _ => Some(defaults),
+                })
+                .flatten()
+                .flatten();
+            // Constants and other defaults are read in their defining
+            // scope (UNIT-13, UNIT-8).
             for value in module.constants.iter().flatten().chain(defaults) {
                 waiting.extend(instances.asked_in(program, &value.value));
             }
