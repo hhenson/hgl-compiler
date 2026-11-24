@@ -451,10 +451,7 @@ fn substitute(
             .unwrap_or_else(|| ty.clone()),
         // GEN-17: a key can be supplied before the pack is known.
         Type::PackMember { pack, name, key } => {
-            let key = Constant {
-                text: key.text.clone(),
-                value: constant(key).value,
-            };
+            let key = constant(key);
             member(*pack, name, &key).unwrap_or_else(|| Type::PackMember {
                 pack: *pack,
                 name: name.clone(),

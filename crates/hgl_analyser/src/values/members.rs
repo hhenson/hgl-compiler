@@ -434,10 +434,10 @@ impl<'a> Typer<'a> {
                 return self.deferred_pack_entry(pack);
             }
             Err(Fault::Reported | Fault::Failed) => return unread,
-            _ => {
+            unread_key => {
                 let key = Constant {
                     text,
-                    value: ConstantValue::Unknown,
+                    value: unread_key.map_or(ConstantValue::Unknown, |read| read.value),
                 };
                 self.pack_member_fault(at, &MemberFault::KeyKind { key });
                 return unread;
