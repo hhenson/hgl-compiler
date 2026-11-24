@@ -2537,7 +2537,7 @@ fn pack_entries_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 8 passed, 0 failed\nexecutable cases: 11 passed, 0 failed, 0 not run\n"
+            "rejection cases: 8 passed, 0 failed\nexecutable cases: 12 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );

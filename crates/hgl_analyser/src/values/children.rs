@@ -301,9 +301,9 @@ impl Typer<'_> {
         }
     }
 
-    /// The temporal pack whose fitted entry must supply this projection's
-    /// shape (FN-19, GEN-7). No validity fact is known until then.
-    pub(super) fn deferred_pack_root(&self, value: &Expr) -> Option<LocalId> {
+    /// The selected pack entry whose fitted type must supply the projection's
+    /// shape (FN-19, GEN-7).
+    pub(super) fn deferred_pack_selection(&self, value: &Expr) -> Option<PackEndpointSelection> {
         if self.pack_inputs.is_some() || value.ty != Type::Unknown {
             return None;
         }
@@ -315,7 +315,7 @@ impl Typer<'_> {
         if root.ty != Type::Unknown || !matches!(root.kind, ExprKind::DeferredPackRead) {
             return None;
         }
-        self.pack_endpoint_selection(root).map(|entry| entry.pack)
+        self.pack_endpoint_selection(root)
     }
 
     /// True where `value` reads a child that is a window, of an input
@@ -660,7 +660,7 @@ impl Typer<'_> {
         let child = self.expression(&named, None);
         self.naming = before;
         let has_child = self.child_of(&child).is_some()
-            || (defer_guard && self.deferred_pack_root(&child).is_some());
+            || (defer_guard && self.deferred_pack_selection(&child).is_some());
         Some(has_child.then_some(child))
     }
 
@@ -797,7 +797,7 @@ impl Typer<'_> {
         if self.hook == Some(Hook::Start)
             && let Some(input) = self
                 .input_of(child)
-                .or_else(|| self.deferred_pack_root(child))
+                .or_else(|| self.deferred_pack_selection(child).map(|entry| entry.pack))
         {
             let name = self.locals[input].name.clone();
             self.input_lifecycle(at, &name);
@@ -806,11 +806,31 @@ impl Typer<'_> {
 
     /// The child a test of `child`, an endpoint operation's argument,
     /// proves valid, where it is named when the program is compiled.
-    pub(super) fn tested_child(&self, child: &Expr) -> Option<ChildPath> {
+    fn tested_child(&self, child: &Expr) -> Option<ChildPath> {
         match self.child_of(child)? {
             Child::Named(path) => Some(path),
             Child::Runtime => None,
         }
+    }
+
+    /// A guard on a known child admits that child. A guard before fitting
+    /// defers checking reads projected from the same entry (TIME-4, GEN-7).
+    pub(super) fn child_guard_facts(
+        &self,
+        operation: EndpointOperation,
+        child: &Expr,
+    ) -> Vec<Fact> {
+        if let Some(path) = self.tested_child(child) {
+            return child_facts(operation, path);
+        }
+        if let Some(PackEndpointSelection {
+            pack,
+            key: Some(key),
+        }) = self.deferred_pack_selection(child)
+        {
+            return vec![Fact::DeferredChildGuard { pack, key }];
+        }
+        Vec::new()
     }
 }
 

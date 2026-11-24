@@ -1079,6 +1079,7 @@ impl<'a> Typer<'a> {
                             // (TIME-1); replay is graph composition.
                             Fact::AllValid(_)
                             | Fact::ChildValid(_)
+                            | Fact::DeferredChildGuard { .. }
                             | Fact::DeferredPackGuard { .. } => None,
                         })
                         .collect()

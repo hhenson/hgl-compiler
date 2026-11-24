@@ -131,6 +131,13 @@ test a_named_pack_child_uses_its_fitted_field {
     ) == [_, 9]
 }
 
+# FN-19 and GEN-7: a named value-pack entry also supplies its field's type.
+const fn packed_bid<...As>(args: ...{As}) -> i64 => args["q"].bid
+
+test a_named_pack_field_in_a_value_function {
+    assert packed_bid(q: PackQuote(bid: 9, ask: 7)) == 9
+}
+
 # expect-error(phase, "endpoint.argument")
 fn nonstructural_pack_child(quote: atomic<PackQuote>) -> i64 => guarded_named_child(quote: quote)
 

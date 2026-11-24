@@ -6,7 +6,6 @@
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::Typer;
 use super::constants::constant_text;
 use super::dependent_packs::MemberFault;
 use super::fit::{hook_payload_type, not_null, open, whole};
@@ -14,6 +13,7 @@ use super::forms::received_type;
 use super::forwarded_packs::BoundPack;
 use super::inference::{fixed, placed, type_pack};
 use super::results::{captured_output, proof_binding};
+use super::{Fact, Typer};
 use crate::constant::Fault;
 use crate::declared::substitute_within;
 use crate::hir::{Body, Expr, ExprKind, Hook, PackKey, Value, ValueCategory};
@@ -91,7 +91,7 @@ impl<'a> Typer<'a> {
                 Type::Result { .. } => !whole(ty),
                 _ => false,
             });
-        if deferred_graph || self.deferred_pack_root(&base).is_some() {
+        if deferred_graph || self.deferred_pack_selection(&base).is_some() {
             return (
                 ExprKind::DeferredMember {
                     base: Box::new(base),
@@ -371,14 +371,7 @@ impl<'a> Typer<'a> {
             let (kind, ty) = self.pack_entry(pack, named, &index);
             let at = self.at(node);
             let input = self.is_temporal_input(pack);
-            // With an unfitted entry only the concrete body can tell whether
-            // the projection reads a temporal child or the entry's payload.
-            let deferred_child = matches!(kind, ExprKind::DeferredPackRead)
-                && ty == Type::Unknown
-                && self.pack_inputs.is_none()
-                && super::children::following_projection(node).is_some();
-            let child =
-                self.reads_children() && (deferred_child || self.continues_chain(node, &ty));
+            let child = self.reads_children() && self.continues_chain(node, &ty);
             if !matches!(kind, ExprKind::Unread)
                 && input
                 && !child
@@ -391,9 +384,23 @@ impl<'a> Typer<'a> {
                     ExprKind::PackEntry { key, .. } => Some(key.clone()),
                     _ => self.endpoint_key(node),
                 };
+                // Check entry admission even when the shape is unfitted. A
+                // dominating child guard on that entry leaves the projection's
+                // admission to the instance, which can see the actual child.
+                let guarded_projection = matches!(kind, ExprKind::DeferredPackRead)
+                    && ty == Type::Unknown
+                    && self.pack_inputs.is_none()
+                    && self.reads_children()
+                    && super::children::following_projection(node).is_some()
+                    && self.present.iter().any(|fact| {
+                        matches!(fact, Fact::DeferredChildGuard { pack: guarded, key: entry }
+                            if *guarded == pack && key.as_ref() == Some(entry))
+                    });
                 // An unresolved key or shape can affect what admits the
                 // read. Its instance decides it where both are known.
-                if key.is_some() || !matches!(self.hook, Some(Hook::When | Hook::Stop)) {
+                if !guarded_projection
+                    && (key.is_some() || !matches!(self.hook, Some(Hook::When | Hook::Stop)))
+                {
                     self.pack_input_read(
                         pack,
                         key,
