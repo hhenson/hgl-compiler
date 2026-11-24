@@ -189,13 +189,14 @@ transpiler: partial
 
 ## CTRL-16
 
-analyser: planned
+analyser: partial
 
-- #368 tracks checking only the selected branch and using a pass's loop binding in a nested constant bound or generic argument.
+- An inline pack spread reads only the branch selected in each concrete pack-key pass. A chain with no selected branch and no `else` supplies no argument (FN-19, GEN-7).
+- Left: Other uses of a pass binding in a nested constant bound or generic argument remain part of #368.
 
-transpiler: planned
+transpiler: partial
 
-- Constant branches of compile-time loops await #368.
+- C++ emits the arguments supplied by the selected branches of an inline pack spread.
 
 ## SOURCE-1
 

@@ -506,6 +506,7 @@ impl<'a> Typer<'a> {
         };
         let entry = wanted.as_ref().and_then(|key| {
             inputs
+                .values
                 .iter()
                 .find(|input| input.parameter == pack && input.key == *key)
         });

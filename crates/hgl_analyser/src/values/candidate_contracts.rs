@@ -101,6 +101,7 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
                 binding: &binding,
                 parameter: &parameter,
                 arguments: &bindings,
+                type_packs: &[],
                 constants: &constants,
             };
             if declared_requirement(
