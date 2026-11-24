@@ -290,12 +290,43 @@ const fn a_fixed_prefix_proves_no_member<...Us>(value: tuple<i64, Us>) -> bool {
 # expect-error(type, "type.mismatch")
 const fn wrong_nested_partition() -> bool => list_partition([("a", true)], (1,))
 
-# hgl_spec#240 leaves tuple arity ranking open: preserve ambiguity.
-operator arity<T>(value: T) -> bool
-impl const fn arity<...Ts>(value: tuple<Ts>) -> bool => true
-impl const fn arity<A, B>(value: tuple<A, B>) -> bool => true
-# expect-error(operator, "operator.ambiguous")
-const fn tuple_arity_stays_ambiguous() -> bool => arity((1, "a"))
+# GEN-5: fixed tuples outrank admitting packs, including a packed
+# suffix, a nested tuple and a nullable tuple.
+operator arity<T>(value: T) -> str
+impl const fn arity<...Ts>(value: tuple<Ts>) -> str => "pack"
+impl const fn arity<A, B>(value: tuple<A, B>) -> str => "pair"
+fn ranked_tuple(value: tuple<i64, str>) -> str => arity(value)
+
+operator prefixed_arity<T>(value: T) -> str
+impl const fn prefixed_arity<A, ...Ts>(value: tuple<A, Ts>) -> str => "pack"
+impl const fn prefixed_arity<A>(value: tuple<A>) -> str => "single"
+impl const fn prefixed_arity<A, B>(value: tuple<A, B>) -> str => "pair"
+
+operator nested_arity<T>(value: T) -> str
+impl const fn nested_arity<...Ts>(value: tuple<bool, tuple<Ts>>) -> str => "pack"
+impl const fn nested_arity<A, B>(value: tuple<bool, tuple<A, B>>) -> str => "pair"
+
+operator nullable_arity<T>(value: T) -> str
+impl const fn nullable_arity<...Ts>(value: tuple<Ts>?) -> str => "pack"
+impl const fn nullable_arity<A, B>(value: tuple<A, B>?) -> str => "pair"
+
+operator fixed_arity<T>(value: T) -> str
+impl const fn fixed_arity<A, B>(value: tuple<A, B>) -> str => "generic"
+impl const fn fixed_arity<B>(value: tuple<i64, B>) -> str => "integer"
+
+test fixed_tuple_specificity {
+    assert arity((1, "a")) == "pair"
+    assert arity((1, "a", true)) == "pack"
+    assert eval ranked_tuple(value: [(1, "a"), (2, "b")]) == ["pair", "pair"]
+    assert prefixed_arity((1,)) == "single"
+    assert prefixed_arity((1, "a")) == "pair"
+    assert prefixed_arity((1, "a", true)) == "pack"
+    assert nested_arity((true, (1, "a"))) == "pair"
+    let optional: tuple<i64, str>? = (1, "a")
+    assert nullable_arity(optional) == "pair"
+    assert fixed_arity((1, "a")) == "integer"
+    assert fixed_arity((true, "a")) == "generic"
+}
 
 # GEN-3: evidence retention never guesses a split between two unknown packs.
 const fn unconstrained_partition<...As, ...Bs>(joined: list<tuple<As, Bs>>) -> bool => true

@@ -530,18 +530,15 @@ fn nested_exact_tuples_guarantee_their_pack_member_exists() {
 }
 
 #[test]
-fn tuple_arity_alone_remains_ambiguous_pending_spec240() {
-    // hgl_spec#240: GEN-5 has not settled fixed tuple arity versus a pack.
+fn fixed_tuple_arity_outranks_a_pack_in_either_declaration_order() {
+    // GEN-5: the fixed-length tuple outranks a pack that admits it.
     for candidates in [
         "impl const fn p<...Ts>(x: tuple<Ts>) -> bool => true\nimpl const fn p<A, B>(x: tuple<A, B>) -> bool => true\n",
         "impl const fn p<A, B>(x: tuple<A, B>) -> bool => true\nimpl const fn p<...Ts>(x: tuple<Ts>) -> bool => true\n",
     ] {
-        rejects(
-            &format!(
-                "module m\noperator p<T>(x: T) -> bool\n{candidates}test t {{ assert p((1, \"a\")) }}"
-            ),
-            "operator/operator.ambiguous",
-        );
+        accepts(&format!(
+            "module m\noperator p<T>(x: T) -> bool\n{candidates}test t {{ assert p((1, \"a\")) }}"
+        ));
     }
 }
 
