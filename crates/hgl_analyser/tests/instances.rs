@@ -453,6 +453,7 @@ fn called(checked: &Checked, body: &Body) -> Vec<String> {
                     .map(|argument| match argument {
                         Argument::Type(ty) => ty.to_string(),
                         Argument::Constant(constant) => constant.text.clone(),
+                        Argument::NoResult => "none".to_string(),
                     })
                     .collect();
                 format!("{name} <{}>", given.join(", "))
@@ -1190,4 +1191,59 @@ fn a_graphs_instance_reaches_the_value_candidate() {
     assert_eq!(signature(&taken), "(lhs: f64, rhs: f64) -> f64");
     // Its one required call, in the hook for both inputs valid.
     assert_eq!(called(&checked, &node), ["add_(f64, f64)"]);
+}
+
+/// GEN-7: an explicit return stays a return in an instance with no result.
+#[test]
+fn returning_a_resultless_callback_rejects_at_the_call() {
+    let checked = module(concat!(
+        "fn record(value: i64) {}\n",
+        "fn through<R>(f: fn(i64) -> R, value: i64) -> R { return f(value) }\n",
+        "fn call(value: i64) => through(record, value)\n",
+    ));
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/type.mismatch");
+    assert_eq!(checked.findings[0].at, "m.hgl:4:24");
+    assert!(
+        checked
+            .report
+            .contains("this call makes the instance `through<none>`")
+    );
+}
+
+/// GEN-1 and FN-17: an absence can only bind a complete result slot.
+#[test]
+fn resultless_callbacks_respect_all_uses_of_the_result_type() {
+    let definitions = "fn record(value: i64) {}\n";
+    for signature in [
+        "fn use_it<R>(f: fn(i64) -> R, value: i64) -> list<R> => [f(value)]",
+        "fn use_it<R>(f: fn(i64) -> R, value: R) -> R => value",
+        "fn use_it<R>(f: fn(i64) -> R, value: i64) -> ref R { when {} }",
+        "fn use_it<R>(f: fn(i64) -> R, value: i64) -> R requires R in {i64} => f(value)",
+    ] {
+        let checked = module(&format!(
+            "{definitions}{signature}\nfn call(value: i64) => use_it(record, value)\n"
+        ));
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(
+            checked.findings[0].code, "type/type.mismatch",
+            "{}",
+            checked.report
+        );
+    }
+    let checked = module(concat!(
+        "const fn each_of(f: const fn(i64), value: i64) => f(value)\n",
+        "const fn add_one(value: i64) -> i64 => value + 1\n",
+        "const fn call() => each_of(add_one, 2)\n",
+    ));
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/type.mismatch");
+}
+
+/// GEN-2: dropping the call's value does not resolve the generic.
+#[test]
+fn discarding_a_call_does_not_bind_a_result_parameter_to_none() {
+    let checked = module("fn make<T>() -> T {}\nfn call() => make()\n");
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/generic.unresolved");
 }

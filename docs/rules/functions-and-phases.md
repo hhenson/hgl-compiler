@@ -245,7 +245,8 @@ analyser: partial
 - When a graph instance completes a call's parameter types, an anonymous callback takes the completed template in its lexical scope. Its synthesized capture inputs are separate from the written arguments (GEN-2).
 - Match a declared function or an operator's selected candidate, infer generic types in either direction, and accept explicit generic arguments on function and operator references. An operator reference uses the public signature, with the written arguments and the template together resolving its generic parameters. Static parameters may be called or passed onward. They hold no runtime value.
 - A named operator call reads a fixed callback against each candidate's function template. The other arguments can resolve its input types, its template sets an anonymous callback's phase, and the supplied function can resolve its result type (GEN-2, GEN-6).
-- An anonymous callback is read against the result type its template already knows, including one a later argument resolved (GEN-2).
+- A function type written with no result accepts only a callback with no result. A result-only generic accepts that callback and binds its result to none (GEN-1).
+- An anonymous callback is read against the result type its template already knows, including one a later argument resolved (GEN-2). With an unresolved result-only generic and no written result, its arrow or block body supplies a value type or no result.
 - Applies the proposed plain-parameter restriction to the fixed inputs. Keeps the remaining callback slots in declared order with their modes, defaults and pack shape.
 - A reflected operator callback selects from the resolved parameter types, including the dependent arguments. With no resolved parameter type, it reports `generic.unresolved` even for a lone candidate (FN-17).
 - A written operator reference supplies its resolved fixed input types to candidate selection. The enclosing dependent call keeps the actual argument types, including split inputs given to `map` (MAP-2).
@@ -255,6 +256,7 @@ analyser: partial
 transpiler: partial
 
 - A static target specializes the called body. The C++ target emits ordinary value helpers and composed graph calls; anonymous functions carry their permitted lexical captures as inputs.
+- A resultless specialization emits its callback invocation and side effects without a result port (GEN-7).
 - An anonymous target's identity also carries the normalized const inputs of its enclosing instance when those inputs determined its code (FN-1, FMT-3).
 - The C++ target bounds the size and structural depth of the bodies it copies when specializing static callable arguments, including each use of a named or anonymous target and the body of an anonymous target. It also bounds deeper requests of one declaration along a call chain. Exceeding a limit reports the request as unsupported.
 - The C++ target specializes reflected templates by the static callback and the dependent argument shape. It does not yet write `valid` on a temporal input captured by a value callback (#397).

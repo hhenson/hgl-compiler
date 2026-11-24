@@ -660,6 +660,7 @@ impl Emitter<'_> {
         for argument in generics {
             let written = match argument {
                 GenericArgument::Type(ty) => self.named_type(ty),
+                GenericArgument::NoResult => None,
                 GenericArgument::Constant(constant) => {
                     if let ConstantValue::Member(member) = &constant.value
                         && let Some(of) = &member.of
@@ -674,6 +675,9 @@ impl Emitter<'_> {
                 None => {
                     let shown = match argument {
                         GenericArgument::Type(ty) => format!("the type `{ty}`"),
+                        GenericArgument::NoResult => {
+                            "a generic argument with no result".to_string()
+                        }
                         GenericArgument::Constant(constant) => {
                             format!("the generic argument `{}`", constant.text)
                         }
@@ -698,12 +702,7 @@ impl Emitter<'_> {
         let ExprKind::Call { callee, .. } = &value.kind else {
             return false;
         };
-        callee.declaration().is_some_and(|(module, declaration)| {
-            matches!(
-                self.program.modules[module].details.get(declaration),
-                Some(Detail::Callable(signature)) if signature.result.is_none()
-            )
-        })
+        callee.has_result(self.program) == Some(false)
     }
 }
 

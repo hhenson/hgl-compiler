@@ -19,6 +19,8 @@ mod debug_tests;
 mod executable;
 #[path = "cpp/formatting.rs"]
 mod formatting;
+#[path = "cpp/result_only.rs"]
+mod result_only;
 #[path = "cpp/string_append.rs"]
 mod string_append;
 

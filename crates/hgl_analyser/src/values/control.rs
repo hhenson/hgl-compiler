@@ -11,7 +11,7 @@ use super::symbols::is_null;
 use super::{BOOL, Fact, Typer};
 use crate::constant::Fault;
 use crate::declared::agree;
-use crate::hir::{self, Expr, ExprKind, IfInference, LocalId, Stmt, ValueCategory};
+use crate::hir::{self, Callee, Expr, ExprKind, IfInference, LocalId, Stmt, ValueCategory};
 use crate::program::{LocalKind, Program};
 use crate::syntax::{child, tokens, ungrouped};
 use crate::types::{Constant, ConstantValue, Detail, Scalar, Type};
@@ -227,8 +227,22 @@ impl<'a> Typer<'a> {
             SyntaxKind::IfExpr => self.conditional(node, expected, used),
             _ => {
                 let value = self.expression_in_flow(node, expected, used);
-                let ty = value.ty.clone();
-                (value, Outcome::Value(ty))
+                let outcome = if self.anonymous.as_ref().is_some_and(|scope| scope.infer_result)
+                    && let ExprKind::Call { callee, .. } = &value.kind
+                    && match callee {
+                        Callee::Parameter { parameter, .. } => self.locals.get(*parameter).is_some_and(|local| {
+                            matches!(&local.ty, Type::Function(template) if template.result.is_none())
+                        }),
+                        callee => callee.has_result(self.program) == Some(false),
+                    }
+                {
+                    // FN-17: the tail of a callback with an unwritten
+                    // result can give no value, including through a block.
+                    Outcome::Nothing
+                } else {
+                    Outcome::Value(value.ty.clone())
+                };
+                (value, outcome)
             }
         };
         self.valued -= u32::from(valued);

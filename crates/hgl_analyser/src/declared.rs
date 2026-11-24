@@ -447,6 +447,7 @@ fn substitute(
             .iter()
             .find_map(|(declared, argument)| match argument {
                 Argument::Type(given) if declared == at => Some(given.clone()),
+                Argument::NoResult if declared == at => Some(Type::Unknown),
                 _ => None,
             })
             .unwrap_or_else(|| ty.clone()),
@@ -477,6 +478,7 @@ fn substitute(
                         Argument::Type(substitute(argument, map, member, pack))
                     }
                     Argument::Constant(argument) => Argument::Constant(constant(argument)),
+                    Argument::NoResult => Argument::NoResult,
                 })
                 .collect(),
         },
@@ -535,10 +537,12 @@ fn substitute(
                 let ty = parameter.ty_mut();
                 *ty = substitute(ty, map, member, pack);
             }
-            function.result = function
-                .result
-                .as_ref()
+            function.result = bind_result(function.result.as_ref(), map)
                 .map(|ty| substitute(ty, map, member, pack));
+            function.result_admits_none &= matches!(
+                function.result,
+                Some(Type::Parameter { .. } | Type::Unknown)
+            );
             Type::Function(Box::new(function))
         }
         // TYPE-16: "In a generic declaration it stays as written until
@@ -612,7 +616,7 @@ pub(crate) fn weight(ty: &Type) -> usize {
             .iter()
             .map(|argument| match argument {
                 Argument::Type(argument) => weight(argument),
-                Argument::Constant(_) => 1,
+                Argument::Constant(_) | Argument::NoResult => 1,
             })
             .sum(),
         Type::Tuple(elements) => elements.iter().map(weight).sum(),
@@ -656,6 +660,20 @@ pub fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
     substitute_with_members(ty, map, &|_, _, _| None, 1)
 }
 
+/// Apply a result-only generic binding (GEN-1). A remaining result type
+/// is still specialized by the caller, including any pack members.
+pub(crate) fn bind_result<'a>(
+    result: Option<&'a Type>,
+    map: &[(Location, &Argument)],
+) -> Option<&'a Type> {
+    result.filter(|ty| match ty {
+        Type::Parameter { at, .. } => !map
+            .iter()
+            .any(|(parameter, argument)| parameter == at && matches!(argument, Argument::NoResult)),
+        _ => true,
+    })
+}
+
 /// Specialize a type that can also name the member of a known pack (GEN-17).
 /// `pack_weight` bounds the weight of any type supplied by the member lookup.
 pub(crate) fn substitute_with_members(
@@ -680,7 +698,7 @@ pub(crate) fn substitute_with_packs(
         .iter()
         .map(|(_, argument)| match argument {
             Argument::Type(argument) => weight(argument),
-            Argument::Constant(_) => 1,
+            Argument::Constant(_) | Argument::NoResult => 1,
         })
         .max()
         .unwrap_or(1);
@@ -1299,7 +1317,7 @@ impl Structs<'_> {
                 let packs = &self.packs;
                 let pack_of = |argument: &Argument| match argument {
                     Argument::Type(ty) => pack_of(ty, packs),
-                    Argument::Constant(_) => None,
+                    Argument::Constant(_) | Argument::NoResult => None,
                 };
                 // An argument not known may be anything.
                 let mut each = |given: &Option<Argument>, applied: &Argument| {
@@ -1828,7 +1846,7 @@ fn arguments_may_be(given: &[Argument], applied: &[Argument], found: &mut Matchi
     let packs = found.packs;
     let pack_of = |argument: &Argument| match argument {
         Argument::Type(ty) => pack_of(ty, packs),
-        Argument::Constant(_) => None,
+        Argument::Constant(_) | Argument::NoResult => None,
     };
     in_sequence(
         given,
@@ -2054,14 +2072,14 @@ fn grown(ty: &Type, in_group: &dyn Fn(Id) -> bool) -> Option<String> {
                 Argument::Type(argument) => {
                     !matches!(argument, Type::Parameter { .. }) && names_parameter(argument)
                 }
-                Argument::Constant(_) => false,
+                Argument::Constant(_) | Argument::NoResult => false,
             });
             if built && in_group((*module, *declaration)) {
                 return Some(ty.to_string());
             }
             arguments.iter().find_map(|argument| match argument {
                 Argument::Type(argument) => grown(argument, in_group),
-                Argument::Constant(_) => None,
+                Argument::Constant(_) | Argument::NoResult => None,
             })
         }
         Type::Tuple(elements) => elements.iter().find_map(|element| grown(element, in_group)),

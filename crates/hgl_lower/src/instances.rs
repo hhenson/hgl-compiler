@@ -320,7 +320,7 @@ pub fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring>
         .collect();
     // The call's own type is the result as this call has it.
     let windowed = matches!(call.ty, Type::RollingWindow { .. });
-    let result = match &signature.result {
+    let result = match signature.result_at_call(generics) {
         None => None,
         Some(_) if known || windowed => Some(call.ty.clone()),
         Some(_) => trace_payload(eval),
@@ -338,6 +338,7 @@ pub fn run_result(program: &Program, run: &Run) -> Option<Type> {
             Callee::Function {
                 module,
                 declaration,
+                generics,
                 ..
             },
         ..
@@ -352,7 +353,9 @@ pub fn run_result(program: &Program, run: &Run) -> Option<Type> {
     // The call's own type is the result as this call has it: with the
     // generic arguments of the call in place of the entry's generic
     // parameters.
-    signature.result.as_ref().map(|_| run.call.ty.clone())
+    signature
+        .result_at_call(generics)
+        .map(|_| run.call.ty.clone())
 }
 
 /// The temporal function `name` of core's module: `replay`, `record`.

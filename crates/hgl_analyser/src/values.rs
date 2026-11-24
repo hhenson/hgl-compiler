@@ -446,6 +446,7 @@ pub(crate) fn reread_instance_body(
                     let argument = match argument {
                         crate::Argument::Type(ty) => crate::Argument::Type(project(ty)),
                         crate::Argument::Constant(_) => crate::instance::placed(argument, map),
+                        crate::Argument::NoResult => crate::Argument::NoResult,
                     };
                     (*at, argument)
                 })
@@ -953,10 +954,10 @@ impl<'a> Typer<'a> {
     /// The current function's result, which is the anonymous function's
     /// while reading its body (FN-7, CTRL-5).
     fn result_type(&self) -> Option<&Type> {
-        self.anonymous
-            .as_ref()
-            .map(|scope| &scope.result)
-            .or(self.signature.result.as_ref())
+        self.anonymous.as_ref().map_or_else(
+            || self.signature.result.as_ref(),
+            |scope| scope.result.as_ref(),
+        )
     }
 
     fn at(&self, node: &SyntaxNode) -> Location {

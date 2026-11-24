@@ -239,7 +239,7 @@ impl<'p> PackTypes<'p> {
             .flat_map(|call| call.arguments.iter())
             .filter_map(|(_, argument)| match argument {
                 GenericArgument::Type(ty) => Some(ty),
-                GenericArgument::Constant(_) => None,
+                GenericArgument::Constant(_) | GenericArgument::NoResult => None,
             });
         written
             .chain(call_types)

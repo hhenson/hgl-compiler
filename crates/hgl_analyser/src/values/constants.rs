@@ -384,7 +384,7 @@ impl<'a> Typer<'a> {
         Ok(value.substituted(
             &|at| match map.iter().find(|(declared, _)| *declared == at)?.1 {
                 Argument::Constant(given) => Some(given.value.clone()),
-                Argument::Type(_) => None,
+                Argument::Type(_) | Argument::NoResult => None,
             },
         ))
     }

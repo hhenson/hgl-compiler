@@ -519,9 +519,13 @@ impl<'a> Typer<'a> {
                 }
             }
         }
+        let generics = match &kind {
+            ExprKind::Call { callee, .. } => callee.generics(),
+            _ => &[],
+        };
         let has_result = matches!(
             self.program.modules[module].details.get(declaration),
-            Some(Detail::Callable(signature)) if signature.result.is_some()
+            Some(Detail::Callable(signature)) if signature.result_at_call(generics).is_some()
         );
         let call = Expr {
             kind,

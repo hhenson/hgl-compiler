@@ -129,7 +129,7 @@ fn key_use(program: &Program, expression: &Expr) -> Option<KeyUse> {
         Callee::Function { generics, .. } | Callee::Candidate { generics, .. } => {
             match generics.first()? {
                 Argument::Type(ty) => ty.clone(),
-                Argument::Constant(_) => return None,
+                Argument::Constant(_) | Argument::NoResult => return None,
             }
         }
         _ => return None,
