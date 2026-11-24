@@ -9,16 +9,20 @@ use hgl_parser::{HasSpan, SyntaxKind};
 use hgl_source::FileId;
 
 use crate::constant::{Constants, Scope};
-use crate::declared::{result_types_differ, same_type, substitute_with_members, substitute_within};
+use crate::declared::{
+    names_one_of, result_types_differ, same_type, substitute_with_members, substitute_with_packs,
+    substitute_within, weight,
+};
 use crate::program::{Declaration, DeclarationKind, Program, Role};
 use crate::read::type_child;
 use crate::syntax::child;
 use crate::types::{
-    Argument, Constant, ConstantValue, Detail, GenericKind, ReflectedPack, Signature, Type,
+    Argument, Constant, ConstantValue, Detail, GenericKind, Pack, Parameter, ReflectedPack,
+    Signature, Type,
 };
 use crate::{codes, error};
 
-use super::inference::infer;
+use super::inference::{infer, pack_bounds, type_pack};
 use super::requirements::declared_requirement;
 
 /// Report contradictions that follow from the candidate's declared types.
@@ -69,7 +73,7 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
                 .map(|(parameter, argument)| (parameter.at, argument))
                 .collect();
             let expected = public.result.as_ref().map(|result| {
-                result_in_candidate(result, public, signature, &bindings, &parameters.packs)
+                result_in_candidate(result, public, signature, &bindings, &parameters)
             });
             if let Some(message) = result_error(&expected, &signature.result) {
                 let at = child(&candidate.syntax, SyntaxKind::ReturnType)
@@ -144,22 +148,38 @@ fn result_error(expected: &Option<Type>, actual: &Option<Type>) -> Option<String
 /// GEN-6 and GEN-17: a reflected result uses the corresponding pack
 /// in the candidate's callback parameter, including a shared option key.
 /// Without the pack or key, only that member's type is still open.
+/// GEN-10: an exact homogeneous pack supplies its tuple elements.
 fn result_in_candidate(
     result: &Type,
     public: &Signature,
     candidate: &Signature,
     bindings: &[(Location, &Argument)],
-    packs: &HashMap<Location, &ReflectedPack>,
+    parameters: &ParameterTypes<'_>,
 ) -> Type {
     let member = |at, _: &str, key: &Constant| {
         Some(
-            packs
+            parameters
+                .packs
                 .get(&at)
                 .and_then(|pack| reflected_member(public, candidate, pack, key))
                 .unwrap_or(Type::Unknown),
         )
     };
-    substitute_with_members(result, bindings, &member, 1)
+    let sequence = |at| {
+        let pack = parameters
+            .tuple_pack
+            .as_ref()
+            .filter(|pack| pack.at == at)?;
+        Some(vec![pack.element.clone(); pack.count])
+    };
+    // Bound the expansion before allocating it. A pack the result does
+    // not refer to cannot affect the weight of the result.
+    let pack_weight = parameters
+        .tuple_pack
+        .as_ref()
+        .filter(|pack| names_one_of(result, &[pack.at]))
+        .map_or(1, |pack| pack.count.saturating_mul(weight(pack.element)));
+    substitute_with_packs(result, bindings, &member, &sequence, pack_weight)
 }
 
 /// A reflected member written in the candidate's pack and option scope.
@@ -218,6 +238,7 @@ fn parameter_types<'a>(
     let mut from_parameter = arguments.clone();
     let mut inputs = Vec::new();
     let mut packs = HashMap::new();
+    let mut tuple_pack = None;
     for (parameter, slot) in public
         .parameters
         .iter()
@@ -226,6 +247,9 @@ fn parameter_types<'a>(
         let given = &candidate.parameters[slot?];
         if parameter.pack != given.pack {
             return None;
+        }
+        if parameter.pack == Some(Pack::Positional) {
+            tuple_pack = homogeneous_candidate_pack(public, candidate, parameter, given);
         }
         // The type reader has reported this non-ordinary input (TYPE-12).
         if matches!(given.ty, Type::Signal) && (role == Role::Value || given.configuration) {
@@ -304,12 +328,46 @@ fn parameter_types<'a>(
             .map(|argument| argument.unwrap_or(Argument::Type(Type::Unknown)))
             .collect(),
         packs,
+        tuple_pack,
     })
 }
 
 struct ParameterTypes<'a> {
     arguments: Vec<Argument>,
     packs: HashMap<Location, &'a ReflectedPack>,
+    tuple_pack: Option<HomogeneousPack<'a>>,
+}
+
+struct HomogeneousPack<'a> {
+    at: Location,
+    count: usize,
+    element: &'a Type,
+}
+
+/// A nonempty positional candidate pack of known cardinality can give
+/// one concrete sequence of element types to a public type pack (GEN-10).
+fn homogeneous_candidate_pack<'a>(
+    public: &Signature,
+    candidate: &Signature,
+    parameter: &Parameter,
+    given: &'a Parameter,
+) -> Option<HomogeneousPack<'a>> {
+    let at = public.generics[type_pack(parameter, &public.generics)?].at;
+    let (count, maximum) = given.pack_bounds;
+    let (public_minimum, public_maximum) = pack_bounds(parameter, &public.generics, None);
+    if count == 0
+        || maximum != Some(count)
+        || count < public_minimum
+        || public_maximum.is_some_and(|maximum| count > maximum)
+        || type_pack(given, &candidate.generics).is_some()
+    {
+        return None;
+    }
+    Some(HomogeneousPack {
+        at,
+        count: usize::try_from(count).ok()?,
+        element: &given.ty,
+    })
 }
 
 /// True where an input repeats an inferred binding or computes a constant

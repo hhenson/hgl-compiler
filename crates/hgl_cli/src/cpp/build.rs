@@ -139,8 +139,8 @@ pub(super) fn cache() -> Result<PathBuf, String> {
         .map_err(|error| format!("{} cannot be made absolute: {error}", directory.display()))
 }
 
-/// Takes the lock of `directory`, waiting for a run that holds it; it
-/// is let go when what is given is dropped.
+/// Takes the lock of `directory`, waiting for the driver and any native
+/// jobs that inherited a copy of its lock.
 pub(super) fn lock(directory: &Path) -> Result<fs::File, String> {
     let path = directory.join(LOCK);
     let file = fs::File::options()
@@ -455,10 +455,10 @@ pub(super) fn native_tool_command(program: &Path) -> Command {
     command
 }
 
-/// A build process inherits the open workspace lock on its unused stdin.
-/// If hgl dies, the next build waits while the native process exits.
+/// Carries the open build lock into the native launcher on stdin. The
+/// launcher makes a second copy for jobs whose builder replaces stdin.
 pub(super) fn native_command(program: &Path, lock: &fs::File) -> Result<Command, String> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut command = {
         let hgl = std::env::current_exe().map_err(|error| format!("cannot find hgl: {error}"))?;
         let mut command = native_tool_command(&hgl);
@@ -469,7 +469,7 @@ pub(super) fn native_command(program: &Path, lock: &fs::File) -> Result<Command,
             .arg("--");
         command
     };
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let mut command = native_tool_command(program);
     let inherited = lock
         .try_clone()
@@ -478,27 +478,36 @@ pub(super) fn native_command(program: &Path, lock: &fs::File) -> Result<Command,
     Ok(command)
 }
 
-/// Sets a parent-death signal before replacing this helper with the build tool.
-#[cfg(target_os = "linux")]
+/// Gives a native tool and its jobs a shared copy of the build lock.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn native_build_child(
     parent: u32,
     program: &Path,
     arguments: &[std::ffi::OsString],
 ) -> std::process::ExitCode {
-    use nix::{
-        sys::{prctl, signal::Signal},
-        unistd::getppid,
-    };
+    #[cfg(target_os = "linux")]
+    use nix::sys::{prctl, signal::Signal};
+    use nix::unistd::{dup, getppid};
     use std::os::unix::process::CommandExt as _;
 
+    #[cfg(target_os = "linux")]
     if let Err(error) = prctl::set_pdeathsig(Signal::SIGTERM) {
         eprintln!("hgl: cannot set the build's parent-death signal: {error}");
         return std::process::ExitCode::FAILURE;
     }
-    // The original parent may have died before the signal was installed.
+    // The original parent may have died while this helper was starting.
     if u32::try_from(getppid().as_raw()) != Ok(parent) {
         return std::process::ExitCode::FAILURE;
     }
+    // dup leaves the copy open across exec. It is private to this launcher
+    // and still holds the lock when Ninja opens /dev/null over stdin.
+    let _held = match dup(io::stdin()) {
+        Ok(held) => held,
+        Err(error) => {
+            eprintln!("hgl: cannot pass the build lock to native jobs: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
     let error = native_tool_command(program).args(arguments).exec();
     eprintln!("hgl: `{}` could not be started: {error}", program.display());
     std::process::ExitCode::FAILURE

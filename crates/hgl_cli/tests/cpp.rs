@@ -5199,7 +5199,7 @@ fn category_constraints_and_tuple_packs_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 29 passed, 0 failed\nexecutable cases: 17 passed, 0 failed, 0 not run\n"
+            "rejection cases: 29 passed, 0 failed\nexecutable cases: 18 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );
