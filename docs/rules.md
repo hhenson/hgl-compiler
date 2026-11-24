@@ -67,6 +67,9 @@ heading; under it, each stage's entry is a line `stage: state`, then a
 line `- ...` for each fact of what the stage does. Two changes to one
 rule, made apart, then merge as long as they change different lines.
 
+The units and names chapter records nearest lexical binding and callable
+shadowing (UNIT-10, UNIT-12).
+
 - [Source text](rules/source-text.md)
 - [Units and names](rules/units-and-names.md)
 - [Types and values](rules/types-and-values.md)

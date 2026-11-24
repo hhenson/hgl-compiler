@@ -108,6 +108,7 @@ pub(crate) fn assemble<'a>(
             tests: Vec::new(),
             prelude_names: Vec::new(),
             uses: Vec::new(),
+            hidden_callables: Default::default(),
             decisions: Vec::new(),
             details: Vec::new(),
             dependent_packs: Default::default(),

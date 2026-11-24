@@ -188,6 +188,8 @@ pub struct Module {
     /// constraints that resolved, with what it resolved to (UNIT-10), in
     /// file order and then source order.
     pub uses: Vec<NameUse>,
+    /// Local bindings that hide a callable, mapped to the callable's declaration (UNIT-12).
+    pub(crate) hidden_callables: HashMap<Location, Location>,
     /// What each `name<...>(...)` the parser left undecided was decided
     /// to be (GEN-14).
     pub decisions: Vec<Decision>,

@@ -5280,3 +5280,36 @@ fn category_constraints_and_tuple_packs_run_on_the_sdk() {
         "{stdout}"
     );
 }
+
+/// UNIT-10 and UNIT-12: emitted code uses the nearest binding while a
+/// module or prelude function still works outside the hiding scope.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn lexical_names_can_hide_module_and_prelude_functions() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("unit12_shadowing");
+    let file = write(
+        &root,
+        "src/demo.unit12_shadowing.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.unit12_shadowing.hgl"),
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    let diagnostics = text(&checked.stderr);
+    assert!(checked.status.success(), "{diagnostics}");
+    assert_eq!(
+        diagnostics.matches("warning[name.hides_function]").count(),
+        1,
+        "{diagnostics}"
+    );
+
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    let stderr = text(&output.stderr);
+    assert!(output.status.success(), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains("passed   executable  demo.unit12_shadowing::uses_nearest_binding"),
+        "{stdout}"
+    );
+}

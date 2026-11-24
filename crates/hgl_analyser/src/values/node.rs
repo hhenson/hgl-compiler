@@ -4,7 +4,6 @@
 //! TIME-3, TIME-5, TIME-7). Part of the typing pass ([`super`]).
 
 use hgl_diagnostics::{Category, Location};
-use hgl_lexer::literal::decode_string;
 use hgl_parser::{HasSpan, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::calls::call_callee;
@@ -991,16 +990,7 @@ impl<'a> Typer<'a> {
     /// "At a named function, `@suppress_warning(\"node.no_activation\")`
     /// acknowledges the dormant-node warning for that declaration."
     fn acknowledges(&self, code: &str) -> bool {
-        self.declaration
-            .syntax
-            .children()
-            .filter(|annotation| annotation.kind() == SyntaxKind::WarningAnnotation)
-            .filter_map(|annotation| {
-                tokens(&annotation).find(|token| token.kind() == SyntaxKind::Str)
-            })
-            // The string's value, not its spelling: an escape, or a
-            // text block, that says the code names the same warning.
-            .any(|string| decode_string(string.text()).is_ok_and(|value| value == code))
+        crate::syntax::suppresses_warning(&self.declaration.syntax, code)
     }
 
     /// What a `return` to a `ref` result of type `result`, or `out =` of

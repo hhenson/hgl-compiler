@@ -392,21 +392,34 @@ impl<'a> Typer<'a> {
             // type". An anonymous function has no type here, and a value
             // of a type is no function.
             if !open(&called.ty) {
-                self.diagnostics.emit(
-                    error(
-                        Category::Type,
-                        codes::TYPE_MISMATCH,
-                        self.at(&callee),
-                        format!(
-                            "this is `{}`, which is no function, and is called",
-                            called.ty
-                        ),
-                        "FN-7",
-                    )
-                    .with_note(
-                        "what is called is a function: one a module declares, or an anonymous one",
+                let mut report = error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    self.at(&callee),
+                    format!(
+                        "this is `{}`, which is no function, and is called",
+                        called.ty
                     ),
+                    "FN-7",
+                )
+                .with_note(
+                    "what is called is a function: one a module declares, or an anonymous one",
                 );
+                if direct.kind() == SyntaxKind::NameExpr
+                    && let Some(name) = name_token(&direct)
+                    && let Some(Binding::Local { at, .. }) =
+                        self.binding_at(self.file, name.span().start)
+                    && let Some(&hidden) = self
+                        .program
+                        .modules
+                        .iter()
+                        .find_map(|module| module.hidden_callables.get(at))
+                {
+                    report = report
+                        .with_related(*at, format!("`{}` is bound here", name.text()))
+                        .with_related(hidden, "this function or operator is hidden by the binding");
+                }
+                self.diagnostics.emit(report);
             }
             return self.unread_call(&list);
         };

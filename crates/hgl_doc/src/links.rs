@@ -20,6 +20,22 @@ pub(crate) fn resolve(program: &Program, context: LinkContext<'_>, name: &str) -
         .position(|file| file.file == context.at.file)?;
     let file = &module.files[origin];
 
+    let enclosing = module
+        .declarations
+        .iter()
+        .enumerate()
+        .find(|(_, declaration)| {
+            declaration.file == origin
+                && declaration.syntax.span().start <= context.at.span.start
+                && context.at.span.end <= declaration.syntax.span().end
+        });
+    let head = name.split(['.', ':']).next()?;
+    if enclosing
+        .and_then(|(index, _)| module.details.get(index))
+        .is_some_and(|detail| parameter_name(detail, head))
+    {
+        return None;
+    }
     if let Some((alias, subject)) = name.split_once("::") {
         let import = file
             .imports
@@ -31,22 +47,6 @@ pub(crate) fn resolve(program: &Program, context: LinkContext<'_>, name: &str) -
         });
     }
 
-    let enclosing = module
-        .declarations
-        .iter()
-        .enumerate()
-        .find(|(_, declaration)| {
-            declaration.file == origin
-                && declaration.syntax.span().start <= context.at.span.start
-                && context.at.span.end <= declaration.syntax.span().end
-        });
-    let head = name.split('.').next()?;
-    if enclosing
-        .and_then(|(index, _)| module.details.get(index))
-        .is_some_and(|detail| parameter_name(detail, head))
-    {
-        return None;
-    }
     let in_test = enclosing.is_some_and(|(_, declaration)| declaration.test_only)
         || module.tests.iter().any(|test| test.at == context.at);
     if let Some(location) =

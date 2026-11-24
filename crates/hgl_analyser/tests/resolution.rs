@@ -164,12 +164,10 @@ fn a_name_nothing_binds_is_left_for_the_prelude() {
 
 // ---- UNIT-12 and UNIT-5: one binding for a name ----
 
-/// UNIT-12: "A local or iteration binding, parameter, or generic
-/// parameter takes no name bound there by an enclosing block or function,
-/// a module declaration, a `use` in its file". UNIT-5: "Duplicate ...
-/// parameter names ... or local bindings in one scope are rejected."
+/// UNIT-12 permits lexical bindings to hide declarations and imports.
+/// UNIT-5 and UNIT-12 still reject duplicate lexical bindings.
 #[test]
-fn a_binding_takes_no_name_already_in_scope() {
+fn a_binding_can_hide_declarations_and_imports_but_cannot_reuse_lexical_names() {
     let checked = check(&[
         ("lib.hgl", "module lib\nexport fn shared() {}\n"),
         (
@@ -204,12 +202,9 @@ fn a_binding_takes_no_name_already_in_scope() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:15 name/name.duplicate UNIT-12",
             "m.hgl:5:38 name/name.duplicate UNIT-5",
             "m.hgl:5:50 name/name.duplicate UNIT-5",
             "m.hgl:7:9 name/name.duplicate UNIT-12",
-            "m.hgl:8:9 name/name.duplicate UNIT-12",
-            "m.hgl:9:9 name/name.duplicate UNIT-12",
             "m.hgl:12:13 name/name.duplicate UNIT-12",
             "m.hgl:13:13 name/name.duplicate UNIT-12",
             "m.hgl:15:9 name/name.duplicate UNIT-5",
@@ -235,22 +230,20 @@ fn blocks_that_do_not_enclose_one_another_may_reuse_a_name() {
     assert_eq!(checked.summary(), NONE);
 }
 
-/// UNIT-12's own examples: "a first parameter named `seed`, a local named
-/// `base` in a block body of `choose`, a local of an inner block named
-/// for an earlier local of a block around it ... takes a name already in
-/// scope".
+/// UNIT-12 allows a parameter named for the module's `seed` and rejects
+/// duplicate lexical declarations. UNIT-7 keeps formals out of defaults.
 #[test]
 fn the_chapters_rejections_are_rejected() {
     let accepted = module(concat!(
         "const fn seed() -> i64 => 7\n",
-        "const fn choose(base: i64, value: i64 = seed()) -> i64 => base + value\n",
+        "const fn choose(base: i64, seed: i64 = seed()) -> i64 => base + seed\n",
         "test defining_closure {\n    assert choose(1) == 8\n}\n",
     ));
     assert_eq!(accepted.summary(), NONE);
 
     let rejected = module(concat!(
         "const fn seed() -> i64 => 7\n",
-        "const fn first(seed: i64) -> i64 => 1\n",
+        "const fn first(seed: i64) -> i64 => seed\n",
         "const fn choose(base: i64) -> i64 {\n    let base = 1\n    return base\n}\n",
         "const fn inner(base: i64) -> i64 {\n",
         "    let earlier = 1\n",
@@ -264,7 +257,6 @@ fn the_chapters_rejections_are_rejected() {
     assert_eq!(
         rejected.summary(),
         [
-            "m.hgl:3:16 name/name.duplicate UNIT-12",
             "m.hgl:5:9 name/name.duplicate UNIT-12",
             "m.hgl:11:13 name/name.duplicate UNIT-12",
             "m.hgl:15:44 name/default.formal_argument UNIT-7",
@@ -454,8 +446,7 @@ fn production_names_no_test_only_declaration() {
                 "test {\n",
                 "    struct Fixture { x: i64 }\n",
                 "    const fn helper() -> Fixture => Fixture(x: private())\n",
-                // A helper's local takes no helper's name; a
-                // production local may.
+                // A local may hide a test-scope declaration in a test helper.
                 "    const fn clash() -> i64 {\n        let helper = 1\n        return helper\n    }\n",
                 "}\n",
                 "const fn free() -> i64 {\n    let helper = 1\n    return helper\n}\n",
@@ -467,7 +458,6 @@ fn production_names_no_test_only_declaration() {
         [
             "a.hgl:3:26 name/name.test_only TST-2",
             "a.hgl:3:37 name/name.test_only TST-2",
-            "b.hgl:6:13 name/name.duplicate UNIT-12",
         ]
     );
 }
@@ -732,7 +722,6 @@ fn every_binding_form_binds_in_its_scope() {
             "m.hgl:11:19 name/name.unknown UNIT-10",
             "m.hgl:15:17 name/name.duplicate UNIT-5",
             "m.hgl:19:11 name/name.duplicate UNIT-12",
-            "m.hgl:20:12 name/name.duplicate UNIT-12",
         ]
     );
     // `index` is bound for the `for` body alone.
@@ -835,5 +824,265 @@ const fn outside() -> i64 => hidden
             "m.hgl:21:12 name/name.duplicate TST-2",
             "m.hgl:25:30 name/name.unknown UNIT-10",
         ]
+    );
+}
+
+/// UNIT-10 and UNIT-7 resolve signature types and defaults before the
+/// callable binds its formal parameters, including in an anonymous function.
+#[test]
+fn annotations_and_defaults_see_the_outer_scope() {
+    let checked = module(
+        r#"const n: i64 = 2
+const fn seed() -> i64 => 11
+const fn same_name(n: i64, items: list<f64, n>) -> list<f64, n> => items
+const fn lambda() -> list<f64, 2> => (fn(n: i64, items: list<f64, n>) => items)(3, [1.0, 2.0])
+const fn module_default(seed: i64 = seed()) -> i64 => seed
+const fn prelude_default(format: str = format("seed")) -> str => format
+const fn missing_formal(parameter: i64 = 1, value: i64 = parameter) -> i64 => value"#,
+    );
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "name/default.formal_argument");
+    let names = uses(&checked, "m");
+    assert!(
+        names
+            .iter()
+            .any(|used| used == "seed 6:37 -> m value function")
+    );
+    assert!(
+        names
+            .iter()
+            .any(|used| used == "format 7:40 -> core operator")
+    );
+    assert_eq!(
+        names
+            .iter()
+            .filter(|used| used.starts_with("n ") && used.ends_with("constant"))
+            .count(),
+        3,
+        "{names:?}"
+    );
+}
+
+/// UNIT-12 warns once at a function-typed binding hiding a function or
+/// operator. ERR-10 silences it. Ordinary anonymous formals may hide too.
+#[test]
+fn function_bindings_call_the_binding_and_report_only_unsuppressed_warnings() {
+    let checked = module(
+        r#"const fn helper(value: i64) -> i64 => value + 1
+const fn typed(helper: const fn(i64) -> i64) -> i64 => helper(7)
+const fn module_target() -> i64 => helper(7)
+const fn hidden_operator(add_: const fn(i64) -> i64) -> i64 => add_(7)
+const fn anonymous_formal() -> i64 => (fn(helper: i64) => helper)(7)
+@suppress_warning("name.hides_function")
+const fn quiet(helper: const fn(i64) -> i64) -> i64 => helper(7)"#,
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:16 warning/name.hides_function UNIT-12",
+            "m.hgl:5:26 warning/name.hides_function UNIT-12",
+        ],
+        "{}",
+        checked.report
+    );
+
+    let rejected = module(
+        r#"const fn helper(value: i64) -> i64 => value
+const fn call(helper: i64) -> i64 => helper(7)"#,
+    );
+    assert!(rejected.rejected);
+    assert_eq!(rejected.findings.len(), 1, "{}", rejected.report);
+    assert!(
+        rejected
+            .report
+            .contains("function or operator is hidden by the binding"),
+        "{}",
+        rejected.report
+    );
+}
+
+/// UNIT-2 and UNIT-12 use the ordinary nearest binding for a qualifier.
+#[test]
+fn a_lexical_binding_hides_an_import_alias_only_in_its_scope() {
+    let checked = check(&[
+        (
+            "lib.hgl",
+            "module lib\nexport const fn marker() -> i64 => 7\n",
+        ),
+        (
+            "m.hgl",
+            r#"module m
+use lib as dep
+const fn ordinary() -> i64 => dep::marker()
+const fn bad(dep: i64) -> i64 => dep::marker()
+const fn value(dep: i64) -> i64 => dep"#,
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:34 name/alias.unknown UNIT-2"],
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked.report.contains("parameter hides the alias"),
+        "{}",
+        checked.report
+    );
+    assert!(
+        checked.report.contains("the alias is declared here"),
+        "{}",
+        checked.report
+    );
+}
+
+/// UNIT-12 preserves contextual names and guards lexical duplicates.
+#[test]
+fn activation_and_result_forms_are_reserved_for_lexical_bindings() {
+    let checked = module(
+        r#"const fn reserved(scheduled: i64, modified: i64, valid: i64, ok: i64) -> i64 => scheduled
+const fn local() -> i64 {
+    let valid = 1
+    return 1
+}"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:19 name/name.duplicate UNIT-12",
+            "m.hgl:2:35 name/name.duplicate UNIT-12",
+            "m.hgl:2:50 name/name.duplicate UNIT-12",
+            "m.hgl:2:62 name/name.duplicate ERR-13",
+            "m.hgl:4:9 name/name.duplicate UNIT-12",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// UNIT-12 allows each lexical form to hide a module or prelude name.
+#[test]
+fn generic_configuration_iteration_and_storage_bindings_hide_module_names() {
+    let checked = module(
+        r#"const fn helper(value: i64) -> i64 => value + 100
+const limit: i64 = 2
+const kept: i64 = 1
+const seen: i64 = 1
+const clock: i64 = 1
+const fn generic<const limit: i64>() -> i64 requires limit == 3 => limit
+const fn configuration{helper: i64}(value: i64) -> i64 => value + helper
+const fn iteration(items: list<i64>) -> i64 {
+    var sum = 0
+    for helper in items { sum += helper }
+    return sum
+}
+fn node(value: i64) -> i64 {
+    state kept: i64 = 0
+    cache seen = kept
+    inject clock
+    when { return value + seen }
+}"#,
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// GEN-18's law predicate reads its own callback formal, and FN-8's
+/// pack clause reads that formal and its own generic exclusion key.
+#[test]
+fn requirements_and_pack_exclusions_use_lexical_bindings() {
+    let checked = module(
+        r#"const key: str = "outer"
+const fn f(a: i64, b: i64) -> i64 => a + b
+const fn law<const answered: bool = associative(f)>(f: const fn(i64, i64) -> i64, a: i64, b: i64) -> i64 requires associative(f) => f(a, b)
+operator pass<R, ...Ps, ...As, const key: str = "inner">(f: fn(...{Ps}) -> R, args: ...{As for f without key}) -> R"#,
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        ["warning/name.hides_function", "warning/name.hides_function"],
+        "{}",
+        checked.report
+    );
+    let names = uses(&checked, "m");
+    assert!(
+        names
+            .iter()
+            .any(|used| used.starts_with("key 5:") && used.ends_with("GenericParameter")),
+        "{names:?}"
+    );
+    assert_eq!(
+        names
+            .iter()
+            .filter(|used| used.starts_with("f 4:") && used.ends_with("Parameter"))
+            .count(),
+        3,
+        "{names:?}"
+    );
+    assert_eq!(
+        names
+            .iter()
+            .filter(|used| used.starts_with("f 5:") && used.ends_with("Parameter"))
+            .count(),
+        1,
+        "{names:?}"
+    );
+
+    let rejected = module(
+        r#"const key: str = "outer"
+const fn f(a: i64, b: i64) -> i64 => a + b
+const fn bad(f: i64) -> i64 requires associative(f) => f
+operator wrong<...Ps, ...As, const key: i64 = 0>(f: fn(...{Ps}), args: ...{As for f without key})"#,
+    );
+    assert!(rejected.rejected);
+    assert_eq!(rejected.findings.len(), 3, "{}", rejected.report);
+    assert_eq!(rejected.findings[2].code, "type/type.mismatch");
+}
+
+/// UNIT-12 keeps option labels, fields and pack keys out of lexical lookup.
+#[test]
+fn written_call_labels_members_and_pack_keys_keep_their_own_meanings() {
+    let checked = module(
+        r#"const fn option() -> i64 => 7
+struct Record { option: i64 }
+operator choose{option: i64}(value: i64) -> i64
+impl const fn choose{option: i64}(value: i64) -> i64 => value + option
+const fn take<...As>(values: ...{As}) -> i64 => 1
+const fn uses_labels(option: i64) -> i64 {
+    let record = Record(option: option)
+    return choose{option: record.option}(1) + take(option: option)
+}"#,
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// UNIT-10, FN-14 and EXPR-2 still reject an unbound type argument, a
+/// captured mutable binding and an unmatched call label.
+#[test]
+fn shadowing_changes_no_signature_capture_or_call_label_rules() {
+    let checked = module(
+        r#"const fn missing_size(n: i64, items: list<f64, n>) -> i64 => n
+const fn helper() -> i64 => 1
+const fn invalid_capture(value: i64) -> i64 {
+    var helper = value
+    return (fn() => helper)()
+}
+const fn label_only(foo: i64) -> i64 => foo
+const fn wrong_label(bad: i64) -> i64 => label_only(bad: bad)"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:48 name/name.unknown UNIT-10",
+            "m.hgl:6:21 name/name.captured FN-14",
+            "m.hgl:9:42 type/argument.missing EXPR-2",
+            "m.hgl:9:53 name/argument.unknown EXPR-2",
+        ],
+        "{}",
+        checked.report
     );
 }
