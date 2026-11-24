@@ -1159,6 +1159,9 @@ impl Instances {
         if let Some(reduction) = crate::calls::ordered_list_reduction(program, value) {
             found.extend(self.asks(program, &reduction.combiner, expanding));
         }
+        if let Some(map) = crate::calls::one_dictionary_map(program, value) {
+            found.extend(self.asks(program, &map.callback, expanding));
+        }
         // Check the borrowed arguments before cloning them into a request.
         if self.instanced_call(program, callee)
             && let Ok(depths) = request_depths(

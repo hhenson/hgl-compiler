@@ -7,11 +7,11 @@ use std::collections::HashMap;
 use std::ops::Deref;
 
 use hgl_analyser::hir::{
-    Argument, Body, Callee, DefaultExpr, Expr, ExprKind, Form, Value, ValueCategory,
+    Argument, Body, Callee, DefaultExpr, Expr, ExprKind, Form, PackKey, Value, ValueCategory,
 };
 use hgl_analyser::{
-    DeclarationKind, Detail, FieldRef, GenericKind, Parameter, Program, Role, Type,
-    substitute_within,
+    Argument as GenericArgument, ConstantValue, DeclarationKind, Detail, FieldRef, GenericKind,
+    Parameter, Program, Role, Type, substitute_within,
 };
 
 /// The evaluated arguments of a call in written order, keeping their
@@ -118,6 +118,185 @@ pub fn ordered_list_reduction(program: &Program, value: &Expr) -> Option<Ordered
         category: ValueCategory::Connection,
     };
     Some(OrderedReduction { inputs, combiner })
+}
+
+/// A checked result-bearing map with one split dictionary (MAP-1, MAP-2).
+pub struct KeyedMap {
+    /// The written lifecycle key set, or the split dictionary's keys.
+    pub keys: Option<usize>,
+    /// The callback applied to this child's bindings.
+    pub callback: Expr,
+    /// Each bound argument's source, in the callback call's argument order.
+    pub inputs: Vec<KeyedMapInput>,
+}
+
+/// How a checked map argument is delivered to one child.
+#[derive(Clone, Copy)]
+pub enum KeyedMapInput {
+    /// The key that the engine publishes when the child starts (MAP-9).
+    Key,
+    /// The entry of this child in the written dictionary argument.
+    Split(usize),
+    /// The entire connection supplied by the written argument.
+    Whole(usize),
+    /// A value passed to a compile-time parameter.
+    Configuration(usize),
+    /// A compile-time callable that needs no runtime input.
+    Static,
+}
+
+/// Bind the checked dependent pack to the selected callback's own slots.
+/// A missing callback argument stays omitted, so it keeps its own default.
+pub fn one_dictionary_map(program: &Program, value: &Expr) -> Option<KeyedMap> {
+    let ExprKind::Call {
+        callee, arguments, ..
+    } = &value.kind
+    else {
+        return None;
+    };
+    let Type::Dict { key, value: result } = &value.ty else {
+        return None;
+    };
+    let (module, declaration) = callee.declaration()?;
+    if Some(module) != program.core() {
+        return None;
+    }
+    let owner = &program.modules[module];
+    let declared = &owner.declarations[declaration];
+    if declared.name != "map"
+        || !matches!(
+            declared.kind,
+            DeclarationKind::NativeCandidate(Role::Temporal, _)
+        )
+    {
+        return None;
+    }
+    let Detail::Callable(signature) = &owner.details[declaration] else {
+        return None;
+    };
+    let position = |name: &str| {
+        signature
+            .parameters
+            .iter()
+            .position(|item| item.name == name)
+    };
+    let keys_parameter = position("keys")?;
+    let callback_parameter = position("f")?;
+    let pack_parameter = position("args")?;
+    let selected = signature
+        .generics
+        .iter()
+        .position(|item| item.name == "key")?;
+    let GenericArgument::Constant(selected) = callee.generics().get(selected)? else {
+        return None;
+    };
+    let ConstantValue::Str(key_name) = &selected.value else {
+        return None;
+    };
+    let callback = &arguments
+        .iter()
+        .find(|arg| arg.parameter == Some(callback_parameter))?
+        .value;
+    let (ExprKind::StaticCallable(target), Type::Function(function)) =
+        (&callback.kind, &callback.ty)
+    else {
+        return None;
+    };
+    let lifted = match target.as_ref() {
+        Callee::Anonymous(function) => function.template.value,
+        _ => {
+            let (module, declaration) = target.declaration()?;
+            program.modules[module].declarations[declaration]
+                .kind
+                .role()
+                == Some(Role::Value)
+        }
+    };
+    let keys = arguments.iter().position(|arg| {
+        arg.parameter == Some(keys_parameter)
+            && !matches!(arg.value.kind, ExprKind::Literal(Value::Null))
+    });
+    let supplied: Vec<_> = arguments
+        .iter()
+        .enumerate()
+        .filter(|(_, arg)| arg.parameter == Some(pack_parameter))
+        .collect();
+    let parameters = function.parameters.iter().enumerate().filter(|(_, item)| {
+        item.declared()
+            .is_none_or(|declared| !declared.configuration)
+    });
+    let mut inputs = Vec::new();
+    let mut bound = Vec::new();
+    let mut matched = 0;
+    let mut splits = 0;
+    for (ordinal, (parameter, item)) in parameters.enumerate() {
+        let ty = item.ty();
+        let name = item.name();
+        let arg_key = name.map_or(PackKey::Position(ordinal), |name| {
+            PackKey::Name(name.to_string())
+        });
+        let (input, expr) = if name == Some(key_name.as_str()) {
+            (KeyedMapInput::Key, None)
+        } else {
+            let Some(&(source, arg)) = supplied
+                .iter()
+                .find(|(_, arg)| arg.pack.as_ref() == Some(&arg_key))
+            else {
+                continue;
+            };
+            matched += 1;
+            if matches!(arg.value.kind, ExprKind::StaticCallable(_)) {
+                (KeyedMapInput::Static, Some(arg.value.clone()))
+            } else if item.declared().is_some_and(|parameter| parameter.constant) {
+                (
+                    KeyedMapInput::Configuration(source),
+                    Some(arg.value.clone()),
+                )
+            } else if &arg.value.ty == ty {
+                (KeyedMapInput::Whole(source), None)
+            } else if matches!(&arg.value.ty, Type::Dict { key: actual_key, value: member }
+                if actual_key == key && member.as_ref() == ty)
+            {
+                splits += 1;
+                (KeyedMapInput::Split(source), None)
+            } else {
+                return None;
+            }
+        };
+        let local = inputs.len();
+        inputs.push(input);
+        bound.push(Argument {
+            parameter: Some(parameter),
+            pack: None,
+            value: expr.unwrap_or_else(|| Expr {
+                kind: ExprKind::Local(local),
+                ty: ty.clone(),
+                at: callback.at,
+                category: ValueCategory::Connection,
+            }),
+        });
+    }
+    if splits != 1 || supplied.len() != matched {
+        return None;
+    }
+    let callback = Expr {
+        kind: ExprKind::Call {
+            callee: (**target).clone(),
+            arguments: bound,
+            form: Form::Named,
+            text: None,
+            braced: Vec::new(),
+            lifted,
+        },
+        ty: result.as_ref().clone(),
+        at: callback.at,
+        category: ValueCategory::Connection,
+    };
+    Some(KeyedMap {
+        keys,
+        callback,
+        inputs,
+    })
 }
 
 /// What a call that leaves a parameter out gives it (UNIT-8).

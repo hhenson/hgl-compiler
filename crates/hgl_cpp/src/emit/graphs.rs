@@ -23,7 +23,9 @@
 
 use hgl_analyser::hir::{Argument, Body, Callee, Expr, ExprKind, Stmt, Value, ValueCategory};
 use hgl_analyser::{DeclarationKind, Detail, LocalKind, Role as Phase, Signature, Type};
-use hgl_lower::calls::{LeftOut, left_out, ordered_list_reduction, runtime_arguments};
+use hgl_lower::calls::{
+    LeftOut, left_out, one_dictionary_map, ordered_list_reduction, runtime_arguments,
+};
 
 use super::Emitter;
 use super::anonymous::{anonymous_arguments, anonymous_signature};
@@ -236,6 +238,9 @@ impl Emitter<'_> {
         held: HeldInputs<'_>,
         result_form: ResultForm,
     ) -> String {
+        if let Some(map) = one_dictionary_map(self.program, value) {
+            return self.keyed_map(scope, value, &map, held);
+        }
         if let Some(reduction) = ordered_list_reduction(self.program, value) {
             return self.ordered_reduction(scope, value, &reduction, held);
         }
@@ -699,6 +704,14 @@ impl Family for Graphs {
                                 scope,
                                 value,
                                 &reduction,
+                                HeldInputs::default(),
+                            ));
+                        }
+                        if let Some(map) = one_dictionary_map(emitter.program, value) {
+                            return Some(emitter.keyed_map(
+                                scope,
+                                value,
+                                &map,
                                 HeldInputs::default(),
                             ));
                         }
