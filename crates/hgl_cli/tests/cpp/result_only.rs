@@ -19,6 +19,9 @@ fn record(value: i64) {
     when { write(format("{}\n", value), Stream.out) }
 }
 fn plus_one(value: i64) -> i64 => value + 1
+fn unexpected(failure: error) {
+    when { write("unexpected error\n", Stream.out) }
+}
 
 fn through<R>(f: fn(i64) -> R, value: i64) -> R => f(value)
 fn relay<R>(f: fn(i64) -> R, value: i64) -> R => through(f, value)
@@ -33,7 +36,8 @@ impl fn fetch(value: i64) => record(value + 20)
 fn input() -> i64 { yield 1s: 1 }
 export fn execute() {
     let value = input()
-    through(record, value)
+    let seen = capture(through, record, value)
+    unexpected(seen.error)
     through(fn(x) => record(x + 1), value)
     through(fn(x) { record(x + 2) }, value)
     relay(fn(x) => { record(x + 3) }, value)
