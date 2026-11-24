@@ -301,3 +301,11 @@ const fn tuple_arity_stays_ambiguous() -> bool => arity((1, "a"))
 const fn unconstrained_partition<...As, ...Bs>(joined: list<tuple<As, Bs>>) -> bool => true
 # expect-error(type, "generic.unresolved")
 const fn no_partition_evidence() -> bool => unconstrained_partition([(1, "a")])
+
+# GEN-6 and GEN-10: the candidate's homogeneous pack expands the result.
+operator homogeneous_pair<...Ts>(values: ...Ts) -> tuple<Ts>
+impl const fn homogeneous_pair(values: ...i64{2}) -> tuple<i64, i64> => (1, 2)
+
+test homogeneous_candidate_supplies_the_tuple_result {
+    assert homogeneous_pair(10, 20) == (1, 2)
+}
