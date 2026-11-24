@@ -54,7 +54,7 @@ impl PreviousBuild {
     }
 
     /// Only a current stamp vouches for an executable that can run now.
-    pub(super) fn reusable(&self, workspace: &Workspace, key: &str, tests: bool) -> bool {
+    pub(super) fn reusable(&self, workspace: &Workspace, key: &str, tests: Option<bool>) -> bool {
         self.active && self.stamp.reusable(workspace, key, tests)
     }
 
@@ -137,13 +137,13 @@ impl Stamp {
         (stamp.version == VERSION).then_some(stamp)
     }
 
-    fn reusable(&self, workspace: &Workspace, key: &str, tests: bool) -> bool {
+    fn reusable(&self, workspace: &Workspace, key: &str, tests: Option<bool>) -> bool {
         if self.key != key
             || self.partial_tests
-            || (tests && self.program.tests.is_none())
+            || tests.is_some_and(|tests| tests != self.program.tests.is_some())
             // The test runner omits rejection owners (TST-13). An ordinary
             // build or run checks the whole source under TST-14.
-            || (!tests
+            || (tests != Some(true)
                 && self.program.tests.iter().flatten().any(|case| case.kind == CaseKind::Rejection))
         {
             return false;

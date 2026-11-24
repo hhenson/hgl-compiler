@@ -1991,8 +1991,8 @@ eval present(values: [taste(7)])
     );
 }
 
-/// TST-2: building tests with an application keeps test-only instances
-/// and the module supplying their candidates out of its linked objects.
+/// TST-2: an application build omits test units, and a mixed build keeps
+/// their code and candidate instances out of the application executable.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn building_tests_preserves_the_applications_production_link() {
@@ -2029,45 +2029,132 @@ use p21.a::{via}
 fn present(const values: list<i64>) -> i64 {
     for value in values { yield 1s: value }
 }
+test app_plain {
+    struct AppTestValue { value: i64 }
+    const fn app_expected(value: AppTestValue) -> i64 => value.value
+    assert app_expected(AppTestValue(value: via(7))) == 0
+}
 eval present(values: [via(7)])
 "#,
     );
     let sources = argument(&root.join("src"));
     let workspace = argument(&root.join("mixed"));
-    let app_link = |directory: &str, options: &[&str]| {
-        let mut args = vec!["build", &sources, "--out", directory];
+    let build = |directory: &str, options: &[&str]| {
+        let mut args = vec![
+            "build",
+            &sources,
+            "--out",
+            directory,
+            "--format",
+            "json",
+            "--compile-commands",
+        ];
         args.extend_from_slice(options);
         let built = hgl_in(&args, &[], &[]);
         assert!(built.status.success(), "{}", text(&built.stderr));
-        let manifest = fs::read_to_string(Path::new(directory).join("build.ninja")).unwrap();
-        let prefix = format!(
-            "build run/app-p21-app{}: link ",
-            std::env::consts::EXE_SUFFIX
-        );
+        serde_json::from_slice::<serde_json::Value>(&built.stdout).unwrap()
+    };
+    let manifest =
+        |directory: &str| fs::read_to_string(Path::new(directory).join("build.ninja")).unwrap();
+    let link = |manifest: &str, target: &str| {
+        let prefix = format!("build {target}{}: link ", std::env::consts::EXE_SUFFIX);
         manifest
             .lines()
             .find_map(|line| line.strip_prefix(&prefix))
             .unwrap()
             .to_owned()
     };
-    let production_link = app_link(&argument(&root.join("production")), &[]);
-    let mixed_link = app_link(&workspace, &["--tests"]);
-    assert_eq!(mixed_link, production_link);
+    let production = argument(&root.join("production"));
+    let production_units = serde_json::json!(["core", "p21.a", "p21.app"]);
+    let built = build(&production, &[]);
+    assert_eq!(built["units"], production_units);
+    assert_eq!(built["tests"], serde_json::json!([]));
+    let production_manifest = manifest(&production);
+    assert!(
+        !production_manifest.contains("test-mod-"),
+        "{production_manifest}"
+    );
+    assert!(!root.join("production/modules/test-mod-p21-a.cpp").exists());
+    assert!(
+        !root
+            .join("production/obj/modules/test-mod-p21-a.o")
+            .exists()
+    );
+    assert!(!root.join("production/modules/type-p21-app.h").exists());
+    assert!(
+        !fs::read_to_string(root.join("production/modules/mod-p21-app.h"))
+            .unwrap()
+            .contains("AppTestValue")
+    );
+
+    let mixed = build(&workspace, &["--tests"]);
+    let mixed_manifest = manifest(&workspace);
+    let units = mixed["units"].as_array().unwrap();
+    for unit in [
+        "p21.a",
+        "test:p21.a",
+        "test:p21.b",
+        "p21.app",
+        "test:p21.app",
+    ] {
+        assert_eq!(
+            units.iter().filter(|name| *name == unit).count(),
+            1,
+            "{units:?}"
+        );
+    }
+    assert_eq!(mixed["tests"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        link(&mixed_manifest, "run/app-p21-app"),
+        link(&production_manifest, "run/app-p21-app")
+    );
+    let other_module_test = link(&mixed_manifest, "bin/test-p21-b");
+    assert!(
+        other_module_test.contains("obj/modules/test-mod-p21-a.o"),
+        "{other_module_test}"
+    );
+    assert!(
+        other_module_test.contains("obj/modules/test-mod-p21-b.o"),
+        "{other_module_test}"
+    );
+    assert!(
+        !other_module_test.contains("test-mod-p21-app.o"),
+        "{other_module_test}"
+    );
+    let application_test = link(&mixed_manifest, "bin/test-p21-app");
+    assert!(
+        application_test.contains("obj/modules/mod-p21-app.o"),
+        "{application_test}"
+    );
+    assert!(
+        application_test.contains("obj/modules/test-mod-p21-app.o"),
+        "{application_test}"
+    );
     let module = fs::read_to_string(root.join("mixed/modules/mod-p21-a.cpp")).unwrap();
     assert!(!module.contains("test_candidates_"), "{module}");
 
-    let app = hgl_in(
-        &["run", &sources, "--target", "cpp", "--keep", &workspace],
-        &[],
-        &[],
-    );
-    let stdout = text(&app.stdout);
-    assert!(app.status.success(), "{stdout}{}", text(&app.stderr));
-    assert!(stdout.contains("  0\n"), "{stdout}");
+    let runtime = argument(&root.join("runtime"));
+    for directory in [&runtime, &workspace] {
+        let app = hgl_in(
+            &["run", &sources, "--target", "cpp", "--keep", directory],
+            &[],
+            &[],
+        );
+        let stdout = text(&app.stdout);
+        assert!(app.status.success(), "{stdout}{}", text(&app.stderr));
+        assert!(stdout.contains("  0\n"), "{stdout}");
+        assert!(
+            stdout.contains("ran p21.app on cpp: 1 publication"),
+            "{stdout}"
+        );
+    }
+    assert_eq!(manifest(&workspace), mixed_manifest);
+    let runtime_manifest = manifest(&runtime);
     assert!(
-        stdout.contains("ran p21.app on cpp: 1 publication"),
-        "{stdout}"
+        !runtime_manifest.contains("test-mod-"),
+        "{runtime_manifest}"
     );
+    assert!(!root.join("runtime/modules/test-mod-p21-a.cpp").exists());
 
     let tests = hgl_in(
         &["test", &sources, "--target", "cpp", "--keep", &workspace],
@@ -2076,12 +2163,26 @@ eval present(values: [via(7)])
     );
     let stdout = text(&tests.stdout);
     assert!(tests.status.success(), "{stdout}{}", text(&tests.stderr));
-    for test in ["p21.a::a_plain", "p21.b::b_declares"] {
+    for test in ["p21.a::a_plain", "p21.b::b_declares", "p21.app::app_plain"] {
         assert!(
             stdout.contains(&format!("passed   executable  {test}\n")),
             "{stdout}"
         );
     }
+
+    let rebuilt = build(&workspace, &[]);
+    assert_eq!(rebuilt["units"], production_units);
+    assert_eq!(rebuilt["tests"], serde_json::json!([]));
+    let rebuilt_manifest = manifest(&workspace);
+    assert!(
+        !rebuilt_manifest.contains("test-mod-"),
+        "{rebuilt_manifest}"
+    );
+    let compile_commands = fs::read_to_string(root.join("mixed/compile_commands.json")).unwrap();
+    assert!(
+        !compile_commands.contains("test-mod-"),
+        "{compile_commands}"
+    );
 }
 
 /// The integration test above passes on the SDK.
