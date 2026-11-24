@@ -12,8 +12,8 @@
 #
 # 1. The release alone: a debug build links the optimised libraries, says
 #    why, and runs; a debugger names an engine function and finds no line.
-# 2. Both in one tree: the debug tree is verified (release-bundle.py
-#    verify-debug); a debug build links the debug libraries beside hgl, says
+# 2. Both in one tree: the build tool verifies the debug tree. A debug
+#    build links the debug libraries beside hgl, says
 #    so, and runs; a debugger stops in an engine frame of it with its file,
 #    line and locals. The release's optimised engine and fmt libraries
 #    resolve functions to files and lines through their symbol files. On
@@ -47,7 +47,8 @@ case "$(uname -s)-$(uname -m)" in
         ;;
     *) fail "runs on Apple silicon macOS or x86-64 Linux" ;;
 esac
-version=$(python3 scripts/release-bundle.py version)
+build_tool=(cargo run --locked --quiet -p hgl_build_tool --)
+version=$("${build_tool[@]}" version)
 name=hgl-$version-$platform
 debug_name=hgl-debug-$version-$platform
 fixtures=$PWD/crates/hgl_cpp/tests/fixtures
@@ -84,39 +85,6 @@ debug_build() {
     cat -- "$2.said"
 }
 
-# The value of key path $2 of the JSON in file $1.
-json() {
-    python3 -c 'import json, sys
-value = json.load(open(sys.argv[1]))
-for key in sys.argv[2:]:
-    value = value[key]
-print(value)' "$@"
-}
-
-# Runs the command the description in $1 describes, with no debugger: the
-# run publishes twice.
-run_described() {
-    python3 - "$1" <<'PY'
-import json, os, subprocess, sys
-launch = json.load(open(sys.argv[1]))
-env = {**os.environ, **launch["environment"]}
-ran = subprocess.run([launch["executable"], *launch["arguments"]], env=env,
-                     cwd=launch["workingDirectory"], stdin=subprocess.DEVNULL,
-                     capture_output=True, text=True)
-published = [line for line in ran.stdout.splitlines() if line.startswith("published ")]
-if ran.returncode != 0 or len(published) != 2:
-    sys.exit(f"the described run ended {ran.returncode} with {len(published)} publications:\n{ran.stderr}")
-print(f"the described run published {len(published)} times")
-PY
-}
-
-# The command of the description in $1, one word to a line.
-described() {
-    python3 -c 'import json, sys
-launch = json.load(open(sys.argv[1]))
-print("\n".join([launch["executable"], *launch["arguments"]]))' "$1"
-}
-
 # What the platform's debugger says of function $2 in shared library $1.
 lookup_symbol() {
     if [[ $platform == linux-x86_64 ]]; then
@@ -147,51 +115,54 @@ stop_in_engine() {
             -- "${command[@]}" 2>&1 || true
         return
     fi
-    local then
+    local follow
     if [[ -n ${2:-} ]]; then
-        then="generate-core-file $2"
+        follow="generate-core-file $2"
     else
-        then=$(cat <<'GDB'
-python
-# The engine's loop over a graph's nodes, which called the node.
-frame = gdb.selected_frame()
-while frame is not None and not (
-    "libhgraph_runtime" in (gdb.solib_name(frame.pc()) or "")
-    and "evaluate_nodes<" in (frame.name() or "")
-    and "annotate_on_exception" not in (frame.name() or "")
-):
-    frame = frame.older()
-said = ""
-if frame is not None:
-    frame.select()
-    said = gdb.execute("info locals", to_string=True)
-print("engine loop locals:", "none" if not said or said.startswith("No ") else len(said.splitlines()))
-end
+        follow=$(cat <<'GDB'
+echo engine stack:\n
+frame apply all -s info locals
 GDB
 )
     fi
+    # The source-qualified breakpoint ignores the executable's PLT stub.
     cat >"$scratch/stop.gdb" <<GDB
 set pagination off
 set confirm off
+set print max-depth 1
 start
-break hgraph::NodeView::global_state
-python
-# The engine's own function, not the executable's PLT stub for it.
-for location in gdb.breakpoints()[-1].locations:
-    location.enabled = "libhgraph_runtime" in (gdb.solib_name(location.address) or "")
-end
+break -source node.cpp -function hgraph::NodeView::global_state
 continue
-python
-frame = gdb.selected_frame()
-line = frame.find_sal()
-print("engine library:", gdb.solib_name(frame.pc()))
-print("engine frame:", frame.name(), "at", f"{line.symtab.filename}:{line.line}" if line.symtab else "no line")
-end
-$then
+echo engine symbol:\n
+info symbol \$pc
+echo engine top frame:\n
+frame 0
+$follow
 kill
 GDB
     "${gdb[@]}" -x "$scratch/stop.gdb" --args "${command[@]}" </dev/null 2>&1 |
-        grep -E '^(engine |Saved corefile)' || true
+        awk '
+            /^engine symbol:$/ {
+                getline
+                if (sub(/^.* in section [^ ]+ of /, "")) print "engine library: " $0
+                next
+            }
+            /^engine top frame:$/ {
+                getline
+                if (/^#0 .*hgraph::NodeView::global_state / && sub(/^.* at /, ""))
+                    print "engine frame: hgraph::NodeView::global_state at " $0
+                next
+            }
+            /^engine stack:$/ { stack = 1; next }
+            stack && /^#[0-9]+ / {
+                frame = !found && /evaluate_nodes</ && !/annotate_on_exception/ && /\/hgl-release\/hgraph\//
+                if (frame) found = 1
+                next
+            }
+            frame && /^[[:alnum:]_]+ = / { ++locals; next }
+            /^Saved corefile/ { print }
+            END { if (locals) print "engine loop locals: " locals }
+        ' || true
 }
 
 # Whether what the debugger said, $1, has the process load the engine's
@@ -212,12 +183,12 @@ core_frame() {
 
 echo "== the release alone"
 tar -xzf "$archives/$name.tar.gz" -C "$alone"
-python3 scripts/release-bundle.py verify --target "$target" "$alone/$name"
+"${build_tool[@]}" verify --target "$target" "$alone/$name"
 said=$(debug_build "$alone" "$scratch/alone")
 grep -qx "hgl: a debug build, with hgraph's optimised libraries in .*: the \`hgl-debug\` package is not installed beside hgl, and HGL_HGRAPH_DEBUG is not set" <<<"$said" ||
     fail "the release alone said: $said"
-[[ $(json "$scratch/alone.json" hgraph libraries) == optimised ]] || fail "the release alone did not link the optimised libraries"
-run_described "$scratch/alone.json"
+[[ $("${build_tool[@]}" launch-field "$scratch/alone.json" hgraph libraries) == optimised ]] || fail "the release alone did not link the optimised libraries"
+"${build_tool[@]}" run-described "$scratch/alone.json"
 looked=$(lookup_symbol "$alone/$name/libexec/hgraph-sdk/lib/libhgraph_runtime.$suffix" hgraph::NodeView::global_state)
 printf '%s\n' "$looked"
 ! grep -q 'node\.cpp' <<<"$looked" || fail "the release alone found a line of the engine"
@@ -234,13 +205,13 @@ tar -xzf "$archives/$name.tar.gz" -C "$both"
 tar -xzf "$archives/$debug_name.tar.gz" -C "$both"
 stamp=$both/$name/libexec/hgraph-debug/hgl-debug.txt
 [[ -f $stamp && $(<"$stamp") == "$version" ]] || fail "the debug archive has no stamp for hgl $version"
-python3 scripts/release-bundle.py verify-debug --target "$target" "$both/$name"
+"${build_tool[@]}" verify-debug --target "$target" "$both/$name"
 said=$(debug_build "$both" "$scratch/both")
 grep -qx "hgl: a debug build, with hgraph's debug libraries in .*/libexec/hgraph-debug, installed beside hgl" <<<"$said" ||
     fail "the release with hgl-debug said: $said"
-[[ $(json "$scratch/both.json" hgraph libraries) == debug ]] || fail "the release with hgl-debug did not link the debug libraries"
-run_described "$scratch/both.json"
-described "$scratch/both.json" >"$scratch/both.command"
+[[ $("${build_tool[@]}" launch-field "$scratch/both.json" hgraph libraries) == debug ]] || fail "the release with hgl-debug did not link the debug libraries"
+"${build_tool[@]}" run-described "$scratch/both.json"
+"${build_tool[@]}" launch-command "$scratch/both.json" >"$scratch/both.command"
 stopped=$(stop_in_engine "$scratch/both.command")
 printf '%s\n' "$stopped"
 grep -Eq '(engine frame: hgraph::NodeView::global_state at .*/node\.cpp:[0-9]+|at node\.cpp:[0-9]+)' <<<"$stopped" ||
