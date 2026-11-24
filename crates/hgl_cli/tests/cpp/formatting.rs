@@ -58,6 +58,10 @@ test stream_bytes {
 }
 
 test typed_formats {
+    assert format("{:5}", true) == "true "
+    assert format("{:>5}", true) == " true"
+    assert format("{:0>5}", true) == "0true"
+    assert display_typed("{:05}", 42) == "00042"
     assert display<"{:.2f}">(1.25) == "1.25"
     assert display_value<"{:x}">(42) == "value 2a"
     assert format(HEX, 255) == "ff"
