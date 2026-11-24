@@ -50,8 +50,8 @@ use hgl_analyser::hir::{
     ValueCategory, walk_statement_nodes_at, walk_statements,
 };
 use hgl_analyser::{
-    Argument as GenericArgument, DeclarationKind, Detail, GenericKind, LocalKind, Pack, Program,
-    Role, Signature, Type,
+    Argument as GenericArgument, DeclarationKind, Detail, GenericKind, LocalKind, Program, Role,
+    Signature, Type,
 };
 use hgl_diagnostics::Location;
 
@@ -103,16 +103,16 @@ impl Instance {
     }
 }
 
-/// Runtime slots for a native value call with a positional pack (FN-8).
+/// Runtime slots for a native value call with packed inputs (FN-8).
 /// A native declaration has no HGL body to specialize.
 pub struct NativePack {
-    /// The concrete runtime parameters in call order.
+    /// The concrete runtime parameters, with packed slots expanded.
     pub signature: Signature,
     slots: Vec<Slot>,
 }
 
 impl NativePack {
-    /// Expand a native value candidate taking only a positional pack.
+    /// Expand a native value candidate's fixed and packed parameters.
     pub fn of(program: &Program, callee: &Callee, arguments: &[Argument]) -> Option<Self> {
         let (module, declaration) = callee.declaration()?;
         let owner = &program.modules[module];
@@ -125,23 +125,28 @@ impl NativePack {
         let Detail::Callable(signature) = &owner.details[declaration] else {
             return None;
         };
-        let [parameter] = signature.parameters.as_slice() else {
-            return None;
-        };
-        if parameter.pack != Some(Pack::Positional) {
+        if !signature
+            .parameters
+            .iter()
+            .any(|parameter| parameter.pack.is_some())
+        {
             return None;
         }
 
         let captures = Captures::of(program, callee, signature, arguments);
         let mut signature = signature.clone();
         let mut body = Body {
-            locals: vec![Local {
-                at: parameter.at,
-                name: parameter.name.clone(),
-                kind: LocalKind::Parameter,
-                ty: parameter.ty.clone(),
-                category: ValueCategory::Value,
-            }],
+            locals: signature
+                .parameters
+                .iter()
+                .map(|parameter| Local {
+                    at: parameter.at,
+                    name: parameter.name.clone(),
+                    kind: LocalKind::Parameter,
+                    ty: parameter.ty.clone(),
+                    category: ValueCategory::Value,
+                })
+                .collect(),
             statements: Vec::new(),
         };
         let (slots, _) = captures.expand(&mut signature, &mut body);
@@ -154,6 +159,12 @@ impl NativePack {
     /// The concrete slot of the supplied argument.
     pub fn parameter(&self, argument: &Argument) -> Option<usize> {
         self.slots.iter().position(|slot| slot.takes(argument))
+    }
+
+    /// The declaration's slot owns a fixed input's default (UNIT-8),
+    /// even when expanding an earlier pack moved its runtime position.
+    pub fn original_parameter(&self, index: usize) -> usize {
+        self.slots[index].parameter
     }
 }
 
