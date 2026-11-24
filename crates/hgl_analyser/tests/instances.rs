@@ -129,6 +129,19 @@ fn computed_pack_passes_check_selected_calls_at_the_making_call() {
     }
 }
 
+/// FN-19: an ordinary const parameter remains a valid condition even
+/// when the current pass cannot read its value at compile time.
+#[test]
+fn computed_pack_passes_leave_unread_const_conditions_deferred() {
+    let checked = module(concat!(
+        "const fn pick(value: i64 = 3) -> i64 => value\n",
+        "const fn collect<...Ts>(const keep: bool, items: ...Ts) -> i64 =>\n",
+        "    pick(...{for key in arg_keys(Ts): if keep { items[key] }})\n",
+        "test invoke { assert collect(true, 5) == 5 }\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
 /// GEN-7: a call reached only through a computed entry sees the result
 /// type its selected candidate gives. Its error reports both instances.
 #[test]

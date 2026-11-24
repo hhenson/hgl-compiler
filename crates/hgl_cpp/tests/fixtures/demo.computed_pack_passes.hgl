@@ -8,6 +8,9 @@ const fn weighted(price: i64, weight: i64 = 2) -> i64 => price * weight
 const fn take_second<...A>(items: ...A) -> i64 =>
     increment(...{for key in arg_keys(A): if key == 1 { items[key] }})
 
+const fn weight_when<const Include: bool, ...A>(items: ...A) -> i64 =>
+    weighted(price: 7, ...{for key in arg_keys(A): if Include { items[key] }})
+
 const fn forward<...Ps, ...As>(
     f: const fn(...{Ps}) -> i64,
     args: ...{As for f},
@@ -22,4 +25,6 @@ test an_omitted_position_leaves_a_slot {
 test an_omitted_name_leaves_a_default {
     assert forward(weighted, price: 7) == 14
     assert forward(weighted, 7, 3) == 21
+    assert weight_when<false>(3) == 14
+    assert weight_when<true>(3) == 21
 }

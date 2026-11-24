@@ -7,7 +7,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
 use super::requirements::{IndependentSourceBodies, called_or_referenced, pack_view};
-use crate::constant::Scope;
+use crate::constant::{Fault, Scope};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{Callee, Expr, ExprKind, Form, PackInput, PackKey, TypePackArgument};
 use crate::program::{Binding, LocalKind};
@@ -25,7 +25,7 @@ pub(super) struct ForwardedArgument {
     pub(super) value: Expr,
 }
 
-impl Typer<'_> {
+impl<'a> Typer<'a> {
     /// A form that does not implement pack forwarding must not discard
     /// the spread and emit a call using only its written arguments.
     pub(super) fn unread_pack_call(&mut self, list: &SyntaxNode) -> Option<(ExprKind, Type)> {
@@ -357,29 +357,48 @@ impl Typer<'_> {
     }
 
     /// GEN-7: the pack's keys exist only in the instance that supplies it.
-    fn computed_pack(&self, comprehension: &SyntaxNode) -> Option<&TypePackArgument> {
+    fn computed_pack(&self, comprehension: &SyntaxNode) -> Option<&'a TypePackArgument> {
         let inputs = self.pack_inputs?;
         let iterable = ungrouped(comprehension.children().next()?);
         let (_, pack) = pack_view(iterable)?;
         let Binding::Local { at, .. } = self.binding_at(self.file, pack.span().start)? else {
             return None;
         };
-        let parameter = self
-            .signature
-            .generics
+        inputs
+            .types
             .iter()
-            .position(|generic| generic.at == *at)?;
-        inputs.types.iter().find(|pack| {
-            pack.parameter == parameter
-                && !pack.infer_from_arguments
-                && pack.forwarded_from.is_none()
-        })
+            .find(|(declared, pack)| {
+                declared == at && !pack.infer_from_arguments && pack.forwarded_from.is_none()
+            })
+            .map(|(_, pack)| *pack)
     }
 
     /// Whether a written computed spread must wait for its own keys.
     pub(super) fn deferred_computed_spread(&self, list: &SyntaxNode) -> bool {
         spread_operands(list).map(ungrouped).any(|spread| {
-            spread.kind() == SyntaxKind::PackComprehension && self.computed_pack(&spread).is_none()
+            spread.kind() == SyntaxKind::PackComprehension && !self.computed_spread_ready(&spread)
+        })
+    }
+
+    /// Keep the whole spread unread when the constant reader cannot yet
+    /// choose a branch. A known type error is reported by the pass itself.
+    fn computed_spread_ready(&self, comprehension: &SyntaxNode) -> bool {
+        let (Some(pack), Some(name), Some(entry)) = (
+            self.computed_pack(comprehension),
+            name_token(comprehension),
+            comprehension.children().nth(1),
+        ) else {
+            return false;
+        };
+        let binding = Location::new(self.file, name.span());
+        pack.keys.iter().all(|key| {
+            let Some(argument) = pack_key_argument(key) else {
+                return false;
+            };
+            matches!(
+                self.selected_pack_entry(ungrouped(entry.clone()), (binding, &argument)),
+                Ok(_) | Err((_, Fault::Mismatch(_) | Fault::NoMember(_) | Fault::NoEnum))
+            )
         })
     }
 
@@ -441,68 +460,67 @@ impl Typer<'_> {
             return;
         };
         let key_binding = Location::new(self.file, name.span());
-        let keys = pack.keys.clone();
         let before = self.bound.len();
-        for key in keys {
-            let value = match &key {
-                PackKey::Name(name) => ConstantValue::Str(name.clone()),
-                PackKey::Position(position) => {
-                    let Ok(position) = i64::try_from(*position) else {
-                        continue;
-                    };
-                    ConstantValue::Int(position)
-                }
+        for key in pack.keys.iter().cloned() {
+            let Some(argument) = pack_key_argument(&key) else {
+                continue;
             };
-            self.bound.push((
-                key_binding,
-                Argument::Constant(Constant {
-                    text: value.key().unwrap_or_default(),
-                    value,
-                }),
-            ));
-            if let Some(source) = self.selected_pack_entry(ungrouped(entry.clone())) {
-                let value = self.expression(&source, None);
-                forwarded.push(ForwardedArgument { key, source, value });
+            match self.selected_pack_entry(ungrouped(entry.clone()), (key_binding, &argument)) {
+                Ok(Some(source)) => {
+                    self.bound.push((key_binding, argument));
+                    let value = self.expression(&source, None);
+                    forwarded.push(ForwardedArgument { key, source, value });
+                    self.bound.truncate(before);
+                }
+                Ok(None) => {}
+                Err((condition, _)) => self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    self.at(&condition),
+                    "a pack loop condition must be a constant bool".to_string(),
+                    "FN-19",
+                )),
             }
-            self.bound.truncate(before);
         }
     }
 
     /// Find the selected expression of an `if` chain, or omit this key.
-    fn selected_pack_entry(&mut self, mut entry: SyntaxNode) -> Option<SyntaxNode> {
+    fn selected_pack_entry(
+        &self,
+        mut entry: SyntaxNode,
+        key: (Location, &Argument),
+    ) -> Result<Option<SyntaxNode>, (SyntaxNode, Fault)> {
         while entry.kind() == SyntaxKind::IfExpr {
             let mut parts = entry.children();
-            let (condition, then) = (parts.next()?, parts.next()?);
-            match self.pack_condition(&condition) {
-                Some(true) => return Some(then),
-                Some(false) => entry = ungrouped(parts.next()?),
-                None => {
-                    self.diagnostics.emit(error(
-                        Category::Type,
-                        codes::TYPE_MISMATCH,
-                        self.at(&condition),
-                        "a pack loop condition must be a constant bool".to_string(),
-                        "FN-19",
-                    ));
-                    return None;
-                }
+            let (Some(condition), Some(then)) = (parts.next(), parts.next()) else {
+                return Ok(None);
+            };
+            if self
+                .pack_condition(&condition, key)
+                .map_err(|fault| (condition, fault))?
+            {
+                return Ok(Some(then));
             }
+            let Some(otherwise) = parts.next() else {
+                return Ok(None);
+            };
+            entry = ungrouped(otherwise);
         }
-        Some(entry)
+        Ok(Some(entry))
     }
 
-    fn pack_condition(&self, condition: &SyntaxNode) -> Option<bool> {
-        let inputs = self.pack_inputs?;
-        let type_packs: Vec<_> = inputs
-            .types
-            .iter()
-            .filter_map(|pack| Some((self.signature.generics.get(pack.parameter)?.at, pack)))
-            .collect();
+    fn pack_condition(
+        &self,
+        condition: &SyntaxNode,
+        key: (Location, &Argument),
+    ) -> Result<bool, Fault> {
+        let inputs = self.pack_inputs.ok_or(Fault::NotConstant)?;
         let arguments: Vec<_> = self
             .instance
             .iter()
             .chain(&self.bound)
             .map(|(at, value)| (*at, value))
+            .chain(std::iter::once(key))
             .collect();
         let binding = |file, start| self.binding_at(file, start);
         let parameter = |at| {
@@ -522,16 +540,28 @@ impl Typer<'_> {
             binding: &binding,
             parameter: &parameter,
             arguments: &arguments,
-            type_packs: &type_packs,
+            type_packs: inputs.types,
             constants: &self.constants,
         };
         let expected = Type::Scalar(Scalar::Bool);
-        let read = crate::constant::typed(condition, Some(&expected), &scope).ok()?;
-        match crate::constant::fit(read, Some(&expected), self.program).ok()? {
-            ConstantValue::Bool(value) => Some(value),
-            _ => None,
+        let read = crate::constant::typed(condition, Some(&expected), &scope)?;
+        match crate::constant::fit(read, Some(&expected), self.program)? {
+            ConstantValue::Bool(value) => Ok(value),
+            _ => Err(Fault::NotConstant),
         }
     }
+}
+
+/// An integer position or a name read from the pass in which it is bound.
+fn pack_key_argument(key: &PackKey) -> Option<Argument> {
+    let value = match key {
+        PackKey::Name(name) => ConstantValue::Str(name.clone()),
+        PackKey::Position(position) => ConstantValue::Int(i64::try_from(*position).ok()?),
+    };
+    Some(Argument::Constant(Constant {
+        text: value.key().unwrap_or_default(),
+        value,
+    }))
 }
 
 /// The operand of each spread, in the order it is written.

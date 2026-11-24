@@ -119,7 +119,7 @@ analyser: partial
 
 analyser: partial
 
-- The proposed checking of passes over the keys of a generic pack awaits #368.
+- Inline pack-key passes are checked when an instance supplies its keys. Only the branch a constant condition selects is read. A failing pass reports at the call that made the instance and names the failing body and any nested instances (FN-19, CTRL-16).
 
 - In a body with generic parameters, a call of an operator, by name or by symbol, with an argument whose type names one of them is admitted where a requirement of the declaration names that operator with those types, each given by its position or by the operator's parameter name, and is of the type its arrow states. A candidate that takes every admitted type can also admit the body.
 - The call records the position of the requirement it is (`Callee::Required`), so that a call of the declaration says which candidate it calls
@@ -274,7 +274,7 @@ analyser: partial
 
 - Reflects the selected callback's fixed suffix and its supplied positional and named pack entries. A dependent pack keeps the callback parameter keys and the types written at the call.
 - Evaluates `each` over `arg_keys`, constant key membership, and keyed type projection. Candidate requirements can compare bare pack members. A missing member of a known pack reports `pack.name`.
-- In a pack comprehension, `arg_keys` names a declared type pack and the iteration name is a compile-time key. A membership condition reads those bindings and has type `bool`. Generic unrolling and the value of that condition in a pass await the GEN-7 decision (#368).
+- In a pack comprehension, `arg_keys` names a declared type pack and the iteration name is a compile-time key. In a concrete inline spread, a membership condition tests that pass's key against the resolved type pack and gives a constant `bool` (GEN-7).
 - A generic call that receives another function parameter checks its pack requirements when the caller supplies the reflected types. The receiver's fixed positions determine which original inputs its pack reflects.
 - An operator callback reflects the public declaration's parameter names and the selected candidate's types (FN-17).
 - Specializes a pack-member type written as a function call's generic argument (GEN-8), including within another type. A missing key reports `pack.name`. A positive member-type equality, including one stated for each key of a pack, can admit a constrained call under GEN-7. A call with an untold member type remains unsupported in the target.

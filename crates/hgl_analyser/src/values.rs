@@ -469,6 +469,11 @@ pub(crate) fn reread_instance_body(
         },
         ..signature.clone()
     };
+    let pack_types: Vec<_> = inputs
+        .type_packs
+        .iter()
+        .filter_map(|pack| Some((reading.generics.get(pack.parameter)?.at, pack)))
+        .collect();
     let mut typer = Typer::new(
         program,
         owner,
@@ -498,7 +503,7 @@ pub(crate) fn reread_instance_body(
         .collect();
     typer.pack_inputs = inputs.pack_inputs.map(|values| PackInputs {
         values,
-        types: inputs.type_packs,
+        types: &pack_types,
     });
     typer.pack_functions = inputs.functions.to_vec();
     typer.body_at_phase(owner.phases[declaration])
@@ -767,7 +772,7 @@ struct Typer<'a> {
 #[derive(Clone, Copy)]
 struct PackInputs<'a> {
     values: &'a [hir::PackInput],
-    types: &'a [hir::TypePackArgument],
+    types: &'a [(Location, &'a hir::TypePackArgument)],
 }
 
 /// How many expressions of one construct are read a second time, beside

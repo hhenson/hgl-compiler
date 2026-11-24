@@ -290,11 +290,12 @@ analyser: partial
 - Checks function, operator and static callback arguments with the ordinary call diagnostics (EXPR-2) and uses the names written by a callback template (FN-17).
 - A forwarded name that binds a generic value parameter or a selecting operator option reports `generic.argument_constant` at the runtime entry (GEN-6, GEN-8). Generic value names take priority over a callee's ordinary named pack.
 - Follows concrete calls in parameter and field defaults and anonymous bodies. Struct fields bind by name, and positional entries reject (TYPE-5). An enum constructor with a spread reports the argument during analysis (TYPE-7).
-- Checks where a pack comprehension is held and requires its iterable to name a type pack's keys. Checks condition chains for runtime bindings, assignments to the iteration key, and ordinary reads of a type pack or callback. A computed spread retains the call for the target to decline while the generic passes remain unread.
+- Checks where a pack comprehension is held and requires its iterable to name a type pack's keys. At the declaration it checks condition chains for runtime bindings, assignments to the iteration key, and ordinary reads of a type pack or callback. In an instance an inline computed spread visits the concrete keys, reads only each selected branch, and omits keys whose chain selects no entry (GEN-7, CTRL-16).
 - Reads a declared function's written arguments, including its configuration, through their parameter types before the computed entries are known.
 
 transpiler: partial
 
 - Lowers forwarded entries and constant-key reads from the same fitted pack input slots, including captured values and connections. The SDK cases also exercise operator selection, static callbacks and constructors.
+- Lowers the concrete arguments of an inline computed spread. The SDK cases exercise a skipped position and a skipped name whose parameter takes its default.
 
-Left: Unrolling a generic pack comprehension and spreading a pack bound with `let` are tracked in #368. Generic unrolling awaits the GEN-7 decision. The packed signal payload diagnostic is tracked in #731, and guards on the pack entry itself in #732.
+Left: A pack bound with `let` and then spread, and conditions whose compile-time values this reader does not yet work out, remain part of #368. The packed signal payload diagnostic is tracked in #731, and guards on the pack entry itself in #732.
