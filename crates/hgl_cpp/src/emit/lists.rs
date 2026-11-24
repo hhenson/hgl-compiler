@@ -591,8 +591,20 @@ impl Family for Lists {
             // TIME-1: a child read at a constant index, which the analyser
             // has proved admitted, read as its form reads it, and checked
             // again when it runs.
-            ExprKind::Index { .. } => {
-                let endpoint = emitter.child_endpoint(scope, value)?;
+            ExprKind::Index { base, .. } => {
+                let endpoint = if matches!(base.kind, ExprKind::Field { .. })
+                    && matches!(shape(&base.ty), Some(Shape::Fixed(..)))
+                {
+                    // TIME-1: a fixed-list field of a structural input
+                    // holds its own child endpoints. Read the position
+                    // through the same view as its guard.
+                    let (_, false) = super::structs::child_view(emitter, scope, base)? else {
+                        return None;
+                    };
+                    emitter.read_endpoint_view(scope, value)?
+                } else {
+                    emitter.child_endpoint(scope, value)?
+                };
                 scope.read = true;
                 scope.acted = true;
                 Some(format!("::{namespace}::checked_whole({endpoint})"))

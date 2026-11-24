@@ -1023,6 +1023,29 @@ fn nested_forms_run_on_the_sdk() {
     );
 }
 
+/// TIME-1: a guarded position of a fixed-list field reads its endpoint,
+/// including when the struct input is supplied by a fitted pack.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn fixed_list_fields_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("fixed-list-field");
+    let file = write(
+        &root,
+        "demo.fixed_list_field.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.fixed_list_field.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// A dictionary's tuple entry reads into a result even if it is not all valid (ERR-14, TIME-1).
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
