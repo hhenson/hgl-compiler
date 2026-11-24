@@ -129,7 +129,6 @@ fn switch_branch_read(clock: bool, route: i64, reading: i64) -> list<i64> =>
     branch_samples(clock, switch_window(route, reading))
 
 test both_temporal_branches_read_their_staged_windows {
-    # Branch re-entry and fresh window history are covered by #676.
     assert eval if_branch_read(clock: [true, true, true], first: [true, true, true],
                                reading: [1, 2, 3]) == [[1], [1, 3], [3, 6]]
     assert eval if_branch_read(clock: [true, true, true], first: [false, false, false],
@@ -138,6 +137,39 @@ test both_temporal_branches_read_their_staged_windows {
                                    reading: [1, 2, 3]) == [[1], [1, 3], [3, 6]]
     assert eval switch_branch_read(clock: [true, true, true], route: [0, 0, 0],
                                    reading: [1, 2, 3]) == [[101], [101, 203], [203, 306]]
+}
+
+# CTRL-2: a changed selection starts its child and window history fresh.
+fn near(reading: i64) -> rolling_window<i64, 2, 1> {
+    when { return reading }
+}
+fn far(reading: i64) -> rolling_window<i64, 2, 1> {
+    when { return reading + 100 }
+}
+fn fresh_if_window(first: bool, reading: i64) -> rolling_window<i64, 2, 1> {
+    if first { return near(reading) }
+    return far(reading)
+}
+fn fresh_switch_window(route: i64, reading: i64) -> rolling_window<i64, 2, 1> {
+    switch route {
+        case 1: return near(reading)
+        default: return far(reading)
+    }
+}
+fn fresh_if_samples(clock: bool, first: bool, reading: i64) -> list<i64> =>
+    branch_samples(clock, fresh_if_window(first, reading))
+fn fresh_switch_samples(clock: bool, route: i64, reading: i64) -> list<i64> =>
+    branch_samples(clock, fresh_switch_window(route, reading))
+
+test branch_window_history_starts_fresh {
+    assert eval fresh_if_samples(clock: [true, true, true, true, true, true],
+                                 first: [true, true, false, false, true, true],
+                                 reading: [1, 2, 3, 4, 5, 6]) ==
+        [[1], [1, 2], [103], [103, 104], [5], [5, 6]]
+    assert eval fresh_switch_samples(clock: [true, true, true, true, true, true],
+                                     route: [1, 1, 0, 0, 1, 1],
+                                     reading: [1, 2, 3, 4, 5, 6]) ==
+        [[1], [1, 2], [103], [103, 104], [5], [5, 6]]
 }
 
 # END-1, END-2, END-3 and END-6: metadata follows the last pending arrival,
