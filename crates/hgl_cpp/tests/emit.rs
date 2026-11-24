@@ -3075,11 +3075,10 @@ fn composite_values_are_written() {
 
 /// What the target does not write of the composites yet is reported
 /// where it is written, and nothing is miswritten: a struct that holds
-/// itself (TYPE-6), a field's default that runs statements of its own,
-/// a field of an abstract struct assigned, a dictionary written with keys
-/// that may be one, which the pinned text does not say what it holds, a
-/// dictionary's entry given to a `var` parameter, and an application of a
-/// generic struct that its C++ template would not be.
+/// itself (TYPE-6), a field of an abstract struct assigned, a dictionary
+/// written with keys that may be one, which the pinned text does not say
+/// what it holds, a dictionary's entry given to a `var` parameter, and an
+/// application of a generic struct that its C++ template would not be.
 #[test]
 fn composite_forms_not_written_yet_are_reported() {
     let emitted = emit(&[(
