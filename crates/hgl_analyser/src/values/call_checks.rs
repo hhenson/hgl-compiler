@@ -6,7 +6,7 @@
 //! the typing pass ([`super`]).
 
 use hgl_diagnostics::{Category, Location};
-use hgl_parser::HasSpan;
+use hgl_parser::{HasSpan, SyntaxKind};
 
 use super::arguments::Takes;
 use super::evals::holds_trace;
@@ -17,7 +17,7 @@ use super::{Selected, Typer};
 use crate::declared::substitute_within;
 use crate::hir::{Expr, ExprKind, Form, Hook, LocalId, Value, ValueCategory};
 use crate::program::{LocalKind, Program, Role};
-use crate::types::{Argument, ConstantValue, Detail, Scalar, Type};
+use crate::types::{Argument, ConstantValue, Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
 
 impl<'e> Selected<'e> {
@@ -552,8 +552,9 @@ impl<'a> Typer<'a> {
     /// FN-1: "a `const` parameter takes what is fixed when the graph is
     /// built. In composition that is any ordinary value. In a hook and
     /// in a value function it is a constant expression: of literals,
-    /// enum members, generic value parameters, and the enclosing
-    /// function's own `const` parameters."
+    /// enum members, constants (UNIT-13), generic value parameters, and
+    /// the enclosing function's own `const` parameters." It also admits
+    /// field and constant-index reads from the stated fixed values.
     ///
     /// A graph's own rule, that a `const` parameter is given no
     /// connection, is `constants_of`'s. This is the other half: where
@@ -598,8 +599,9 @@ impl<'a> Typer<'a> {
                     "FN-1",
                 )
                 .with_note(
-                    "a literal, an enum member, a generic value parameter, or a `const` \
-                     parameter of the enclosing function is fixed",
+                    "a literal or an enum member is fixed, as is a constant, a generic value \
+                     parameter, or a `const` parameter of the enclosing function, including \
+                     fields and entries at constant indexes of the last three",
                 ),
             );
         }
@@ -610,13 +612,27 @@ impl<'a> Typer<'a> {
     /// the enclosing function's own `const` parameters." CTRL-16 also
     /// supplies constants from active unrolled passes to range bounds.
     pub(super) fn is_fixed(&self, value: &Expr, range_bindings: &[LocalId]) -> bool {
-        fixed_expression(value, &|local, _| {
-            range_bindings.contains(&local)
-                || self
-                    .signature
-                    .parameters
-                    .get(local)
-                    .is_some_and(|parameter| parameter.constant)
+        fixed_expression(value, &|read| {
+            if let ExprKind::Local(local) = read.kind {
+                return range_bindings.contains(&local)
+                    || self
+                        .signature
+                        .parameters
+                        .get(local)
+                        .is_some_and(|parameter| parameter.constant);
+            }
+            // A reread substitutes the aggregate at the const parameter's
+            // use. Its lexical binding still identifies that fixed base.
+            !self.const_inputs.is_empty()
+                && self
+                    .syntax_of(read)
+                    .filter(|node| node.kind() == SyntaxKind::NameExpr)
+                    .and_then(|node| self.local_of(&node))
+                    .is_some_and(|local| {
+                        self.const_inputs
+                            .iter()
+                            .any(|(parameter, _)| *parameter == self.locals[local].at)
+                    })
         })
     }
 
@@ -689,18 +705,16 @@ impl<'a> Typer<'a> {
 /// (core's CRUN-8).
 const RUN_OUTPUT_KEY: &str = "run.output";
 
-/// Whether a typed expression of fixed locals meets FN-1.
-pub(crate) fn fixed_expression(
-    value: &Expr,
-    fixed_local: &dyn Fn(LocalId, Location) -> bool,
-) -> bool {
-    let fixed = |operand: &Expr| fixed_expression(operand, fixed_local);
+/// Whether a typed expression of fixed bindings meets FN-1.
+pub(crate) fn fixed_expression(value: &Expr, fixed_binding: &dyn Fn(&Expr) -> bool) -> bool {
+    let fixed = |operand: &Expr| fixed_expression(operand, fixed_binding);
     match &value.kind {
         ExprKind::Literal(_)
         | ExprKind::EnumMember { .. }
         | ExprKind::GenericValue { .. }
         | ExprKind::Constant { .. } => true,
-        ExprKind::Local(local) => fixed_local(*local, value.at),
+        ExprKind::Local(_) => fixed_binding(value),
+        ExprKind::Field { .. } | ExprKind::Index { .. } => fixed_read(value, fixed_binding),
         ExprKind::Widen(inner) => fixed(inner),
         // ERR-12 and ERR-15 read the argument's existing value.
         ExprKind::Raised { result, .. } | ExprKind::OrNull { result, .. } => fixed(result),
@@ -742,5 +756,35 @@ pub(crate) fn fixed_expression(
             .iter()
             .all(|(key, value)| fixed(key) && fixed(value)),
         _ => false,
+    }
+}
+
+/// FN-1 restricts the base of a projection to a named fixed value or an
+/// admitted read. An index is itself a constant expression.
+fn fixed_read(value: &Expr, fixed_binding: &dyn Fn(&Expr) -> bool) -> bool {
+    match &value.kind {
+        ExprKind::Constant { .. } | ExprKind::GenericValue { .. } => true,
+        ExprKind::Field { base, .. } => {
+            let payload = match &base.ty {
+                Type::Atomic(payload) => &**payload,
+                other => other,
+            };
+            // Native properties also use Field in HIR (NATIVE-6).
+            matches!(
+                payload,
+                Type::Named {
+                    kind: NamedKind::Struct,
+                    ..
+                }
+            ) && fixed_read(base, fixed_binding)
+        }
+        ExprKind::Index { base, index } => {
+            fixed_read(base, fixed_binding) && fixed_expression(index, fixed_binding)
+        }
+        ExprKind::Raised { result, .. } | ExprKind::OrNull { result, .. } => {
+            fixed_read(result, fixed_binding)
+        }
+        ExprKind::NullRead { value, .. } => fixed_read(value, fixed_binding),
+        _ => fixed_binding(value),
     }
 }

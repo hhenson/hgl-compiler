@@ -12,6 +12,7 @@ analyser: partial
 - A `const fn` parameter marked `ref` is `ref.position` (FN-16)
 - A generic parameter of a value function that a call's place, or what the call writes, binds to a type that holds a window is `type.not_ordinary`; one given a window binds to the `list<V>` it holds (GEN-1, TYPE-11)
 - In a hook, a source and a value function a `const` parameter is given a constant expression (`argument.constant`); in a graph, no connection (`connection.as_constant`)
+- A constant, generic value parameter, or enclosing `const` parameter can be read by field or at a constant index in a constant expression. An admitted read can serve as the base of the next read.
 - Left: a `const` parameter that only an operator marks; roles of `const fn` and a temporal `fn` in bodies
 
 ## FN-2
