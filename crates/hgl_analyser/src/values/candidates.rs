@@ -1773,11 +1773,12 @@ impl<'a> Typer<'a> {
         }
         // Each combination of members, as an instance would have it.
         let before = std::mem::take(&mut self.instance);
+        let packs = PackTypes::new(&[], &[]);
         let mut failed = None;
         for combination in &combinations {
             self.instance = combination.clone();
             let mark = self.mark();
-            let outcome = match self.select_at_instance(&record, None) {
+            let outcome = match self.select_at_instance(&record, &packs, None) {
                 // What a call is held to once its candidate is selected
                 // (`Typer::called`): a `var` parameter's place among them.
                 AtInstance::Selected(chosen, given) => {
@@ -1894,6 +1895,7 @@ impl<'a> Typer<'a> {
     pub(super) fn select_at_instance(
         &mut self,
         selecting: &Selecting,
+        packs: &PackTypes<'_>,
         values: Option<Vec<Expr>>,
     ) -> AtInstance<'a> {
         let own: Vec<Location> = self.instance.iter().map(|(at, _)| *at).collect();
@@ -1902,7 +1904,9 @@ impl<'a> Typer<'a> {
             .iter()
             .map(|(at, argument)| (*at, argument))
             .collect();
-        let in_place = |ty: &Type| placed(substitute_within(ty, &map), &own);
+        // GEN-17: a reflected member supplies its concrete type before
+        // the requested result and operands are matched against candidates.
+        let in_place = |ty: &Type| placed(packs.project(ty, &map).unwrap_or(Type::Unknown), &own);
         self.graph = selecting.graph;
         let operator = selecting.operator;
         let program = self.program;
@@ -2381,6 +2385,7 @@ pub(crate) fn select_in_instance(
     program: &crate::program::Program,
     (module, declaration): (usize, usize),
     generics: &[Argument],
+    packs: &PackTypes<'_>,
     body: &mut hir::Body,
     after: &dyn Fn(&mut Expr),
 ) -> Vec<Location> {
@@ -2461,7 +2466,8 @@ pub(crate) fn select_in_instance(
             .iter()
             .map(|argument| argument.value.clone())
             .collect();
-        let AtInstance::Selected(chosen, given) = typer.select_at_instance(call, Some(values))
+        let AtInstance::Selected(chosen, given) =
+            typer.select_at_instance(call, packs, Some(values))
         else {
             return;
         };
