@@ -76,11 +76,6 @@ const PENDING_MODULES: &[(&str, &str, &str)] = &[
         "examples.mapping",
         "MAP-1 and RED-1 (#369, #370)",
     ),
-    (
-        "hgl_spec/spec/language/functions-and-phases.md",
-        "examples.pack_forms",
-        "LEX-29, EXPR-16, EXPR-17 and FN-19 (#368)",
-    ),
 ];
 
 /// The rejection cases of core the compiler does not yet reject, each as

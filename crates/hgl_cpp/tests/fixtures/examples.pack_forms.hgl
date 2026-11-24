@@ -1,0 +1,126 @@
+module examples.pack_forms
+
+# The FN-19 example from functions-and-phases, with executable cases below.
+
+const fn squares(n: i64) -> list<i64> => [for i in 0..<n: i * i]
+
+const fn below(n: i64) -> i64 {
+    var sum = 0
+    for i in 0..<n { sum += i }
+    return sum
+}
+
+fn doubled(prices: list<f64, 3>) -> list<f64, 3> => [for i in 0..<3: prices[i] * 2.0]
+
+fn scaled(price: f64, factor: f64) -> f64 => price * factor
+
+fn passed_on<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+    requires each arg in arg_keys(As) { As[arg] == Ps[arg] }
+{
+    let given = {for arg in arg_keys(Ps): args[arg]}
+    return f(...given)
+}
+
+fn tagged<R, ...Ps, ...As, const key: str = "key">(
+    f: fn(...{Ps}) -> R,
+    args: ...{As for f without key},
+) -> R {
+    let given = {for arg in arg_keys(Ps):
+        if arg == key { "fixed" } else if arg in arg_keys(As) { args[arg] }}
+    return f(...given)
+}
+
+fn weighted(price: f64, weight: f64 = 1.0) -> f64 => price * weight
+
+fn labelled(key: str, price: f64) -> str => key
+
+fn total(scale: f64, values: ...f64) -> f64 {
+    when {
+        var sum = 0.0
+        for value in values { sum += value }
+        return sum * scale
+    }
+}
+
+fn one(price: f64, factor: f64) -> f64 => passed_on(scaled, price, factor)
+
+fn two(price: f64) -> str => tagged(labelled, price)
+
+fn four(price: f64) -> f64 => tagged(weighted, price)
+
+fn three(a: f64, b: f64) -> f64 => passed_on(total, 2.0, a, b)
+
+test range_forms {
+    assert squares(4) == [0, 1, 4, 9]
+    let empty: list<i64> = []
+    assert squares(0) == empty
+    assert below(4) == 6
+    assert eval doubled(prices: [[2.0, 3.0, 4.0]]) == [[4.0, 6.0, 8.0]]
+}
+
+test a_bound_pack_forwards_to_a_graph_or_node {
+    assert eval one(price: [2.0], factor: [3.0]) == [6.0]
+    assert eval two(price: [2.0, 3.0]) == ["fixed"]
+    assert eval three(a: [2.0], b: [3.0]) == [10.0]
+    assert eval four(price: [2.0, 3.0]) == [2.0, 3.0]
+}
+
+struct Point {
+    x: i64
+    y: i64
+}
+
+const fn construct<...A>(args: ...{A}) -> Point {
+    let fields = {for key in arg_keys(A): args[key] + 1}
+    return Point(...fields)
+}
+
+const fn combine(a: i64, b: i64, c: i64) -> i64 => a * 100 + b * 10 + c
+
+const fn bind_separately<...A>(args: ...A) -> i64 {
+    let first = {for key in arg_keys(A): if key == 0 { args[key] }}
+    let rest = {for key in arg_keys(A): if key == 1 { args[key] }}
+    let explicit = first[0] + rest[1]
+    return combine(...first, ...rest, b: explicit)
+}
+
+const fn bind_once<...A>(args: ...A) -> i64 {
+    var count = 0
+    let given = {for key in arg_keys(A): if key >= 0 {
+        count += 1
+        args[key]
+    }}
+    let first = given[0]
+    return combine(...given, c: count + first)
+}
+
+test a_bound_pack_can_be_indexed_and_spread {
+    let p = construct(y: 5, x: 2)
+    assert p.x == 3
+    assert p.y == 6
+    assert bind_separately(2, 5) == 275
+    assert bind_once(2, 5) == 254
+}
+
+const fn duplicate<...A>(args: ...{A}) -> i64 {
+    let given = {for key in arg_keys(A): args[key]}
+    return combine(...given, a: 9)
+}
+
+const fn missing<...A>(args: ...A) -> i64 {
+    let given = {for key in arg_keys(A): if key == 0 { args[key] }}
+    return given[1]
+}
+
+test a_written_argument_cannot_also_be_spread {
+    # expect-error(name, "argument.duplicate")
+    assert duplicate(a: 1, b: 2, c: 3) == 0
+}
+
+test a_skipped_entry_has_no_key {
+    # expect-error(type, "pack.name")
+    assert missing(1, 2) == 0
+}
+
+# expect-error(type, "type.mismatch")
+const fn not_a_runtime_value(items: ...i64) -> str => items

@@ -11,6 +11,7 @@ use super::constants::constant_text;
 use super::dependent_packs::MemberFault;
 use super::fit::{hook_payload_type, not_null, open, whole};
 use super::forms::received_type;
+use super::forwarded_packs::BoundPack;
 use super::inference::{fixed, placed, type_pack};
 use super::results::{captured_output, proof_binding};
 use crate::constant::Fault;
@@ -20,6 +21,12 @@ use crate::program::DeclarationKind;
 use crate::syntax::{name_token, tokens, ungrouped};
 use crate::types::{Argument, Constant, ConstantValue, Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
+
+enum PackEntryKey {
+    Known(Option<PackKey>, Constant),
+    Deferred,
+    Rejected,
+}
 
 /// EXPR-7 and GEN-7: the type of an indexed parameter is known only in
 /// the instance. Reread the bracket and any call it supplies there.
@@ -357,11 +364,12 @@ impl<'a> Typer<'a> {
         };
         let root = ungrouped(base.clone());
         if let Some(pack) = self.local_of(&root)
-            && self
-                .signature
-                .parameters
-                .get(pack)
-                .is_some_and(|parameter| parameter.pack.is_some())
+            && self.bound_packs.contains_key(&pack)
+        {
+            return self.bound_pack_entry(pack, node, &index);
+        }
+        if let Some(pack) = self.local_of(&root)
+            && self.parameter_pack(pack).is_some()
         {
             let (kind, ty) = self.pack_entry(pack, &index);
             let at = self.at(node);
@@ -418,7 +426,76 @@ impl<'a> Typer<'a> {
     /// FN-19 and GEN-17: read an entry under a compile-time key. A
     /// specialization supplies the pack's actual keys and fitted types.
     fn pack_entry(&mut self, pack: usize, index: &SyntaxNode) -> (ExprKind, Type) {
+        let (wanted, key) = match self.pack_entry_key(index) {
+            PackEntryKey::Known(wanted, key) => (wanted, key),
+            PackEntryKey::Deferred => return self.deferred_pack_entry(pack),
+            PackEntryKey::Rejected => return (ExprKind::Unread, Type::Unknown),
+        };
         let unread = (ExprKind::Unread, Type::Unknown);
+        let Some(inputs) = &self.pack_inputs else {
+            return self.deferred_pack_entry(pack);
+        };
+        let entry = wanted.as_ref().and_then(|key| {
+            inputs
+                .values
+                .iter()
+                .find(|input| input.parameter == pack && input.key == *key)
+        });
+        let Some(entry) = entry else {
+            self.pack_member_fault(
+                self.at(index),
+                &MemberFault::Missing {
+                    pack: self.locals[pack].name.clone(),
+                    key,
+                },
+            );
+            return unread;
+        };
+        (
+            ExprKind::PackEntry {
+                pack,
+                key: entry.key.clone(),
+            },
+            entry.ty.clone(),
+        )
+    }
+
+    /// A computed binding reads the local initialized by the selected pass.
+    fn bound_pack_entry(
+        &mut self,
+        pack: usize,
+        node: &SyntaxNode,
+        index: &SyntaxNode,
+    ) -> (ExprKind, Type) {
+        let (wanted, key) = match self.pack_entry_key(index) {
+            PackEntryKey::Known(wanted, key) => (wanted, key),
+            PackEntryKey::Deferred => return (ExprKind::DeferredPackRead, Type::Unknown),
+            PackEntryKey::Rejected => return (ExprKind::Unread, Type::Unknown),
+        };
+        let Some(BoundPack::Entries(entries)) = self.bound_packs.get(&pack) else {
+            return (ExprKind::DeferredPackRead, Type::Unknown);
+        };
+        let local = wanted.and_then(|key| {
+            entries
+                .iter()
+                .find_map(|(entry, local)| (*entry == key).then_some(*local))
+        });
+        if let Some(local) = local {
+            let value = self.read_local(local, node);
+            (value.kind, value.ty)
+        } else {
+            self.pack_member_fault(
+                self.at(index),
+                &MemberFault::Missing {
+                    pack: self.locals[pack].name.clone(),
+                    key,
+                },
+            );
+            (ExprKind::Unread, Type::Unknown)
+        }
+    }
+
+    fn pack_entry_key(&mut self, index: &SyntaxNode) -> PackEntryKey {
         let at = self.at(index);
         let text = constant_text(index);
         let source = match self.typed_in(self.file, index, None) {
@@ -432,16 +509,16 @@ impl<'a> Typer<'a> {
             // CTRL-16: the analyser sees a range body before the
             // target can supply the constant of each unrolled pass.
             Err(Fault::NotConstant) if self.range_pack_key(index) => {
-                return self.deferred_pack_entry(pack);
+                return PackEntryKey::Deferred;
             }
-            Err(Fault::Reported | Fault::Failed) => return unread,
+            Err(Fault::Reported | Fault::Failed) => return PackEntryKey::Rejected,
             _ => {
                 let key = Constant {
                     text,
                     value: ConstantValue::Unknown,
                 };
                 self.pack_member_fault(at, &MemberFault::KeyKind { key });
-                return unread;
+                return PackEntryKey::Rejected;
             }
         };
         let value = source.substituted(&|at| {
@@ -460,15 +537,14 @@ impl<'a> Typer<'a> {
         } else {
             text
         };
-        let parameter = &self.signature.parameters[pack];
         let wanted = match &value {
             ConstantValue::Str(name) => Some(PackKey::Name(name.clone())),
             ConstantValue::Int(position) => usize::try_from(*position).ok().map(PackKey::Position),
-            ConstantValue::Unknown => return unread,
+            ConstantValue::Unknown => return PackEntryKey::Rejected,
             // UNIT-13: a call can compute a module constant. The
             // constant reader holds that value by its declaration even
             // when it cannot work it out for this lookup.
-            _ if named_key(&value) => return self.deferred_pack_entry(pack),
+            _ if named_key(&value) => return PackEntryKey::Deferred,
             _ if self.pack_inputs.is_none()
                 && self
                     .signature
@@ -476,7 +552,7 @@ impl<'a> Typer<'a> {
                     .iter()
                     .any(|generic| value.names_one_of(&[generic.at])) =>
             {
-                return self.deferred_pack_entry(pack);
+                return PackEntryKey::Deferred;
             }
             _ => {
                 self.pack_member_fault(
@@ -485,35 +561,10 @@ impl<'a> Typer<'a> {
                         key: Constant { text, value },
                     },
                 );
-                return unread;
+                return PackEntryKey::Rejected;
             }
         };
-        let Some(inputs) = &self.pack_inputs else {
-            return self.deferred_pack_entry(pack);
-        };
-        let entry = wanted.as_ref().and_then(|key| {
-            inputs
-                .values
-                .iter()
-                .find(|input| input.parameter == pack && input.key == *key)
-        });
-        let Some(entry) = entry else {
-            self.pack_member_fault(
-                at,
-                &MemberFault::Missing {
-                    pack: parameter.name.clone(),
-                    key: Constant { text, value },
-                },
-            );
-            return unread;
-        };
-        (
-            ExprKind::PackEntry {
-                pack,
-                key: entry.key.clone(),
-            },
-            entry.ty.clone(),
-        )
+        PackEntryKey::Known(wanted, Constant { text, value })
     }
 
     /// A graph range's constant binding can be part of an FN-19 key

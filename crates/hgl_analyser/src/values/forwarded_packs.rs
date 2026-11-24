@@ -10,11 +10,14 @@ use super::requirements::{IndependentSourceBodies, called_or_referenced, pack_vi
 use crate::constant::{Fault, Scope};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{
-    BinaryOperator, Callee, Expr, ExprKind, Form, PackInput, PackKey, TypePackArgument,
+    BinaryOperator, Callee, Expr, ExprKind, Form, Local, LocalId, PACK_ENTRY_LOCAL_PREFIX,
+    PackInput, PackKey, Stmt, TypePackArgument, ValueCategory,
 };
 use crate::program::{Binding, LocalKind};
-use crate::syntax::{child, has_token, is_arg_keys_call, name_token, pack_member_names, ungrouped};
-use crate::types::{Argument, Constant, ConstantValue, GenericKind, Scalar, Type};
+use crate::syntax::{
+    child, has_token, is_arg_keys_call, name_token, pack_member_names, tokens, ungrouped,
+};
+use crate::types::{Argument, Constant, ConstantValue, GenericKind, Pack, Parameter, Scalar, Type};
 use crate::{codes, error};
 
 /// A concrete entry supplied by one spread in the original call.
@@ -25,6 +28,14 @@ pub(super) struct ForwardedArgument {
     pub(super) source: SyntaxNode,
     /// The typed read of the entry in the enclosing instance.
     pub(super) value: Expr,
+}
+
+/// The compile-time shape of a pack bound by `let` (FN-19).
+pub(super) enum BoundPack {
+    /// This binding awaits the instance or a condition's constant value.
+    Deferred,
+    /// Each entry is initialized once, in pass order, in its own local.
+    Entries(Vec<(PackKey, LocalId)>),
 }
 
 impl<'a> Typer<'a> {
@@ -80,8 +91,7 @@ impl<'a> Typer<'a> {
             }
             let pack = self
                 .local_of(&operand)
-                .and_then(|local| self.signature.parameters.get(local))
-                .is_some_and(|parameter| parameter.pack.is_some());
+                .is_some_and(|local| self.names_pack(local));
             if !pack {
                 self.diagnostics.emit(error(
                     Category::Type,
@@ -131,6 +141,142 @@ impl<'a> Typer<'a> {
         };
         self.check_pack_conditions(ungrouped(entry.clone()));
         self.check_pack_entry(&entry);
+    }
+
+    /// FN-19: a pack binding contributes one declaration per selected entry.
+    /// The source name holds only the key-to-local mapping at compile time.
+    pub(super) fn bind_computed_pack(
+        &mut self,
+        declaration: &SyntaxNode,
+        comprehension: &SyntaxNode,
+        statements: &mut Vec<Stmt>,
+    ) {
+        let Some(name) = tokens(declaration).find(|token| token.kind() == SyntaxKind::Ident) else {
+            return;
+        };
+        if let Some(annotation) = declaration
+            .children()
+            .find(|part| crate::read::is_type(part.kind()))
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                self.at(&annotation),
+                "a pack binding does not take an ordinary value type".to_string(),
+                "FN-19",
+            ));
+        }
+        let binding = if self.computed_spread_ready(comprehension) {
+            let mut entries = Vec::new();
+            self.computed_arguments(comprehension, &mut entries);
+            let mut locals = Vec::with_capacity(entries.len());
+            for entry in entries {
+                let local = self.locals.len();
+                let category = if self.graph {
+                    self.category(&entry.value)
+                } else {
+                    ValueCategory::Value
+                };
+                self.locals.push(Local {
+                    name: format!("{PACK_ENTRY_LOCAL_PREFIX}{local}"),
+                    at: entry.value.at,
+                    kind: LocalKind::Let,
+                    ty: entry.value.ty.clone(),
+                    category,
+                });
+                self.assigned.push(true);
+                statements.push(Stmt::Declare {
+                    local,
+                    value: Some(entry.value),
+                });
+                locals.push((entry.key, local));
+            }
+            BoundPack::Entries(locals)
+        } else {
+            self.check_pack_comprehension(comprehension);
+            statements.push(Stmt::Expr(Expr {
+                kind: ExprKind::DeferredPackRead,
+                ty: Type::Unknown,
+                at: self.at(comprehension),
+                category: ValueCategory::Unsettled,
+            }));
+            BoundPack::Deferred
+        };
+        let local = self.declare(
+            name.text(),
+            Location::new(self.file, name.span()),
+            LocalKind::Let,
+            Type::Unknown,
+            true,
+        );
+        self.bound_packs.insert(local, binding);
+    }
+
+    /// Whether a name denotes a parameter pack or a computed pack binding.
+    pub(super) fn names_pack(&self, local: LocalId) -> bool {
+        self.bound_packs.contains_key(&local) || self.parameter_pack(local).is_some()
+    }
+
+    /// A pack parameter is the local for that exact lexical declaration.
+    pub(super) fn parameter_pack(&self, local: LocalId) -> Option<&'a Parameter> {
+        let parameter = self.signature.parameters.get(local)?;
+        (self.locals[local].at == parameter.at && parameter.pack.is_some()).then_some(parameter)
+    }
+
+    /// The FN-19 `total` example iterates a homogeneous positional parameter
+    /// pack. Its concrete entries make the loop sequence in this instance.
+    pub(super) fn homogeneous_pack_iterable(&mut self, node: &SyntaxNode) -> Option<Expr> {
+        let pack = self.local_of(&ungrouped(node.clone()))?;
+        let parameter = self.parameter_pack(pack)?;
+        if parameter.pack != Some(Pack::Positional)
+            || super::inference::type_pack(parameter, &self.signature.generics).is_some()
+        {
+            return None;
+        }
+        let at = self.at(node);
+        let input = self.is_temporal_input(pack);
+        let local_category = self.locals[pack].category;
+        let payload = |ty: &Type| {
+            if input && self.hook.is_some() {
+                super::fit::hook_payload_type(ty)
+            } else {
+                ty.clone()
+            }
+        };
+        let element = payload(&parameter.ty);
+        let ty = Type::list(element.clone(), None);
+        let Some(inputs) = self.pack_inputs else {
+            return Some(Expr {
+                kind: ExprKind::DeferredPackRead,
+                ty,
+                at,
+                category: ValueCategory::Unsettled,
+            });
+        };
+        let entries: Vec<_> = inputs
+            .values
+            .iter()
+            .filter(|input| input.parameter == pack)
+            .map(|entry| Expr {
+                kind: ExprKind::PackEntry {
+                    pack,
+                    key: entry.key.clone(),
+                },
+                ty: payload(&entry.ty),
+                at,
+                category: local_category,
+            })
+            .collect();
+        if input && !entries.is_empty() {
+            self.input_read(pack, at, super::children::read_whole_all_valid(&element));
+            self.signal_read(pack, at, Some((&element, node)));
+        }
+        Some(Expr {
+            kind: ExprKind::Sequence(entries),
+            ty,
+            at,
+            category: ValueCategory::Unsettled,
+        })
     }
 
     fn check_pack_entry(&mut self, node: &SyntaxNode) {
@@ -379,7 +525,13 @@ impl<'a> Typer<'a> {
     /// Whether a written computed spread must wait for its own keys.
     pub(super) fn deferred_computed_spread(&self, list: &SyntaxNode) -> bool {
         spread_operands(list).map(ungrouped).any(|spread| {
-            spread.kind() == SyntaxKind::PackComprehension && !self.computed_spread_ready(&spread)
+            if spread.kind() == SyntaxKind::PackComprehension {
+                !self.computed_spread_ready(&spread)
+            } else {
+                self.local_of(&spread).is_some_and(|local| {
+                    matches!(self.bound_packs.get(&local), Some(BoundPack::Deferred))
+                })
+            }
         })
     }
 
@@ -430,6 +582,20 @@ impl<'a> Typer<'a> {
             let Some(local) = self.local_of(&operand) else {
                 continue;
             };
+            if let Some(BoundPack::Entries(entries)) = self.bound_packs.get(&local) {
+                let at = self.at(&source);
+                forwarded.extend(entries.iter().map(|(key, entry)| ForwardedArgument {
+                    key: key.clone(),
+                    source: source.clone(),
+                    value: Expr {
+                        kind: ExprKind::Local(*entry),
+                        ty: self.locals[*entry].ty.clone(),
+                        at,
+                        category: self.locals[*entry].category,
+                    },
+                }));
+                continue;
+            }
             let category = self.locals[local].category;
             for input in inputs
                 .values

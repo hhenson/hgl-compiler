@@ -255,21 +255,42 @@ impl<'a> Typer<'a> {
         // GEN-10: a runtime schema view has no ordinary value type.
         // Resolve the language form only where no declaration or local
         // binds that name (UNIT-10).
-        if used
-            && direct.kind() == SyntaxKind::NameExpr
+        if direct.kind() == SyntaxKind::NameExpr
             && child(&direct, SyntaxKind::QualifiedName).is_none()
             && let Some(name) = name_token(&direct)
             && name.text() == "schemas"
             && !self.bindings.contains_key(&(self.file, name.span().start))
         {
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::TYPE_MISMATCH,
-                self.at(node),
-                "a borrowed schema view cannot be used as an ordinary value".to_string(),
-                "GEN-10",
-            ));
-            return self.unread_call(&list);
+            if used {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    self.at(node),
+                    "a borrowed schema view cannot be used as an ordinary value".to_string(),
+                    "GEN-10",
+                ));
+            }
+            // Its pack operand names schema slots, so it is not a read
+            // of the pack as an ordinary value (FN-19).
+            let arguments = self
+                .call_entries(&list)
+                .into_iter()
+                .filter_map(|(_, _, argument)| {
+                    let operand = ungrouped(argument.clone());
+                    if self
+                        .local_of(&operand)
+                        .is_some_and(|local| self.parameter_pack(local).is_some())
+                    {
+                        return None;
+                    }
+                    Some(hir::Argument {
+                        parameter: None,
+                        pack: None,
+                        value: self.expression(&argument, Some(&Type::Unknown)),
+                    })
+                })
+                .collect();
+            return (unread_call_kind(arguments), Type::Unknown);
         }
         // ERR-13: "as the callee of a call each is the form this
         // chapter defines, whatever else is in scope."

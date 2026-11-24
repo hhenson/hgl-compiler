@@ -202,10 +202,7 @@ impl<'a> Typer<'a> {
         } else {
             parts.len()
         };
-        let statements = parts[..before]
-            .iter()
-            .map(|statement| self.statement(statement))
-            .collect();
+        let statements = self.read_statements(parts[..before].iter().cloned());
         (statements, last)
     }
 
@@ -683,13 +680,8 @@ impl<'a> Typer<'a> {
         // ERR-12: a body may run no times, so what a null test proves
         // inside it is proved of nothing after the loop.
         let frame = self.present.len();
-        let statements = match block {
-            Some(block) => block
-                .children()
-                .map(|statement| self.statement(&statement))
-                .collect(),
-            None => Vec::new(),
-        };
+        let statements =
+            block.map_or_else(Vec::new, |block| self.read_statements(block.children()));
         self.present.truncate(frame);
         self.assigned = restored(&before, self.locals.len(), true);
         self.returned = before_returned;
@@ -836,6 +828,9 @@ impl<'a> Typer<'a> {
     /// range whose bounds are ordinary `i64` values (EXPR-16).
     pub(super) fn loop_iterable(&mut self, node: &SyntaxNode) -> Expr {
         if node.kind() != SyntaxKind::RangeExpr {
+            if let Some(pack) = self.homogeneous_pack_iterable(node) {
+                return pack;
+            }
             let value = self.expression(node, None);
             return self.received(value, iterates);
         }
@@ -1203,7 +1198,7 @@ impl<'a> Typer<'a> {
                     // proved of no other, and of nothing after the
                     // `switch`: another case may be the one selected.
                     let frame = self.present.len();
-                    let body = inside.map(|statement| self.statement(&statement)).collect();
+                    let body = self.read_statements(inside);
                     self.present.truncate(frame);
                     ends.push((self.assigned.clone(), self.returned));
                     cases.push(hir::Case { label, value, body });
@@ -1212,10 +1207,7 @@ impl<'a> Typer<'a> {
                     self.assigned = restored(&before, self.locals.len(), false);
                     self.returned = before_returned;
                     let frame = self.present.len();
-                    let body = part
-                        .children()
-                        .map(|statement| self.statement(&statement))
-                        .collect();
+                    let body = self.read_statements(part.children());
                     self.present.truncate(frame);
                     ends.push((self.assigned.clone(), self.returned));
                     default = Some(body);

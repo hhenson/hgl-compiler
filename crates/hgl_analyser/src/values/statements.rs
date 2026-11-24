@@ -17,7 +17,7 @@ use crate::hir::{
 };
 use crate::program::{DeclarationKind, LocalKind, RUN_CONFIG};
 use crate::read::is_type;
-use crate::syntax::{child, tokens, ungrouped};
+use crate::syntax::{child, has_token, tokens, ungrouped};
 use crate::types::{NamedKind, Type};
 use crate::{codes, error, local_error};
 
@@ -178,6 +178,37 @@ impl<'a> Typer<'a> {
     }
 
     // ---- Statements ----
+
+    /// Read a statement list. A `let` pack may contribute several entry
+    /// declarations, while ordinary statements contribute one (FN-19).
+    pub(super) fn read_statements(
+        &mut self,
+        nodes: impl IntoIterator<Item = SyntaxNode>,
+    ) -> Vec<Stmt> {
+        let mut statements = Vec::new();
+        for node in nodes {
+            self.append_statement(&node, &mut statements);
+        }
+        statements
+    }
+
+    /// Read one statement into its containing list.
+    pub(super) fn append_statement(&mut self, node: &SyntaxNode, statements: &mut Vec<Stmt>) {
+        if node.kind() == SyntaxKind::LocalDecl
+            && has_token(node, SyntaxKind::KwLet)
+            && let Some(pack) = node
+                .children()
+                .find(|part| !is_type(part.kind()))
+                .map(ungrouped)
+            && pack.kind() == SyntaxKind::PackComprehension
+        {
+            let outer = self.begin_construct(node);
+            self.bind_computed_pack(node, &pack, statements);
+            self.end_construct(outer);
+        } else {
+            statements.push(self.statement(node));
+        }
+    }
 
     /// A statement of a block. One read where no expression is, is read
     /// once, and has its own allowance of rereads
