@@ -5,6 +5,7 @@
 //! asks of a node: the tokens directly inside it, its first child of a
 //! kind, the name it uses, and what it is inside its parentheses.
 
+use hgl_lexer::literal::decode_string;
 use hgl_parser::{SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// The first child node of `node` of kind `kind`.
@@ -17,6 +18,14 @@ pub(crate) fn tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
     node.children_with_tokens()
         .filter_map(|element| element.into_token())
         .filter(|token| !token.kind().is_trivia())
+}
+
+/// Whether a declaration acknowledges a warning by its code (ERR-10).
+pub(crate) fn suppresses_warning(node: &SyntaxNode, code: &str) -> bool {
+    node.children()
+        .filter(|annotation| annotation.kind() == SyntaxKind::WarningAnnotation)
+        .filter_map(|annotation| tokens(&annotation).find(|token| token.kind() == SyntaxKind::Str))
+        .any(|string| decode_string(string.text()).is_ok_and(|value| value == code))
 }
 
 /// True when a token of `kind` is directly inside `node`.

@@ -56,7 +56,7 @@ analyser: done
 
 analyser: partial
 
-- A default reads no parameter of its declaration and no field of its struct. Its own block bindings stay in scope when the default is specialized.
+- A default resolves in the enclosing scope. A reference to a formal parameter of its callable or a field of its struct reports `default.formal_argument` before outer lookup. Its own block bindings stay in scope during specialization.
 - An imported default retains its defining module's private bindings, even where the caller binds the same name.
 - GEN-18 law-predicate defaults alone may name a formal function parameter; the call reads its declared metadata.
 
@@ -94,9 +94,9 @@ analyser: planned
 
 analyser: partial
 
-- Every name in a signature, body, type and constraint resolved to its one binding, and one that nothing binds is `name.unknown`
+- Names resolve to their nearest binding. Signature types see generic parameters and the enclosing scope. An unbound name is `name.unknown`. A lexical binding that hides an import alias is reported at a qualified use as `alias.unknown`.
 - Clock properties resolve on the capability, and `types(Ts)` supplies the selections in an `each` constraint (GEN-10).
-- An unqualified call of `scheduled()` retains the wake selector's meaning when a binding has the same name (TIME-9).
+- An unqualified `scheduled()` keeps its wake selector meaning (TIME-9).
 - A function named `scheduled` reports `name.reserved` at the declaration. Reserving the name for other declaration kinds remains proposed.
 
 ## UNIT-11
@@ -111,7 +111,10 @@ analyser: done
 
 analyser: done
 
-- No declaration, import, local, parameter or generic parameter takes a name already in scope, a prelude name included for a declaration, an import alias and a local
+- Locals, iteration bindings, parameters and generic parameters can hide a module declaration, a file import or a prelude name for the duration of their scope. Duplicate lexical bindings still report `name.duplicate`.
+- A function-typed binding that hides a function or operator reports `name.hides_function` at the binding. Calls use the binding. `@suppress_warning("name.hides_function")` suppresses the warning on its declaration (ERR-10).
+- Lexical bindings named `scheduled`, `modified` or `valid` reject. ERR-13's contextual names also reject. Module declaration and import collisions keep their existing checks.
+- Members, call labels, option names at a call and pack keys introduce no lexical binding.
 
 ## UNIT-13
 

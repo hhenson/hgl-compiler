@@ -476,9 +476,9 @@ fn a_name_or_module_rejection_is_a_case() {
             "# expect-error(name, \"default.formal_argument\")\n",
             "const fn defaulted(base: i64, value: i64 = base) -> i64 => value\n",
             "\n",
-            // UNIT-12: "a first parameter named `seed`".
-            "# expect-error(name, \"name.duplicate\")\n",
+            // UNIT-12 permits a parameter named for the module's `seed`.
             "const fn first(seed: i64) -> i64 => seed\n",
+            "\n",
             "\n",
             // UNIT-12: "a local named `base` in a block body".
             "const fn local(base: i64) -> i64 {\n",
@@ -526,7 +526,6 @@ fn a_name_or_module_rejection_is_a_case() {
         [
             "passed rejection defaults.hgl:4 use examples.missing",
             "passed rejection defaults.hgl:10 const fn defaulted",
-            "passed rejection defaults.hgl:13 const fn first",
             "passed rejection defaults.hgl:15 const fn local",
             "passed rejection defaults.hgl:21 const fn cases",
             "passed rejection defaults.hgl:34 const fn choose",

@@ -1,0 +1,38 @@
+module demo.unit12_shadowing
+
+const fn helper(value: i64) -> i64 => value + 10
+const fn twice(value: i64) -> i64 => value * 2
+
+/** Uses a module function outside the block and captures the local inside it. */
+export const fn lexical_scope(value: i64) -> i64 {
+    let before = helper(2)
+    if value > 0 {
+        let helper = value
+        return before + invoke(fn(ignored) => helper)
+    }
+    return before + helper(3)
+}
+
+const fn invoke(read: const fn(i64) -> i64) -> i64 => read(0)
+
+const fn callback(helper: const fn(i64) -> i64) -> i64 => helper(4)
+
+@suppress_warning("name.hides_function")
+const fn quiet(helper: const fn(i64) -> i64) -> i64 => helper(5)
+
+const fn prelude_name(text: str = format("seed")) -> str => text
+
+const fn prelude_local() -> str {
+    let before = format("{}", 3)
+    let format = "local"
+    return format
+}
+
+test uses_nearest_binding {
+    assert lexical_scope(2) == 14
+    assert lexical_scope(0) == 25
+    assert callback(twice) == 8
+    assert quiet(twice) == 10
+    assert prelude_name() == "seed"
+    assert prelude_local() == "local"
+}

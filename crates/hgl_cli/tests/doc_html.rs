@@ -912,3 +912,37 @@ fn concurrent_first_writes_and_rebuilds_leave_one_complete_site() {
         assert!(actual == expected_left || actual == expected_right);
     }
 }
+
+/// SDOC-8 follows UNIT-10 for qualified names. A formal can hide the
+/// import alias in the documentation for its own declaration (UNIT-12).
+#[test]
+fn a_hidden_qualifier_is_plain_code_in_its_declaration_documentation() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    fs::create_dir(&source).unwrap();
+    fs::write(
+        source.join("provider.hgl"),
+        "module doc.provider\nexport const fn marker() -> i64 => 7\n",
+    )
+    .unwrap();
+    fs::write(
+        source.join("consumer.hgl"),
+        r#"module doc.consumer
+use doc.provider as dep
+/** Linked `dep::marker`. */
+export const fn ordinary() -> i64 => dep::marker()
+/** Hidden `dep::marker`. */
+export const fn shadowed(dep: i64) -> i64 => dep
+"#,
+    )
+    .unwrap();
+    let site = write_site(root.path(), &source, &[]);
+    let page = fs::read_to_string(site.join("modules/mod-doc.consumer.html")).unwrap();
+    assert!(
+        page.contains(
+            r##"Linked <a href="mod-doc.provider.html#decl-marker"><code>dep::marker</code></a>."##
+        ),
+        "{page}"
+    );
+    assert!(page.contains("Hidden <code>dep::marker</code>."), "{page}");
+}

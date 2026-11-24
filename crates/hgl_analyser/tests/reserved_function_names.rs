@@ -57,7 +57,7 @@ fn functions_named_for_an_activation_form_report_the_declared_name() {
 
 /// UNIT-10's reservation on other declaration kinds remains proposed.
 #[test]
-fn other_declarations_and_bindings_keep_their_names() {
+fn other_module_declarations_and_member_names_keep_their_names() {
     let checked = check(&[
         (
             "operator.hgl",
@@ -83,12 +83,20 @@ fn other_declarations_and_bindings_keep_their_names() {
                 "const fn keep(scheduled: i64) -> i64 => scheduled\n",
                 "const fn keep_local(value: i64) -> i64 {\n",
                 "    let scheduled = value\n",
-                "    Record(scheduled: scheduled).scheduled\n",
+                "    Record(scheduled: value).scheduled\n",
                 "}\n",
             ),
         ),
     ]);
-    assert!(checked.summary().is_empty(), "{}", checked.report);
+    assert_eq!(
+        checked.summary(),
+        [
+            "binding.hgl:3:15 name/name.duplicate UNIT-12",
+            "binding.hgl:5:9 name/name.duplicate UNIT-12",
+        ],
+        "{}",
+        checked.report
+    );
 }
 
 /// A selective import reports the reserved name at the function's

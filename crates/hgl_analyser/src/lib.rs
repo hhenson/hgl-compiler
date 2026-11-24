@@ -213,6 +213,8 @@ pub mod codes {
     pub const NAME_UNKNOWN: &str = "name.unknown";
     /// A function declared with a reserved activation form's name (UNIT-10).
     pub const NAME_RESERVED: &str = "name.reserved";
+    /// A function-typed binding hides a function or operator (UNIT-12).
+    pub const NAME_HIDES_FUNCTION: &str = "name.hides_function";
     /// A generic type's name stands before a `<` that does not open its
     /// arguments (GEN-14).
     pub const GENERIC_INVALID_APPLICATION: &str = "generic.invalid_application";
@@ -697,6 +699,7 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     signatures::check(&program, diagnostics);
     documentation::check(&program, diagnostics);
     values::check(&mut program, diagnostics);
+    resolve::warn_hidden_callables(&program, diagnostics);
     // UNIT-13: asked of the typed program, where each call has the
     // definition it selected.
     cycles::check(&program, diagnostics);
