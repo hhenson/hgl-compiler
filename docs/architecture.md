@@ -1333,9 +1333,8 @@ So `requires window(T) -> list<T, 5>` neither is the body's bare
 `window(value)`, which asks for the default, nor meets a candidate's
 `requires window(T)`.
 
-Named requirements and calls written in generic bodies keep the
-complete request through `Typer::output_requested`: what the place
-expects, the types supplied
+Named requirements keep complete inference through
+`Typer::output_requested`: what the place expects, the types supplied
 in the operator's parameter order with an abstract struct widening what
 an earlier one decided (GEN-2), the operator's defaults, each of its
 parameter's type as resolved (GEN-13), and the operator's own
@@ -1349,9 +1348,19 @@ The complete public inference still checks dependent defaults (GEN-13),
 result membership and reflected packs. Separate call metadata lets
 `Typer::called` resolve inherited configuration defaults from the fitted
 arguments (UNIT-8): fitting to `f64?` yields the `f64` payload type.
-Named requirements and calls written in generic bodies keep the existing
-complete request; this change neither rereads an instance nor changes
-the held GEN-7 result/literal behavior.
+Generic-dependent literal calls use that same request separation (GEN-7),
+and a concrete instance reread fits the literal as the written-out call
+would. Membership admission records a provisional result type for the
+existing consumer checks. For a literal call, rechecking reaches consumers
+that the declaration already admits with its provisional `i64`; the supplied
+sum of calls using a typed seed and a literal seed gives `4.5` in its `f64`
+instance. Literal-free membership-admitted operator chains keep their
+result consumers too. A literal-call result
+used as another call's argument, or multiplied by another literal-call
+result, can still reject in the declaration (#734). A genuine contextual
+output is retained before the preliminary input-derived type
+(GEN-2). Fully concrete calls lexically inside generic declarations keep
+their existing request; generic configuration-default metadata is unchanged.
 
 Where two requirements name one operator with the same types and
 different results, the call is the one that gives what its place
