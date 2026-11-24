@@ -14,8 +14,10 @@ with their own signatures and documentation. A candidate implemented in
 another module names and links that module; its implementing module also
 lists the candidate and links to its article under the owning operator.
 Visible names in signatures link in the signature's source scope, while
-parameter and generic bindings, strings and local initializer names stay
-plain. Without an authored `Args:` section, the argument tables precede
+declaration names at their binding site, parameter and generic bindings,
+strings and local initializer names stay plain. Both names of a dictionary
+iteration and list/pack comprehension bindings are local. Without an authored
+`Args:` section, the argument tables precede
 the comment's headed sections, including examples and rules. Exported declarations
 appear by default. Use `--private` to include the rest and named tests.
 

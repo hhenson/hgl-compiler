@@ -266,7 +266,7 @@ fn site_renders_initializer_headers_and_entry_markdown() {
     for signature in [
         "export const answer: i64 = { 42 }",
         "count: i64 = { 42 }",
-        "export const fn <a href=\"#decl-closed_header\">closed_header</a>() -&gt; i64",
+        "export const fn closed_header() -&gt; i64",
         "test named_header",
     ] {
         assert!(page.contains(&format!(
@@ -1049,6 +1049,45 @@ fn documentation_navigation_associates_external_candidates_and_signature_types()
             "{signature}"
         );
         assert!(!signature.contains("href=\"#decl-value\""), "{signature}");
+    }
+    // CTRL-12, EXPR-3/17 and FN-19: both dictionary iteration names,
+    // single-name loops, locals and list/pack comprehension bindings stay
+    // plain when a visible module declaration has the same spelling.
+    for name in [
+        "summed",
+        "with_loop_default",
+        "let_result",
+        "var_result",
+        "single_loop",
+        "list_loop",
+        "pack_loop",
+        "total",
+    ] {
+        let signature = types
+            .split(&format!("<article id=\"decl-{name}\">"))
+            .nth(1)
+            .unwrap()
+            .split("</pre>")
+            .next()
+            .unwrap();
+        assert!(!signature.contains("href=\"#decl-value\""), "{signature}");
+        if matches!(name, "summed" | "with_loop_default") {
+            assert!(signature.contains("href=\"#decl-entries\""), "{signature}");
+        }
+    }
+    // SDOC-4: the binding site stays plain for both functions and constants.
+    for name in ["with_default", "with_loop_default", "summed"] {
+        let signature = types
+            .split(&format!("<article id=\"decl-{name}\">"))
+            .nth(1)
+            .unwrap()
+            .split("</pre>")
+            .next()
+            .unwrap();
+        assert!(
+            !signature.contains(&format!("href=\"#decl-{name}\"")),
+            "{signature}"
+        );
     }
     internal_link_targets_exist(&site, &snapshot(&site));
     let private = root.path().join("private");

@@ -39,6 +39,7 @@ docs: done
 - HTML parameter tables show argument modes and pack marks
 - HTML shows a candidate's implementing module and lists its contribution on that module's page; the full article stays with the owning operator
 - Module contents link to declaration articles; signatures link visible names in their source scope
+- Signature binding sites stay plain for constants, functions and types; initializer locals and iteration patterns come from their syntax nodes, including both dictionary names and list/pack comprehensions
 - Missing argument tables precede authored sections while introductory prose and explicit table sections keep their order
 
 ## SDOC-5

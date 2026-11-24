@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 use hgl_diagnostics::Diagnostics;
 use hgl_lexer::TokenKind;
+use hgl_parser::ast::Item;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::{SourceMap, Span};
 
@@ -18,6 +19,26 @@ pub(crate) fn render(text: &str, link: impl Fn(&str) -> Option<String>) -> Strin
         return escaped(text);
     };
     let tokens = hgl_lexer::lex(&sources, file, &mut Diagnostics::new());
+    let mut header = tokens
+        .iter()
+        .filter(|token| !token.kind.is_trivia() && token.kind != TokenKind::Newline);
+    // A field or enum member is retained without its enclosing type.
+    // Parse it as a constant so its initializer keeps a syntax tree;
+    // the synthetic prefix never enters the rendered text.
+    let (file, tokens, prefix) = if header.next().is_some_and(|t| t.kind == TokenKind::Ident)
+        && header
+            .next()
+            .is_some_and(|t| matches!(t.kind, TokenKind::Colon | TokenKind::Eq))
+    {
+        let Ok(file) = sources.add("member-signature.hgl", format!("const {text}")) else {
+            return escaped(text);
+        };
+        let tokens = hgl_lexer::lex(&sources, file, &mut Diagnostics::new());
+        (file, tokens, "const ".len())
+    } else {
+        (file, tokens, 0)
+    };
+    let text = sources.file(file).text();
     // Headers can omit their declaration's body. The total parser still
     // retains the complete anonymous functions within their initializers.
     let syntax = hgl_parser::parse(
@@ -27,30 +48,21 @@ pub(crate) fn render(text: &str, link: impl Fn(&str) -> Option<String>) -> Strin
         hgl_parser::Entry::Declarations,
         hgl_parser::Limits::default(),
         &mut Diagnostics::new(),
-    );
-    let anonymous = anonymous_bindings(&syntax.syntax());
+    )
+    .syntax();
+    let anonymous = anonymous_bindings(&syntax);
+    let declarations = declaration_bindings(&syntax);
+    let locals = local_bindings(&syntax);
     let tokens: Vec<_> = tokens
         .iter()
         .filter(|token| !token.kind.is_trivia() && token.kind != TokenKind::Newline)
         .collect();
-    // A retained block initializer can bind its own locals. They are
-    // not module references even when a visible declaration shares a name.
-    let locals: HashSet<_> = tokens
-        .windows(2)
-        .filter(|pair| {
-            matches!(
-                pair[0].kind,
-                TokenKind::KwLet | TokenKind::KwVar | TokenKind::KwFor
-            ) && pair[1].kind == TokenKind::Ident
-        })
-        .map(|pair| &text[pair[1].span.start as usize..pair[1].span.end as usize])
-        .collect();
     let mut output = String::new();
-    let mut rendered = 0;
+    let mut rendered = prefix;
     let mut index = 0;
     while index < tokens.len() {
         let first = tokens[index];
-        if first.kind != TokenKind::Ident {
+        if first.kind != TokenKind::Ident || (first.span.start as usize) < prefix {
             index += 1;
             continue;
         }
@@ -69,6 +81,7 @@ pub(crate) fn render(text: &str, link: impl Fn(&str) -> Option<String>) -> Strin
             after += 2;
         }
         let binding = locals.contains(name.split(['.', ':']).next().unwrap_or_default())
+            || declarations.contains(&first.span)
             || anonymous.iter().any(|(bound, scope)| {
                 bound == name.split(['.', ':']).next().unwrap_or_default()
                     && scope.start <= first.span.start
@@ -95,6 +108,65 @@ pub(crate) fn render(text: &str, link: impl Fn(&str) -> Option<String>) -> Strin
     }
     output.push_str(&escaped(&text[rendered..]));
     output
+}
+
+/// Binding sites stay plain for constants, callables and types alike;
+/// only references in the remainder of a signature provide navigation.
+fn declaration_bindings(syntax: &SyntaxNode) -> Vec<Span> {
+    syntax
+        .children()
+        .filter_map(Item::cast)
+        .filter_map(|item| match item {
+            Item::Function(item) => item.name(),
+            Item::NativeFunction(item) => item.name(),
+            Item::Constant(item) => item.name(),
+            Item::Struct(item) => item.name(),
+            Item::Enum(item) => item.name(),
+            Item::Operator(item) => item.name(),
+            Item::NativeType(item) => item.name(),
+            Item::Test(item) => item.name(),
+            _ => None,
+        })
+        .map(|name| name.span())
+        .collect()
+}
+
+/// EXPR-3/17, CTRL-12 and FN-19: read each binding pattern from its
+/// syntax node, including both dictionary iteration names. Conservatively
+/// leave these local spellings plain throughout the retained header.
+fn local_bindings(syntax: &SyntaxNode) -> HashSet<String> {
+    let mut bindings = HashSet::new();
+    for node in syntax.descendants().filter(|node| {
+        matches!(
+            node.kind(),
+            SyntaxKind::LocalDecl
+                | SyntaxKind::ForStmt
+                | SyntaxKind::ListComprehension
+                | SyntaxKind::PackComprehension
+        )
+    }) {
+        let tokens: Vec<_> = node
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .collect();
+        // Only a ForStmt's pattern has a direct comma; expressions of
+        // its iterable and body are child nodes, not tokens of the pattern.
+        let count = if node.kind() == SyntaxKind::ForStmt
+            && tokens.iter().any(|token| token.kind() == SyntaxKind::Comma)
+        {
+            2
+        } else {
+            1
+        };
+        for name in tokens
+            .iter()
+            .filter(|token| token.kind() == SyntaxKind::Ident)
+            .take(count)
+        {
+            bindings.insert(name.text().to_string());
+        }
+    }
+    bindings
 }
 
 /// FN-14: anonymous parameters bind their name and uses within their body,

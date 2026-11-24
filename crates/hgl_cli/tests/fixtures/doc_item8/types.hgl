@@ -14,3 +14,38 @@ export const inferred_result: i64 = (fn(n) => n)(n)
 export const nested_result: i64 = (fn(n: i64) => (fn(value: i64) => n + value)(1))(n)
 export const block_result: i64 = (fn(n: i64) { n })(n)
 export const fn with_default(value: i64 = (fn(n: i64) => n)(n)) -> i64 => value
+export const entries: dict<str, i64> = ["a": 1, "b": 2]
+export const summed: i64 = {
+    var acc = 0
+    for key, value in entries { acc = acc + value }
+    acc
+}
+export const fn with_loop_default(answer: i64 = {
+    var acc = 0
+    for key, value in entries { acc = acc + value }
+    acc
+}) -> i64 => answer
+export const let_result: i64 = {
+    let value = 2
+    value
+}
+export const var_result: i64 = {
+    var value: i64
+    value = 2
+    value
+}
+export const single_loop: i64 = {
+    var acc = 0
+    for value in [1, 2] { acc += value }
+    acc
+}
+export const list_loop: list<i64> = [for value in 0..<2: value]
+const fn count_values<...Ps>(items: ...{Ps}) -> i64 => 1
+export const fn pack_loop<...Ps>(answer: i64 = count_values(...{for value in arg_keys(Ps): if value == value { 1 } else { 2 }}), items: ...{Ps}) -> i64 => answer
+export struct Totals {
+    total: i64 = {
+        var acc = 0
+        for key, value in entries { acc += value }
+        acc
+    }
+}
