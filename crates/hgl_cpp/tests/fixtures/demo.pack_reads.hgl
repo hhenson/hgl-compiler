@@ -96,3 +96,64 @@ test a_packed_child_waits_for_its_guard {
         delta<list<i64>>(updated: [0: 9]),
     ]) == [_, 9]
 }
+
+# TYPE-11, ERR-14 and ERR-15: an underfilled window in a selected entry
+# gives the same checked forms as the corresponding ordinary input.
+fn window_source(reading: i64) -> rolling_window<i64, 3, 2> {
+    when { return reading }
+}
+
+fn checked_window(items: ...rolling_window<i64, 3, 2>) -> tuple<str, i64> {
+    when {
+        let outcome: result<list<i64>, error> = items[0]
+        let samples: list<i64>? = items[0]
+        let first = if samples != null { samples[0] } else { -1 }
+        return (if is_ok(outcome) { "ok" } else { outcome.error.code }, first)
+    }
+}
+
+fn graph_checked_window(reading: i64) -> tuple<str, i64> =>
+    checked_window(window_source(reading))
+
+test a_packed_window_gives_a_checked_read {
+    assert eval graph_checked_window(reading: [1, 2, 3, 4]) ==
+        [("value.unset_read", -1), ("ok", 1), ("ok", 1), ("ok", 2)]
+}
+
+# TIME-1, ERR-14: a gap makes a whole read of an unsized list fail.
+fn checked_list(items: ...list<i64>) -> bool {
+    when {
+        let outcome: result<list<i64>, error> = items[0]
+        return is_ok(outcome)
+    }
+}
+
+fn graph_checked_list(items: list<i64>) -> bool => checked_list(items)
+
+test a_packed_list_reports_a_gap {
+    assert eval graph_checked_list(items: [
+        [1],
+        delta<list<i64>>(updated: [2: 4]),
+        delta<list<i64>>(updated: [1: 7]),
+    ]) == [true, false, true]
+}
+
+# TIME-1, ERR-14: a named pack may supply a dictionary with a partial entry.
+fn checked_dictionary<...As>(items: ...{As}) -> bool {
+    when {
+        let outcome: result<dict<str, tuple<i64, str>>, error> = items["book"]
+        return is_ok(outcome)
+    }
+}
+
+fn graph_checked_dictionary(book: dict<str, tuple<i64, str>>) -> bool =>
+    checked_dictionary(book: book)
+
+test a_packed_dictionary_reports_a_partial_entry {
+    let first: delta<tuple<i64, str>> = (1, null)
+    let second: delta<tuple<i64, str>> = (null, "complete")
+    assert eval graph_checked_dictionary(book: [
+        delta<dict<str, tuple<i64, str>>>(updated: ["x": first]),
+        delta<dict<str, tuple<i64, str>>>(updated: ["x": second]),
+    ]) == [false, true]
+}

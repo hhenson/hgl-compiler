@@ -283,6 +283,7 @@ analyser: partial
 
 - Reads a parameter pack entry by a constant name or position. The instance supplies the entry type and reports `pack.name` for an absent key using the key's source spelling (GEN-17, UNIT-13).
 - In a hook, the entry follows ordinary input admission and lifecycle rules (TIME-1, TIME-4, TIME-5) and reads the whole payload of an atomic or the list held by a window (TYPE-9, TYPE-11).
+- A checked whole read from a window, an unsized list or a dictionary takes the result or nullable form of its place (ERR-14, ERR-15).
 - A child of a structural pack entry uses the ordinary child admission check. A guard proves a child of that entry only (TIME-1, TIME-4).
 - Keeps an entry read pending when its constant key needs an unrolled range pass (CTRL-16) or a module constant the compiler has not evaluated (UNIT-13). C++ declines the pending read.
 - Resolves spreads of parameter packs when the enclosing callable is instantiated. Written arguments bind first, then named entries, then positional entries fill the remaining parameter slots in order.
@@ -296,4 +297,4 @@ transpiler: partial
 
 - Lowers forwarded entries and constant-key reads from the same fitted pack input slots, including captured values and connections. The SDK cases also exercise operator selection, static callbacks and constructors.
 
-Left: Unrolling a generic pack comprehension and spreading a pack bound with `let` are tracked in #368. Generic unrolling awaits the GEN-7 decision. The packed signal payload diagnostic is tracked in #731.
+Left: Unrolling a generic pack comprehension and spreading a pack bound with `let` are tracked in #368. Generic unrolling awaits the GEN-7 decision. The packed signal payload diagnostic is tracked in #731, and guards on the pack entry itself in #732.

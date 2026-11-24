@@ -232,17 +232,12 @@ impl Typer<'_> {
         let input = self.local_of(&root)?;
         let (key, ty) = match &value.kind {
             ExprKind::PackEntry { pack, key } => {
-                let entry = self
-                    .pack_inputs
-                    .as_ref()?
-                    .iter()
-                    .find(|entry| entry.parameter == *pack && entry.key == *key)?;
-                (key.clone(), &entry.ty)
+                (key.clone(), self.packed_input_type(*pack, Some(key))?)
             }
             ExprKind::DeferredPackRead => {
                 // A homogeneous pack can already expose its child shape
                 // where the declaration is read, before any call.
-                let ty = &self.signature.parameters.get(input)?.ty;
+                let ty = self.packed_input_type(input, None)?;
                 let index = self.read_constant(&parts.next()?, None).ok()?;
                 let key = match index {
                     ConstantValue::Int(position) => {
@@ -255,7 +250,7 @@ impl Typer<'_> {
             }
             _ => return None,
         };
-        (self.is_temporal_input(input) && collection(ty)).then(|| {
+        collection(ty).then(|| {
             (
                 ChildOrigin {
                     input,
@@ -265,6 +260,34 @@ impl Typer<'_> {
                 self.at(&root),
             )
         })
+    }
+
+    /// The selected temporal entry's endpoint type before a hook
+    /// projects it to its payload (TYPE-9, TYPE-11).
+    fn packed_input_type(&self, pack: LocalId, key: Option<&PackKey>) -> Option<&Type> {
+        if !self.is_temporal_input(pack) {
+            return None;
+        }
+        match key {
+            Some(key) => self
+                .pack_inputs
+                .as_ref()?
+                .iter()
+                .find(|entry| entry.parameter == pack && entry.key == *key)
+                .map(|entry| &entry.ty),
+            None => Some(&self.signature.parameters.get(pack)?.ty),
+        }
+    }
+
+    fn packed_read_type(&self, value: &Expr) -> Option<&Type> {
+        match &value.kind {
+            ExprKind::PackEntry { pack, key } => self.packed_input_type(*pack, Some(key)),
+            ExprKind::DeferredPackRead => {
+                let base = ungrouped(self.syntax_of(value)?.children().next()?);
+                self.packed_input_type(self.local_of(&base)?, None)
+            }
+            _ => None,
+        }
     }
 
     /// True where `value` reads a child that is a window, of an input
@@ -316,6 +339,9 @@ impl Typer<'_> {
                         Type::RollingWindow { .. }
                     )
             }
+            ExprKind::PackEntry { .. } | ExprKind::DeferredPackRead => self
+                .packed_read_type(value)
+                .is_some_and(|ty| matches!(ty.omission_removed(), Type::RollingWindow { .. })),
             ExprKind::Field { .. } | ExprKind::Index { .. } | ExprKind::BoundChild(_) => {
                 self.reads_window(value)
                     && (self.rooted_at_out(value)
@@ -338,6 +364,9 @@ impl Typer<'_> {
                 (self.is_temporal_input(*local) || Some(*local) == self.out)
                     && can_be_partial(self.locals[*local].ty.omission_removed())
             }
+            ExprKind::PackEntry { .. } | ExprKind::DeferredPackRead => self
+                .packed_read_type(value)
+                .is_some_and(|ty| can_be_partial(ty.omission_removed())),
             ExprKind::Field { .. } | ExprKind::Index { .. } | ExprKind::BoundChild(_) => {
                 self.rooted_at_out(value) || matches!(self.child_of(value), Some(Child::Named(_)))
             }
