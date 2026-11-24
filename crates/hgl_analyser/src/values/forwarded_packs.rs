@@ -712,6 +712,9 @@ pub(crate) struct ForwardingInstance {
     functions: Vec<(usize, Callee)>,
     type_packs: Vec<crate::hir::TypePackArgument>,
     pack_inputs: Vec<crate::hir::PackInput>,
+    /// The ordinary const inputs a check in the body reads (FN-1, FMT-3),
+    /// carried with the entries so the instance is read with both.
+    constants: crate::const_inputs::ReadInputs,
 }
 
 impl crate::Program {
@@ -784,6 +787,8 @@ impl crate::Program {
 
 impl ForwardingInstance {
     /// The declaration and fully known argument shape supplied by a call.
+    /// Its const inputs are left out: what the body reads of its constants
+    /// is told of the instances [`check_instances`] follows.
     pub(crate) fn of(program: &crate::Program, expression: &Expr) -> Option<Self> {
         let ExprKind::Call {
             callee, arguments, ..
@@ -791,34 +796,42 @@ impl ForwardingInstance {
         else {
             return None;
         };
-        Self::from_callee(program, callee, Some(arguments))
+        Self::from_callee(program, callee, Some(arguments), false)
     }
 
     /// A static reference can reach a forwarding body even without its own
     /// pack arguments, through the ordinary calls the referenced body makes.
+    /// A call gives the instance its const inputs too (FN-1, GEN-7).
     fn for_check(program: &crate::Program, expression: &Expr) -> Option<Self> {
         let (module, declaration) = called_or_referenced(expression)?.declaration()?;
+        let instance = match &expression.kind {
+            ExprKind::StaticCallable(callee) => Self::from_callee(program, callee, None, false),
+            ExprKind::Call {
+                callee, arguments, ..
+            } => Self::from_callee(program, callee, Some(arguments), true),
+            _ => None,
+        }?;
         if let crate::Detail::Callable(signature) = &program.modules[module].details[declaration]
             && signature.generics.is_empty()
             && signature
                 .parameters
                 .iter()
                 .all(|parameter| parameter.pack.is_none())
+            && instance.constants.values.is_empty()
         {
             // Concrete bodies supply their own forwarding roots. A call
-            // of one does not make those same instances a second time.
+            // of one does not make those same instances a second time,
+            // unless it gives the body const inputs it reads (FN-1).
             return None;
         }
-        match &expression.kind {
-            ExprKind::StaticCallable(callee) => Self::from_callee(program, callee, None),
-            _ => Self::of(program, expression),
-        }
+        Some(instance)
     }
 
     fn from_callee(
         program: &crate::Program,
         callee: &Callee,
         arguments: Option<&[crate::hir::Argument]>,
+        with_constants: bool,
     ) -> Option<Self> {
         use crate::types::Argument;
         let declaration = callee.declaration()?;
@@ -883,6 +896,11 @@ impl ForwardingInstance {
             functions,
             type_packs: type_packs.to_vec(),
             pack_inputs,
+            constants: if with_constants {
+                program.known_const_inputs(callee, arguments)
+            } else {
+                crate::const_inputs::ReadInputs::default()
+            },
         })
     }
 
@@ -902,8 +920,13 @@ impl ForwardingInstance {
             functions: &self.functions,
             type_packs: &self.type_packs,
             pack_inputs: Some(&self.pack_inputs),
-            ..crate::InstanceInputs::default()
+            constants: &self.constants.values,
         }
+    }
+
+    /// GEN-13: a const input that outgrew its text budget makes no instance.
+    fn outgrew_its_inputs(&self) -> bool {
+        self.constants.outgrown
     }
 }
 
@@ -971,7 +994,10 @@ impl PackShape {
 }
 
 struct ForwardingParent {
-    call: (super::requirements::MakingCall, Option<usize>),
+    /// The calls from this instance out to the root, which the calls it
+    /// makes share: a path grows by one call at each instance (GEN-7).
+    path: std::rc::Rc<super::requirements::MakingPath>,
+    parent: Option<usize>,
     shape: PackShape,
 }
 
@@ -985,14 +1011,27 @@ pub(super) fn check_instances(
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
     use super::requirements::{
-        MakingCall, bounded_instance_key, emit_instance_report, making_path,
-        past_pack_growth_limit, past_the_limit,
+        MakingCall, MakingPath, bounded_instance_key, emit_instance_report, past_pack_growth_limit,
+        past_the_limit,
     };
     use hgl_diagnostics::Code;
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = HashSet::new();
     let mut callers = HashMap::<_, Vec<_>>::new();
+    // GEN-5 and GEN-7: a call whose candidate each instance selects may
+    // select one that forwards; each candidate of its operator is called.
+    let mut candidates = HashMap::<(usize, usize), Vec<(usize, usize)>>::new();
+    for (module, unit) in program.modules.iter().enumerate() {
+        for (declaration, declared) in unit.declarations.iter().enumerate() {
+            if let Some((_, Some(operator))) = declared.kind.candidate() {
+                candidates
+                    .entry((operator.module, operator.declaration))
+                    .or_default()
+                    .push((module, declaration));
+            }
+        }
+    }
     for (module, unit) in program.modules.iter().enumerate() {
         for (declaration, body) in unit.bodies.iter().enumerate() {
             let Some(body) = body else { continue };
@@ -1005,6 +1044,12 @@ pub(super) fn check_instances(
                     callers.entry(called).or_default().push(owner);
                 }
             });
+            for selected in unit.selecting.get(declaration).into_iter().flatten() {
+                let operator = (selected.operator.module, selected.operator.declaration);
+                for &candidate in candidates.get(&operator).into_iter().flatten() {
+                    callers.entry(candidate).or_default().push(owner);
+                }
+            }
         }
     }
     if forwarding.is_empty() {
@@ -1077,7 +1122,7 @@ pub(super) fn check_instances(
             let count = counts.entry(instance.declaration).or_insert(0);
             *count += 1;
             let shape = PackShape::of(&instance);
-            let ancestors = std::iter::successors(parent, |&index| parents[index].call.1)
+            let ancestors = std::iter::successors(parent, |&index| parents[index].parent)
                 .map(|index| parents[index].shape);
             if shape.exceeds_growth(ancestors) {
                 past_pack_growth_limit(at, instance.declaration, program, PACK_GROWTH, diagnostics);
@@ -1105,15 +1150,17 @@ pub(super) fn check_instances(
                 &reports,
                 &mut graph_reports,
             );
-            let making = || {
+            let here = MakingPath::new(
                 MakingCall::new(
                     program,
                     instance.declaration,
                     &instance.generics,
                     &instance.type_packs,
                     written,
-                )
-            };
+                ),
+                parent.map(|index| parents[index].path.clone()),
+            );
+            let path = || here.calls().cloned().collect::<Vec<_>>();
             for report in graph_reports.as_slice() {
                 // A missing member in the written signature rejects the
                 // making call already. Its body supplies no second pack
@@ -1124,11 +1171,7 @@ pub(super) fn check_instances(
                 {
                     continue;
                 }
-                emit_instance_report(
-                    report.clone(),
-                    &[making_path(making(), parent, |index| &parents[index].call)],
-                    diagnostics,
-                );
+                emit_instance_report(report.clone(), &[path()], diagnostics);
             }
             if let Some(checked) = checked {
                 if let Some(result_uses) = &checked.result_uses
@@ -1142,7 +1185,7 @@ pub(super) fn check_instances(
                             &instance.type_packs,
                         ),
                         result_uses,
-                        &[making_path(making(), parent, |index| &parents[index].call)],
+                        &[path()],
                         diagnostics,
                     );
                     if result_uses.reports.has_errors() {
@@ -1151,10 +1194,17 @@ pub(super) fn check_instances(
                     }
                 }
                 let mut link = None;
+                let mut outgrown = false;
                 checked.walk_calls(&mut |value| {
                     let Some(child) = ForwardingInstance::for_check(program, value) else {
                         return;
                     };
+                    // GEN-13: a const input that grows past its budget
+                    // ends the walk, as one past the instance bound does.
+                    if child.outgrew_its_inputs() {
+                        outgrown = true;
+                        return;
+                    }
                     // The final body can make new calls wherever the
                     // entries affect a type, including in a callback.
                     if !independent
@@ -1162,21 +1212,30 @@ pub(super) fn check_instances(
                         .is_some_and(|calls| calls.contains(&child))
                         && let Some(callee) = called_or_referenced(value)
                     {
-                        let mut path = vec![MakingCall::new(
-                            program,
-                            child.declaration,
-                            &child.generics,
-                            &child.type_packs,
-                            value.at,
-                        )];
-                        path.extend(making_path(making(), parent, |index| &parents[index].call));
-                        super::requirements::made_forwarded_callee(callee, at, path, discovered);
+                        let via = MakingPath::new(
+                            MakingCall::new(
+                                program,
+                                child.declaration,
+                                &child.generics,
+                                &child.type_packs,
+                                value.at,
+                            ),
+                            Some(here.clone()),
+                        );
+                        super::requirements::made_forwarded_callee(
+                            callee,
+                            child.constants.clone(),
+                            at,
+                            via,
+                            discovered,
+                        );
                     }
                     if forwarding.contains(&child.declaration) {
                         let caller = *link.get_or_insert_with(|| {
                             let index = parents.len();
                             parents.push(ForwardingParent {
-                                call: (making(), parent),
+                                path: here.clone(),
+                                parent,
                                 shape,
                             });
                             index
@@ -1184,6 +1243,10 @@ pub(super) fn check_instances(
                         waiting.push_back((child, value.at, Some(caller)));
                     }
                 });
+                if outgrown {
+                    past_the_limit(&[at], instance.declaration, program, diagnostics);
+                    break;
+                }
             }
             seen.push(instance);
         }
@@ -1242,6 +1305,7 @@ mod tests {
                 key: PackKey::Position(0),
                 ty,
             }],
+            constants: Default::default(),
         };
         assert_eq!(PackShape::of(&instance).entries, 3);
         instance.type_packs.clear();
