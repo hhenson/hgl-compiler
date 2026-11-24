@@ -84,3 +84,27 @@ test whole_temporal_values_in_nullable_places {
     assert eval opt_node(value: [3, 4]) == [3, 4]
     assert eval opt_graph(value: [3, 4]) == [3, 4]
 }
+
+# ERR-15 and GEN-7: checked division gives a result in each instance,
+# and a nullable return reads its value on success or null on failure.
+const fn divide_value<T>(a: T, b: T) -> f64? requires T in {i64, f64} => a /{zero: .error} b
+
+fn divide_node<T>(a: T, b: T) -> f64? requires T in {i64, f64} {
+    when { return a /{zero: .error} b }
+}
+
+fn divide_graph<T>(a: T, b: T) -> f64? requires T in {i64, f64} => a /{zero: .error} b
+
+test checked_division_value_places {
+    assert divide_value(1, 2) == 0.5
+    assert divide_value(1, 0) == null
+    assert divide_value(1.0, 2.0) == 0.5
+    assert divide_value(1.0, 0.0) == null
+}
+
+test checked_division_temporal_places {
+    assert eval divide_node(a: [1, 1], b: [2, 0]) == [0.5, null]
+    assert eval divide_node(a: [1.0, 1.0], b: [2.0, 0.0]) == [0.5, null]
+    assert eval divide_graph(a: [1, 1], b: [2, 0]) == [0.5, null]
+    assert eval divide_graph(a: [1.0, 1.0], b: [2.0, 0.0]) == [0.5, null]
+}
