@@ -321,6 +321,260 @@ fn const_instance_checks_leave_aggregate_admission_as_written() {
     );
 }
 
+/// The code and rule of each finding, in order.
+fn codes(checked: &Checked) -> Vec<String> {
+    checked
+        .findings
+        .iter()
+        .map(|finding| format!("{} {}", finding.code, finding.rule))
+        .collect()
+}
+
+/// FN-1, FN-19, FMT-3, FMT-4 and GEN-7: a const pattern given beside
+/// forwarded packs is read in each instance with its entries. Each call
+/// whose entries the pattern does not take rejects once, at the call that
+/// makes the instance, with the code the same direct `format` call has.
+#[test]
+fn formatting_checks_const_patterns_forwarded_beside_packs() {
+    let calls = [
+        ("good", "both(\"{} {name}\", 1, name: \"a\") == \"1 a\""),
+        (
+            "positional",
+            "positional(\"{:x}|{:.1f}\", 255, 2.5) == \"ff|2.5\"",
+        ),
+        (
+            "named",
+            "named(\"{b}-{a:>3}\", a: 1, b: \"x\") == \"x-  1\"",
+        ),
+        ("no_entries", "both(\"plain {{x}}\") == \"plain {x}\""),
+        ("specifier", "both(\"{:x}\", 1.5) == \"\""),
+        ("few", "both(\"{} {}\", 1) == \"\""),
+        ("unknown", "named(\"{nope}\", a: 1) == \"\""),
+        ("unused", "positional(\"{}\", 1, 2) == \"\""),
+        ("syntax", "positional(\"{\", 1) == \"\""),
+        ("empty", "both(\"{}\") == \"\""),
+    ];
+    let tests = |direct: bool| -> String {
+        calls
+            .iter()
+            .map(|(name, call)| {
+                let call = if direct {
+                    call.replacen("both(", "format(", 1)
+                        .replacen("positional(", "format(", 1)
+                        .replacen("named(", "format(", 1)
+                } else {
+                    (*call).to_string()
+                };
+                format!("test {name} {{ assert {call} }}\n")
+            })
+            .collect()
+    };
+    let checked = with_core(&format!(
+        "{}{}{}{}",
+        "const fn both<...As, ...Ks>(const p: str, args: ...As, kwargs: ...{Ks}) -> str => format(p, ...args, ...kwargs)\n",
+        "const fn positional<...As>(const p: str, args: ...As) -> str => format(p, ...args)\n",
+        "const fn named<...Ks>(const p: str, kwargs: ...{Ks}) -> str => format(p, ...kwargs)\n",
+        tests(false),
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:25 type/format.specifier FMT-4",
+            "m.hgl:10:19 type/format.argument FMT-3",
+            "m.hgl:11:23 type/format.argument FMT-3",
+            "m.hgl:12:22 type/format.unused FMT-3",
+            "m.hgl:13:22 type/format.syntax FMT-3",
+            "m.hgl:14:21 type/format.argument FMT-3",
+        ],
+        "{}",
+        checked.report,
+    );
+    for instance in [
+        "both<[f64], []>",
+        "both<[i64], []>",
+        "named<[i64]>",
+        "positional<[i64, i64]>",
+        "positional<[i64]>",
+        "both<[], []>",
+    ] {
+        assert!(
+            checked
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            checked.report,
+        );
+    }
+    assert_eq!(
+        checked
+            .report
+            .matches("the instance's body rejects here")
+            .count(),
+        6,
+        "{}",
+        checked.report,
+    );
+    let direct = with_core(&tests(true));
+    assert_eq!(codes(&checked), codes(&direct), "{}", direct.report);
+}
+
+/// FN-19 and GEN-7: the pattern reaches `format` through a function that
+/// forwards to one that forwards, by name, from a literal in a forwarding
+/// body, through a generic caller, and to a pack entry's own call.
+#[test]
+fn formatting_checks_const_patterns_forwarded_twice() {
+    let checked = with_core(concat!(
+        "const fn inner<...As, ...Ks>(const p: str, args: ...As, kwargs: ...{Ks}) -> str => format(p, ...args, ...kwargs)\n",
+        "const fn outer<...As, ...Ks>(const p: str, args: ...As, kwargs: ...{Ks}) -> str => inner(p, ...args, ...kwargs)\n",
+        "const fn fixed<...As>(args: ...As) -> str => inner(\"{:x}\", ...args)\n",
+        "const fn by_name<...As>(const q: str, args: ...As) -> str => inner(...args, p: q)\n",
+        "const fn typed<T>(const q: str, v: T) -> str => outer(q, v)\n",
+        "const fn helper<T>(const p: str, v: T) -> str => format(p, v)\n",
+        "const fn entry<...As>(const p: str, args: ...As) -> str => helper(p, args[0])\n",
+        "test good {\n",
+        "    assert outer(\"{} {name}\", 1, name: \"a\") == \"1 a\"\n",
+        "    assert fixed(255) == \"ff\"\n",
+        "    assert by_name(\"<{}>\", 1) == \"<1>\"\n",
+        "    assert typed(\"{:x}\", 255) == \"ff\"\n",
+        "    assert entry(\"<{}>\", 1) == \"<1>\"\n",
+        "}\n",
+        "test twice { assert outer(\"{:x}\", 1.5) == \"\" }\n",
+        "test twice_named { assert outer(\"{} {nope}\", 1, name: \"a\") == \"\" }\n",
+        "test literal { assert fixed(1.5) == \"\" }\n",
+        "test named_argument { assert by_name(\"{:x}\", 1.5) == \"\" }\n",
+        "test generic { assert typed(\"{:x}\", 1.5) == \"\" }\n",
+        "test pack_entry { assert entry(\"{:x}\", 1.5) == \"\" }\n",
+        "test twice_few { assert outer(\"{} {}\", 1) == \"\" }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:16:21 type/format.specifier FMT-4",
+            "m.hgl:17:27 type/format.argument FMT-3",
+            "m.hgl:18:23 type/format.specifier FMT-4",
+            "m.hgl:19:30 type/format.specifier FMT-4",
+            "m.hgl:20:23 type/format.specifier FMT-4",
+            "m.hgl:21:26 type/format.specifier FMT-4",
+            "m.hgl:22:25 type/format.argument FMT-3",
+        ],
+        "{}",
+        checked.report,
+    );
+    for instance in [
+        "outer<[f64], []>",
+        "inner<[f64], []>",
+        "inner<[i64], [str]>",
+        "fixed<[f64]>",
+        "by_name<[f64]>",
+        "typed<f64>",
+        "helper<f64>",
+        "entry<[f64]>",
+    ] {
+        assert!(
+            checked
+                .report
+                .contains(&format!("this call makes the instance `{instance}`")),
+            "{}",
+            checked.report,
+        );
+    }
+}
+
+/// GEN-7 and GEN-13: two calls with different patterns, or one pattern
+/// and different entries, are different instances, each with its own
+/// verdict, whichever is checked first. The pattern written in the body
+/// beside the packs is checked as before.
+#[test]
+fn formatting_checks_each_forwarded_pattern_instance_on_its_own() {
+    let declarations = concat!(
+        "const fn show<...As>(const p: str, args: ...As) -> str => format(p, ...args)\n",
+        "const fn written<...As, ...Ks>(args: ...As, kwargs: ...{Ks}) -> str => format(\"{:x} {name}\", ...args, ...kwargs)\n",
+    );
+    let good = [
+        "test hex { assert show(\"{:x}\", 255) == \"ff\" }\n",
+        "test float { assert show(\"{:.1f}\", 1.5) == \"1.5\" }\n",
+        "test flag { assert show(\"{:x}\", true) == \"1\" }\n",
+        "test body { assert written(255, name: \"a\") == \"ff a\" }\n",
+    ];
+    let bad = [
+        (
+            "test hex_float { assert show(\"{:x}\", 1.5) == \"\" }\n",
+            25,
+            "format.specifier FMT-4",
+        ),
+        (
+            "test body_float { assert written(1.5, name: \"a\") == \"\" }\n",
+            26,
+            "format.specifier FMT-4",
+        ),
+        (
+            "test body_missing { assert written(1) == \"\" }\n",
+            28,
+            "format.argument FMT-3",
+        ),
+    ];
+    for bad_first in [false, true] {
+        let mut lines: Vec<(&str, Option<(usize, &str)>)> =
+            good.iter().map(|line| (*line, None)).collect();
+        let failing = bad
+            .iter()
+            .map(|(line, column, code)| (*line, Some((*column, *code))));
+        if bad_first {
+            lines.splice(0..0, failing);
+        } else {
+            lines.extend(failing);
+        }
+        let source: String = lines.iter().map(|(line, _)| *line).collect();
+        let checked = with_core(&format!("{declarations}{source}"));
+        let expected: Vec<String> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (_, failing))| {
+                let (column, code) = (*failing)?;
+                Some(format!("m.hgl:{}:{column} type/{code}", index + 4))
+            })
+            .collect();
+        assert_eq!(checked.summary(), expected, "{}", checked.report);
+    }
+}
+
+/// GEN-13: a const pattern that grows through a forwarded call makes
+/// instances without end, whether it is appended to, doubled, or grown
+/// through a generic caller of the forwarding body. Each walk ends at the
+/// bound, reported once at the call that makes the first of them.
+#[test]
+fn forwarded_const_pattern_growth_reports_the_instance_limit() {
+    for (body, call) in [
+        (
+            "const fn grow<...As>(const p: str, args: ...As) -> str => format(p, ...args) + grow(p + \"x\", ...args)\n",
+            "grow(\"{}\", 1)",
+        ),
+        (
+            "const fn grow<...As>(const p: str, args: ...As) -> str => format(p, ...args) + grow(p + p, ...args)\n",
+            "grow(\"a\")",
+        ),
+        (
+            concat!(
+                "const fn show<...As>(const p: str, args: ...As) -> str => format(p, ...args)\n",
+                "const fn grow<T>(const p: str, v: T) -> str => show(p, v) + grow(p + \"x\", v)\n",
+            ),
+            "grow(\"{}\", 1)",
+        ),
+    ] {
+        let lines = body.lines().count();
+        let checked = with_core(&format!("{body}test t {{ assert {call} == \"\" }}\n"));
+        assert_eq!(
+            checked.summary(),
+            [format!(
+                "m.hgl:{}:17 type/generic.instance_limit GEN-13",
+                lines + 2
+            )],
+            "{body}: {}",
+            checked.report,
+        );
+    }
+}
+
 /// FMT-5: the selected conversion must consume the whole value and
 /// yield `str`, including when a native collection converts its parts.
 #[test]

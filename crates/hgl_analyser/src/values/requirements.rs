@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
@@ -2187,7 +2188,7 @@ pub(super) struct Made {
     required: Option<usize>,
     at: Location,
     /// A concrete forwarding path that exposed this call to the walk.
-    via: Option<Box<[MakingCall]>>,
+    via: Option<Rc<MakingPath>>,
 }
 
 type ConstArguments = crate::const_inputs::ReadInputs;
@@ -2505,24 +2506,44 @@ pub(super) fn instances_hold(
         }
     }
     let mut rejected_calls = InstanceCallRejections::default();
+    // GEN-7 reports a rejection at the calls written outside every generic
+    // body. An instance one walk has told for each of a root's calls is
+    // not told again for them: a call found inside a forwarding instance
+    // starts a walk that its own root's walk repeats, once per call.
+    let mut told = HashSet::<(String, Location)>::new();
+    let told_for = |told: &HashSet<(String, Location)>, key: &String, from: &[Location]| {
+        from.iter().all(|at| told.contains(&(key.clone(), *at)))
+    };
     for (root, root_calls) in roots {
         let from: Vec<_> = root_calls.iter().map(|call| call.at).collect();
+        let root_key = instance_key(
+            root.callee,
+            &root.generics,
+            &root.type_packs,
+            &root.answers,
+            &root.constants,
+        );
+        if told_for(&told, &root_key, &from) {
+            continue;
+        }
         // Each instance this one makes followed once, by what it is: its
         // callee and its arguments, the root's own among them.
         let mut seen: std::collections::HashSet<String> =
-            std::collections::HashSet::from([instance_key(
-                root.callee,
-                &root.generics,
-                &root.type_packs,
-                &root.answers,
-                &root.constants,
-            )]);
+            std::collections::HashSet::from([root_key]);
         let mut waiting = std::collections::VecDeque::from([(root, None)]);
         let mut parents = Vec::new();
         // How many instances of each declaration this one has made.
         let mut followed: HashMap<(usize, usize), usize> = HashMap::new();
         let mut exhausted = false;
         while let Some((made, parent)) = waiting.pop_front() {
+            let key = instance_key(
+                made.callee,
+                &made.generics,
+                &made.type_packs,
+                &made.answers,
+                &made.constants,
+            );
+            told.extend(from.iter().map(|&at| (key.clone(), at)));
             let count = followed.entry(made.callee).or_insert(0);
             *count += 1;
             if *count > INSTANCES {
@@ -2990,7 +3011,7 @@ pub(super) fn instances_hold(
                         continue;
                     }
                 }
-                if reaching.contains(&callee) && seen.insert(key) {
+                if reaching.contains(&callee) && !told_for(&told, &key, &from) && seen.insert(key) {
                     let caller = *link.get_or_insert_with(|| {
                         let index = parents.len();
                         parents.push((
@@ -3039,7 +3060,41 @@ pub(super) struct MakingCall {
 /// A non-generic making site and the concrete forwarding path it exposes.
 struct InstanceRoot {
     at: Location,
-    via: Option<Box<[MakingCall]>>,
+    via: Option<Rc<MakingPath>>,
+}
+
+/// The calls from an instance out to the call written outside every
+/// generic body, innermost first (GEN-7). The calls one instance makes
+/// share its path, so a walk keeps one call for each instance it makes.
+#[derive(Debug)]
+pub(super) struct MakingPath {
+    call: MakingCall,
+    outer: Option<Rc<MakingPath>>,
+}
+
+impl MakingPath {
+    /// `call`, made inside the instance whose path is `outer`.
+    pub(super) fn new(call: MakingCall, outer: Option<Rc<MakingPath>>) -> Rc<Self> {
+        Rc::new(Self { call, outer })
+    }
+
+    /// Each call on the path, from this one out.
+    pub(super) fn calls(&self) -> impl Iterator<Item = &MakingCall> {
+        std::iter::successors(Some(self), |path| path.outer.as_deref()).map(|path| &path.call)
+    }
+}
+
+/// A long path is let go one call at a time, and not by a call for each.
+impl Drop for MakingPath {
+    fn drop(&mut self) {
+        let mut outer = self.outer.take();
+        while let Some(path) = outer {
+            // `Rc::try_unwrap` takes the path where nothing else holds it.
+            outer = Rc::try_unwrap(path)
+                .ok()
+                .and_then(|mut path| path.outer.take());
+        }
+    }
 }
 
 impl MakingCall {
@@ -3102,7 +3157,7 @@ impl InstanceChain<'_> {
             .map(|from| {
                 let mut path = inner.to_vec();
                 match &from.via {
-                    Some(via) => path.extend_from_slice(via),
+                    Some(via) => path.extend(via.calls().cloned()),
                     None => path.push(MakingCall {
                         at: from.at,
                         instance: root.instance.clone(),
@@ -3578,16 +3633,19 @@ fn instance_limit(from: &[Location], message: String, diagnostics: &mut Diagnost
                 && earlier.primary.file == at.file
                 && earlier.primary.span.start == at.span.start
         });
-        if !rejected {
-            // GEN-13 catalogues the code, proposed, for instances past
-            // the implementation's bound.
-            diagnostics.emit(crate::error(
-                Category::Type,
-                codes::INSTANCE_LIMIT,
-                at,
-                message.clone(),
-                "GEN-13",
-            ));
+        // GEN-13 catalogues the code, proposed, for instances past
+        // the implementation's bound.
+        let report = crate::error(
+            Category::Type,
+            codes::INSTANCE_LIMIT,
+            at,
+            message.clone(),
+            "GEN-13",
+        );
+        // ERR-9: a walk that meets the bound the forwarding walk met
+        // already reports nothing more at that call.
+        if !rejected && !diagnostics.as_slice().contains(&report) {
+            diagnostics.emit(report);
         }
     }
 }
@@ -4053,17 +4111,19 @@ fn make_call(callee: &Callee, at: Location, constants: ConstArguments, made: &mu
 }
 
 /// A deferred call resolved by forwarding carries the path from its
-/// own location to the call that supplied the pack.
+/// own location to the call that supplied the pack, and the const inputs
+/// it gives in the forwarding instance (FN-1, GEN-7).
 pub(super) fn made_forwarded_callee(
     callee: &Callee,
+    constants: ConstArguments,
     at: Location,
-    via: Vec<MakingCall>,
+    via: Rc<MakingPath>,
     made: &mut Vec<Made>,
 ) {
     let index = made.len();
-    made_callee(callee, at, made);
+    make_call(callee, at, constants, made);
     if let Some(call) = made.get_mut(index) {
-        call.via = Some(via.into_boxed_slice());
+        call.via = Some(via);
     }
 }
 

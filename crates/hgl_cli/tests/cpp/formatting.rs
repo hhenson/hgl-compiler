@@ -440,3 +440,98 @@ test generic_second { assert generic_format("[{:.1f}]", 1.5) == "[1.0]|[1.5]" }
         "{stdout}"
     );
 }
+
+/// FN-1, FN-19 and GEN-13: a forwarding body's const input keys its
+/// instances only where the instance reads it at compile time: one
+/// pattern with one argument shape is one body, and a label read only
+/// at run time keys none.
+#[test]
+fn forwarded_const_inputs_key_instances_by_demand() {
+    let root = scratch("forwarded-const-input-keys");
+    let file = write(
+        &root,
+        "keys.hgl",
+        r#"module forwarded_keys
+const fn count<...As>(const label: str, args: ...As) -> str => label
+const fn relay<...As>(const label: str, args: ...As) -> str => count(label, ...args)
+const fn show<...As>(const p: str, args: ...As) -> str => format(p, ...args)
+test t {
+    assert relay("x", 1) == "x"
+    assert relay("y", 2) == "y"
+    assert show("{:x}", 255) == "ff"
+    assert show("{:x}", 16) == "10"
+    assert show("<{}>", 1) == "<1>"
+}
+"#,
+    );
+    let output = root.join("cpp");
+    let emitted = emit_format_program(&file, &output);
+    assert!(emitted.status.success(), "{}", text(&emitted.stderr));
+    let module = fs::read_to_string(output.join("modules/mod-forwarded_keys.cpp")).unwrap();
+    let instances = |name: &str| {
+        module
+            .lines()
+            .filter(|line| *line == format!("namespace i_::{name}"))
+            .count()
+    };
+    assert_eq!(
+        [instances("count"), instances("relay"), instances("show")],
+        [1, 1, 2],
+        "{module}"
+    );
+}
+
+/// FN-19 and FMT-3: a const pattern given beside forwarded packs, once or
+/// twice, is written with the text the direct `format` call writes.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn runs_const_patterns_forwarded_beside_packs() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("forwarded-const-patterns");
+    let file = write(
+        &root,
+        "formatting.hgl",
+        r#"module forwarded_patterns
+const fn both<...As, ...Ks>(const p: str, args: ...As, kwargs: ...{Ks}) -> str
+    => format(p, ...args, ...kwargs)
+const fn positional<...As>(const p: str, args: ...As) -> str => format(p, ...args)
+const fn named<...Ks>(const p: str, kwargs: ...{Ks}) -> str => format(p, ...kwargs)
+const fn outer<...As, ...Ks>(const p: str, args: ...As, kwargs: ...{Ks}) -> str
+    => both(p, ...args, ...kwargs)
+const fn typed<T>(const q: str, v: T) -> str => outer(q, v)
+const fn helper<T>(const p: str, v: T) -> str => format(p, v)
+const fn entry<...As>(const p: str, args: ...As) -> str => helper(p, args[0])
+test both_packs { assert both("{} {name}", 1, name: "a") == "1 a" }
+test positional_pack {
+    assert positional("{:x}|{:>4}|{:.2f}", 255, "ab", 1.5)
+        == format("{:x}|{:>4}|{:.2f}", 255, "ab", 1.5)
+}
+test named_pack { assert named("{b}-{a:>3}", a: 1, b: "x") == format("{b}-{a:>3}", a: 1, b: "x") }
+test empty_packs { assert both("plain {{x}}") == "plain {x}" }
+test twice {
+    assert outer("{} {name}", 1, name: "a") == "1 a"
+    assert outer("[{:.2f}]", 1.5) == "[1.50]"
+}
+test patterns_apart {
+    assert positional("{:x}", 255) == "ff"
+    assert positional("{:.1f}", 1.5) == "1.5"
+    assert positional("{:x}", true) == format("{:x}", true)
+    assert positional("<{}>", "s") == "<s>"
+}
+test through_generic { assert typed("{:x}", 255) == "ff" }
+test pack_entry { assert entry("<{:.1f}>", 2.5) == "<2.5>" }
+"#,
+    );
+    let report = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&report.stdout);
+    assert!(report.status.success(), "{stdout}{}", text(&report.stderr));
+    assert_eq!(
+        stdout
+            .matches("passed   executable  forwarded_patterns::")
+            .count(),
+        8,
+        "{stdout}"
+    );
+}
