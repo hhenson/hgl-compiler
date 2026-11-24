@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use crate::markdown::{Markup, Renderers, escaped, render, render_section};
 use crate::model::{Declaration, Documentation, Interface, Model, Module, Section, Source};
-use crate::{LinkContext, links};
+use crate::{LinkContext, links, signatures};
 
 /// The browser builds and notices from the exact npm releases in
 /// vendor/README.md. Embedding them also carries them in release binaries.
@@ -93,6 +93,30 @@ pub(crate) fn build(program: &Program, model: Model<'_>) -> Vec<SiteFile> {
     for (module, page) in model.modules.iter().zip(&pages) {
         site.add_module_targets(module, page);
     }
+    // The operator owns each candidate's article. Its implementing module
+    // lists a reference to that same article rather than copying it.
+    let mut contributions = BTreeMap::<_, Vec<_>>::new();
+    for module in &model.modules {
+        for operator in &module.declarations {
+            for candidate in &operator.candidates {
+                if candidate.source.module != module.name {
+                    contributions
+                        .entry(candidate.source.module)
+                        .or_default()
+                        .push((operator, candidate));
+                }
+            }
+        }
+    }
+    for candidates in contributions.values_mut() {
+        candidates.sort_by_key(|(_, candidate)| {
+            (
+                candidate.source.part,
+                candidate.source.line,
+                candidate.source.column,
+            )
+        });
+    }
 
     let search = serde_json::to_string(&site.search).expect("the search index has only strings");
     let mut files = vec![
@@ -106,7 +130,11 @@ pub(crate) fn build(program: &Program, model: Model<'_>) -> Vec<SiteFile> {
     ];
     let mut renderers = Renderers::default();
     for (module, page) in model.modules.iter().zip(&pages) {
-        let mut markup = site.module(module, page);
+        let mut markup = site.module(
+            module,
+            page,
+            contributions.get(module.name).map_or(&[], Vec::as_slice),
+        );
         renderers.include(&markup.renderers);
         if markup.renderers.any() {
             markup
@@ -250,7 +278,12 @@ impl<'a> Site<'a> {
         }
     }
 
-    fn module(&self, module: &Module<'_>, page_name: &str) -> Markup {
+    fn module(
+        &self,
+        module: &Module<'_>,
+        page_name: &str,
+        contributions: &[(&Declaration<'_>, &Declaration<'_>)],
+    ) -> Markup {
         let mut output = Markup {
             html: page(module.name, "../"),
             renderers: Renderers::default(),
@@ -275,13 +308,84 @@ impl<'a> Site<'a> {
                 .or_default()
                 .push(declaration);
         }
+        if !kinds.is_empty() || !contributions.is_empty() {
+            output
+                .html
+                .push_str("<nav class=\"contents\" aria-label=\"Module contents\">\n");
+            output.heading(2, "Contents");
+            output.html.push_str("<ul>\n");
+            for (kind, declarations) in &kinds {
+                writeln!(output.html, "<li>{}<ul>", escaped(kind)).unwrap();
+                for declaration in declarations {
+                    self.contents_entry(&mut output, declaration, page_name, declaration.name);
+                }
+                output.html.push_str("</ul></li>\n");
+            }
+            if !contributions.is_empty() {
+                output
+                    .html
+                    .push_str("<li>Candidates for other modules<ul>\n");
+                for (operator, candidate) in contributions {
+                    self.contents_entry(
+                        &mut output,
+                        candidate,
+                        page_name,
+                        &operator.canonical_name,
+                    );
+                }
+                output.html.push_str("</ul></li>\n");
+            }
+            output.html.push_str("</ul>\n</nav>\n");
+        }
         for (kind, declarations) in kinds {
             output.heading(2, kind);
             for declaration in declarations {
                 self.declaration(&mut output, declaration, page_name, 3);
             }
         }
+        if !contributions.is_empty() {
+            output.heading(2, "Candidates for other modules");
+            output.html.push_str("<ul>\n");
+            for (operator, candidate) in contributions {
+                let href = self.destination(&self.targets[&candidate.source.at], page_name);
+                writeln!(output.html, "<li><a href=\"{}\">{}</a>\n<pre class=\"signature\"><code>{}</code></pre></li>",
+                    escaped(&href), escaped(&operator.canonical_name),
+                    self.signature(candidate, page_name)).unwrap();
+            }
+            output.html.push_str("</ul>\n");
+        }
         output
+    }
+
+    fn contents_entry(&self, output: &mut Markup, item: &Declaration<'_>, page: &str, label: &str) {
+        let href = self.destination(&self.targets[&item.source.at], page);
+        writeln!(
+            output.html,
+            "<li><a href=\"{}\">{}</a></li>",
+            escaped(&href),
+            escaped(label)
+        )
+        .unwrap();
+    }
+
+    fn destination(&self, target: &Target<'_>, page: &str) -> String {
+        let prefix = if target.page == page { "" } else { target.page };
+        format!("{prefix}#{}", target.anchor)
+    }
+
+    fn link(&self, source: &Source<'_>, page: &str, name: &str) -> Option<String> {
+        let context = LinkContext {
+            module: source.module,
+            at: source.at,
+        };
+        let target = links::resolve(self.program, context, name)?;
+        Some(self.destination(self.targets.get(&target)?, page))
+    }
+
+    fn signature(&self, declaration: &Declaration<'_>, page: &str) -> String {
+        signatures::render(&declaration.signature, |name| {
+            self.link(&declaration.source, page, name)
+        })
     }
 
     fn declaration(
@@ -296,9 +400,24 @@ impl<'a> Site<'a> {
         output.heading(level, declaration.name);
         writeln!(
             output.html,
-            "<pre class=\"signature\"><code>{}</code></pre>\n\
-             <p class=\"source\">{}:{}</p>",
-            escaped(&declaration.signature),
+            "<pre class=\"signature\"><code>{}</code></pre>",
+            self.signature(declaration, page),
+        )
+        .unwrap();
+        output.html.push_str("<p class=\"source\">");
+        let origin = filename(declaration.source.module);
+        if origin != page {
+            write!(
+                output.html,
+                "Declared in <a href=\"{}\">{}</a>: ",
+                escaped(&origin),
+                escaped(declaration.source.module)
+            )
+            .unwrap();
+        }
+        writeln!(
+            output.html,
+            "{}:{}</p>",
             escaped(&declaration.source.file),
             declaration.source.line,
         )
@@ -340,22 +459,39 @@ impl<'a> Site<'a> {
         level: usize,
         interface: Option<&Interface<'_>>,
     ) {
-        let context = LinkContext {
-            module: source.module,
-            at: source.at,
-        };
-        let link = |name: &str| {
-            let target = links::resolve(self.program, context, name)?;
-            let target = self.targets.get(&target)?;
-            let prefix = if target.page == page { "" } else { target.page };
-            Some(format!("{prefix}#{}", target.anchor))
-        };
+        let link = |name: &str| self.link(source, page, name);
 
         render(output, &comment.summary, level, link);
         let section_level = level + 1;
         let mut wrote_generics = false;
         let mut wrote_parameters = false;
+        let has_generics = comment
+            .sections
+            .iter()
+            .any(|section| section.recognized && section.heading.as_deref() == Some("Type Args:"));
+        let has_parameters = comment
+            .sections
+            .iter()
+            .any(|section| section.recognized && section.heading.as_deref() == Some("Args:"));
         for section in &comment.sections {
+            // Keep introductory prose together. Missing interface tables
+            // precede the first authored section instead of following its
+            // examples or rules; explicit table sections keep their order.
+            if section.heading.is_some()
+                && let Some(interface) = interface
+            {
+                if !has_generics && !wrote_generics {
+                    generic_table(output, interface, section_level, None, link);
+                    wrote_generics = true;
+                }
+                if !has_parameters
+                    && !wrote_parameters
+                    && section.heading.as_deref() != Some("Type Args:")
+                {
+                    parameter_tables(output, interface, section_level, None, link);
+                    wrote_parameters = true;
+                }
+            }
             match (section.heading.as_deref(), interface) {
                 (Some("Type Args:"), Some(interface))
                     if section.recognized && !interface.generic_parameters.is_empty() =>

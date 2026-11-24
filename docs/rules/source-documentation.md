@@ -37,6 +37,9 @@ docs: done
 - JSON and HTML keep interfaces, candidates and members distinct, with their own signatures, comments and source parts
 - HTML signatures include block initializers of constants and fields
 - HTML parameter tables show argument modes and pack marks
+- HTML shows a candidate's implementing module and lists its contribution on that module's page; the full article stays with the owning operator
+- Module contents link to declaration articles; signatures link visible names in their source scope
+- Missing argument tables precede authored sections while introductory prose and explicit table sections keep their order
 
 ## SDOC-5
 

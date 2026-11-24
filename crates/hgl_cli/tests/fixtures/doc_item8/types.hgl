@@ -1,0 +1,10 @@
+module guide.types
+export struct Price { raw: i64 }
+export const value: i64 = 3
+const secret: i64 = 17
+export const public_count: i64 = secret
+export const number: i64 = 3
+export const shadowed: i64 = {
+    let number = 4
+    number
+}

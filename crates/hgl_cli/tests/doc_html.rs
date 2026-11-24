@@ -266,7 +266,7 @@ fn site_renders_initializer_headers_and_entry_markdown() {
     for signature in [
         "export const answer: i64 = { 42 }",
         "count: i64 = { 42 }",
-        "export const fn closed_header() -&gt; i64",
+        "export const fn <a href=\"#decl-closed_header\">closed_header</a>() -&gt; i64",
         "test named_header",
     ] {
         assert!(page.contains(&format!(
@@ -945,4 +945,92 @@ export const fn shadowed(dep: i64) -> i64 => dep
         "{page}"
     );
     assert!(page.contains("Hidden <code>dep::marker</code>."), "{page}");
+}
+
+/// #484 item 8, SDOC-4 and SDOC-8: declarations remain associated with
+/// their owner while references use the source module's visible names.
+#[test]
+fn documentation_navigation_associates_external_candidates_and_signature_types() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    fs::create_dir(&source).unwrap();
+    for (name, content) in [
+        ("api.hgl", include_str!("fixtures/doc_item8/api.hgl")),
+        ("impls.hgl", include_str!("fixtures/doc_item8/impls.hgl")),
+        ("types.hgl", include_str!("fixtures/doc_item8/types.hgl")),
+    ] {
+        fs::write(source.join(name), content).unwrap();
+    }
+    let site = write_site(root.path(), &source, &[]);
+    let api = fs::read_to_string(site.join("modules/mod-guide.api.html")).unwrap();
+    let implementations = fs::read_to_string(site.join("modules/mod-guide.impls.html")).unwrap();
+    let types = fs::read_to_string(site.join("modules/mod-guide.types.html")).unwrap();
+    assert!(api.contains("Declared in <a href=\"mod-guide.impls.html\">guide.impls</a>"));
+    assert!(api.contains("External Price candidate."));
+    assert!(implementations.contains("Candidates for other modules"));
+    let contributions = implementations
+        .split("<h2>Candidates for other modules</h2>")
+        .nth(1)
+        .unwrap();
+    assert!(
+        contributions.find("guide.api::measure").unwrap()
+            < contributions.find("guide.api::choose").unwrap()
+    );
+    assert!(
+        implementations.contains("href=\"mod-guide.api.html#decl-choose-2\">guide.api::choose</a>")
+    );
+    for page in [&api, &implementations, &types] {
+        assert!(page.contains("aria-label=\"Module contents\""));
+    }
+    let article = implementations
+        .split("<article id=\"decl-copy_price\">")
+        .nth(1)
+        .unwrap()
+        .split("</article>")
+        .next()
+        .unwrap();
+    let signature = article.split("</pre>").next().unwrap();
+    assert_eq!(
+        signature
+            .matches("href=\"mod-guide.types.html#decl-Price\"")
+            .count(),
+        2,
+        "{signature}"
+    );
+    assert!(!signature.contains("href=\"mod-guide.types.html#decl-value\""));
+    assert!(
+        article.find("More introductory context.").unwrap()
+            < article.find("<h4>Arguments</h4>").unwrap()
+    );
+    assert!(
+        article.find("<h4>Arguments</h4>").unwrap() < article.find("<h4>Examples</h4>").unwrap()
+    );
+    assert!(article.find("<h4>Arguments</h4>").unwrap() < article.find("<h4>Rules</h4>").unwrap());
+    let generic = implementations
+        .split("<article id=\"decl-generic\">")
+        .nth(1)
+        .unwrap()
+        .split("</pre>")
+        .next()
+        .unwrap();
+    assert!(
+        !generic.contains("mod-guide.types.html#decl-Price"),
+        "generic and parameter bindings stay text: {generic}"
+    );
+    assert!(implementations.contains("= &quot;types::Price&quot;</code></pre>"));
+    assert!(!types.contains("href=\"#decl-secret\""));
+    let shadowed = types
+        .split("<article id=\"decl-shadowed\">")
+        .nth(1)
+        .unwrap()
+        .split("</pre>")
+        .next()
+        .unwrap();
+    assert!(!shadowed.contains("href=\"#decl-number\""), "{shadowed}");
+    internal_link_targets_exist(&site, &snapshot(&site));
+    let private = root.path().join("private");
+    write_site(root.path(), &source, &["--private", "--out", "private"]);
+    let types = fs::read_to_string(private.join("modules/mod-guide.types.html")).unwrap();
+    assert!(types.contains("= <a href=\"#decl-secret\">secret</a>"));
+    internal_link_targets_exist(&private, &snapshot(&private));
 }

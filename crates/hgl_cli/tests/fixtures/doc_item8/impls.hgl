@@ -1,0 +1,23 @@
+module guide.impls
+use guide.api::{choose, measure}
+use guide.types as types
+use guide.types::{Price, value}
+impl const fn measure(value: types::Price) -> i64 => value.raw * 2
+/** External Price candidate. */
+impl const fn choose(value: types::Price) -> i64 => value.raw
+/** Return a price.
+
+More introductory context.
+
+Examples:
+    ~~~hgl no-run
+    let text = "shown"
+    ~~~
+
+Rules:
+    SDOC-4
+*/
+export const fn copy_price(value: types::Price) -> types::Price => value
+
+export const fn generic<Price>(value: Price) -> Price => value
+export const label: str = "types::Price"

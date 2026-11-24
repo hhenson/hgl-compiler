@@ -5,12 +5,18 @@ Open `index.html` in that directory. The default directory is
 `hgl-doc`. Use `--format json` for the JSON model below.
 
 The index links to one page per module. Each module page shows its
-parts, their source comments and its declarations grouped by kind.
-Declarations show their written signatures, file and line,
+parts, their source comments and its declarations grouped by kind, with
+a contents list linking to the declarations. Declarations show their written signatures, file and line,
 documentation, and parameter and type-parameter tables. The argument and
 configuration tables show modes beside parameter names and pack marks
 beside types. An operator lists its candidates
-with their own signatures and documentation. Exported declarations
+with their own signatures and documentation. A candidate implemented in
+another module names and links that module; its implementing module also
+lists the candidate and links to its article under the owning operator.
+Visible names in signatures link in the signature's source scope, while
+parameter and generic bindings, strings and local initializer names stay
+plain. Without an authored `Args:` section, the argument tables precede
+the comment's headed sections, including examples and rules. Exported declarations
 appear by default. Use `--private` to include the rest and named tests.
 
 HTML output goes into an empty directory or a site marked by `hgl doc`.
