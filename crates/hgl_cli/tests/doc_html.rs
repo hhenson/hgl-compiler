@@ -946,3 +946,166 @@ export const fn shadowed(dep: i64) -> i64 => dep
     );
     assert!(page.contains("Hidden <code>dep::marker</code>."), "{page}");
 }
+
+/// #484 item 8, SDOC-4 and SDOC-8: declarations remain associated with
+/// their owner while references use the source module's visible names.
+#[test]
+fn documentation_navigation_associates_external_candidates_and_signature_types() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    fs::create_dir(&source).unwrap();
+    for (name, content) in [
+        ("api.hgl", include_str!("fixtures/doc_item8/api.hgl")),
+        ("impls.hgl", include_str!("fixtures/doc_item8/impls.hgl")),
+        ("types.hgl", include_str!("fixtures/doc_item8/types.hgl")),
+    ] {
+        fs::write(source.join(name), content).unwrap();
+    }
+    let site = write_site(root.path(), &source, &[]);
+    let api = fs::read_to_string(site.join("modules/mod-guide.api.html")).unwrap();
+    let implementations = fs::read_to_string(site.join("modules/mod-guide.impls.html")).unwrap();
+    let types = fs::read_to_string(site.join("modules/mod-guide.types.html")).unwrap();
+    assert!(api.contains("Declared in <a href=\"mod-guide.impls.html\">guide.impls</a>"));
+    assert!(api.contains("External Price candidate."));
+    assert!(implementations.contains("Candidates for other modules"));
+    let contributions = implementations
+        .split("<h2>Candidates for other modules</h2>")
+        .nth(1)
+        .unwrap();
+    assert!(
+        contributions.find("guide.api::measure").unwrap()
+            < contributions.find("guide.api::choose").unwrap()
+    );
+    assert!(
+        implementations.contains("href=\"mod-guide.api.html#decl-choose-2\">guide.api::choose</a>")
+    );
+    for page in [&api, &implementations, &types] {
+        assert!(page.contains("aria-label=\"Module contents\""));
+    }
+    let article = implementations
+        .split("<article id=\"decl-copy_price\">")
+        .nth(1)
+        .unwrap()
+        .split("</article>")
+        .next()
+        .unwrap();
+    let signature = article.split("</pre>").next().unwrap();
+    assert_eq!(
+        signature
+            .matches("href=\"mod-guide.types.html#decl-Price\"")
+            .count(),
+        2,
+        "{signature}"
+    );
+    assert!(!signature.contains("href=\"mod-guide.types.html#decl-value\""));
+    assert!(
+        article.find("More introductory context.").unwrap()
+            < article.find("<h4>Arguments</h4>").unwrap()
+    );
+    assert!(
+        article.find("<h4>Arguments</h4>").unwrap() < article.find("<h4>Examples</h4>").unwrap()
+    );
+    assert!(article.find("<h4>Arguments</h4>").unwrap() < article.find("<h4>Rules</h4>").unwrap());
+    let generic = implementations
+        .split("<article id=\"decl-generic\">")
+        .nth(1)
+        .unwrap()
+        .split("</pre>")
+        .next()
+        .unwrap();
+    assert!(
+        !generic.contains("mod-guide.types.html#decl-Price"),
+        "generic and parameter bindings stay text: {generic}"
+    );
+    assert!(implementations.contains("= &quot;types::Price&quot;</code></pre>"));
+    assert!(!types.contains("href=\"#decl-secret\""));
+    let shadowed = types
+        .split("<article id=\"decl-shadowed\">")
+        .nth(1)
+        .unwrap()
+        .split("</pre>")
+        .next()
+        .unwrap();
+    assert!(!shadowed.contains("href=\"#decl-number\""), "{shadowed}");
+    // SDOC-4/FN-14: anonymous parameters shadow module declarations only
+    // in their own body, including a nested function and a retained default.
+    for (name, module_references) in [
+        ("anonymous_result", 2),
+        ("inferred_result", 1),
+        ("nested_result", 1),
+        ("block_result", 1),
+        ("with_default", 1),
+    ] {
+        let signature = types
+            .split(&format!("<article id=\"decl-{name}\">"))
+            .nth(1)
+            .unwrap()
+            .split("</pre>")
+            .next()
+            .unwrap();
+        assert_eq!(
+            signature.matches("href=\"#decl-n\"").count(),
+            module_references,
+            "{signature}"
+        );
+        assert!(!signature.contains("href=\"#decl-value\""), "{signature}");
+    }
+    // CTRL-12, EXPR-3/17 and FN-19: both dictionary iteration names,
+    // single-name loops, locals and list/pack comprehension bindings stay
+    // plain when a visible module declaration has the same spelling.
+    for name in [
+        "summed",
+        "with_loop_default",
+        "let_result",
+        "var_result",
+        "single_loop",
+        "list_loop",
+        "pack_loop",
+        "total",
+    ] {
+        let signature = types
+            .split(&format!("<article id=\"decl-{name}\">"))
+            .nth(1)
+            .unwrap()
+            .split("</pre>")
+            .next()
+            .unwrap();
+        assert!(!signature.contains("href=\"#decl-value\""), "{signature}");
+        if matches!(name, "summed" | "with_loop_default") {
+            assert!(signature.contains("href=\"#decl-entries\""), "{signature}");
+        }
+    }
+    // SDOC-4: the binding site stays plain for both functions and constants.
+    for name in ["with_default", "with_loop_default", "summed"] {
+        let signature = types
+            .split(&format!("<article id=\"decl-{name}\">"))
+            .nth(1)
+            .unwrap()
+            .split("</pre>")
+            .next()
+            .unwrap();
+        assert!(
+            !signature.contains(&format!("href=\"#decl-{name}\"")),
+            "{signature}"
+        );
+    }
+    // SDOC-4: implicit and numbered enum members declare their name;
+    // a reference in a field default still points to the enum member.
+    for name in ["buy", "sell"] {
+        let signature = types
+            .split(&format!("<h5>{name}</h5>"))
+            .nth(1)
+            .unwrap()
+            .split("</pre>")
+            .next()
+            .unwrap();
+        assert!(!signature.contains("<a "), "{signature}");
+    }
+    assert!(types.contains("href=\"#decl-sell-2\">Side.sell</a>"));
+    internal_link_targets_exist(&site, &snapshot(&site));
+    let private = root.path().join("private");
+    write_site(root.path(), &source, &["--private", "--out", "private"]);
+    let types = fs::read_to_string(private.join("modules/mod-guide.types.html")).unwrap();
+    assert!(types.contains("= <a href=\"#decl-secret\">secret</a>"));
+    internal_link_targets_exist(&private, &snapshot(&private));
+}

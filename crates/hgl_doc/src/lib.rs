@@ -7,6 +7,7 @@ mod extract;
 mod links;
 mod markdown;
 mod model;
+mod signatures;
 mod site;
 
 use std::io::{self, Write};
