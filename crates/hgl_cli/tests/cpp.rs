@@ -2636,6 +2636,29 @@ fn pack_entries_run_on_the_sdk() {
     );
 }
 
+/// TIME-9 and GEN-7: delta and retained time reads observe the fitted
+/// pack child in the same way as the child of an ordinary input.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn pack_child_observations_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("pack-child-operations");
+    let file = write(
+        &root,
+        "demo.pack_child_operations.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.pack_child_operations.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-19, TIME-1, TIME-4 and TIME-9: guards and subscriptions use the
 /// selected temporal input after pack expansion.
 #[test]

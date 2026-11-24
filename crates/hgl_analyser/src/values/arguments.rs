@@ -236,6 +236,7 @@ impl<'a> Typer<'a> {
                     written_pack: None,
                     result_fallback: None,
                     callable: None,
+                    defer_endpoint_child: false,
                     // GEN-2: "a generic value parameter that nothing
                     // says anything of takes its default".
                     defaults: read
