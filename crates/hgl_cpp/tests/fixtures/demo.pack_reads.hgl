@@ -74,3 +74,25 @@ test each_entry_keeps_its_type {
     assert entry_type(price: 13) == 13
     assert entry_type(price: "label") == "label"
 }
+
+# TIME-1 and TIME-4: another child publishing does not admit this read.
+fn guarded_child(items: ...list<i64>) -> i64 {
+    when valid(items[0][0]) { return items[0][0] }
+}
+
+fn graph_guarded_child(items: list<i64>) -> i64 => guarded_child(items)
+
+fn ordinary_guarded_child(items: list<i64>) -> i64 {
+    when valid(items[0]) { return items[0] }
+}
+
+test a_packed_child_waits_for_its_guard {
+    assert eval graph_guarded_child(items: [
+        delta<list<i64>>(size_modified: 2, updated: [1: 7]),
+        delta<list<i64>>(updated: [0: 9]),
+    ]) == [_, 9]
+    assert eval ordinary_guarded_child(items: [
+        delta<list<i64>>(size_modified: 2, updated: [1: 7]),
+        delta<list<i64>>(updated: [0: 9]),
+    ]) == [_, 9]
+}

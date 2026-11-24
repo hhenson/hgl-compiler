@@ -366,7 +366,12 @@ impl<'a> Typer<'a> {
             let (kind, ty) = self.pack_entry(pack, &index);
             let at = self.at(node);
             let input = self.is_temporal_input(pack);
-            if !matches!(kind, ExprKind::Unread) && input && self.naming != Some(self.at(&root)) {
+            let child = self.reads_children() && self.continues_chain(node, &ty);
+            if !matches!(kind, ExprKind::Unread)
+                && input
+                && !child
+                && self.naming != Some(self.at(&root))
+            {
                 // FN-19 selects one input. In a hook its payload has
                 // the same admission and lifecycle requirements (TIME-1,
                 // TIME-4, TIME-5) as a non-packed input.
