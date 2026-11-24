@@ -242,6 +242,7 @@ impl<'a> Typer<'a> {
             _ => {
                 let value = self.expression_in_flow(node, expected, value_use);
                 let outcome = if value_use == ValueUse::Inferred
+                    && value.ty == Type::Unknown
                     && let ExprKind::Call { callee, .. } = &value.kind
                     && self.call_has_no_result(callee)
                 {

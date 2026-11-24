@@ -887,6 +887,11 @@ impl<'a> Typer<'a> {
         }
         let written = crate::syntax::child(node, SyntaxKind::ReturnType);
         let infer_result = written.is_none() && template.result_admits_none;
+        // FN-17: reading the body to infer this result can infer
+        // another callback result. Charge the reading before entering it.
+        if infer_result && !self.may_reread() {
+            return None;
+        }
         let result = written
             .and_then(|written| self.anonymous_type(&written))
             .or_else(|| {

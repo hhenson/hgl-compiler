@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
+use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location, Severity};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
@@ -2282,6 +2282,7 @@ pub(super) fn instances_hold(
     source: &IndependentSourceBodies,
     diagnostics: &mut Diagnostics,
 ) {
+    let declared_reports = diagnostics.len();
     // The generic parameters of `(module, declaration)`, by where each
     // is declared.
     let own = |(module, declaration): (usize, usize)| -> Vec<Location> {
@@ -2583,6 +2584,21 @@ pub(super) fn instances_hold(
             let constants = made.constants.values.as_slice();
             let recheck_format = dependent_patterns.contains(&made.callee) || !constants.is_empty();
             let recheck_resultless = made.generics.contains(&Argument::NoResult);
+            let declaration = &unit.declarations[made.callee.1];
+            if recheck_resultless
+                && diagnostics.as_slice()[..declared_reports]
+                    .iter()
+                    .any(|report| {
+                        let span = declaration.syntax.span();
+                        report.severity == Severity::Error
+                            && report.primary.file == declaration.at.file
+                            && (span.start..span.end).contains(&report.primary.span.start)
+                    })
+            {
+                // ERR-9: the declaration already rejects. Do not
+                // report a second reading of its resultless instance.
+                continue;
+            }
             let inputs = crate::InstanceInputs {
                 constants,
                 test_candidates: made.test_candidates,

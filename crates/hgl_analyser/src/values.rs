@@ -465,6 +465,12 @@ pub(crate) fn reread_instance_body(
                 .iter()
                 .map(|(at, argument)| {
                     let argument = match argument {
+                        // GEN-1: a bare argument can forward the absence
+                        // to another result-only parameter. The receiving
+                        // signature checks which slots admit it.
+                        Argument::Type(Type::Parameter { at, .. }) if absent.contains(at) => {
+                            Argument::NoResult
+                        }
                         Argument::Type(ty) => {
                             if needs_absent_type(ty) {
                                 absent_type_uses.entry(at_key).or_insert(*at);
@@ -531,6 +537,17 @@ pub(crate) fn reread_instance_body(
     });
     typer.pack_functions = inputs.functions.to_vec();
     typer.body_at_phase(owner.phases[declaration])
+}
+
+/// GEN-1: a written argument needs a type unless it takes a whole result.
+fn absent_type_argument(at: Location) -> hgl_diagnostics::Diagnostic {
+    crate::error(
+        hgl_diagnostics::Category::Type,
+        crate::codes::TYPE_MISMATCH,
+        at,
+        "this requires a type, but its generic parameter has no result".to_string(),
+        "GEN-1",
+    )
 }
 
 /// Read the body as declared, leaving provisional call results unknown.
@@ -993,13 +1010,7 @@ impl<'a> Typer<'a> {
             .absent_type_uses
             .and_then(|uses| uses.get(&(self.file, start)))
         {
-            self.diagnostics.emit(crate::error(
-                hgl_diagnostics::Category::Type,
-                crate::codes::TYPE_MISMATCH,
-                *at,
-                "this requires a type, but its generic parameter has no result".to_string(),
-                "GEN-1",
-            ));
+            self.diagnostics.emit(absent_type_argument(*at));
         }
     }
 

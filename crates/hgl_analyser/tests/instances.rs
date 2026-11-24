@@ -1285,6 +1285,23 @@ fn written_types_in_a_body_cannot_use_a_resultless_binding() {
     }
 }
 
+/// GEN-7, ERR-9: a failed declaration needs no second instance report.
+#[test]
+fn a_rejected_declaration_does_not_report_resultless_instance_errors() {
+    let checked = module(concat!(
+        "fn record(value: i64) {}\n",
+        "fn increment(value: i64) -> i64 => value + 1\n",
+        "fn through<R>(f: fn(i64) -> R, value: i64) -> R => increment(f(value))\n",
+        "fn first(value: i64) => through(record, value)\n",
+        "fn second(value: i64) => through(record, value)\n",
+    ));
+    assert_eq!(checked.findings.len(), 2, "{}", checked.report);
+    for finding in &checked.findings {
+        assert_eq!(finding.code, "type/type.mismatch");
+        assert!(finding.at.starts_with("m.hgl:4:"), "{}", checked.report);
+    }
+}
+
 /// GEN-7: an explicit return stays a return in an instance with no result.
 #[test]
 fn returning_a_resultless_callback_rejects_at_the_call() {

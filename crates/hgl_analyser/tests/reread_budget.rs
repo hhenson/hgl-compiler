@@ -269,7 +269,7 @@ fn a_construct_past_its_allowance_is_reported_and_the_next_is_judged() {
 /// allowance as the trials, even when its result is inferred as none.
 #[test]
 fn resultless_callbacks_use_the_construct_reading_allowance() {
-    for (depth, resultless) in [(6, true), (13, true), (13, false)] {
+    for (depth, resultless) in [(6, true), (13, true), (14, false)] {
         let mut nested = if resultless {
             format!("record(x{depth})")
         } else {

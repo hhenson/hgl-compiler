@@ -404,7 +404,11 @@ impl<'a> Typer<'a> {
                 .iter()
                 .map(|(at, argument)| match argument {
                     Argument::Type(ty) => self.project_pack_pass_type(ty, *at),
-                    Argument::NoResult => Type::Unknown,
+                    Argument::NoResult => {
+                        faulty = true;
+                        self.diagnostics.emit(super::absent_type_argument(*at));
+                        Type::Unknown
+                    }
                     Argument::Constant(_) => {
                         faulty = true;
                         self.diagnostics.emit(error(
@@ -469,6 +473,11 @@ impl<'a> Typer<'a> {
         let mut rejected = false;
         for (position, (at, argument)) in given.iter().enumerate() {
             let generic = &generics[position];
+            if matches!(argument, Argument::NoResult) && !generic.result_only {
+                self.diagnostics.emit(super::absent_type_argument(*at));
+                rejected = true;
+                continue;
+            }
             let mismatch = match (&generic.kind, argument) {
                 // Reported where it is written.
                 (_, Argument::Type(Type::Unknown)) => {

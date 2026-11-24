@@ -47,7 +47,10 @@ impl<'a> Typer<'a> {
         self.expressing += 1;
         let reported = self.diagnostics.len();
         let mut value = self.expression_read(node, expected, value_use);
+        // A call with a settled type already has a result. Only an
+        // unknown type needs the callee's signature to distinguish absence.
         if value_use == ValueUse::Required
+            && value.ty == Type::Unknown
             && self.diagnostics.len() == reported
             && let ExprKind::Call { callee, .. } = &value.kind
             && self.call_has_no_result(callee)

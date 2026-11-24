@@ -25,6 +25,7 @@ fn unexpected(failure: error) {
 
 fn through<R>(f: fn(i64) -> R, value: i64) -> R => f(value)
 fn relay<R>(f: fn(i64) -> R, value: i64) -> R => through(f, value)
+fn forward<R>(f: fn(i64) -> R, value: i64) -> R => relay<R>(f, value)
 
 operator visit<R>(f: fn(i64) -> R, value: i64) -> R
 impl fn visit<R>(f: fn(i64) -> R, value: i64) -> R => f(value)
@@ -43,12 +44,16 @@ export fn execute() {
     relay(fn(x) => { record(x + 3) }, value)
     visit(record, value)
     fetch(value)
+    forward(record, value + 4)
 }
 
 fn valued(value: i64) -> i64 => through(plus_one, value) + through(fn(x) => x + 1, value) + visit(plus_one, value)
 
+fn forwarded(value: i64) -> i64 => forward(plus_one, value)
+
 test results {
     assert eval valued(value: [3]) == [12]
+    assert eval forwarded(value: [3]) == [4]
 }
 "#,
     );
@@ -74,7 +79,7 @@ eval execute()
     let stderr = text(&run.stderr);
     let mut effects: Vec<_> = stderr.lines().collect();
     effects.sort_unstable();
-    assert_eq!(effects, ["1", "11", "2", "21", "3", "4"]);
+    assert_eq!(effects, ["1", "11", "2", "21", "3", "4", "5"]);
 
     let tests = hgl_in(&["test", &root, "--target", "cpp"], &[], &[]);
     let stdout = text(&tests.stdout);
