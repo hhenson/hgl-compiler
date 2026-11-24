@@ -174,24 +174,34 @@ TEST_CASE("an f64 is written as the shortest text that reads back (OPS-6)") {
     CHECK(hglrt::convert_f64<str>(-infinity) == "-inf");
 }
 
-TEST_CASE("a padded f64 takes its sign from the converted text (FMT-4, OPS-6)") {
-    const auto padded = [](f64 value, hglrt::TextPadding padding,
+TEST_CASE("a default f64 takes its sign from the converted text (FMT-4, OPS-6)") {
+    const auto format = [](f64 value, hglrt::TextPadding padding,
                            std::optional<char> sign = std::nullopt, bool zero = false) {
         str text;
         hglrt::format_float_text(text, value, padding, sign, zero);
         return text;
     };
     const hglrt::TextPadding right{" ", 8, '>'};
+    const hglrt::TextPadding no_width{" ", 0, '>'};
+    CHECK(format(3.0, no_width, '+') == "+3.0");
+    CHECK(format(3.0, no_width, '-') == "3.0");
+    CHECK(format(3.0, no_width, ' ') == " 3.0");
+    CHECK(format(3.0, no_width, std::nullopt, true) == "3.0");
+    CHECK(format(-0.0, no_width, '+') == "-0.0");
+    CHECK(format(1e21, no_width, '+') == "+1e21");
     for (f64 nan : {std::copysign(not_a_number, 1.0), std::copysign(not_a_number, -1.0)}) {
-        CHECK(padded(nan, right) == "     nan");
-        CHECK(padded(nan, right, '-') == "     nan");
-        CHECK(padded(nan, right, '+') == "    +nan");
-        CHECK(padded(nan, right, ' ') == "     nan");
-        CHECK(padded(nan, right, std::nullopt, true) == "     nan");
-        CHECK(padded(nan, {"*", 9, '^'}, '+') == "**+nan***");
+        CHECK(format(nan, right) == "     nan");
+        CHECK(format(nan, right, '-') == "     nan");
+        CHECK(format(nan, right, '+') == "    +nan");
+        CHECK(format(nan, right, ' ') == "     nan");
+        CHECK(format(nan, right, std::nullopt, true) == "     nan");
+        CHECK(format(nan, {"*", 9, '^'}, '+') == "**+nan***");
+        CHECK(format(nan, no_width, '+') == "+nan");
+        CHECK(format(nan, no_width, '-') == "nan");
+        CHECK(format(nan, no_width, ' ') == " nan");
     }
-    CHECK(padded(-0.0, right, '+', true) == "-00000.0");
-    CHECK(padded(-infinity, right, '+', true) == "    -inf");
+    CHECK(format(-0.0, right, '+', true) == "-00000.0");
+    CHECK(format(-infinity, right, '+', true) == "    -inf");
 }
 
 TEST_CASE("text is an i64 where it is an integer literal, after one `-` (OPS-6, OPS-7)") {
