@@ -1989,6 +1989,99 @@ eval present(values: [taste(7)])
     );
 }
 
+/// TST-2: building tests with an application keeps test-only instances
+/// and the module supplying their candidates out of its linked objects.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn building_tests_preserves_the_applications_production_link() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("mixed-test-and-application-link");
+    write(
+        &root,
+        "src/a.hgl",
+        r#"module p21.a
+export operator kind<T>(value: T) -> i64
+impl const fn kind<T>(value: T) -> i64 => 0
+export const fn via(value: i64) -> i64 => kind(value)
+test a_plain { assert via(7) == 0 }
+"#,
+    );
+    write(
+        &root,
+        "src/b.hgl",
+        r#"module p21.b
+use p21.a::{kind, via}
+test b_declares {
+    impl const fn kind(value: i64) -> i64 => 2
+    assert via(7) == 2
+}
+"#,
+    );
+    write(
+        &root,
+        "src/app.hgl",
+        r#"application p21.app
+use p21.a::{via}
+fn present(const values: list<i64>) -> i64 {
+    for value in values { yield 1s: value }
+}
+eval present(values: [via(7)])
+"#,
+    );
+    let sources = argument(&root.join("src"));
+    let workspace = argument(&root.join("mixed"));
+    let app_link = |directory: &str, options: &[&str]| {
+        let mut args = vec!["build", &sources, "--out", directory];
+        args.extend_from_slice(options);
+        let built = hgl_in(&args, &[], &[]);
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let manifest = fs::read_to_string(Path::new(directory).join("build.ninja")).unwrap();
+        let prefix = format!(
+            "build run/app-p21-app{}: link ",
+            std::env::consts::EXE_SUFFIX
+        );
+        manifest
+            .lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .unwrap()
+            .to_owned()
+    };
+    let production_link = app_link(&argument(&root.join("production")), &[]);
+    let mixed_link = app_link(&workspace, &["--tests"]);
+    assert_eq!(mixed_link, production_link);
+    let module = fs::read_to_string(root.join("mixed/modules/mod-p21-a.cpp")).unwrap();
+    assert!(!module.contains("test_candidates_"), "{module}");
+
+    let app = hgl_in(
+        &["run", &sources, "--target", "cpp", "--keep", &workspace],
+        &[],
+        &[],
+    );
+    let stdout = text(&app.stdout);
+    assert!(app.status.success(), "{stdout}{}", text(&app.stderr));
+    assert!(stdout.contains("  0\n"), "{stdout}");
+    assert!(
+        stdout.contains("ran p21.app on cpp: 1 publication"),
+        "{stdout}"
+    );
+
+    let tests = hgl_in(
+        &["test", &sources, "--target", "cpp", "--keep", &workspace],
+        &[],
+        &[],
+    );
+    let stdout = text(&tests.stdout);
+    assert!(tests.status.success(), "{stdout}{}", text(&tests.stderr));
+    for test in ["p21.a::a_plain", "p21.b::b_declares"] {
+        assert!(
+            stdout.contains(&format!("passed   executable  {test}\n")),
+            "{stdout}"
+        );
+    }
+}
+
 /// The integration test above passes on the SDK.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
