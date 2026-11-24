@@ -401,9 +401,14 @@ pub(crate) fn names_parameter(ty: &Type) -> bool {
 /// argument.
 type PackMember<'a> = dyn Fn(Location, &str, &Constant) -> Option<Type> + 'a;
 
-fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>) -> Type {
+fn substitute(
+    ty: &Type,
+    map: &[(Location, &Argument)],
+    member: &PackMember<'_>,
+    pack: &dyn Fn(Location) -> Option<Vec<Type>>,
+) -> Type {
     // `Box::new` puts the substituted part where a `Box<Type>` points.
-    let part = |inner: &Type| Box::new(substitute(inner, map, member));
+    let part = |inner: &Type| Box::new(substitute(inner, map, member, pack));
     // The constant given for the generic value parameter declared at
     // `at`, where `map` gives one.
     let given = |at: Location| {
@@ -467,7 +472,9 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>)
             arguments: arguments
                 .iter()
                 .map(|argument| match argument {
-                    Argument::Type(argument) => Argument::Type(substitute(argument, map, member)),
+                    Argument::Type(argument) => {
+                        Argument::Type(substitute(argument, map, member, pack))
+                    }
                     Argument::Constant(argument) => Argument::Constant(constant(argument)),
                 })
                 .collect(),
@@ -475,11 +482,18 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>)
         Type::Tuple(elements) => Type::Tuple(
             elements
                 .iter()
-                .map(|element| substitute(element, map, member))
+                .flat_map(|element| {
+                    if let Type::Parameter { at, .. } = element
+                        && let Some(types) = pack(*at)
+                    {
+                        return types;
+                    }
+                    vec![substitute(element, map, member, pack)]
+                })
                 .collect(),
         ),
         Type::List { element, size } => Type::list(
-            substitute(element, map, member),
+            substitute(element, map, member, pack),
             size.as_ref().map(constant),
         ),
         Type::Set(inner) => Type::Set(part(inner)),
@@ -518,17 +532,17 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>)
             let mut function = function.as_ref().clone();
             for parameter in &mut function.parameters {
                 let ty = parameter.ty_mut();
-                *ty = substitute(ty, map, member);
+                *ty = substitute(ty, map, member, pack);
             }
             function.result = function
                 .result
                 .as_ref()
-                .map(|ty| substitute(ty, map, member));
+                .map(|ty| substitute(ty, map, member, pack));
             Type::Function(Box::new(function))
         }
         // TYPE-16: "In a generic declaration it stays as written until
         // T is known", and is then what the table gives for that T.
-        Type::Delta(inner) => Type::delta(substitute(inner, map, member)),
+        Type::Delta(inner) => Type::delta(substitute(inner, map, member, pack)),
         // TST-5: a tuple's trace cell names its T (`Type::trace_cell`),
         // which the tuple's delta formed again would not. A generic
         // target's parameter that is a tuple naming a parameter,
@@ -541,15 +555,15 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>)
         Type::Trace { cell, style } => {
             let cell = match &**cell {
                 Type::Delta(of) if matches!(**of, Type::Tuple(_)) => {
-                    Type::trace_cell(substitute(of, map, member))
+                    Type::trace_cell(substitute(of, map, member, pack))
                 }
-                own if names_parameter(own) => match substitute(own, map, member) {
+                own if names_parameter(own) => match substitute(own, map, member, pack) {
                     of @ (Type::Tuple(_) | Type::Atomic(_) | Type::RollingWindow { .. }) => {
                         Type::trace_cell(of)
                     }
                     other => other,
                 },
-                other => substitute(other, map, member),
+                other => substitute(other, map, member, pack),
             };
             Type::Trace {
                 cell: Box::new(cell),
@@ -558,7 +572,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)], member: &PackMember<'_>)
         }
         // TYPE-14: "either a T or null". A `T?` whose T is given a
         // nullable type is that type.
-        Type::Nullable(inner) => match substitute(inner, map, member) {
+        Type::Nullable(inner) => match substitute(inner, map, member, pack) {
             inner @ Type::Nullable(_) => inner,
             inner => Type::Nullable(Box::new(inner)),
         },
@@ -649,6 +663,18 @@ pub(crate) fn substitute_with_members(
     member: &PackMember<'_>,
     pack_weight: usize,
 ) -> Type {
+    substitute_with_packs(ty, map, member, &|_| None, pack_weight)
+}
+
+/// GEN-10 and GEN-17: specialize member types and expand type packs in
+/// a tuple's element sequence. A scalar type parameter remains one element.
+pub(crate) fn substitute_with_packs(
+    ty: &Type,
+    map: &[(Location, &Argument)],
+    member: &PackMember<'_>,
+    pack: &dyn Fn(Location) -> Option<Vec<Type>>,
+    pack_weight: usize,
+) -> Type {
     let heaviest = map
         .iter()
         .map(|(_, argument)| match argument {
@@ -660,7 +686,7 @@ pub(crate) fn substitute_with_members(
     if weight(ty).saturating_mul(heaviest.max(pack_weight)) > WEIGHT {
         return Type::Unknown;
     }
-    substitute(ty, map, member)
+    substitute(ty, map, member, pack)
 }
 
 /// TYPE-4: "A field is optional when its type is nullable, `T?`, or an
@@ -2149,7 +2175,7 @@ fn opened(ty: &Type) -> Type {
     if map.is_empty() {
         return ty.clone();
     }
-    substitute(ty, &map, &|_, _, _| None)
+    substitute(ty, &map, &|_, _, _| None, &|_| None)
 }
 
 #[derive(Clone, Copy)]

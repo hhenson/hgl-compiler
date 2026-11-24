@@ -192,6 +192,10 @@ export const fn scale<T, ...Rest, const N: i64>(
 
 fn arrow{const by: i64 = 1}(x: i64) -> i64 => x + by
 
+# GEN-3: category keywords are membership operands, never source types.
+const fn record<T>(value: T) -> T requires T in struct => value
+const fn tag<T>(value: T) -> T requires T in enum => value
+
 const fn apply(f: const fn(value: i64) -> i64, x: i64) -> i64 => f(x)
 const fn via_generic(x: i64) -> i64 => apply(other::increase<i64>, x)
 const fn forward<...Args>(args: ...Args) => another(...args)

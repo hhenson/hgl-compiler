@@ -38,8 +38,13 @@ transpiler: partial
 
 ## GEN-3
 
+parser: done
+
+- Category keywords `struct` and `enum` occur only after a membership's `in`.
+
 analyser: partial
 
+- Category membership tests the nominal kind, including generic structs, and excludes nullable types, other composites, native types and ordinary constants. Stated category facts are preserved through generic calls; negation and disjunction do not invent positive category evidence. The complete `examples.categories` illustration executes all three selections, with the separate `i64` call rejected.
 - A positive conjunctive `any` equality binds one unresolved generic from the first matching pack entry, with tentative bindings discarded on a failed trial and conjuncts revisited to a fixed point. Negation and disjunction only test supplied bindings.
 - Bare bool generic terms and their negations are checked at calls and candidates; positive terms also state a bool bound in a generic body.
 - Inequality constraints parse and test resolved operands, including named module constants, without binding.
@@ -163,11 +168,18 @@ parser: partial
 
 analyser: partial
 
+- `tuple<Ts>` captures and expands a type pack in element order, including nested types, explicit arguments, cardinalities and repeated captures. Ordinary type parameters remain one element even when their type is itself a tuple. Tuple captures share the existing specialization path with ordinary calls and independently typed callbacks. Forwarded sequences retain their splice position among fixed tuple elements, and must prove the callee's category requirements under the wrapper's stated bounds. Every independent source pack survives specialization. A decisive existential witness or false conjunction needs a guaranteed element: declared bounds and an exact `tuple<Us>` parameter can supply that minimum; a pack beside fixed tuple elements cannot. Ordinary value-pack forwarding remains checked in the concrete instance (GEN-7). Tuple indices select a guaranteed member by its pack key, never a sequence marker; positions whose member cannot be determined for every admitted length reject at the declaration. The same effective minimum proves call cardinality. Tuple partition equations reuse settled argument types to a fixed point, tuple operands expand in requirements, and a pack cannot stand beneath an element's `?`.
 - A cardinality bounds the arguments a generic type's pack takes, and has its upper bound at least its lower
 - Function and operator calls check the cardinality of captured arguments against the value parameter and its generic type pack. Explicit positional type sequences also constrain the argument count. The HIR records the resolved sequence of types for each captured type pack.
 - A function's `each T in types(Ts)` checks its condition for every resolved type in the pack. An empty capture satisfies it. Equality and membership can test the bound type by name. A verdict the analyser cannot give rejects as untold (GEN-3).
 - GEN-17 adds quantification over pack keys. `any` succeeds for at least one entry and rejects an empty pack. Type and key bindings project within nested type expressions.
 - An `any` equality can infer a const generic nested in a type, such as a fixed list length, from either equality operand; an explicitly supplied value is preserved (GEN-3).
+- Tuple candidate ranking expands captured arities into declared variables before comparing components; a concrete component outranks an unconstrained tuple-pack member (GEN-5, GEN-12). Explicit callback packs keep their supplied function types, and a template mismatch is reported at the argument (FN-17, GEN-8).
+- Left: a homogeneous candidate pack does not yet bind a public tuple-pack result in the declaration contract (GEN-6/GEN-10, #716; follows #684).
+- Guaranteed indexed tuple members retain their pack's universal category facts only where the effective minimum guarantees that key. Exact tuple-pack occurrences inside parameter containers also prove a positive minimum. Tuple equations are retained inside lists, dictionary values, nullable types and nested tuples without changing argument reading.
+- Left: key-preserving universal finite-membership and named-call inheritance for indexed members (#723); ordinary membership proof rows do not represent independent pack keys.
+- Left: positive existential constraints do not yet prove a nonempty pack for tuple indexing (#724).
+- Left: fixed tuple arity versus variadic tuple ranking is unresolved in hgl_spec#240; neither outranks the other solely by arity.
 - Left: named operator requirements bound by a quantifier.
 - An ordinary value context rejects the borrowed view from `schemas(pack)`.
 
@@ -205,6 +217,7 @@ analyser: partial
 - Generic arguments that are the same, each type canonical and each value one constant (UNIT-13), make one type or one instance, and arguments that differ another: of the worked fragment, `Scaled<1>`, `Scaled<1.0>` and `Scaled<1.00>` are one type, and a `Scaled<-0.0>` where a `Scaled<0.0>` is expected is `type.mismatch`
 - Calls and symbolic operations whose candidates become known in a graph instance contribute to the same bounded traversal of instances and their requirements (GEN-3, GEN-7).
 - "Where the instances of one declaration never end when the program is compiled, the program rejects": no more than `hgl_analyser::INSTANCES` (4096) instances of one declaration are followed from one call, by the analyser and by `hgl_lower`, and a call past that is `generic.instance_limit`, at the call that makes the first of them: the worked fragment's `climbed`; through constants worked out from the body's own parameters, and through a type that grows, `nest<list<T>>`
+- The forwarding walk uses the same argument size and nesting limits. It also reports `generic.instance_limit` at the initiating call after more than 64 increases in the pack width of one declaration along a path.
 - Left: a default that names anything else; the kind a constraint gives; `type(N)`; a call that supplies no type for a function's parameter its signature does not settle
 
 ## GEN-14
