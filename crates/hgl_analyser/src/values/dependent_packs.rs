@@ -598,18 +598,14 @@ impl Typer<'_> {
 
     /// Report a failed lookup after resolving a pack member's key (GEN-17).
     pub(super) fn pack_member_fault(&mut self, at: Location, fault: &MemberFault) {
-        let resolved_key = |key: &Constant| key.value.key().unwrap_or_else(|| key.text.clone());
         let (code, message) = match fault {
             MemberFault::Missing { pack, key } => (
                 codes::PACK_NAME,
-                format!("pack `{pack}` has no member under `{}`", resolved_key(key)),
+                format!("pack `{pack}` has no member under `{key}`"),
             ),
             MemberFault::KeyKind { key } => (
                 codes::TYPE_MISMATCH,
-                format!(
-                    "`{}` must be a compile-time `str` or `i64` pack key",
-                    resolved_key(key)
-                ),
+                format!("`{key}` must be a compile-time `str` or `i64` pack key"),
             ),
         };
         self.diagnostics

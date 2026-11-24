@@ -110,6 +110,23 @@ fn a_missing_positional_pack_key_reports_its_value() {
     );
 }
 
+/// GEN-17: a module constant keeps its written name in the diagnostic
+/// even when the compiler knows the value that failed the lookup.
+#[test]
+fn a_missing_module_pack_key_reports_its_name() {
+    let checked = module(concat!(
+        "const absent: str = \"z\"\n",
+        "const fn fetch<...As>(args: ...{As}) -> As[absent] => args[absent]\n",
+        "test missing { assert fetch(given: 1) == 1 }\n",
+    ));
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/pack.name");
+    assert_eq!(
+        checked.findings[0].message,
+        "pack `As` has no member under `absent`"
+    );
+}
+
 #[test]
 fn key_membership_reads_the_bound_key_as_a_value() {
     // GEN-17: key membership refers to the compile-time key that each binds.
