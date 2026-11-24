@@ -105,8 +105,8 @@ enum Command {
     /// Run an application of a program on a target, and print its
     /// output.
     Run(RunArgs),
-    /// Internal process entry that takes a parent-death signal before exec.
-    #[cfg(target_os = "linux")]
+    /// Internal process entry that passes the build lock to native jobs.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[command(hide = true)]
     NativeBuildChild {
         parent: u32,
@@ -462,7 +462,7 @@ fn main() -> ExitCode {
                 Target::Cpp => cpp::run(&arguments),
             })
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         Command::NativeBuildChild {
             parent,
             program,

@@ -2205,9 +2205,11 @@ lock through the build and until its last executable ends. A stop during
 preparation exits immediately. A first stop while waiting for a native tool
 lets that tool exit before the driver exits. A second stop exits immediately.
 Ninja inherits the workspace lock, and tools building the SDK runtime and
-precompiled header inherit the toolchain lock. On Linux those processes also
-receive a termination signal when `hgl` dies. On macOS a started build can
-finish under its inherited lock.
+precompiled header inherit the toolchain lock. A second descriptor keeps the
+lock available to jobs after Ninja replaces their standard input. On Linux
+the tools started by the driver receive a termination signal when `hgl`
+dies. On macOS the tools run in a separate process group, so CMake can
+finish its jobs under its inherited lock after a terminal stop.
 
 `hgl build ROOT...` checks the program, writes the generated files
 and builds its units and application executables. `--tests` builds a
@@ -2614,7 +2616,7 @@ the job the way the design needs is dropped.
 | `blake3` | `hgl_cli` | content fingerprints for native build reuse |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
 | `ctrlc` | `hgl_cli` | handles stops during preparation, native builds and application execution |
-| `nix` | `hgl_cli` on Linux | delivers a termination signal to a native build tool if the build driver dies |
+| `nix` | `hgl_cli` on Linux and macOS | passes the build lock to native jobs and sets the parent-death signal on Linux |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `pulldown-cmark` | `hgl_parser`, `hgl_doc` | CommonMark fenced block ranges and HTML rendering of documentation comments |
