@@ -2387,8 +2387,9 @@ fn let_bound_packs_run_on_the_sdk() {
     );
 }
 
-/// MAP-1, RED-1, RED-4 and RED-5: Core declares the native forms and
-/// C++ reports the work still tracked by #370.
+/// MAP-1, RED-1, RED-4 and RED-5: C++ reports the remaining native forms.
+/// A capture-free ordered fold is written, and FN-14 permits the captured
+/// callback even though the engine cannot wire it in an ordered reduction.
 #[test]
 fn native_mapping_forms_decline_cpp_emission() {
     let root = scratch("native-mapping-forms");
@@ -2405,6 +2406,8 @@ export fn keyed_map(values: dict<str, i64>, selected: set<str>) -> dict<str, i64
 export fn growing_map(values: list<i64>) -> list<i64> => map(twice_for_map, values)
 export fn growing_tree(values: list<i64>) -> i64 => reduce(add_, values, 0)
 export fn ordered_growing(values: list<i64>) -> i64 => reduce(fold_digit, values, 0)
+export fn ordered_captured(values: list<i64>, bias: i64) -> i64 =>
+    reduce(fn(accumulated, member) => accumulated * 10 + member + bias, values, 0)
 export fn set_tree(values: set<i64>) -> i64 => reduce(add_, values, 0)
 export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values, 0)
 "#,
@@ -2420,6 +2423,14 @@ export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values,
     );
     let stderr = text(&emitted.stderr);
     assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("an ordered reduction with a captured callback"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("reduce(fold_digit, values, 0)"),
+        "{stderr}"
+    );
     assert_eq!(
         stderr.matches("error[build/target.unsupported]").count(),
         6,
