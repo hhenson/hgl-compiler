@@ -1666,6 +1666,9 @@ its instant and what was published, written as HGL writes a value where
 it has a way to. What the program logs and hgraph prints goes to standard
 error, as the run goes.
 
+The target executable writes `debug_print` lines to its own stream.
+`hgl run` and `hgl test` read publications and test outcomes from separate records.
+
 `eval` is a simulation, and `run` is in real time (RUN-3). An interrupt
 of `hgl run`, or a request for it to end, is the host's stop of a run in
 real time: `hgl` takes it and passes it on to the run, which ends as it
