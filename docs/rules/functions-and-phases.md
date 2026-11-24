@@ -281,7 +281,8 @@ parser: partial
 
 analyser: partial
 
-- Reads a parameter pack entry by a constant name or position. The instance supplies the entry type and reports `pack.name` for an absent key using the key's source spelling (GEN-17, UNIT-13). In a node the entry follows the temporal input's admission and lifecycle rules (TIME-1, TIME-4, TIME-5).
+- Reads a parameter pack entry by a constant name or position. The instance supplies the entry type and reports `pack.name` for an absent key using the key's source spelling (GEN-17, UNIT-13).
+- In a hook, the entry follows ordinary input admission and lifecycle rules (TIME-1, TIME-4, TIME-5) and reads the whole payload of an atomic or the list held by a window (TYPE-9, TYPE-11).
 - Keeps an entry read pending when its constant key needs an unrolled range pass (CTRL-16) or a module constant the compiler has not evaluated (UNIT-13). C++ declines the pending read.
 - Resolves spreads of parameter packs when the enclosing callable is instantiated. Written arguments bind first, then named entries, then positional entries fill the remaining parameter slots in order.
 - Checks function, operator and static callback arguments with the ordinary call diagnostics (EXPR-2) and uses the names written by a callback template (FN-17).

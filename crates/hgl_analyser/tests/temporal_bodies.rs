@@ -131,6 +131,27 @@ fn a_packed_input_payload_read_needs_admission() {
     );
 }
 
+/// FN-19, TYPE-9 and TYPE-11: a packed input reads as its ordinary
+/// payload in a hook. Composition supplies the original endpoint type.
+#[test]
+fn packed_hook_inputs_read_their_payload_types() {
+    let checked = module(concat!(
+        "fn atomic_read(items: ...atomic<list<i64>>) -> list<i64> {\n",
+        "    when { return items[0] }\n",
+        "}\n",
+        "fn window_read(items: ...rolling_window<i64, 2, 1>) -> list<i64> {\n",
+        "    when { return items[0] }\n",
+        "}\n",
+        "fn scalar_read(items: ...i64) -> i64 {\n",
+        "    when { return items[0] }\n",
+        "}\n",
+        "fn atomic_entry(a: atomic<list<i64>>, b: atomic<list<i64>>) -> list<i64> => atomic_read(a, b)\n",
+        "fn window_entry(a: rolling_window<i64, 2, 1>, b: rolling_window<i64, 2, 1>) -> list<i64> => window_read(a, b)\n",
+        "fn scalar_entry(a: i64, b: i64) -> i64 => scalar_read(a, b)\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+}
+
 /// TIME-1 and GEN-7: a fixed list read whole needs all-valid admission
 /// even when the entry type is supplied by a pack instance.
 #[test]

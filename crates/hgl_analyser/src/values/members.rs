@@ -9,7 +9,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::Typer;
 use super::constants::constant_text;
 use super::dependent_packs::MemberFault;
-use super::fit::{not_null, open, whole};
+use super::fit::{hook_payload_type, not_null, open, whole};
 use super::forms::received_type;
 use super::inference::{fixed, placed, type_pack};
 use super::results::{captured_output, proof_binding};
@@ -365,15 +365,18 @@ impl<'a> Typer<'a> {
         {
             let (kind, ty) = self.pack_entry(pack, &index);
             let at = self.at(node);
-            if !matches!(kind, ExprKind::Unread)
-                && self.is_temporal_input(pack)
-                && self.naming != Some(self.at(&root))
-            {
+            let input = self.is_temporal_input(pack);
+            if !matches!(kind, ExprKind::Unread) && input && self.naming != Some(self.at(&root)) {
                 // FN-19 selects one input. In a hook its payload has
                 // the same admission and lifecycle requirements (TIME-1,
                 // TIME-4, TIME-5) as a non-packed input.
                 self.input_read(pack, at, super::children::read_whole_all_valid(&ty));
             }
+            let ty = if input && self.hook.is_some() {
+                hook_payload_type(&ty)
+            } else {
+                ty
+            };
             return (kind, ty);
         }
         let base = self.expression(&base, None);
