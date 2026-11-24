@@ -1446,8 +1446,8 @@ fn timing_runs_on_the_sdk() {
     );
 }
 
-/// TYPE-12 and UNIT-8: parameters and configuration observe the ticks of
-/// a signal connection. An omitted signal stays silent when forwarded.
+/// TYPE-12, FN-19 and UNIT-8: parameters, configuration and pack
+/// connections observe signal ticks. An omitted signal stays silent.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn signal_inputs_run_on_the_sdk() {
@@ -1469,7 +1469,7 @@ fn signal_inputs_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
