@@ -2345,7 +2345,13 @@ pub(super) fn instances_hold(
                     .bodies
                     .get(position)
                     .and_then(Option::as_ref)
-                    .is_some_and(|body| crate::formatting::has_dependent_formatting(program, body))
+                    .is_some_and(|body| {
+                        crate::formatting::has_dependent_formatting(
+                            program,
+                            (index, position),
+                            body,
+                        )
+                    })
             {
                 dependent_patterns.insert((index, position));
             }
@@ -2923,24 +2929,14 @@ pub(super) fn instances_hold(
                 at,
             } in calls
             {
-                let deep = generics.iter().any(
-                    |argument| matches!(argument, Argument::Type(ty) if nesting(ty) > NESTING),
-                );
-                if deep
-                    || type_packs
-                        .iter()
-                        .flat_map(|pack| &pack.types)
-                        .any(|ty| nesting(ty) > NESTING)
-                {
+                let Some(key) = bounded_instance_key(callee, &generics, &type_packs, &answers)
+                else {
                     exhausted = true;
                     break;
-                }
-                let key = generic_instance_key(callee, &generics, &type_packs, &answers);
+                };
                 // Traversal budgets leave an input unread. A concrete text
                 // that outgrows its argument budget exhausts this walk.
-                if key.len() > ARGUMENTS
-                    || constants.limit == Some(crate::ConstInputFault::TextLimit)
-                {
+                if constants.limit == Some(crate::ConstInputFault::TextLimit) {
                     exhausted = true;
                     break;
                 }
@@ -3259,6 +3255,27 @@ fn instance_key(
         generic_instance_key(callee, generics, type_packs, answers),
         constants,
     )
+}
+
+/// The generic part of an instance's identity, within the GEN-13 walk's bounds.
+pub(crate) fn bounded_instance_key(
+    callee: (usize, usize),
+    generics: &[Argument],
+    type_packs: &[hir::TypePackArgument],
+    answers: &[hir::Answer],
+) -> Option<String> {
+    if generics
+        .iter()
+        .any(|argument| matches!(argument, Argument::Type(ty) if nesting(ty) > NESTING))
+        || type_packs
+            .iter()
+            .flat_map(|pack| &pack.types)
+            .any(|ty| nesting(ty) > NESTING)
+    {
+        return None;
+    }
+    let key = generic_instance_key(callee, generics, type_packs, answers);
+    (key.len() <= ARGUMENTS).then_some(key)
 }
 
 fn generic_instance_key(

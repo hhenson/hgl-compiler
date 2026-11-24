@@ -2172,6 +2172,16 @@ pub(crate) struct Selecting {
     tag_test: Option<InstanceTagTest>,
 }
 
+impl Selecting {
+    /// The written argument that fills this parameter before selection.
+    pub(crate) fn argument_for(&self, signature: &Signature, slot: usize) -> Option<&Expr> {
+        self.arguments
+            .iter()
+            .find(|given| given.key.public_parameter(signature) == Some(slot))
+            .map(|given| &given.value)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct InstanceTagTest {
     success: bool,
