@@ -5,6 +5,7 @@
 //!
 //! | HGL | C++ |
 //! | --- | --- |
+//! | A `signal` or `signal?` input (TYPE-12, TYPE-14) | hgraph's payload-free `SIGNAL` |
 //! | `price`, a temporal input read in a hook (TIME-1) | its temporal form's checked read of the view, `::hglrt::checked_value(price)` for a scalar |
 //! | `key`, a `const` parameter read in a hook | `key.value()`, the node's `hgraph::Scalar` |
 //! | `valid(a)`, `valid(a, b)`, `valid()`, `valid([])` (END-1) | `::hglrt::fn_valid(a)`, each of them, every temporal input, `true` |
@@ -175,6 +176,12 @@ fn bound_child(value: &Expr) -> bool {
 }
 
 impl Family for Endpoints {
+    fn schema(&self, _emitter: &mut Emitter<'_>, ty: &Type) -> Option<String> {
+        // TYPE-12: a signal only observes ticks. TYPE-14: the optional mark
+        // affects omission and leaves the schema unchanged.
+        matches!(ty.omission_removed(), Type::Signal).then(|| "::hgraph::SIGNAL".to_string())
+    }
+
     fn expression(
         &self,
         emitter: &mut Emitter<'_>,
