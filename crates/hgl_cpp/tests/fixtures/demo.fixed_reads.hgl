@@ -1,0 +1,43 @@
+module demo.fixed_reads
+
+# FN-1: a fixed value's field and constant-index entry are fixed reads.
+struct Settings {
+    pattern: str
+    width: i64
+}
+
+const SETTINGS: Settings = Settings(pattern: "x", width: 3)
+const CHOICES: tuple<i64, i64> = (0, 1)
+const DISPLAY: Settings = Settings(pattern: "<{}>", width: 3)
+const fn take(const p: str) -> str => p
+
+const fn from_parameter(const settings: Settings) -> str => take(settings.pattern)
+const fn from_pair(const pair: tuple<str, i64>) -> str => take(pair[0])
+const fn from_constant() -> str => take(SETTINGS.pattern)
+const fn from_nested(const pair: tuple<Settings, i64>) -> str => take(pair[0].pattern)
+const fn from_list(const values: list<str>) -> str => take(values[CHOICES[1]])
+const fn from_dictionary(const values: dict<str, str>) -> str => take(values["key"])
+
+# FMT-1: a check that needs the projected value reads it in the instance.
+const fn format_field(const settings: Settings, value: i64) -> str => format(settings.pattern, value)
+const fn format_entry(const pair: tuple<str, i64>, value: i64) -> str => format(pair[0], value)
+
+test fixed_projections {
+    assert from_parameter(Settings(pattern: "field", width: 5)) == "field"
+    assert from_pair(("pair", 2)) == "pair"
+    assert from_constant() == "x"
+    assert from_nested((Settings(pattern: "nested", width: 7), 8)) == "nested"
+    assert from_list(["first", "second"]) == "second"
+    assert from_dictionary(["key": "entry"]) == "entry"
+}
+
+test projected_formats {
+    assert format_field(DISPLAY, 42) == "<42>"
+    assert format_entry(("{:x}", 3), 42) == "2a"
+    assert format(DISPLAY.pattern, 42) == "<42>"
+}
+
+test wrong_projected_format {
+    # expect-error(type, "format.specifier")
+    assert format_entry(("{:f}", 3), 42) == ""
+}
