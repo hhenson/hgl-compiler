@@ -1089,6 +1089,19 @@ fn documentation_navigation_associates_external_candidates_and_signature_types()
             "{signature}"
         );
     }
+    // SDOC-4: implicit and numbered enum members declare their name;
+    // a reference in a field default still points to the enum member.
+    for name in ["buy", "sell"] {
+        let signature = types
+            .split(&format!("<h5>{name}</h5>"))
+            .nth(1)
+            .unwrap()
+            .split("</pre>")
+            .next()
+            .unwrap();
+        assert!(!signature.contains("<a "), "{signature}");
+    }
+    assert!(types.contains("href=\"#decl-sell-2\">Side.sell</a>"));
     internal_link_targets_exist(&site, &snapshot(&site));
     let private = root.path().join("private");
     write_site(root.path(), &source, &["--private", "--out", "private"]);

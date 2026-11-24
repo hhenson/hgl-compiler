@@ -22,13 +22,17 @@ pub(crate) fn render(text: &str, link: impl Fn(&str) -> Option<String>) -> Strin
     let mut header = tokens
         .iter()
         .filter(|token| !token.kind.is_trivia() && token.kind != TokenKind::Newline);
+    let first = header.next().map(|token| token.kind);
+    let after = header.next().map(|token| token.kind);
+    // SDOC-4: an implicit enum member's entire header is its binding name.
+    if first == Some(TokenKind::Ident) && after.is_none() {
+        return escaped(text);
+    }
     // A field or enum member is retained without its enclosing type.
     // Parse it as a constant so its initializer keeps a syntax tree;
     // the synthetic prefix never enters the rendered text.
-    let (file, tokens, prefix) = if header.next().is_some_and(|t| t.kind == TokenKind::Ident)
-        && header
-            .next()
-            .is_some_and(|t| matches!(t.kind, TokenKind::Colon | TokenKind::Eq))
+    let (file, tokens, prefix) = if first == Some(TokenKind::Ident)
+        && after.is_some_and(|kind| matches!(kind, TokenKind::Colon | TokenKind::Eq))
     {
         let Ok(file) = sources.add("member-signature.hgl", format!("const {text}")) else {
             return escaped(text);

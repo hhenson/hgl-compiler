@@ -49,3 +49,7 @@ export struct Totals {
         acc
     }
 }
+export const buy: i64 = 4
+export const sell: i64 = 5
+export enum Side { buy = 0, sell }
+export struct Selection { side: Side = Side.sell }
