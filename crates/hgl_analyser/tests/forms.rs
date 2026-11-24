@@ -204,6 +204,41 @@ fn a_candidate_result_honours_its_operator() {
     assert!(checked.rejected);
 }
 
+/// GEN-6 and GEN-10: an exact homogeneous candidate pack supplies the
+/// public tuple's element types even when it is nested in a result.
+#[test]
+fn a_homogeneous_candidate_binds_its_operator_tuple_pack() {
+    let checked = module(concat!(
+        "operator pair<...Ts>(values: ...Ts) -> tuple<Ts>\n",
+        "impl const fn pair(values: ...i64{2}) -> tuple<i64, i64> => (1, 2)\n",
+        "operator nested<...Ts>(values: ...Ts) -> list<tuple<bool, Ts>>\n",
+        "impl const fn nested(values: ...i64{2}) -> list<tuple<bool, i64, i64>> => [(true, 1, 2)]\n",
+        "test pair_value { assert pair(10, 20) == (1, 2) }\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// GEN-6 and GEN-10: a fixed homogeneous pack determines both the
+/// result's tuple length and the type of each element.
+#[test]
+fn a_homogeneous_candidate_rejects_incompatible_tuple_results() {
+    let checked = module(concat!(
+        "operator short<...Ts>(values: ...Ts) -> tuple<Ts>\n",
+        "impl const fn short(values: ...i64{2}) -> tuple<i64> => (1,)\n",
+        "operator mixed<...Ts>(values: ...Ts) -> tuple<Ts>\n",
+        "impl const fn mixed(values: ...i64{2}) -> tuple<i64, f64> => (1, 2.0)\n",
+    ));
+    assert_eq!(checked.findings.len(), 2, "{}", checked.report);
+    for finding in &checked.findings {
+        assert_eq!(finding.code, "operator/impl.result", "{}", checked.report);
+        assert!(
+            finding.message.ends_with("result `tuple<i64, i64>`"),
+            "{}",
+            checked.report
+        );
+    }
+}
+
 /// GEN-6: a candidate has a result when its operator has one.
 #[test]
 fn a_candidate_declares_a_result_exactly_when_its_operator_does() {
