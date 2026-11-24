@@ -23,7 +23,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::Write as _;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -41,38 +41,62 @@ use super::{
 /// The file a workspace's lock is taken on.
 const LOCK: &str = ".hgl-lock";
 
-const BUILDING: u8 = 0;
-const INTERRUPTED: u8 = 1;
-const FINISHED: u8 = 2;
+const PREPARING: u8 = 0;
+const WAITING: u8 = 1;
+const INTERRUPTED: u8 = 2;
+const FINISHED: u8 = 3;
+const INTERRUPTED_BUILD: &str = "the build was interrupted";
 
 /// A stop requested during a build. The process waits for its native
-/// child before releasing the workspace lock and leaves no stamp.
+/// child on the first request, before releasing the workspace lock.
+#[derive(Default)]
 pub(super) struct Interrupt(Arc<AtomicU8>);
 
 impl Interrupt {
     /// The command's one handler routes a stop to its build until it can
     /// publish a stamp, and to the application after that point.
     pub(super) fn watch(stop: Option<Stop>) -> Result<Self, String> {
-        let state = Arc::new(AtomicU8::new(BUILDING));
-        let signal = Arc::clone(&state);
+        let interrupt = Self::default();
+        let signal = Arc::clone(&interrupt.0);
         ctrlc::set_handler(move || {
-            if signal.compare_exchange(BUILDING, INTERRUPTED, Ordering::SeqCst, Ordering::SeqCst)
-                == Err(FINISHED)
-            {
-                if let Some(stop) = &stop {
-                    stop.ask();
-                } else {
-                    std::process::exit(130);
+            let previous = signal.try_update(Ordering::SeqCst, Ordering::SeqCst, |state| {
+                matches!(state, PREPARING | WAITING).then_some(INTERRUPTED)
+            });
+            match previous {
+                Ok(WAITING) => {}
+                Err(FINISHED) => {
+                    if let Some(stop) = &stop {
+                        stop.ask();
+                    } else {
+                        std::process::exit(130);
+                    }
+                }
+                _ => {
+                    eprintln!("hgl: {INTERRUPTED_BUILD}");
+                    std::process::exit(i32::from(crate::EXIT_FAILED));
                 }
             }
         })
         .map_err(|error| format!("the interrupt handler could not be started: {error}"))?;
-        Ok(Self(state))
+        Ok(interrupt)
+    }
+
+    /// Starts one native child and collects its output. Only this wait
+    /// gets a first request to finish before the driver stops.
+    pub(super) fn output(&self, command: &mut Command) -> io::Result<std::process::Output> {
+        self.0
+            .compare_exchange(PREPARING, WAITING, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, INTERRUPTED_BUILD))?;
+        let output = command.output();
+        let _ = self
+            .0
+            .compare_exchange(WAITING, PREPARING, Ordering::SeqCst, Ordering::SeqCst);
+        output
     }
 
     pub(super) fn check(&self) -> Result<(), String> {
         if self.0.load(Ordering::SeqCst) == INTERRUPTED {
-            Err("the build was interrupted".to_string())
+            Err(INTERRUPTED_BUILD.to_string())
         } else {
             Ok(())
         }
@@ -81,9 +105,9 @@ impl Interrupt {
     /// Allows publication only if no stop was requested during the build.
     pub(super) fn finish(&self) -> Result<(), String> {
         self.0
-            .compare_exchange(BUILDING, FINISHED, Ordering::SeqCst, Ordering::SeqCst)
+            .compare_exchange(PREPARING, FINISHED, Ordering::SeqCst, Ordering::SeqCst)
             .map(|_| ())
-            .map_err(|_| "the build was interrupted".to_string())
+            .map_err(|_| INTERRUPTED_BUILD.to_string())
     }
 }
 
@@ -301,6 +325,7 @@ impl Workspace {
         tests: bool,
         jobs: Option<&str>,
         previous: Option<&Stamp>,
+        interrupt: &Interrupt,
     ) -> Result<Vec<String>, String> {
         let mut targets: Vec<_> = output
             .units
@@ -335,7 +360,7 @@ impl Workspace {
         );
         if !targets.is_empty() {
             Stamp::remove_unverified(previous, self, &artifacts)?;
-            self.build_targets(ninja, &targets, jobs)?;
+            self.build_targets(ninja, &targets, jobs, interrupt)?;
         }
         Ok(artifacts)
     }
@@ -349,6 +374,7 @@ impl Workspace {
         stems: &BTreeSet<&str>,
         jobs: Option<&str>,
         previous: Option<&Stamp>,
+        interrupt: &Interrupt,
     ) -> Result<Vec<String>, String> {
         let mut targets = Vec::new();
         let mut artifacts = BTreeSet::new();
@@ -372,7 +398,7 @@ impl Workspace {
         let artifacts: Vec<_> = artifacts.into_iter().collect();
         if !targets.is_empty() {
             Stamp::remove_unverified(previous, self, &artifacts)?;
-            self.build_targets(ninja, &targets, jobs)?;
+            self.build_targets(ninja, &targets, jobs, interrupt)?;
         }
         Ok(artifacts)
     }
@@ -383,15 +409,15 @@ impl Workspace {
         ninja: &Path,
         targets: &[String],
         jobs: Option<&str>,
+        interrupt: &Interrupt,
     ) -> Result<(), String> {
         let mut command = native_command(ninja, &self._lock)?;
         command.arg("-C").arg(&self.directory).arg("-k").arg("0");
         if let Some(jobs) = jobs {
             command.arg("-j").arg(jobs);
         }
-        let finished = command
-            .args(targets)
-            .output()
+        let finished = interrupt
+            .output(command.args(targets))
             .map_err(|error| format!("`{}` could not be started: {error}", ninja.display()))?;
         if finished.status.success() {
             return Ok(());
@@ -415,7 +441,7 @@ impl Workspace {
 
 /// A build process inherits the open workspace lock on its unused stdin.
 /// If hgl dies, the next build waits while the native process exits.
-fn native_command(program: &Path, lock: &fs::File) -> Result<Command, String> {
+pub(super) fn native_command(program: &Path, lock: &fs::File) -> Result<Command, String> {
     #[cfg(target_os = "linux")]
     let mut command = {
         let hgl = std::env::current_exe().map_err(|error| format!("cannot find hgl: {error}"))?;

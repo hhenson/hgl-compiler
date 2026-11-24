@@ -76,19 +76,21 @@ pub(super) struct BuiltProgram {
 }
 
 impl BuildSession {
-    pub(super) fn open(
+    fn open(
         roots: &[PathBuf],
         keep: Option<&Path>,
         debug: bool,
+        interrupt: &Interrupt,
     ) -> Result<Self, String> {
         let cache = build::cache()?;
         let workspace = Workspace::open(keep, roots, &cache, debug)?;
         let previous = PreviousBuild::read(&workspace);
         let found = if debug {
-            Toolchain::find_debug()
+            Toolchain::find_debug(interrupt)
         } else {
-            Toolchain::find()
+            Toolchain::find(interrupt)
         };
+        interrupt.check()?;
         let toolchain = match found {
             Ok(toolchain) => toolchain,
             Err(reason) => {
@@ -183,10 +185,14 @@ impl BuildSession {
     ) -> Result<Description, String> {
         interrupt.check()?;
         let ninja = self.toolchain.ninja()?;
-        let description =
-            self.toolchain
-                .prepare(&self.cache, &self.toolchain_key, self.jobs.as_deref())?;
+        let description = self.toolchain.prepare(
+            &self.cache,
+            &self.toolchain_key,
+            self.jobs.as_deref(),
+            interrupt,
+        );
         interrupt.check()?;
+        let description = description?;
         self.workspace
             .write(output, &description, program.tests.is_some())?;
         let previous = self.previous.as_ref().map(|previous| &previous.stamp);
@@ -194,11 +200,15 @@ impl BuildSession {
         let artifacts = match debug_tests {
             Some(stems) => self
                 .workspace
-                .build_debug_tests(ninja, output, stems, jobs, previous),
-            None => {
-                self.workspace
-                    .build_program(ninja, output, program.tests.is_some(), jobs, previous)
-            }
+                .build_debug_tests(ninja, output, stems, jobs, previous, interrupt),
+            None => self.workspace.build_program(
+                ninja,
+                output,
+                program.tests.is_some(),
+                jobs,
+                previous,
+                interrupt,
+            ),
         };
         interrupt.check()?;
         let mut artifacts = artifacts?;
@@ -242,7 +252,8 @@ pub(super) fn test(
         Ok(interrupt) => interrupt,
         Err(reason) => return commands::build_error(reason),
     };
-    let (inputs, session) = match commands::BuildRequest::tests(arguments).start(paths) {
+    let (inputs, session) = match commands::BuildRequest::tests(arguments).start(paths, &interrupt)
+    {
         Ok(commands::BuildStart::Hit(session, built)) => {
             let cases = built.program.tests.as_deref().unwrap_or_default();
             let ready = interrupt.finish();
