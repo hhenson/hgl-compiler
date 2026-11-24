@@ -6,7 +6,10 @@
 
 #include <fmt/compile.h>
 
+#include <cstddef>
 #include <ctime>
+#include <optional>
+#include <string_view>
 
 namespace hglrt {
 
@@ -34,6 +37,21 @@ str format_default(date value);
 str format_default(time value);
 str format_default(datetime value);
 str format_default(duration value);
+
+/// The checked fill, minimum width and alignment of a text field (FMT-4).
+struct TextPadding {
+    std::string_view fill;
+    std::size_t width;
+    char align;
+};
+
+/// Append a plain text field with width and precision in UTF-8 code points (FMT-4).
+void format_text(str& output, std::string_view value, TextPadding padding,
+                 std::optional<std::size_t> precision);
+
+/// Append FMT-5 float text with the field's FMT-4 sign and padding.
+void format_float_text(str& output, f64 value, TextPadding padding,
+                       std::optional<char> sign, bool zero);
 
 /// Write an HGL string literal for `{:?}` and compound members (FMT-4, FMT-5).
 str format_quoted(std::string_view value);

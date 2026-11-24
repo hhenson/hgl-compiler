@@ -751,10 +751,10 @@ fn concrete_const_inputs_reach_a_forwarding_body() {
     );
 }
 
-/// FMT-5: the selected conversion must consume the whole value and
-/// yield `str`, including when a native collection converts its parts.
+/// FMT-5: use the nullable payload's text conversion where present.
+/// Other fields and collection members still need a conversion to `str`.
 #[test]
-fn formatting_requires_a_conversion_of_the_whole_argument_to_text() {
+fn formatting_checks_conversions_of_values_and_nullable_payloads() {
     let checked = with_core(concat!(
         "const fn number(x: i64?) -> str => format(\"{}\", x)\n",
         "const fn optional_list(x: list<i64>?) -> str => format(\"{}\", x)\n",
@@ -765,8 +765,6 @@ fn formatting_requires_a_conversion_of_the_whole_argument_to_text() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:2:49 operator/operator.no_candidate FMT-5",
-            "m.hgl:3:62 operator/operator.no_candidate FMT-5",
             "m.hgl:4:42 operator/operator.no_candidate FMT-5",
             "m.hgl:5:54 operator/operator.no_candidate FMT-5",
             "m.hgl:6:60 operator/operator.no_candidate FMT-5",
