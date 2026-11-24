@@ -89,6 +89,12 @@ A warm build, test or run starts the selected C++ compiler once with
 toolchain and verifies the stamped artifacts by content. The HGL front end
 and Ninja are skipped when that check succeeds.
 
+A reused `hgl build --out DIR` directory may retain generated C++ sources,
+headers, objects and executables from earlier builds. This includes test
+artifacts after a plain build and files for modules removed from the sources.
+The `build.ninja` manifest and `hgl build --format json` inventory identify
+the units and executables in the current build.
+
 Reuse assumes that the SDK and dependency prefixes are fixed installations.
 The key includes the prefixes and hashes the SDK version file and its runtime
 and wiring libraries. Use a fresh native cache and workspace after updating
