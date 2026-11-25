@@ -242,3 +242,21 @@ fn kind() -> bool => type(temporal(1)) == type(1)
     });
     assert!(found_payload);
 }
+
+/// TYPE-18 and GEN-8: the early query probe cannot turn an ill-typed
+/// tuple into a Type constant merely because its outer tuple type is known.
+#[test]
+fn an_ill_typed_early_query_is_not_a_type_constant() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"
+module m
+const fn selected<const K: Type>() -> Type => K
+const fn wrong_operand() -> Type => selected<type((1, 1 + true))>()
+test valid_tuple { let known = selected<type((1, true))>() }
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/generic.argument_constant");
+    assert!(checked.findings[0].message.contains("`K`"));
+}

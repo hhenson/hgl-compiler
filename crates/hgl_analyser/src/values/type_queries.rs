@@ -65,5 +65,7 @@ pub(crate) fn query_type(program: &Program, file: FileId, query: &SyntaxNode) ->
     );
     let operand = query.children().next()?;
     let ty = typer.expression(&operand, None).ty;
-    (ty != Type::Unknown).then_some(ty)
+    // TYPE-18 still checks the operand. A partially known aggregate
+    // produced alongside a type error is no compiled Type constant.
+    (!typer.diagnostics.has_errors() && ty != Type::Unknown).then_some(ty)
 }
