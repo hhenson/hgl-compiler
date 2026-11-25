@@ -195,8 +195,14 @@ struct ForwardedKeys<'a> {
     program: &'a Program,
     instances: &'a Instances,
     store: Type,
-    path: Vec<((usize, usize), Vec<Option<Expr>>)>,
+    path: Vec<ForwardedCall>,
     remaining: Cell<usize>,
+}
+
+#[derive(PartialEq)]
+struct ForwardedCall {
+    declaration: (usize, usize),
+    fixed: Vec<Option<Expr>>,
 }
 
 impl ForwardedKeys<'_> {
@@ -272,15 +278,22 @@ impl ForwardedKeys<'_> {
                 }
             })
             .collect();
-        let identity = (module, declaration);
-        if self.path.contains(&(identity, fixed.clone())) {
+        let call = ForwardedCall {
+            declaration: (module, declaration),
+            fixed,
+        };
+        if self.path.contains(&call) {
             return Ok(());
         }
-        if self.path.iter().any(|(earlier, _)| *earlier == identity) {
+        if self
+            .path
+            .iter()
+            .any(|earlier| earlier.declaration == call.declaration)
+        {
             return Err(at);
         }
-        self.path.push((identity, fixed));
-        let fixed = self.path.last().expect("current store-key call").1.clone();
+        let fixed = call.fixed.clone();
+        self.path.push(call);
         let mut result = Ok(());
         walk_statements(&body.statements, &mut |expression| {
             let ExprKind::Call {

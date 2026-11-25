@@ -1210,12 +1210,7 @@ const C: Settings = Settings(part: ("a", -0.0), count: 1)
             let module = &program.modules[0];
             let declaration = module.scope[name][0];
             let constant = module.constants[declaration].as_ref().unwrap();
-            let mut reader = Reader {
-                program: &program,
-                steps_left: INPUT_BUDGET,
-                text_left: INPUT_BUDGET,
-                reading: Vec::new(),
-            };
+            let mut reader = Reader::new(&program);
             let value = reader.read(&constant.value, INPUT_DEPTH, &[]).unwrap();
             let mut output = String::new();
             key_value(&value, &mut output).unwrap();
