@@ -144,6 +144,65 @@ fn nested_nullable_guards_fit_the_reading_budget() {
     }
 }
 
+/// EXPR-6 and ERR-12: each nested level uses the binding its guard refines.
+/// Probing the graph's categories must not recursively replay scalar flow.
+#[test]
+fn nested_scalar_guarded_reads_fit_the_reading_budget() {
+    // Match the analyser stack used by `hgl`; these 24 levels contain
+    // two connectives apiece, beyond the default Rust test thread's stack.
+    std::thread::Builder::new()
+        .stack_size(hgl_analyser::stack_size(hgl_parser::Limits::default()))
+        .spawn(|| {
+            let parameters = (0..24)
+                .map(|index| format!("const a{index}: i64?"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            for shape in 0..3 {
+                let mut expression = if shape == 1 {
+                    (0..24)
+                        .map(|index| format!("positive(a{index})"))
+                        .collect::<Vec<_>>()
+                        .join(" && ")
+                } else {
+                    "true".to_string()
+                };
+                for index in (0..24).rev() {
+                    expression = match shape {
+                        1 => format!("a{index} != null && ({expression})"),
+                        2 if index % 2 == 1 => {
+                            format!("a{index} == null || (positive(a{index}) && ({expression}))")
+                        }
+                        _ => format!("a{index} != null && (positive(a{index}) && ({expression}))"),
+                    };
+                }
+                let checked = module(&format!(
+                    "const fn positive(value: i64) -> bool => value > 0\n\
+                     fn nested({parameters}) -> bool => {expression}\n"
+                ));
+                assert_eq!(checked.summary(), NONE, "{}", checked.report);
+            }
+        })
+        .expect("the analysis thread starts")
+        .join()
+        .expect("nested guarded reads check");
+}
+
+/// FN-3, FN-6 and EXPR-6: an outer connection retains its category while a
+/// scalar subtree refines its own binding; value code keeps short-circuit flow.
+#[test]
+fn scalar_guarded_subtrees_keep_their_flow_inside_temporal_logic() {
+    let checked = module(concat!(
+        "const fn positive(value: i64) -> bool => value > 0\n",
+        "const fn as_value(value: i64?) -> bool => value != null && positive(value)\n",
+        "fn as_scalar(const value: i64?) -> bool => value != null && positive(value)\n",
+        "fn mixed(tick: bool, const value: i64?) -> bool => \
+         tick && (value != null && positive(value))\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    assert!(recorded(&checked, body(&checked, "mixed"))[0].ends_with(": connection lifted"));
+    assert!(recorded(&checked, body(&checked, "as_scalar"))[0].ends_with(": value"));
+}
+
 /// FN-6: a value helper "with temporal arguments in composition is
 /// lifted ... All-scalar calls execute directly and invent no source
 /// timing". A temporal function's call is the node or the graph itself,

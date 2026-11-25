@@ -373,7 +373,17 @@ impl<'a> Typer<'a> {
     ) -> (ExprKind, Type) {
         let mark = self.mark();
         let reported = mark.diagnostics;
-        let given: Vec<_> = operands
+        let probing = self.probing_logic;
+        // EXPR-6: learn the whole tree's categories without recursively
+        // retrying each inner connective's scalar flow. The real read below
+        // keeps the graph phase and supplies each short-circuit path's facts.
+        let nested_logic = operands.iter().any(|operand| {
+            operand
+                .descendants()
+                .any(|part| logical_operator(&part).is_some())
+        });
+        self.probing_logic = true;
+        let mut given: Vec<_> = operands
             .into_iter()
             .enumerate()
             .map(|(position, node)| {
@@ -381,27 +391,43 @@ impl<'a> Typer<'a> {
                 Given::read(position, node, value)
             })
             .collect();
-        if let Form::Binary(operator) = form
-            && given
-                .iter()
-                .all(|given| self.category(&given.value) == ValueCategory::Value)
-            && (self.diagnostics.len() != reported
-                || !self.assigned.starts_with(&mark.assigned)
-                || self.returned != mark.returned
-                || self.guards_refine_later_operands(operator, &given))
-            && self.may_reread()
-        {
-            // Only reread when short-circuit flow can change the typing
-            // of a later operand. Plain nested Boolean expressions keep
-            // their first reading.
+        self.probing_logic = probing;
+        let scalar = given
+            .iter()
+            .all(|given| self.category(&given.value) == ValueCategory::Value);
+        let scalar_flow = match form {
+            Form::Binary(operator) if scalar => {
+                self.diagnostics.len() != reported
+                    || !self.assigned.starts_with(&mark.assigned)
+                    || self.returned != mark.returned
+                    || self.guards_refine_later_operands(operator, &given)
+            }
+            _ => false,
+        };
+        if !probing && (nested_logic || scalar_flow) && self.may_reread() {
             self.take_back(mark, false);
-            let mut nodes = given.into_iter().map(|given| given.node);
-            let first = nodes.next().expect("a Boolean connective has operands");
-            let first = self.expression(&first, Some(&BOOL));
-            let value = nodes.fold(first, |left, right| {
-                self.scalar_logic(operator, left, &right)
-            });
-            return (value.kind, BOOL);
+            if let Form::Binary(operator) = form
+                && scalar
+            {
+                let mut nodes = given.into_iter().map(|given| given.node);
+                let first = nodes.next().expect("a Boolean connective has operands");
+                let first = self.expression(&first, Some(&BOOL));
+                let value = nodes.fold(first, |left, right| {
+                    self.scalar_logic(operator, left, &right)
+                });
+                return (value.kind, BOOL);
+            }
+            // A temporal outer form still reads scalar subtrees with their
+            // own short-circuit facts, without letting those facts guard a
+            // separate temporal operand. Unary forms retain their usual read.
+            given = given
+                .into_iter()
+                .enumerate()
+                .map(|(position, given)| {
+                    let value = self.expression(&given.node, Some(&BOOL));
+                    Given::read(position, given.node, value)
+                })
+                .collect();
         }
         if self.diagnostics.len() != reported {
             return (self.unselected(given, form), BOOL);

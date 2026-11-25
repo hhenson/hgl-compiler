@@ -81,3 +81,152 @@ test mixed_guards {
         a18: 1, a19: 1, a20: 1, a21: 1, a22: 1, a23: -1
     ) == [false]
 }
+
+# EXPR-6, ERR-12: all 24 guards protect their own payload reads.
+fn reads_interleaved(
+    const a0: i64?, const a1: i64?, const a2: i64?,
+    const a3: i64?, const a4: i64?, const a5: i64?,
+    const a6: i64?, const a7: i64?, const a8: i64?,
+    const a9: i64?, const a10: i64?, const a11: i64?,
+    const a12: i64?, const a13: i64?, const a14: i64?,
+    const a15: i64?, const a16: i64?, const a17: i64?,
+    const a18: i64?, const a19: i64?, const a20: i64?,
+    const a21: i64?, const a22: i64?, const a23: i64?
+) -> bool =>
+    a0 != null && (positive(a0) && (a1 != null && (positive(a1) && (a2 != null && (positive(a2) &&
+    (a3 != null && (positive(a3) && (a4 != null && (positive(a4) && (a5 != null && (positive(a5) &&
+    (a6 != null && (positive(a6) && (a7 != null && (positive(a7) && (a8 != null && (positive(a8) &&
+    (a9 != null && (positive(a9) && (a10 != null && (positive(a10) && (a11 != null && (positive(a11)
+    && (a12 != null && (positive(a12) && (a13 != null && (positive(a13) && (a14 != null &&
+    (positive(a14) && (a15 != null && (positive(a15) && (a16 != null && (positive(a16) && (a17 !=
+    null && (positive(a17) && (a18 != null && (positive(a18) && (a19 != null && (positive(a19) &&
+    (a20 != null && (positive(a20) && (a21 != null && (positive(a21) && (a22 != null &&
+    (positive(a22) && (a23 != null && (positive(a23) &&
+    (true))))))))))))))))))))))))))))))))))))))))))))))))
+
+test reads_interleaved_run {
+    assert eval reads_interleaved(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: 1, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: 1, a19: 1, a20: 1, a21: 1, a22: 1, a23: 1
+    ) == [true]
+    assert eval reads_interleaved(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: null, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: 1, a19: 1, a20: 1, a21: 1, a22: 1, a23: 1
+    ) == [false]
+    assert eval reads_interleaved(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: 1, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: -1, a19: 1, a20: 1, a21: 1, a22: 1, a23: 1
+    ) == [false]
+}
+
+# EXPR-6, ERR-12: all 24 guards protect their own payload reads.
+fn reads_after_guards(
+    const a0: i64?, const a1: i64?, const a2: i64?,
+    const a3: i64?, const a4: i64?, const a5: i64?,
+    const a6: i64?, const a7: i64?, const a8: i64?,
+    const a9: i64?, const a10: i64?, const a11: i64?,
+    const a12: i64?, const a13: i64?, const a14: i64?,
+    const a15: i64?, const a16: i64?, const a17: i64?,
+    const a18: i64?, const a19: i64?, const a20: i64?,
+    const a21: i64?, const a22: i64?, const a23: i64?
+) -> bool =>
+    a0 != null && (a1 != null && (a2 != null && (a3 != null && (a4 != null && (a5 != null && (a6 !=
+    null && (a7 != null && (a8 != null && (a9 != null && (a10 != null && (a11 != null && (a12 !=
+    null && (a13 != null && (a14 != null && (a15 != null && (a16 != null && (a17 != null && (a18 !=
+    null && (a19 != null && (a20 != null && (a21 != null && (a22 != null && (a23 != null &&
+    (positive(a0) && positive(a1) && positive(a2) && positive(a3) && positive(a4) && positive(a5) &&
+    positive(a6) && positive(a7) && positive(a8) && positive(a9) && positive(a10) && positive(a11)
+    && positive(a12) && positive(a13) && positive(a14) && positive(a15) && positive(a16) &&
+    positive(a17) && positive(a18) && positive(a19) && positive(a20) && positive(a21) &&
+    positive(a22) && positive(a23)))))))))))))))))))))))))
+
+test reads_after_guards_run {
+    assert eval reads_after_guards(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: 1, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: 1, a19: 1, a20: 1, a21: 1, a22: 1, a23: 1
+    ) == [true]
+    assert eval reads_after_guards(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: null, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: 1, a19: 1, a20: 1, a21: 1, a22: 1, a23: 1
+    ) == [false]
+    assert eval reads_after_guards(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: 1, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: -1, a19: 1, a20: 1, a21: 1, a22: 1, a23: 1
+    ) == [false]
+}
+
+# EXPR-6, ERR-12: all 24 guards protect their own payload reads.
+fn reads_mixed(
+    const a0: i64?, const a1: i64?, const a2: i64?,
+    const a3: i64?, const a4: i64?, const a5: i64?,
+    const a6: i64?, const a7: i64?, const a8: i64?,
+    const a9: i64?, const a10: i64?, const a11: i64?,
+    const a12: i64?, const a13: i64?, const a14: i64?,
+    const a15: i64?, const a16: i64?, const a17: i64?,
+    const a18: i64?, const a19: i64?, const a20: i64?,
+    const a21: i64?, const a22: i64?, const a23: i64?
+) -> bool =>
+    a0 != null && (positive(a0) && (a1 == null || (positive(a1) && (a2 != null && (positive(a2) &&
+    (a3 == null || (positive(a3) && (a4 != null && (positive(a4) && (a5 == null || (positive(a5) &&
+    (a6 != null && (positive(a6) && (a7 == null || (positive(a7) && (a8 != null && (positive(a8) &&
+    (a9 == null || (positive(a9) && (a10 != null && (positive(a10) && (a11 == null || (positive(a11)
+    && (a12 != null && (positive(a12) && (a13 == null || (positive(a13) && (a14 != null &&
+    (positive(a14) && (a15 == null || (positive(a15) && (a16 != null && (positive(a16) && (a17 ==
+    null || (positive(a17) && (a18 != null && (positive(a18) && (a19 == null || (positive(a19) &&
+    (a20 != null && (positive(a20) && (a21 == null || (positive(a21) && (a22 != null &&
+    (positive(a22) && (a23 == null || (positive(a23) &&
+    (true))))))))))))))))))))))))))))))))))))))))))))))))
+
+test reads_mixed_run {
+    assert eval reads_mixed(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: 1, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: 1, a19: 1, a20: 1, a21: 1, a22: 1, a23: 1
+    ) == [true]
+    assert eval reads_mixed(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: null, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: 1, a19: 1, a20: 1, a21: 1, a22: 1, a23: 1
+    ) == [false]
+    assert eval reads_mixed(
+        a0: 1, a1: 1, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: 1, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: -1, a19: 1, a20: 1, a21: 1, a22: 1, a23: 1
+    ) == [false]
+    assert eval reads_mixed(
+        a0: 1, a1: null, a2: 1, a3: 1, a4: 1, a5: 1,
+        a6: 1, a7: 1, a8: 1, a9: 1, a10: 1, a11: 1,
+        a12: 1, a13: 1, a14: 1, a15: 1, a16: 1, a17: 1,
+        a18: -1, a19: 1, a20: 1, a21: 1, a22: 1, a23: 1
+    ) == [true]
+}
+
+# FN-3, FN-6 and EXPR-6: a temporal outer Boolean form keeps scalar flow inside.
+const fn value_guard(value: i64?) -> bool => value != null && positive(value)
+fn scalar_guard(const value: i64?) -> bool => value != null && positive(value)
+fn temporal_outer(tick: bool, const value: i64?) -> bool =>
+    tick && (value != null && positive(value))
+
+test phase_and_short_circuit_controls {
+    assert value_guard(null) == false
+    assert value_guard(1)
+    assert eval scalar_guard(value: null) == [false]
+    assert eval scalar_guard(value: 1) == [true]
+    assert eval temporal_outer(tick: [true, false], value: 1) == [true, false]
+    assert eval temporal_outer(tick: [true, false], value: null) == [false, false]
+}

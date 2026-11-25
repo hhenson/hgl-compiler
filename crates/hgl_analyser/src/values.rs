@@ -782,6 +782,9 @@ struct Typer<'a> {
     /// are met, and is cut back to where it stood when a branch or a
     /// block ends.
     present: Vec<Fact>,
+    /// Suppress nested scalar-flow retries while probing a Boolean tree
+    /// for value/connection categories (EXPR-6). Restored before its real read.
+    probing_logic: bool,
     /// TYPE-18: a cold operand asks for declared types, never local values.
     type_query: bool,
     /// The locals a capability has been bound to, each with the
@@ -1025,6 +1028,7 @@ impl<'a> Typer<'a> {
             out: None,
             designating: None,
             present: Vec::new(),
+            probing_logic: false,
             type_query: false,
             aliases: HashMap::new(),
             bound_children: HashMap::new(),
