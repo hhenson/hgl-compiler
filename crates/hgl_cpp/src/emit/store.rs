@@ -122,8 +122,17 @@ impl Keys {
         }
         let indent = INDENT.repeat(2);
         let mut checks = String::new();
+        // Read only the configuration the keys are made of.
+        let mut read_slots = HashSet::new();
+        for key in &self.values {
+            key.walk(&mut |part| {
+                if let ExprKind::Local(slot) = part.kind {
+                    read_slots.insert(slot);
+                }
+            });
+        }
         for (slot, parameter) in signature.parameters.iter().enumerate() {
-            if !parameter.constant {
+            if !parameter.constant || !read_slots.contains(&slot) {
                 continue;
             }
             let name = identifier(&body.locals[slot].name);
