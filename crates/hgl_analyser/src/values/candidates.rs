@@ -23,7 +23,7 @@ use super::inference::{
     bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
 };
 use super::lifting::preferred_call_role;
-use super::operators::unreadable;
+use super::operators::{core_dictionary_fallback, dictionary_fallback_type, unreadable};
 use super::requirements::{Condition, holds};
 use super::{Candidate, Typer};
 use crate::constant::Fault;
@@ -1294,6 +1294,11 @@ impl<'a> Typer<'a> {
         widening: bool,
         converting: bool,
     ) -> Admits {
+        if core_dictionary_fallback(self.program, module, candidate, signature)
+            && !exact_dictionary_fallback(signature, given, bound)
+        {
+            return Admits::Misfit;
+        }
         let result_fits = self.candidate_result_admits(wanted.place, signature.result.as_ref());
         // The operator's own requirement of its result.
         let among = match (&wanted.among, &signature.result) {
@@ -2228,6 +2233,9 @@ impl<'a> Typer<'a> {
             }
             return AtInstance::Selected(Box::new(chosen), given);
         }
+        if let Err(report) = self.dictionary_get_fallback(operator, public, &candidates, &given) {
+            return AtInstance::Rejected(*report);
+        }
         // Named as the operator is declared: a symbol stands for it.
         let name = &program.modules[operator.module].declarations[operator.declaration].name;
         AtInstance::Rejected(self.no_one_candidate(
@@ -2923,6 +2931,16 @@ pub(super) struct CallbackRequest<'w> {
     pub(super) values: &'w [CallbackOption<'w>],
     /// A reflected callback can leave these parameters for its caller (FN-8).
     pub(super) reflected: Option<&'w [&'w str]>,
+}
+
+/// ERR-6 requires a supplied fallback with the dictionary's exact value
+/// type. A literal can take its expected type under EXPR-5.
+fn exact_dictionary_fallback(signature: &Signature, given: &[Given], bound: &[Place]) -> bool {
+    given.iter().zip(bound).any(|(argument, place)| {
+        place.parameter() == Some(2)
+            && !written_null(&argument.node)
+            && dictionary_fallback_type(argument, &signature.parameters[2].ty)
+    })
 }
 
 /// A public option that a candidate may take under the same name.
