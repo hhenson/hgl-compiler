@@ -586,6 +586,18 @@ impl Typer<'_> {
         if admitted {
             return;
         }
+        // GEN-7: all_valid of an entry whose key needs the instance can
+        // admit its immediate child. Recheck the actual key in the instance.
+        if self.pack_inputs.is_none()
+            && path.entry.is_some()
+            && path.steps.len() == 1
+            && self.present.contains(&Fact::DeferredPackGuard {
+                pack: path.input,
+                all_valid: true,
+            })
+        {
+            return;
+        }
         self.diagnostics.emit(
             error(
                 Category::Phase,

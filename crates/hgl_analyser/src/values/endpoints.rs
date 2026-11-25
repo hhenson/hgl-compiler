@@ -9,6 +9,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::calls::arguments_of;
 use super::fit::{not_null, nullable, reads_cycle, whole};
+use super::inference::type_pack;
 use super::node::RefRead;
 use super::{BOOL, Fact, Typer, children};
 use crate::hir::{
@@ -388,6 +389,26 @@ impl<'a> Typer<'a> {
             .then_some((pack, base))
     }
 
+    /// Core's bound activity query names one packed direct input (TIME-9, FN-19).
+    pub(super) fn packed_activity(
+        &mut self,
+        name: &SyntaxToken,
+        argument: &SyntaxNode,
+        given: Option<&CallArguments>,
+    ) -> Option<(ExprKind, Type)> {
+        self.hook?;
+        let argument = endpoint_argument(argument);
+        self.pack_endpoint_base(&argument)?;
+        self.evaluating = false;
+        let (kind, ty) = self.packed_endpoint(
+            EndpointOperation::IsActive,
+            Location::new(self.file, name.span()),
+            std::iter::once(&argument),
+        );
+        self.endpoint_generics(name, given, &kind);
+        Some((kind, ty))
+    }
+
     /// The identity of a selected input. A declaration can know a written
     /// key before it knows the shape of that entry (FN-19, GEN-7).
     pub(super) fn pack_endpoint_selection(&self, value: &Expr) -> Option<PackEndpointSelection> {
@@ -440,6 +461,17 @@ impl<'a> Typer<'a> {
                 self.naming = before;
                 input.ty = match &input.kind {
                     ExprKind::PackEntry { key, .. } => self.packed_input_type(pack, Some(key)),
+                    // GEN-7: a heterogeneous pack's entries get their types in its instance.
+                    ExprKind::DeferredPackRead
+                        if operation == EndpointOperation::IsActive
+                            && type_pack(
+                                &self.signature.parameters[pack],
+                                &self.signature.generics,
+                            )
+                            .is_some() =>
+                    {
+                        None
+                    }
                     ExprKind::DeferredPackRead => self.packed_input_type(pack, None),
                     _ => None,
                 }
