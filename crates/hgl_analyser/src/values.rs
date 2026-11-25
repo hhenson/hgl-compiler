@@ -779,6 +779,9 @@ struct Typer<'a> {
     /// are met, and is cut back to where it stood when a branch or a
     /// block ends.
     present: Vec<Fact>,
+    /// Suppress nested scalar-flow retries while probing a Boolean tree
+    /// for value/connection categories (EXPR-6). Restored before its real read.
+    probing_logic: bool,
     /// The locals a capability has been bound to, each with the
     /// capability it is: `let bound = clock` (TIME-8: "Binding one to a
     /// `let` ... [is a use]"). The local is then the capability under
@@ -1020,6 +1023,7 @@ impl<'a> Typer<'a> {
             out: None,
             designating: None,
             present: Vec::new(),
+            probing_logic: false,
             aliases: HashMap::new(),
             bound_children: HashMap::new(),
             binding_child: None,
