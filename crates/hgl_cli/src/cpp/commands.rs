@@ -29,6 +29,7 @@ pub(super) struct BuildRequest<'a> {
     debug: bool,
     tests: bool,
     compile_commands: bool,
+    clean: bool,
     running: bool,
     limits: LimitArgs,
     replacements: Replacements<'a>,
@@ -57,6 +58,7 @@ impl<'a> BuildRequest<'a> {
             debug: false,
             tests: true,
             compile_commands: false,
+            clean: false,
             running: false,
             limits: arguments.limits,
             replacements: Replacements {
@@ -82,7 +84,7 @@ impl<'a> BuildRequest<'a> {
         inputs: &ProgramSources,
         interrupt: &Interrupt,
     ) -> Result<(BuildSession, String), String> {
-        let session = BuildSession::open(self.roots, self.keep, self.debug, interrupt)?;
+        let session = BuildSession::open(self.roots, self.keep, self.debug, self.clean, interrupt)?;
         self.with_key(session, inputs)
     }
 
@@ -100,7 +102,7 @@ impl<'a> BuildRequest<'a> {
         paths: Option<&[PathBuf]>,
         interrupt: &Interrupt,
     ) -> Result<BuildStart, ExitCode> {
-        let session = BuildSession::open(self.roots, self.keep, self.debug, interrupt);
+        let session = BuildSession::open(self.roots, self.keep, self.debug, self.clean, interrupt);
         interrupt.check().map_err(build_error)?;
         let inputs = match paths {
             Some(paths) => ProgramSources::read_paths(paths),
@@ -349,6 +351,7 @@ pub(crate) fn run(arguments: &RunArgs) -> ExitCode {
         debug: arguments.debug_build.is_some(),
         tests: false,
         compile_commands: false,
+        clean: false,
         running: true,
         limits: arguments.limits,
         replacements: Replacements {
@@ -404,8 +407,14 @@ fn legacy_debug(
         chosen.ok_or_else(|| build_error("the program has no application to run".into()))?;
     let app = runnable_application(&program, &chosen, true)?;
     let directory = debug_session(directory).map_err(build_error)?;
-    let session = BuildSession::open(request.roots, Some(directory.path()), true, &interrupt)
-        .map_err(build_error)?;
+    let session = BuildSession::open(
+        request.roots,
+        Some(directory.path()),
+        true,
+        false,
+        &interrupt,
+    )
+    .map_err(build_error)?;
     let key = session
         .key(&inputs, request.limits, &request.replacements)
         .map_err(build_error)?;
@@ -442,6 +451,7 @@ pub(crate) fn build(arguments: &BuildArgs) -> ExitCode {
         debug: arguments.debug,
         tests: arguments.tests,
         compile_commands: arguments.compile_commands,
+        clean: arguments.clean,
         running: false,
         limits: arguments.limits,
         replacements: Replacements {

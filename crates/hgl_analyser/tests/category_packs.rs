@@ -18,6 +18,416 @@ fn rejects(source: &str, code: &str) {
     );
 }
 
+#[test]
+fn bare_callback_uses_the_most_specific_declared_membership() {
+    // GEN-3 and FN-17: a direct function can declare the same evidence
+    // as an operator candidate. GEN-12 compares the nested list shape.
+    let source = r#"module m
+const entry: str = "x"
+operator twice<T>(x: T) -> T
+impl fn twice(x: i64) -> i64 => x * 2
+fn nested<R, ...Inputs, ...Actual>(f: fn(...{Inputs}) -> R, args: ...{Actual for f}) -> i64
+    requires each k in arg_keys(Actual) {
+        Actual[k] in {Inputs[k], list<Inputs[k], 2>, list<list<Inputs[k], 2>, 2>}
+    }
+    => 3
+fn single<R, ...Inputs, ...Actual>(f: fn(...{Inputs}) -> R, args: ...{Actual for f}) -> i64
+    requires (Actual[entry] in {Inputs[entry], list<Inputs[entry], 2>})
+    => 4
+fn positional(items: list<list<i64, 2>, 2>) -> i64 => nested(twice, items)
+fn named(items: list<i64, 2>) -> i64 => single(twice, x: items)
+"#;
+    accepts(source);
+}
+
+#[test]
+fn bare_callback_rejects_incomparable_member_types() {
+    // GEN-3 and GEN-12: either alternative fits the dictionary, but
+    // each constrains a different part and they give different types.
+    rejects(
+        r#"module m
+fn identity<T>(x: T) -> T => x
+fn select<R, ...Inputs, ...Actual>(f: fn(...{Inputs}) -> R, args: ...{Actual for f}) -> i64
+    requires each k in arg_keys(Actual) {
+        Actual[k] in {dict<Inputs[k], str>, dict<i64, Inputs[k]>}
+    }
+    => 3
+fn ambiguous(items: dict<i64, str>) -> i64 => select(identity, items)
+"#,
+        "type/generic.unresolved",
+    );
+}
+
+#[test]
+fn bare_map_callback_uses_declared_native_collection_members() {
+    // MAP-2 and FN-17: expanding a list or dictionary is a property of
+    // the admitted declarations, independent of their target support.
+    accepts(
+        r#"module m
+const fn identity<T>(x: T) -> T => x
+fn growing(values: list<i64>) -> list<i64> => map(add_, values, 2)
+fn keyed(values: dict<str, i64>) -> dict<str, i64> => map(identity, values)
+"#,
+    );
+}
+
+#[test]
+fn bare_callback_checks_every_input_of_a_shared_generic() {
+    // GEN-3 and FN-17: both arguments must agree on T. The second
+    // may stay whole when its member type conflicts with the first.
+    let source = r#"module m
+const fn first<T>(x: T, y: T) -> T => x
+fn mixed(x: list<list<i64, 2>, 2>, y: list<i64, 2>) -> list<list<i64, 2>, 2> =>
+"#;
+    accepts(&format!("{source}    map(first, x, y)"));
+    accepts(&format!("{source}    map(first<list<i64, 2>>, x, y)"));
+}
+
+#[test]
+fn bare_callback_uses_compatible_sibling_choices_in_either_declaration_order() {
+    // GEN-3 and FN-17: the receiver's result does not determine T.
+    // The sibling types resolve it consistently across the two inputs.
+    for alternatives in [
+        "Inputs[k], list<Inputs[k], 2>",
+        "list<Inputs[k], 2>, Inputs[k]",
+    ] {
+        let declarations = format!(
+            r#"module m
+const fn first<T>(x: T, y: T) -> T => x
+fn pass<R, ...Inputs, ...Actual>(f: fn(...{{Inputs}}) -> R, args: ...{{Actual for f}}) -> i64
+    requires each k in arg_keys(Actual) {{ Actual[k] in {{{alternatives}}} }} => 3
+"#
+        );
+        accepts(&format!(
+            "{declarations}fn mixed(x: list<list<i64, 2>, 2>, y: list<i64, 2>) -> i64 => pass(first, x, y)"
+        ));
+        rejects(
+            &format!(
+                "{declarations}fn mixed(x: list<list<i64, 2>, 2>, y: list<str, 2>) -> i64 => pass(first, x, y)"
+            ),
+            "type/generic.unresolved",
+        );
+        rejects(
+            &format!(
+                "{declarations}fn mixed(x: list<list<i64, 2>, 2>, y: list<str, 2>) -> i64 => pass(first, y, x)"
+            ),
+            "type/generic.unresolved",
+        );
+    }
+}
+
+#[test]
+fn bare_callback_rejects_incomparable_whole_call_choices() {
+    // GEN-3 and GEN-12: x prefers the list's element, but y admits
+    // two incomparable shapes that make different shared bindings fit.
+    rejects(
+        r#"module m
+const x_key: str = "x"
+const y_key: str = "y"
+const fn first<T>(x: T, y: T) -> T => x
+fn call<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires As[x_key] in {Ps[x_key], list<Ps[x_key], 2>}
+        && As[y_key] in {tuple<i64, Ps[y_key]>, tuple<Ps[y_key], list<i64, 2>>} => 3
+fn work(x: list<i64, 2>, y: tuple<i64, list<i64, 2>>) -> i64 => call(first, x, y)
+"#,
+        "type/generic.unresolved",
+    );
+}
+
+#[test]
+fn a_positive_sibling_equality_can_require_a_whole_argument() {
+    // GEN-3: the equality binds y to its whole list. Both callback
+    // parameters use T, so x must use its whole-list alternative too.
+    for equality in ["As[y_key] == Ps[y_key]", "Ps[y_key] == As[y_key]"] {
+        for operands in ["x, y", "y: y, x: x"] {
+            accepts(&format!(
+                r#"module m
+const x_key: str = "x"
+const y_key: str = "y"
+const fn first<T>(x: T, y: T) -> T => x
+fn keep<R, ...Ps, ...As>(f: fn(...{{Ps}}) -> R, args: ...{{As for f}}) -> i64
+    requires As[x_key] in {{Ps[x_key], list<Ps[x_key], 2>}} && {equality} => 3
+fn work(x: list<i64, 2>, y: list<i64, 2>) -> i64 => keep(first, {operands})
+"#,
+            ));
+        }
+    }
+}
+
+#[test]
+fn a_shared_key_can_require_a_whole_dictionary_in_either_argument_order() {
+    // GEN-3: v's equality decides K = str. The other pack member can
+    // fit the same K only by taking its dictionary whole.
+    let declarations = r#"module m
+const left: str = "v"
+const right: str = "w"
+const fn last<T>(v: f64, w: T) -> i64 => 7
+fn receiver<K, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires As[left] == dict<K, Ps[left]> && As[right] in {Ps[right], dict<K, Ps[right]>}
+    => 7
+"#;
+    for arguments in ["x, y", "w: y, v: x"] {
+        accepts(&format!(
+            "{declarations}fn sample(x: dict<str, f64>, y: dict<i64, f64>) -> i64 => receiver(last, {arguments})"
+        ));
+    }
+    accepts(&format!(
+        "{declarations}fn explicit(x: dict<str, f64>, y: dict<i64, f64>) -> i64 => receiver<str>(last<dict<i64, f64>>, x, y)"
+    ));
+}
+
+#[test]
+fn enclosing_key_equalities_can_require_a_whole_dictionary() {
+    // GEN-3: a forces K = str and the positive equality makes J the
+    // same key type. Both call orders must keep b's dictionary whole.
+    let shared = r#"module m
+const left: str = "a"
+const right: str = "b"
+const fn sample<T>(a: i64, b: T) -> i64 => a
+"#;
+    for (generics, equality) in [("K, J", "K == J"), ("K, J, Q", "Q == J && K == Q")] {
+        let signature = format!(
+            "choose<{generics}, R, ...Ps, ...As>(f: fn(...{{Ps}}) -> R, args: ...{{As for f}}) -> i64"
+        );
+        let requirements = format!(
+            "requires {equality} && As[left] == dict<K, Ps[left]> && As[right] in {{Ps[right], dict<J, Ps[right]>}}"
+        );
+        for declaration in [
+            format!("fn {signature}\n    {requirements} => 1"),
+            format!("operator {signature}\nimpl fn {signature}\n    {requirements} => 1"),
+        ] {
+            accepts(&format!(
+                r#"{shared}{declaration}
+fn control(x: dict<str, i64>, y: dict<i64, i64>) -> i64 => choose(sample<dict<i64, i64>>, x, y)
+fn infer(x: dict<str, i64>, y: dict<i64, i64>) -> i64 => choose(sample, x, y)
+fn reverse(x: dict<str, i64>, y: dict<i64, i64>) -> i64 => choose(sample, b: y, a: x)
+"#,
+            ));
+        }
+    }
+}
+
+#[test]
+fn a_reflected_argument_can_constrain_the_callback_result() {
+    // GEN-3 and FN-17: the anchor fixes the callback's result from K,
+    // whether the template writes K directly or R with R == K.
+    let overloaded = r#"module m
+const left: str = "anchor"
+const right: str = "v"
+operator last<A, B, O>(anchor: A, v: B) -> O
+impl const fn last(anchor: bool, v: i64) -> i64 => v
+impl const fn last(anchor: bool, v: list<i64, 2>) -> str => "chosen"
+operator decide<K, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> bool
+impl fn decide<K, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> bool
+    requires R == K && As[left] == dict<K, Ps[left]>
+        && As[right] in {Ps[right], list<Ps[right], 2>} => true
+fn full(a: dict<str, bool>, xs: list<i64, 2>) -> bool => decide(last, a, xs)
+fn flip(a: dict<str, bool>, xs: list<i64, 2>) -> bool => decide(last, v: xs, anchor: a)
+fn forced(a: dict<str, bool>, xs: list<i64, 2>) -> bool =>
+    decide(last<bool, list<i64, 2>, str>, a, xs)
+"#;
+    let generic = r#"module m
+const left: str = "anchor"
+const right: str = "v"
+const fn last<T>(anchor: bool, v: T) -> T => v
+fn decide<K, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> bool
+    requires R == K && As[left] == tuple<K, Ps[left]>
+        && As[right] in {Ps[right], list<Ps[right], 2>} => true
+fn full(a: tuple<list<i64, 2>, bool>, xs: list<i64, 2>) -> bool => decide(last, a, xs)
+fn flip(a: tuple<list<i64, 2>, bool>, xs: list<i64, 2>) -> bool => decide(last, v: xs, anchor: a)
+fn forced(a: tuple<list<i64, 2>, bool>, xs: list<i64, 2>) -> bool =>
+    decide(last<list<i64, 2>>, a, xs)
+"#;
+    for source in [overloaded, generic] {
+        accepts(source);
+        let direct = source
+            .replace("decide<K, R,", "decide<K,")
+            .replace("-> R, args:", "-> K, args:")
+            .replace("requires R == K && ", "requires ");
+        accepts(&direct);
+    }
+}
+
+#[test]
+fn distinct_shared_keys_can_leave_the_best_readings_ambiguous() {
+    // GEN-3: one dictionary can split, but the call leaves open which
+    // one. Each choice fits its own K and disagrees on the split input.
+    rejects(
+        r#"module m
+const fn ignore<T, U>(v: T, w: U) -> i64 => 7
+fn receiver<K, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires any k in arg_keys(As) { As[k] == dict<K, Ps[k]> }
+        && each k in arg_keys(As) { As[k] in {Ps[k], dict<K, Ps[k]>} }
+    => 7
+fn ambiguous(x: dict<str, f64>, y: dict<i64, f64>) -> i64 => receiver(ignore, x, y)
+"#,
+        "type/generic.unresolved",
+    );
+}
+
+#[test]
+fn known_results_choose_compatible_bare_operator_candidates_in_either_order() {
+    // GEN-3 and FN-17: the public result O is independent of the input
+    // generics, but each candidate's signature ties the result to a reading.
+    let members = "impl const fn total(left: bool, right: i64) -> i64 => right";
+    let whole = "impl const fn total(left: bool, right: list<i64, 2>) -> list<i64, 2> => right";
+    for (first, second) in [(members, whole), (whole, members)] {
+        accepts(&format!(
+            r#"module m
+operator total<L, R, O>(left: L, right: R) -> O
+{first}
+{second}
+fn members(flags: list<bool, 2>, xs: list<i64, 2>) -> list<i64, 2> =>
+    map(total, flags, xs)
+fn copies(flags: list<bool, 2>, xs: list<i64, 2>) -> list<list<i64, 2>, 2> =>
+    map(total, flags, xs)
+fn keyed(flags: dict<str, bool>, xs: list<i64, 2>) -> dict<str, list<i64, 2>> =>
+    map(total, flags, xs)
+"#,
+        ));
+    }
+}
+
+#[test]
+fn a_nonbinding_reading_cannot_specialize_an_operator_candidate() {
+    // GEN-3: the preferred i64 pattern binds nothing. The fact that a
+    // candidate could take an i64 does not infer the missing type for it.
+    rejects(
+        r#"module m
+operator arbitrary<T>(value: T) -> str
+impl const fn arbitrary<T>(value: T) -> str => "chosen"
+fn select<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => 3
+fn no_type_evidence(value: i64) -> i64 => select(arbitrary, value)
+"#,
+        "type/generic.unresolved",
+    );
+}
+
+#[test]
+fn bare_operator_candidates_preserve_incomparable_readings() {
+    // GEN-3: both dictionary patterns fit and can select a candidate.
+    // Neither pattern rules out the other's selection.
+    rejects(
+        r#"module m
+operator count<T>(value: T) -> i64
+impl const fn count(value: i64) -> i64 => 1
+impl const fn count(value: str) -> i64 => 2
+fn select<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {dict<Ps[k], str>, dict<i64, Ps[k]>} } => 3
+fn ambiguous(items: dict<i64, str>) -> i64 => select(count, items)
+"#,
+        "type/generic.unresolved",
+    );
+}
+
+#[test]
+fn negative_and_disjoined_memberships_supply_no_bare_callback_evidence() {
+    // GEN-3: a test of argument types can hold without binding a type.
+    let source = r#"module m
+operator keep<T>(x: T) -> i64
+impl fn keep(x: list<i64, 2>) -> i64 => 5
+fn whole<R, ...Inputs, ...Actual>(f: fn(...{Inputs}) -> R, args: ...{Actual for f}) -> i64
+    requires each k in arg_keys(Actual) {
+        Actual[k] in {list<Inputs[k], 2>} || !(Actual[k] in {list<Inputs[k], 2>})
+    }
+    => 3
+fn pass_whole(items: list<i64, 2>) -> i64 => whole(keep, items)
+"#;
+    accepts(source);
+}
+
+#[test]
+fn a_more_specific_nonbinding_alternative_does_not_supply_a_callback_type() {
+    // GEN-3: the winning i64 alternative binds nothing. The receiving
+    // result may still determine identity's input type (GEN-2, FN-17).
+    let declarations = r#"module m
+fn identity<T>(value: T) -> T => value
+fn fixed<const N: i64 = 0>(value: i64) -> i64 => N
+fn select<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => 3
+fn select_i64<...Ps, ...As>(f: fn(...{Ps}) -> i64, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => 3
+fn result_known(value: i64) -> i64 => select_i64(identity, value)
+fn input_known(value: i64) -> i64 => select(fixed, value)
+"#;
+    accepts(declarations);
+    rejects(
+        &format!("{declarations}fn missing(value: i64) -> i64 => select(identity, value)"),
+        "type/generic.unresolved",
+    );
+}
+
+#[test]
+fn a_nonbinding_argument_still_has_to_fit_the_type_its_sibling_supplies() {
+    // GEN-2, GEN-3 and FN-17: y decides T=str, but the non-binding i64
+    // alternative cannot make the original i64 argument a str.
+    rejects(
+        r#"module m
+fn pair<T>(x: T, y: T) -> T => x
+fn select<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => 3
+fn invalid(x: i64, y: str) -> i64 => select(pair, x, y)
+"#,
+        "type/generic.unresolved",
+    );
+}
+
+#[test]
+fn a_callback_result_equality_still_requires_a_compatible_operand() {
+    // GEN-3 and FN-17: the stated str result fixes identity's input,
+    // but the original list fits neither str nor list<str, 2>.
+    rejects(
+        r#"module m
+fn identity<T>(value: T) -> T => value
+fn select<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires R == str && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} } => 3
+fn invalid(input: list<i64, 2>) -> i64 => select(identity, input)
+"#,
+        "constraint/requires.unmet",
+    );
+}
+
+#[test]
+fn a_wrapped_candidate_result_can_complete_a_nonbinding_callback() {
+    // GEN-3 and FN-17. The i64 alternative establishes no input
+    // type. The expected tuple result supplies i64 through R instead.
+    accepts(
+        r#"module m
+const fn echo<T>(x: T) -> T => x
+operator apply<R, C, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> C
+impl fn apply<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> tuple<R, bool>
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => (f(...args), true)
+fn entry(arg: i64) -> tuple<i64, bool> => apply(echo, arg)
+"#,
+    );
+}
+
+#[test]
+fn bare_callback_trials_keep_the_public_operator_diagnostic() {
+    // GEN-3 and GEN-4: a public condition belongs to the operator, even
+    // when more than one callback trial independently fails it.
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+fn identity<T>(x: T) -> T => x
+operator choose<M, R, ...Ps, ...As>(mode: M, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires M in {i64, str}
+impl fn choose<R, ...Ps, ...As>(mode: i64, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k]} } => 1
+impl fn choose<R, ...Ps, ...As>(mode: str, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {list<Ps[k], 2>} } => 2
+fn invalid(items: list<i64, 2>) -> i64 => choose(true, identity, items)
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(
+        checked.findings[0].code, "constraint/requires.unmet",
+        "{}",
+        checked.report
+    );
+}
+
 const CATEGORIES: &str = "module m\n\
 struct Point { x: f64\n y: f64 }\n\
 struct Label { text: str }\n\

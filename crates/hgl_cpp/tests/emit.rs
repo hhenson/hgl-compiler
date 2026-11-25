@@ -691,12 +691,11 @@ fn a_default_that_may_fail_in_a_branch_is_reported() {
     assert_eq!(emitted.blocked("literal_once"), None);
 }
 
-/// FN-9: a child of a `switch` "is built then, and its calls are
-/// evaluated then". hgraph compiles a child graph on a wiring of its own,
-/// which neither sees nor sets the store of the run's root, so a branch
-/// that reads the store is reported, whatever writes the `inject`.
+/// FN-9: store reads that determine the branch wiring still need
+/// activation-time composition. A selected child's startup hook cannot
+/// supply the configuration of an already compiled graph.
 #[test]
-fn the_store_in_a_branch_is_reported() {
+fn a_store_read_that_drives_branch_wiring_is_reported() {
     let emitted = emit_with(
         &[(
             "m.hgl",
@@ -711,18 +710,31 @@ fn the_store_in_a_branch_is_reported() {
                 "    }\n",
                 "    return value\n",
                 "}\n",
+                "\n",
+                "fn stored_with_alias(open: bool, value: i64) -> i64 {\n",
+                "    inject global_state\n",
+                "    let alias = global_state\n",
+                "    if open {\n",
+                "        let scale: i64 = get(global_state, \"scale\")\n",
+                "        put(alias, \"last\", scale)\n",
+                "        return value * scale\n",
+                "    }\n",
+                "    return value\n",
+                "}\n",
             ),
         )],
         &hgl_cpp::runtime::provides,
     );
-    assert!(
-        emitted.reported.contains(
-            &"m.hgl:5:5 the cpp target does not write the store in a branch or a loop's body, a child graph that hgraph builds on a wiring of its own, which neither sees nor sets the root's store yet"
-                .to_string()
-        ),
-        "{:?}",
-        emitted.reported
-    );
+    let reason = "the cpp target does not write a selected child's store when its reads determine wiring or its startup cannot be ordered yet";
+    for line in [5, 15] {
+        assert!(
+            emitted
+                .reported
+                .contains(&format!("m.hgl:{line}:5 {reason}")),
+            "{:?}",
+            emitted.reported
+        );
+    }
 }
 
 /// The activity of a node's inputs (TIME-9, END-5) and the temporal form

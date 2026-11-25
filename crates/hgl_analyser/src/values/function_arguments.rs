@@ -3,8 +3,8 @@
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::Typer;
 use super::arguments::{Slot, Takes};
+use super::callback_evidence::{CallbackEvidence, MemberReading, ReadingFailure, select_readings};
 use super::candidates::{
     CallbackOption, CallbackOptionSource, CallbackRequest, Given, Key, Wanted, in_instance,
 };
@@ -12,8 +12,11 @@ use super::constants::generic_default;
 use super::dependent_packs::PackTypes;
 use super::fit::{accepts_float, is_integer_literal, open, whole};
 use super::forwarded_packs::spread_operands;
-use super::inference::{ExplicitGenerics, infer, mentions, pack_bounds, type_pack};
-use crate::declared::{agree, names_parameter, substitute_within};
+use super::inference::{
+    ExplicitGenerics, infer, mentions, pack_bounds, tuple_pack_bindings, type_pack, unsaid,
+};
+use super::{Candidate, Typer};
+use crate::declared::{agree, names_parameter, same_type, substitute_within};
 use crate::hir::{
     AnonymousFunction, AnonymousSpecialization, Callee, Expr, ExprKind, Form, LocalId, Node, Stmt,
     TypePackArgument, ValueCategory, walk_statement_nodes,
@@ -80,6 +83,132 @@ impl<'a> Typer<'a> {
             at,
             category: ValueCategory::Value,
         }
+    }
+
+    /// Fixed sibling callbacks can constrain the shared result while
+    /// leaving its element types open (GEN-2, GEN-12, FN-17).
+    pub(super) fn sibling_result_shapes<'b>(
+        &self,
+        signature: &Signature,
+        result: Option<&Type>,
+        bindings: &[(Location, &Argument)],
+        siblings: impl IntoIterator<Item = (&'b Type, &'b SyntaxNode)>,
+    ) -> Vec<Type> {
+        let Some(result) = result else {
+            return Vec::new();
+        };
+        let known: Vec<_> = signature
+            .generics
+            .iter()
+            .map(|generic| {
+                bindings.iter().find_map(|(at, value)| {
+                    if *at != generic.at {
+                        return None;
+                    }
+                    match value {
+                        Argument::Type(ty) if !whole(ty) => None,
+                        Argument::Constant(value)
+                            if matches!(value.value, ConstantValue::Unknown) =>
+                        {
+                            None
+                        }
+                        value => Some((*value).clone()),
+                    }
+                })
+            })
+            .collect();
+        let mut shapes = Vec::new();
+        for (expected, node) in siblings {
+            let Type::Function(expected) = expected else {
+                continue;
+            };
+            if expected.named_pack.is_some() {
+                continue;
+            }
+            let node = ungrouped(node.clone());
+            if node.kind() != SyntaxKind::NameExpr || self.local_of(&node).is_some() {
+                continue;
+            }
+            let Some((module, declarations)) =
+                name_token(&node).and_then(|name| self.declarations(&name))
+            else {
+                continue;
+            };
+            let unit = &self.program.modules[module];
+            let preferred = if expected.value {
+                Role::Value
+            } else {
+                Role::Temporal
+            };
+            let kind = |index: usize| unit.declarations[index].kind;
+            let declared = declarations
+                .iter()
+                .copied()
+                .find(|&index| kind(index) == crate::program::DeclarationKind::Operator)
+                .or_else(|| {
+                    declarations
+                        .iter()
+                        .copied()
+                        .find(|&index| kind(index).role() == Some(preferred))
+                })
+                .or_else(|| {
+                    declarations
+                        .iter()
+                        .copied()
+                        .find(|&index| kind(index).role().is_some())
+                });
+            let Some(Detail::Callable(actual)) = declared.map(|index| &unit.details[index]) else {
+                continue;
+            };
+            let unknown_type = Argument::Type(Type::Unknown);
+            let unknown_value = Argument::Constant(unsaid());
+            let placeholders: Vec<_> = actual
+                .generics
+                .iter()
+                .map(|generic| {
+                    let value = if matches!(generic.kind, GenericKind::Value(_)) {
+                        &unknown_value
+                    } else {
+                        &unknown_type
+                    };
+                    (generic.at, value)
+                })
+                .collect();
+            let packs: Vec<_> = actual
+                .generics
+                .iter()
+                .filter_map(|generic| {
+                    matches!(generic.kind, GenericKind::Pack { .. }).then_some(generic.at)
+                })
+                .collect();
+            let inputs = expected
+                .ordinary_parameters()
+                .zip(
+                    actual
+                        .parameters
+                        .iter()
+                        .filter(|input| !input.configuration),
+                )
+                .map(|(expected, actual)| (expected.ty(), &actual.ty));
+            for (expected, actual) in inputs.chain(expected.result.iter().zip(&actual.result)) {
+                if mentions(actual, &packs) {
+                    continue;
+                }
+                let mut found = known.clone();
+                infer(expected, actual, &signature.generics, &mut found);
+                let map: Vec<_> = signature
+                    .generics
+                    .iter()
+                    .zip(&found)
+                    .filter_map(|(generic, value)| Some((generic.at, value.as_ref()?)))
+                    .collect();
+                let shape = substitute_within(&substitute_within(result, &map), &placeholders);
+                if !open(&shape) && shape != *result && !shapes.contains(&shape) {
+                    shapes.push(shape);
+                }
+            }
+        }
+        shapes
     }
 
     fn function_target(
@@ -178,9 +307,36 @@ impl<'a> Typer<'a> {
             self.marked_function(node, signature);
             return None;
         }
+        // FN-17 resolves the callback's template before dependent
+        // arguments supply evidence (GEN-2, GEN-3). In particular, a
+        // concrete input stays fixed even in a generic function.
+        let known = inputs
+            .evidence
+            .filter(|_| node.kind() == SyntaxKind::NameExpr)
+            .map(|_| ReferenceShape::new(signature, template));
         let given = inputs
             .supplied
-            .map(|_| reflected_arguments(signature, template, node, self.at(node), inputs));
+            .map(|_| {
+                reflected_arguments(
+                    self,
+                    signature,
+                    template,
+                    node,
+                    inputs,
+                    ReflectedTarget::Declared(known.as_ref()),
+                )
+            })
+            .transpose()
+            .ok()?;
+        let result_shapes: Vec<_> = given.iter().flat_map(|read| &read.result_shapes).collect();
+        let constrained = inputs
+            .requested_result(node, template, &result_shapes)
+            .filter(|result| template.result.as_ref() != Some(*result))
+            .map(|result| {
+                let mut template = template.clone();
+                template.result = Some(result.clone());
+                template
+            });
         let ReferenceArguments {
             generics,
             type_packs,
@@ -189,7 +345,10 @@ impl<'a> Typer<'a> {
             node,
             name,
             (declared, signature),
-            (template, given.as_deref()),
+            (
+                constrained.as_ref().unwrap_or(template),
+                given.as_ref().map(|read| read.given.as_slice()),
+            ),
         )?;
         let map = signature
             .generics
@@ -204,6 +363,27 @@ impl<'a> Typer<'a> {
         let packs = PackTypes::new(&signature.generics, &type_packs);
         for parameter in &mut taken.parameters {
             parameter.ty = packs.project(&parameter.ty, &map).ok()?;
+        }
+        // GEN-3: an earlier argument's binding cannot discard a different
+        // member type another argument supplies to the same generic.
+        if let Some(given) = given.filter(|read| read.projected)
+            && let Some(argument) = given.given.iter().find(|argument| {
+                callback_parameter(signature, &argument.key).is_some_and(|slot| {
+                    known.as_ref().is_some_and(|shape| {
+                        mentions(&signature.parameters[slot].ty, &shape.unresolved)
+                    }) && !self.admits(&taken.parameters[slot].ty, argument.ty())
+                })
+            })
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::GENERIC_UNRESOLVED,
+                argument.value.at,
+                "this argument's derived type conflicts with the bare function's inputs"
+                    .to_string(),
+                "GEN-3",
+            ));
+            return None;
         }
         taken.result = taken
             .result
@@ -260,13 +440,37 @@ impl<'a> Typer<'a> {
         }
         let at = self.at(node);
         let reflected = template.named_pack.is_some();
-        let mut given = if reflected {
-            reflected_arguments(public, template, node, at, inputs)
+        let candidates: Vec<_> = self.with_callback_role(template, |typer, _| {
+            typer
+                .value_candidates(operator)
+                .into_iter()
+                .filter(|(_, _, signature)| {
+                    plain_inputs(signature, template)
+                        && missing_callback_configuration(signature, Some(public)).is_none()
+                })
+                .collect()
+        });
+        let ReflectedArguments {
+            mut given,
+            result_shapes: reflected_results,
+            ..
+        } = if reflected {
+            reflected_arguments(
+                self,
+                public,
+                template,
+                node,
+                inputs,
+                ReflectedTarget::Operator(operator, &candidates),
+            )
+            .ok()?
         } else {
-            Vec::new()
+            ReflectedArguments::default()
         };
         if let Some(pack) = &template.named_pack
-            && !given.iter().any(|argument| whole(argument.ty()))
+            && !given
+                .iter()
+                .any(|argument| whole(argument.inference_type()))
         {
             self.diagnostics.emit(error(
                 Category::Type,
@@ -321,16 +525,6 @@ impl<'a> Typer<'a> {
                 }
             }
         }
-        let graph = std::mem::replace(&mut self.graph, !template.value);
-        let value_code = std::mem::replace(&mut self.value_code, false);
-        let candidates: Vec<_> = self
-            .value_candidates(operator)
-            .into_iter()
-            .filter(|(_, _, signature)| {
-                plain_inputs(signature, template)
-                    && missing_callback_configuration(signature, Some(public)).is_none()
-            })
-            .collect();
         let mut requested_values = Vec::new();
         if let Some(explicit) = &explicit
             && let Detail::Callable(public) =
@@ -378,8 +572,12 @@ impl<'a> Typer<'a> {
                 });
             }
         }
+        let result_shapes: Vec<_> = inputs
+            .known_result_shapes(node, template)
+            .chain(&reflected_results)
+            .collect();
         let wanted = Wanted {
-            place: request.result.as_ref(),
+            place: inputs.requested_result(node, request, &result_shapes),
             among: explicit
                 .as_ref()
                 .and_then(|operator| operator.among.clone()),
@@ -388,17 +586,12 @@ impl<'a> Typer<'a> {
                 reference: request.reference,
                 values: &requested_values,
                 reflected: reflected.then_some(inputs.excluded),
+                result_shapes: &result_shapes,
             }),
         };
-        let role = if template.value {
-            Role::Value
-        } else {
-            Role::Temporal
-        };
-        let (mut matches, unknown) =
-            self.admitted_for_callback(operator, &candidates, &given, &wanted, role);
-        self.graph = graph;
-        self.value_code = value_code;
+        let (mut matches, unknown) = self.with_callback_role(template, |typer, role| {
+            typer.admitted_for_callback(operator, &candidates, &given, &wanted, role)
+        });
         if !unknown
             && matches.len() == 1
             && let Some(chosen) = matches.pop()
@@ -489,6 +682,25 @@ impl<'a> Typer<'a> {
         None
     }
 
+    /// Use the receiving template's phase for both a trial and its final reading.
+    fn with_callback_role<T>(
+        &mut self,
+        template: &FunctionType,
+        read: impl FnOnce(&mut Self, Role) -> T,
+    ) -> T {
+        let graph = std::mem::replace(&mut self.graph, !template.value);
+        let value_code = std::mem::replace(&mut self.value_code, false);
+        let role = if template.value {
+            Role::Value
+        } else {
+            Role::Temporal
+        };
+        let result = read(self, role);
+        self.graph = graph;
+        self.value_code = value_code;
+        result
+    }
+
     /// Resolve the public signature of an explicit operator reference
     /// from its written arguments and its receiving template (FN-17).
     fn operator_reference(
@@ -573,36 +785,15 @@ impl<'a> Typer<'a> {
         if faulty {
             return None;
         }
-        if let (Some(pattern), Some(actual)) = (&signature.result, &template.result) {
-            infer(pattern, actual, &signature.generics, &mut found);
-        }
-        let ordinary = signature
-            .parameters
-            .iter()
-            .filter(|input| !input.configuration);
-        for (pattern, actual) in ordinary.zip(template.ordinary_parameters()) {
-            infer(&pattern.ty, actual.ty(), &signature.generics, &mut found);
-        }
+        infer_reference_template(signature, template, &mut found);
         for given in given.unwrap_or_default() {
-            let parameter = given
-                .key
-                .public_parameter(signature)
-                .map(|index| &signature.parameters[index])
-                .or_else(|| {
-                    // FN-8 and GEN-2: a homogeneous pack's entries each
-                    // supply evidence for its element type.
-                    let kind = match &given.key {
-                        Key::Position(_) => Pack::Positional,
-                        Key::Name(_) => Pack::Named,
-                        _ => return None,
-                    };
-                    signature.parameters.iter().find(|parameter| {
-                        parameter.pack == Some(kind)
-                            && type_pack(parameter, &signature.generics).is_none()
-                    })
-                });
-            if let Some(parameter) = parameter {
-                infer(&parameter.ty, given.ty(), &signature.generics, &mut found);
+            if let Some(index) = callback_parameter(signature, &given.key) {
+                infer(
+                    &signature.parameters[index].ty,
+                    given.inference_type(),
+                    &signature.generics,
+                    &mut found,
+                );
             }
         }
         // GEN-2 and GEN-8: a generic value parameter nothing says
@@ -1305,15 +1496,166 @@ pub(super) struct CallbackInputs<'a> {
     pub(super) supplied: Option<&'a [(Option<&'a str>, &'a Expr)]>,
     /// Parameters the enclosing declaration will give the callback (FN-8).
     pub(super) excluded: &'a [&'a str],
+    /// Positive memberships or equalities that constrain supplied argument types.
+    pub(super) evidence: Option<&'a CallbackEvidence>,
+    /// Known parts of the callback result required by other static arguments.
+    pub(super) result_shapes: &'a [Type],
 }
 
-fn reflected_arguments(
+impl CallbackInputs<'_> {
+    /// The enclosing requirement or candidate fixes a bare callback result.
+    fn expected_result(&self, node: &SyntaxNode, template: &FunctionType) -> Option<&Type> {
+        if node.kind() != SyntaxKind::NameExpr {
+            return None;
+        }
+        self.evidence?.expected_result(template.result.as_ref()?)
+    }
+
+    /// An enclosing bare-callback trial can contribute several partial result shapes.
+    fn known_result_shapes<'s>(
+        &'s self,
+        node: &SyntaxNode,
+        template: &'s FunctionType,
+    ) -> impl Iterator<Item = &'s Type> {
+        let bare = node.kind() == SyntaxKind::NameExpr;
+        self.result_shapes
+            .iter()
+            .chain(template.result.iter().filter(|ty| !open(ty) && !whole(ty)))
+            .chain(
+                self.evidence
+                    .map_or(&[][..], CallbackEvidence::result_shapes),
+            )
+            .filter(move |_| bare)
+    }
+
+    /// A known result can specialize the callback before its candidates are ranked.
+    fn requested_result<'s>(
+        &'s self,
+        node: &SyntaxNode,
+        template: &'s FunctionType,
+        shapes: &[&'s Type],
+    ) -> Option<&'s Type> {
+        let result = template.result.as_ref()?;
+        self.expected_result(node, template)
+            .or_else(|| {
+                shapes
+                    .iter()
+                    .copied()
+                    .find(|ty| !whole(result) && whole(ty))
+            })
+            .or(Some(result))
+    }
+}
+
+/// Learn the bindings that precede dependent argument evidence (GEN-2, FN-17).
+fn infer_reference_template(
+    signature: &Signature,
+    template: &FunctionType,
+    found: &mut [Option<Argument>],
+) {
+    if let (Some(pattern), Some(actual)) = (&signature.result, &template.result) {
+        infer(pattern, actual, &signature.generics, found);
+    }
+    let ordinary = signature
+        .parameters
+        .iter()
+        .filter(|input| !input.configuration);
+    for (pattern, actual) in ordinary.zip(template.ordinary_parameters()) {
+        infer(&pattern.ty, actual.ty(), &signature.generics, found);
+    }
+}
+
+/// Bindings supplied by the receiving function template before pack evidence.
+struct ReferenceShape {
+    found: Vec<Option<Argument>>,
+    unresolved: Vec<Location>,
+}
+
+impl ReferenceShape {
+    fn new(signature: &Signature, template: &FunctionType) -> Self {
+        let mut found = vec![None; signature.generics.len()];
+        infer_reference_template(signature, template, &mut found);
+        let unresolved = signature
+            .generics
+            .iter()
+            .zip(&found)
+            .filter_map(|(generic, value)| value.is_none().then_some(generic.at))
+            .collect();
+        Self { found, unresolved }
+    }
+
+    /// Trial substitution preserves whatever is already known. A tuple
+    /// pack can take the sequence this type gives it, as in the final
+    /// reference inference. Keep this trial separate from that inference.
+    fn fits<'i, 'r>(
+        &self,
+        typer: &Typer<'_>,
+        signature: &Signature,
+        mut arguments: impl Iterator<Item = (&'i Type, &'i Type)> + Clone,
+        result_shapes: impl Iterator<Item = &'r Type>,
+    ) -> bool {
+        let mut result_shapes = result_shapes.peekable();
+        let mut found = self.found.clone();
+        for (input, actual) in arguments.clone() {
+            infer(input, actual, &signature.generics, &mut found);
+        }
+        let packs = tuple_pack_bindings(&signature.generics, &mut found, &typer.signature.generics);
+        let packs = PackTypes::new(&signature.generics, &packs);
+        let map: Vec<_> = signature
+            .generics
+            .iter()
+            .zip(&found)
+            .filter_map(|(generic, value)| value.as_ref().map(|value| (generic.at, value)))
+            .collect();
+        let compatible = |expected: &Type, actual: &Type| {
+            same_type(expected, actual) != Some(false) || typer.admits(expected, actual)
+        };
+        arguments.all(|(input, actual)| {
+            packs
+                .project(input, &map)
+                .is_ok_and(|expected| compatible(&expected, actual))
+        }) && signature.result.as_ref().is_none_or(|result| {
+            result_shapes.peek().is_none()
+                || packs
+                    .project(result, &map)
+                    .is_ok_and(|result| result_shapes.all(|shape| compatible(shape, &result)))
+        })
+    }
+}
+
+/// What the complete reading must fit after its arguments are reflected.
+#[derive(Clone, Copy)]
+enum ReflectedTarget<'a, 's> {
+    Declared(Option<&'s ReferenceShape>),
+    Operator(OperatorRef, &'s [Candidate<'a>]),
+}
+
+/// The argument and result evidence from one complete reflected reading.
+#[derive(Default)]
+struct ReflectedArguments {
+    given: Vec<Given>,
+    projected: bool,
+    result_shapes: Vec<Type>,
+}
+
+fn reflected_arguments<'a>(
+    typer: &mut Typer<'a>,
     public: &Signature,
     template: &FunctionType,
     node: &SyntaxNode,
-    at: Location,
     inputs: &CallbackInputs<'_>,
-) -> Vec<Given> {
+    target: ReflectedTarget<'a, '_>,
+) -> Result<ReflectedArguments, ()> {
+    let evidence = inputs
+        .evidence
+        .filter(|_| node.kind() == SyntaxKind::NameExpr);
+    let declared_shape = match target {
+        ReflectedTarget::Declared(shape) => shape,
+        ReflectedTarget::Operator(..) => None,
+    };
+    let operator_shape = (matches!(target, ReflectedTarget::Operator(..)) && evidence.is_some())
+        .then(|| ReferenceShape::new(public, template));
+    let shape = declared_shape.or(operator_shape.as_ref());
     let fixed = public.positional_parameters().count();
     let mut remaining = public
         .positional_parameters()
@@ -1321,7 +1663,7 @@ fn reflected_arguments(
         .enumerate()
         .filter(|(_, parameter)| !inputs.excluded.contains(&parameter.name.as_str()));
     let mut pack_position = fixed;
-    let mut given: Vec<_> = inputs
+    let supplied: Vec<_> = inputs
         .supplied
         .unwrap_or_default()
         .iter()
@@ -1335,8 +1677,220 @@ fn reflected_arguments(
                 pack_position += 1;
                 Key::Position(position)
             };
-            let mut argument = callback_operand(0, node, value.at, value.ty.clone());
-            argument.key = key;
+            (key, *value)
+        })
+        .collect();
+    let parameters: Vec<_> = supplied
+        .iter()
+        .map(|(key, _)| callback_parameter(public, key).map(|slot| &public.parameters[slot].ty))
+        .collect();
+    let result_shapes: Vec<_> = inputs.known_result_shapes(node, template).collect();
+    let choices: Vec<_> = supplied
+        .iter()
+        .zip(&parameters)
+        .map(|((key, value), parameter)| {
+            let unchanged = || vec![MemberReading::unchanged(&value.ty)];
+            let Some(evidence) = evidence else {
+                return unchanged();
+            };
+            let slot = key.public_parameter(public);
+            let name = key
+                .name()
+                .or_else(|| slot.map(|slot| public.parameters[slot].name.as_str()));
+            let position = match key {
+                Key::Position(position) => position.checked_sub(fixed),
+                _ => None,
+            };
+            let fixed_type = slot.and_then(|slot| {
+                let before = public.parameters[..slot]
+                    .iter()
+                    .filter(|parameter| !parameter.configuration)
+                    .count();
+                template
+                    .ordinary_parameters()
+                    .nth(before)
+                    .map(FunctionParameter::ty)
+                    .filter(|ty| whole(ty))
+            });
+            // FN-17: a bare operator already declares a whole input
+            // when its public parameter has the actual argument type.
+            let fixed_type = fixed_type.or_else(|| {
+                let ty = &public.parameters[slot?].ty;
+                (declared_shape.is_none() && same_type(ty, &value.ty) == Some(true)).then_some(ty)
+            });
+            if declared_shape.is_some() && parameter.is_none() {
+                return unchanged();
+            }
+            // A fixed callback input still determines shared generics
+            // of the enclosing call, such as a keyed map's K (GEN-3).
+            let mut readings = evidence.readings(name, position, &value.ty);
+            if let Some(fixed) = fixed_type {
+                readings.retain(|reading| {
+                    reading.evidence_type().is_none_or(|ty| {
+                        same_type(fixed, ty) != Some(false) || typer.admits(fixed, ty)
+                    })
+                });
+            }
+            if let Some((shape, parameter)) = shape.zip(*parameter) {
+                readings.retain(|reading| {
+                    reading.evidence_type().is_none_or(|actual| {
+                        shape.fits(
+                            typer,
+                            public,
+                            std::iter::once((parameter, actual)),
+                            result_shapes.iter().copied(),
+                        )
+                    })
+                });
+            }
+            if readings.is_empty() {
+                return unchanged();
+            }
+            readings
+        })
+        .collect();
+    let operator_trial = match target {
+        ReflectedTarget::Operator(operator, candidates)
+            if choices.iter().any(|choices| choices.len() > 1) =>
+        {
+            Some((operator, candidates))
+        }
+        _ => None,
+    };
+    let at = typer.at(node);
+    let mut select = |check_operator| {
+        select_readings(&choices, |trial, complete| {
+            let trial_shapes = evidence.map_or_else(
+                || Ok(Vec::new()),
+                |evidence| {
+                    evidence.trial_result_shapes(typer.program, trial.iter().flatten().copied())
+                },
+            );
+            let Ok(trial_shapes) = trial_shapes else {
+                return false;
+            };
+            let shapes: Vec<_> = result_shapes.iter().copied().chain(&trial_shapes).collect();
+            let arguments = parameters
+                .iter()
+                .zip(trial)
+                .filter_map(|(parameter, reading)| {
+                    Some(((*parameter)?, (*reading)?.evidence_type()?))
+                });
+            if arguments.clone().next().is_some()
+                && shape.is_some_and(|shape| {
+                    !shape.fits(typer, public, arguments, shapes.iter().copied())
+                })
+            {
+                return false;
+            }
+            let Some((operator, candidates)) = operator_trial.filter(|_| check_operator) else {
+                return true;
+            };
+            if !typer.may_reread() {
+                return false;
+            }
+            if !complete {
+                return true;
+            }
+            let (mut given, _) = reflected_operands(
+                public,
+                template,
+                node,
+                at,
+                &supplied,
+                trial
+                    .iter()
+                    .map(|reading| reading.and_then(|reading| reading.ty.as_ref())),
+            );
+            let wanted = Wanted {
+                place: inputs.requested_result(node, template, &shapes),
+                among: None,
+                written: false,
+                callback: Some(CallbackRequest {
+                    reference: template.reference,
+                    values: &[],
+                    reflected: Some(inputs.excluded),
+                    result_shapes: &shapes,
+                }),
+            };
+            let mark = typer.mark();
+            let possible = typer.with_callback_role(template, |typer, role| {
+                let (admitted, unknown) =
+                    typer.admitted_for_callback(operator, candidates, &given, &wanted, role);
+                if unknown || !admitted.is_empty() {
+                    return true;
+                }
+                if given.iter().all(|argument| argument.type_evidence) {
+                    return false;
+                }
+                // An original argument can demonstrate that a candidate
+                // could fit. A nonbinding reading still contributes no type
+                // to the final selection (GEN-3).
+                for argument in &mut given {
+                    argument.type_evidence = true;
+                }
+                let (admitted, unknown) =
+                    typer.admitted_for_callback(operator, candidates, &given, &wanted, role);
+                unknown || !admitted.is_empty()
+            });
+            typer.take_back(mark, false);
+            possible
+        })
+    };
+    let readings = match select(true) {
+        // The ordinary operator reference check reports a failed
+        // candidate selection using the best structural reading.
+        Err(ReadingFailure::NoMatch) if operator_trial.is_some() => select(false),
+        result => result,
+    }
+    .map_err(|_| {
+        typer.diagnostics.emit(error(
+            Category::Type,
+            codes::GENERIC_UNRESOLVED,
+            typer.at(node),
+            "these arguments do not determine a unique type for the bare function".to_string(),
+            "GEN-3",
+        ));
+    })?;
+    let result_shapes = evidence.map_or_else(
+        || Ok(Vec::new()),
+        |evidence| evidence.trial_result_shapes(typer.program, readings.iter().copied()),
+    )?;
+    let (given, projected) = reflected_operands(
+        public,
+        template,
+        node,
+        at,
+        &supplied,
+        readings.iter().map(|reading| reading.ty.as_ref()),
+    );
+    Ok(ReflectedArguments {
+        given,
+        projected,
+        result_shapes,
+    })
+}
+
+/// Turn a chosen reading into the synthetic arguments used to check its callback.
+fn reflected_operands<'t>(
+    public: &Signature,
+    template: &FunctionType,
+    node: &SyntaxNode,
+    at: Location,
+    supplied: &[(Key, &Expr)],
+    readings: impl IntoIterator<Item = Option<&'t Type>>,
+) -> (Vec<Given>, bool) {
+    let mut projected = false;
+    let mut given: Vec<_> = supplied
+        .iter()
+        .zip(readings)
+        .map(|((key, value), ty)| {
+            let type_evidence = ty.is_some();
+            let ty = ty.unwrap_or(&value.ty);
+            projected |= !type_evidence || *ty != value.ty;
+            let mut argument = callback_operand(0, node, value.at, ty.clone());
+            argument.key = key.clone();
+            argument.type_evidence = type_evidence;
             argument
         })
         .collect();
@@ -1352,7 +1906,7 @@ fn reflected_arguments(
             given.push(callback_operand(index, node, at, input.ty().clone()));
         }
     }
-    given
+    (given, projected)
 }
 
 fn callback_operand(position: usize, node: &SyntaxNode, at: Location, ty: Type) -> Given {
@@ -1366,6 +1920,21 @@ fn callback_operand(position: usize, node: &SyntaxNode, at: Location, ty: Type) 
             category: ValueCategory::Value,
         },
     )
+}
+
+/// FN-8 and GEN-2: a homogeneous pack's entries each supply evidence
+/// for its element type.
+fn callback_parameter(signature: &Signature, key: &Key) -> Option<usize> {
+    key.public_parameter(signature).or_else(|| {
+        let kind = match key {
+            Key::Position(_) => Pack::Positional,
+            Key::Name(_) => Pack::Named,
+            _ => return None,
+        };
+        signature.parameters.iter().position(|parameter| {
+            parameter.pack == Some(kind) && type_pack(parameter, &signature.generics).is_none()
+        })
+    })
 }
 
 /// FN-17: fixed inputs are plain. GEN-17 reflects the other inputs as

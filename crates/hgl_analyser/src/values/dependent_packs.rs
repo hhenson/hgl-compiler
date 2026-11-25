@@ -5,11 +5,12 @@ use std::cell::{Cell, RefCell};
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
 
-use super::Typer;
 use super::arguments::{Assigned, Slot, Takes};
+use super::callback_evidence::CallbackEvidence;
 use super::candidates::Given;
 use super::function_arguments::CallbackInputs;
 use super::inference::{pack_bounds, type_pack};
+use super::{Candidate, Typer};
 use crate::declared::{substitute_with_packs, weight};
 use crate::hir::{Callee, Expr, ExprKind, PackKey, ReflectedInputs, TypePackArgument};
 use crate::syntax::child;
@@ -419,11 +420,12 @@ impl Typer<'_> {
     pub(super) fn read_dependent_call(
         &mut self,
         (name, list): (&SyntaxToken, &SyntaxNode),
-        (module, signature, dependent): (usize, &Signature, Option<usize>),
+        (callable, dependent): (Candidate<'_>, Option<usize>),
         (slots, map): (&[Slot<'_>], &[(Location, &GenericArgument)]),
         (assigned, values): (&mut [Assigned], &mut [Option<Expr>]),
     ) -> Vec<TypePackArgument> {
         let program = self.program;
+        let (module, _, signature) = callable;
         let declared = &program.modules[module];
         // The computed entries can still fill this callback's inputs.
         // Its written reference can be read against its template.
@@ -433,6 +435,8 @@ impl Typer<'_> {
                 let parameter = &signature.parameters[slot];
                 (slot, &declared.dependent_packs[&parameter.at])
             });
+        let evidence =
+            dependent.map(|_| CallbackEvidence::from_callables(program, [(callable, map)]));
         let mut packs = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let Type::Function(template) = &parameter.ty else {
@@ -481,12 +485,30 @@ impl Typer<'_> {
                 .iter()
                 .map(|(offset, value)| (assigned[*offset].name_text(), value))
                 .collect();
+            let result_shapes =
+                if for_this.is_some() && evidence.as_ref().is_some_and(|value| !value.is_empty()) {
+                    self.sibling_result_shapes(
+                        signature,
+                        match &parameter.ty {
+                            Type::Function(written) => written.result.as_ref(),
+                            _ => None,
+                        },
+                        map,
+                        assigned.iter().filter_map(|entry| {
+                            Some((&signature.parameters[entry.slot?].ty, &entry.value))
+                        }),
+                    )
+                } else {
+                    Vec::new()
+                };
             let mut callback = self.function_argument_with_inputs(
                 &assigned[position].value,
                 &template,
                 &CallbackInputs {
                     supplied: for_this.is_some().then_some(&arguments),
                     excluded: &excluded,
+                    evidence: evidence.as_ref().filter(|_| for_this.is_some()),
+                    result_shapes: &result_shapes,
                 },
             );
             let mut reflected = reflect(&template, &callback);

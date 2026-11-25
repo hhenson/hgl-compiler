@@ -736,7 +736,7 @@ impl<'a> Typer<'a> {
             found[*parameter] = Some(Argument::Type(Type::Tuple(types.to_vec())));
         }
 
-        let dependent = callable.and_then(|(module, signature)| {
+        let dependent = callable.and_then(|(module, _, signature)| {
             dependent_slot(&self.program.modules[module], signature)
         });
         let mut assigned = self.assign_dependent(name, list, slots, takes, aside, dependent);
@@ -1022,7 +1022,7 @@ impl<'a> Typer<'a> {
         }
         // A resolved callback determines its reflected types before
         // another place can use a keyed member of those types (GEN-17).
-        let mut type_packs = callable.map_or_else(Vec::new, |(module, signature)| {
+        let mut type_packs = callable.map_or_else(Vec::new, |callable| {
             let unresolved = Argument::Type(Type::Unknown);
             let map: Vec<_> = generics
                 .iter()
@@ -1032,7 +1032,7 @@ impl<'a> Typer<'a> {
                 .collect();
             self.read_dependent_call(
                 (name, list),
-                (module, signature, dependent),
+                (callable, dependent),
                 (slots, &map),
                 (&mut assigned, &mut values),
             )
@@ -1465,7 +1465,7 @@ pub(super) struct Places<'s> {
     /// an entry for each of `generics`, or none at all.
     pub(super) defaults: Vec<Option<Constant>>,
     /// A callable declaration whose callbacks may reflect parameter packs.
-    pub(super) callable: Option<(usize, &'s Signature)>,
+    pub(super) callable: Option<super::Candidate<'s>>,
     /// The core activity query checks a projected pack child's shape in
     /// its instance before rejecting it as an indirect input (TIME-9).
     pub(super) defer_endpoint_child: bool,

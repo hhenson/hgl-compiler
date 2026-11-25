@@ -3100,6 +3100,7 @@ fn pack_entries_with_unread_constant_keys_decline_cpp_emission() {
 /// temporal calls. Captured values and connections reach their bodies
 /// through a node hook, a graph and another static function parameter.
 /// MAP-2: map fits its split inputs to an explicit operator's member types.
+/// GEN-3: a bare callback takes the member or whole input type from the call.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn function_parameters_run_on_the_sdk() {
@@ -3117,7 +3118,29 @@ fn function_parameters_run_on_the_sdk() {
         "demo.callback_library.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.callback_library.hgl"),
     );
-    let output = hgl_in(&["test", &file, &library, "--target", "cpp"], &[], &[]);
+    let templates = write(
+        &root,
+        "demo.bare_callback_templates.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.bare_callback_templates.hgl"),
+    );
+    let alternatives = write(
+        &root,
+        "demo.callback_alternatives.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.callback_alternatives.hgl"),
+    );
+    let output = hgl_in(
+        &[
+            "test",
+            &file,
+            &library,
+            &templates,
+            &alternatives,
+            "--target",
+            "cpp",
+        ],
+        &[],
+        &[],
+    );
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -3126,7 +3149,7 @@ fn function_parameters_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 20 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -3273,29 +3296,48 @@ fn written_pack_member_types_run_on_the_sdk() {
     );
 }
 
-/// GEN-10 and GEN-17: an existential or cross-pack relation can leave a
-/// member's type untold. Analysis preserves that judgment and C++ reports the call.
+/// GEN-7, GEN-10 and GEN-17: evidence that leaves a member's type unknown
+/// does not prove the callee's requirement at the declaration.
 #[test]
-fn an_unproved_reflected_type_declines_cpp_emission() {
+fn an_unproved_reflected_type_rejects_at_the_declaration() {
     let root = scratch("unproved-reflected-type");
     let cases = [
         (
             "existential",
             concat!(
-                "const fn shape(item: str, other: i64) -> i64 => other\n",
                 "const fn choose<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key]\n",
                 "    requires any arg in arg_keys(Ps) { Ps[arg] == i64 } => exact<Ps[key]>(item)\n",
-                "test chosen_member { assert choose(shape, \"text\") == \"text\" }\n",
             ),
         ),
         (
             "cross_pack",
             concat!(
-                "const fn shape(item: i64) -> i64 => item\n",
                 "const fn choose<...Ps, ...Qs>(f: const fn(...{Ps}) -> i64, g: const fn(...{Qs}) -> i64,\n",
                 "    item: Ps[key]) -> Ps[key]\n",
                 "    requires each arg in arg_keys(Ps) { Ps[arg] == Qs[arg] } => exact<Ps[key]>(item)\n",
-                "test chosen_member { assert choose(shape, shape, 3) == 3 }\n",
+            ),
+        ),
+        (
+            "inequality",
+            concat!(
+                "const fn choose<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key]\n",
+                "    requires Ps[key] != str => exact<Ps[key]>(item)\n",
+            ),
+        ),
+        (
+            "disjunction",
+            concat!(
+                "const fn choose<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key]\n",
+                "    requires (each arg in arg_keys(Ps) { Ps[arg] == i64 }) || Ps[key] == str\n",
+                "    => exact<Ps[key]>(item)\n",
+            ),
+        ),
+        (
+            "two_members",
+            concat!(
+                "const other: str = \"other\"\n",
+                "const fn choose<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[key]) -> Ps[key]\n",
+                "    requires Ps[key] == Ps[other] => exact<Ps[key]>(item)\n",
             ),
         ),
     ];
@@ -3309,31 +3351,21 @@ fn an_unproved_reflected_type_declines_cpp_emission() {
             ),
         );
         let checked = hgl_in(&["check", &file], &[], &[]);
-        assert_eq!(
-            checked.status.code(),
-            Some(0),
-            "{name}: {}",
-            text(&checked.stderr)
-        );
-        let out = root.join(name);
-        let emitted = hgl_in(
-            &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
-            &[],
-            &[],
-        );
-        let stderr = text(&emitted.stderr);
-        assert_eq!(emitted.status.code(), Some(1), "{name}: {stderr}");
+        let stderr = text(&checked.stderr);
+        assert_eq!(checked.status.code(), Some(1), "{name}: {stderr}");
         assert!(
-            stderr.contains("error[build/target.unsupported]"),
+            stderr.contains("error[constraint/requires.unmet]")
+                && stderr.contains("the `requires` of `exact` is not known to hold")
+                && stderr.matches("error[").count() == 1,
             "{name}: {stderr}"
         );
     }
 }
 
-/// GEN-5 and GEN-7: an unread member proof preserves the ordinary
-/// call's operator diagnostic at the declaration.
+/// GEN-3 and GEN-7: a finite membership that admits a failing type
+/// rejects the call before the caller's concrete instance is checked.
 #[test]
-fn an_unread_reflected_membership_preserves_the_operator_error() {
+fn an_insufficient_reflected_membership_rejects_at_the_declaration() {
     let root = scratch("unread-reflected-membership");
     let file = write(
         &root,
@@ -3352,8 +3384,9 @@ fn an_unread_reflected_membership_preserves_the_operator_error() {
     let stderr = text(&checked.stderr);
     assert_eq!(checked.status.code(), Some(1), "{stderr}");
     assert!(
-        stderr.contains("error[operator/operator.no_candidate]")
-            && stderr.contains("no value candidate of operator `add_` takes `Ps[item_key]`"),
+        stderr.contains("error[constraint/requires.unmet]")
+            && stderr.contains("the `requires` of `twice` does not hold for this call")
+            && stderr.matches("error[").count() == 1,
         "{stderr}"
     );
 }
@@ -5732,6 +5765,29 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
         stdout.ends_with("executable cases: 32 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// FN-9, CRUN-7: a selected child uses the run store before its user node
+/// starts and again when the branch is re-entered.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn selected_children_use_the_run_store_at_startup_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("selected_child_store");
+    let file = write(
+        &root,
+        "demo.store.child_start.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.store.child_start.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

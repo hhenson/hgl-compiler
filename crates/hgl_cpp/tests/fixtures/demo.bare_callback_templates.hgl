@@ -1,0 +1,169 @@
+module demo.bare_callback_templates
+
+const fn id<T>(x: T) -> T => x
+const fn pair<T>(a: T, b: T) -> T => a
+const fn take_second<B>(flag: bool, b: B) -> B => b
+const fn keep_list<T>(items: list<T, 2>) -> list<T, 2> => items
+
+operator op_id<T>(x: T) -> T
+impl const fn op_id(x: i64) -> i64 => x + 100
+impl const fn op_id(x: list<i64, 2>) -> list<i64, 2> => [x[0] + 10, x[1] + 20]
+
+operator public_list<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>}
+}
+impl fn public_list<...Ps, ...As>(f: fn(...{Ps}) -> list<i64, 2>, args: ...{As for f}) -> list<i64, 2> => f(...args)
+
+operator public_scalar<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64}
+}
+impl fn public_scalar<...Ps, ...As>(f: fn(...{Ps}) -> i64, args: ...{As for f}) -> i64 => f(...args)
+
+operator candidate_equality<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>}
+}
+impl fn candidate_equality<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+    requires R == list<i64, 2> => f(...args)
+
+operator candidate_list<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+impl fn candidate_list<T, ...Ps, ...As>(f: fn(...{Ps}) -> list<T, 2>, args: ...{As for f}) -> list<T, 2>
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>}
+} => f(...args)
+
+operator candidate_input<A, R, ...Ps, ...As, const first_name: str = "a">(f: fn(a: A, ...{Ps}) -> R, args: ...{As for f without first_name}) -> i64
+impl fn candidate_input<R, ...Ps, ...As, const first_name: str = "a">(f: fn(a: list<i64, 2>, ...{Ps}) -> R, args: ...{As for f without first_name}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>}
+} => 10
+
+operator candidate_mark<T, R, ...Ps, ...As>(mark: T, f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+impl fn candidate_mark<R, ...Ps, ...As>(mark: R, f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>}
+} => f(...args)
+
+operator candidate_place<R, C, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> C
+impl fn candidate_place<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>}
+} => f(...args)
+
+operator candidate_scalar_place<R, C, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> C
+impl fn candidate_scalar_place<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64}
+} => f(...args)
+
+operator candidate_tuple_place<R, C, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> C
+impl const fn candidate_tuple_place<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> tuple<R, bool>
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => (f(...args), true)
+
+operator candidate_sibling<T, R, ...Ps, ...As>(g: fn(T) -> T, f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>}
+}
+impl fn candidate_sibling<R, ...Ps, ...As>(g: fn(R) -> R, f: fn(...{Ps}) -> R, args: ...{As for f}) -> R => g(f(...args))
+
+fn partial_list<T, ...Ps, ...As>(f: fn(...{Ps}) -> list<T, 2>, args: ...{As for f}) -> list<T, 2>
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>}
+} => f(...args)
+
+fn partial_equality<R, T, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+    requires R == list<T, 2> && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>}
+} => f(...args)
+
+fn required_dictionary_key<K, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
+    requires K == i64 && each k in arg_keys(As) { As[k] in {Ps[k], dict<K, Ps[k]>}
+} => f(...args)
+
+fn required_tuple_result<A, B, ...Ps, ...As>(mark: A, f: fn(...{Ps}) -> tuple<A, B>, args: ...{As for f}) -> tuple<A, B>
+    requires B == i64 && each k in arg_keys(As) { As[k] in {Ps[k], tuple<str, i64>}
+} => f(...args)
+
+fn required_list_result<R, const N: i64 = 2, ...Ps, ...As>(f: fn(...{Ps}) -> list<R, N>, args: ...{As for f}) -> list<R, N>
+    requires R == i64 && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>}
+} => f(...args)
+
+fn public_fixed_result(xs: list<i64, 2>) -> i64 {
+    let r = public_list(id, xs)
+    return r[0]
+}
+fn public_nonbinding_member(v: i64) -> i64 {
+    let r = public_scalar(id, v)
+    return r
+}
+fn public_with_candidate_equality(xs: list<i64, 2>) -> i64 {
+    let r = candidate_equality(id, xs)
+    return r[0]
+}
+fn candidate_partial_result(xs: list<i64, 2>) -> i64 {
+    let r = candidate_list(id, xs)
+    return r[0]
+}
+fn candidate_fixed_input(xs: list<i64, 2>) -> i64 => candidate_input(pair, xs)
+fn function_partial_result(xs: list<i64, 2>) -> i64 {
+    let r = partial_list(id, xs)
+    return r[0]
+}
+fn operator_partial_result(xs: list<i64, 2>) -> i64 {
+    let r = partial_list(op_id, xs)
+    return r[0]
+}
+fn equality_partial_result(xs: list<i64, 2>) -> i64 {
+    let r = partial_equality(id, xs)
+    return r[0]
+}
+fn dictionary_kept_whole(d: dict<str, i64>) -> i64 {
+    let r = required_dictionary_key(id, d)
+    return r["a"]
+}
+fn compound_tuple_result(v: tuple<str, i64>) -> i64 {
+    let r = required_tuple_result("hi", id, v)
+    return r[1]
+}
+fn compound_list_result(xs: list<i64, 2>) -> i64 {
+    let r = required_list_result(id, xs)
+    return r[0]
+}
+fn ordinary_candidate_input(xs: list<i64, 2>) -> i64 {
+    let r = candidate_mark(xs, id, xs)
+    return r[0]
+}
+fn direct_candidate_result(xs: list<i64, 2>) -> list<i64, 2> => candidate_place(id, xs)
+fn explicit_whole_map(flags: list<bool, 2>, xs: list<i64, 2>) -> list<list<i64, 2>, 2> => map(take_second<list<i64, 2>>, flags, xs)
+fn nonbinding_candidate_result(v: i64) -> i64 => candidate_scalar_place(id, v)
+fn nonbinding_tuple_result(v: i64) -> tuple<i64, bool> => candidate_tuple_place(id, v)
+fn explicit_tuple_result(v: i64) -> tuple<i64, bool> => candidate_tuple_place(id<i64>, v)
+fn sibling_candidate_result(xs: list<i64, 2>) -> i64 {
+    let r = candidate_sibling(keep_list, id, xs)
+    return r[0]
+}
+
+# GEN-2, GEN-5 and FN-17. Candidate inputs and the candidate result supply the callback template.
+test candidate_callback_templates {
+    assert eval candidate_partial_result(xs: [[5, 6]]) == [5]
+    assert eval candidate_fixed_input(xs: [[1, 2]]) == [10]
+    assert eval ordinary_candidate_input(xs: [[2, 3]]) == [2]
+    assert eval direct_candidate_result(xs: [[6, 7]]) == [[6, 7]]
+    assert eval nonbinding_candidate_result(v: [8]) == [8]
+    assert eval nonbinding_tuple_result(v: [3]) == [(3, true)]
+    assert eval explicit_tuple_result(v: [3]) == [(3, true)]
+    assert eval explicit_whole_map(flags: [[true, false]], xs: [[1, 2]]) == [[[1, 2], [1, 2]]]
+}
+
+# GEN-3 and GEN-5. An operator’s public memberships apply during each candidate trial.
+test public_callback_memberships {
+    assert eval public_fixed_result(xs: [[1, 2]]) == [1]
+    assert eval public_nonbinding_member(v: [5]) == [5]
+    assert eval public_with_candidate_equality(xs: [[3, 4]]) == [3]
+    assert eval sibling_candidate_result(xs: [[2, 4]]) == [2]
+}
+
+# GEN-3 and FN-17. A known result shape guides inference while the element type is still open.
+test partial_callback_results {
+    assert eval function_partial_result(xs: [[7, 8]]) == [7]
+    assert eval operator_partial_result(xs: [[1, 2]]) == [11]
+    assert eval equality_partial_result(xs: [[9, 10]]) == [9]
+}
+
+# GEN-3. Positive equalities determine compound result parts and the membership’s key type.
+test positive_callback_equalities {
+    assert eval dictionary_kept_whole(d: [["a": 3]]) == [3]
+    assert eval compound_tuple_result(v: [("ok", 7)]) == [7]
+    assert eval compound_list_result(xs: [[4, 5]]) == [4]
+}
