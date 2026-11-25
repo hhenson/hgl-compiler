@@ -27,7 +27,7 @@ use super::{Candidate, Typer};
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
 use crate::program::{Declaration, DeclarationKind, DependentPack, OperatorRef, Program, Role};
-use crate::syntax::{has_token, name_token};
+use crate::syntax::{has_token, name_token, ungrouped};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, NamedKind, Pack, Scalar,
     Signature, Type,
@@ -409,7 +409,6 @@ impl<'a> Typer<'a> {
             &unit.declarations[operator.declaration],
             dependent_pack.zip(evidence.as_ref()),
         );
-        let candidate_functions = !candidates.is_empty();
         let written =
             self.operator_arguments(name, list, (public, dependent), &options, pack.as_ref());
         let named_generics = self.diagnostics.len() == reported
@@ -460,7 +459,7 @@ impl<'a> Typer<'a> {
                     Some(&inferred),
                     pack.as_ref(),
                     replay,
-                    false,
+                    &[],
                 );
                 self.take_back(mark, false);
                 self.infer_operator_inputs(public, &mut inferred, &public_inputs(public, &probe));
@@ -473,7 +472,7 @@ impl<'a> Typer<'a> {
             context.as_deref(),
             pack.as_ref(),
             replay,
-            candidate_functions,
+            &candidates,
         );
         self.constants_given(&given, public);
         if self.diagnostics.len() == reported {
@@ -1023,7 +1022,7 @@ impl<'a> Typer<'a> {
         context: Option<&[Option<Argument>]>,
         pack: Option<&hir::TypePackArgument>,
         replay: Option<ReplayedCall<'_>>,
-        candidate_functions: bool,
+        candidates: &[Candidate<'_>],
     ) -> Vec<Given> {
         let evidence = dependent.map(|(_, evidence)| evidence);
         let dependent = dependent.map(|(pack, _)| pack);
@@ -1091,16 +1090,31 @@ impl<'a> Typer<'a> {
             .enumerate()
             .map(|(position, (key, node, ready))| {
                 let public_type = public_function(public, &key);
+                let public_slot = key.public_parameter(public);
                 let dependent_function = dependent.is_some_and(|pack| {
-                    key.public_parameter(public)
-                        .is_some_and(|index| public.parameters[index].at == pack.function)
+                    public_slot.is_some_and(|index| public.parameters[index].at == pack.function)
                 });
+                let fixed_template = |ty: &Type| {
+                    matches!(ty, Type::Function(template) if template.named_pack.is_none())
+                };
+                let candidate_template = || {
+                    candidates.iter().filter_map(|&(_, _, candidate)| {
+                        let index = public
+                            .candidate_parameters(candidate)
+                            .nth(public_slot?)
+                            .flatten()?;
+                        Some(&candidate.parameters[index].ty)
+                    }).any(fixed_template)
+                };
                 // A reflected pack needs its public reading to establish
                 // the arguments the operator admits (GEN-17).
-                let by_function = candidate_functions
+                let by_function = !candidates.is_empty()
                     && !dependent_function
-                    && matches!(public_type, Some(Type::Function(template)) if template.named_pack.is_none())
-                    && ready.is_none();
+                    && ready.is_none()
+                    && (public_type.is_some_and(fixed_template)
+                        || public_type.is_none()
+                            && self.names_static_callback(&node)
+                            && candidate_template());
                 let explicit = match &key {
                     Key::Position(position) => position
                         .checked_sub(fixed)
@@ -1156,6 +1170,24 @@ impl<'a> Typer<'a> {
                         explicit: None,
                         retried: by_function,
                     }
+                } else if by_function {
+                    // A candidate's fixed template reads this function
+                    // name. There is no ordinary value to read first.
+                    let at = self.at(&node);
+                    Given {
+                        key,
+                        node,
+                        value: Expr {
+                            kind: ExprKind::Unread,
+                            ty: Type::Unknown,
+                            at,
+                            category: ValueCategory::Unsettled,
+                        },
+                        by_place: false,
+                        by_function: true,
+                        explicit: None,
+                        retried: true,
+                    }
                 } else if let Some(ty) = explicit {
                     let value = self.expression(&node, Some(ty));
                     let value = self.fit_input(value, ty, "the explicitly typed pack argument");
@@ -1173,6 +1205,29 @@ impl<'a> Typer<'a> {
                 }
             })
             .collect()
+    }
+
+    /// FN-17: a candidate can give a named callback its fixed template
+    /// when the operator's public slot supplies no function type.
+    fn names_static_callback(&self, node: &SyntaxNode) -> bool {
+        let node = ungrouped(node.clone());
+        if !matches!(
+            node.kind(),
+            SyntaxKind::NameExpr | SyntaxKind::FunctionReference
+        ) {
+            return false;
+        }
+        if let Some(local) = self.local_of(&node) {
+            return matches!(self.locals[local].ty, Type::Function(_));
+        }
+        name_token(&node)
+            .and_then(|name| self.declarations(&name))
+            .is_some_and(|(module, declarations)| {
+                declarations.iter().any(|&index| {
+                    let kind = self.program.modules[module].declarations[index].kind;
+                    kind == DeclarationKind::Operator || kind.binding_role().is_some()
+                })
+            })
     }
 
     /// ERR-15: equally few result reads in different operands leave no
