@@ -646,8 +646,8 @@ test conflict { eval different(key: "app.key") }
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:13:22 injectable/store.reserved_key TIME-8",
             "m.hgl:10:21 injectable/store.key_type TIME-8",
+            "m.hgl:13:17 injectable/store.reserved_key TIME-8",
         ],
         "{}",
         checked.report,
