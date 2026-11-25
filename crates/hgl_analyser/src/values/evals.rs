@@ -849,7 +849,7 @@ impl<'a> Typer<'a> {
         let mut cells = Vec::new();
         // The kind of key a timed trace has, and its last constant key.
         let mut key: Option<Scalar> = None;
-        let mut last: Option<i64> = None;
+        let mut last: Option<i128> = None;
         for item in items {
             let (time, value) = if timed {
                 // A value among pairs has been reported by the parser.
@@ -970,7 +970,7 @@ impl<'a> Typer<'a> {
         &mut self,
         node: &SyntaxNode,
         key: &mut Option<Scalar>,
-        last: &mut Option<i64>,
+        last: &mut Option<i128>,
     ) -> Option<Expr> {
         if node.kind() == SyntaxKind::Hole {
             self.placeholder(
@@ -1014,9 +1014,21 @@ impl<'a> Typer<'a> {
             }
             _ => {}
         }
-        // "Keys strictly increase": of the keys that are constants read
-        // here, durations.
-        if let Ok(ConstantValue::Duration(now)) = self.read_constant(node, None) {
+        // TST-7: "Keys strictly increase". Compare absolute keys by their
+        // UTC instant (TYPE-2), using the same normalization as constants.
+        // A mixed key type is already reported above and has no order here.
+        let now = match self.read_constant(node, None) {
+            Ok(ConstantValue::Duration(now)) if *key == Some(Scalar::Duration) => {
+                Some(i128::from(now))
+            }
+            Ok(ConstantValue::Temporal(parts))
+                if *key == Some(Scalar::Datetime) && time.ty == Type::Scalar(Scalar::Datetime) =>
+            {
+                crate::constant::instant(&parts)
+            }
+            _ => None,
+        };
+        if let Some(now) = now {
             if last.is_some_and(|before| now <= before) {
                 self.diagnostics.emit(error(
                     Category::Type,

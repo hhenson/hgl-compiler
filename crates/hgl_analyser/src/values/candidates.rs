@@ -23,19 +23,20 @@ use super::inference::{
     bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
 };
 use super::lifting::preferred_call_role;
-use super::operators::unreadable;
+use super::operators::{core_dictionary_fallback, dictionary_fallback_type, unreadable};
 use super::requirements::{Condition, holds};
 use super::{Candidate, Typer};
 use crate::constant::Fault;
 use crate::declared::{
-    agree, bind_result, names_parameter, substitute_with_packs, substitute_within,
+    agree, bind_result, names_parameter, substitute_with_members, substitute_with_packs,
+    substitute_within, weight,
 };
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
 use crate::syntax::{child, name_token, tokens, ungrouped};
 use crate::types::{
     Argument, Constant, ConstantValue, Detail, FunctionType, GenericKind, GenericParameter, Pack,
-    Signature, Type,
+    Scalar, Signature, Type,
 };
 use crate::{codes, error};
 
@@ -774,23 +775,34 @@ impl<'a> Typer<'a> {
             .into_iter()
             .filter_map(|(reads, chosen)| (Some(reads.len()) == fewest).then_some(chosen))
             .collect::<Vec<_>>();
-        // GEN-5: "Select exactly one most-specific admitted candidate.
-        // Concrete types outrank variables; structurally constrained
-        // variables outrank unconstrained ones."
-        retain_preferred(&mut selected, |left, right| outranks(left, right, public));
-        // GEN-5: "Select exactly one most-specific admitted candidate.
-        // Concrete types outrank variables". A candidate not told to admit
-        // the call that one admitted candidate outranks is selected by
-        // nothing whatever its condition comes to; any other leaves which
-        // is selected not told. GEN-7: so a candidate that takes every
-        // generic argument is known where nothing else can outrank it.
+        // GEN-5: compare exact matches before declared specificity.
+        let exact =
+            |left: &Chosen<'_>, right: &Chosen<'_>| self.exact_match(left, right, given, widening);
+        retain_preferred(&mut selected, |left, right| {
+            exact(left, right) == Specific::More
+        });
+        retain_preferred(&mut selected, |left, right| {
+            exact(left, right) == Specific::Same && outranks(left, right, public)
+        });
+        // GEN-7: keep the generic body's provisional structural match
+        // when an exact candidate may win only after substitution.
+        let generic_operand = !possible.is_empty()
+            && given.iter().any(|given| {
+                self.signature
+                    .generics
+                    .iter()
+                    .any(|generic| mentions(given.ty(), &[generic.at]))
+            });
+        let settles = |left: &Chosen<'_>, right: &Chosen<'_>| match exact(left, right) {
+            Specific::More => true,
+            Specific::Same => outranks(left, right, public),
+            Specific::Less | Specific::Neither => generic_operand && outranks(left, right, public),
+        };
         untold |= possible.iter().any(|(reads, unknown)| {
             fewest.is_none_or(|fewest| {
                 *reads < fewest
                     || *reads == fewest
-                        && !selected
-                            .iter()
-                            .any(|admitted| outranks(admitted, unknown, public))
+                        && !selected.iter().any(|admitted| settles(admitted, unknown))
             })
         });
         if widening && selected.len() > 1 {
@@ -817,6 +829,7 @@ impl<'a> Typer<'a> {
                     role(chosen) != Some(preferred)
                         && selected.iter().any(|other| {
                             role(other) == Some(preferred)
+                                && exact(other, chosen) == Specific::Same
                                 && other
                                     .taken
                                     .parameters
@@ -836,14 +849,70 @@ impl<'a> Typer<'a> {
                 !outranked[position - 1]
             });
         }
-        // Compare the inferred inputs only among candidates still tied
-        // after structural specificity, literal widening and phase.
-        if !untold {
-            retain_preferred(&mut selected, |left, right| {
-                callback_input_specificity(left, right, given) == Specific::More
-            });
-        }
         (selected, untold)
+    }
+
+    /// GEN-5: the exact match wins where it takes an argument as it is
+    /// and the other candidate widens it. Opposite preferences across
+    /// arguments leave the candidates incomparable.
+    fn exact_match(
+        &self,
+        left: &Chosen,
+        right: &Chosen,
+        given: &[Given],
+        widening: bool,
+    ) -> Specific {
+        given.iter().zip(&left.bound).zip(&right.bound).fold(
+            Specific::Same,
+            |order, ((argument, &left_place), &right_place)| {
+                let left_type = parameter_type(&left.taken, &left.type_packs, left_place);
+                let right_type = parameter_type(&right.taken, &right.type_packs, right_place);
+                let preference = if argument.by_function {
+                    let left = (left, left_place, left_type);
+                    let right = (right, right_place, right_type);
+                    callback_match(left, right, given)
+                } else if let (Some(left), Some(right)) = (left_type, right_type) {
+                    let widens = |expected| self.argument_widening(argument, expected, widening);
+                    match (widens(left), widens(right)) {
+                        (Some(false), Some(true)) => Specific::More,
+                        (Some(true), Some(false)) => Specific::Less,
+                        _ => Specific::Same,
+                    }
+                } else {
+                    Specific::Same
+                };
+                order.and(preference)
+            },
+        )
+    }
+
+    /// GEN-5 distinguishes exact types from nullable, parent, and `any`
+    /// widenings. Nullable widening includes `delta<V>` to `delta<V?>`
+    /// (TYPE-16). Literal precision is settled before admission.
+    fn argument_widening(&self, argument: &Given, expected: &Type, widening: bool) -> Option<bool> {
+        let floated = Type::Scalar(Scalar::F64);
+        let actual = if widening
+            && argument.explicit.is_none()
+            && accepts_float(expected)
+            && is_integer_literal(&argument.value)
+        {
+            &floated
+        } else {
+            argument.ty()
+        };
+        if argument.by_place || !whole(actual) || !whole(expected) {
+            return None;
+        }
+        if agree(actual, expected) {
+            return Some(false);
+        }
+        (matches!(expected, Type::Scalar(Scalar::Any))
+            || matches!(expected, Type::Nullable(inner)
+                if !matches!(actual, Type::Nullable(_)) && self.admits(inner, actual))
+            || matches!(expected, Type::Delta(of)
+                if matches!(of.as_ref(), Type::Nullable(_)) && self.admits(expected, actual))
+            || self.widens(actual, expected))
+        .then_some(true)
     }
 
     /// GEN-5: "Among candidates that tie and differ only in which
@@ -1225,6 +1294,11 @@ impl<'a> Typer<'a> {
         widening: bool,
         converting: bool,
     ) -> Admits {
+        if core_dictionary_fallback(self.program, module, candidate, signature)
+            && !exact_dictionary_fallback(signature, given, bound)
+        {
+            return Admits::Misfit;
+        }
         let result_fits = self.candidate_result_admits(wanted.place, signature.result.as_ref());
         // The operator's own requirement of its result.
         let among = match (&wanted.among, &signature.result) {
@@ -1736,23 +1810,50 @@ impl<'a> Typer<'a> {
         {
             return Settled::Elsewhere;
         }
-        // The memberships of the parameters the call names: each such
-        // parameter, as an argument's type, a constant it gives, or the
-        // output it asks for.
+        let evidence_types: Vec<_> = given
+            .iter()
+            .map(Given::ty)
+            .chain(wanted.place)
+            .chain(wanted.among.iter().flatten())
+            .chain(
+                operator_generics
+                    .iter()
+                    .filter_map(|argument| match argument {
+                        Argument::Type(ty) => Some(ty),
+                        Argument::Constant(_) | Argument::NoResult => None,
+                    }),
+            )
+            .collect();
+        let uses_member = evidence_types.iter().any(|ty| {
+            ty.any_part(
+                &|part| matches!(part, Type::PackMember { pack, .. } if own.contains(pack)),
+                &|_| false,
+            )
+        });
+        let member_dependencies = if uses_member {
+            self.stated_member_dependencies(&evidence_types)
+        } else {
+            Vec::new()
+        };
+        // Ordinary memberships can constrain the call directly or through
+        // the stated type or key of one of its reflected members.
         let memberships: Vec<(Location, Vec<Argument>)> = self
             .memberships()
             .into_iter()
             .filter(|(parameter, _)| {
                 let one = [*parameter];
-                given.iter().any(|given| {
-                    mentions(given.ty(), &one)
-                        || self
-                            .read_constant(&given.node, None)
-                            .is_ok_and(|value| value.names_one_of(&one))
-                }) || wanted.place.is_some_and(|place| mentions(place, &one))
+                member_dependencies.contains(parameter)
+                    || given.iter().any(|given| {
+                        mentions(given.ty(), &one)
+                            || self
+                                .read_constant(&given.node, None)
+                                .is_ok_and(|value| value.names_one_of(&one))
+                    })
+                    || wanted.place.is_some_and(|place| mentions(place, &one))
             })
             .collect();
-        let admits_without_membership = memberships.is_empty() && !untold;
+        let admits_without_membership =
+            memberships.is_empty() && !untold && (provisional.is_some() || !uses_member);
         if admits_without_membership && (!generic_operands || provisional.is_none()) {
             return Settled::Elsewhere;
         }
@@ -1791,10 +1892,26 @@ impl<'a> Typer<'a> {
         // The report where nothing the `requires` states settles it.
         let operator_name =
             &program.modules[operator.module].declarations[operator.declaration].name;
+        let unresolved = |typer: &Self| {
+            typer.no_one_candidate((operator_name, name), public, (given, wanted), (true, &[]))
+        };
         let unsettled = |typer: &Self| {
-            typer
-                .no_one_candidate((operator_name, name), public, (given, wanted), (true, &[]))
-                .with_note(super::operators::UNSETTLED)
+            let report = unresolved(typer).with_note(super::operators::UNSETTLED);
+            if uses_member {
+                report.with_note(
+                    "state a reflected member's type or finite alternatives, for example \
+                     `requires Ps[k] == i64` or `requires Ps[k] in {i64, f64}` (GEN-7, GEN-17)",
+                )
+            } else {
+                report
+            }
+        };
+        let proof_limit = |typer: &Self| {
+            unresolved(typer).with_note(format!(
+                "the analyser's limit of {} combinations of stated requirements was reached \
+                 while proving this call (GEN-7)",
+                crate::INSTANCES
+            ))
         };
         let constants = given.iter().all(|given| {
             !given.by_place
@@ -1803,37 +1920,90 @@ impl<'a> Typer<'a> {
                     Err(Fault::NotConstant)
                 )
         });
-        let combinations = combinations(&memberships);
-        if !constants || memberships.is_empty() || combinations.len() > crate::INSTANCES {
+        let mut ordinary_trials = combinations(&memberships);
+        if memberships.is_empty() && uses_member {
+            ordinary_trials.push(Vec::new());
+        }
+        if !constants || ordinary_trials.is_empty() {
             return Settled::Rejected(unsettled(self));
+        }
+        if ordinary_trials.len() > crate::INSTANCES {
+            return Settled::Rejected(proof_limit(self));
         }
         // Each combination of members, as an instance would have it.
         let before = std::mem::take(&mut self.instance);
-        let packs = PackTypes::new(&[], &[]);
+        let bound = self.bound.clone();
+        let no_packs = PackTypes::new(&[], &[]);
         let mut failed = None;
-        for combination in &combinations {
-            self.instance = combination.clone();
-            let mark = self.mark();
-            let outcome = match self.select_at_instance(&record, &packs, None) {
-                // What a call is held to once its candidate is selected
-                // (`Typer::called`): a `var` parameter's place among them.
-                AtInstance::Selected(chosen, given) => {
-                    let start = self.diagnostics.len();
-                    self.called(operator, *chosen, given, Vec::new(), (form, name));
-                    self.diagnostics.as_slice()[start..].first().cloned()
-                }
-                AtInstance::Rejected(report) => Some(report),
-                AtInstance::Untold => Some(unsettled(self)),
+        let mut tried = 0;
+        'ordinary: for combination in &ordinary_trials {
+            let bindings: Vec<_> = bound
+                .iter()
+                .chain(combination)
+                .map(|(at, arg)| (*at, arg))
+                .collect();
+            let member_choices = if uses_member {
+                self.stated_member_choices(&evidence_types, &bindings)
+            } else {
+                Vec::new()
             };
-            self.take_back(mark, false);
-            if let Some(report) = outcome {
-                failed = Some((combination.clone(), report));
+            let mut member_trials = combinations(&member_choices);
+            if member_choices.is_empty() {
+                if memberships.is_empty() {
+                    failed = Some((Vec::new(), Vec::new(), unsettled(self)));
+                    break;
+                }
+                member_trials.push(Vec::new());
+            }
+            tried += member_trials.len();
+            if tried > crate::INSTANCES {
+                failed = Some((Vec::new(), Vec::new(), proof_limit(self)));
                 break;
+            }
+            self.instance = combination.clone();
+            for members in member_trials {
+                let mark = self.mark();
+                let selected = if members.is_empty() {
+                    self.select_at_instance(&record, &no_packs, None)
+                } else {
+                    // Stated member types can use symbolic keys. They
+                    // supply just those members, without a pack's arity.
+                    let known = |pack, _: &str, key: &Constant| {
+                        members.iter().find_map(|((at, given), ty)| {
+                            (*at == pack && given.value.same(&key.value) == Some(true))
+                                .then(|| ty.clone())
+                        })
+                    };
+                    let bound = members.iter().map(|(_, ty)| weight(ty)).max().unwrap_or(1);
+                    let declared: Vec<_> = bindings.iter().map(|(at, _)| *at).collect();
+                    self.select_with_types(&record, None, &|ty| {
+                        placed(
+                            substitute_with_members(ty, &bindings, &known, bound),
+                            &declared,
+                        )
+                    })
+                };
+                let outcome = match selected {
+                    // What a call is held to once its candidate is selected
+                    // (`Typer::called`): a `var` parameter's place among them.
+                    AtInstance::Selected(chosen, given) => {
+                        let start = self.diagnostics.len();
+                        self.called(operator, *chosen, given, Vec::new(), (form, name));
+                        self.diagnostics.as_slice()[start..].first().cloned()
+                    }
+                    AtInstance::Rejected(report) => Some(report),
+                    AtInstance::Untold => Some(unsettled(self)),
+                };
+                self.take_back(mark, false);
+                if let Some(report) = outcome {
+                    failed = Some((combination.clone(), members, report));
+                    break 'ordinary;
+                }
             }
         }
         self.instance = before;
-        if let Some((combination, report)) = failed {
-            let members: Vec<String> = combination
+        if let Some((combination, pack_members, report)) = failed {
+            let mut members: Vec<String> = combination
                 .iter()
                 .map(|(at, member)| {
                     let parameter = self
@@ -1850,6 +2020,31 @@ impl<'a> Typer<'a> {
                     format!("`{parameter}` = `{member}`")
                 })
                 .collect();
+            let reflected = !pack_members.is_empty();
+            members.extend(pack_members.into_iter().map(|((pack, key), ty)| {
+                let name = self
+                    .signature
+                    .generics
+                    .iter()
+                    .find(|generic| generic.at == pack)
+                    .map_or("_", |generic| generic.name.as_str());
+                let key = match key.value {
+                    ConstantValue::Str(name) => format!("{name:?}"),
+                    ConstantValue::Int(index) => index.to_string(),
+                    _ => key.text,
+                };
+                format!("`{name}[{key}]` = `{ty}`")
+            }));
+            if members.is_empty() {
+                return Settled::Rejected(report);
+            }
+            if reflected {
+                return Settled::Rejected(report.with_note(format!(
+                    "for {}, which the declaration's `requires` admits: the body must \
+                     support the call under its stated requirements (GEN-7)",
+                    members.join(" and ")
+                )));
+            }
             return Settled::Rejected(report.with_note(format!(
                 "for {}, which the declaration's `requires` admits: a membership authorises an \
                  operation only where each listed member has a candidate for it (GEN-3, \
@@ -1944,6 +2139,17 @@ impl<'a> Typer<'a> {
         // GEN-17: a reflected member supplies its concrete type before
         // the requested result and operands are matched against candidates.
         let in_place = |ty: &Type| placed(packs.project(ty, &map).unwrap_or(Type::Unknown), &own);
+        self.select_with_types(selecting, values, &in_place)
+    }
+
+    /// Select against a concrete instance or against one combination of
+    /// the declaration's stated requirements (GEN-5, GEN-7).
+    fn select_with_types(
+        &mut self,
+        selecting: &Selecting,
+        values: Option<Vec<Expr>>,
+        in_place: &impl Fn(&Type) -> Type,
+    ) -> AtInstance<'a> {
         self.graph = selecting.graph;
         let operator = selecting.operator;
         let program = self.program;
@@ -2026,6 +2232,9 @@ impl<'a> Typer<'a> {
                 }
             }
             return AtInstance::Selected(Box::new(chosen), given);
+        }
+        if let Err(report) = self.dictionary_get_fallback(operator, public, &candidates, &given) {
+            return AtInstance::Rejected(*report);
         }
         // Named as the operator is declared: a symbol stands for it.
         let name = &program.modules[operator.module].declarations[operator.declaration].name;
@@ -2179,24 +2388,22 @@ pub(super) enum Settled {
 /// each generic parameter, each as an instance would give the
 /// parameters: for `T in {i64, f64}` and `U in {str}`, `(i64, str)` and
 /// `(f64, str)`. None where there is no membership.
-pub(super) fn combinations(
-    memberships: &[(Location, Vec<Argument>)],
-) -> Vec<Vec<(Location, Argument)>> {
+pub(super) fn combinations<K: Clone, V: Clone>(memberships: &[(K, Vec<V>)]) -> Vec<Vec<(K, V)>> {
     if memberships.is_empty() {
         return Vec::new();
     }
-    let mut all: Vec<Vec<(Location, Argument)>> = vec![Vec::new()];
+    let mut all: Vec<Vec<(K, V)>> = vec![Vec::new()];
     for (at, members) in memberships {
-        let mut next = Vec::with_capacity(all.len() * members.len());
+        let mut next = Vec::new();
         for combination in &all {
             for member in members {
                 let mut more = combination.clone();
-                more.push((*at, member.clone()));
+                more.push((at.clone(), member.clone()));
                 next.push(more);
-            }
-            // Past the bound on instances there are too many to try.
-            if next.len() > crate::INSTANCES {
-                return next;
+                // Past the bound on instances there are too many to try.
+                if next.len() > crate::INSTANCES {
+                    return next;
+                }
             }
         }
         all = next;
@@ -2724,6 +2931,16 @@ pub(super) struct CallbackRequest<'w> {
     pub(super) values: &'w [CallbackOption<'w>],
     /// A reflected callback can leave these parameters for its caller (FN-8).
     pub(super) reflected: Option<&'w [&'w str]>,
+}
+
+/// ERR-6 requires a supplied fallback with the dictionary's exact value
+/// type. A literal can take its expected type under EXPR-5.
+fn exact_dictionary_fallback(signature: &Signature, given: &[Given], bound: &[Place]) -> bool {
+    given.iter().zip(bound).any(|(argument, place)| {
+        place.parameter() == Some(2)
+            && !written_null(&argument.node)
+            && dictionary_fallback_type(argument, &signature.parameters[2].ty)
+    })
 }
 
 /// A public option that a candidate may take under the same name.
@@ -3552,7 +3769,6 @@ struct RankingType<'a> {
     written: Option<&'a Type>,
     generics: &'a [GenericParameter],
     pack_length: &'a dyn Fn(usize) -> Option<usize>,
-    retains_anonymous_value: bool,
 }
 
 impl<'a> RankingType<'a> {
@@ -3577,7 +3793,6 @@ impl<'a> RankingType<'a> {
         Self {
             ty,
             written,
-            retains_anonymous_value: false,
             ..self
         }
     }
@@ -3626,7 +3841,6 @@ impl<'a> RankingType<'a> {
         elements.iter().zip(written).map(move |(ty, written)| Self {
             ty,
             written,
-            retains_anonymous_value: false,
             ..self
         })
     }
@@ -3722,21 +3936,15 @@ fn specificity(left: RankingType<'_>, right: RankingType<'_>) -> Specific {
         (Type::Function(l), Type::Function(r))
             if l.value == r.value
                 && l.parameters.len() == r.parameters.len()
-                && (l.result.is_none()
-                    && (r.result_admits_none || right.retains_anonymous_value)
-                    || r.result.is_none()
-                        && (l.result_admits_none || left.retains_anonymous_value)) =>
+                && (l.result.is_none() && r.result_admits_none
+                    || r.result.is_none() && l.result_admits_none) =>
         {
-            // GEN-5 keeps the value of an anonymous body with no written
-            // result. GEN-12 otherwise prefers a written absence over a
-            // result that can bind to none. The inputs still count.
-            let result = match (
-                l.result.is_none(),
-                left.retains_anonymous_value,
-                right.retains_anonymous_value,
-            ) {
-                (false, true, _) | (true, _, false) => Specific::More,
-                _ => Specific::Less,
+            // GEN-12 prefers a written absence over a result that can
+            // bind to none. The inputs still count.
+            let result = if l.result.is_none() {
+                Specific::More
+            } else {
+                Specific::Less
             };
             l.parameters
                 .iter()
@@ -3774,83 +3982,69 @@ fn retain_preferred(selected: &mut Vec<Chosen>, outranks: impl Fn(&Chosen, &Chos
     });
 }
 
-/// GEN-5, FN-17: where the ordinary arguments match alike, compare the
-/// input types each candidate gives an inferred callback. A type inferred
-/// from another argument outranks a nullable widening of that type.
-fn callback_input_specificity(left: &Chosen, right: &Chosen, given: &[Given]) -> Specific {
-    let mut rank = Specific::Same;
-    for ((argument, &left_place), &right_place) in given.iter().zip(&left.bound).zip(&right.bound) {
-        let left_type = parameter_type(&left.taken, &left.type_packs, left_place);
-        let right_type = parameter_type(&right.taken, &right.type_packs, right_place);
-        if !argument.by_function {
-            if left_type != right_type {
-                return Specific::Neither;
-            }
-            continue;
-        }
-        let (
-            Some(Type::Function(left_type)),
-            Some(Type::Function(right_type)),
-            Some(left_index),
-            Some(right_index),
-        ) = (
-            left_type,
-            right_type,
-            left_place.parameter(),
-            right_place.parameter(),
-        )
-        else {
-            return Specific::Neither;
-        };
-        let (Type::Function(left_written), Type::Function(right_written)) = (
-            &left.declared.parameters[left_index].ty,
-            &right.declared.parameters[right_index].ty,
-        ) else {
-            return Specific::Neither;
-        };
-        // GEN-12 compares a written absence of the callback result with
-        // a result that may bind to none as part of structural specificity.
-        if left_written.result.is_none() != right_written.result.is_none() {
-            return Specific::Neither;
-        }
-        if left_type == right_type {
-            continue;
-        }
-        let callback_rank = |(plain, written, chosen): (&FunctionType, &FunctionType, &Chosen),
-                             (widened, widened_written, widened_chosen): (
-            &FunctionType,
-            &FunctionType,
-            &Chosen,
-        )| {
-            let arity = plain.ordinary_parameters().count();
-            arity == widened.ordinary_parameters().count()
+/// GEN-5 and FN-17: a candidate can take an inferred callback's inputs
+/// without widening and keep the value of its unwritten result.
+fn callback_match(
+    (left, left_place, left_type): (&Chosen, Place, Option<&Type>),
+    (right, right_place, right_type): (&Chosen, Place, Option<&Type>),
+    given: &[Given],
+) -> Specific {
+    let (
+        Some(Type::Function(left_type)),
+        Some(Type::Function(right_type)),
+        Some(left_index),
+        Some(right_index),
+    ) = (
+        left_type,
+        right_type,
+        left_place.parameter(),
+        right_place.parameter(),
+    )
+    else {
+        return Specific::Same;
+    };
+    let result = if right_type.result.is_none()
+        && left.valued_anonymous_parameters.contains(&left_index)
+    {
+        Specific::More
+    } else if left_type.result.is_none() && right.valued_anonymous_parameters.contains(&right_index)
+    {
+        Specific::Less
+    } else {
+        Specific::Same
+    };
+    let (Type::Function(left_written), Type::Function(right_written)) = (
+        &left.declared.parameters[left_index].ty,
+        &right.declared.parameters[right_index].ty,
+    ) else {
+        return result;
+    };
+    let fits_without_widening = |(plain, written, chosen): (
+        &FunctionType,
+        &FunctionType,
+        &Chosen,
+    ),
+                                 widened: &FunctionType| {
+        let arity = plain.ordinary_parameters().count();
+        arity == widened.ordinary_parameters().count()
                 && arity == written.ordinary_parameters().count()
-                && arity == widened_written.ordinary_parameters().count()
                 && plain
                     .ordinary_parameters()
                     .zip(widened.ordinary_parameters())
                     .zip(written.ordinary_parameters())
-                    .zip(widened_written.ordinary_parameters())
-                    .all(|(((plain, widened), written), widened_written)| {
+                    .all(|((plain, widened), written)| {
                         plain.ty() == widened.ty()
                             || matches!(widened.ty(), Type::Nullable(inner) if inner.as_ref() == plain.ty())
                                 && callback_input_from_arguments(chosen, given, written.ty())
-                                && matches!(widened_written.ty(), Type::Nullable(inner)
-                                    if callback_input_from_arguments(widened_chosen, given, inner))
                     })
-        };
-        let left_types = (left_type.as_ref(), left_written.as_ref(), left);
-        let right_types = (right_type.as_ref(), right_written.as_ref(), right);
-        let left_exact = callback_rank(left_types, right_types);
-        let right_exact = callback_rank(right_types, left_types);
-        rank = rank.and(match (left_exact, right_exact) {
-            (true, false) => Specific::More,
-            (false, true) => Specific::Less,
-            (true, true) => Specific::Same,
-            (false, false) => Specific::Neither,
-        });
-    }
-    rank
+    };
+    let left_exact = fits_without_widening((left_type, left_written, left), right_type);
+    let right_exact = fits_without_widening((right_type, right_written, right), left_type);
+    result.and(match (left_exact, right_exact) {
+        (true, false) => Specific::More,
+        (false, true) => Specific::Less,
+        _ => Specific::Same,
+    })
 }
 
 /// A callback input's type variable also occurs in an ordinary parameter
@@ -3939,14 +4133,12 @@ pub(super) fn alternative_outranks(
             written: Some(better),
             generics: better_generics,
             pack_length: &better_length,
-            retains_anonymous_value: false,
         },
         RankingType {
             ty: &worse_expanded,
             written: Some(worse),
             generics: worse_generics,
             pack_length: &worse_length,
-            retains_anonymous_value: false,
         },
     ) == Specific::More
 }
@@ -3993,18 +4185,12 @@ fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
                     written: Some(better_type),
                     generics: better_generics,
                     pack_length: &better_length,
-                    retains_anonymous_value: better
-                        .valued_anonymous_parameters
-                        .contains(&better_index),
                 },
                 RankingType {
                     ty: &worse_expanded,
                     written: Some(worse_type),
                     generics: worse_generics,
                     pack_length: &worse_length,
-                    retains_anonymous_value: worse
-                        .valued_anonymous_parameters
-                        .contains(&worse_index),
                 },
             ))
         })

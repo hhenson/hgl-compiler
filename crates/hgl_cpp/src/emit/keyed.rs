@@ -6,6 +6,7 @@
 //! | HGL | C++ |
 //! | --- | --- |
 //! | A temporal value of `set<K>`, of `dict<K, V>` | hgraph's `TSS<K>`, `TSD<K, V'>`, `V'` the form of `V` |
+//! | A set or dictionary used as a constant connection (FN-3) | `::hglrt::constant<T, Schema>` publishes its whole membership or entries once |
 //! | A read of one whole in a hook (TIME-1) | `::hglrt::keyed_value(view)`: an `::hglrt::set` or `::hglrt::dict`, which fails with `value.unset_read` where it is not valid |
 //! | `return value`, `out = value`, of a whole value or a delta (TIME-7) | `::hglrt::keyed_publish(view, value);`: hgraph's whole write of the one, its write of a delta of the other |
 //! | `delta_value(view)` (END-3, TYPE-16, ERR-14) | `::hglrt::fn_delta_value(view)`, or `fn_delta_value_checked`: an `::hglrt::set_delta`, `::hglrt::dict_delta` |
@@ -18,9 +19,8 @@
 //! A set's element and a dictionary's key are a scalar, which hgraph
 //! holds as a value of its own; a dictionary's value is a scalar, a set,
 //! a dictionary or a tuple of such positions, whose form the library
-//! converts (TIME-1). This family reports unsupported temporal forms,
-//! constant connections of sets and dictionaries (FN-3), and direct
-//! payload reads of nested entries (`book["a"]["b"]`). Observations of
+//! converts (TIME-1). This family reports unsupported temporal forms
+//! and direct payload reads of nested entries (`book["a"]["b"]`). Observations of
 //! nested entries (END-8) use the `endpoints` family's view of the complete
 //! path. A key's child as a graph connection (EXPR-7) is the `references`
 //! family's, a designation of the entry.
@@ -30,6 +30,7 @@ use hgl_analyser::{Scalar, Type};
 
 use super::Emitter;
 use super::forms::Family;
+use super::graphs::WIRING;
 use super::nodes::{Kind, Role};
 use super::statements::Scope;
 use super::types::cpp_type;
@@ -79,6 +80,16 @@ fn schema(emitter: &mut Emitter, ty: &Type) -> Option<String> {
 impl Family for Keyed {
     fn schema(&self, emitter: &mut Emitter<'_>, ty: &Type) -> Option<String> {
         schema(emitter, ty)
+    }
+
+    // FN-3: the ordinary collection publishes once in its keyed form.
+    fn constant(&self, emitter: &mut Emitter<'_>, ty: &Type, value: &str) -> Option<String> {
+        let schema = schema(emitter, ty)?;
+        let written = cpp_type(emitter.program, ty)?;
+        Some(format!(
+            "::{}::constant<{written}, {schema}>({WIRING}, {value})",
+            runtime::NAMESPACE
+        ))
     }
 
     // TIME-1: "A dictionary and an unsized list hold what they hold: a

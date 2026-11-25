@@ -233,7 +233,7 @@ transpiler: done
 
 analyser: done
 
-- Selects `join` for one list of strings or for the proposed positional-pack form. Each form takes `separator` by name under the FN-8 trial.
+- Selects `join` for one list of strings or for a positional pack of strings. Its `separator` configuration defaults to one space. A connection as the separator rejects (FN-18, EXPR-14).
 
 transpiler: done
 
@@ -551,6 +551,7 @@ transpiler: partial
 - Reading an absent store key gives `value.missing_key`, the same code as a
   strict dictionary lookup (ERR-6).
 - Left: a temporal child graph using the surrounding store is declined (CRUN-7).
+- Left: The execution catalogue lists `store.reserved_key`. #543 implements its checks.
 
 ## CAP-7
 
@@ -743,6 +744,7 @@ transpiler: partial
   stop. Outputless entries have no recording.
 - Left: Unsupported record types follow CEVAL-4. The reserved `run.output` check covers
   literal keys at source checking. Keys resolved at graph construction remain unchecked.
+- Left: The execution catalogue lists `store.reserved_key`. #543 implements its checks.
 
 runner: planned
 
@@ -758,7 +760,9 @@ runner: planned
 
 transpiler: partial
 
-- Fixed-size list `map` runs its HGL candidate. The keyed and growing-list candidates are declared and C++ reports them as unsupported (#370).
+- Fixed-size list `map` runs its HGL candidates. C++ wires a result-bearing keyed map over one split dictionary.
+- Core currently declares result-bearing native map candidates. Native calls with resultless callbacks reject during checking.
+- Left: native growing lists and multiple split dictionaries (#370).
 
 ## MAP-2
 
@@ -768,7 +772,9 @@ analyser: partial
 
 transpiler: partial
 
-- A fixed-size map binds positional and named inputs, splits the fitted list inputs, and supplies whole inputs to each child. An explicitly specialized operator can supply the callback's member types (FN-17). An omitted callback input uses the callback's default (FN-8, UNIT-8). Native forms await #370.
+- A fixed-size map binds positional and named inputs, splits the fitted list inputs, and supplies whole inputs to each child. An explicitly specialized operator can supply the callback's member types (FN-17). An omitted callback input uses the callback's default (FN-8, UNIT-8).
+- The native one-dictionary map binds the callback's checked arguments, passes the selected dictionary entry, and gives each whole input to every child.
+- Left: a function supplied to a keyed child, multiple split dictionaries and growing lists (#370). Bare operator selection is tracked in #776 and inline dictionary argument fitting in #826.
 
 ## MAP-3
 
@@ -778,15 +784,17 @@ analyser: done
 
 ## MAP-4
 
-transpiler: planned
+transpiler: partial
 
-- #370.
+- In a one-dictionary map the explicit key set or split dictionary supplies K. The keyed candidate requires an injected parameter to have type K.
+- Left: multiple split dictionaries (#370).
 
 ## MAP-5
 
-transpiler: planned
+transpiler: partial
 
-- #370.
+- One split dictionary supplies the keys when the option is omitted or written as `null`. An explicit nonnullable key set selects its own keys and has no children before it becomes valid.
+- Left: joins of multiple dictionaries and nullable `keys` connections, which need nullable set publications to switch the key set (#370).
 
 ## MAP-6
 
@@ -798,26 +806,36 @@ transpiler: partial
 
 transpiler: partial
 
-- A fixed-size map composes a child for each position at build time. Native child lifetimes await #370.
+- A fixed-size map composes a child for each position at build time. In the supported keyed map, hgraph keeps a child as its inputs change and starts a new child when a removed key returns.
+- Left: child lifetimes for the remaining native forms (#370).
 
 ## MAP-8
 
-transpiler: planned
+transpiler: partial
 
-- #370.
+- A one-dictionary map with explicit keys leaves a split input invalid while its selected key has no entry.
+- Left: missing entries under joins of multiple dictionaries or lists (#370).
 
 ## MAP-9
 
+analyser: partial
+
+- A keyed map rejects a callback whose selected key parameter is `const`, because the child's key is a connection (`connection.as_constant`, FN-1).
+
 transpiler: partial
 
-- A fixed-size map supplies each child's position to the default `key` parameter or the renamed parameter. Native keys await #370.
+- A fixed-size map supplies each child's position to the default `key` parameter or the renamed parameter. The supported keyed map supplies a key connection when the child starts, regardless of the parameter's position.
+- Left: Key injection in the other native forms remains in #370.
 
 ## MAP-10
 
 transpiler: partial
 
-- Fixed-size results hold the children's publications. A callback with no result runs at each fixed position, and the map gives no result. A failure that leaves a child leaves either form. The native forms await #370.
+- Fixed-size results hold the children's publications. A callback with no result runs at each fixed position, and the map gives no result. A failure that leaves a child leaves either form.
 - The C++ target's existing [size-zero temporal list limit](https://github.com/hhenson/hgl-compiler/issues/829) applies to both fixed-size forms (TYPE-10).
+- The native one-dictionary map holds published entries, including a child's first empty dictionary, and publishes a valid empty dictionary once if no child publishes. Lifecycle changes of an unpublished child leave an already valid result silent (TIME-7). A child failure propagates, and an entry is removed when its child stops.
+- Proposed. Invalidating a child result removes its entry until that child publishes again. Under explicit keys, a pass-through result withdraws when its split entry leaves, while the child remains alive (MAP-8).
+- Left: other native result shapes (#370).
 
 ## RED-1
 
@@ -851,10 +869,14 @@ transpiler: planned
 
 ## RED-5
 
-transpiler: partial
+transpiler: done
 
-- Ordered folds wait for their required zero and visit positions in order. The growing-list target wires a capture-free callback and starts a returning member's callback with fresh state. A change of list length publishes the result again even if its value stays the same. An omitted zero rejects during candidate selection.
-- Left: callbacks that capture values or connections (FN-14, [hgraph#1914](https://github.com/hhenson/hgraph/issues/1914)).
+- Ordered folds wait for their required zero and visit positions in order.
+  An omitted zero rejects during candidate selection.
+- A growing-list callback retains captured values and reads captured connections
+  (FN-14). A captured connection's tick re-evaluates the fold, and a returning
+  member starts its callback with fresh state. A change of list length
+  publishes the result again even if its value stays the same.
 
 ## RED-6
 

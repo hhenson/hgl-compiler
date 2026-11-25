@@ -77,17 +77,19 @@ transpiler: partial
 
 ## ERR-6
 
-analyser: partial
+analyser: done
 
 - Brackets read an ordinary dictionary by its key. Core's two-argument `get` gives `result<V, error>` and the place selects its form (ERR-15).
-- Checking a fallback against the exact dictionary value type (`lookup.default_type`) is pending. A literal `null` fallback selects the plain read.
+- Checks a supplied fallback against the dictionary's exact value type
+  (`lookup.default_type`). The supplied form gives that type directly.
+  A written `null` selects the plain two-argument read.
 
-transpiler: partial
+transpiler: done
 
 - C++ brackets perform a strict read. Two-argument `get` returns the whole result to the
   recorded ERR-15 form. A temporal dictionary child is an endpoint read (ERR-14).
-- Left: Evaluation of the fallback on a key hit and preservation of a nullable fallback
-  value are pending.
+- Evaluates the fallback in ordinary argument order, including on a key hit.
+  The resulting fallback and the held value can both be null.
 
 ## ERR-7
 
@@ -99,8 +101,9 @@ analyser: partial
 
 transpiler: partial
 
-- Wires an error boundary around a resolved graph call or lifted helper and exposes its
-  normal value and error results.
+- Wires an error boundary around a resolved temporal function, a temporal
+  HGL operator candidate, or a lifted helper and exposes its value and error
+  connections.
 - Left: A target with no supported call or recording form, an unavailable packed
   instance and other capture reads are reported.
 
@@ -157,6 +160,7 @@ analyser: done
 transpiler: done
 
 - C++ reads the payload at the recorded expression and reports `value.null` in its recorded phase. A null publication on a required connection fails its consumer that cycle, before handler or lifted-call admission. This includes an input bound through a pack.
+- A refined connection in a temporal branch projects its present payload. That projection follows its source's validity when the branch changes.
 
 ## ERR-13
 

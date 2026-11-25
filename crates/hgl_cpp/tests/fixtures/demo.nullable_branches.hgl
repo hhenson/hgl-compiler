@@ -1,0 +1,53 @@
+module demo.nullable_branches
+
+fn or_thousand(acc: i64, x: i64?) -> i64 =>
+    if x == null { acc + 1000 } else { acc + x }
+
+# ERR-12 and TYPE-14: the lifted addition takes the payload in the non-null branch.
+test temporal_if_reads_the_narrowed_input {
+    assert eval or_thousand(acc: [1, 2], x: [null, 5]) == [1001, 7]
+}
+
+fn direct(x: i64?) -> i64 => if x != null { x } else { 0 }
+
+# TYPE-15: silence and a published null affect branch selection independently.
+test a_branch_uses_the_present_and_retained_payload {
+    assert eval or_thousand(acc: [1, 2, 3, 4, 5], x: [_, null, 5, _, null]) ==
+        [_, 1002, 8, 9, 1005]
+    assert eval direct(x: [_, null, 5, null, 7]) == [_, 0, 5, 0, 7]
+}
+
+fn invalidatable(command: i64) -> i64? {
+    inject out
+    when {
+        if command < 0 {
+            invalidate(out)
+        } else if command == 0 {
+            return null
+        } else {
+            return command
+        }
+    }
+}
+
+fn across_invalidation(acc: i64, command: i64) -> i64 =>
+    or_thousand(acc, invalidatable(command))
+
+# TIME-1 and ERR-12: a projected value loses validity with its source.
+test invalidation_clears_the_projected_payload {
+    assert eval across_invalidation(acc: [1, 2, 3, 4], command: [5, -1, 7, 0]) ==
+        [6, _, 10, 1004]
+}
+
+fn reduced(items: list<i64, 2>) -> i64 =>
+    reduce(fn(acc: i64, x: i64?) =>
+        if x == null { acc + 1000 } else { acc + x }, items, 0)
+
+# RED-2 and ERR-12: the anonymous temporal callback reads its refined input.
+test a_reduce_callback_reads_the_admitted_member {
+    assert eval reduced(items: [
+        delta<list<i64, 2>>(updated: [0: 5]),
+        delta<list<i64, 2>>(updated: [1: 2]),
+        delta<list<i64, 2>>(removed: [1]),
+    ]) == [1005, 7, 1005]
+}

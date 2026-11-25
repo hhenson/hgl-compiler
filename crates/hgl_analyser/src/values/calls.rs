@@ -1054,6 +1054,19 @@ impl<'a> Typer<'a> {
             Detail::Callable(signature) => signature.result.as_ref(),
             _ => None,
         };
+        let target = &self.program.modules[module].declarations[declaration];
+        let reads_activity = Some(module) == self.program.core()
+            && target.kind == DeclarationKind::NativeFunction(Role::Value)
+            && target.name == "is_active";
+        if reads_activity
+            && let [(false, argument_name, argument)] = self.call_entries(list).as_slice()
+            && argument_name
+                .as_ref()
+                .is_none_or(|name| name.text() == "input")
+            && let Some(query) = self.packed_activity(name, argument, given)
+        {
+            return query;
+        }
         if let Some(call) = self.defer_pack_call_with(list, result, expected, |typer| {
             let evaluating = std::mem::take(&mut typer.evaluating);
             typer
@@ -1072,10 +1085,6 @@ impl<'a> Typer<'a> {
         // The call an `eval` stands for is this one, and not one among
         // its arguments.
         let evaluating = std::mem::take(&mut self.evaluating);
-        let target = &self.program.modules[module].declarations[declaration];
-        let reads_activity = Some(module) == self.program.core()
-            && target.kind == DeclarationKind::NativeFunction(Role::Value)
-            && target.name == "is_active";
         // ERR-14: core's `removed_value` "takes its form from its place
         // as `delta_value` does": the call gives the window's V, which a
         // place that takes `result<V, error>` makes the `ok` of its
