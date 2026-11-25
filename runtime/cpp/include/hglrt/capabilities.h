@@ -36,6 +36,7 @@
 #include <hgraph/types/value/value.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <source_location>
 #include <string>
@@ -354,18 +355,36 @@ class GlobalState {
     /// Whether the borrowing node's attachment checked its fixed keys.
     [[nodiscard]] bool fixed_keys_checked() const noexcept { return fixed_keys_checked_; }
 
+    /// The same store, given to a value function with the route it is
+    /// called on (TIME-8): bit `i` of `varying` is set where that
+    /// function's parameter `i` holds a key that can differ between the
+    /// calls of a cycle on this route. Attachment did not check such a key.
+    [[nodiscard]] GlobalState routed(std::uint64_t varying) const noexcept {
+        GlobalState routed{*this};
+        routed.varying_ = varying;
+        return routed;
+    }
+
+    /// Whether one of the `parameters` (one bit each, as `routed` sets
+    /// them) of the function that holds this store varies on its route.
+    [[nodiscard]] bool varies(std::uint64_t parameters) const noexcept {
+        return (varying_ & parameters) != 0;
+    }
+
   private:
     hgraph::GlobalStateView view_;
     bool fixed_keys_checked_;
+    std::uint64_t varying_{0};
 };
 
 /// Use a fixed key from a graph or hook, checking it if the caller has
-/// no attachment-time proof (CAP-6).
+/// no attachment-time proof (CAP-6), or if it reads one of `parameters`
+/// that varies on this call's route (TIME-8).
 template <typename Key>
 decltype(auto) use_fixed_store_key(
-    const GlobalState& store, Key&& key,
+    const GlobalState& store, Key&& key, std::uint64_t parameters = 0,
     std::source_location where = std::source_location::current()) {
-    if (!store.fixed_keys_checked()) {
+    if (!store.fixed_keys_checked() || store.varies(parameters)) {
         require_store_key(key, where);
     }
     return std::forward<Key>(key);
