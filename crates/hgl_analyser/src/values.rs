@@ -138,7 +138,10 @@ pub(crate) fn walk_body_calls(body: &hir::Body, visit: &mut dyn FnMut(&hir::Expr
     });
 }
 /// Types the bodies of the program, filling in [`Module::bodies`].
-pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
+pub(crate) fn check(
+    program: &mut Program,
+    diagnostics: &mut Diagnostics,
+) -> crate::store_keys::KeyUses {
     // The signature of what has none: a test, a run statement, a
     // constant.
     let empty = Signature {
@@ -376,11 +379,25 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     program.const_demands = crate::const_inputs::demands(program);
     let source = requirements::independent_source_bodies(program);
     let mut instance_calls = operator_defaults::check(program, &source, diagnostics);
-    forwarded_packs::check_instances(program, &mut instance_calls, &source, diagnostics);
-    requirements::instances_hold(program, instance_calls, &source, diagnostics);
+    let mut store_keys = crate::store_keys::KeyUses::default();
+    forwarded_packs::check_instances(
+        program,
+        &mut instance_calls,
+        &source,
+        &mut store_keys,
+        diagnostics,
+    );
+    requirements::instances_hold(
+        program,
+        instance_calls,
+        &source,
+        &mut store_keys,
+        diagnostics,
+    );
     // TYPE-10, TYPE-11: the sizes each struct application written in a
     // type gives the struct's lists and windows.
     sizes::applied_sizes(program, diagnostics);
+    store_keys
 }
 
 /// What the earlier passes found of `module`, by where each is written:

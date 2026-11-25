@@ -621,3 +621,61 @@ fn the_supplied_core_declares_scheduling_and_the_store() {
     assert!(locals(&checked, "counted").contains(&"total: i64".to_string()));
     assert!(locals(&checked, "lookup").contains(&"price: result<i64, error>".to_string()));
 }
+
+/// TIME-8 and CAP-6 apply to names resolved through ordinary const arguments.
+#[test]
+fn store_key_checks_follow_resolved_const_arguments() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+fn save(const key: str) {
+    inject global_state
+    put(global_state, key, 7)
+}
+fn forward(const name: str = "run.output") { save(key: name) }
+fn different(const key: str) {
+    inject global_state
+    put(global_state, key, 7)
+    let text: str = get(global_state, key)
+}
+test ordinary { eval forward(name: "run.output.mine") }
+test reserved { eval forward() }
+test conflict { eval different(key: "app.key") }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:10:21 injectable/store.key_type TIME-8",
+            "m.hgl:13:17 injectable/store.reserved_key TIME-8",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// A generic store use binds its payload type in each instance (CAP-6, TIME-8).
+#[test]
+fn store_key_types_are_compared_across_instances() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+fn save<V>(const key: str, const value: V) {
+    inject global_state
+    put(global_state, key, value)
+}
+fn twice(const key: str) {
+    save(key: key, value: 7)
+    save(key: "other", value: "allowed")
+    save(key: key, value: "wrong")
+}
+test conflict { eval twice(key: "shared") }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:9:5 injectable/store.key_type TIME-8"],
+        "{}",
+        checked.report,
+    );
+}

@@ -538,9 +538,11 @@ transpiler: done
 analyser: partial
 
 - `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get` gives a `result<V, error>`, with V written by the caller or inferred from the place
-- The run's own key, `"run.output"`, written out as a key is rejected (`store.reserved_key`)
-- A key written out is used with one type in a program: a `put` or a `get` of another type than an earlier use is `store.key_type` (TIME-8)
-- Left: a key resolved from a `const` parameter can name `run.output` or bypass the source check for inconsistent types.
+- A known `"run.output"` key is rejected (`store.reserved_key`), including where
+  a call resolves the `const` parameter supplying the key.
+- A known key is used with one type in a program. A `put` or a `get` of a
+  different type than an earlier use is `store.key_type` (TIME-8).
+- Left: a key whose value is known only to the target can name `run.output`.
 
 transpiler: partial
 
@@ -550,6 +552,7 @@ transpiler: partial
   stored null is successful and the key remains present.
 - Reading an absent store key gives `value.missing_key`, the same code as a
   strict dictionary lookup (ERR-6).
+- Reading or writing a key whose stored type differs gives `store.key_type`.
 - Left: a temporal child graph using the surrounding store is declined (CRUN-7).
 
 ## CAP-7
@@ -735,15 +738,16 @@ transpiler: partial
 
 analyser: partial
 
-- The run's own key written out as a key of the global store is rejected (`store.reserved_key`)
-- Left: a key supplied as a `const` parameter can name `run.output` (CAP-6).
+- A known `"run.output"` key is rejected (`store.reserved_key`), including where
+  a call resolves the `const` parameter supplying the key (CAP-6).
+- Left: a key whose value is known only to the target can name `run.output`.
 
 transpiler: partial
 
 - Adds recording to a result-bearing entry and retrieves the timestamped deltas after
   stop. Outputless entries have no recording.
-- Left: Unsupported record types follow CEVAL-4. The reserved `run.output` check covers
-  literal keys at source checking. Keys resolved at graph construction remain unchecked.
+- Left: Unsupported record types follow CEVAL-4. A key whose value is known only
+  at graph construction is unchecked against `run.output`.
 
 runner: planned
 

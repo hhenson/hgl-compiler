@@ -43,6 +43,8 @@ pub(crate) enum SelectedDemand {
 /// A deferred operator can select a body that only uses this value at run time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Demand {
+    /// A key may be compared during source checking when its value is known.
+    StoreKey,
     IfSelected,
     Always,
 }
@@ -92,10 +94,26 @@ pub enum ConstInputFault {
 const INPUT_BUDGET: usize = 1 << 16;
 const INPUT_DEPTH: usize = 64;
 
+/// Read a string for a source check without requiring the target to know it.
+pub(crate) fn known_text(program: &Program, expression: &Expr) -> Option<String> {
+    if let ExprKind::Literal(Value::Str(text)) = &expression.kind {
+        return Some(text.clone());
+    }
+    let read = Reader::new(program)
+        .read(expression, INPUT_DEPTH, &[])
+        .ok()?;
+    match read.kind {
+        ExprKind::Literal(Value::Str(text)) => Some(text),
+        _ => None,
+    }
+}
+
 impl Program {
     /// Whether a compile-time check in this declaration needs const inputs.
     pub fn needs_const_inputs(&self, declaration: Declaration) -> bool {
-        self.const_demands.contains_key(&declaration)
+        self.const_demands
+            .get(&declaration)
+            .is_some_and(|slots| slots.values().any(|demand| *demand != Demand::StoreKey))
     }
 
     /// The const inputs a resolved call must have to check its instance.
@@ -105,7 +123,7 @@ impl Program {
         callee: &Callee,
         arguments: &[Argument],
     ) -> Result<Vec<ConstInput>, ConstInputFault> {
-        let known = self.known_const_inputs(callee, arguments);
+        let known = self.read_const_inputs(callee, arguments, false);
         if let Some(limit) = known.limit {
             return Err(limit);
         }
@@ -127,6 +145,15 @@ impl Program {
     /// Analysis can check the known inputs even when another input remains
     /// unread. Lowering requires the complete set through `call_const_inputs`.
     pub(crate) fn known_const_inputs(&self, callee: &Callee, arguments: &[Argument]) -> ReadInputs {
+        self.read_const_inputs(callee, arguments, true)
+    }
+
+    fn read_const_inputs(
+        &self,
+        callee: &Callee,
+        arguments: &[Argument],
+        check_store: bool,
+    ) -> ReadInputs {
         use ConstInputFault::{ReaderLimit, TextLimit, Unread};
 
         let Some((module, declaration)) = callee.declaration() else {
@@ -145,8 +172,9 @@ impl Program {
         // forwarding body makes, and so which of its consts they read.
         let pack_inputs = pack_inputs_of(self, callee, signature, arguments);
         // Give unconditional inputs the first use of the read budget.
-        let ordered = [Demand::Always, Demand::IfSelected]
+        let ordered = [Demand::Always, Demand::IfSelected, Demand::StoreKey]
             .into_iter()
+            .filter(|mode| check_store || *mode != Demand::StoreKey)
             .flat_map(|mode| demand.iter().filter(move |(_, demand)| **demand == mode));
         for (&slot, &demand) in ordered {
             if demand == Demand::IfSelected
@@ -224,7 +252,7 @@ impl Program {
                     // GEN-13: a text the instance reads that outgrows the
                     // budget ends a walk, a conditional one included once
                     // its instance is known to read it.
-                    known.outgrown |= fault == TextLimit;
+                    known.outgrown |= demand != Demand::StoreKey && fault == TextLimit;
                     reader.text_left = text_before;
                 }
             }
@@ -459,7 +487,7 @@ impl Program {
                         };
                         calls.push((callee.clone(), entries, slot));
                     }
-                    None => {}
+                    Some(Demand::StoreKey) | None => {}
                 }
             }
         });
@@ -937,26 +965,29 @@ pub(crate) fn demands(program: &Program) -> Demands {
                 continue;
             }
             let caller = (module_index, declaration);
-            let mut read_pattern = |pattern: &Expr| {
-                if crate::values::fixed_expression(pattern, &|read| {
+            let mut read_compile_time_value = |value: &Expr, demand: Demand| {
+                if crate::values::fixed_expression(value, &|read| {
                     matches!(read.kind, ExprKind::Local(_))
                         && bindings
                             .get(&(read.at.file, read.at.span.start))
                             .is_some_and(|at| slots.contains_key(at))
                 }) {
-                    slots_read(pattern, &bindings, &slots, |slot| {
-                        pending.push_back(((caller, slot), Demand::Always));
+                    slots_read(value, &bindings, &slots, |slot| {
+                        pending.push_back(((caller, slot), demand));
                     });
                 }
             };
             let mut deferred_at = HashSet::new();
             for selection in &module.selecting[declaration] {
+                if let Some(key) = crate::store_keys::deferred_key(program, selection) {
+                    read_compile_time_value(key, Demand::StoreKey);
+                }
                 if selection.graph {
                     continue;
                 }
                 deferred_at.insert(selection.at);
                 if let Some(pattern) = formatting::deferred_pattern(program, selection) {
-                    read_pattern(pattern);
+                    read_compile_time_value(pattern, Demand::Always);
                     continue;
                 }
                 let operator = selection.operator;
@@ -1013,7 +1044,10 @@ pub(crate) fn demands(program: &Program) -> Demands {
                 if let Some(signature) = formatting::value_signature(program, callee)
                     && let Some(pattern) = formatting::argument(signature, arguments, "fmt_str")
                 {
-                    read_pattern(&pattern.value);
+                    read_compile_time_value(&pattern.value, Demand::Always);
+                }
+                if let Some(key) = crate::store_keys::key_argument(program, callee, arguments) {
+                    read_compile_time_value(key, Demand::StoreKey);
                 }
                 for argument in arguments {
                     let Some(position) = argument.parameter else {

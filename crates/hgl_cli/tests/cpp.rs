@@ -5381,6 +5381,51 @@ fn store_values_and_failure_places_on_the_sdk() {
     }
 }
 
+/// CAP-6: a key only known when making the graph can fail with `store.key_type`.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn store_key_types_resolved_at_graph_build_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("store_keys");
+    let file = write(
+        &root,
+        "keys.hgl",
+        r#"module probes.store_keys
+const fn select_key(prefix: str) -> str => prefix + ".key"
+
+fn write_key(const key: str) {
+    inject global_state
+    put(global_state, key, 7)
+    put(global_state, key, "wrong")
+}
+
+fn read_key(value: i64, const key: str) -> i64 {
+    inject global_state
+    put(global_state, key, 7)
+    let saved: i64 = get(global_state, key)
+    value + saved
+}
+
+test ordinary {
+    assert eval read_key(value: [2], key: "run.output.mine") == [9]
+}
+
+test resolved_at_run {
+    assert raises("store.key_type") { eval write_key(key: select_key(prefix: "dynamic")) }
+}
+"#,
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// A failure names the HGL line of the statement it is raised in, though
 /// the target writes more than one line of C++ for it: `xs[i] = ys[j]`
 /// holds its index and checks its place first (EXPR-2), and its value

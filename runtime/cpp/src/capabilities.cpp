@@ -211,7 +211,8 @@ error detail::store_missing(std::string_view key) {
 }
 
 error detail::store_type(std::string_view key) {
-    return make_error(std::format("the global store holds a value of another type under '{}'", key));
+    return make_error(std::format("the global store holds a value of another type under '{}'", key),
+                      std::string{codes::store_key_type});
 }
 
 } // namespace hglrt

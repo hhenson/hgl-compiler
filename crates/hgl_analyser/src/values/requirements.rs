@@ -2280,6 +2280,7 @@ pub(super) fn instances_hold(
     program: &Program,
     mut given: Vec<Made>,
     source: &IndependentSourceBodies,
+    store_keys: &mut crate::store_keys::KeyUses,
     diagnostics: &mut Diagnostics,
 ) {
     let declared_reports = diagnostics.len();
@@ -2744,6 +2745,11 @@ pub(super) fn instances_hold(
                     diagnostics,
                     "this endpoint read in the generic hook is checked for this instance",
                 );
+            }
+            if let Some(instance) = &instance
+                && !body_reports.has_errors()
+            {
+                store_keys.in_instance(program, &instance.body, made.at);
             }
             if inner.is_empty() && selecting.is_empty() && instance_calls.is_empty() {
                 continue;

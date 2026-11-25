@@ -15,7 +15,7 @@ use super::inference::placed;
 use super::statements::child_loop_write;
 use super::{Selected, Typer};
 use crate::declared::substitute_within;
-use crate::hir::{Expr, ExprKind, Form, Hook, LocalId, Value, ValueCategory};
+use crate::hir::{Expr, ExprKind, Form, Hook, LocalId, ValueCategory};
 use crate::program::{LocalKind, Program, Role};
 use crate::types::{Argument, ConstantValue, Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
@@ -440,9 +440,7 @@ impl<'a> Typer<'a> {
     /// `get`, `has` and `put` (CAP-6), which are the candidates of core
     /// that take the store. A function of a program that is given the
     /// store reads and writes it through those, so its own parameters
-    /// are no keys. A key written out is judged here. One that is a
-    /// `const` parameter of the function it is in is known where the
-    /// graph is built, which no pass reads yet.
+    /// are no keys. The same check reads keys known in a concrete instance.
     fn store_keys(&mut self, selected: &Selected) {
         let &Selected {
             module, arguments, ..
@@ -471,10 +469,8 @@ impl<'a> Typer<'a> {
                     .is_some_and(|parameter| parameter.constant && parameter.name == "key")
             })
             .filter(|argument| {
-                matches!(
-                    &argument.value.kind,
-                    ExprKind::Literal(Value::Str(key)) if key == RUN_OUTPUT_KEY
-                )
+                crate::const_inputs::known_text(self.program, &argument.value).as_deref()
+                    == Some(RUN_OUTPUT_KEY)
             })
             .map(|argument| argument.value.at)
             .collect();

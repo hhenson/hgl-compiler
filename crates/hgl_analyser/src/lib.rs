@@ -716,14 +716,14 @@ fn analyse_with_test_candidates(
     declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics, tests);
     documentation::check(&program, diagnostics);
-    values::check(&mut program, diagnostics);
+    let store_key_uses = values::check(&mut program, diagnostics);
     resolve::warn_hidden_callables(&program, diagnostics);
     // UNIT-13: asked of the typed program, where each call has the
     // definition it selected.
     cycles::check(&program, diagnostics);
     // TIME-8: "a use of another type in one program rejects", asked of
     // every typed body of the program at once.
-    store_keys::key_types(&program, diagnostics);
+    store_keys::key_types(&program, store_key_uses, diagnostics);
     program
 }
 
