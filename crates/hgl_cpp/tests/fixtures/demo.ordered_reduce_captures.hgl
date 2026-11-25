@@ -77,3 +77,14 @@ fn return_capture(values: list<i64>, scale: i64) -> i64 =>
 test a_callback_can_return_its_capture {
     assert eval return_capture(values: [[1], _, []], scale: [7, 8, _]) == [7, 8, 0]
 }
+
+fn fold_with(values: list<i64>, step: fn(i64, i64) -> i64) -> i64 =>
+    reduce{associative: false}(step, values, 0)
+
+fn forwarded_capture(values: list<i64>, scale: i64) -> i64 =>
+    fold_with(values, fn(acc: i64, member: i64) => acc + member * scale)
+
+# FN-14, FN-17 and RED-5: forwarding a callback retains the caller's capture.
+test a_forwarded_callback_keeps_its_capture {
+    assert eval forwarded_capture(values: [[1, 2], _], scale: [2, 3]) == [6, 9]
+}

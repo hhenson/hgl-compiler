@@ -2761,7 +2761,7 @@ fn ordered_reduction_captures_run_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
