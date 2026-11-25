@@ -44,6 +44,7 @@
 #include <hgraph/types/value/value_builder.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <optional>
 #include <source_location>
 #include <string>
@@ -399,15 +400,15 @@ struct Membership {
 template <class S>
 struct KeyedWrites {
     template <class D>
-    bool record(const hgraph::TSDataView&, const D&) { return true; }
+    bool record(const hgraph::TSDataView&, const D&, std::size_t) { return true; }
 
     template <class D>
-    bool filter(D&) const { return true; }
+    bool filter(D&, std::size_t) const { return true; }
 };
 
 template <class K>
 struct KeyedWrites<hgraph::TSS<K>> {
-    bool record(const hgraph::TSDataView& original, const set_delta<K>& delta) {
+    bool record(const hgraph::TSDataView& original, const set_delta<K>& delta, std::size_t) {
         bool changed = false;
         const auto write = [&](const K& key, bool present) {
             const bool held = original.valid() && original.as_set().contains(hgraph::Value{key}.view());
@@ -424,7 +425,7 @@ struct KeyedWrites<hgraph::TSS<K>> {
         return changed;
     }
 
-    bool filter(set_delta<K>& delta) const {
+    bool filter(set_delta<K>& delta, std::size_t) const {
         const auto unchanged = [&](const K& key) {
             // A key containing NaN compares unequal even to itself (NUM-5).
             // It cannot cancel another write through the sparse lookup.
@@ -441,16 +442,20 @@ struct KeyedWrites<hgraph::TSS<K>> {
 
 template <class K, class V>
 struct KeyedWrites<hgraph::TSD<K, V>> {
-    using Delta = dict_delta<K, typename keyed_form<V>::type>;
+    using Value = typename keyed_form<V>::type;
+    using Delta = dict_delta<K, Value>;
+    // A scalar update carries the whole value, as opposed to a keyed child's delta.
+    static constexpr bool scalar_entry = std::is_same_v<delta_t<Value>, Value>;
 
     struct Entry {
         Membership member;
         bool valid;
         bool withdrawn{};
+        std::size_t last_update{};
         KeyedWrites<V> child{};
     };
 
-    bool record(const hgraph::TSDataView& original, const Delta& delta) {
+    bool record(const hgraph::TSDataView& original, const Delta& delta, std::size_t index) {
         bool changed = false;
         const auto initial = [&](const K& key) -> hgraph::TSDataView {
             return original.valid() ? original.as_dict().at(hgraph::Value{key}.view())
@@ -473,20 +478,27 @@ struct KeyedWrites<hgraph::TSD<K, V>> {
             auto& entry = entry_for(key, source);
             changed |= !entry.member.current;
             entry.member.current = true;
-            // If the entry is itself withdrawn and restored, the engine
-            // interprets its already ordered operations against that slot.
-            changed |= entry.withdrawn || entry.child.record(source, value);
+            if constexpr (scalar_entry) {
+                entry.last_update = index;
+            }
+            // A keyed child restored after withdrawal still needs its ordered operations.
+            changed |= entry.withdrawn || entry.child.record(source, value, index);
         }
         return changed;
     }
 
-    bool filter(Delta& delta) const {
+    bool filter(Delta& delta, std::size_t index) const {
         const auto absent = [](const Entry& entry) {
             return !entry.member.initial && !entry.member.current;
         };
+        // TIME-7: an update restores the scalar entry with its final value.
+        // Replaying the intervening removals can hide that update from the SDK's delta.
+        const auto restored = [](const Entry& entry) {
+            return scalar_entry && entry.withdrawn && entry.member.current;
+        };
         std::erase_if(delta.removed, [&](const K& key) {
             const auto entry = entries.find(key);
-            return entry != entries.end() && absent(entry->second);
+            return entry != entries.end() && (absent(entry->second) || restored(entry->second));
         });
         for (auto it = delta.updated.begin(); it != delta.updated.end();) {
             // As in the set form, an unmatched key keeps its ordinary write.
@@ -496,7 +508,8 @@ struct KeyedWrites<hgraph::TSD<K, V>> {
                 continue;
             }
             const auto& entry = found->second;
-            if (absent(entry) || (!entry.withdrawn && !entry.child.filter(it->second) && entry.valid)) {
+            if (absent(entry) || (restored(entry) && index != entry.last_update) ||
+                (!entry.withdrawn && !entry.child.filter(it->second, index) && entry.valid)) {
                 it = delta.updated.erase(it);
             } else {
                 ++it;
@@ -538,7 +551,7 @@ class KeyedEvaluation {
     /// Read a delta against the current sparse record, in source order.
     void write(Delta delta) {
         changed_ |= !valid();
-        changed_ |= staged_.record(output_.base().data_view(), delta);
+        changed_ |= staged_.record(output_.base().data_view(), delta, changes_.size());
         changes_.push_back(std::move(delta));
     }
 
@@ -560,8 +573,9 @@ class KeyedEvaluation {
             keyed_publish(output_, *whole_);
             return;
         }
-        for (auto& change : changes_) {
-            if (staged_.filter(change) || !output_.valid()) {
+        for (std::size_t index = 0; index < changes_.size(); ++index) {
+            auto& change = changes_[index];
+            if (staged_.filter(change, index) || !output_.valid()) {
                 keyed_publish(output_, change);
             }
         }
