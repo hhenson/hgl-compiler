@@ -95,6 +95,16 @@ artifacts after a plain build and files for modules removed from the sources.
 The `build.ninja` manifest and `hgl build --format json` inventory identify
 the units and executables in the current build.
 
+Use `hgl build --clean --out DIR` to rebuild the project from scratch. The
+compiler holds the workspace lock while clearing generated project files and
+building their replacements. This removes generated C++ sources carrying the
+compiler header, and removes compiled objects, executables, compilation
+databases, debug source copies and run or test results only when unchanged
+from the workspace stamps. Add `--compile-commands` to regenerate the
+compilation database and `--debug` for debug symbols. Clean applies to the
+selected workspace. Other workspaces and the shared native toolchain cache
+are independent.
+
 Reuse assumes that the SDK and dependency prefixes are fixed installations.
 The key includes the prefixes and hashes the SDK version file and its runtime
 and wiring libraries. Use a fresh native cache and workspace after updating
@@ -215,7 +225,7 @@ failure from old results.
 
 ## What hgraph is asked for
 
-The SDK is hgraph 0.9.31. It compares native Float zero signs during
+The SDK is hgraph 0.9.32. It compares native Float zero signs during
 interning ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866)).
 HGL tuples and lists can still hide their floats from that comparison,
 so their nodes use unique wiring.

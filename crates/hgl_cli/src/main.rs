@@ -258,6 +258,10 @@ struct BuildArgs {
     #[arg(long)]
     compile_commands: bool,
 
+    /// Clear this program's generated build outputs before building again.
+    #[arg(long)]
+    clean: bool,
+
     /// The build workspace, or the program's workspace under the cache.
     #[arg(long, visible_alias = "keep", value_name = "DIR")]
     out: Option<PathBuf>,

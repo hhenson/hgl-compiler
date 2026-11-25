@@ -14,6 +14,7 @@ use hgl_analyser::{Argument as GenericArgument, Constant, Program, Type};
 pub fn canonical(program: &Program, ty: &Type) -> Option<String> {
     let one = |ty: &Type| canonical(program, ty);
     Some(match ty {
+        Type::TypeValue => "Type".to_string(),
         Type::Scalar(scalar) => scalar.as_str().to_string(),
         Type::Named {
             name,

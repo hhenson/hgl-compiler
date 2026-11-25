@@ -19,8 +19,8 @@ use super::{Fact, Typer};
 use crate::constant::Fault;
 use crate::declared::{names_one_of, names_parameter, substitute_within};
 use crate::hir::{self, Expr, ValueCategory};
-use crate::program::Declaration;
-use crate::syntax::ungrouped;
+use crate::program::{Binding, Declaration, DeclarationKind, LocalKind};
+use crate::syntax::{child, name_token, ungrouped};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, GenericKind, GenericParameter, Pack,
     Parameter, Signature, Type,
@@ -361,6 +361,10 @@ impl<'a> Typer<'a> {
         signature: &Signature,
         given: Option<&CallArguments>,
     ) -> Option<ExplicitGenerics> {
+        // FN-4/6: call_named has selected the role. Only that signature
+        // determines whether a contextual Type argument denotes a type.
+        let contextual = given.and_then(|given| self.contextual_type_arguments(given, signature));
+        let given = contextual.as_ref().or(given);
         let generics = &signature.generics;
         let first_pack = generics
             .iter()
@@ -432,6 +436,122 @@ impl<'a> Typer<'a> {
             faulty,
             pack,
         })
+    }
+
+    /// GEN-14, TYPE-18: read the value interpretation of a deferred Type
+    /// spelling only after the receiving callable's kind is known.
+    fn contextual_type_arguments(
+        &mut self,
+        given: &CallArguments,
+        signature: &Signature,
+    ) -> Option<CallArguments> {
+        // Ordinary calls retain the borrowed records. Only a descriptor
+        // at a value/undetermined slot can need another interpretation.
+        if !given
+            .arguments
+            .iter()
+            .zip(&signature.generics)
+            .any(|((_, argument), generic)| {
+                *argument == Argument::Type(Type::TypeValue)
+                    && !matches!(generic.kind, GenericKind::Type | GenericKind::Pack { .. })
+            })
+        {
+            return None;
+        }
+        let map: Vec<_> = signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(given.arguments.iter().map(|(_, argument)| argument))
+            .collect();
+        let mut given = given.clone();
+        for (index, (at, argument)) in given.arguments.iter_mut().enumerate() {
+            if *argument != Argument::Type(Type::TypeValue) {
+                continue;
+            }
+            let Some(generic) = signature.generics.get(index) else {
+                continue;
+            };
+            if matches!(generic.kind, GenericKind::Type | GenericKind::Pack { .. }) {
+                continue;
+            }
+            let Some(node) = self.node_at(*at).filter(|node| {
+                node.kind() == SyntaxKind::NamedType
+                    && child(node, SyntaxKind::QualifiedName).is_none()
+                    && child(node, SyntaxKind::GenericArgs).is_none()
+                    && name_token(node).is_some_and(|name| name.text() == "Type")
+            }) else {
+                continue;
+            };
+            let name = name_token(&node).expect("the contextual name");
+            let binding = self.binding_at(at.file, name.span().start);
+            let value = match binding {
+                Some(Binding::Local {
+                    at,
+                    kind: LocalKind::GenericParameter,
+                }) => self.signature.generics.iter().any(|parameter| {
+                    parameter.at == *at
+                        && (matches!(parameter.kind, GenericKind::Value(_))
+                            || matches!(generic.kind, GenericKind::Value(_))
+                                && parameter.kind == GenericKind::Plain)
+                }),
+                Some(Binding::Declarations {
+                    module,
+                    declarations,
+                }) => declarations.iter().any(|&index| {
+                    !matches!(
+                        self.program.modules[*module].declarations[index].kind,
+                        DeclarationKind::Struct
+                            | DeclarationKind::Enum
+                            | DeclarationKind::NativeType
+                    )
+                }),
+                Some(_) => true,
+                None => self
+                    .module
+                    .contextual_type_reports
+                    .contains_key(&Location::new(at.file, name.span())),
+            };
+            if !value {
+                continue;
+            }
+            if let Some(reports) = self
+                .module
+                .contextual_type_reports
+                .get(&Location::new(at.file, name.span()))
+            {
+                for report in reports {
+                    if !self.diagnostics.as_slice().contains(report) {
+                        self.diagnostics.emit(report.clone());
+                    }
+                }
+            }
+            let expected = match &generic.kind {
+                GenericKind::Value(ty) => Some(substitute_within(ty, &map)),
+                _ => None,
+            };
+            let value = match self.read_constant(&node, expected.as_ref()) {
+                Ok(value) => value,
+                Err(Fault::NotConstant) => ConstantValue::Unevaluated,
+                Err(fault) => {
+                    if let Some(expected) = expected
+                        && let Some(report) = fault.report(
+                            *at,
+                            &format!("the generic parameter `{}`", generic.name),
+                            &expected,
+                        )
+                    {
+                        self.diagnostics.emit(report);
+                    }
+                    ConstantValue::Unknown
+                }
+            };
+            *argument = Argument::Constant(Constant {
+                text: "Type".to_string(),
+                value,
+            });
+        }
+        Some(given)
     }
 
     /// What the generic arguments a call writes say of the callee's
@@ -616,7 +736,7 @@ impl<'a> Typer<'a> {
             found[*parameter] = Some(Argument::Type(Type::Tuple(types.to_vec())));
         }
 
-        let dependent = callable.and_then(|(module, signature)| {
+        let dependent = callable.and_then(|(module, _, signature)| {
             dependent_slot(&self.program.modules[module], signature)
         });
         let mut assigned = self.assign_dependent(name, list, slots, takes, aside, dependent);
@@ -902,7 +1022,7 @@ impl<'a> Typer<'a> {
         }
         // A resolved callback determines its reflected types before
         // another place can use a keyed member of those types (GEN-17).
-        let mut type_packs = callable.map_or_else(Vec::new, |(module, signature)| {
+        let mut type_packs = callable.map_or_else(Vec::new, |callable| {
             let unresolved = Argument::Type(Type::Unknown);
             let map: Vec<_> = generics
                 .iter()
@@ -912,7 +1032,7 @@ impl<'a> Typer<'a> {
                 .collect();
             self.read_dependent_call(
                 (name, list),
-                (module, signature, dependent),
+                (callable, dependent),
                 (slots, &map),
                 (&mut assigned, &mut values),
             )
@@ -1345,7 +1465,7 @@ pub(super) struct Places<'s> {
     /// an entry for each of `generics`, or none at all.
     pub(super) defaults: Vec<Option<Constant>>,
     /// A callable declaration whose callbacks may reflect parameter packs.
-    pub(super) callable: Option<(usize, &'s Signature)>,
+    pub(super) callable: Option<super::Candidate<'s>>,
     /// The core activity query checks a projected pack child's shape in
     /// its instance before rejecting it as an indirect input (TIME-9).
     pub(super) defer_endpoint_child: bool,

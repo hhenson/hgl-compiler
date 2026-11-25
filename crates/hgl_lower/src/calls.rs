@@ -421,6 +421,7 @@ pub fn left_out<'p>(
         && let Callee::Candidate {
             operator,
             operator_generics,
+            operator_type_packs,
             ..
         } = callee
         && let Some(default) = program.inherited_configuration_default(callee, index)
@@ -430,6 +431,7 @@ pub fn left_out<'p>(
             default,
             *operator,
             operator_generics,
+            operator_type_packs,
             parameter,
             &mut diagnostics,
         );
@@ -444,6 +446,22 @@ pub fn left_out<'p>(
             .and_then(Option::as_ref)
     });
     if let Some(default) = default {
+        if default.has_type_query()
+            && !callee.generics().is_empty()
+            && let Some(owner) = callee.declaration()
+        {
+            let mut diagnostics = hgl_diagnostics::Diagnostics::new();
+            let default = program.specialize_parameter_default(
+                default,
+                owner,
+                callee.generics(),
+                callee.type_packs(),
+                parameter,
+                &mut diagnostics,
+            );
+            return (!diagnostics.has_errors())
+                .then(|| LeftOut::Default(DefaultValue::Specialized(Box::new(default))));
+        }
         Some(LeftOut::Default(DefaultValue::Declared(default)))
     } else if matches!(parameter.ty, Type::Nullable(_)) {
         Some(LeftOut::Null)

@@ -486,8 +486,8 @@ impl<'a> Typer<'a> {
     /// its arguments." Nothing is reported where it cannot be told
     /// ([`requires_holds`]). A named operator requirement is told for a
     /// generic parameter of the declaration being read too: it holds
-    /// where that declaration states it (GEN-7). `false` leaves a call
-    /// using unsupported pack-member evidence for the target to decline.
+    /// where that declaration states it (GEN-7). `false` keeps an
+    /// unproved reflected argument symbolic after reporting its failure.
     pub(super) fn requires_met(
         &mut self,
         at: Location,
@@ -536,7 +536,7 @@ impl<'a> Typer<'a> {
     /// GEN-3 and GEN-10: a function that receives resolved type packs
     /// must have a requirement known to hold for those types. Report
     /// both a false condition and a form this pass cannot judge. An
-    /// unsupported stated member fact returns `false` as `requires_met` does.
+    /// unproved reflected member returns `false` as `requires_met` does.
     pub(super) fn pack_requires_met(
         &mut self,
         at: Location,
@@ -702,32 +702,28 @@ impl<'a> Typer<'a> {
             .iter()
             .map(|generic| generic.at)
             .collect();
-        let stated_members = self.stated_pack_members();
-        // Existing checks still report unmet ordinary generic requirements.
-        // A proof needed only for a reflected type can remain untold.
-        let unread_packs = if passes_on(generics, &own) || packs_pass_on(type_packs, &own) {
-            HashSet::new()
-        } else {
-            self.unread_stated_packs(&stated_members)
-        };
-        let stated_members = stated_members
-            .into_iter()
-            .filter(|member| {
-                reflects(generics, &[member.pack]) || packs_pass_on(type_packs, &[member.pack])
+        let evidence_types = generics
+            .iter()
+            .filter_map(|argument| match argument {
+                Argument::Type(ty) => Some(ty),
+                _ => None,
             })
+            .chain(type_packs.iter().flat_map(|pack| &pack.types))
             .collect::<Vec<_>>();
+        let dependencies = self.stated_member_dependencies(&evidence_types);
+        let reflected = evidence_types.iter().any(|ty| {
+            ty.any_part(
+                &|part| matches!(part, Type::PackMember { pack, .. } if own.contains(pack)),
+                &|_| false,
+            )
+        });
         let memberships: Vec<(Location, Vec<Argument>)> = self
             .memberships()
             .into_iter()
             .filter(|(parameter, _)| {
-                let parameter = &[*parameter];
-                passes_on(generics, parameter)
-                    || packs_pass_on(type_packs, parameter)
-                    || stated_members.iter().any(|member| {
-                        let key_depends = matches!(&member.key, StatedPackKey::One(key)
-                            if key.names_one_of(parameter));
-                        key_depends || mentions(&member.ty, parameter)
-                    })
+                dependencies.contains(parameter)
+                    || passes_on(generics, &[*parameter])
+                    || packs_pass_on(type_packs, &[*parameter])
             })
             .collect();
         let mut combinations = super::candidates::combinations(&memberships);
@@ -737,79 +733,12 @@ impl<'a> Typer<'a> {
         let bound = self.bound.clone();
         let name = &program.modules[callee.0].declarations[callee.1].name;
         let body = &self.declaration.name;
-        let mut readable = true;
-        for combination in combinations.iter().take(crate::INSTANCES + 1) {
+        let mut remaining = crate::INSTANCES;
+        for combination in &combinations {
             let given: Vec<(Location, &Argument)> = bound
                 .iter()
                 .chain(combination)
                 .map(|(at, argument)| (*at, argument))
-                .collect();
-            // The lookup and its evidence use the same combination's
-            // arguments. The substituted member types also set the size bound.
-            let constant_at = |at| match given.iter().find(|(declared, _)| *declared == at)?.1 {
-                Argument::Constant(constant) => Some(constant.value.clone()),
-                Argument::Type(_) | Argument::NoResult => None,
-            };
-            let projected_members = stated_members
-                .iter()
-                .map(|member| StatedPackMember {
-                    pack: member.pack,
-                    site: member.site,
-                    key: match &member.key {
-                        StatedPackKey::One(key) => {
-                            StatedPackKey::One(key.substituted(&constant_at))
-                        }
-                        StatedPackKey::Every(key) => StatedPackKey::Every(*key),
-                    },
-                    ty: substitute_within(&member.ty, &given),
-                })
-                .collect::<Vec<_>>();
-            let member_weight = projected_members
-                .iter()
-                .map(|member| weight(&member.ty))
-                .max()
-                .unwrap_or(1);
-            let unread = std::cell::Cell::new(false);
-            let member_type = |pack, _: &str, key: &Constant| {
-                let found = projected_members
-                    .iter()
-                    .filter(|member| member.pack == pack)
-                    .find_map(|member| match &member.key {
-                        StatedPackKey::One(stated) if stated.same(&key.value) == Some(true) => {
-                            Some(member.ty.clone())
-                        }
-                        StatedPackKey::Every(bound) => Some(substitute_within(
-                            &member.ty,
-                            &[(*bound, &Argument::Constant(key.clone()))],
-                        )),
-                        StatedPackKey::One(_) => None,
-                    });
-                if found.is_none() && unread_packs.contains(&pack) {
-                    unread.set(true);
-                }
-                found
-            };
-            let project = |ty: &Type| {
-                placed(
-                    substitute_with_members(ty, &given, &member_type, member_weight),
-                    &own,
-                )
-            };
-            let placed_generics: Vec<Argument> = generics
-                .iter()
-                .map(|argument| match argument {
-                    Argument::Type(ty) => Argument::Type(project(ty)),
-                    Argument::Constant(_) | Argument::NoResult => given_in(argument, &given, &own),
-                })
-                .collect();
-            let placed_packs: Vec<_> = type_packs
-                .iter()
-                .cloned()
-                .map(|mut pack| {
-                    pack.infer_from_arguments = false;
-                    pack.place_types(project);
-                    pack
-                })
                 .collect();
             // ERR-9: "Failure during argument evaluation precedes later
             // admission checks": a generic argument worked out from the
@@ -836,16 +765,58 @@ impl<'a> Typer<'a> {
                 });
                 return true;
             }
-            let held = self
-                .requires_told_with_packs(callee, &placed_generics, &placed_packs, None)
-                .map(|(_, held, _)| held);
-            if held == Some(Some(true)) {
-                continue;
+            let member_choices = self.stated_member_choices(&evidence_types, &given);
+            let mut member_trials = super::candidates::combinations(&member_choices);
+            if member_trials.is_empty() {
+                member_trials.push(Vec::new());
             }
-            if held == Some(None) && unread.get() {
-                readable = false;
-                continue;
-            }
+            let Some(rest) = remaining.checked_sub(member_trials.len()) else {
+                self.diagnostics.emit(untold_with_reason(
+                    program,
+                    callee,
+                    at,
+                    condition,
+                    "the analyser's limit on combinations of stated requirements was reached",
+                ));
+                return !reflected;
+            };
+            remaining = rest;
+            let failed = member_trials.iter().find_map(|members| {
+                let member_type = |pack, _: &str, key: &Constant| {
+                    members.iter().find_map(|((at, stated), ty)| {
+                        (*at == pack && stated.value.same(&key.value) == Some(true))
+                            .then(|| ty.clone())
+                    })
+                };
+                let bound = members.iter().map(|(_, ty)| weight(ty)).max().unwrap_or(1);
+                let project = |ty: &Type| {
+                    placed(
+                        substitute_with_members(ty, &given, &member_type, bound),
+                        &own,
+                    )
+                };
+                let placed_generics = generics
+                    .iter()
+                    .map(|argument| match argument {
+                        Argument::Type(ty) => Argument::Type(project(ty)),
+                        _ => given_in(argument, &given, &own),
+                    })
+                    .collect::<Vec<_>>();
+                let placed_packs = type_packs
+                    .iter()
+                    .cloned()
+                    .map(|mut pack| {
+                        pack.infer_from_arguments = false;
+                        pack.place_types(project);
+                        pack
+                    })
+                    .collect::<Vec<_>>();
+                let held = self
+                    .requires_told_with_packs(callee, &placed_generics, &placed_packs, None)
+                    .map(|(_, held, _)| held);
+                (held != Some(Some(true))).then_some(held)
+            });
+            let Some(held) = failed else { continue };
             let members = self.members_named(combination);
             let message = match (held, members.is_empty()) {
                 (Some(Some(false)), false) => format!(
@@ -887,13 +858,13 @@ impl<'a> Typer<'a> {
                          makes this hold"
                 )),
             );
-            return true;
+            return !reflected;
         }
-        readable
+        true
     }
 
-    /// A positive equality states one GEN-17 member's type. An `each`
-    /// over the same pack's keys can state a type for every member (GEN-10).
+    /// Positive equality and membership constrain a GEN-17 member's
+    /// type. An `each` over the same pack's keys constrains every member.
     fn stated_pack_members(&self) -> Vec<StatedPackMember> {
         let Some(condition) = child(&self.declaration.syntax, SyntaxKind::RequiresClause)
             .and_then(|clause| clause.children().next())
@@ -914,7 +885,7 @@ impl<'a> Typer<'a> {
         let mut members = Vec::new();
         for term in terms {
             if term.kind() == SyntaxKind::ConstraintRelation {
-                members.extend(self.stated_member_equality(&term));
+                members.extend(self.stated_member_bound(&term));
                 continue;
             }
             // An existential `any` never proves an arbitrary member's type.
@@ -944,7 +915,7 @@ impl<'a> Typer<'a> {
             let mut relations = Vec::new();
             conjoined_relations(&body, &mut relations);
             for relation in relations {
-                let Some(mut member) = self.stated_member_equality(&relation) else {
+                let Some(mut member) = self.stated_member_bound(&relation) else {
                     continue;
                 };
                 if member.pack == pack.at
@@ -958,8 +929,11 @@ impl<'a> Typer<'a> {
         members
     }
 
-    /// The member and type asserted equal in one GEN-3 relation.
-    fn stated_member_equality(&self, relation: &SyntaxNode) -> Option<StatedPackMember> {
+    /// The member and type bound stated in one GEN-3 relation.
+    fn stated_member_bound(&self, relation: &SyntaxNode) -> Option<StatedPackMember> {
+        if tokens(relation).any(|token| token.text() == "in") {
+            return self.stated_member_membership(relation);
+        }
         if !has_token(relation, SyntaxKind::EqEq) {
             return None;
         }
@@ -972,20 +946,15 @@ impl<'a> Typer<'a> {
         let readable = |given| {
             whole(given) && !given.any_part(&|ty| matches!(ty, Type::PackMember { .. }), &|_| false)
         };
-        let (pack, key, given, site) = match (*left, *right) {
-            (Type::PackMember { pack, key, .. }, given) if readable(given) => {
-                (pack, key, given, left_at)
-            }
-            (given, Type::PackMember { pack, key, .. }) if readable(given) => {
-                (pack, key, given, right_at)
-            }
+        let (pack, key, given) = match (*left, *right) {
+            (Type::PackMember { pack, key, .. }, given) if readable(given) => (pack, key, given),
+            (given, Type::PackMember { pack, key, .. }) if readable(given) => (pack, key, given),
             _ => return None,
         };
         Some(StatedPackMember {
             pack: *pack,
-            site,
             key: StatedPackKey::One(key.value.clone()),
-            ty: given.clone(),
+            types: StatedMemberTypes::Equal(given.clone()),
         })
     }
 
@@ -1023,7 +992,7 @@ impl<'a> Typer<'a> {
             .filter(|at| {
                 let one = &[*at];
                 used.iter().any(|member| {
-                    mentions(&member.ty, one)
+                    member.types.values().iter().any(|ty| mentions(ty, one))
                         || matches!(&member.key, StatedPackKey::One(key) if key.names_one_of(one))
                 })
             })
@@ -1037,18 +1006,8 @@ impl<'a> Typer<'a> {
         types: &[&Type],
         given: &[(Location, &Argument)],
     ) -> Vec<((Location, Constant), Vec<Type>)> {
-        let equalities = self.stated_pack_members();
-        let mut relations = Vec::new();
-        if let Some(condition) = child(&self.declaration.syntax, SyntaxKind::RequiresClause)
-            .and_then(|clause| clause.children().next())
-        {
-            conjoined_relations(&condition, &mut relations);
-        }
-        let memberships: Vec<_> = relations
-            .iter()
-            .filter_map(|relation| self.stated_member_membership(relation))
-            .collect();
-        if equalities.is_empty() && memberships.is_empty() {
+        let bounds = self.stated_pack_members();
+        if bounds.is_empty() {
             return Vec::new();
         }
         let constant_at = |at| match given.iter().find(|(declared, _)| *declared == at)?.1 {
@@ -1075,48 +1034,38 @@ impl<'a> Typer<'a> {
                     }) {
                         return false;
                     }
-                    let equality = equalities.iter().find_map(|member| {
-                        if member.pack != *pack {
-                            return None;
-                        }
-                        match &member.key {
-                            StatedPackKey::One(stated)
-                                if stated.substituted(&constant_at).same(&key.value)
-                                    == Some(true) =>
-                            {
-                                Some(substitute_within(&member.ty, given))
+                    let project = |member: &StatedPackMember, ty: &Type| {
+                        let ty = substitute_within(ty, given);
+                        match member.key {
+                            StatedPackKey::One(_) => ty,
+                            StatedPackKey::Every(bound) => {
+                                substitute_within(&ty, &[(bound, &Argument::Constant(key.clone()))])
                             }
-                            StatedPackKey::Every(bound) => Some(substitute_within(
-                                &substitute_within(&member.ty, given),
-                                &[(*bound, &Argument::Constant(key.clone()))],
-                            )),
-                            StatedPackKey::One(_) => None,
                         }
-                    });
-                    // An equality to an open type does not displace a
-                    // finite membership for this same pack key.
-                    let types = if equality
-                        .as_ref()
-                        .is_some_and(|ty| whole(ty) && !names_parameter(ty))
-                    {
-                        equality.map(|ty| vec![ty])
-                    } else {
-                        memberships
-                            .iter()
-                            .find(|(at, stated, _)| {
-                                *at == *pack
-                                    && stated.substituted(&constant_at).same(&key.value)
-                                        == Some(true)
-                            })
-                            .map(|(_, _, members)| {
-                                members
-                                    .iter()
-                                    .map(|ty| substitute_within(ty, given))
-                                    .collect()
-                            })
-                            .or_else(|| equality.map(|ty| vec![ty]))
                     };
-                    if let Some(types) = types {
+                    let matching: Vec<Vec<Type>> = bounds
+                        .iter()
+                        .filter(|member| {
+                            member.pack == *pack
+                                && match &member.key {
+                                    StatedPackKey::One(stated) => {
+                                        stated.substituted(&constant_at).same(&key.value)
+                                            == Some(true)
+                                    }
+                                    StatedPackKey::Every(_) => true,
+                                }
+                        })
+                        .map(|member| {
+                            member
+                                .types
+                                .values()
+                                .iter()
+                                .map(|ty| project(member, ty))
+                                .collect()
+                        })
+                        .collect();
+                    let types = self.intersect_member_bounds(matching);
+                    if !types.is_empty() {
                         choices.push(((*pack, key), types));
                     }
                     false
@@ -1127,14 +1076,313 @@ impl<'a> Typer<'a> {
         choices.into_inner()
     }
 
-    /// A positive membership of a named member in a finite set of types.
-    fn stated_member_membership(
-        &self,
-        relation: &SyntaxNode,
-    ) -> Option<(Location, ConstantValue, Vec<Type>)> {
-        if !tokens(relation).any(|token| token.text() == "in") {
-            return None;
+    /// Intersect all positive bounds stated for one reflected pack member
+    /// regardless of conjunction order (GEN-3, GEN-7, GEN-10). Concrete
+    /// bounds narrow the candidate set before open ones; open bounds never
+    /// discard a type that an unresolved normalizing or open form can later
+    /// become. Without a concrete bound, only a known-subset open bound is
+    /// kept so differing type variables stay conservative in both orders.
+    /// An empty intersection leaves the member unproved.
+    fn intersect_member_bounds(&self, bounds: Vec<Vec<Type>>) -> Vec<Type> {
+        let is_concrete = |ty: &Type| {
+            whole(ty)
+                && !ty.any_part(
+                    &|part| {
+                        matches!(part, Type::Parameter { .. } | Type::PackMember { .. })
+                            || matches!(
+                                part,
+                                Type::Function(template) if template.named_pack.is_some()
+                            )
+                    },
+                    &|constant| constant.value.key().is_none(),
+                )
+        };
+        let (mut closed, open): (Vec<Vec<Type>>, Vec<Vec<Type>>) = bounds
+            .into_iter()
+            .partition(|set| set.iter().all(is_concrete));
+        let (base, closed_rest, open_rest) = if !closed.is_empty() {
+            let first = closed.remove(0);
+            (first, closed, open)
+        } else if !open.is_empty() {
+            // Without a concrete bound, keep an open bound only when every
+            // other open bound is known to contain every element of it.
+            let Some(chosen) = open.iter().find(|set| {
+                open.iter().all(|other| {
+                    set.iter().all(|ty| {
+                        other
+                            .iter()
+                            .any(|candidate| same_type(ty, candidate) == Some(true))
+                    })
+                })
+            }) else {
+                return Vec::new();
+            };
+            (chosen.clone(), Vec::new(), Vec::new())
+        } else {
+            return Vec::new();
+        };
+        let mut intersected = Vec::new();
+        for ty in base {
+            if closed_rest.iter().all(|other| {
+                other
+                    .iter()
+                    .any(|candidate| same_type(&ty, candidate) == Some(true))
+            }) && open_rest.iter().all(|other| {
+                other
+                    .iter()
+                    .any(|candidate| self.types_may_meet(&ty, candidate))
+            }) && !intersected
+                .iter()
+                .any(|existing| same_type(existing, &ty) == Some(true))
+            {
+                intersected.push(ty);
+            }
         }
+        intersected
+    }
+
+    /// True when some valid instantiation of the enclosing generics may make
+    /// `left` and `right` normalize to the same type (TYPE-9, TYPE-10, TYPE-14,
+    /// TYPE-16, GEN-7). Used only so an open bound never discards a type that
+    /// an unresolved normalizing or open form can later become.
+    fn types_may_meet(&self, left: &Type, right: &Type) -> bool {
+        fn atomic_may_unwrap(payload: &Type) -> bool {
+            match payload {
+                Type::Unknown
+                | Type::Parameter { .. }
+                | Type::PackMember { .. }
+                | Type::Scalar(_)
+                | Type::Error
+                | Type::Result { .. }
+                | Type::Atomic(_)
+                | Type::Delta(_)
+                | Type::Named {
+                    kind: NamedKind::Enum | NamedKind::Native,
+                    ..
+                } => true,
+                Type::Nullable(inner) => atomic_may_unwrap(inner),
+                _ => false,
+            }
+        }
+        fn delta_may_normalize(of: &Type) -> bool {
+            match of {
+                Type::Unknown
+                | Type::Parameter { .. }
+                | Type::PackMember { .. }
+                | Type::Scalar(_)
+                | Type::Error
+                | Type::ErrorContext
+                | Type::Result { .. }
+                | Type::Named {
+                    kind: NamedKind::Enum | NamedKind::Native,
+                    ..
+                }
+                | Type::Delta(_)
+                | Type::Atomic(_)
+                | Type::RollingWindow { .. }
+                | Type::Tuple(_) => true,
+                Type::Nullable(inner) => matches!(
+                    **inner,
+                    Type::Unknown
+                        | Type::Parameter { .. }
+                        | Type::PackMember { .. }
+                        | Type::RollingWindow { .. }
+                        | Type::Atomic(_)
+                        | Type::Signal
+                        | Type::Delta(_)
+                        | Type::Nullable(_)
+                ),
+                _ => false,
+            }
+        }
+        let delta_can_change_shape = |ty: &Type| match ty {
+            Type::Unknown | Type::Parameter { .. } | Type::PackMember { .. } => true,
+            Type::Delta(inner) => delta_may_normalize(inner),
+            _ => false,
+        };
+        if delta_can_change_shape(left) || delta_can_change_shape(right) {
+            return true;
+        }
+        // TYPE-9: `Type::atomic(payload)` either stays `Atomic(payload)` or
+        // unwraps to `payload` when `payload` is non-composite (`whole`), so
+        // `atomic<T?>` can meet `i64?` or `atomic<list<i64>?>` but never `i64`
+        // or `list<i64>?`.
+        match (left, right) {
+            (Type::Atomic(left_inner), Type::Atomic(right_inner)) => {
+                return self.types_may_meet(left_inner, right_inner)
+                    || (atomic_may_unwrap(left_inner) && self.types_may_meet(left_inner, right))
+                    || (atomic_may_unwrap(right_inner) && self.types_may_meet(left, right_inner));
+            }
+            (Type::Atomic(inner), other) | (other, Type::Atomic(inner)) => {
+                return atomic_may_unwrap(inner)
+                    && atomic_may_unwrap(other)
+                    && self.types_may_meet(inner, other);
+            }
+            _ => {}
+        }
+        let constants_may_meet = |left: &Constant, right: &Constant| {
+            matches!(left.value, ConstantValue::Unknown)
+                || matches!(right.value, ConstantValue::Unknown)
+                || left.value.same(&right.value) != Some(false)
+        };
+        let is_pack_type = |ty: &Type| {
+            matches!(
+                ty,
+                Type::Parameter { at, .. }
+                    if self
+                        .signature
+                        .generics
+                        .iter()
+                        .find(|generic| generic.at == *at)
+                        .is_none_or(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
+            )
+        };
+        match (left, right) {
+            (
+                Type::Named {
+                    module,
+                    declaration,
+                    arguments,
+                    ..
+                },
+                Type::Named {
+                    module: other_module,
+                    declaration: other_declaration,
+                    arguments: other_arguments,
+                    ..
+                },
+            ) => {
+                if module != other_module || declaration != other_declaration {
+                    return false;
+                }
+                let has_pack = |args: &[Argument]| {
+                    args.iter()
+                        .any(|arg| matches!(arg, Argument::Type(ty) if is_pack_type(ty)))
+                };
+                if has_pack(arguments) || has_pack(other_arguments) {
+                    return true;
+                }
+                arguments.len() == other_arguments.len()
+                    && arguments
+                        .iter()
+                        .zip(other_arguments)
+                        .all(|pair| match pair {
+                            (Argument::Type(left), Argument::Type(right)) => {
+                                self.types_may_meet(left, right)
+                            }
+                            (Argument::Constant(left), Argument::Constant(right)) => {
+                                constants_may_meet(left, right)
+                            }
+                            (Argument::NoResult, Argument::NoResult) => true,
+                            _ => false,
+                        })
+            }
+            (Type::Tuple(left), Type::Tuple(right)) => {
+                if left.iter().any(is_pack_type) || right.iter().any(is_pack_type) {
+                    return true;
+                }
+                left.len() == right.len()
+                    && left
+                        .iter()
+                        .zip(right)
+                        .all(|(left, right)| self.types_may_meet(left, right))
+            }
+            (
+                Type::List { element, size },
+                Type::List {
+                    element: other_element,
+                    size: other_size,
+                },
+            ) => {
+                let sizes = match (size, other_size) {
+                    (Some(left), Some(right)) => {
+                        constants_may_meet(left, right)
+                            || left.value.same_extent(&right.value)
+                            || right.value.same_extent(&left.value)
+                    }
+                    (Some(size), None) | (None, Some(size)) => size.value.key().is_none(),
+                    (None, None) => true,
+                };
+                sizes && self.types_may_meet(element, other_element)
+            }
+            (Type::Set(left), Type::Set(right))
+            | (Type::Endpoint(left), Type::Endpoint(right))
+            | (Type::Delta(left), Type::Delta(right))
+            | (Type::Nullable(left), Type::Nullable(right)) => self.types_may_meet(left, right),
+            (
+                Type::Dict { key, value },
+                Type::Dict {
+                    key: other_key,
+                    value: other_value,
+                },
+            ) => self.types_may_meet(key, other_key) && self.types_may_meet(value, other_value),
+            (
+                Type::RollingWindow {
+                    value,
+                    maximum,
+                    minimum,
+                },
+                Type::RollingWindow {
+                    value: other_value,
+                    maximum: other_maximum,
+                    minimum: other_minimum,
+                },
+            ) => {
+                let minimum = minimum.as_ref().unwrap_or(maximum);
+                let other_minimum = other_minimum.as_ref().unwrap_or(other_maximum);
+                constants_may_meet(maximum, other_maximum)
+                    && constants_may_meet(minimum, other_minimum)
+                    && self.types_may_meet(value, other_value)
+            }
+            (
+                Type::Result { value, error },
+                Type::Result {
+                    value: other_value,
+                    error: other_error,
+                },
+            ) => self.types_may_meet(value, other_value) && self.types_may_meet(error, other_error),
+            (Type::Trace { cell: left, .. }, Type::Trace { cell: right, .. }) => {
+                names_parameter(left) || names_parameter(right) || self.types_may_meet(left, right)
+            }
+            (Type::Function(left), Type::Function(right)) => {
+                if left.value != right.value || left.reference != right.reference {
+                    return false;
+                }
+                if left.named_pack.is_some() || right.named_pack.is_some() {
+                    return true;
+                }
+                let left_params: Vec<_> = left.ordinary_parameters().collect();
+                let right_params: Vec<_> = right.ordinary_parameters().collect();
+                if left_params
+                    .iter()
+                    .chain(&right_params)
+                    .any(|param| param.declared().is_some_and(|decl| decl.pack.is_some()))
+                {
+                    return true;
+                }
+                let results = match (&left.result, &right.result) {
+                    (Some(left), Some(right)) => self.types_may_meet(left, right),
+                    (None, None) => true,
+                    (Some(_), None) => left.result_admits_none,
+                    (None, Some(_)) => right.result_admits_none,
+                };
+                results
+                    && left_params.len() == right_params.len()
+                    && left_params
+                        .iter()
+                        .zip(&right_params)
+                        .all(|(left, right)| self.types_may_meet(left.ty(), right.ty()))
+            }
+            (Type::Scalar(left), Type::Scalar(right)) => left == right,
+            (Type::Signal, Type::Signal)
+            | (Type::Error, Type::Error)
+            | (Type::ErrorContext, Type::ErrorContext) => true,
+            _ => false,
+        }
+    }
+
+    /// A positive membership of a named member in a finite set of types.
+    fn stated_member_membership(&self, relation: &SyntaxNode) -> Option<StatedPackMember> {
         let mut operands = relation.children();
         let (member, set) = (operands.next()?, operands.next()?);
         if set.kind() != SyntaxKind::ConstraintSet {
@@ -1153,35 +1401,11 @@ impl<'a> Typer<'a> {
                     .then(|| (*ty).clone())
             })
             .collect::<Option<_>>()?;
-        (!types.is_empty()).then_some((*pack, key.value.clone(), types))
-    }
-
-    /// Packs named by a stated member expression for which we read no
-    /// usable equality, such as an existential `any` or a relation to another member.
-    fn unread_stated_packs(&self, members: &[StatedPackMember]) -> HashSet<Location> {
-        let Some(clause) = child(&self.declaration.syntax, SyntaxKind::RequiresClause) else {
-            return HashSet::new();
-        };
-        let unread = RefCell::new(HashSet::new());
-        for node in clause.descendants() {
-            let site = node.span().start;
-            if members.iter().any(|member| member.site == site) {
-                continue;
-            }
-            if let Some(ty) = self.written.get(&(self.file, site)) {
-                // `any_part` visits the members nested inside a type too.
-                ty.any_part(
-                    &|part| {
-                        if let Type::PackMember { pack, .. } = part {
-                            unread.borrow_mut().insert(*pack);
-                        }
-                        false
-                    },
-                    &|_| false,
-                );
-            }
-        }
-        unread.into_inner()
+        (!types.is_empty()).then_some(StatedPackMember {
+            pack: *pack,
+            key: StatedPackKey::One(key.value.clone()),
+            types: StatedMemberTypes::Alternatives(types),
+        })
     }
 
     /// Reports a `requires` that does not hold, or is not told for a
@@ -1608,6 +1832,7 @@ impl<'a> Typer<'a> {
                 Argument::Type(ty.clone()),
                 Argument::Type(result),
             ],
+            operator_type_packs: Vec::new(),
             module,
             declaration,
             generics,
@@ -2148,6 +2373,7 @@ impl<'a> Typer<'a> {
                 operator: (operator.module, operator.declaration),
                 requirement: index,
                 operator_generics,
+                operator_type_packs: Vec::new(),
                 configuration,
             },
             arguments,
@@ -2265,9 +2491,22 @@ fn required_calls(node: &SyntaxNode, calls: &mut Vec<SyntaxNode>) {
 /// A reflected member type stated by a positive requirement (GEN-17).
 struct StatedPackMember {
     pack: Location,
-    site: u32,
     key: StatedPackKey,
-    ty: Type,
+    types: StatedMemberTypes,
+}
+
+enum StatedMemberTypes {
+    Equal(Type),
+    Alternatives(Vec<Type>),
+}
+
+impl StatedMemberTypes {
+    fn values(&self) -> &[Type] {
+        match self {
+            Self::Equal(ty) => std::slice::from_ref(ty),
+            Self::Alternatives(types) => types,
+        }
+    }
 }
 
 /// One declared key, or the key parameter of a universal requirement.
@@ -2287,7 +2526,7 @@ fn conjoined_relations(node: &SyntaxNode, relations: &mut Vec<SyntaxNode>) {
 }
 
 /// Select terms only from the condition itself and the sides of `&&`.
-fn conjoined_terms(
+pub(super) fn conjoined_terms(
     node: &SyntaxNode,
     take: &dyn Fn(SyntaxKind) -> bool,
     terms: &mut Vec<SyntaxNode>,
@@ -2419,7 +2658,8 @@ fn nesting<'t>(ty: &'t Type) -> usize {
                 inside(error);
             }
             Type::Function(function) => function.types().for_each(&mut inside),
-            Type::Scalar(_)
+            Type::TypeValue
+            | Type::Scalar(_)
             | Type::Parameter { .. }
             | Type::PackMember { .. }
             | Type::Signal
@@ -2629,6 +2869,7 @@ pub(super) fn instances_hold(
         .chain(dependent_patterns.iter().copied())
         .chain(program.const_demands.keys().copied())
         .chain(program.generic_store_bodies.iter().copied())
+        .chain(crate::type_values::instance_declarations(program))
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -2753,7 +2994,8 @@ pub(super) fn instances_hold(
             let constants = made.constants.values.as_slice();
             let recheck_values = dependent_patterns.contains(&made.callee)
                 || !constants.is_empty()
-                || program.generic_store_bodies.contains(&made.callee);
+                || program.generic_store_bodies.contains(&made.callee)
+                || crate::type_values::has_instance_query(program, made.callee);
             let recheck_resultless = made.generics.contains(&Argument::NoResult);
             let declaration = &unit.declarations[made.callee.1];
             if recheck_resultless
@@ -2787,6 +3029,50 @@ pub(super) fn instances_hold(
                 parent,
                 parents: &parents,
             };
+            let name_reports =
+                crate::type_values::instance_parameter_names(program, made.callee, &made.generics);
+            if !name_reports.is_empty() {
+                let paths = chain.paths(program, &root_calls);
+                for mut report in name_reports {
+                    // TYPE-18 requires the declared name as primary, even
+                    // when GEN-13 determines its kind at a making call.
+                    for call in paths.iter().flatten() {
+                        let label = format!("this call makes the instance `{}`", call.instance);
+                        if !report
+                            .related
+                            .iter()
+                            .any(|related| related.location == call.at && related.message == label)
+                        {
+                            report = report.with_related(call.at, label);
+                        }
+                    }
+                    if !diagnostics.as_slice().contains(&report) {
+                        diagnostics.emit(report);
+                    }
+                }
+                continue;
+            }
+            let enclosing_packs = match &program.modules[made.callee.0].details[made.callee.1] {
+                Detail::Callable(signature) => &signature.generics[..],
+                Detail::Struct(read) => &read.generics[..],
+                _ => &[],
+            };
+            let enclosing_packs =
+                super::dependent_packs::PackTypes::new(enclosing_packs, &made.type_packs);
+            let mut delta_reports = Diagnostics::new();
+            crate::type_values::instance_deltas(
+                program,
+                made.callee,
+                |ty| enclosing_packs.project(ty, &map).ok(),
+                &mut delta_reports,
+            );
+            if delta_reports.has_errors() {
+                let paths = chain.paths(program, &root_calls);
+                for report in delta_reports.as_slice() {
+                    emit_instance_report(report.clone(), &paths, diagnostics);
+                }
+                continue;
+            }
             let recheck_endpoints = endpoint_reads.contains(&made.callee)
                 && matches!(
                     unit.details.get(made.callee.1),
@@ -2943,13 +3229,6 @@ pub(super) fn instances_hold(
                     at: call.at,
                 })
                 .collect();
-            let enclosing_packs = match &program.modules[made.callee.0].details[made.callee.1] {
-                Detail::Callable(signature) => &signature.generics[..],
-                Detail::Struct(read) => &read.generics[..],
-                _ => &[],
-            };
-            let enclosing_packs =
-                super::dependent_packs::PackTypes::new(enclosing_packs, &made.type_packs);
             for call in inner.iter().filter(|call| !replaced.contains(&call.at)) {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with
@@ -4421,9 +4700,16 @@ pub(super) fn category_holds(program: &Program, ty: &Type, category: SyntaxKind)
     if let Some(known) = known_category(ty, category) {
         return Some(known);
     }
-    let at = match ty {
-        Type::Parameter { at, .. } => *at,
-        Type::PackMember { pack, key, .. } if guaranteed_member(program, *pack, key) => *pack,
+    let (at, subject) = match ty {
+        Type::Parameter { at, .. } => (*at, CategorySubject::Parameter(*at)),
+        Type::PackMember { pack, key, .. } => (
+            *pack,
+            CategorySubject::Member {
+                pack: *pack,
+                key,
+                guaranteed: guaranteed_member(program, *pack, key),
+            },
+        ),
         _ => return None,
     };
     for (index, module) in program.modules.iter().enumerate() {
@@ -4433,7 +4719,7 @@ pub(super) fn category_holds(program: &Program, ty: &Type, category: SyntaxKind)
             };
             if parameters.iter().any(|generic| generic.at == at) {
                 let file = module.declarations[position].at.file;
-                return category_facts(&condition, module, file, at, true)
+                return category_facts(&condition, module, file, subject, true)
                     .into_iter()
                     .find_map(|(stated, positive)| {
                         if stated == category {
@@ -4448,6 +4734,17 @@ pub(super) fn category_holds(program: &Program, ty: &Type, category: SyntaxKind)
         }
     }
     None
+}
+
+/// The symbolic type whose declaration may state a category (GEN-3, GEN-17).
+#[derive(Clone, Copy)]
+enum CategorySubject<'a> {
+    Parameter(Location),
+    Member {
+        pack: Location,
+        key: &'a Constant,
+        guaranteed: bool,
+    },
 }
 
 /// GEN-7 and GEN-10: only an existing member inherits universal facts.
@@ -4479,23 +4776,23 @@ fn category_facts(
     node: &SyntaxNode,
     module: &crate::Module,
     file: FileId,
-    at: Location,
+    subject: CategorySubject<'_>,
     positive: bool,
 ) -> Vec<(SyntaxKind, bool)> {
     match node.kind() {
         SyntaxKind::ConstraintParen => node.children().next().map_or_else(Vec::new, |inner| {
-            category_facts(&inner, module, file, at, positive)
+            category_facts(&inner, module, file, subject, positive)
         }),
         SyntaxKind::ConstraintNot => node.children().next().map_or_else(Vec::new, |inner| {
-            category_facts(&inner, module, file, at, !positive)
+            category_facts(&inner, module, file, subject, !positive)
         }),
         SyntaxKind::ConstraintBinary => {
             let mut children = node.children();
             let (Some(left), Some(right)) = (children.next(), children.next()) else {
                 return Vec::new();
             };
-            let mut left = category_facts(&left, module, file, at, positive);
-            let right = category_facts(&right, module, file, at, positive);
+            let mut left = category_facts(&left, module, file, subject, positive);
+            let right = category_facts(&right, module, file, subject, positive);
             if has_token(node, SyntaxKind::AmpAmp) == positive {
                 left.extend(right);
             } else {
@@ -4504,6 +4801,17 @@ fn category_facts(
             left
         }
         SyntaxKind::ConstraintEach if positive => {
+            let at = match subject {
+                CategorySubject::Parameter(at)
+                | CategorySubject::Member {
+                    pack: at,
+                    guaranteed: true,
+                    ..
+                } => at,
+                CategorySubject::Member {
+                    guaranteed: false, ..
+                } => return Vec::new(),
+            };
             let mut children = node.children();
             let (Some(view), Some(body)) = (children.next(), children.next()) else {
                 return Vec::new();
@@ -4522,7 +4830,13 @@ fn category_facts(
             else {
                 return Vec::new();
             };
-            category_facts(&body, module, file, Location::new(file, bound.span()), true)
+            category_facts(
+                &body,
+                module,
+                file,
+                CategorySubject::Parameter(Location::new(file, bound.span())),
+                true,
+            )
         }
         SyntaxKind::ConstraintRelation if tokens(node).any(|token| token.text() == "in") => {
             let mut children = node.children();
@@ -4532,11 +4846,23 @@ fn category_facts(
             if right.kind() != SyntaxKind::ConstraintCategory {
                 return Vec::new();
             }
-            let Some(name) = name_token(&left) else {
-                return Vec::new();
+            let matches = match subject {
+                CategorySubject::Parameter(at) => name_token(&left).is_some_and(|name| {
+                    module.uses.iter().any(|used| {
+                        used.at == Location::new(file, name.span())
+                            && matches!(&used.binding, Binding::Local { at: declared, .. } if *declared == at)
+                    })
+                }),
+                // GEN-17: a category asserted for one reflected key is
+                // evidence only for that member.
+                CategorySubject::Member { pack, key, .. } => module.written.iter().any(|written| {
+                    written.at.file == file
+                        && written.at.span.start == left.span().start
+                        && matches!(&written.ty, Type::PackMember { pack: written_pack, key: written_key, .. }
+                            if *written_pack == pack && written_key.value.same(&key.value) == Some(true))
+                }),
             };
-            if !module.uses.iter().any(|used| used.at == Location::new(file, name.span())
-                && matches!(&used.binding, Binding::Local { at: declared, .. } if *declared == at)) {
+            if !matches {
                 return Vec::new();
             }
             vec![(
@@ -4979,7 +5305,8 @@ fn struct_applications(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>
         Type::Function(function) => function
             .types()
             .for_each(|ty| struct_applications(ty, found)),
-        Type::Scalar(_)
+        Type::TypeValue
+        | Type::Scalar(_)
         | Type::Parameter { .. }
         | Type::PackMember { .. }
         | Type::Signal

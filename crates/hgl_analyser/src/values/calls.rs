@@ -1369,7 +1369,7 @@ impl<'a> Typer<'a> {
                 .as_ref()
                 .map(|pack| (pack.parameter, pack.types.as_slice())),
             result_fallback,
-            callable: Some((module, signature)),
+            callable: Some((module, declaration, signature)),
             defer_endpoint_child: reads_activity && self.pack_inputs.is_none(),
             defaults: generics
                 .iter()

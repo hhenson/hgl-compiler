@@ -202,6 +202,9 @@ const fn forward<...Args>(args: ...Args) => another(...args)
 
 export const limit: i64 = 2 * 5
 
+# TYPE-18: an unevaluated type query has its own expression node.
+const known: Type = type(limit)
+
 export abstract struct Quote<T> : Base, other::Mixin requires T is Shape {
     bid: T = 0.0
     time: datetime

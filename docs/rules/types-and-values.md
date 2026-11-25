@@ -109,11 +109,16 @@ analyser: done
 - A member is of its enum, and `.member` is given its enum by the type its place expects
 - A call of the enum's name constructs a member from an `i64` or a `str`, one argument by position; a constant that is no member's number or name is `member.unknown`
 - A construction from a constant that names a member is read as that member: a `switch` label, a `const` argument and a generic value argument take it as they take `Side.buy`
+- Core's `convert` candidates select explicit conversions to a member's name or number and from its number (OPS-4, OPS-7).
 
 transpiler: partial
 
 - Emits enum members and constructs members from names or numbers. Supplies enum
   payload, constant and trace forms.
+- Supplies the enum's source names and numbers to Core's conversion natives.
+- Writes scalar and nullable ports for empty enums. In a lifted conversion
+  a number gives an Err in a checked result, raises `convert.invalid` with
+  `invalid: .fail`, or gives null in a nullable result (OPS-7, proposed).
 - Left: An unavailable enum layout or unsupported construction source is reported. A
   failed construction lacks `enum.no_member`.
 
@@ -267,6 +272,7 @@ transpiler: partial
 analyser: partial
 
 - `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window (of a window of a nullable V, `delta<V>`), a tuple of each position's delta under a `?`, and a type of its own for a nullable, a list, a set, a dictionary and a struct
+- Proposed: a `Type`, or a tuple, collection, nullable or struct that stores one, has no delta (`delta.unsupported_shape`, TYPE-18). Original delta operands are retained until fields resolve, including applications that atomic, result or window normalization erases. Generic function and struct instances project those operands through the existing bounded GEN-7 traversal and reject forbidden substituted payloads. Ordinary struct layouts omit their auxiliary delta layout.
 - A `signal` has none (`delta.unsupported_shape`); a `ref` parameter's `delta_value` is not read (`ref.read`, FN-16)
 - Each delta that is a type of its own has its properties: a set's `added` and `removed`, a list's `updated`, `removed` and `size_modified`, a dictionary's `updated` and `removed`, a nullable's `value`, a struct's one for each field; none is assigned (`binding.immutable`)
 - It is constructed by them, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`)
@@ -299,8 +305,25 @@ transpiler: done
 
 ## TYPE-18
 
-parser: planned
-analyser: planned
-transpiler: planned
+parser: done
 
-- Left: Type values, `type(e)`, and their C++ lowering are tracked in #864.
+- `type(e)` contains one expression; the separate `requires type(N)` form is unchanged.
+
+analyser: partial
+
+- `Type` is an intrinsic ordinary type without generic parameters. A query retains the expression's checked type as a compiled constant, without its operand's calls, input payload reads or local flow effects. A declared but unassigned local supplies its type; a later ordinary read still requires assignment (EXPR-3). Generic instances project the queried type.
+- The spelling is reserved only for type declarations and type parameters (`name.reserved` at the declared name). Ordinary value, callable, parameter and member names remain valid. GEN-13 inferred value parameters remain valid; a deferred type instance rejects at its declared parameter name with making-call context.
+- A cold operand retains the call-role rules of its source place (FN-3). A graph query of a temporal call retains its payload type and wires no call.
+- Generic cold queries use the existing instance source reread with concrete inputs, so a newly selected operator result replaces the provisional type (GEN-7). Operand diagnostics still reject at the making call; no operand calls enter runtime HIR, including recursive calls and node/graph queries.
+- An omitted generic parameter default containing a cold query is read again in its defining scope with the concrete generic arguments and bound type packs (UNIT-7, GEN-10). Written types and call arguments use the existing pack projection, and the default worklist distinguishes pack instances. It retains no operand calls and no formal argument in scope; explicit arguments bypass the default.
+- An inherited operator default reconstructs the public operator’s bound pack from its tuple argument, including for a selected candidate with no generic parameters (GEN-6). Its query agrees with a body query, and explicit configuration bypasses the default.
+- Type constants compare and form collection keys by canonical type identity (GEN-13), independently of their text. The type of a value annotated `any` is `any`.
+- Proposed: an explicit delta of Type or a value that stores one rejects with `shape/delta.unsupported_shape` (TYPE-16).
+- Left: late generic-value query reading (#871), including same-module calls, constructors, annotated or inferred locals, module constants formed from those operands, and lost operand diagnostics. Type-containing connections lack the proposed source rejection (#907); nested forbidden-delta diagnostics may duplicate or cascade (#908). A cold query of its own declared constant reports a cycle (#910).
+
+transpiler: partial
+
+- Emits ordinary Type values, equality, inequality, set elements and dictionary keys. Core's native conversion returns canonical diagnostic spelling (FMT-5). Queries in constants, parameter and field defaults, generic functions, node handlers and graph composition execute without evaluating the operand.
+- Ordinary structs holding Type retain their value layout and omit auxiliary delta layouts under the proposed TYPE-16 rule. Storage dependencies are computed once after fields resolve and reused across emitted modules. Indexed dependencies retain their source keys and use concrete generic/pack projection at each application; unselected Type members do not count as stored. The existing GEN-13 instance/type-size bounds produce a checked limit result and a source diagnostic or clean target decline.
+- Enum generic arguments use their declared enum name in text; qualified identity remains separate, including inside compound constant arguments.
+- Left: Type-valued generic struct arguments (#871), Type-containing connections (#907), primitive type-call operands left untyped by their checker stub (#874), and unresolved anonymous-function/resultless-block query operands (#906) decline cleanly with `target.unsupported` before native compilation. Generic-type diagnostics still preserve source-form duration/float arguments rather than the canonical Type value spelling (#909).

@@ -1,0 +1,215 @@
+module demo.type_values
+const BOXED: any = 1
+const INTEGER: Type = type(1)
+const FROM_CALL: Type = type(explosive())
+const fn explosive() -> i64 => 1 // 0
+const fn type_argument<const Kind: Type>(value: i64) -> str => convert<str>(Kind)
+const fn default_argument(value: Type = type(explosive())) -> str => convert<str>(value)
+struct Descriptor { tag: Type = type(explosive()) }
+fn labelled(value: i64, probe: bool) -> str {
+    when valid([]) { return convert<str>(type(value)) }
+}
+fn graph_label(value: i64) -> str => convert<str>(type(value))
+test constants {
+    assert convert<str>(INTEGER) == "i64"
+    assert convert<str>(FROM_CALL) == "i64"
+    assert convert<str>(type(explosive())) == "i64"
+    assert type_argument<type(1)>(7) == "i64"
+    assert default_argument() == "i64"
+    assert convert<str>(Descriptor().tag) == "i64"
+    assert convert<str>(type(BOXED)) == "any"
+}
+test node {
+    assert eval labelled(value: [_, 7, _], probe: [true, true, true]) == ["i64", "i64", "i64"]
+}
+fn cold_assignment(value: i64) -> i64 {
+    var x: i64
+    let kind = type({
+        x = value
+        x
+    })
+    x = 1
+    return x
+}
+fn unwired_type_operand(value: i64) -> i64 {
+    start { assert false }
+    when valid(value) { return value }
+}
+fn unwired_type_label() -> str => convert<str>(type(unwired_type_operand(1)))
+test graph {
+    assert eval graph_label(value: [_, 7, _]) == ["i64"]
+    assert eval cold_assignment(value: [2, 3]) == [1]
+    assert eval unwired_type_label() == ["i64"]
+}
+
+test identity_and_keys {
+    let integer: Type = type(1)
+    let keys: set<Type> = [integer, type(2), type(1.0)]
+    let names: dict<Type, str> = [type(1): "integer", type(1.0): "real"]
+    assert integer == type(2)
+    assert integer != type(1.0)
+    assert keys == [type(1), type(1.0)]
+    assert names[integer] == "integer"
+    assert names[type(1.0)] == "real"
+}
+
+# TYPE-18: obtaining the declared type never reads an unassigned value.
+const fn declared_kind() -> Type {
+    var count: i64
+    let known = type(count)
+    count = 12
+    return known
+}
+fn graph_declared_kind(value: i64) -> i64 {
+    var count: i64
+    let known = type(count)
+    count = value
+    return count
+}
+test declared_types_without_values {
+    assert declared_kind() == type(1)
+    var count: i64
+    let known = type(count)
+    count = 12
+    assert convert<str>(known) == "i64"
+    assert type({ var nested: i64
+        nested }) == type(1)
+    assert eval graph_declared_kind(value: [1, 2]) == [1, 2]
+}
+
+# LEX-10, TYPE-18: Type remains a field, enum member and argument label.
+struct NamedMember { Type: i64 }
+enum NamedChoice { Type }
+test type_member_names {
+    let value = NamedMember(Type: 12)
+    assert value.Type == 12
+    assert NamedChoice.Type == NamedChoice.Type
+}
+
+# TYPE-18: the type of a descriptor is Type, including a nested query.
+test nested_descriptor_queries {
+    let t: Type = type(42)
+    assert type(t) == type(type(t))
+    assert convert<str>(type(t)) == "Type"
+}
+
+# TYPE-18, LEX-10: names in one program keep their value/member roles while
+# a type annotation Type always names the descriptor type.
+const fn Type(Type: i64) -> i64 => Type + 1
+struct TypedMember { Type: Type }
+test contextual_type_names {
+    let answer = Type(41)
+    let Type = answer
+    let value = TypedMember(Type: type(1))
+    let descriptor: Type = type(Type)
+    assert Type == 42
+    assert value.Type == descriptor
+    assert NamedChoice.Type == NamedChoice.Type
+    assert convert<str>(descriptor) == "i64"
+}
+
+# FMT-5: enum constant identity is qualified, display spelling is its name.
+enum TextMode { on, off }
+struct Moded<const mode: TextMode> { value: i64 }
+struct Timed<const span: duration> { value: i64 }
+struct Scaled<const ratio: f64> { value: i64 }
+test canonical_generic_arguments {
+    assert convert<str>(type(Moded<TextMode.on>(value: 1))) == "Moded<TextMode.on>"
+    assert convert<str>(type(Timed<5m>(value: 1))) == "Timed<300000000us>"
+    assert convert<str>(type(Scaled<1>(value: 1))) == "Scaled<1.0>"
+}
+
+# TYPE-18, GEN-7: select each instance's result, never run the operand.
+operator cold_items<T, C>(value: T) -> C
+impl const fn cold_items<T>(value: T) -> list<i64, 2> {
+    assert false
+    return [1, 2]
+}
+impl const fn cold_items(value: i64) -> list<i64, 3> {
+    assert false
+    return [1, 2, 3]
+}
+const fn selected_kind<T>(value: T) -> Type => type(cold_items(value))
+const SELECTED_KIND: Type = selected_kind(1)
+fn selected_graph<T>(value: T) -> str => convert<str>(type(cold_items(value)))
+fn selected_node<T>(value: T) -> str {
+    when valid(value) { return convert<str>(type(cold_items(value))) }
+}
+test instance_selected_query {
+    assert convert<str>(type(cold_items(1))) == "list<i64, 3>"
+    assert convert<str>(selected_kind(1)) == "list<i64, 3>"
+    assert convert<str>(selected_kind(true)) == "list<i64, 2>"
+    assert convert<str>(SELECTED_KIND) == "list<i64, 3>"
+    assert eval selected_graph(value: [1, 2]) == ["list<i64, 3>"]
+    assert eval selected_graph(value: [true]) == ["list<i64, 2>"]
+    assert eval selected_node(value: [1, 2]) == ["list<i64, 3>", "list<i64, 3>"]
+}
+
+# TYPE-18, UNIT-7: defaults and bodies see the same selected type.
+operator cold_sample<T, R>(x: T) -> R
+impl const fn cold_sample<T>(x: T) -> list<str, 2> {
+    assert false
+    return ["a", "b"]
+}
+impl const fn cold_sample(x: list<str>) -> tuple<bool, bool> {
+    assert false
+    return (true, false)
+}
+const fn cold_make<T>() -> list<T> {
+    assert false
+    return []
+}
+const fn original<T>(x: T, tag: Type = type(cold_sample(cold_make<T>()))) -> str => format("{}", tag)
+const fn body_control<T>(x: T) -> str => format("{}", type(cold_sample(cold_make<T>())))
+test concrete_query_defaults {
+    assert original(true) == "list<str, 2>"
+    assert original("one") == "tuple<bool, bool>"
+    assert body_control(true) == "list<str, 2>"
+    assert body_control("one") == "tuple<bool, bool>"
+    assert original("one", tag: type(1)) == "i64"
+}
+
+# TYPE-18, GEN-10, UNIT-7: identical body/default queries keep type packs.
+const fn pack_inspect<...Ts>(v: tuple<Ts>, tag: Type = type(cold_make<tuple<Ts>>())) -> str => format("{}", tag)
+const fn pack_body<...Ts>(v: tuple<Ts>) -> str => format("{}", type(cold_make<tuple<Ts>>()))
+test packed_query_defaults {
+    assert pack_inspect((1, true)) == "list<tuple<i64, bool>>"
+    assert pack_body((1, true)) == "list<tuple<i64, bool>>"
+    assert pack_inspect(("one",)) == "list<tuple<str>>"
+    assert pack_body(("one",)) == "list<tuple<str>>"
+    assert pack_inspect((1, true, "two")) == "list<tuple<i64, bool, str>>"
+    assert pack_body((1, true, "two")) == "list<tuple<i64, bool, str>>"
+    assert pack_inspect((1, true), tag: type(true)) == "bool"
+}
+
+# GEN-6/10, UNIT-7, TYPE-18: the operator owns an inherited default's pack.
+operator public_inspect<...Ts>{tag: Type = type(cold_make<tuple<Ts>>())}(v: tuple<Ts>) -> str
+impl const fn public_inspect{tag: Type}(v: tuple<i64, bool>) -> str => format("{}", tag)
+impl const fn public_inspect{tag: Type}(v: tuple<str>) -> str => format("{}", tag)
+test inherited_packed_query_defaults {
+    assert public_inspect((1, true)) == "list<tuple<i64, bool>>"
+    assert public_inspect(("one",)) == "list<tuple<str>>"
+    assert public_inspect((1, true)) == pack_body((1, true))
+    assert public_inspect(("one",)) == pack_body(("one",))
+    assert public_inspect{tag: type(true)}((1, true)) == "bool"
+    assert public_inspect{tag: type(1)}(("one",)) == "i64"
+}
+
+# GEN-6/17, UNIT-7, TYPE-18: inherited defaults retain reflected parameter names.
+const SECOND: str = "second"
+const fn named_callback(one: i64, second: str) -> bool => true
+const fn other_callback(second: i64) -> bool => false
+const fn named_default<...Ps>(f: const fn(...{Ps}) -> bool, tag: Type = type(cold_make<Ps[SECOND]>())) -> str => format("{}", tag)
+const fn named_body<...Ps>(f: const fn(...{Ps}) -> bool) -> str => format("{}", type(cold_make<Ps[SECOND]>()))
+operator named_inspect<...Ps>{tag: Type = type(cold_make<Ps[SECOND]>())}(f: const fn(...{Ps}) -> bool) -> str
+impl const fn named_inspect<...Qs>{tag: Type}(f: const fn(...{Qs}) -> bool) -> str => format("{}", tag)
+test inherited_named_query_defaults {
+    assert named_inspect(named_callback) == "list<str>"
+    assert named_inspect(other_callback) == "list<i64>"
+    assert named_default(named_callback) == named_body(named_callback)
+    assert named_default(other_callback) == named_body(other_callback)
+    assert named_inspect(named_callback) == named_body(named_callback)
+    assert named_inspect(other_callback) == named_body(other_callback)
+    assert named_inspect{tag: type(true)}(named_callback) == "bool"
+    assert named_inspect{tag: type(1)}(other_callback) == "i64"
+}

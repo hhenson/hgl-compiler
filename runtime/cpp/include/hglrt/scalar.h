@@ -417,6 +417,17 @@ CmpResult compare__T_T(const T& lhs, const T& rhs) {
     return lhs == rhs ? CmpResult::equivalent : CmpResult::unordered;
 }
 
+/// `lt_(lhs: bytes, rhs: bytes)` in unsigned octet order (TYPE-1, OPS-2).
+bool lt__bytes_bytes(const bytes& lhs, const bytes& rhs);
+/// `le_(lhs: bytes, rhs: bytes)` in unsigned octet order (TYPE-1, OPS-2).
+bool le__bytes_bytes(const bytes& lhs, const bytes& rhs);
+/// `gt_(lhs: bytes, rhs: bytes)` in unsigned octet order (TYPE-1, OPS-2).
+bool gt__bytes_bytes(const bytes& lhs, const bytes& rhs);
+/// `ge_(lhs: bytes, rhs: bytes)` in unsigned octet order (TYPE-1, OPS-2).
+bool ge__bytes_bytes(const bytes& lhs, const bytes& rhs);
+/// The three-way order of two byte sequences (TYPE-1, OPS-2, OPS-3).
+CmpResult compare__bytes_bytes(const bytes& lhs, const bytes& rhs);
+
 // The order of an `i64` and an `f64` (NUM-2: "Mixed numeric comparison must
 // not first round an i64 operand to f64"; NUM-6's table): by their exact
 // values, and false, or `unordered`, where the `f64` is a NaN.

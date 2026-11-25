@@ -3335,3 +3335,40 @@ fn pack_spreads_are_distinct_from_written_arguments() {
     rejected(Entry::Statements, "f(...)");
     rejected(Entry::Statements, "f(item: ...kwargs)");
 }
+
+/// TYPE-18, GEN-13: the query is one expression; requires keeps its own form.
+#[test]
+fn type_queries_keep_the_requires_form_separate() {
+    let tree = statements("let kind = type(f(1 + 2))");
+    assert!(tree.contains("TypeOfExpr["), "{tree}");
+    assert!(tree.contains("CallExpr["), "{tree}");
+    let tree = declarations("const fn f<const N: i64>() requires type(N) in {i64, f64} {}");
+    assert!(!tree.contains("TypeOfExpr["), "{tree}");
+    assert!(tree.contains("CallExpr[NameExpr[\"type\"]"), "{tree}");
+    let tree = declarations(
+        "const fn f<const N: i64>() requires (type(N) in {i64, f64}) && check(type(N)) {}",
+    );
+    assert!(!tree.contains("TypeOfExpr["), "{tree}");
+    rejected(Entry::Statements, "let kind = type()");
+    rejected(Entry::Statements, "let kind = type(1, 2)");
+}
+
+/// LEX-10, TYPE-18: type-name reservation is semantic; Type remains an
+/// identifier in value, callable, parameter, member and label positions.
+#[test]
+fn type_is_contextual_in_value_and_member_positions() {
+    for text in [
+        "struct Type { count: i64 }",
+        "enum Type { member }",
+        "fn Type(value: i64) -> i64 => value",
+        "fn value(Type: i64) -> i64 => Type",
+        "const Type: i64 = 1",
+        "struct Record { Type: Type }",
+        "enum Choice { Type }",
+    ] {
+        declarations(text);
+    }
+    statements("let Type = Record(Type: Kind.Type)\nlet selected = Type.Type");
+    statements("let t: Type = type(42)\nlet nested = type(type(t))");
+    statements("let type = 1\nRecord(type: type)");
+}

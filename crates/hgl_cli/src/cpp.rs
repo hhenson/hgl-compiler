@@ -6,6 +6,7 @@
 
 mod application;
 mod build;
+mod clean;
 mod commands;
 mod debug_tests;
 mod plan;
@@ -80,11 +81,18 @@ impl BuildSession {
         roots: &[PathBuf],
         keep: Option<&Path>,
         debug: bool,
+        clean: bool,
         interrupt: &Interrupt,
     ) -> Result<Self, String> {
         let cache = build::cache()?;
         let workspace = Workspace::open(keep, roots, &cache, debug)?;
         let previous = PreviousBuild::read(&workspace);
+        let previous = if clean {
+            clean::workspace(&workspace, previous.as_ref())?;
+            None
+        } else {
+            previous
+        };
         let found = if debug {
             Toolchain::find_debug(interrupt)
         } else {
@@ -161,7 +169,9 @@ impl BuildSession {
 
     /// Exports compile commands from the manifest of this locked workspace.
     fn compile_commands(&self) -> Result<PathBuf, String> {
-        self.workspace.compile_commands(self.toolchain.ninja()?)
+        let path = self.workspace.compile_commands(self.toolchain.ninja()?)?;
+        Stamp::record_optional(&self.workspace, &["compile_commands.json"])?;
+        Ok(path)
     }
 
     /// Writes the program and publishes its stamp after Ninja succeeds.
@@ -195,6 +205,15 @@ impl BuildSession {
         let description = description?;
         self.workspace
             .write(output, &description, program.tests.is_some())?;
+        let debug_sources: Vec<String> = output
+            .files
+            .iter()
+            .filter(|file| Path::new(&file.path).starts_with(DEBUG_SOURCES))
+            .map(|file| file.path.clone())
+            .collect();
+        if !debug_sources.is_empty() {
+            Stamp::record_previous_optional(&self.workspace, &debug_sources)?;
+        }
         let previous = self.previous.as_ref().map(|previous| &previous.stamp);
         let jobs = self.jobs.as_deref();
         let artifacts = match debug_tests {
@@ -214,13 +233,7 @@ impl BuildSession {
         let mut artifacts = artifacts?;
         // A reusable debug launch needs the sources from its line tables
         // as well as the executable.
-        artifacts.extend(
-            output
-                .files
-                .iter()
-                .filter(|file| Path::new(&file.path).starts_with(DEBUG_SOURCES))
-                .map(|file| file.path.clone()),
-        );
+        artifacts.extend(debug_sources);
         if self.toolchain.key() != self.toolchain_key {
             return Err("the C++ toolchain changed during the build".to_string());
         }
@@ -232,6 +245,7 @@ impl BuildSession {
             program,
             debug_tests.is_some(),
             retained,
+            self.previous.as_ref(),
         )?;
         interrupt.finish()?;
         Stamp::save(&self.workspace, &stamp)?;
@@ -387,13 +401,18 @@ fn print_cases(cases: &[&TestCase], run: Result<(&BuildSession, &Description), &
             limit: None,
         }));
         let libraries = sdk::library_path(description);
-        for (slot, outcome) in launch_all(
+        let launched = launch_all(
             &session.workspace,
             &launches,
             libraries.as_ref(),
             session.jobs.as_deref(),
-        ) {
+        );
+        for (slot, outcome) in launched.outcomes {
             outcomes[slot] = outcome;
+        }
+        if !launched.written.is_empty() {
+            let paths: Vec<&str> = launched.written.iter().map(String::as_str).collect();
+            let _ = Stamp::record_optional(&session.workspace, &paths);
         }
     }
     let outcomes: Vec<_> = cases
@@ -412,6 +431,11 @@ struct Launch<'o> {
     limit: Option<Duration>,
 }
 
+struct LaunchBatch {
+    outcomes: Vec<(usize, CaseOutcome)>,
+    written: Vec<String>,
+}
+
 /// Runs each of `launches` in `workspace`, as many at once as `jobs`
 /// says or the machine has cores, each with `libraries`, a variable and
 /// its value, in its environment where there is one
@@ -422,7 +446,7 @@ fn launch_all(
     launches: &[Launch],
     libraries: Option<&(&'static str, OsString)>,
     jobs: Option<&str>,
-) -> Vec<(usize, CaseOutcome)> {
+) -> LaunchBatch {
     let threads = jobs
         .and_then(|jobs| jobs.parse::<usize>().ok())
         .or_else(|| std::thread::available_parallelism().ok().map(usize::from))
@@ -431,19 +455,27 @@ fn launch_all(
     let next = AtomicUsize::new(0);
     // Each thread takes the next launch until none is left; a scope's
     // threads are joined before it ends.
-    let ran: Vec<Vec<(usize, CaseOutcome)>> = std::thread::scope(|scope| {
+    let ran: Vec<LaunchBatch> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..threads)
             .map(|_| {
                 scope.spawn(|| {
-                    let mut ran = Vec::new();
+                    let mut batch = LaunchBatch {
+                        outcomes: Vec::new(),
+                        written: Vec::new(),
+                    };
                     loop {
                         let taken = next.fetch_add(1, Ordering::Relaxed);
                         let Some(launch) = launches.get(taken) else {
                             break;
                         };
-                        ran.extend(launch_one(workspace, launch, taken, libraries));
+                        let (outcomes, result_file) =
+                            launch_one(workspace, launch, taken, libraries);
+                        batch.outcomes.extend(outcomes);
+                        if let Some(result_file) = result_file {
+                            batch.written.push(result_file);
+                        }
                     }
-                    ran
+                    batch
                 })
             })
             .collect();
@@ -456,7 +488,15 @@ fn launch_all(
             })
             .collect()
     });
-    ran.into_iter().flatten().collect()
+    let mut combined = LaunchBatch {
+        outcomes: Vec::new(),
+        written: Vec::new(),
+    };
+    for part in ran {
+        combined.outcomes.extend(part.outcomes);
+        combined.written.extend(part.written);
+    }
+    combined
 }
 
 /// Runs one executable, the `position`th of the runs, on its tests, with
@@ -467,7 +507,7 @@ fn launch_one(
     launch: &Launch,
     position: usize,
     libraries: Option<&(&'static str, OsString)>,
-) -> Vec<(usize, CaseOutcome)> {
+) -> (Vec<(usize, CaseOutcome)>, Option<String>) {
     let stem = launch.stem;
     let all = |reason: String| -> Vec<(usize, CaseOutcome)> {
         launch
@@ -477,6 +517,7 @@ fn launch_one(
             .collect()
     };
     // A results file for each run, by its position among them.
+    let relative = format!("results/{stem}.{position}.txt");
     let results = workspace
         .directory
         .join("results")
@@ -491,7 +532,7 @@ fn launch_one(
             .map_err(|error| format!("{} could not be made: {error}", results.display())),
     };
     if let Err(reason) = cleared {
-        return all(reason);
+        return (all(reason), None);
     }
     // `EXECUTABLE RESULTS NAME...`: the runtime library's test host
     // (`hglrt/testing.h`).
@@ -506,10 +547,13 @@ fn launch_one(
     let (finished, timed_out) = match finish(&mut command, launch.limit) {
         Ok(finished) => finished,
         Err(error) => {
-            return all(format!(
-                "{} could not be run: {error}",
-                executable.display()
-            ));
+            return (
+                all(format!(
+                    "{} could not be run: {error}",
+                    executable.display()
+                )),
+                None,
+            );
         }
     };
     // TST-17: a test still running at its limit has failed.
@@ -518,11 +562,14 @@ fn launch_one(
             "timed out: it was still running after its limit of {}",
             seconds(limit)
         );
-        return launch
-            .tests
-            .iter()
-            .map(|(slot, _, _)| (*slot, CaseOutcome::Failed(said.clone())))
-            .collect();
+        return (
+            launch
+                .tests
+                .iter()
+                .map(|(slot, _, _)| (*slot, CaseOutcome::Failed(said.clone())))
+                .collect(),
+            Some(relative),
+        );
     }
     let printed = String::from_utf8_lossy(&finished.stderr);
     let last = printed
@@ -532,7 +579,7 @@ fn launch_one(
         .unwrap_or("it printed no error");
     let stopped = format!("the executable stopped ({}): {last}", finished.status);
     let recorded = fs::read_to_string(&results).unwrap_or_default();
-    read_results(&recorded, launch.tests.len())
+    let outcomes = read_results(&recorded, launch.tests.len())
         .into_iter()
         .zip(&launch.tests)
         .map(|(recorded, (slot, _, test))| {
@@ -563,7 +610,8 @@ fn launch_one(
             };
             (*slot, outcome)
         })
-        .collect()
+        .collect();
+    (outcomes, Some(relative))
 }
 
 /// Runs `command` to its end, and gives what it printed and how it

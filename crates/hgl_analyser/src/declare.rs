@@ -114,17 +114,32 @@ pub(crate) fn declare(module: &mut Module, inputs: &[&ParsedFile], diagnostics: 
     module.declarations.extend(walk.test_declarations);
     module.tests = walk.tests;
     module.instantiations = walk.instantiations;
-    check_reserved_function_names(module, diagnostics);
+    check_reserved_names(module, diagnostics);
     bind_declarations(module, diagnostics);
     bind_native_implementations(module, diagnostics);
     bind_native_candidates(module, diagnostics);
     check_tests(module, diagnostics);
 }
 
-/// UNIT-10 reserves an activation form's name on a function declaration.
-fn check_reserved_function_names(module: &Module, diagnostics: &mut Diagnostics) {
+/// UNIT-10 reserves activation function names; TYPE-18 reserves the descriptor
+/// spelling only on declarations that introduce a type.
+fn check_reserved_names(module: &Module, diagnostics: &mut Diagnostics) {
     let name = EndpointOperation::Scheduled.name();
     for declaration in &module.declarations {
+        if declaration.name == "Type"
+            && matches!(
+                declaration.kind,
+                DeclarationKind::Struct | DeclarationKind::Enum | DeclarationKind::NativeType
+            )
+        {
+            diagnostics.emit(error(
+                Category::Name,
+                codes::NAME_RESERVED,
+                declaration.at,
+                "the type name `Type` is reserved for the descriptor type".to_string(),
+                "TYPE-18",
+            ));
+        }
         if declaration.name == name && declaration.kind.binding_role().is_some() {
             diagnostics.emit(error(
                 Category::Name,

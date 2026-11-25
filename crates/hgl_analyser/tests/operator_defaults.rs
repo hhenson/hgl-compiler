@@ -8,6 +8,91 @@ use hgl_analyser::hir::{Callee, ExprKind, Stmt};
 use hgl_diagnostics::Diagnostics;
 
 #[test]
+fn an_inherited_type_query_keeps_public_reflected_keys_and_prefix() {
+    // GEN-6/17, TYPE-18: public and candidate packs have independent
+    // keys and fixed prefixes. A tuple of their types cannot replace them.
+    let checked = module(
+        r#"const WHOM: str = "second"
+const fn cb(one: i64, second: str) -> bool => true
+const fn other(second: i64) -> bool => false
+const fn cold<T>() -> list<T> { assert false
+ return [] }
+operator tell<...Ps>{tag: Type = type(cold<Ps[WHOM]>())}(f: const fn(...{Ps}) -> bool) -> Type
+impl const fn tell<...Qs>{tag: Type}(f: const fn(...{Qs}) -> bool) -> Type => tag
+operator suffix<...Ps>{tag: Type = type(cold<Ps[WHOM]>())}(f: const fn(i64, ...{Ps}) -> bool) -> Type
+impl const fn suffix<...Qs>{tag: Type}(f: const fn(...{Qs}) -> bool) -> Type => tag
+const fn first() -> Type => tell(cb)
+const fn second() -> Type => tell(other)
+const fn prefix() -> Type => suffix(cb)"#,
+    );
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+    for (name, keys, text, prefix) in [
+        ("first", vec!["one", "second"], "list<str>", 0),
+        ("second", vec!["second"], "list<i64>", 0),
+        ("prefix", vec!["second"], "list<str>", 1),
+    ] {
+        let [
+            Stmt::Return {
+                value: Some(call), ..
+            },
+        ] = body(&checked, name).statements.as_slice()
+        else {
+            panic!("expected the inherited-default call");
+        };
+        let ExprKind::Call {
+            callee:
+                callee @ Callee::Candidate {
+                    operator,
+                    operator_generics,
+                    operator_type_packs,
+                    module,
+                    declaration,
+                    ..
+                },
+            ..
+        } = &call.kind
+        else {
+            panic!("expected a selected candidate");
+        };
+        let [pack] = operator_type_packs.as_slice() else {
+            panic!("expected the public reflected pack");
+        };
+        assert_eq!(
+            pack.keys,
+            keys.into_iter()
+                .map(|key| hgl_analyser::hir::PackKey::Name(key.to_string()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(pack.reflected.as_ref().unwrap().fixed, prefix);
+        let default = checked
+            .program
+            .inherited_configuration_default(callee, 0)
+            .unwrap();
+        let Detail::Callable(candidate) = &checked.program.modules[*module].details[*declaration]
+        else {
+            panic!("expected the candidate signature");
+        };
+        let mut diagnostics = Diagnostics::new();
+        let placed = checked.program.specialize_operator_default(
+            default,
+            *operator,
+            operator_generics,
+            operator_type_packs,
+            &candidate.parameters[0],
+            &mut diagnostics,
+        );
+        assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");
+        assert!(
+            matches!(&placed.value.kind,
+            ExprKind::Literal(hgl_analyser::hir::Value::Type(ty))
+                if ty.canonical_spelling() == text),
+            "{:#?}",
+            placed.value
+        );
+    }
+}
+
+#[test]
 fn a_generic_inherited_default_is_held_to_the_selected_parameter() {
     // GEN-6, UNIT-8: a call leaving the configuration out takes the
     // operator's default as a value of the selected parameter's type.
@@ -235,6 +320,7 @@ const fn use_default() -> bool => pick(false)",
     let Callee::Candidate {
         operator,
         operator_generics,
+        operator_type_packs,
         module,
         declaration,
         ..
@@ -255,6 +341,7 @@ const fn use_default() -> bool => pick(false)",
         default,
         *operator,
         operator_generics,
+        operator_type_packs,
         &signature.parameters[0],
         &mut diagnostics,
     );

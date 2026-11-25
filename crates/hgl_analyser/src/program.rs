@@ -12,11 +12,16 @@ use hgl_source::FileId;
 
 use crate::declared::{names_one_of, substitute_within};
 use crate::hir::{Body, DefaultExpr, Run};
-use crate::types::{Argument, CallArguments, Detail, GenericKind, NamedKind, Type, WrittenType};
+use crate::types::{
+    Argument, CallArguments, DeltaInput, Detail, GenericKind, NamedKind, Type, WrittenType,
+};
 
 /// Every module found in the files analysed, in order of module path.
 #[derive(Debug, Clone, Default)]
 pub struct Program {
+    /// Storage dependencies after declared struct fields resolve (TYPE-18).
+    /// Later passes fill bodies, leaving this immutable summary reusable.
+    pub(crate) type_value_storage: std::sync::OnceLock<crate::type_values::TypeStorage>,
     /// The modules. A module's position here is how other records refer
     /// to it ([`Import::module`], [`OperatorRef::module`]).
     pub modules: Vec<Module>,
@@ -199,6 +204,9 @@ pub struct Module {
     /// constraints that resolved, with what it resolved to (UNIT-10), in
     /// file order and then source order.
     pub uses: Vec<NameUse>,
+    /// GEN-14 lookup reports for a contextual Type argument. The type reader
+    /// emits them only when the corresponding slot chooses a value.
+    pub(crate) contextual_type_reports: HashMap<Location, Vec<hgl_diagnostics::Diagnostic>>,
     /// Local bindings that hide a callable, mapped to the callable's declaration (UNIT-12).
     pub(crate) hidden_callables: HashMap<Location, Location>,
     /// What each `name<...>(...)` the parser left undecided was decided
@@ -214,6 +222,9 @@ pub struct Module {
     /// order and then source order. A type inside another is part of
     /// that one and not listed again.
     pub written: Vec<WrittenType>,
+    /// Delta operands retained before normalization, so TYPE-16/18 can
+    /// check their resolved storage after struct fields have been read.
+    pub(crate) delta_inputs: Vec<DeltaInput>,
     /// The generic arguments each call writes after its callee's name,
     /// `count<i64>(3)` (GEN-8), in the order the calls are read.
     pub call_arguments: Vec<CallArguments>,

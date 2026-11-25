@@ -49,7 +49,7 @@ use control::label;
 use endpoints::endpoint_argument;
 
 pub(crate) use candidates::{Selecting, select_in_instance};
-pub(crate) use constants::generic_default;
+pub(crate) use constants::{generic_default, reread_parameter_default};
 pub(crate) use lifting::record;
 
 // The bodies of anonymous functions and their direct calls (FN-7, FN-14).
@@ -75,6 +75,7 @@ mod constants;
 // Blocks, `if`, `while`, `for` and `switch` (CTRL-5, CTRL-10 to CTRL-15).
 mod control;
 // A delta as a type of its own: its properties and its construction (TYPE-16).
+mod callback_evidence;
 mod deltas;
 mod dependent_packs;
 pub(crate) use dependent_packs::PackTypes;
@@ -125,6 +126,8 @@ mod sizes;
 mod statements;
 // `-`, `!` and the operators with two operands, as calls of core's (NUM-1, EXPR-6).
 mod symbols;
+mod type_queries;
+pub(crate) use type_queries::query_type;
 
 /// Walk calls and constructions in a body, including static references
 /// and the independently scoped bodies of anonymous functions.
@@ -782,6 +785,8 @@ struct Typer<'a> {
     /// Suppress nested scalar-flow retries while probing a Boolean tree
     /// for value/connection categories (EXPR-6). Restored before its real read.
     probing_logic: bool,
+    /// TYPE-18: a cold operand asks for declared types, never local values.
+    type_query: bool,
     /// The locals a capability has been bound to, each with the
     /// capability it is: `let bound = clock` (TIME-8: "Binding one to a
     /// `let` ... [is a use]"). The local is then the capability under
@@ -1024,6 +1029,7 @@ impl<'a> Typer<'a> {
             designating: None,
             present: Vec::new(),
             probing_logic: false,
+            type_query: false,
             aliases: HashMap::new(),
             bound_children: HashMap::new(),
             binding_child: None,

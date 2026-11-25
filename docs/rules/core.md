@@ -140,6 +140,7 @@ transpiler: done
 analyser: partial
 
 - In a value function, ordering between two of one ordered type and equality between two values of one type, by symbol and by name through core's candidates
+- Selects Core's unsigned-octet ordering candidates when both operands are `bytes`.
 - An operand that is a generic parameter is compared as its declaration's requirements state (GEN-7)
 - Two zoned datetimes, in a value function, a hook and a graph: `==` and `!=` select core's candidates for them. The ordinary `utc` parameter can be a lifted input (EXPR-14). A zoned type has no ordering.
 - Left: a comparison with a nullable operand; other types in temporal bodies
@@ -148,6 +149,7 @@ transpiler: done
 
 - Writes core's ordered comparison and value equality, including zoned equality and the
   `utc` option.
+- Compares `bytes` lexicographically as unsigned octets (TYPE-1).
 
 ## OPS-3
 
@@ -157,10 +159,10 @@ analyser: done
 
 ## OPS-4
 
-analyser: partial
+analyser: done
 
 - Resolves declared conversions in value functions, node hooks and graph composition. A list of concrete structs converts to a list of their abstract parent (OPS-6).
-- Left: the enum conversions awaiting Core declarations and target support (#514).
+- Selects the enum candidates for a written enum destination or an enum operand. Other pairings are rejected at the operator.
 
 transpiler: done
 
@@ -187,6 +189,7 @@ transpiler: done
 
 - Uses the runtime conversion natives and the generated conversion of a list of concrete
   structs to a list of their abstract parent.
+- The enum natives use the member's HGL name and number, including explicit and sparse numbers.
 
 ## OPS-7
 
@@ -198,6 +201,8 @@ transpiler: done
 
 - Emits rounding, NaN and invalid-input policies through the selected conversion. The
   checked conversion preserves its ordinary tagged result.
+- Proposed: an integer without a member gives `convert.invalid` in the
+  checked result or raises it under `.fail`.
 
 ## OPS-8
 
@@ -575,7 +580,10 @@ transpiler: partial
   is built, and a node's keys its configuration fixes, its own and those it
   hands helpers, when the SDK attaches it, before any start hook. A key
   that can differ between the calls of a cycle is left to the operation.
-- Left: a temporal child graph using the surrounding store is declined (CRUN-7).
+- A selected branch may use the surrounding store and its captured aliases
+  during its startup prefix (FN-9, CRUN-7).
+- Left: store-dependent child wiring and startup outside the supported
+  branch form (#541).
 
 ## CAP-7
 
@@ -753,7 +761,11 @@ transpiler: partial
 
 - Creates one store for a run, populated by the application before graph construction,
   and executes its wiring-time store calls in order.
-- Left: a temporal branch using its surrounding graph's store is declined by the target (FN-9, CAP-6).
+- Executes the ordinary store prefix of a selected branch before its
+  directly wired scalar node starts. Every activation uses the same run
+  store (FN-9, CAP-6).
+- Left: store-dependent child wiring and startup outside that branch
+  form (#541).
 
 ## CRUN-8
 
@@ -793,6 +805,10 @@ transpiler: partial
 - Left: native growing lists and multiple split dictionaries (#370).
 
 ## MAP-2
+
+analyser: partial
+
+- A bare operator or generic function prefers the collection member when its type fits the call. A known type can require a less specific whole-collection reading. The candidate's declared membership supplies both possibilities, and the call still splits an input (GEN-3, FN-17, MAP-3).
 
 transpiler: partial
 
@@ -983,12 +999,16 @@ transpiler: partial
 
 analyser: partial
 
+- Core declares a native value candidate for `convert<str>(Type)`.
+
 - A user type uses its selected `convert<str>` and rejects if there is no candidate.
 - A nullable field checks the text conversion of its payload type. The target writes that text when present and `null` when absent.
 - Left: tuple and struct text candidates (#434, #512).
 
 transpiler: partial
 
+- A Type value converts to its canonical diagnostic spelling, including fixed collection sizes, generic arguments and nullable suffixes (TYPE-18).
+- Enum arguments display their declared enum name, independently of their qualified identity key. Left: generic-type diagnostics retain source-form duration/float arguments while Type values normalize them (#909).
 - Value defaults are written in Core's scalar forms. The growing list, fixed list, set and dictionary candidates use each member's conversion and traversal order, quote and escape strings and render absent members as `null`.
 - Left: tuple and struct text candidates (#434, #512).
 
@@ -1029,9 +1049,11 @@ transpiler: partial
 
 ## DBG-1
 
-transpiler: planned
+transpiler: partial
 
-- #434.
+- Core's value candidate writes and flushes one line to the program's standard output
+  where it is executed. Its output stays separate from publications and test outcomes.
+- Left: the HGL graph candidate (#434).
 
 ## DBG-2
 
@@ -1041,9 +1063,14 @@ transpiler: planned
 
 ## DBG-3
 
-transpiler: planned
+analyser: done
 
-- #434.
+- The value candidate forwards the pattern and both packs through the FMT-9 checks.
+  An explicit `Marked<T>` retains the mark exception.
+
+transpiler: done
+
+- Value functions and handlers execute Core's line write at the call.
 
 ## DBG-4
 
@@ -1077,6 +1104,7 @@ transpiler: planned
 
 ## DBG-9
 
-transpiler: planned
+transpiler: partial
 
-- #434.
+- The bundled HGL value candidate calls `format` and `write` with flushing.
+- Left: the HGL graph candidate and its options (#434).

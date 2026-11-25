@@ -78,6 +78,7 @@ struct DefaultUse {
     at: Location,
     owner: (usize, usize),
     generics: Vec<Argument>,
+    type_packs: Vec<hir::TypePackArgument>,
     expected: Type,
 }
 
@@ -286,7 +287,7 @@ fn check_declared_defaults(
         };
         checking.specialize(
             program,
-            (owner, generics),
+            (owner, generics, callee.type_packs()),
             (default, &concrete),
             diagnostics,
         );
@@ -304,6 +305,7 @@ fn check_inherited_defaults(
     let Callee::Candidate {
         operator,
         operator_generics,
+        operator_type_packs,
         module,
         declaration,
         generics,
@@ -332,6 +334,7 @@ fn check_inherited_defaults(
         .map(|generic| generic.at)
         .zip(generics)
         .collect();
+    let packs = program.operator_default_packs(*operator, operator_generics, operator_type_packs);
     for ((parameter, slot), default) in public
         .parameters
         .iter()
@@ -352,7 +355,7 @@ fn check_inherited_defaults(
         };
         checking.specialize(
             program,
-            (*operator, operator_generics),
+            (*operator, operator_generics, &packs),
             (default, &concrete),
             diagnostics,
         );
@@ -364,14 +367,20 @@ impl Defaults {
     fn specialize(
         &mut self,
         program: &Program,
-        (owner, generics): ((usize, usize), &[Argument]),
+        (owner, generics, type_packs): ((usize, usize), &[Argument], &[hir::TypePackArgument]),
         (default, parameter): (&hir::DefaultExpr, &Parameter),
         diagnostics: &mut Diagnostics,
     ) {
+        let type_packs = if default.has_type_query() {
+            type_packs
+        } else {
+            &[]
+        };
         let use_key = DefaultUse {
             at: default.value.at,
             owner,
             generics: generics.to_vec(),
+            type_packs: type_packs.to_vec(),
             expected: parameter.ty.clone(),
         };
         if self.seen.len() >= crate::INSTANCES || self.seen.contains(&use_key) {
@@ -379,8 +388,14 @@ impl Defaults {
         }
         self.seen.push(use_key);
         let mut reports = Diagnostics::new();
-        let specialized =
-            program.specialize_parameter_default(default, owner, generics, parameter, &mut reports);
+        let specialized = program.specialize_parameter_default(
+            default,
+            owner,
+            generics,
+            type_packs,
+            parameter,
+            &mut reports,
+        );
         if !reports.has_errors() && reads_generic_value(default) {
             with_configuration_typer(program, owner, &mut reports, |typer| {
                 typer.check_default_evaluation(default.value.at, parameter, generics);
@@ -402,7 +417,7 @@ impl Defaults {
 /// An omitted default can depend on generic arguments through its type
 /// or through a value read by the expression.
 fn dependent_default(parameter: &Parameter, default: &hir::DefaultExpr) -> bool {
-    names_parameter(&parameter.ty) || reads_generic_value(default)
+    names_parameter(&parameter.ty) || reads_generic_value(default) || default.has_type_query()
 }
 
 fn reads_generic_value(default: &hir::DefaultExpr) -> bool {

@@ -129,6 +129,848 @@ exec "$HGL_TEST_REAL_NINJA" "$@"
     }
 }
 
+/// Clean rebuilds unchanged units and retires generated outputs left by an earlier program.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn clean_rebuilds_the_workspace_and_removes_retired_units() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("clean-rebuild");
+    write(&root, "src/stamped.hgl", SOURCE);
+    let app = write(&root, "src/app.hgl", APP);
+    let ninja = NinjaTrace::new(&root);
+    let sources = argument(&root.join("src"));
+    let workspace = argument(&ninja.workspace);
+    let build = |options: &[&str]| {
+        let out = ninja
+            .hgl(&[
+                "build",
+                &sources,
+                "--out",
+                &workspace,
+                "--compile-commands",
+                "--format",
+                "json",
+            ])
+            .args(options)
+            .output()
+            .unwrap();
+        serde_json::from_str::<Value>(&success(out)).unwrap()
+    };
+    assert_eq!(build(&["--clean", "--tests"])["reused"], false);
+    assert_eq!(build(&["--tests"])["reused"], true);
+    // Debug builds stamp each bundled source copy with its digest; a later
+    // ordinary build carries that provenance so `--clean` still removes
+    // unmodified copies while preserving edited copies and neighbours.
+    build(&["--debug", "--tests"]);
+    let debug_copy = ninja.workspace.join("debug-sources/core.hgl.source");
+    let edited_copy = ninja.workspace.join("debug-sources/calendar.hgl.source");
+    assert!(debug_copy.is_file());
+    assert!(edited_copy.is_file());
+    fs::write(&edited_copy, "user edit").unwrap();
+    let nearby = write(
+        &ninja.workspace,
+        "debug-sources/notes.hgl.source",
+        "handwritten",
+    );
+    build(&["--tests"]);
+    build(&["--clean", "--tests"]);
+    assert!(!debug_copy.exists());
+    assert_eq!(fs::read_to_string(&edited_copy).unwrap(), "user edit");
+    assert_eq!(fs::read_to_string(nearby).unwrap(), "handwritten");
+    fs::remove_file(&edited_copy).unwrap();
+
+    // Run real test and application hosts so recorded result files exist before retiring them.
+    success(
+        ninja
+            .hgl(&["test", &sources, "--target", "cpp", "--keep", &workspace])
+            .output()
+            .unwrap(),
+    );
+    success(
+        ninja
+            .hgl(&["run", &sources, "--target", "cpp", "--keep", &workspace])
+            .output()
+            .unwrap(),
+    );
+    let recorded_test = ninja.workspace.join("results/test-demo-stamped.0.txt");
+    let recorded_app = ninja.workspace.join("results/app-demo-app.run.txt");
+    assert!(recorded_test.is_file());
+    assert!(recorded_app.is_file());
+
+    fs::remove_file(app).unwrap();
+    build(&[]);
+    let retired = [
+        "applications/app-demo-app.cpp",
+        "run/app-demo-app",
+        "obj/applications/app-demo-app.o",
+        "tests/test-demo-stamped.cpp",
+        "bin/test-demo-stamped",
+        "obj/tests/test-demo-stamped.o",
+    ];
+    for file in retired {
+        assert!(ninja.workspace.join(file).is_file(), "{file}");
+    }
+    let object = ninja.workspace.join("obj/modules/mod-demo-stamped.o");
+    let old = File::open(&object).unwrap();
+    old.set_modified(std::time::SystemTime::UNIX_EPOCH).unwrap();
+    let note = write(
+        &ninja.workspace,
+        "results/test-demo-stamped.notes.txt",
+        "keep",
+    );
+    let handwritten = write(&ninja.workspace, "modules/manual.cpp", "// mine");
+    let other = write(
+        &ninja.workspace,
+        "debug/compile_commands.json",
+        "other profile",
+    );
+    let got = build(&["--clean"]);
+    assert_eq!(got["reused"], false);
+    assert_eq!(
+        got["compileCommands"],
+        argument(&ninja.workspace.join("compile_commands.json"))
+    );
+    assert_ne!(
+        fs::metadata(object).unwrap().modified().unwrap(),
+        old.metadata().unwrap().modified().unwrap()
+    );
+    for file in retired {
+        assert!(!ninja.workspace.join(file).exists(), "{file}");
+    }
+    assert!(!recorded_test.exists());
+    assert!(!recorded_app.exists());
+    assert_eq!(fs::read_to_string(note).unwrap(), "keep");
+    assert_eq!(fs::read_to_string(handwritten).unwrap(), "// mine");
+    assert_eq!(fs::read_to_string(other).unwrap(), "other profile");
+    assert_eq!(build(&[])["reused"], true);
+
+    write(
+        &root,
+        "src/stamped.hgl",
+        "module demo.stamped\nconst fn broken() -> i64 => false",
+    );
+    assert!(
+        !ninja
+            .hgl(&["build", &sources, "--out", &workspace, "--clean"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(!ninja.workspace.join(".hgl-built.json").exists());
+    assert!(
+        !ninja
+            .workspace
+            .join("obj/modules/mod-demo-stamped.o")
+            .exists()
+    );
+    write(&root, "src/stamped.hgl", SOURCE);
+    assert_eq!(build(&[])["reused"], false);
+}
+
+/// Clean removes optional files only when unchanged from recorded stamp
+/// provenance, preserving user-created files even in valid host/compdb format.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn clean_requires_recorded_provenance_for_optional_workspace_files() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("clean-provenance");
+    write(&root, "src/stamped.hgl", SOURCE);
+    write(&root, "src/app.hgl", APP);
+    let ninja = NinjaTrace::new(&root);
+    let sources = argument(&root.join("src"));
+    let workspace = argument(&ninja.workspace);
+    let compdb = ninja.workspace.join("compile_commands.json");
+    let build = |options: &[&str]| {
+        let out = ninja
+            .hgl(&["build", &sources, "--out", &workspace, "--format", "json"])
+            .args(options)
+            .output()
+            .unwrap();
+        serde_json::from_str::<Value>(&success(out)).unwrap()
+    };
+
+    // Build without `--compile-commands` and without running tests or the app.
+    assert_eq!(build(&["--tests"])["reused"], false);
+    // Place user-created files at expected names, including valid host format
+    // and valid Ninja compdb format, before HGL has ever produced them.
+    let lookalike_compdb = success(
+        Command::new(&ninja.native)
+            .arg("-C")
+            .arg(&ninja.workspace)
+            .args(["-t", "compdb", "unit", "entry"])
+            .output()
+            .unwrap(),
+    );
+    fs::write(&compdb, &lookalike_compdb).unwrap();
+    let valid_test_result = "start 0\npassed 0\n";
+    let valid_app_result = "start\npublished 1970-01-01T00:00:01Z 51\nstopped\n";
+    let user_test_result = write(
+        &ninja.workspace,
+        "results/test-demo-stamped.0.txt",
+        valid_test_result,
+    );
+    let user_plus_result = write(
+        &ninja.workspace,
+        "results/test-demo-stamped.+0.txt",
+        valid_test_result,
+    );
+    let user_app_result = write(
+        &ninja.workspace,
+        "results/app-demo-app.run.txt",
+        valid_app_result,
+    );
+    let user_debug_result = write(
+        &ninja.workspace,
+        "debug-results/test-demo-stamped.txt",
+        valid_test_result,
+    );
+    let top_level_results = write(&ninja.workspace, "results.txt", valid_app_result);
+    assert_eq!(build(&["--clean", "--tests"])["reused"], false);
+    assert_eq!(fs::read_to_string(&compdb).unwrap(), lookalike_compdb);
+    assert_eq!(
+        fs::read_to_string(&user_test_result).unwrap(),
+        valid_test_result
+    );
+    assert_eq!(
+        fs::read_to_string(&user_plus_result).unwrap(),
+        valid_test_result
+    );
+    assert_eq!(
+        fs::read_to_string(&user_app_result).unwrap(),
+        valid_app_result
+    );
+    assert_eq!(
+        fs::read_to_string(&user_debug_result).unwrap(),
+        valid_test_result
+    );
+    assert_eq!(
+        fs::read_to_string(&top_level_results).unwrap(),
+        valid_app_result
+    );
+
+    // Export a genuine compilation database, edit it, and confirm `--clean` preserves it.
+    assert_eq!(build(&["--tests", "--compile-commands"])["reused"], true);
+    let generated = fs::read_to_string(&compdb).unwrap();
+    let edited_db = format!("{generated}\n");
+    fs::write(&compdb, &edited_db).unwrap();
+    assert_eq!(build(&["--clean", "--tests"])["reused"], false);
+    assert_eq!(fs::read_to_string(&compdb).unwrap(), edited_db);
+
+    // An unmodified compiler-generated database survives an ordinary rebuild
+    // and is removed by `--clean` when `--compile-commands` is omitted.
+    assert_eq!(build(&["--tests", "--compile-commands"])["reused"], true);
+    assert_eq!(build(&[])["reused"], false);
+    assert!(compdb.is_file());
+    assert_eq!(build(&["--clean", "--tests"])["reused"], false);
+    assert!(!compdb.exists());
+
+    // Run real `hgl test` and `hgl run`: unmodified recorded result is removed,
+    // while a user-edited recorded result is preserved.
+    success(
+        ninja
+            .hgl(&["test", &sources, "--target", "cpp", "--keep", &workspace])
+            .output()
+            .unwrap(),
+    );
+    success(
+        ninja
+            .hgl(&["run", &sources, "--target", "cpp", "--keep", &workspace])
+            .output()
+            .unwrap(),
+    );
+    fs::write(&user_app_result, "user edited run output\n").unwrap();
+    assert_eq!(build(&["--clean"])["reused"], false);
+    assert!(!Path::new(&user_test_result).exists());
+    assert_eq!(
+        fs::read_to_string(&user_app_result).unwrap(),
+        "user edited run output\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&top_level_results).unwrap(),
+        valid_app_result
+    );
+
+    // Multi-step debug -> ordinary -> ordinary -> clean removes unmodified
+    // debug copies while keeping edited copies and handwritten neighbours.
+    assert_eq!(build(&["--debug", "--tests"])["reused"], false);
+    let debug_core = ninja.workspace.join("debug-sources/core.hgl.source");
+    let debug_calendar = ninja.workspace.join("debug-sources/calendar.hgl.source");
+    assert!(debug_core.is_file());
+    assert!(debug_calendar.is_file());
+    fs::write(&debug_calendar, "edited copy").unwrap();
+    let neighbor = write(
+        &ninja.workspace,
+        "debug-sources/notes.hgl.source",
+        "handwritten",
+    );
+    assert_eq!(build(&["--tests"])["reused"], false);
+    assert_eq!(build(&[])["reused"], false);
+    assert_eq!(build(&["--clean"])["reused"], false);
+    assert!(!debug_core.exists());
+    assert_eq!(fs::read_to_string(&debug_calendar).unwrap(), "edited copy");
+    assert_eq!(fs::read_to_string(&neighbor).unwrap(), "handwritten");
+
+    // A failed first debug build records the written debug copies in
+    // `.hgl-previous-build.json`; a subsequent `--clean` removes unmodified
+    // copies while preserving edits.
+    let failed_ws = root.join("failed-debug-ws");
+    let failed_arg = argument(&failed_ws);
+    let failed = ninja
+        .hgl(&[
+            "build",
+            &sources,
+            "--out",
+            &failed_arg,
+            "--debug",
+            "--tests",
+        ])
+        .env("HGL_TEST_BUILD_WORKSPACE", &failed_ws)
+        .env("HGL_TEST_BUILD_FAIL", "1")
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    let failed_core = failed_ws.join("debug-sources/core.hgl.source");
+    let failed_calendar = failed_ws.join("debug-sources/calendar.hgl.source");
+    assert!(failed_core.is_file());
+    assert!(failed_calendar.is_file());
+    fs::write(&failed_calendar, "edited after failure").unwrap();
+    success(
+        ninja
+            .hgl(&["build", &sources, "--out", &failed_arg, "--clean"])
+            .env("HGL_TEST_BUILD_WORKSPACE", &failed_ws)
+            .output()
+            .unwrap(),
+    );
+    assert!(!failed_core.exists());
+    assert_eq!(
+        fs::read_to_string(&failed_calendar).unwrap(),
+        "edited after failure"
+    );
+}
+
+/// A generated source name alone cannot authorize deleting an object or
+/// executable in an emit-only directory, after an unrelated build, or after
+/// the user replaced a previously built executable.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn clean_preserves_unrecorded_executables_and_objects() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("clean-unrecorded-exec");
+    let audit_app = "application audit.runit\n\
+        fn pulse(const value: i64) -> i64 { yield 1s: value }\n\
+        eval pulse(value: 7)\n";
+    let other_mod = "module other.keep\nexport const fn answer() -> i64 => 42\n";
+    write(&root, "audit/runit.hgl", audit_app);
+    write(&root, "other/keep.hgl", other_mod);
+    let audit_src = argument(&root.join("audit"));
+    let other_src = argument(&root.join("other"));
+    let ninja = NinjaTrace::new(&root);
+
+    // 1. Emit-only directory with a handwritten launcher at `run/app-audit-runit`.
+    let emit_dir = root.join("emit-only");
+    let emit_arg = argument(&emit_dir);
+    success(
+        ninja
+            .hgl(&["emit", &audit_src, "--target", "cpp", "--out", &emit_arg])
+            .output()
+            .unwrap(),
+    );
+    let emit_launcher = write(&emit_dir, "run/app-audit-runit", "#!/bin/sh\necho emit\n");
+    let emit_obj = write(&emit_dir, "obj/applications/app-audit-runit.o", "user obj");
+    success(
+        ninja
+            .hgl(&["build", &other_src, "--clean", "--out", &emit_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &emit_dir)
+            .output()
+            .unwrap(),
+    );
+    assert!(!emit_dir.join("applications/app-audit-runit.cpp").exists());
+    assert_eq!(
+        fs::read_to_string(&emit_launcher).unwrap(),
+        "#!/bin/sh\necho emit\n"
+    );
+    assert_eq!(fs::read_to_string(&emit_obj).unwrap(), "user obj");
+
+    // 2. Owned workspace built for an unrelated program whose manifest omitted
+    //    `audit.runit`, with `applications/app-audit-runit.cpp` present beside
+    //    a handwritten launcher and object.
+    let unrelated_dir = root.join("unrelated-owned");
+    let unrelated_arg = argument(&unrelated_dir);
+    success(
+        ninja
+            .hgl(&["build", &other_src, "--out", &unrelated_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &unrelated_dir)
+            .output()
+            .unwrap(),
+    );
+    success(
+        ninja
+            .hgl(&[
+                "emit",
+                &audit_src,
+                "--target",
+                "cpp",
+                "--out",
+                &unrelated_arg,
+            ])
+            .output()
+            .unwrap(),
+    );
+    let unrelated_launcher = write(
+        &unrelated_dir,
+        "run/app-audit-runit",
+        "#!/bin/sh\necho owned\n",
+    );
+    let unrelated_obj = write(
+        &unrelated_dir,
+        "obj/applications/app-audit-runit.o",
+        "handwritten obj",
+    );
+    success(
+        ninja
+            .hgl(&["build", &other_src, "--clean", "--out", &unrelated_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &unrelated_dir)
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        !unrelated_dir
+            .join("applications/app-audit-runit.cpp")
+            .exists()
+    );
+    assert_eq!(
+        fs::read_to_string(&unrelated_launcher).unwrap(),
+        "#!/bin/sh\necho owned\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&unrelated_obj).unwrap(),
+        "handwritten obj"
+    );
+
+    // 3. Built application whose executable was replaced by a handwritten
+    //    launcher: clean preserves the replacement while removing unmodified
+    //    recorded objects from the retired application.
+    let replaced_dir = root.join("replaced-exec");
+    let replaced_arg = argument(&replaced_dir);
+    success(
+        ninja
+            .hgl(&["build", &audit_src, "--out", &replaced_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &replaced_dir)
+            .output()
+            .unwrap(),
+    );
+    let replaced_launcher = replaced_dir.join("run/app-audit-runit");
+    let built_obj = replaced_dir.join("obj/applications/app-audit-runit.o");
+    assert!(replaced_launcher.is_file());
+    assert!(built_obj.is_file());
+    fs::write(&replaced_launcher, "#!/bin/sh\necho custom\n").unwrap();
+    success(
+        ninja
+            .hgl(&["build", &other_src, "--clean", "--out", &replaced_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &replaced_dir)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        fs::read_to_string(&replaced_launcher).unwrap(),
+        "#!/bin/sh\necho custom\n"
+    );
+    assert!(!built_obj.exists());
+}
+
+/// A partial clean failure (such as a temporarily read-only `obj/modules`)
+/// must preserve the workspace stamps until the corresponding products have
+/// been removed, so a retry after restoring permissions cleans them cleanly.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn clean_preserves_provenance_through_partial_failure_until_retry() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("clean-partial-failure");
+    write(&root, "src/stamped.hgl", SOURCE);
+    let sources = argument(&root.join("src"));
+    let ninja = NinjaTrace::new(&root);
+    let workspace = argument(&ninja.workspace);
+
+    // Build a debug+test workspace, run its test to record a result file, then
+    // switch to an ordinary build so both stamps exist and the test artifacts
+    // and debug copies are retired.
+    success(
+        ninja
+            .hgl(&["build", &sources, "--debug", "--tests", "--out", &workspace])
+            .output()
+            .unwrap(),
+    );
+    success(
+        ninja
+            .hgl(&["test", &sources, "--target", "cpp", "--keep", &workspace])
+            .output()
+            .unwrap(),
+    );
+    success(
+        ninja
+            .hgl(&["build", &sources, "--out", &workspace])
+            .output()
+            .unwrap(),
+    );
+    let debug_core = ninja.workspace.join("debug-sources/core.hgl.source");
+    let debug_calendar = ninja.workspace.join("debug-sources/calendar.hgl.source");
+    let recorded_result = ninja.workspace.join("results/test-demo-stamped.0.txt");
+    let retired_test_bin = ninja.workspace.join("bin/test-demo-stamped");
+    assert!(debug_core.is_file());
+    assert!(debug_calendar.is_file());
+    assert!(recorded_result.is_file());
+    assert!(retired_test_bin.is_file());
+    let neighbour = write(
+        &ninja.workspace,
+        "debug-sources/notes.hgl.source",
+        "handwritten neighbour",
+    );
+    let unrecorded_db = write(&ninja.workspace, "compile_commands.json", "[]\n");
+    let unrecorded_result = write(
+        &ninja.workspace,
+        "results/test-demo-stamped.9.txt",
+        "start 0\npassed 0\n",
+    );
+
+    let obj_modules = ninja.workspace.join("obj/modules");
+    fs::set_permissions(&obj_modules, fs::Permissions::from_mode(0o555)).unwrap();
+    let failed = ninja
+        .hgl(&["build", &sources, "--clean", "--out", &workspace])
+        .output()
+        .unwrap();
+    fs::set_permissions(&obj_modules, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!failed.status.success());
+    // Stamps and manifest must remain on disk while recorded products could not be removed.
+    assert!(ninja.workspace.join(".hgl-built.json").is_file());
+    assert!(ninja.workspace.join(".hgl-previous-build.json").is_file());
+    assert!(ninja.workspace.join("build.ninja").is_file());
+
+    // Restoring write access and running the same clean must remove all
+    // recorded debug copies and retired test outputs while keeping neighbours
+    // and unrecorded optional files intact.
+    let recovered: Value = serde_json::from_str(&success(
+        ninja
+            .hgl(&[
+                "build", &sources, "--clean", "--out", &workspace, "--format", "json",
+            ])
+            .output()
+            .unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(recovered["reused"], false);
+    assert!(!debug_core.exists());
+    assert!(!debug_calendar.exists());
+    assert!(!recorded_result.exists());
+    assert!(!retired_test_bin.exists());
+    assert_eq!(
+        fs::read_to_string(&neighbour).unwrap(),
+        "handwritten neighbour"
+    );
+    assert_eq!(fs::read_to_string(&unrecorded_db).unwrap(), "[]\n");
+    assert_eq!(
+        fs::read_to_string(&unrecorded_result).unwrap(),
+        "start 0\npassed 0\n"
+    );
+}
+
+/// After a failed debug upgrade writes newer bundled Core bytes into a
+/// workspace whose `.hgl-previous-build.json` still holds the prior build's
+/// `artifacts`, both direct `--clean` and carry-forward across an ordinary
+/// release build must use the newest writer's digest: remove untouched latest
+/// bytes and preserve restored old bytes.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn clean_prefers_latest_debug_copy_digest_after_failed_upgrade() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("clean-failed-debug-upgrade");
+    let ninja = NinjaTrace::new(&root);
+
+    let setup_failed_upgrade = |name: &str| -> (PathBuf, String, String, Vec<u8>) {
+        let ws = root.join(name);
+        let ws_arg = argument(&ws);
+        let src_dir = root.join(format!("{name}-src"));
+        let source_file = write(&src_dir, "stamped.hgl", SOURCE);
+        let sources = argument(&src_dir);
+        success(
+            ninja
+                .hgl(&["build", &sources, "--debug", "--tests", "--out", &ws_arg])
+                .env("HGL_TEST_BUILD_WORKSPACE", &ws)
+                .output()
+                .unwrap(),
+        );
+        // Simulate an earlier compiler release whose bundled `core.hgl.source`
+        // bytes differed from the current compiler's bundled Core.
+        let core_path = ws.join("debug-sources/core.hgl.source");
+        let latest_bytes = fs::read(&core_path).unwrap();
+        let mut old_bytes = b"// prior compiler release core\n".to_vec();
+        old_bytes.extend_from_slice(&latest_bytes);
+        fs::write(&core_path, &old_bytes).unwrap();
+        let stamp_path = ws.join(".hgl-built.json");
+        let mut stamp: Value = serde_json::from_slice(&fs::read(&stamp_path).unwrap()).unwrap();
+        let old_digest = blake3::hash(&old_bytes).to_hex().to_string();
+        for artifact in stamp["artifacts"].as_array_mut().unwrap() {
+            if artifact["path"] == "debug-sources/core.hgl.source" {
+                artifact["digest"] = Value::String(old_digest.clone());
+            }
+        }
+        fs::write(&stamp_path, serde_json::to_string(&stamp).unwrap()).unwrap();
+
+        // Trigger a debug rebuild whose module C++ changes while `obj/modules`
+        // is temporarily read-only: the upgrade writes the newer
+        // `core.hgl.source` and records its digest in `.hgl-previous-build.json`'s
+        // `retained_artifacts` before native compilation fails.
+        fs::write(
+            &source_file,
+            SOURCE.replace("yield 1s: value", "yield 2s: value"),
+        )
+        .unwrap();
+        let obj_modules = ws.join("obj/modules");
+        fs::set_permissions(&obj_modules, fs::Permissions::from_mode(0o555)).unwrap();
+        let failed = ninja
+            .hgl(&["build", &sources, "--debug", "--tests", "--out", &ws_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &ws)
+            .output()
+            .unwrap();
+        fs::set_permissions(&obj_modules, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!failed.status.success());
+        assert!(!stamp_path.exists());
+        assert_eq!(fs::read(&core_path).unwrap(), latest_bytes);
+        let prev: Value =
+            serde_json::from_slice(&fs::read(ws.join(".hgl-previous-build.json")).unwrap())
+                .unwrap();
+        assert!(prev["artifacts"].as_array().unwrap().iter().any(|a| {
+            a["path"] == "debug-sources/core.hgl.source" && a["digest"] == old_digest
+        }));
+        let latest_digest = blake3::hash(&latest_bytes).to_hex().to_string();
+        assert!(
+            prev["retained_artifacts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| {
+                    a["path"] == "debug-sources/core.hgl.source" && a["digest"] == latest_digest
+                })
+        );
+        (ws, ws_arg, sources, old_bytes)
+    };
+
+    // 1. Direct clean with untouched latest bytes removes `core.hgl.source`.
+    let (ws_latest, ws_latest_arg, sources, _) = setup_failed_upgrade("direct-latest");
+    success(
+        ninja
+            .hgl(&["build", &sources, "--clean", "--out", &ws_latest_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &ws_latest)
+            .output()
+            .unwrap(),
+    );
+    assert!(!ws_latest.join("debug-sources/core.hgl.source").exists());
+
+    // 2. Direct clean with old bytes restored from backup preserves `core.hgl.source`.
+    let (ws_restored, ws_restored_arg, sources, old_bytes) =
+        setup_failed_upgrade("direct-restored");
+    let restored_core = ws_restored.join("debug-sources/core.hgl.source");
+    fs::write(&restored_core, &old_bytes).unwrap();
+    success(
+        ninja
+            .hgl(&["build", &sources, "--clean", "--out", &ws_restored_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &ws_restored)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(fs::read(&restored_core).unwrap(), old_bytes);
+
+    // 3. Intervening ordinary release build carries forward the newest writer's
+    //    digest for untouched latest bytes, then `--clean` removes it.
+    let (ws_carry_latest, ws_carry_latest_arg, sources, _) = setup_failed_upgrade("carry-latest");
+    success(
+        ninja
+            .hgl(&["build", &sources, "--out", &ws_carry_latest_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &ws_carry_latest)
+            .output()
+            .unwrap(),
+    );
+    success(
+        ninja
+            .hgl(&["build", &sources, "--clean", "--out", &ws_carry_latest_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &ws_carry_latest)
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        !ws_carry_latest
+            .join("debug-sources/core.hgl.source")
+            .exists()
+    );
+
+    // 4. Intervening ordinary release build with restored old bytes does not
+    //    fall back to the older `artifacts` digest; `--clean` preserves it.
+    let (ws_carry_restored, ws_carry_restored_arg, sources, old_bytes) =
+        setup_failed_upgrade("carry-restored");
+    let carry_restored_core = ws_carry_restored.join("debug-sources/core.hgl.source");
+    fs::write(&carry_restored_core, &old_bytes).unwrap();
+    success(
+        ninja
+            .hgl(&["build", &sources, "--out", &ws_carry_restored_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &ws_carry_restored)
+            .output()
+            .unwrap(),
+    );
+    success(
+        ninja
+            .hgl(&[
+                "build",
+                &sources,
+                "--clean",
+                "--out",
+                &ws_carry_restored_arg,
+            ])
+            .env("HGL_TEST_BUILD_WORKSPACE", &ws_carry_restored)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(fs::read(&carry_restored_core).unwrap(), old_bytes);
+}
+
+/// When a legacy 0.2.9 debug build followed by an ordinary release build left
+/// `debug-sources/core.hgl.source` recorded only in `.hgl-previous-build.json`,
+/// a failing or interrupted ordinary build of another program must persist that
+/// earlier verified inventory before withdrawing `.hgl-built.json`, so a later
+/// `--clean` still removes unmodified copies while keeping edited neighbours.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn failed_ordinary_build_after_legacy_debug_then_release_preserves_provenance() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("clean-legacy-failed-ordinary");
+    write(&root, "src/stamped.hgl", SOURCE);
+    write(
+        &root,
+        "other/keep.hgl",
+        "module other.keep\nexport const fn answer() -> i64 => 42\n",
+    );
+    let sources = argument(&root.join("src"));
+    let other_sources = argument(&root.join("other"));
+    let ninja = NinjaTrace::new(&root);
+
+    let setup_legacy_debug_then_release = |name: &str| -> (PathBuf, String) {
+        let ws = root.join(name);
+        let ws_arg = argument(&ws);
+        // Step 1: debug build writes and stamps debug copies.
+        success(
+            ninja
+                .hgl(&["build", &sources, "--debug", "--tests", "--out", &ws_arg])
+                .env("HGL_TEST_BUILD_WORKSPACE", &ws)
+                .output()
+                .unwrap(),
+        );
+        // Step 2: ordinary release build moves debug stamp to `.hgl-previous-build.json`.
+        success(
+            ninja
+                .hgl(&["build", &sources, "--out", &ws_arg])
+                .env("HGL_TEST_BUILD_WORKSPACE", &ws)
+                .output()
+                .unwrap(),
+        );
+        // Strip `retained_artifacts` from `.hgl-built.json` to model a 0.2.9
+        // release stamp where `debug-sources/*` lives ONLY in `.hgl-previous-build.json`.
+        let stamp_path = ws.join(".hgl-built.json");
+        let mut active: Value = serde_json::from_slice(&fs::read(&stamp_path).unwrap()).unwrap();
+        active.as_object_mut().unwrap().remove("retained_artifacts");
+        fs::write(&stamp_path, serde_json::to_string(&active).unwrap()).unwrap();
+
+        // Edited debug copy and handwritten neighbour controls.
+        fs::write(ws.join("debug-sources/calendar.hgl.source"), "edited copy").unwrap();
+        write(&ws, "debug-sources/notes.hgl.source", "handwritten");
+        assert!(ws.join("debug-sources/core.hgl.source").is_file());
+        (ws, ws_arg)
+    };
+
+    // 1. Failing ordinary build of another program while `obj/modules` is read-only.
+    let (ws_ro, ws_ro_arg) = setup_legacy_debug_then_release("readonly-fail");
+    let obj_modules = ws_ro.join("obj/modules");
+    fs::set_permissions(&obj_modules, fs::Permissions::from_mode(0o555)).unwrap();
+    let failed = ninja
+        .hgl(&["build", &other_sources, "--out", &ws_ro_arg])
+        .env("HGL_TEST_BUILD_WORKSPACE", &ws_ro)
+        .output()
+        .unwrap();
+    fs::set_permissions(&obj_modules, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!failed.status.success());
+    assert!(!ws_ro.join(".hgl-built.json").exists());
+    assert!(ws_ro.join(".hgl-previous-build.json").is_file());
+
+    success(
+        ninja
+            .hgl(&["build", &other_sources, "--clean", "--out", &ws_ro_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &ws_ro)
+            .output()
+            .unwrap(),
+    );
+    assert!(!ws_ro.join("debug-sources/core.hgl.source").exists());
+    assert_eq!(
+        fs::read_to_string(ws_ro.join("debug-sources/calendar.hgl.source")).unwrap(),
+        "edited copy"
+    );
+    assert_eq!(
+        fs::read_to_string(ws_ro.join("debug-sources/notes.hgl.source")).unwrap(),
+        "handwritten"
+    );
+
+    // 2. Interrupted ordinary build of another program withdraws `.hgl-built.json`
+    //    and still preserves the earlier verified `core.hgl.source` provenance.
+    let (ws_int, ws_int_arg) = setup_legacy_debug_then_release("interrupted-ordinary");
+    let calls = ninja.calls();
+    let building = ninja
+        .hgl(&["build", &other_sources, "--out", &ws_int_arg])
+        .env("HGL_TEST_BUILD_WORKSPACE", &ws_int)
+        .env("HGL_TEST_BUILD_DELAY", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    assert!(wait_until(|| ninja.calls() > calls));
+    assert!(
+        Command::new("kill")
+            .args(["-INT", &building.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let interrupted = building.wait_with_output().unwrap();
+    assert_eq!(interrupted.status.code(), Some(2));
+    assert!(!ws_int.join(".hgl-built.json").exists());
+    assert!(ws_int.join(".hgl-previous-build.json").is_file());
+
+    success(
+        ninja
+            .hgl(&["build", &other_sources, "--clean", "--out", &ws_int_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &ws_int)
+            .output()
+            .unwrap(),
+    );
+    assert!(!ws_int.join("debug-sources/core.hgl.source").exists());
+    assert_eq!(
+        fs::read_to_string(ws_int.join("debug-sources/calendar.hgl.source")).unwrap(),
+        "edited copy"
+    );
+    assert_eq!(
+        fs::read_to_string(ws_int.join("debug-sources/notes.hgl.source")).unwrap(),
+        "handwritten"
+    );
+}
+
 /// The compilation database comes from the exact workspace Ninja rules,
 /// can be restored on a hit, and preserves a reader's complete snapshot.
 #[test]

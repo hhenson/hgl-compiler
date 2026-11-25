@@ -146,6 +146,8 @@ pub enum NamedKind {
 /// since its size would then have no end.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
+    /// `Type`: a type held as an ordinary compile-time value (TYPE-18).
+    TypeValue,
     /// `i64`, `str`, `datetime` and the other scalars.
     Scalar(Scalar),
     /// A struct, an enum or a native type: `Quote`, `pc::Curve`,
@@ -401,7 +403,8 @@ impl Type {
             Type::Result { value, error } => part(value) || part(error),
             Type::Function(function) => function.types().any(part),
             Type::PackMember { key, .. } => constant(key),
-            Type::Scalar(_)
+            Type::TypeValue
+            | Type::Scalar(_)
             | Type::Parameter { .. }
             | Type::Signal
             | Type::Error
@@ -555,7 +558,8 @@ impl Type {
             // A type of its own; one not yet known; and one that has no
             // delta, a `signal`, which is reported where it is written
             // (`delta.unsupported_shape`).
-            Type::Set(_)
+            Type::TypeValue
+            | Type::Set(_)
             | Type::List { .. }
             | Type::Dict { .. }
             | Type::Named {
@@ -621,6 +625,8 @@ impl Eq for Constant {}
 /// that `f64`), and compares two ([`ConstantValue::same`]).
 #[derive(Debug, Clone)]
 pub enum ConstantValue {
+    /// A type's identity, fixed at compilation (TYPE-18, GEN-13).
+    Type(Box<Type>),
     /// An `i64`.
     Int(i64),
     /// An `f64`. Never a NaN: a constant that comes to one is
@@ -782,6 +788,7 @@ impl fmt::Display for Argument {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Type::TypeValue => f.write_str("Type"),
             Type::Scalar(scalar) => f.write_str(scalar.as_str()),
             Type::Named {
                 name, arguments, ..
@@ -873,6 +880,16 @@ pub struct WrittenType {
     pub at: Location,
     /// What it means.
     pub ty: Type,
+}
+
+/// An explicit delta application and its operand before that application
+/// normalizes (TYPE-16/18). Its fields may be resolved only after reading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeltaInput {
+    /// The `delta<T>` application, excluding constructor arguments.
+    pub at: Location,
+    /// The operand T, before applying `Type::delta`.
+    pub payload: Type,
 }
 
 /// The generic arguments a call writes after its callee's name,
