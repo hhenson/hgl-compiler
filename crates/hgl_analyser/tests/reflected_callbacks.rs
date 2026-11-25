@@ -6,6 +6,37 @@ use common::{Checked, module};
 use hgl_analyser::hir::{Callee, ExprKind, Stmt};
 use hgl_analyser::{FunctionType, Pack, Scalar, Type};
 
+/// A fixed callback input in a candidate and a plain function has the
+/// same FN-17 mode restriction, including a `const` parameter (FN-1).
+#[test]
+fn a_candidates_fixed_callback_rejects_a_const_input() {
+    let checked = module(
+        r#"operator call2<F>(f: F, x: i64) -> i64
+impl fn call2(f: fn(i64, i64) -> i64, x: i64) -> i64 => f(x, x)
+fn plain2(f: fn(i64, i64) -> i64, x: i64) -> i64 => f(x, x)
+fn const_key(member: i64, const key: i64) -> i64 => member + key
+fn plain_key(member: i64, key: i64) -> i64 => member + key
+fn through_candidate(x: i64) -> i64 => call2(const_key, x)
+fn through_function(x: i64) -> i64 => plain2(const_key, x)
+fn through_plain_candidate(x: i64) -> i64 => call2(plain_key, x)
+
+operator map_each<F>(f: F, items: dict<i64, i64>) -> dict<i64, i64>
+impl fn map_each(f: fn(i64, i64) -> i64, items: dict<i64, i64>) -> dict<i64, i64> => map(f, items)
+fn through_map(items: dict<i64, i64>) -> dict<i64, i64> => map_each(const_key, items)
+"#,
+    );
+    assert_eq!(checked.findings.len(), 3, "{}", checked.report);
+    for finding in &checked.findings {
+        assert_eq!(finding.code, "type/type.mismatch", "{}", checked.report);
+        assert_eq!(finding.rule, "FN-17", "{}", checked.report);
+        assert!(
+            finding.message.contains("takes a plain parameter"),
+            "{}",
+            checked.report
+        );
+    }
+}
+
 /// The static argument after FN-17 matching, independently of what
 /// the enclosing call resolves from the argument's reflected slots.
 fn callback<'a>(checked: &'a Checked, caller: &str) -> (&'a Callee, &'a FunctionType) {
