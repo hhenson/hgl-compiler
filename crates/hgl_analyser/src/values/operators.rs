@@ -1199,8 +1199,7 @@ impl<'a> Typer<'a> {
                 let dependent_callback = (candidate_evidence
                     && dependent_function
                     && ready.is_none()
-                    && ungrouped(node.clone()).kind() == SyntaxKind::NameExpr
-                    && self.names_static_callback(&node))
+                    && self.uses_callback_evidence(&node))
                 .then(|| match substitute_within(public_type?, &map) {
                     Type::Function(template) => Some(Box::new(DependentCallback {
                         template: *template,
@@ -1316,6 +1315,24 @@ impl<'a> Typer<'a> {
                 }
             })
             .collect()
+    }
+
+    /// GEN-3 and FN-17: only a bare operator or generic function can take
+    /// unresolved types from the enclosing declaration's membership.
+    fn uses_callback_evidence(&self, node: &SyntaxNode) -> bool {
+        let node = ungrouped(node.clone());
+        if node.kind() != SyntaxKind::NameExpr || self.local_of(&node).is_some() {
+            return false;
+        }
+        name_token(&node)
+            .and_then(|name| self.declarations(&name))
+            .is_some_and(|(module, declarations)| {
+                let unit = &self.program.modules[module];
+                declarations.iter().any(|&index| {
+                    unit.declarations[index].kind == DeclarationKind::Operator
+                        || matches!(&unit.details[index], Detail::Callable(signature) if !signature.generics.is_empty())
+                })
+            })
     }
 
     /// FN-17: a candidate can give a named callback its fixed template
