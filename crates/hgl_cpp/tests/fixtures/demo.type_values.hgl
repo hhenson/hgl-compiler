@@ -22,8 +22,18 @@ test constants {
 test node {
     assert eval labelled(value: [_, 7, _], probe: [true, true, true]) == ["i64", "i64", "i64"]
 }
+fn cold_assignment(value: i64) -> i64 {
+    var x: i64
+    let kind = type({
+        x = value
+        x
+    })
+    x = 1
+    return x
+}
 test graph {
     assert eval graph_label(value: [_, 7, _]) == ["i64"]
+    assert eval cold_assignment(value: [2, 3]) == [1]
 }
 
 test identity_and_keys {

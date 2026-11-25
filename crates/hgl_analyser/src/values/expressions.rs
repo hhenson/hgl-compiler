@@ -125,6 +125,11 @@ impl<'a> Typer<'a> {
             SyntaxKind::Literal => self.literal(node, expected),
             SyntaxKind::TypeOfExpr => {
                 let mark = self.mark();
+                // A cold block may assign an existing local, including
+                // its graph category or capability alias (TYPE-18).
+                let locals = self.locals.clone();
+                let aliases = self.aliases.clone();
+                let returns = (self.must_return, self.returning_tails.clone());
                 let lifecycle = (self.hook, self.initializing, self.caching);
                 self.hook = None;
                 self.initializing = false;
@@ -136,6 +141,9 @@ impl<'a> Typer<'a> {
                 // TYPE-18 evaluates nothing of the operand. Its local
                 // effects and deferred calls do not belong to the body.
                 self.restore_read(mark, false);
+                self.locals = locals;
+                self.aliases = aliases;
+                (self.must_return, self.returning_tails) = returns;
                 (self.hook, self.initializing, self.caching) = lifecycle;
                 self.constants.remember_type(at, ty.clone());
                 (

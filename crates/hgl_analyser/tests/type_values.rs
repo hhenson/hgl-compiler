@@ -151,3 +151,24 @@ fn type_takes_no_generic_arguments() {
     assert_eq!(checked.findings[0].code, "type/generic.argument_count");
     assert!(checked.findings[0].message.contains("`Type`"));
 }
+
+/// TYPE-18: a discarded assignment does not set an outer graph var's category.
+#[test]
+fn a_type_query_does_not_assign_an_existing_local() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"
+module m
+fn graph(value: i64) -> i64 {
+    var x: i64
+    let kind = type({
+        x = value
+        x
+    })
+    x = 1
+    return x
+}
+"#,
+    )]);
+    assert_eq!(checked.summary(), Vec::<String>::new());
+}
