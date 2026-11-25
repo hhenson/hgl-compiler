@@ -233,7 +233,7 @@ transpiler: done
 
 analyser: done
 
-- Selects `join` for one list of strings or for the proposed positional-pack form. Each form takes `separator` by name under the FN-8 trial.
+- Selects `join` for one list of strings or for a positional pack of strings. Its `separator` configuration defaults to one space. A connection as the separator rejects (FN-18, EXPR-14).
 
 transpiler: done
 
