@@ -1195,14 +1195,30 @@ impl<'a> Typer<'a> {
                 _ => false,
             }
         }
-        let may_change_shape = |ty: &Type| match ty {
+        let delta_can_change_shape = |ty: &Type| match ty {
             Type::Unknown | Type::Parameter { .. } | Type::PackMember { .. } => true,
-            Type::Atomic(inner) => atomic_may_unwrap(inner),
             Type::Delta(inner) => delta_may_normalize(inner),
             _ => false,
         };
-        if may_change_shape(left) || may_change_shape(right) {
+        if delta_can_change_shape(left) || delta_can_change_shape(right) {
             return true;
+        }
+        // TYPE-9: `Type::atomic(payload)` either stays `Atomic(payload)` or
+        // unwraps to `payload` when `payload` is non-composite (`whole`), so
+        // `atomic<T?>` can meet `i64?` or `atomic<list<i64>?>` but never `i64`
+        // or `list<i64>?`.
+        match (left, right) {
+            (Type::Atomic(left_inner), Type::Atomic(right_inner)) => {
+                return self.types_may_meet(left_inner, right_inner)
+                    || (atomic_may_unwrap(left_inner) && self.types_may_meet(left_inner, right))
+                    || (atomic_may_unwrap(right_inner) && self.types_may_meet(left, right_inner));
+            }
+            (Type::Atomic(inner), other) | (other, Type::Atomic(inner)) => {
+                return atomic_may_unwrap(inner)
+                    && atomic_may_unwrap(other)
+                    && self.types_may_meet(inner, other);
+            }
+            _ => {}
         }
         let constants_may_meet = |left: &Constant, right: &Constant| {
             matches!(left.value, ConstantValue::Unknown)
@@ -1291,7 +1307,6 @@ impl<'a> Typer<'a> {
             }
             (Type::Set(left), Type::Set(right))
             | (Type::Endpoint(left), Type::Endpoint(right))
-            | (Type::Atomic(left), Type::Atomic(right))
             | (Type::Delta(left), Type::Delta(right))
             | (Type::Nullable(left), Type::Nullable(right)) => self.types_may_meet(left, right),
             (

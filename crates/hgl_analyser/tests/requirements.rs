@@ -495,6 +495,30 @@ fn reflected_member_intersection_keeps_normalizing_open_types() {
             "test actual { assert op_demo(sig_opt, 2, 3) == 1 }\n",
         ),
         (
+            "P[k] in {list<atomic<T?>>, str} && P[k] in {list<i64?>, str}",
+            "const fn sig_opt_list(size: list<i64?>) -> i64 => 1\n\
+             test actual { assert demonstration(sig_opt_list, 2, [3]) == [3] }\n",
+            "const fn sig_opt_list(size: list<i64?>) -> i64 => 1\n\
+             test actual { assert op_demo(sig_opt_list, 2, [3]) == 1 }\n",
+        ),
+        (
+            "P[k] in {list<i64?>, str} && P[k] in {list<atomic<T?>>, str}",
+            "const fn sig_opt_list(size: list<i64?>) -> i64 => 1\n\
+             test actual { assert demonstration(sig_opt_list, 2, [3]) == [3] }\n",
+            "const fn sig_opt_list(size: list<i64?>) -> i64 => 1\n\
+             test actual { assert op_demo(sig_opt_list, 2, [3]) == 1 }\n",
+        ),
+        (
+            "P[k] in {atomic<delta<T>?>, str} && P[k] in {i64?, str}",
+            "test actual { assert demonstration(sig_opt, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_opt, 2, 3) == 1 }\n",
+        ),
+        (
+            "P[k] in {i64?, str} && P[k] in {atomic<delta<T>?>, str}",
+            "test actual { assert demonstration(sig_opt, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_opt, 2, 3) == 1 }\n",
+        ),
+        (
             "P[k] in {tuple<delta<T>, str>, str} && P[k] in {tuple<i64, str>, str}",
             "test actual { assert demonstration(sig_tuple, 2, (3, \"a\")) == (3, \"a\") }\n",
             "test actual { assert op_demo(sig_tuple, 2, (3, \"a\")) == 1 }\n",
@@ -546,6 +570,8 @@ fn reflected_member_intersection_keeps_normalizing_open_types() {
     for condition in [
         "P[k] in {delta<T?>, str} && P[k] in {i64, str}",
         "P[k] in {i64, str} && P[k] in {delta<T?>, str}",
+        "P[k] in {atomic<T?>, str} && P[k] in {atomic<list<i64>?>, str}",
+        "P[k] in {atomic<list<i64>?>, str} && P[k] in {atomic<T?>, str}",
         "P[k] in {delta<delta<T>>, str} && P[k] in {i64, str}",
         "P[k] in {i64, str} && P[k] in {delta<delta<T>>, str}",
         "P[k] in {atomic<delta<T>>, str} && P[k] in {i64, str}",
@@ -670,6 +696,18 @@ fn reflected_member_intersection_keeps_normalizing_open_types() {
         "P[k] in {i64, str} && P[k] in {atomic<list<T>>, str}",
         "P[k] in {delta<T>?, str} && P[k] in {i64, str}",
         "P[k] in {i64, str} && P[k] in {delta<T>?, str}",
+        "P[k] in {atomic<T?>, str} && P[k] in {i64, str}",
+        "P[k] in {i64, str} && P[k] in {atomic<T?>, str}",
+        "P[k] in {list<atomic<T?>>, str} && P[k] in {list<i64>, str}",
+        "P[k] in {list<i64>, str} && P[k] in {list<atomic<T?>>, str}",
+        "P[k] in {atomic<delta<T>?>, str} && P[k] in {i64, str}",
+        "P[k] in {i64, str} && P[k] in {atomic<delta<T>?>, str}",
+        "P[k] in {atomic<T>, str} && P[k] in {list<i64>, str}",
+        "P[k] in {list<i64>, str} && P[k] in {atomic<T>, str}",
+        "P[k] in {atomic<T?>, str} && P[k] in {list<i64>?, str}",
+        "P[k] in {list<i64>?, str} && P[k] in {atomic<T?>, str}",
+        "P[k] in {atomic<T?>, str} && P[k] in {atomic<list<i64>>, str}",
+        "P[k] in {atomic<list<i64>>, str} && P[k] in {atomic<T?>, str}",
         "P[k] in {list<delta<T>, 3>, str} && P[k] in {list<i64, 2>, str}",
         "P[k] in {list<i64, 2>, str} && P[k] in {list<delta<T>, 3>, str}",
         "T in {f64, bool} && P[k] in {delta<T>, str} && P[k] in {i64, str}",

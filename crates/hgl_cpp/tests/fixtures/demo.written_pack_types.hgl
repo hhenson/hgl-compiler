@@ -215,11 +215,19 @@ const fn narrowed_delta_either_first<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T
 const fn narrowed_delta_either_second<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, item: Ps[item_key]) -> Ps[item_key]
     requires Ps[item_key] in {i64, f64} && Ps[item_key] in {delta<T>, f64} => exact_number<Ps[item_key]>(item)
 
+const fn exact_str<T>(value: T) -> T requires T == str => value
+
 const fn narrowed_disjoint_list_delta_first<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, item: Ps[item_key]) -> Ps[item_key]
     requires Ps[item_key] in {list<delta<T>>, f64} && Ps[item_key] in {str, f64} => exact_number<Ps[item_key]>(item)
 
 const fn narrowed_disjoint_list_delta_second<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, item: Ps[item_key]) -> Ps[item_key]
     requires Ps[item_key] in {str, f64} && Ps[item_key] in {list<delta<T>>, f64} => exact_number<Ps[item_key]>(item)
+
+const fn narrowed_disjoint_atomic_opt_first<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, item: Ps[item_key]) -> Ps[item_key]
+    requires Ps[item_key] in {atomic<T?>, str} && Ps[item_key] in {i64, str} => exact_str<Ps[item_key]>(item)
+
+const fn narrowed_disjoint_atomic_opt_second<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, item: Ps[item_key]) -> Ps[item_key]
+    requires Ps[item_key] in {i64, str} && Ps[item_key] in {atomic<T?>, str} => exact_str<Ps[item_key]>(item)
 
 test each_proves_the_member_type {
     assert every_integer(num, 11) == 11
@@ -238,6 +246,8 @@ test each_proves_the_member_type {
     assert narrowed_delta_either_second(real_item, 2, 1.5) == 1.5
     assert narrowed_disjoint_list_delta_first(real_item, 2, 1.5) == 1.5
     assert narrowed_disjoint_list_delta_second(real_item, 2, 1.5) == 1.5
+    assert narrowed_disjoint_atomic_opt_first(words, 2, "ok") == "ok"
+    assert narrowed_disjoint_atomic_opt_second(words, 2, "ok") == "ok"
 }
 
 test a_nonmatching_member_rejects_the_universal_requirement {
