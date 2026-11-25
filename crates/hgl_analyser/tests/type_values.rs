@@ -172,3 +172,21 @@ fn graph(value: i64) -> i64 {
     )]);
     assert_eq!(checked.summary(), Vec::<String>::new());
 }
+
+/// GEN-13 and TYPE-18: requires reflection retains its existing source
+/// diagnostic; the independent body query remains a Type value.
+#[test]
+fn a_requires_type_reflection_keeps_its_existing_diagnostic() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"
+module m
+const fn reflected<const N: i64>() -> Type
+    requires type(N) in {i64, f64} => type(N)
+test query { assert reflected<1>() == type(1) }
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "name/name.unknown");
+    assert!(checked.findings[0].message.contains("`type`"));
+}

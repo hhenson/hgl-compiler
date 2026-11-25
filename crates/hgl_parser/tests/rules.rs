@@ -3344,6 +3344,11 @@ fn type_queries_keep_the_requires_form_separate() {
     assert!(tree.contains("CallExpr["), "{tree}");
     let tree = declarations("const fn f<const N: i64>() requires type(N) in {i64, f64} {}");
     assert!(!tree.contains("TypeOfExpr["), "{tree}");
+    assert!(tree.contains("CallExpr[NameExpr[\"type\"]"), "{tree}");
+    let tree = declarations(
+        "const fn f<const N: i64>() requires (type(N) in {i64, f64}) && check(type(N)) {}",
+    );
+    assert!(!tree.contains("TypeOfExpr["), "{tree}");
     rejected(Entry::Statements, "let kind = type()");
     rejected(Entry::Statements, "let kind = type(1, 2)");
 }

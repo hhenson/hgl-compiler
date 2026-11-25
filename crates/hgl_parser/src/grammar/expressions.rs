@@ -429,7 +429,12 @@ impl Parser<'_> {
                 self.leaf(Literal);
             }
             // TYPE-18: one unevaluated expression; `type` stays a soft word.
-            Ident if self.at_word("type") && self.nth(1) == LParen && self.suffix_at(1) => {
+            Ident
+                if !self.context.constraint
+                    && self.at_word("type")
+                    && self.nth(1) == LParen
+                    && self.suffix_at(1) =>
+            {
                 self.start(TypeOfExpr);
                 self.bump();
                 self.attached(Bracket::Call);
