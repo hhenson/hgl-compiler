@@ -95,7 +95,10 @@ const INPUT_BUDGET: usize = 1 << 16;
 const INPUT_DEPTH: usize = 64;
 
 /// Read a string for a source check without requiring the target to know it.
-pub(crate) fn known_text(program: &Program, expression: &Expr) -> Option<String> {
+pub(crate) fn known_store_key(program: &Program, expression: &Expr) -> Option<String> {
+    if program.runtime_store_keys.contains(&expression.at) {
+        return None;
+    }
     if let ExprKind::Literal(Value::Str(text)) = &expression.kind {
         return Some(text.clone());
     }
@@ -939,11 +942,13 @@ fn key_value(value: &Expr, output: &mut String) -> Result<(), ConstInputFault> {
 }
 
 /// Follow demand for a compile-time value back through its call arguments.
-pub(crate) fn demands(program: &Program) -> Demands {
+pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
     let mut required = Demands::new();
     let mut uses: HashMap<Slot, Vec<(Slot, Demand)>> = HashMap::new();
     let mut pending = VecDeque::new();
     let mut candidates: HashMap<Declaration, Vec<Declaration>> = HashMap::new();
+    let mut store_reads: HashMap<Location, Vec<Slot>> = HashMap::new();
+    let mut changed_in_recursion = HashSet::new();
     for (module, unit) in program.modules.iter().enumerate() {
         for (declaration, declared) in unit.declarations.iter().enumerate() {
             if let Some((Role::Value, Some(operator))) = declared.kind.candidate() {
@@ -982,6 +987,12 @@ pub(crate) fn demands(program: &Program) -> Demands {
                 }) {
                     slots_read(value, &bindings, &slots, |slot| {
                         pending.push_back(((caller, slot), demand));
+                        if demand == Demand::StoreKey {
+                            store_reads
+                                .entry(value.at)
+                                .or_default()
+                                .push((caller, slot));
+                        }
                     });
                 }
             };
@@ -1049,6 +1060,22 @@ pub(crate) fn demands(program: &Program) -> Demands {
                 let Some(called) = callee.declaration() else {
                     return;
                 };
+                if called == caller {
+                    let unchanged: HashSet<_> = arguments
+                        .iter()
+                        .filter_map(|argument| match argument.value.kind {
+                            ExprKind::Local(local) if argument.parameter == Some(local) => {
+                                Some(local)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    changed_in_recursion.extend(
+                        slots.values().copied().filter_map(|slot| {
+                            (!unchanged.contains(&slot)).then_some((caller, slot))
+                        }),
+                    );
+                }
                 if let Some(signature) = formatting::value_signature(program, callee)
                     && let Some(pattern) = formatting::argument(signature, arguments, "fmt_str")
                 {
@@ -1086,6 +1113,9 @@ pub(crate) fn demands(program: &Program) -> Demands {
         }
     }
     while let Some(((declaration, slot), demand)) = pending.pop_front() {
+        if demand == Demand::StoreKey && changed_in_recursion.contains(&(declaration, slot)) {
+            continue;
+        }
         let slots = required.entry(declaration).or_default();
         if slots.get(&slot).is_some_and(|earlier| *earlier >= demand) {
             continue;
@@ -1099,7 +1129,18 @@ pub(crate) fn demands(program: &Program) -> Demands {
             );
         }
     }
-    required
+    // A recursive helper can calculate the actual key before using it.
+    // A separate compile-time check can still need the initial input.
+    let runtime_store_keys = store_reads
+        .into_iter()
+        .filter_map(|(at, slots)| {
+            slots
+                .iter()
+                .any(|slot| changed_in_recursion.contains(slot))
+                .then_some(at)
+        })
+        .collect();
+    (required, runtime_store_keys)
 }
 
 /// Whether a call of a function parameter gives this slot of its template

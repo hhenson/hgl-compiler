@@ -679,3 +679,34 @@ test conflict { eval twice(key: "shared") }
         checked.report,
     );
 }
+
+/// A helper may compute its actual key in recursion. A key written
+/// directly in a store operation is still checked at that operation.
+#[test]
+fn store_key_checks_distinguish_a_recursive_value_from_a_written_key() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn recursive_put(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { recursive_put(store, depth - 1, key + ".output") }
+}
+fn indirect(const prefix: str) {
+    inject global_state
+    when {}
+    stop { recursive_put(global_state, 1, prefix) }
+}
+test cooked_prefix { eval indirect(prefix: "run.output") }
+const fn direct_put(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { put(store, "run.output", 7) }
+    else { direct_put(store, depth - 1, key + ".output") }
+}
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:13:32 injectable/store.reserved_key TIME-8"],
+        "{}",
+        checked.report,
+    );
+}

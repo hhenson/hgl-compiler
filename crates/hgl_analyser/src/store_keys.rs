@@ -198,7 +198,7 @@ fn key_use(program: &Program, expression: &Expr, made_at: Option<Location>) -> O
         return None;
     }
     Some(KeyUse {
-        key: crate::const_inputs::known_text(program, key)?,
+        key: crate::const_inputs::known_store_key(program, key)?,
         ty,
         at: expression.at,
         made_at,

@@ -469,7 +469,7 @@ impl<'a> Typer<'a> {
                     .is_some_and(|parameter| parameter.constant && parameter.name == "key")
             })
             .filter(|argument| {
-                crate::const_inputs::known_text(self.program, &argument.value).as_deref()
+                crate::const_inputs::known_store_key(self.program, &argument.value).as_deref()
                     == Some(RUN_OUTPUT_KEY)
             })
             .map(|argument| argument.value.at)

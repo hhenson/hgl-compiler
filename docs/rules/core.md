@@ -557,7 +557,8 @@ transpiler: partial
   SDK attaches it to its graph, before any start hook. The run's own recording
   uses that key.
 - A key computed by a recursive value helper with changing arguments is
-  checked by the store operation where the helper uses it.
+  checked by the store operation where the helper uses it, even where the
+  first call gives the helper a literal.
 - Left: a temporal child graph using the surrounding store is declined (CRUN-7).
 
 ## CAP-7
