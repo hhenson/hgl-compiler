@@ -307,6 +307,7 @@ parser: done
 analyser: partial
 
 - `Type` is an intrinsic ordinary type without generic parameters. A query retains the expression's checked type as a compiled constant, without its operand's calls, input payload reads or local flow effects. Generic instances project the queried type.
+- A cold operand retains the call-role rules of its source place (FN-3). A graph query of a temporal call retains its payload type and wires no call.
 - Type constants compare and form collection keys by canonical type identity (GEN-13), independently of their text. The type of a value annotated `any` is `any`.
 - Proposed: an explicit delta of Type or a value that stores one rejects with `shape/delta.unsupported_shape` (TYPE-16).
 - Left: a query of an inferred local used as a generic value argument (#871); source rejection of Type-containing connections (the target declines them).

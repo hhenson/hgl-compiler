@@ -31,9 +31,15 @@ fn cold_assignment(value: i64) -> i64 {
     x = 1
     return x
 }
+fn unwired_type_operand(value: i64) -> i64 {
+    start { assert false }
+    when valid(value) { return value }
+}
+fn unwired_type_label() -> str => convert<str>(type(unwired_type_operand(1)))
 test graph {
     assert eval graph_label(value: [_, 7, _]) == ["i64"]
     assert eval cold_assignment(value: [2, 3]) == [1]
+    assert eval unwired_type_label() == ["i64"]
 }
 
 test identity_and_keys {

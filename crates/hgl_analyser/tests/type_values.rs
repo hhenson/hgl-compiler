@@ -190,3 +190,55 @@ test query { assert reflected<1>() == type(1) }
     assert_eq!(checked.findings[0].code, "name/name.unknown");
     assert!(checked.findings[0].message.contains("`type`"));
 }
+
+/// TYPE-18 and FN-3: unevaluated operands keep their enclosing call role.
+#[test]
+fn a_temporal_call_inside_a_value_type_query_rejects_once() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"
+module m
+fn temporal(value: i64) -> i64 => value
+const fn kind() -> Type => type(temporal(1))
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "function-kind/call.role");
+    assert_eq!(checked.findings[0].at, "m.hgl:4:33");
+}
+
+/// TYPE-18: a graph query has the connection's payload type and retains no call.
+#[test]
+fn a_graph_type_query_retains_only_the_temporal_calls_payload_type() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"
+module m
+fn temporal(value: i64) -> i64 => value
+fn kind() -> bool => type(temporal(1)) == type(1)
+"#,
+    )]);
+    assert_eq!(checked.summary(), Vec::<String>::new());
+    let module = checked.program.module("m").unwrap();
+    let index = module
+        .declarations
+        .iter()
+        .position(|d| d.name == "kind")
+        .unwrap();
+    let body = module.bodies[index].as_ref().unwrap();
+    let mut found_payload = false;
+    hgl_analyser::hir::walk_statements(&body.statements, &mut |value| {
+        if let ExprKind::Literal(Value::Type(ty)) = &value.kind {
+            found_payload |= **ty == Type::Scalar(Scalar::I64);
+        }
+        if let ExprKind::Call { callee, .. } = &value.kind
+            && let Some((module, declaration)) = callee.declaration()
+        {
+            assert_ne!(
+                checked.program.modules[module].declarations[declaration].name,
+                "temporal"
+            );
+        }
+    });
+    assert!(found_payload);
+}
