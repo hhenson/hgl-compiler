@@ -142,19 +142,26 @@ impl CallbackEvidence {
         evidence
     }
 
-    /// Read the most specific alternatives that fit this argument. Tied alternatives
-    /// may give the same type. A conflicting binding cannot select a bare callback.
+    /// Read the most specific alternatives compatible with the argument and
+    /// the callback input. A non-binding winner is still a winner (GEN-3).
     pub(super) fn resolve(
         &self,
         name: Option<&str>,
         position: Option<usize>,
         actual: &Type,
+        compatible: impl Fn(&Type) -> bool,
     ) -> Result<Type, ()> {
         let mut matches = Vec::new();
         for membership in &self.0 {
             if membership.applies(name, position) {
                 matches.extend(membership.patterns.iter().filter_map(|pattern| {
-                    Some((membership, pattern, membership.fit(pattern, actual)?))
+                    let bindings = membership.fit(pattern, actual)?;
+                    if let Some(Argument::Type(ty)) = &bindings[membership.target]
+                        && !compatible(ty)
+                    {
+                        return None;
+                    }
+                    Some((membership, pattern, bindings))
                 }));
             }
         }

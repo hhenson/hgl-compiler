@@ -13,7 +13,9 @@ use super::constants::generic_default;
 use super::dependent_packs::PackTypes;
 use super::fit::{accepts_float, is_integer_literal, open, whole};
 use super::forwarded_packs::spread_operands;
-use super::inference::{ExplicitGenerics, infer, mentions, pack_bounds, type_pack};
+use super::inference::{
+    ExplicitGenerics, infer, mentions, pack_bounds, tuple_pack_bindings, type_pack,
+};
 use crate::declared::{agree, names_parameter, same_type, substitute_within};
 use crate::hir::{
     AnonymousFunction, AnonymousSpecialization, Callee, Expr, ExprKind, Form, LocalId, Node, Stmt,
@@ -182,31 +184,13 @@ impl<'a> Typer<'a> {
         // FN-17 resolves the callback's template before dependent
         // arguments supply evidence (GEN-2, GEN-3). In particular, a
         // concrete input stays fixed even in a generic function.
-        let unresolved = inputs
+        let known = inputs
             .evidence
             .filter(|_| node.kind() == SyntaxKind::NameExpr)
-            .map(|_| {
-                let mut found = vec![None; signature.generics.len()];
-                infer_reference_template(signature, template, &mut found);
-                signature
-                    .generics
-                    .iter()
-                    .zip(found)
-                    .filter_map(|(generic, value)| value.is_none().then_some(generic.at))
-                    .collect::<Vec<_>>()
-            });
+            .map(|_| ReferenceShape::new(signature, template));
         let given = inputs
             .supplied
-            .map(|_| {
-                reflected_arguments(
-                    self,
-                    signature,
-                    template,
-                    node,
-                    inputs,
-                    unresolved.as_deref(),
-                )
-            })
+            .map(|_| reflected_arguments(self, signature, template, node, inputs, known.as_ref()))
             .transpose()
             .ok()?;
         let ReferenceArguments {
@@ -238,8 +222,8 @@ impl<'a> Typer<'a> {
         if let Some((given, true)) = given
             && let Some(argument) = given.iter().find(|argument| {
                 callback_parameter(signature, &argument.key).is_some_and(|slot| {
-                    unresolved.as_ref().is_some_and(|unresolved| {
-                        mentions(&signature.parameters[slot].ty, unresolved)
+                    known.as_ref().is_some_and(|shape| {
+                        mentions(&signature.parameters[slot].ty, &shape.unresolved)
                     }) && !self.admits(&taken.parameters[slot].ty, argument.ty())
                 })
             })
@@ -1356,17 +1340,59 @@ fn infer_reference_template(
     }
 }
 
+/// Bindings supplied by the receiving function template before pack evidence.
+struct ReferenceShape {
+    found: Vec<Option<Argument>>,
+    unresolved: Vec<Location>,
+}
+
+impl ReferenceShape {
+    fn new(signature: &Signature, template: &FunctionType) -> Self {
+        let mut found = vec![None; signature.generics.len()];
+        infer_reference_template(signature, template, &mut found);
+        let unresolved = signature
+            .generics
+            .iter()
+            .zip(&found)
+            .filter_map(|(generic, value)| value.is_none().then_some(generic.at))
+            .collect();
+        Self { found, unresolved }
+    }
+
+    /// Trial substitution preserves whatever is already known. A tuple
+    /// pack can take the sequence this type gives it, as in the final
+    /// reference inference. Keep this trial separate from that inference.
+    fn fits(&self, typer: &Typer<'_>, signature: &Signature, input: &Type, actual: &Type) -> bool {
+        let mut found = self.found.clone();
+        infer(input, actual, &signature.generics, &mut found);
+        let packs = tuple_pack_bindings(&signature.generics, &mut found, &typer.signature.generics);
+        let packs = PackTypes::new(&signature.generics, &packs);
+        let map: Vec<_> = signature
+            .generics
+            .iter()
+            .zip(&found)
+            .filter_map(|(generic, value)| value.as_ref().map(|value| (generic.at, value)))
+            .collect();
+        packs.project(input, &map).is_ok_and(|expected| {
+            same_type(&expected, actual) != Some(false) || typer.admits(&expected, actual)
+        })
+    }
+}
+
 fn reflected_arguments(
     typer: &mut Typer<'_>,
     public: &Signature,
     template: &FunctionType,
     node: &SyntaxNode,
     inputs: &CallbackInputs<'_>,
-    unresolved: Option<&[Location]>,
+    declared_shape: Option<&ReferenceShape>,
 ) -> Result<(Vec<Given>, bool), ()> {
     let evidence = inputs
         .evidence
         .filter(|_| node.kind() == SyntaxKind::NameExpr);
+    let operator_shape = (declared_shape.is_none() && evidence.is_some())
+        .then(|| ReferenceShape::new(public, template));
+    let shape = declared_shape.or(operator_shape.as_ref());
     let fixed = public.positional_parameters().count();
     let mut remaining = public
         .positional_parameters()
@@ -1408,21 +1434,28 @@ fn reflected_arguments(
                         .nth(before)
                         .is_some_and(|parameter| whole(parameter.ty()))
                 });
-                let needs_evidence = unresolved.is_none_or(|unresolved| {
-                    callback_parameter(public, &key)
-                        .is_some_and(|slot| mentions(&public.parameters[slot].ty, unresolved))
+                let parameter =
+                    callback_parameter(public, &key).map(|slot| &public.parameters[slot].ty);
+                let needs_evidence = declared_shape.is_none_or(|shape| {
+                    parameter.is_some_and(|ty| mentions(ty, &shape.unresolved))
                 });
                 // FN-17: a bare operator already declares a whole
                 // input when its public parameter has this exact type.
-                let whole_operator_input = unresolved.is_none()
+                let whole_operator_input = declared_shape.is_none()
                     && slot.is_some_and(|slot| {
                         same_type(&public.parameters[slot].ty, &value.ty) == Some(true)
                     });
                 if settled || !needs_evidence || whole_operator_input {
                     value.ty.clone()
                 } else {
-                    evidence.resolve(name, position, &value.ty).map_err(|()| {
-                        typer.diagnostics.emit(error(
+                    evidence
+                        .resolve(name, position, &value.ty, |resolved| {
+                            shape.zip(parameter).is_none_or(|(shape, parameter)| {
+                                shape.fits(typer, public, parameter, resolved)
+                            })
+                        })
+                        .map_err(|()| {
+                            typer.diagnostics.emit(error(
                             Category::Type,
                             codes::GENERIC_UNRESOLVED,
                             value.at,
@@ -1430,7 +1463,7 @@ fn reflected_arguments(
                                 .to_string(),
                             "GEN-3",
                         ));
-                    })?
+                        })?
                 }
             } else {
                 value.ty.clone()

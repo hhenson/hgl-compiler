@@ -457,6 +457,15 @@ const fn scale_with_table<T>(x: i64, table: list<i64, 2>, factor: T) -> i64 => x
 fn map_with_whole_table(values: list<i64, 2>, table: list<i64, 2>) -> list<i64, 2> =>
     map(scale_with_table, values, table, 3)
 
+# GEN-3: a split alternative cannot change a callback's list input
+# into a scalar. If both candidates for the input are still lists,
+# normal specificity chooses the nested list's member.
+fn nested_callback<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+          && R == i64 => 74
+fn partially_known_list(items: list<i64, 2>) -> i64 => sized_callback<2>(first_item, items)
+fn both_list_shapes_fit(items: list<list<i64, 2>, 2>) -> i64 => nested_callback(first_item, items)
+
 test bare_callbacks_keep_known_outer_bindings {
     assert eval list_binding(items: [[5, 6]]) == [70]
     assert eval dict_binding(items: [["a": 8]]) == [72]
@@ -465,6 +474,8 @@ test bare_callbacks_keep_known_outer_bindings {
     assert eval fixed_list_binding(items: [[5, 6]]) == [70]
     assert eval result_list_binding(items: [[5, 6]]) == [71]
     assert eval operator_list_binding(items: [[5, 6]]) == [70]
+    assert eval partially_known_list(items: [[5, 6]]) == [70]
+    assert eval both_list_shapes_fit(items: [[[5, 6], [7, 8]]]) == [74]
     assert eval mixed_list_binding(items: [[5, 6]], words: [["a", "b"]]) == [73]
     assert eval callback_order(value: [4]) == [1]
     assert eval map_with_whole_table(values: [[1, 2]], table: [[10, 20]]) == [[21, 22]]
