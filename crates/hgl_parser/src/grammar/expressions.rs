@@ -415,7 +415,7 @@ impl Parser<'_> {
     /// ```text
     /// primary_expr = literal | IDENTIFIER | qualified_name | "(", expression, ")"
     ///              | tuple_literal | sequence_literal | typed_constructor
-    ///              | delta_constructor | type_call | pack_loop | function_expr
+    ///              | delta_constructor | type_call | type_of | pack_loop | function_expr
     ///              | if_expression | eval_expression | run_expression | block ;
     /// literal = INTEGER_LITERAL | FLOAT_LITERAL | STRING_LITERAL | TEMPORAL_LITERAL
     ///         | "true" | "false" | "null" ;
@@ -428,6 +428,7 @@ impl Parser<'_> {
             Int | Float | Str | Duration | Tenor | Temporal | KwTrue | KwFalse | KwNull => {
                 self.leaf(Literal);
             }
+            // TYPE-18: one unevaluated expression; `type` stays a soft word.
             Ident if self.at_word("type") && self.nth(1) == LParen && self.suffix_at(1) => {
                 self.start(TypeOfExpr);
                 self.bump();

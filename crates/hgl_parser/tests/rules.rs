@@ -3335,3 +3335,15 @@ fn pack_spreads_are_distinct_from_written_arguments() {
     rejected(Entry::Statements, "f(...)");
     rejected(Entry::Statements, "f(item: ...kwargs)");
 }
+
+/// TYPE-18, GEN-13: the query is one expression; requires keeps its own form.
+#[test]
+fn type_queries_keep_the_requires_form_separate() {
+    let tree = statements("let kind = type(f(1 + 2))");
+    assert!(tree.contains("TypeOfExpr["), "{tree}");
+    assert!(tree.contains("CallExpr["), "{tree}");
+    let tree = declarations("const fn f<const N: i64>() requires type(N) in {i64, f64} {}");
+    assert!(!tree.contains("TypeOfExpr["), "{tree}");
+    rejected(Entry::Statements, "let kind = type()");
+    rejected(Entry::Statements, "let kind = type(1, 2)");
+}

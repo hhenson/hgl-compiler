@@ -25,6 +25,7 @@ mod formatting;
 mod result_only;
 #[path = "cpp/string_append.rs"]
 mod string_append;
+#[path = "cpp/type_values.rs"]
 mod type_values;
 
 use std::fs;
