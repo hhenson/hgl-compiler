@@ -250,7 +250,7 @@ analyser: partial
 - A named operator call reads a fixed callback against each candidate's function template. The other arguments can resolve its input types, its template sets an anonymous callback's phase, and the supplied function can resolve its result type (GEN-2, GEN-6).
 - A function type written with no result accepts only a callback with no result. A result-only generic accepts that callback and binds its result to none (GEN-1).
 - An anonymous callback is read against the result type its template already knows, including one a later argument resolved (GEN-2). With an unresolved result-only generic and no written result, its arrow or block body supplies a value type or no result.
-- Applies the proposed plain-parameter restriction to the fixed inputs. Keeps the remaining callback slots in declared order with their modes, defaults and pack shape.
+- Applies the proposed plain-parameter restriction to fixed inputs of plain functions and operator candidates, including where only the candidate gives a named callback its template. Keeps the remaining callback slots in declared order with their modes, defaults and pack shape.
 - A reflected operator callback selects from the resolved parameter types, including the dependent arguments. With no resolved parameter type, it reports `generic.unresolved` even for a lone candidate (FN-17).
 - A written operator reference supplies its resolved fixed input types to candidate selection. The enclosing dependent call keeps the actual argument types, including split inputs given to `map` (MAP-2).
 - A reflected anonymous parameter beyond the fixed template needs a written type. Arguments of a homogeneous callback pack can determine its generic element type.
