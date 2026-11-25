@@ -989,6 +989,173 @@ impl<'a> Typer<'a> {
         })
     }
 
+    /// Ordinary parameters that supply a reflected member's stated type
+    /// or key. Their memberships also constrain a call using that member
+    /// (GEN-3, GEN-7, GEN-17).
+    pub(super) fn stated_member_dependencies(&self, types: &[&Type]) -> Vec<Location> {
+        let used: Vec<_> = self
+            .stated_pack_members()
+            .into_iter()
+            .filter(|member| {
+                types.iter().any(|ty| {
+                    ty.any_part(
+                        &|part| {
+                            let Type::PackMember { pack, key, .. } = part else {
+                                return false;
+                            };
+                            *pack == member.pack
+                                && match &member.key {
+                                    StatedPackKey::One(stated) => {
+                                        stated.same(&key.value) != Some(false)
+                                    }
+                                    StatedPackKey::Every(_) => true,
+                                }
+                        },
+                        &|_| false,
+                    )
+                })
+            })
+            .collect();
+        self.signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .filter(|at| {
+                let one = &[*at];
+                used.iter().any(|member| {
+                    mentions(&member.ty, one)
+                        || matches!(&member.key, StatedPackKey::One(key) if key.names_one_of(one))
+                })
+            })
+            .collect()
+    }
+
+    /// The finite choices a body states for the reflected members a
+    /// call uses. Keep the key as well as the pack (GEN-3, GEN-7, GEN-17).
+    pub(super) fn stated_member_choices(
+        &self,
+        types: &[&Type],
+        given: &[(Location, &Argument)],
+    ) -> Vec<((Location, Constant), Vec<Type>)> {
+        let equalities = self.stated_pack_members();
+        let mut relations = Vec::new();
+        if let Some(condition) = child(&self.declaration.syntax, SyntaxKind::RequiresClause)
+            .and_then(|clause| clause.children().next())
+        {
+            conjoined_relations(&condition, &mut relations);
+        }
+        let memberships: Vec<_> = relations
+            .iter()
+            .filter_map(|relation| self.stated_member_membership(relation))
+            .collect();
+        if equalities.is_empty() && memberships.is_empty() {
+            return Vec::new();
+        }
+        let constant_at = |at| match given.iter().find(|(declared, _)| *declared == at)?.1 {
+            Argument::Constant(constant) => Some(constant.value.clone()),
+            Argument::Type(_) | Argument::NoResult => None,
+        };
+        let choices = RefCell::new(Vec::<((Location, Constant), Vec<Type>)>::new());
+        for ty in types {
+            ty.any_part(
+                &|part| {
+                    let Type::PackMember { pack, key, .. } = part else {
+                        return false;
+                    };
+                    if !self.signature.generics.iter().any(|slot| slot.at == *pack) {
+                        return false;
+                    }
+                    let key = Constant {
+                        text: key.text.clone(),
+                        value: key.value.substituted(&constant_at),
+                    };
+                    let mut choices = choices.borrow_mut();
+                    if choices.iter().any(|((other_pack, other_key), _)| {
+                        *other_pack == *pack && other_key.value.same(&key.value) == Some(true)
+                    }) {
+                        return false;
+                    }
+                    let equality = equalities.iter().find_map(|member| {
+                        if member.pack != *pack {
+                            return None;
+                        }
+                        match &member.key {
+                            StatedPackKey::One(stated)
+                                if stated.substituted(&constant_at).same(&key.value)
+                                    == Some(true) =>
+                            {
+                                Some(substitute_within(&member.ty, given))
+                            }
+                            StatedPackKey::Every(bound) => Some(substitute_within(
+                                &substitute_within(&member.ty, given),
+                                &[(*bound, &Argument::Constant(key.clone()))],
+                            )),
+                            StatedPackKey::One(_) => None,
+                        }
+                    });
+                    // An equality to an open type does not displace a
+                    // finite membership for this same pack key.
+                    let types = if equality
+                        .as_ref()
+                        .is_some_and(|ty| whole(ty) && !names_parameter(ty))
+                    {
+                        equality.map(|ty| vec![ty])
+                    } else {
+                        memberships
+                            .iter()
+                            .find(|(at, stated, _)| {
+                                *at == *pack
+                                    && stated.substituted(&constant_at).same(&key.value)
+                                        == Some(true)
+                            })
+                            .map(|(_, _, members)| {
+                                members
+                                    .iter()
+                                    .map(|ty| substitute_within(ty, given))
+                                    .collect()
+                            })
+                            .or_else(|| equality.map(|ty| vec![ty]))
+                    };
+                    if let Some(types) = types {
+                        choices.push(((*pack, key), types));
+                    }
+                    false
+                },
+                &|_| false,
+            );
+        }
+        choices.into_inner()
+    }
+
+    /// A positive membership of a named member in a finite set of types.
+    fn stated_member_membership(
+        &self,
+        relation: &SyntaxNode,
+    ) -> Option<(Location, ConstantValue, Vec<Type>)> {
+        if !tokens(relation).any(|token| token.text() == "in") {
+            return None;
+        }
+        let mut operands = relation.children();
+        let (member, set) = (operands.next()?, operands.next()?);
+        if set.kind() != SyntaxKind::ConstraintSet {
+            return None;
+        }
+        let Type::PackMember { pack, key, .. } =
+            self.written.get(&(self.file, member.span().start))?
+        else {
+            return None;
+        };
+        let types: Vec<_> = set
+            .children()
+            .map(|item| {
+                let ty = self.written.get(&(self.file, item.span().start))?;
+                (whole(ty) && !ty.any_part(&|ty| matches!(ty, Type::PackMember { .. }), &|_| false))
+                    .then(|| (*ty).clone())
+            })
+            .collect::<Option<_>>()?;
+        (!types.is_empty()).then_some((*pack, key.value.clone(), types))
+    }
+
     /// Packs named by a stated member expression for which we read no
     /// usable equality, such as an existential `any` or a relation to another member.
     fn unread_stated_packs(&self, members: &[StatedPackMember]) -> HashSet<Location> {
@@ -2600,7 +2767,10 @@ pub(super) fn instances_hold(
                 // report a second reading of its resultless instance.
                 continue;
             }
+            // GEN-17: rechecking a reflected result's consumers needs the
+            // actual members of the pack supplied by the making call.
             let inputs = crate::InstanceInputs {
+                type_packs: &made.type_packs,
                 constants,
                 test_candidates: made.test_candidates,
                 ..crate::InstanceInputs::default()
