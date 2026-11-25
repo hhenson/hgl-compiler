@@ -2342,6 +2342,34 @@ fn operator_candidates_have_distinct_cpp_names_on_the_sdk() {
     );
 }
 
+/// GEN-5 and FMT-5: admitted exact types, inferred callback inputs and
+/// a nullable formatted payload select the appropriate candidates.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn exact_candidate_matches_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("exact-candidates");
+    let file = write(
+        &root,
+        "demo.exact_candidates.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.exact_candidates.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// GEN-5 and GEN-7: value, node and graph instances choose their own
 /// operator candidate, including across modules and through a symbol.
 /// ERR-15: the choice uses the whole operands before implicit reads.

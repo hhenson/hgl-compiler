@@ -491,6 +491,8 @@ pub mod codes {
     /// A value's type is not the type its place requires (EXPR-5),
     /// or `null` stands where the type is not nullable (TYPE-14).
     pub const TYPE_MISMATCH: &str = "type.mismatch";
+    /// A dictionary's fallback is not its exact value type (ERR-6).
+    pub const LOOKUP_DEFAULT_TYPE: &str = "lookup.default_type";
     /// `ok` or `err` where no complete `result<T, E>` is expected
     /// (ERR-2).
     pub const RESULT_CONTEXT_TYPE: &str = "result.context_type";

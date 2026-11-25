@@ -92,10 +92,10 @@ analyser: partial
 - In a value function, a call of an operator, by name or by the symbol that stands for it, selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened, which the candidates' types settle before their conditions, and candidates that tie in which literals they widen give way to the one that widens every one; no candidate and a tie rejected
 - A generic candidate is admitted with its parameters resolved from the call, and the most specific admitted one is selected (GEN-12). A fallible candidate can meet a T or `T?` place. The selected candidate determines the result before its form is taken (ERR-15).
 - A fixed-length tuple pattern outranks a tuple pattern with a pack that admits it. The comparison also applies inside nested and nullable tuple types.
-- When an anonymous callback has no written result and its body gives a value, a candidate that keeps the value outranks one that discards it if the other parameter comparisons are at least as specific (FN-17, GEN-12).
-- Left: when another parameter comparison favours the candidate that discards the callback's value, the call reports `operator.ambiguous` under componentwise specificity (GEN-12). [Compiler issue #794](https://github.com/hhenson/hgl-compiler/issues/794)
-- Proposed. After structural specificity, literal widening and phase leave candidates tied, a callback input shared as a type variable with another parameter prefers the type given by that argument over its nullable widening. This covers inferred anonymous functions, generic functions and bare operators (FN-17). [Specification #252](https://github.com/hhenson/hgl_spec/pull/252)
-- Operand forms are tried at integer precision before widening literals. A nullable candidate result can meet a place for its payload under ERR-12. [Specification decision #182](https://github.com/hhenson/hgl_spec/pull/182)
+- Exact parameter matches are compared before structural specificity (GEN-12). A candidate that widens fewer arguments in this comparison beats one that widens those same arguments and another. Opposite widenings leave the call ambiguous. Widenings include `T?`, `delta<V?>` (TYPE-16), an inherited parent struct, and `any`.
+- Keeping the value of an anonymous callback body with no written result counts as an exact match (FN-17). Proposed: the same comparison applies to a callback input shared with another argument, so the inferred input type beats its nullable widening. [Specification #257](https://github.com/hhenson/hgl_spec/pull/257)
+- Left: when both candidates take an ordinary argument as `R?`, a plain `R` can leave their inferred callback inputs tied (#879).
+- Operand forms are tried at integer precision before widening literals. A literal taken as `f64` is compared as `f64` for exact matching (EXPR-5). A nullable candidate result can meet a place for its payload under ERR-12. [Specification decision #182](https://github.com/hhenson/hgl_spec/pull/182)
 - In a graph a call selects among temporal and value candidates. With the same parameter types, a temporal candidate is preferred for a call with a connection and a value candidate is preferred for an all-scalar call (FN-4, FN-6).
 - In value code, a test's outside an `eval` or a `run` and an application's statements, a call selects among both too, a value candidate outranking a temporal one of the same parameter types; a temporal candidate it selects is `call.role`, the code proposed (TST-3, UNIT-14)
 - A packed candidate matches each captured argument and checks the pack's bounds. Equally specific candidates stay tied when their admitted cardinalities overlap.
@@ -131,6 +131,7 @@ analyser: partial
 
 analyser: partial
 
+- A structurally admitted fallback can prove a call in a generic body. A condition on an exact candidate can select that candidate when the instance provides the needed type.
 - Inline pack-key passes are checked when an instance supplies its keys. Only the branch a constant condition selects is read. A failing pass reports at the call that made the instance and names the failing body and any nested instances (FN-19, CTRL-16).
 
 - In a body with generic parameters, a call of an operator, by name or by symbol, with an argument whose type names one of them is admitted where a requirement of the declaration names that operator with those types, each given by its position or by the operator's parameter name, and is of the type its arrow states. A candidate that takes every admitted type can also admit the body.
