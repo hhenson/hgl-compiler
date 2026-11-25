@@ -93,7 +93,7 @@ struct list : std::vector<T> {
 ///     }
 ///
 /// and it is all an enum needs to be a value of the library: its HGL name
-/// (`type_name`), its text (TYPE-7: "`Type.member` names one", testing.h's
+/// (`type_name`), its text (TYPE-7: "`Type.member` names one", `value_text.h`'s
 /// `text_of`), and its schema, with which hgraph holds it, a list of it and a
 /// recording of it.
 template <class E, std::size_t N>
@@ -313,7 +313,7 @@ std::size_t hash_of(const T& value) {
 }
 
 /// What a header of this library says of a value type it declares that the
-/// chains of `type_name` and of `testing::text_of` (traces.h) do not know, a
+/// chains of `type_name` and of `text_of` (value_text.h) do not know, a
 /// set's or a dictionary's (keyed.h) and a struct's (structs.h) among them: a
 /// specialization gives `name()`, the HGL name of the type, `text(value)`,
 /// a value of it as the language writes it, and `hash(value)`, its hash

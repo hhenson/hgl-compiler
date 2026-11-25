@@ -36,6 +36,7 @@
 #include <hglrt/endpoints.h>
 #include <hglrt/structs.h>
 #include <hglrt/traces.h>
+#include <hglrt/value_text.h>
 #include <hglrt/values.h>
 
 #include <hgraph/types/generated.h>
@@ -684,19 +685,19 @@ std::string sorted_text(const Members& members, Text text) {
 /// A set's members as the language writes them.
 template <class K>
 std::string set_text(const set<K>& members) {
-    return sorted_text(members, [](const K& member) { return testing::text_of(member); });
+    return sorted_text(members, [](const K& member) { return hglrt::text_of(member); });
 }
 
 /// A dictionary's entries as the language writes them.
 template <class K, class V>
 std::string dict_text(const dict<K, V>& entries) {
     return sorted_text(entries, [](const auto& entry) {
-        return testing::text_of(entry.first) + ": " + testing::text_of(entry.second);
+        return hglrt::text_of(entry.first) + ": " + hglrt::text_of(entry.second);
     });
 }
 } // namespace keyed_detail
 
-/// A set's name and text (values.h, traces.h): `set<i64>`, `[1, 2]`.
+/// A set's name and text (values.h, value_text.h): `set<i64>`, `[1, 2]`.
 template <class K>
 struct value_form<set<K>> {
     static std::string name() { return "set<" + type_name<K>() + ">"; }
