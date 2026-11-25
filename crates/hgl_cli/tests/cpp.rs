@@ -2340,6 +2340,34 @@ fn operator_candidates_have_distinct_cpp_names_on_the_sdk() {
     );
 }
 
+/// GEN-5 and FMT-5: admitted exact types, inferred callback inputs and
+/// a nullable formatted payload select the appropriate candidates.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn exact_candidate_matches_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("exact-candidates");
+    let file = write(
+        &root,
+        "demo.exact_candidates.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.exact_candidates.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// GEN-5 and GEN-7: value, node and graph instances choose their own
 /// operator candidate, including across modules and through a symbol.
 /// ERR-15: the choice uses the whole operands before implicit reads.
@@ -2653,9 +2681,8 @@ fn let_bound_packs_run_on_the_sdk() {
 }
 
 /// MAP-1, RED-1, RED-4 and RED-5: C++ reports the remaining native forms.
-/// A map of one split dictionary and a capture-free ordered fold are written.
-/// FN-14 permits the captured callback even though the engine cannot wire it
-/// in an ordered reduction.
+/// C++ writes a one-dictionary keyed map and growing ordered folds with
+/// and without callback captures.
 #[test]
 fn native_mapping_forms_decline_cpp_emission() {
     let root = scratch("native-mapping-forms");
@@ -2693,7 +2720,7 @@ export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values,
     let stderr = text(&emitted.stderr);
     assert_eq!(emitted.status.code(), Some(1), "{stderr}");
     assert!(
-        stderr.contains("an ordered reduction with a captured callback"),
+        !stderr.contains("reduce(fn(accumulated, member)"),
         "{stderr}"
     );
     assert!(
@@ -2704,12 +2731,12 @@ export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values,
     assert!(stderr.contains("map(sum_for_map, left, right)"), "{stderr}");
     assert_eq!(
         stderr.matches("error[build/target.unsupported]").count(),
-        6,
+        5,
         "{stderr}"
     );
 }
 
-/// MAP-1, MAP-2 and MAP-9: report the checked keyed forms the target declines.
+/// MAP-1 and MAP-2: report the checked keyed forms the target declines.
 #[test]
 fn keyed_map_declines_name_the_unsupported_form() {
     let root = scratch("keyed-map-declines");
@@ -2720,10 +2747,8 @@ fn keyed_map_declines_name_the_unsupported_form() {
 
 const fn twice(x: i64) -> i64 => x * 2
 fn applied(member: i64, f: fn(i64) -> i64) -> i64 => f(member)
-fn const_key(member: i64, const key: i64) -> i64 => member + key
 fn sum_members(left: i64, right: i64) -> i64 => left + right
 
-export fn mapped_const_key(items: dict<i64, i64>) -> dict<i64, i64> => map(const_key, items)
 export fn mapped_function(items: dict<i64, i64>) -> dict<i64, i64> => map(applied, items, twice)
 export fn mapped_local(items: dict<i64, i64>) -> dict<i64, i64> {
     let r = map(applied, items, twice)
@@ -2748,7 +2773,6 @@ export fn mapped_pair(a: dict<i64, i64>, b: dict<i64, i64>) -> dict<i64, i64> =>
     let stderr = text(&emitted.stderr);
     assert_eq!(emitted.status.code(), Some(1), "{stderr}");
     for reason in [
-        "a keyed map with a const key parameter",
         "a keyed map passing a function argument to its child",
         "a keyed map with multiple split dictionaries",
     ] {
@@ -2763,7 +2787,7 @@ export fn mapped_pair(a: dict<i64, i64>, b: dict<i64, i64>) -> dict<i64, i64> =>
     );
     assert_eq!(
         stderr.matches("error[build/target.unsupported]").count(),
-        8,
+        7,
         "{stderr}"
     );
 }
@@ -2805,6 +2829,29 @@ test nullable_accumulator_takes_a_plain_seed {
     );
     assert!(
         stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// RED-5 and FN-14: ordered folds retain captured values and observe live
+/// captures, including when a member's callback stops and starts again.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn ordered_reduction_captures_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("ordered-reduction-captures");
+    let file = write(
+        &root,
+        "demo.ordered_reduce_captures.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.ordered_reduce_captures.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -3998,7 +4045,16 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         "src/demo.keyed_constants.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.keyed_constants.hgl"),
     );
-    let output = hgl_in(&["test", &file, &constants, "--target", "cpp"], &[], &[]);
+    let cancellations = write(
+        &root,
+        "src/demo.keyed_cancellation.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.keyed_cancellation.hgl"),
+    );
+    let output = hgl_in(
+        &["test", &file, &constants, &cancellations, "--target", "cpp"],
+        &[],
+        &[],
+    );
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -4007,9 +4063,38 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 17 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
+}
+
+/// TIME-7: mutually exclusive writes still use the single-write path.
+#[test]
+fn single_keyed_write_needs_no_staging() {
+    let root = scratch("single-keyed-write");
+    let source = write(
+        &root,
+        "src/demo.single_keyed_write.hgl",
+        r#"module demo.single_keyed_write
+export fn selected(step: i64) -> set<i64> {
+    inject out
+    when {
+        if step == 1 { out = delta<set<i64>>(added: [5]) }
+        else { out = delta<set<i64>>(removed: [5]) }
+    }
+}
+"#,
+    );
+    let out = root.join("out");
+    let result = hgl_in(
+        &["emit", &source, "--target", "cpp", "--out", &argument(&out)],
+        &[],
+        &[],
+    );
+    assert!(result.status.success(), "{}", text(&result.stderr));
+    let cpp = fs::read_to_string(out.join("modules/mod-demo-single_keyed_write.cpp")).unwrap();
+    assert!(cpp.contains("::hglrt::keyed_publish(out_"), "{cpp}");
+    assert!(!cpp.contains("KeyedEvaluation"), "{cpp}");
 }
 
 /// Nested dictionary entry observations retain the final child's validity,

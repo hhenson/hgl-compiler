@@ -366,7 +366,7 @@ fn the_conformance_cases_are_one_module() {
     assert!(
         stdout.contains(&format!(
             "rejection cases: {} passed, {} failed\n",
-            57 - listed.len(),
+            61 - listed.len(),
             listed.len()
         )),
         "{stdout}"
