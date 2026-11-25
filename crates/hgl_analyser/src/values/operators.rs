@@ -1015,11 +1015,7 @@ impl<'a> Typer<'a> {
             .map(|generic| generic.at)
             .zip(&resolved)
             .collect();
-        let fixed = public
-            .parameters
-            .iter()
-            .filter(|parameter| !parameter.configuration && parameter.pack.is_none())
-            .count();
+        let fixed = public.positional_parameters().count();
         let written: Vec<_> = written.into_iter().collect();
         // For FN-17 selection the dependent arguments supply type
         // evidence even when written after the callback itself.
@@ -1441,11 +1437,7 @@ impl<'a> Typer<'a> {
         let mut names = HashSet::new();
         let mut filled = HashSet::new();
         let mut arguments = Vec::new();
-        let fixed = public
-            .parameters
-            .iter()
-            .filter(|parameter| !parameter.configuration && parameter.pack.is_none())
-            .count();
+        let fixed = public.positional_parameters().count();
         let has_named_pack = public
             .parameters
             .iter()
@@ -1475,14 +1467,8 @@ impl<'a> Typer<'a> {
                 }
                 (Some((hir::PackKey::Position(_), _)), _) => {
                     let slot = public
-                        .parameters
-                        .iter()
-                        .enumerate()
-                        .find(|(index, parameter)| {
-                            !parameter.configuration
-                                && parameter.pack.is_none()
-                                && !filled.contains(index)
-                        })
+                        .positional_parameters()
+                        .find(|(index, _)| !filled.contains(index))
                         .map(|(index, _)| index);
                     if slot.is_none() {
                         if dependent.is_none()
@@ -1864,15 +1850,7 @@ pub(super) fn options_of<'a>(
                 .parameters
                 .iter()
                 .any(|parameter| parameter.pack == Some(Pack::Positional)))
-            .then(|| {
-                maximum.max(
-                    signature
-                        .parameters
-                        .iter()
-                        .filter(|parameter| !parameter.configuration && parameter.pack.is_none())
-                        .count(),
-                )
-            })
+            .then(|| maximum.max(signature.positional_parameters().count()))
         });
     }
     for &(_, _, signature) in candidates {

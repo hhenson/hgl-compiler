@@ -2665,10 +2665,7 @@ impl Key {
             Self::Generic(_) => None,
             Self::ForwardedPosition(index) => *index,
             Self::Position(position) => signature
-                .parameters
-                .iter()
-                .enumerate()
-                .filter(|(_, parameter)| !parameter.configuration && parameter.pack.is_none())
+                .positional_parameters()
                 .nth(*position)
                 .map(|(index, _)| index),
             Self::Name(name) | Self::Brace(name) | Self::Configuration(name) => {
@@ -2922,10 +2919,7 @@ pub(super) fn bound<'g>(
         .iter()
         .position(|p| p.pack == Some(Pack::Named));
     let positional: Vec<_> = signature
-        .parameters
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| !p.configuration && p.pack.is_none())
+        .positional_parameters()
         .map(|(index, _)| index)
         .collect();
     let ordinary_named = |name: &str| {

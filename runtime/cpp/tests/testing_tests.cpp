@@ -8,6 +8,9 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -19,6 +22,17 @@ using hglrt::testing::Timed;
 using hglrt_test::code_raised;
 using hglrt_test::start;
 using namespace std::chrono_literals;
+
+std::vector<std::pair<std::string_view, datetime>> phases;
+
+struct Lifecycle {
+    static constexpr auto name = "test::lifecycle";
+    static constexpr bool schedule_on_start = true;
+
+    static void start(hgraph::DateTime now) { phases.emplace_back("start", now); }
+    static void eval(hgraph::DateTime now) { phases.emplace_back("evaluate", now); }
+    static void stop(hgraph::DateTime now) { phases.emplace_back("stop", now); }
+};
 
 } // namespace
 
@@ -66,7 +80,31 @@ TEST_CASE("a run's bounds (CRUN-2, CRUN-3)") {
     CHECK(code_raised([] { (void)hglrt::testing::resolved({.end = start + 1s, .length = 1s}); }) ==
           "run.end_and_length");
     // CRUN-3 reserves the epoch itself for `never`.
-    CHECK(code_raised([] { (void)hglrt::testing::resolved({.start = datetime{}}); }) == "(no code)");
+    CHECK(code_raised([] { (void)hglrt::testing::resolved({.start = datetime{}}); }) == "run.bounds");
+    bool wired = false;
+    CHECK(code_raised([&] {
+        (void)hglrt::testing::run([&](hgraph::Wiring&, datetime) { wired = true; }, {.start = datetime{}});
+    }) == "run.bounds");
+    CHECK_FALSE(wired);
+}
+
+TEST_CASE("a run with no cycles builds, starts and stops its graph (CRUN-1, CRUN-2)") {
+    const hglrt::testing::Entry entry = [](hgraph::Wiring& wiring, datetime now) {
+        phases.emplace_back("wire", now);
+        hgraph::wire<Lifecycle>(wiring);
+    };
+    for (const auto mode : {Mode::simulation, Mode::real_time}) {
+        for (const auto end : {start, start - 1us}) {
+            phases.clear();
+            (void)hglrt::testing::run(entry, {.start = start, .end = end}, mode);
+            CHECK(phases == std::vector<std::pair<std::string_view, datetime>>{
+                                {"wire", start}, {"start", start}, {"stop", start}});
+        }
+    }
+    phases.clear();
+    (void)hglrt::testing::run(entry, {.length = 1us});
+    CHECK(phases == std::vector<std::pair<std::string_view, datetime>>{
+                        {"wire", start}, {"start", start}, {"evaluate", start}, {"stop", start}});
 }
 
 TEST_CASE("a run's end is no later than the latest end, and no cycle is at or after forever (CRUN-3)") {
@@ -85,9 +123,8 @@ TEST_CASE("a run's end is no later than the latest end, and no cycle is at or af
     CHECK(hglrt::testing::same(evaluate<i64>(entry_of<Counted>(Dense<i64>{7}), {.end = latest}),
                                Dense<i64>{1}));
 
-    // An end after it fails as a start before the earliest start does, with
-    // no code: one given, and one a length gives, a length so long that no
-    // instant holds the end among them.
+    // Explicit and length-derived ends past the upper bound use the same code,
+    // including lengths whose addition would overflow.
     const i64 most = std::numeric_limits<i64>::max();
     for (const hglrt::testing::Bounds& past :
          {hglrt::testing::Bounds{.end = latest + 1us}, hglrt::testing::Bounds{.end = forever + c::years{100}},
@@ -97,9 +134,9 @@ TEST_CASE("a run's end is no later than the latest end, and no cycle is at or af
           hglrt::testing::Bounds{.length = c::days{1'000'000}},
           hglrt::testing::Bounds{.length = hglrt::duration{most}},
           hglrt::testing::Bounds{.start = latest, .length = hglrt::duration{most}}}) {
-        CHECK(code_raised([&] { (void)resolved(past); }) == "(no code)");
+        CHECK(code_raised([&] { (void)resolved(past); }) == "run.bounds");
         CHECK(code_raised([&] { (void)evaluate<i64>(entry_of<Counted>(Dense<i64>{7}), past); }) ==
-              "(no code)");
+              "run.bounds");
     }
 
     // A run with no end ends at the latest end: a start at it or after it,

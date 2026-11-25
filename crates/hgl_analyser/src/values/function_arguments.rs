@@ -1313,14 +1313,11 @@ fn reflected_arguments(
     at: Location,
     inputs: &CallbackInputs<'_>,
 ) -> Vec<Given> {
-    let mut positions = public
-        .parameters
-        .iter()
-        .filter(|parameter| !parameter.configuration && parameter.pack.is_none())
-        .enumerate();
-    let fixed = positions.clone().count();
-    let mut remaining = positions
-        .by_ref()
+    let fixed = public.positional_parameters().count();
+    let mut remaining = public
+        .positional_parameters()
+        .map(|(_, parameter)| parameter)
+        .enumerate()
         .filter(|(_, parameter)| !inputs.excluded.contains(&parameter.name.as_str()));
     let mut pack_position = fixed;
     let mut given: Vec<_> = inputs

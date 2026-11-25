@@ -1095,10 +1095,10 @@ const fn use_it(fallback: result<i64, error>) -> result<i64, error> => forward(f
 #[test]
 fn a_call_in_an_instance_asks_for_a_whole_instance() {
     let checked = module(concat!(
-        "operator join<L, R, O>(lhs: L, rhs: R) -> O\n",
-        "impl const fn join(lhs: i64, rhs: i64) -> i64 => lhs\n",
-        "const fn twice<T>(value: T) -> T requires join(T, T) -> T => join(value, value)\n",
-        "const fn outer<U>(value: U) -> list<U> requires join(U, U) -> U => [twice(value)]\n",
+        "operator fuse<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn fuse(lhs: i64, rhs: i64) -> i64 => lhs\n",
+        "const fn twice<T>(value: T) -> T requires fuse(T, T) -> T => fuse(value, value)\n",
+        "const fn outer<U>(value: U) -> list<U> requires fuse(U, U) -> U => [twice(value)]\n",
         "const fn top() -> list<i64> => outer(2)\n",
     ));
     assert_eq!(checked.summary(), NONE);
@@ -1112,7 +1112,7 @@ fn a_call_in_an_instance_asks_for_a_whole_instance() {
         .instance(module, declaration, &generics, &requirements)
         .expect("`twice` has a body");
     assert_eq!(signature(&taken), "(value: i64) -> i64");
-    assert_eq!(called(&checked, &twice), ["join(i64, i64)"]);
+    assert_eq!(called(&checked, &twice), ["fuse(i64, i64)"]);
 }
 
 /// GEN-13: a generic value parameter is a compile-time constant, and

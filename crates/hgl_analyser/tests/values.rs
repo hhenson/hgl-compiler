@@ -2563,13 +2563,13 @@ fn a_generic_candidates_condition_is_checked_at_the_call() {
 #[test]
 fn equally_specific_generic_candidates_are_ambiguous() {
     let checked = module(concat!(
-        "operator join<L, R>(lhs: L, rhs: R) -> i64\n",
-        "impl const fn join<T>(lhs: T, rhs: i64) -> i64 => 1\n",
-        "impl const fn join<T>(lhs: i64, rhs: T) -> i64 => 2\n",
+        "operator fuse<L, R>(lhs: L, rhs: R) -> i64\n",
+        "impl const fn fuse<T>(lhs: T, rhs: i64) -> i64 => 1\n",
+        "impl const fn fuse<T>(lhs: i64, rhs: T) -> i64 => 2\n",
         "const fn uses(n: i64, text: str) {\n",
-        "    let one = join(text, n)\n",
-        "    let two = join(n, text)\n",
-        "    let tie = join(n, n)\n",
+        "    let one = fuse(text, n)\n",
+        "    let two = fuse(n, text)\n",
+        "    let tie = fuse(n, n)\n",
         "}\n",
     ));
     assert_eq!(
