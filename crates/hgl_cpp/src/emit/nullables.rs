@@ -10,6 +10,7 @@
 //! | A read of it where a test against null has proved it is not null (ERR-12) | `::hglrt::nullable_payload(view)`, the T |
 //! | `value == null`, `value != null` of it (ERR-12) | whether that read holds nothing, or something |
 //! | A scalar connection compared with null in a graph (TYPE-14, TYPE-15) | `::hglrt::CompareNull` publishes a Boolean on each input publication |
+//! | A connection refined to its payload in a graph (ERR-12) | `::hglrt::ProjectNullablePayload` reads the optional port and publishes its present value |
 //! | `return value`, `out = value` (TIME-7) | `::hglrt::publish_nullable(view, value);`: "`return null` for an `i64?` result a null, as `return delta<i64?>()` does" |
 //! | `delta_value(view)` (END-3, ERR-14) | `::hglrt::fn_delta_value(view)`, the optional that is `delta<T?>`, or `fn_delta_value_checked` where its place takes a `result` |
 //! | A cell of a trace of it (TST-5) | a `std::optional<T>`: a nullable publishes whole, a published null among it; a cell written as its delta, the optional the delta holds |
@@ -99,6 +100,25 @@ impl Family for Nullables {
     }
 
     fn wiring(&self, emitter: &mut Emitter<'_>, scope: &mut Scope, value: &Expr) -> Option<String> {
+        if let ExprKind::Local(local) = value.kind
+            && emitter.role(local) == Role::Connection
+        {
+            let declared = &scope.body.locals[local];
+            // ERR-12: a captured connection keeps its declared schema
+            // on the port even where the analyser refines a read.
+            if let Type::Nullable(payload) = &declared.ty
+                && **payload == value.ty
+            {
+                let input = self.schema(emitter, &declared.ty)?;
+                let output = emitter.temporal_schema(&value.ty, value.at)?;
+                let port = identifier(&declared.name);
+                scope.acted = true;
+                return Some(format!(
+                    "::hgraph::wire<::{}::ProjectNullablePayload<{input}, {output}>>({WIRING}, {port})",
+                    runtime::NAMESPACE,
+                ));
+            }
+        }
         let (tested, equal) = null_test(value)?;
         let Type::Nullable(inner) = &tested.ty else {
             return None;
