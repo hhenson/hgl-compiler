@@ -387,6 +387,205 @@ void keyed_publish(const E& out, const endpoint_delta_t<E>& delta) {
 }
 
 namespace keyed_detail {
+
+/// A keyed evaluation visits only keys named by its writes (TIME-7).
+struct Membership {
+    bool initial;
+    bool current;
+};
+
+/// A scalar publication, including an equal value, stays in the batch.
+template <class S>
+struct KeyedWrites {
+    template <class D>
+    bool record(const hgraph::TSDataView&, const D&) { return true; }
+
+    template <class D>
+    bool filter(D&) const { return true; }
+};
+
+template <class K>
+struct KeyedWrites<hgraph::TSS<K>> {
+    bool record(const hgraph::TSDataView& original, const set_delta<K>& delta) {
+        bool changed = false;
+        const auto write = [&](const K& key, bool present) {
+            const bool held = original.valid() && original.as_set().contains(hgraph::Value{key}.view());
+            auto& member = members.try_emplace(key, Membership{held, held}).first->second;
+            changed |= member.current != present;
+            member.current = present;
+        };
+        for (const auto& key : delta.removed) {
+            write(key, false);
+        }
+        for (const auto& key : delta.added) {
+            write(key, true);
+        }
+        return changed;
+    }
+
+    bool filter(set_delta<K>& delta) const {
+        const auto unchanged = [&](const K& key) {
+            // A key containing NaN compares unequal even to itself (NUM-5).
+            // It cannot cancel another write through the sparse lookup.
+            const auto member = members.find(key);
+            return member != members.end() && member->second.initial == member->second.current;
+        };
+        std::erase_if(delta.added, unchanged);
+        std::erase_if(delta.removed, unchanged);
+        return !delta.added.empty() || !delta.removed.empty();
+    }
+
+    dict<K, Membership> members{};
+};
+
+template <class K, class V>
+struct KeyedWrites<hgraph::TSD<K, V>> {
+    using Delta = dict_delta<K, typename keyed_form<V>::type>;
+
+    struct Entry {
+        Membership member;
+        bool valid;
+        bool withdrawn{};
+        KeyedWrites<V> child{};
+    };
+
+    bool record(const hgraph::TSDataView& original, const Delta& delta) {
+        bool changed = false;
+        const auto initial = [&](const K& key) -> hgraph::TSDataView {
+            return original.valid() ? original.as_dict().at(hgraph::Value{key}.view())
+                                    : hgraph::TSDataView{};
+        };
+        const auto entry_for = [&](const K& key, const hgraph::TSDataView& source) -> Entry& {
+            const bool held = source.valid();
+            return entries.try_emplace(key, Entry{
+                {held, held}, held && source.has_current_value()
+            }).first->second;
+        };
+        for (const auto& key : delta.removed) {
+            auto& entry = entry_for(key, initial(key));
+            changed |= entry.member.current;
+            entry.withdrawn |= entry.member.current;
+            entry.member.current = false;
+        }
+        for (const auto& [key, value] : delta.updated) {
+            const auto source = initial(key);
+            auto& entry = entry_for(key, source);
+            changed |= !entry.member.current;
+            entry.member.current = true;
+            // If the entry is itself withdrawn and restored, the engine
+            // interprets its already ordered operations against that slot.
+            changed |= entry.withdrawn || entry.child.record(source, value);
+        }
+        return changed;
+    }
+
+    bool filter(Delta& delta) const {
+        const auto absent = [](const Entry& entry) {
+            return !entry.member.initial && !entry.member.current;
+        };
+        std::erase_if(delta.removed, [&](const K& key) {
+            const auto entry = entries.find(key);
+            return entry != entries.end() && absent(entry->second);
+        });
+        for (auto it = delta.updated.begin(); it != delta.updated.end();) {
+            // As in the set form, an unmatched key keeps its ordinary write.
+            const auto found = entries.find(it->first);
+            if (found == entries.end()) {
+                ++it;
+                continue;
+            }
+            const auto& entry = found->second;
+            if (absent(entry) || (!entry.withdrawn && !entry.child.filter(it->second) && entry.valid)) {
+                it = delta.updated.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        return !delta.updated.empty() || !delta.removed.empty();
+    }
+
+    dict<K, Entry> entries{};
+};
+
+} // namespace keyed_detail
+
+/// Hold the changes of a multiply written keyed result until the evaluation
+/// ends. Within the evaluation, the endpoint reads its staged validity and time.
+template <class O>
+class KeyedEvaluation {
+  public:
+    using schema = schema_of<O>;
+    using Value = typename keyed_form<schema>::type;
+    using Delta = endpoint_delta_t<O>;
+
+    explicit KeyedEvaluation(const O& output) : output_(output) {}
+
+    /// Whether an earlier action in this evaluation established validity.
+    bool valid() const { return !changes_.empty() || output_.valid(); }
+
+    /// An intermediate write can already count as modified inside the node.
+    bool modified() const { return changed_ || output_.modified(); }
+
+    /// Time of the most recent staged or already published change.
+    hgraph::DateTime last_modified_time() const {
+        return changed_ ? output_.evaluation_time() : output_.last_modified_time();
+    }
+
+    /// A whole return is the evaluation's final action (TIME-7, FN-7).
+    void finish(Value value) { whole_.emplace(std::move(value)); }
+
+    /// Read a delta against the current sparse record, in source order.
+    void write(Delta delta) {
+        changed_ |= !valid();
+        changed_ |= staged_.record(output_.base().data_view(), delta);
+        changes_.push_back(std::move(delta));
+    }
+
+    /// Ordinary early returns leave the lambda and commit at the same boundary.
+    template <class F>
+    void run(F&& handlers) {
+        try {
+            handlers(*this);
+        } catch (...) {
+            commit();
+            throw;
+        }
+        commit();
+    }
+
+  private:
+    void commit() {
+        if (whole_) {
+            keyed_publish(output_, *whole_);
+            return;
+        }
+        for (auto& change : changes_) {
+            if (staged_.filter(change) || !output_.valid()) {
+                keyed_publish(output_, change);
+            }
+        }
+    }
+
+    const O& output_;
+    keyed_detail::KeyedWrites<schema> staged_{};
+    std::vector<Delta> changes_{};
+    std::optional<Value> whole_{};
+    bool changed_{};
+};
+
+/// A keyed write within an evaluation is held until its result is known.
+template <class O>
+void keyed_publish(KeyedEvaluation<O>& out, typename KeyedEvaluation<O>::Delta delta) {
+    out.write(std::move(delta));
+}
+
+/// A whole keyed return supplies the result of the evaluation.
+template <class O>
+void keyed_publish(KeyedEvaluation<O>& out, typename KeyedEvaluation<O>::Value value) {
+    out.finish(std::move(value));
+}
+
+namespace keyed_detail {
 /// Reuse keyed publication wherever a generic publisher holds this form.
 template <class Schema>
 struct KeyedPublisher {
