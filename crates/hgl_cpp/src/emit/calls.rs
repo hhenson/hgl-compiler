@@ -439,8 +439,9 @@ impl Emitter<'_> {
             let value = self.expression(scope, &argument.value);
             let value = if let Some((store, key)) = key {
                 // TIME-8: a key that can differ between the calls of a
-                // cycle is checked here, as the call is evaluated; one
-                // fixed on this route was checked at attachment.
+                // cycle is checked here, as the call is evaluated. One
+                // fixed on this route is checked here only where the
+                // store carries no proof from the node's attachment.
                 let check = if program.store_key_at_execution(key) {
                     super::store::KeyCheck::Always
                 } else {
