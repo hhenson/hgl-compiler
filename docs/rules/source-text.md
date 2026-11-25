@@ -61,12 +61,12 @@ lexer: done
 parser: done
 
 - Any word of identifier form, reserved words included, as member name and argument label; `const` as modifier or name by position
-- `Type` is hard reserved in ordinary declaration and binding positions, and stays available as a field, enum member, dotted member and argument label (TYPE-18).
 
 ## LEX-10
 
 parser: partial
 
+- `Type` stays an identifier in value, callable, parameter and member names; TYPE-18 reserves it in type names.
 - Contextual names take their meaning by position; `str(value)` is a conversion and `error(...)` a constructor
 - `run` is a hard reserved word, as `eval` is, and names nothing. The contextual `without` awaits #366.
 - `switch` and `raises` are hard reserved words and remain member names under LEX-9. `case` and `default` remain contextual.

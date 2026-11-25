@@ -252,6 +252,7 @@ parser: done
 analyser: partial
 
 - Decides an undecided constructor from what its name resolves to, a generic type, function or operator; a generic type before a comparison's `<` rejected; each argument against its parameter's kind
+- A contextual `Type` argument supplies the descriptor in a known type slot and uses ordinary value lookup in a value slot. Where the call supplies the kind, module/imported constants and local value bindings take precedence over the descriptor fallback. Value-only lookup diagnostics are retained only on the value path; GEN-8 still requires a constant.
 - Left: a generic function or operator before a comparison's `<`
 
 ## GEN-15

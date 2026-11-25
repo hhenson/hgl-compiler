@@ -6,7 +6,7 @@ use hgl_source::FileId;
 
 use crate::constant::{Fault, Scope, Typed};
 use crate::program::{Binding, Declaration, DeclarationKind, LocalKind};
-use crate::syntax::{child, has_token, name_token};
+use crate::syntax::{child, name_token};
 use crate::types::{Argument, Constant, ConstantValue, GenericKind, NamedKind, Type};
 use crate::{codes, error};
 
@@ -28,7 +28,9 @@ impl Reader<'_> {
     pub(super) fn named(&mut self, node: &SyntaxNode, position: Position) -> Type {
         // TYPE-18: `Type` is the language's type of a type, not a
         // declaration supplied by the program or by core.
-        if child(node, SyntaxKind::QualifiedName).is_none() && has_token(node, SyntaxKind::KwType) {
+        if child(node, SyntaxKind::QualifiedName).is_none()
+            && name_token(node).is_some_and(|name| name.text() == "Type")
+        {
             if let Some(list) = child(node, SyntaxKind::GenericArgs) {
                 // TYPE-18 gives Type no parameters. Still read supplied
                 // arguments so their own errors are not hidden (GEN-2).
@@ -662,7 +664,22 @@ impl Reader<'_> {
             return None;
         }
         let name = name_token(node)?;
-        let &binding = self.bindings.get(&(self.file, name.span().start))?;
+        let contextual_type =
+            name.text() == "Type" && child(node, SyntaxKind::QualifiedName).is_none();
+        let binding = self.bindings.get(&(self.file, name.span().start)).copied();
+        let Some(binding) = binding else {
+            if contextual_type
+                && self
+                    .module
+                    .contextual_type_reports
+                    .contains_key(&self.at(name.span()))
+            {
+                // A failed ordinary value lookup is not a second reading as
+                // the descriptor type. held emits the retained lookup report.
+                return Some(self.held(node, Err(Fault::Reported), expected, place));
+            }
+            return None;
+        };
         match binding {
             Binding::Local {
                 at,
@@ -695,6 +712,15 @@ impl Reader<'_> {
                 &[declaration]
                     if self.program.modules[*module].declarations[declaration].kind
                         == DeclarationKind::Constant => {}
+                _ if contextual_type
+                    && declarations.iter().all(|&declaration| {
+                        !matches!(
+                            self.program.modules[*module].declarations[declaration].kind,
+                            DeclarationKind::Struct
+                                | DeclarationKind::Enum
+                                | DeclarationKind::NativeType
+                        )
+                    }) => {}
                 _ => return None,
             },
         }
@@ -775,6 +801,22 @@ impl Reader<'_> {
         expected: Option<&Type>,
         place: Option<&str>,
     ) -> Constant {
+        // GEN-14: a type slot never reaches constant evaluation, so value-only
+        // lookup failures cannot reject a valid descriptor argument there.
+        // Keep ordinary UNIT/FN diagnostics when this path selects a value.
+        if node.kind() == SyntaxKind::NamedType
+            && let Some(name) = name_token(node)
+            && let Some(reports) = self
+                .module
+                .contextual_type_reports
+                .get(&self.at(name.span()))
+        {
+            for report in reports {
+                if !self.diagnostics.as_slice().contains(report) {
+                    self.diagnostics.emit(report.clone());
+                }
+            }
+        }
         let value = read.and_then(|read| crate::constant::fit(read, expected, self.program));
         let value = match value {
             // GEN-8: a generic value argument is "a compile-time

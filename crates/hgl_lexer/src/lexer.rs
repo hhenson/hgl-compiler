@@ -1159,9 +1159,9 @@ mod tests {
     }
 
     #[test]
-    fn type_descriptor_name_is_hard_reserved() {
-        // LEX-9/10, TYPE-18: exact spelling only; lowercase type is contextual.
-        assert!(crate::TokenKind::keyword("Type").is_some());
+    fn type_descriptor_name_is_contextual() {
+        // LEX-10, TYPE-18: Type is reserved by its type-name context only.
+        assert_eq!(crate::TokenKind::keyword("Type"), None);
         for contextual in ["type", "Types", "TypeValue"] {
             assert_eq!(crate::TokenKind::keyword(contextual), None);
         }

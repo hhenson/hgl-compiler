@@ -307,6 +307,7 @@ parser: done
 analyser: partial
 
 - `Type` is an intrinsic ordinary type without generic parameters. A query retains the expression's checked type as a compiled constant, without its operand's calls, input payload reads or local flow effects. A declared but unassigned local supplies its type; a later ordinary read still requires assignment (EXPR-3). Generic instances project the queried type.
+- The spelling is reserved only for type declarations and type parameters (`name.reserved` at the declared name). Ordinary value, callable, parameter and member names remain valid. GEN-13 inferred value parameters remain valid; a deferred type instance rejects at its declared parameter name with making-call context.
 - A cold operand retains the call-role rules of its source place (FN-3). A graph query of a temporal call retains its payload type and wires no call.
 - Type constants compare and form collection keys by canonical type identity (GEN-13), independently of their text. The type of a value annotated `any` is `any`.
 - Proposed: an explicit delta of Type or a value that stores one rejects with `shape/delta.unsupported_shape` (TYPE-16).

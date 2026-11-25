@@ -2630,7 +2630,7 @@ pub(super) fn instances_hold(
         .chain(dependent_patterns.iter().copied())
         .chain(program.const_demands.keys().copied())
         .chain(program.generic_store_bodies.iter().copied())
-        .chain(crate::type_values::delta_declarations(program))
+        .chain(crate::type_values::instance_declarations(program))
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -2789,6 +2789,29 @@ pub(super) fn instances_hold(
                 parent,
                 parents: &parents,
             };
+            let name_reports =
+                crate::type_values::instance_parameter_names(program, made.callee, &made.generics);
+            if !name_reports.is_empty() {
+                let paths = chain.paths(program, &root_calls);
+                for mut report in name_reports {
+                    // TYPE-18 requires the declared name as primary, even
+                    // when GEN-13 determines its kind at a making call.
+                    for call in paths.iter().flatten() {
+                        let label = format!("this call makes the instance `{}`", call.instance);
+                        if !report
+                            .related
+                            .iter()
+                            .any(|related| related.location == call.at && related.message == label)
+                        {
+                            report = report.with_related(call.at, label);
+                        }
+                    }
+                    if !diagnostics.as_slice().contains(&report) {
+                        diagnostics.emit(report);
+                    }
+                }
+                continue;
+            }
             let enclosing_packs = match &program.modules[made.callee.0].details[made.callee.1] {
                 Detail::Callable(signature) => &signature.generics[..],
                 Detail::Struct(read) => &read.generics[..],

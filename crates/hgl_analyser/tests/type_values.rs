@@ -411,3 +411,203 @@ fn generic_delta_operands_reject_type_containing_instances() {
     )]);
     assert_eq!(ordinary.summary(), Vec::<String>::new());
 }
+
+/// TYPE-18 and LEX-10: Type remains an ordinary value/member spelling,
+/// while the same spelling in an annotation is the descriptor type.
+#[test]
+fn contextual_type_name_preserves_values_members_and_annotations() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn Type(Type: i64) -> i64 => Type + 1
+struct Record { Type: Type }
+enum Kind { Type }
+test contextual_names {
+    let answer = Type(41)
+    let Type = answer
+    let record = Record(Type: type(1))
+    let descriptor: Type = type(Type)
+    assert Type == 42
+    assert record.Type == descriptor
+    assert Kind.Type == Kind.Type
+}
+"#,
+    )]);
+    assert_eq!(checked.summary(), Vec::<String>::new());
+}
+
+/// GEN-14 and TYPE-18: the target slot, rather than a value named Type,
+/// decides whether this spelling supplies the descriptor type or a size.
+#[test]
+fn contextual_type_arguments_follow_known_parameter_kinds() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const Type: i64 = 2
+struct Box<T> { value: T }
+const fn sizes<const Type: i64>(value: Box<Type>, items: list<i64, Type>) -> Type => type(value.value)
+const fn count<const N: i64>() -> i64 => N
+test known_kinds {
+    let value: Box<Type> = Box<Type>(value: type(1))
+    assert sizes<2>(value, [1, 2]) == type(type(1))
+    assert count<Type>() == 2
+}
+"#,
+    )]);
+    assert_eq!(checked.summary(), Vec::<String>::new());
+}
+
+/// GEN-14: a call-supplied kind first uses ordinary value lookup, including
+/// imported constants; with no such value it supplies the descriptor type.
+#[test]
+fn contextual_type_arguments_infer_value_before_descriptor_kind() {
+    use hgl_analyser::Argument;
+    use hgl_analyser::hir::{Callee, walk_statements};
+
+    for (prefix, extra, expected) in [
+        ("const Type: i64 = 7\n", None, Some(7)),
+        (
+            "use other::{Type}\n",
+            Some(("other.hgl", "module other\nexport const Type: i64 = 11\n")),
+            Some(11),
+        ),
+        ("", None, None),
+    ] {
+        let source = format!(
+            "module m\n{prefix}const fn unused<X>() -> i64 => 1\n\
+             const fn caller() -> i64 => unused<Type>()\n"
+        );
+        let mut files = vec![("m.hgl", source.as_str())];
+        files.extend(extra);
+        let checked = check(&files);
+        assert_eq!(checked.summary(), Vec::<String>::new(), "{source}");
+        let mut found = None;
+        walk_statements(&common::body(&checked, "caller").statements, &mut |value| {
+            if let ExprKind::Call {
+                callee: Callee::Function { generics, .. },
+                ..
+            } = &value.kind
+            {
+                found = Some(generics.clone());
+            }
+        });
+        let generics = found.expect("caller retains the generic call");
+        match expected {
+            Some(expected) => assert!(
+                matches!(generics.as_slice(), [Argument::Constant(value)]
+                    if matches!(value.value, ConstantValue::Int(given) if given == expected)),
+                "{source}\n{generics:?}"
+            ),
+            None => assert!(
+                matches!(generics.as_slice(), [Argument::Type(Type::TypeValue)]),
+                "{source}\n{generics:?}"
+            ),
+        }
+    }
+}
+
+/// TYPE-18: declarations that introduce a type reject at their reserved name,
+/// rather than turning Type into a global keyword that blocks values/members.
+#[test]
+fn contextual_type_name_rejects_type_declarations_at_the_name() {
+    for declaration in [
+        "struct Type { value: i64 }",
+        "enum Type { Item }",
+        "native type Type",
+        "const fn packed<...Type>(values: ...Type) {}",
+    ] {
+        let source = format!("module m\n{declaration}\n");
+        let checked = check(&[("m.hgl", &source)]);
+        let at = format!("m.hgl:2:{}", declaration.find("Type").unwrap() + 1);
+        assert!(
+            checked.findings.iter().any(|finding| {
+                finding.code == "name/name.reserved"
+                    && finding.rule == "TYPE-18"
+                    && finding.at == at
+            }),
+            "{source}\n{}",
+            checked.report
+        );
+    }
+}
+
+/// GEN-13 and TYPE-18: an unmarked Type parameter may settle as a value,
+/// including at a making call; a type instance rejects at the declaration.
+#[test]
+fn contextual_type_parameter_reservation_follows_its_kind() {
+    let accepted = check(&[(
+        "m.hgl",
+        r#"module m
+struct Count<Type> { items: list<i64, Type> }
+const fn sized<Type>(items: list<i64, Type>) -> i64 => Type
+const fn unused<Type>() -> i64 => 1
+test values {
+    let count = Count<2>(items: [1, 2])
+    assert sized<2>([1, 2]) == 2
+    assert unused<2>() == 1
+}
+"#,
+    )]);
+    assert_eq!(accepted.summary(), Vec::<String>::new());
+    for argument in ["i64", "Type"] {
+        let source = format!(
+            "module m\nconst fn unused<Type>() -> i64 => 1\n\
+             test type_instance {{ assert unused<{argument}>() == 1 }}\n"
+        );
+        let rejected = check(&[("m.hgl", &source)]);
+        assert!(
+            rejected.findings.iter().any(|finding| {
+                finding.code == "name/name.reserved"
+                    && finding.rule == "TYPE-18"
+                    && finding.at == "m.hgl:2:17"
+            }),
+            "{source}\n{}",
+            rejected.report
+        );
+    }
+}
+
+/// GEN-14 and FN-14: a descriptor argument ignores a same-spelled value's
+/// capture restriction; choosing the value keeps ordinary lookup diagnostics.
+#[test]
+fn contextual_type_slots_keep_value_only_lookup_diagnostics_separate() {
+    let accepted = check(&[(
+        "m.hgl",
+        r#"module m
+struct Box<T> { value: T }
+const fn outer(var Type: i64) -> Type {
+    let query = fn() -> Type => type(Box<Type>(value: type(1)))
+    return query()
+}
+"#,
+    )]);
+    assert_eq!(accepted.summary(), Vec::<String>::new());
+    let rejected = check(&[(
+        "m.hgl",
+        r#"module m
+const fn count<const N: i64>() -> i64 => N
+const fn outer(var Type: i64) -> i64 => (fn() -> i64 => count<Type>())()
+"#,
+    )]);
+    assert!(
+        rejected
+            .findings
+            .iter()
+            .any(|finding| { finding.code == "name/name.captured" && finding.rule == "FN-14" }),
+        "{}",
+        rejected.report
+    );
+    let callable = check(&[(
+        "m.hgl",
+        "module m\nconst fn Type() -> i64 => 1\n\
+         const fn unused<X>() -> i64 => 1\n\
+         const fn caller() -> i64 => unused<Type>()\n",
+    )]);
+    assert!(
+        callable.findings.iter().any(|finding| {
+            finding.code == "type/generic.argument_constant" && finding.rule == "GEN-8"
+        }),
+        "{}",
+        callable.report
+    );
+}

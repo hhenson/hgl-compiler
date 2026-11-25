@@ -77,7 +77,7 @@ test declared_types_without_values {
     assert eval graph_declared_kind(value: [1, 2]) == [1, 2]
 }
 
-# LEX-9: hard reserved Type remains a field, enum member and argument label.
+# LEX-10, TYPE-18: Type remains a field, enum member and argument label.
 struct NamedMember { Type: i64 }
 enum NamedChoice { Type }
 test type_member_names {
@@ -91,4 +91,19 @@ test nested_descriptor_queries {
     let t: Type = type(42)
     assert type(t) == type(type(t))
     assert convert<str>(type(t)) == "Type"
+}
+
+# TYPE-18, LEX-10: names in one program keep their value/member roles while
+# a type annotation Type always names the descriptor type.
+const fn Type(Type: i64) -> i64 => Type + 1
+struct TypedMember { Type: Type }
+test contextual_type_names {
+    let answer = Type(41)
+    let Type = answer
+    let value = TypedMember(Type: type(1))
+    let descriptor: Type = type(Type)
+    assert Type == 42
+    assert value.Type == descriptor
+    assert NamedChoice.Type == NamedChoice.Type
+    assert convert<str>(descriptor) == "i64"
 }

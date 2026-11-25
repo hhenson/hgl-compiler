@@ -7,7 +7,46 @@ use std::collections::{HashMap, HashSet};
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::HasSpan;
 
-use crate::{Argument, ConstantValue, Detail, GenericKind, NamedKind, Program, Type};
+use crate::{
+    Argument, ConstantValue, Detail, GenericKind, GenericParameter, NamedKind, Program, Type,
+};
+
+/// Generic parameters in the declaration's written order.
+fn parameters(program: &Program, (module, declaration): (usize, usize)) -> &[GenericParameter] {
+    match &program.modules[module].details[declaration] {
+        Detail::Callable(signature) => &signature.generics,
+        Detail::Struct(read) => &read.generics,
+        _ => &[],
+    }
+}
+
+/// TYPE-18 and GEN-13: an unmarked function parameter may be a value named
+/// Type. When its making call supplies a type kind, reject at its name.
+pub(crate) fn instance_parameter_names(
+    program: &Program,
+    declaration: (usize, usize),
+    arguments: &[Argument],
+) -> Vec<hgl_diagnostics::Diagnostic> {
+    parameters(program, declaration)
+        .iter()
+        .zip(arguments)
+        .filter(|(generic, argument)| {
+            generic.name == "Type"
+                && generic.kind == GenericKind::Plain
+                && (matches!(argument, Argument::Type(ty) if !matches!(ty, Type::Unknown))
+                    || matches!(argument, Argument::NoResult))
+        })
+        .map(|(generic, _)| {
+            crate::error(
+                Category::Name,
+                crate::codes::NAME_RESERVED,
+                generic.at,
+                "the type parameter name `Type` is reserved for the descriptor type".to_string(),
+                "TYPE-18",
+            )
+        })
+        .collect()
+}
 
 /// TYPE-16 and TYPE-18, Proposed: a Type-containing value has no
 /// temporal form and therefore no delta. Struct fields are resolved
@@ -71,19 +110,23 @@ fn declaration_deltas(
     })
 }
 
-/// Generic declarations whose retained delta operands need another check once
-/// their type parameters or pack members are known (GEN-7, TYPE-16/18 Proposed).
+/// Declarations whose saved delta operands or deferred Type parameter names
+/// need checking once a making call supplies their kinds (GEN-7/13, TYPE-16/18).
 /// Feed the existing bounded instance traversal rather than walking calls again.
-pub(crate) fn delta_declarations(program: &Program) -> Vec<(usize, usize)> {
+pub(crate) fn instance_declarations(program: &Program) -> Vec<(usize, usize)> {
     let mut declarations = Vec::new();
     for (module, unit) in program.modules.iter().enumerate() {
         for declaration in 0..unit.declarations.len() {
-            if declaration_deltas(program, (module, declaration)).any(|input| {
-                input.payload.any_part(
-                    &|part| matches!(part, Type::Parameter { .. } | Type::PackMember { .. }),
-                    &|_| false,
-                )
-            }) {
+            if parameters(program, (module, declaration))
+                .iter()
+                .any(|generic| generic.name == "Type" && generic.kind == GenericKind::Plain)
+                || declaration_deltas(program, (module, declaration)).any(|input| {
+                    input.payload.any_part(
+                        &|part| matches!(part, Type::Parameter { .. } | Type::PackMember { .. }),
+                        &|_| false,
+                    )
+                })
+            {
                 declarations.push((module, declaration));
             }
         }

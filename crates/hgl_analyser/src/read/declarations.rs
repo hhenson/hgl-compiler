@@ -244,6 +244,20 @@ impl Reader<'_> {
         // generic parameter is.
         self.constrained(node);
         self.settle_kinds(declaration);
+        // TYPE-18 applies to the GEN-13 kind, not merely its unmarked
+        // spelling: an inferred value parameter named Type remains legal.
+        for generic in &self.generics {
+            if generic.name == "Type" && generic.kind == GenericKind::Type {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::NAME_RESERVED,
+                    generic.at,
+                    "the type parameter name `Type` is reserved for the descriptor type"
+                        .to_string(),
+                    "TYPE-18",
+                ));
+            }
+        }
         match &mut detail {
             Detail::Callable(signature) => {
                 signature.generics = self.generics.clone();
@@ -262,6 +276,20 @@ impl Reader<'_> {
     /// `self.generics`.
     fn generic_parameters(&mut self, declaration: &SyntaxNode) {
         let forms = generic_forms(declaration);
+        // TYPE-18: a type pack introduces type names; a value parameter
+        // named Type remains an ordinary value and is not reserved.
+        for (_, name, form) in &forms {
+            if name.text() == "Type" && matches!(form, Form::Pack(..)) {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::NAME_RESERVED,
+                    self.at(name.span()),
+                    "the type parameter name `Type` is reserved for the descriptor type"
+                        .to_string(),
+                    "TYPE-18",
+                ));
+            }
+        }
         // GEN-1: "Generic scope covers the whole declaration", so every
         // parameter is known before the type of any is read: in
         // `<const N: T, T>` the type of `N` is the `T` after it.

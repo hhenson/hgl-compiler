@@ -59,16 +59,18 @@ pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
             hidden: Vec::new(),
             diagnostics,
             uses: Vec::new(),
+            contextual_type_reports: HashMap::new(),
             hidden_callables: HashMap::new(),
             prelude: Vec::new(),
             decisions: Vec::new(),
         };
         resolver.module();
-        let (mut uses, prelude, decisions, hidden_callables) = (
+        let (mut uses, prelude, decisions, hidden_callables, contextual_type_reports) = (
             resolver.uses,
             resolver.prelude,
             resolver.decisions,
             resolver.hidden_callables,
+            resolver.contextual_type_reports,
         );
 
         let module = &mut program.modules[index];
@@ -83,6 +85,7 @@ pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
         module.uses = uses;
         module.decisions = decisions;
         module.hidden_callables = hidden_callables;
+        module.contextual_type_reports = contextual_type_reports;
         for name in prelude {
             if !module
                 .prelude_names
@@ -225,6 +228,8 @@ struct Resolver<'a> {
     hidden: Vec<Hidden>,
     diagnostics: &'a mut Diagnostics,
     uses: Vec<NameUse>,
+    /// Value-only reports wait for the GEN-14 argument kind to be known.
+    contextual_type_reports: HashMap<Location, Vec<hgl_diagnostics::Diagnostic>>,
     hidden_callables: HashMap<Location, Location>,
     prelude: Vec<PreludeName>,
     decisions: Vec<Decision>,
@@ -1007,11 +1012,31 @@ impl Resolver<'_> {
     /// Resolves the name a node uses: its `alias::name`, or its first
     /// identifier.
     fn name_of(&mut self, node: &SyntaxNode) -> Option<Binding> {
-        // TYPE-18: the built-in type `Type` needs no declaration.
+        // TYPE-18: a written type Type always names the descriptor. A lone
+        // generic argument shares value/type syntax, however: GEN-14 chooses
+        // its meaning once the target slot's kind is known. Record ordinary
+        // lookup now, keeping its reports for the reader's value path.
         if node.kind() == SyntaxKind::NamedType
             && child(node, SyntaxKind::QualifiedName).is_none()
-            && has_token(node, SyntaxKind::KwType)
+            && identifiers(node)
+                .next()
+                .is_some_and(|name| name.text() == "Type")
         {
+            if node
+                .parent()
+                .is_some_and(|parent| parent.kind() == SyntaxKind::GenericArgs)
+                && child(node, SyntaxKind::GenericArgs).is_none()
+            {
+                let name = identifiers(node).next()?;
+                let before = self.diagnostics.len();
+                let binding = self.lookup_or_form(&name, true);
+                let reports = self.diagnostics.as_slice()[before..].to_vec();
+                self.diagnostics.truncate(before);
+                if !reports.is_empty() {
+                    self.contextual_type_reports.insert(self.at(&name), reports);
+                }
+                return binding;
+            }
             return None;
         }
         if let Some(qualified) = child(node, SyntaxKind::QualifiedName) {
