@@ -303,6 +303,7 @@ analyser: partial
 - In a pack comprehension, `arg_keys` names a declared type pack and the iteration name is a compile-time key. In a concrete inline spread, a membership condition tests that pass's key against the resolved type pack and gives a constant `bool` (GEN-7).
 - A generic call that receives another function parameter checks its pack requirements when the caller supplies the reflected types. The receiver's fixed positions determine which original inputs its pack reflects.
 - An operator callback reflects the public declaration's parameter names and the selected candidate's types (FN-17).
+- An inherited configuration default retains the public operator's reflected pack keys, fixed prefix and forwarding metadata, separately from the selected candidate's packs (GEN-6, TYPE-18).
 - Specializes a pack-member type written as a function call's generic argument (GEN-8), including within another type. A missing key reports `pack.name`. A positive member-type equality, including one stated for each key of a pack, can admit a constrained call under GEN-7. A call with an untold member type remains unsupported in the target.
 
 ## GEN-18

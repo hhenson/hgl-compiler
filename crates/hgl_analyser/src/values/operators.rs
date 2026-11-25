@@ -571,6 +571,7 @@ impl<'a> Typer<'a> {
             self.diagnostics.emit(unfit.diagnostic(public, at));
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
+        let mut operator_type_packs = Vec::new();
         if reflects(&program.modules[operator.module], public) {
             // GEN-6: candidate-only options do not supply a public slot.
             // The candidate still receives them when the call is selected.
@@ -648,6 +649,9 @@ impl<'a> Typer<'a> {
                     }
                 }
             }
+            // GEN-6/17: tuple-encoded generic arguments retain only types.
+            // The inherited default also needs the public reflection's keys.
+            operator_type_packs = resolved.packs;
         }
         // Public constraints and pack checks above use the original
         // inference. Only configuration defaults use the fitted argument
@@ -674,13 +678,14 @@ impl<'a> Typer<'a> {
         ) {
             given.retain(value_argument);
             let at = Location::new(self.file, name.span());
-            return self.call_required(
+            let called = self.call_required(
                 operator,
                 result,
                 given,
                 operator_generics,
                 (Form::Named, at),
             );
+            return with_operator_packs(called, operator_type_packs);
         }
         // True where the output requested is the type the call writes
         // for the operator's result that is a type parameter and nothing
@@ -806,14 +811,15 @@ impl<'a> Typer<'a> {
                     payload,
                 )
             });
-        self.called_with_result_diagnostic(
+        let called = self.called_with_result_diagnostic(
             operator,
             chosen,
             given,
             operator_generics,
             (Form::Named, at),
             unresolved,
-        )
+        );
+        with_operator_packs(called, operator_type_packs)
     }
 
     /// A diagnostic trial runs the selected call's own checks first.
@@ -1948,6 +1954,30 @@ impl Typer<'_> {
         }
         Ok(DictionaryFallback::Value)
     }
+}
+
+/// GEN-6/17: public defaults keep the operator's resolved pack metadata,
+/// independently of the chosen candidate's own generic packs.
+fn with_operator_packs(
+    (mut kind, ty): (ExprKind, Type),
+    packs: Vec<hir::TypePackArgument>,
+) -> (ExprKind, Type) {
+    if let ExprKind::Call {
+        callee:
+            Callee::Candidate {
+                operator_type_packs,
+                ..
+            }
+            | Callee::Required {
+                operator_type_packs,
+                ..
+            },
+        ..
+    } = &mut kind
+    {
+        *operator_type_packs = packs;
+    }
+    (kind, ty)
 }
 
 /// ERR-6 requires the fallback's exact type. A literal can take its

@@ -166,10 +166,11 @@ impl Program {
         default: &DefaultExpr,
         operator: (usize, usize),
         generics: &[Argument],
+        type_packs: &[TypePackArgument],
         parameter: &Parameter,
         diagnostics: &mut Diagnostics,
     ) -> DefaultExpr {
-        let packs = self.operator_default_packs(operator, generics);
+        let packs = self.operator_default_packs(operator, generics, type_packs);
         self.specialize_parameter_default(
             default,
             operator,
@@ -180,12 +181,14 @@ impl Program {
         )
     }
 
-    /// GEN-6/10: public operator packs are encoded as tuple arguments.
-    /// The inherited default uses those packs, even for a non-generic winner.
+    /// GEN-6/10/17: inherited defaults use the public operator's packs,
+    /// preserving reflected keys and falling back to positional tuple arguments.
+    /// This applies even when the selected candidate has no generics.
     pub(crate) fn operator_default_packs(
         &self,
         operator: (usize, usize),
         generics: &[Argument],
+        reflected: &[TypePackArgument],
     ) -> Vec<TypePackArgument> {
         let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
             return Vec::new();
@@ -198,6 +201,9 @@ impl Program {
             .filter_map(|(index, (generic, argument))| {
                 if !matches!(generic.kind, crate::GenericKind::Pack { .. }) {
                     return None;
+                }
+                if let Some(pack) = reflected.iter().find(|pack| pack.parameter == index) {
+                    return Some(pack.clone());
                 }
                 let Argument::Type(Type::Tuple(types)) = argument else {
                     return None;
@@ -1125,6 +1131,19 @@ fn place_callee(
         }
     }
     if let Callee::Candidate {
+        operator_type_packs,
+        ..
+    }
+    | Callee::Required {
+        operator_type_packs,
+        ..
+    } = callee
+    {
+        for pack in operator_type_packs {
+            pack.place_types(place_type);
+        }
+    }
+    if let Callee::Candidate {
         operator_generics, ..
     }
     | Callee::Required {
@@ -1156,6 +1175,7 @@ fn place_callee(
         Callee::Required {
             requirement,
             operator_generics,
+            operator_type_packs,
             ..
         } => {
             if let Some(Answer::Candidate {
@@ -1169,6 +1189,7 @@ fn place_callee(
                 *callee = Callee::Candidate {
                     operator: *operator,
                     operator_generics: std::mem::take(operator_generics),
+                    operator_type_packs: std::mem::take(operator_type_packs),
                     module: *module,
                     declaration: *declaration,
                     generics: generics.clone(),

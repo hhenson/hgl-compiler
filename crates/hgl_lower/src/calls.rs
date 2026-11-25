@@ -421,6 +421,7 @@ pub fn left_out<'p>(
         && let Callee::Candidate {
             operator,
             operator_generics,
+            operator_type_packs,
             ..
         } = callee
         && let Some(default) = program.inherited_configuration_default(callee, index)
@@ -430,6 +431,7 @@ pub fn left_out<'p>(
             default,
             *operator,
             operator_generics,
+            operator_type_packs,
             parameter,
             &mut diagnostics,
         );

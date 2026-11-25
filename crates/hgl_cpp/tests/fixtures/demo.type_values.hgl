@@ -194,3 +194,22 @@ test inherited_packed_query_defaults {
     assert public_inspect{tag: type(true)}((1, true)) == "bool"
     assert public_inspect{tag: type(1)}(("one",)) == "i64"
 }
+
+# GEN-6/17, UNIT-7, TYPE-18: inherited defaults retain reflected parameter names.
+const SECOND: str = "second"
+const fn named_callback(one: i64, second: str) -> bool => true
+const fn other_callback(second: i64) -> bool => false
+const fn named_default<...Ps>(f: const fn(...{Ps}) -> bool, tag: Type = type(cold_make<Ps[SECOND]>())) -> str => format("{}", tag)
+const fn named_body<...Ps>(f: const fn(...{Ps}) -> bool) -> str => format("{}", type(cold_make<Ps[SECOND]>()))
+operator named_inspect<...Ps>{tag: Type = type(cold_make<Ps[SECOND]>())}(f: const fn(...{Ps}) -> bool) -> str
+impl const fn named_inspect<...Qs>{tag: Type}(f: const fn(...{Qs}) -> bool) -> str => format("{}", tag)
+test inherited_named_query_defaults {
+    assert named_inspect(named_callback) == "list<str>"
+    assert named_inspect(other_callback) == "list<i64>"
+    assert named_default(named_callback) == named_body(named_callback)
+    assert named_default(other_callback) == named_body(other_callback)
+    assert named_inspect(named_callback) == named_body(named_callback)
+    assert named_inspect(other_callback) == named_body(other_callback)
+    assert named_inspect{tag: type(true)}(named_callback) == "bool"
+    assert named_inspect{tag: type(1)}(other_callback) == "i64"
+}

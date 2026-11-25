@@ -1209,6 +1209,7 @@ impl<'a> Typer<'a> {
             callee: Callee::Candidate {
                 operator: (operator.module, operator.declaration),
                 operator_generics,
+                operator_type_packs: Vec::new(),
                 module,
                 declaration,
                 generics,

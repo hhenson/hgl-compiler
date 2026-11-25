@@ -305,6 +305,7 @@ fn check_inherited_defaults(
     let Callee::Candidate {
         operator,
         operator_generics,
+        operator_type_packs,
         module,
         declaration,
         generics,
@@ -333,7 +334,7 @@ fn check_inherited_defaults(
         .map(|generic| generic.at)
         .zip(generics)
         .collect();
-    let packs = program.operator_default_packs(*operator, operator_generics);
+    let packs = program.operator_default_packs(*operator, operator_generics, operator_type_packs);
     for ((parameter, slot), default) in public
         .parameters
         .iter()
