@@ -22,7 +22,7 @@
 //! passive at stop only the inputs a node declares active.
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Hook, Stmt};
-use hgl_analyser::{DeclarationKind, Detail, Type};
+use hgl_analyser::{NamedKind, Type};
 
 use super::Emitter;
 use super::forms::Family;
@@ -46,30 +46,16 @@ fn activity_native(operation: EndpointOperation) -> Option<&'static str> {
     })
 }
 
-/// The C++ type of `ty` where it is an enum with a member, noting it
-/// where it is another module's (`types`). An enum of no member has no
-/// value to publish, and the library cannot name it (`types` writes its
-/// `hgl_enum` only where it has one).
-fn enumeration(emitter: &mut Emitter, ty: &Type) -> Option<String> {
-    let Type::Named {
-        module,
-        declaration,
-        ..
-    } = ty
-    else {
-        return None;
-    };
-    let declared = &emitter.program.modules[*module];
-    if declared.declarations[*declaration].kind != DeclarationKind::Enum {
-        return None;
+/// The C++ type of an enum, noting it where it is another module's
+/// (`types`). An empty enum still has a port type (TYPE-7).
+pub(super) fn enumeration(emitter: &mut Emitter, ty: &Type) -> Option<String> {
+    match ty {
+        Type::Named {
+            kind: NamedKind::Enum,
+            ..
+        } => emitter.named_type(ty),
+        _ => None,
     }
-    let Some(Detail::Enum(read)) = declared.details.get(*declaration) else {
-        return None;
-    };
-    if read.members.is_empty() {
-        return None;
-    }
-    emitter.named_type(ty)
 }
 
 impl Family for Activity {
