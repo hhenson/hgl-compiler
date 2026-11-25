@@ -5,7 +5,7 @@ use hgl_diagnostics::Location;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::Candidate;
-use super::candidates::alternative_outranks;
+use super::candidates::{Specific, alternative_specificity};
 use super::dependent_packs::dependent_slot;
 use super::fit::{open, whole};
 use super::inference::{infer, mentions, type_pack, unsaid};
@@ -230,90 +230,264 @@ impl CallbackEvidence {
         evidence
     }
 
-    /// Select among compatible alternatives within each positive
-    /// membership (GEN-3). A winner that gives no binding leaves the
-    /// input open for other type evidence.
-    pub(super) fn resolve(
+    /// Alternatives that satisfy the positive memberships for one argument.
+    pub(super) fn readings(
         &self,
         name: Option<&str>,
         position: Option<usize>,
         actual: &Type,
-        compatible: impl Fn(&Type) -> bool,
-    ) -> Result<Option<Type>, ()> {
-        let groups: Vec<Vec<_>> = self
+    ) -> Vec<MemberReading<'_>> {
+        let mut groups = self
             .memberships
             .iter()
             .filter(|membership| membership.applies(name, position))
-            .map(|membership| {
-                membership
-                    .patterns
-                    .iter()
-                    .filter_map(|pattern| {
-                        let bindings = membership.fit(pattern, actual)?;
-                        if selected_type(&bindings, membership.target)
-                            .is_some_and(|ty| !compatible(ty))
-                        {
-                            return None;
-                        }
-                        Some((membership, pattern, bindings))
-                    })
-                    .collect()
-            })
-            .collect();
-        let permitted = |ty: &Type| {
-            groups.iter().all(|group| {
-                group.iter().any(|(membership, _, bindings)| {
-                    selected_type(bindings, membership.target)
-                        .is_none_or(|other| same_type(ty, other) != Some(false))
-                })
-            })
-        };
-        let mut resolved = None;
-        let mut nonbinding = false;
-        for group in &groups {
-            let admitted: Vec<_> = group
+            .peekable();
+        if groups.peek().is_none() {
+            return vec![MemberReading::unchanged(actual)];
+        }
+        let mut readings = vec![MemberReading {
+            ty: None,
+            patterns: Vec::new(),
+        }];
+        for membership in groups {
+            let alternatives: Vec<_> = membership
+                .patterns
                 .iter()
-                .filter(|(membership, _, bindings)| {
-                    selected_type(bindings, membership.target).is_none_or(permitted)
+                .filter_map(|pattern| {
+                    Some(FittedAlternative {
+                        pattern,
+                        membership,
+                        bindings: membership.fit(pattern, actual)?,
+                    })
                 })
                 .collect();
-            let mut binding = None;
-            let mut open = false;
-            let mut conflicting = false;
-            for (membership, pattern, bindings) in &admitted {
-                if admitted.iter().any(|(other, candidate, found)| {
-                    alternative_outranks(
-                        (candidate, &other.generics, found),
-                        (pattern, &membership.generics, bindings),
-                    )
-                }) {
-                    continue;
+            let mut joined: Vec<MemberReading<'_>> = Vec::new();
+            for reading in readings {
+                for alternative in &alternatives {
+                    let ty = selected_type(&alternative.bindings, membership.target);
+                    if reading
+                        .ty
+                        .as_ref()
+                        .zip(ty)
+                        .is_some_and(|(one, two)| same_type(one, two) == Some(false))
+                    {
+                        continue;
+                    }
+                    let mut joined_reading = reading.clone();
+                    joined_reading.ty = joined_reading.ty.or_else(|| ty.cloned());
+                    joined_reading.patterns.push(alternative.clone());
+                    if joined.iter().any(|previous| {
+                        previous.same_binding(&joined_reading)
+                            && matches!(
+                                previous.specificity(&joined_reading),
+                                Specific::More | Specific::Same
+                            )
+                    }) {
+                        continue;
+                    }
+                    joined.retain(|previous| {
+                        !previous.same_binding(&joined_reading)
+                            || joined_reading.specificity(previous) != Specific::More
+                    });
+                    joined.push(joined_reading);
                 }
-                let Some(ty) = selected_type(bindings, membership.target) else {
-                    open = true;
-                    continue;
-                };
-                conflicting |=
-                    binding.is_some_and(|previous| same_type(previous, ty) != Some(true));
-                binding = Some(ty);
             }
-            // This requirement supplies no binding where one of its
-            // best alternatives is independent of the callback input.
-            if open {
-                nonbinding = true;
-            } else if conflicting {
-                return Err(());
-            } else if let Some(ty) = binding {
-                if resolved.is_some_and(|previous| same_type(previous, ty) != Some(true)) {
-                    return Err(());
-                }
-                resolved = Some(ty);
-            }
+            readings = joined;
         }
-        Ok(resolved
-            .or_else(|| (!nonbinding).then_some(actual))
-            .cloned())
+        // This only sets the search order. The final comparison also
+        // considers combinations that rank equally or are incomparable.
+        let precedence: Vec<_> = readings
+            .iter()
+            .map(|reading| {
+                readings
+                    .iter()
+                    .filter(|other| other.specificity(reading) == Specific::More)
+                    .count()
+            })
+            .collect();
+        let mut ordered: Vec<_> = precedence.into_iter().zip(readings).collect();
+        ordered.sort_by_key(|(preceding, _)| *preceding);
+        ordered.into_iter().map(|(_, reading)| reading).collect()
     }
+}
+
+#[derive(Clone)]
+struct FittedAlternative<'a> {
+    pattern: &'a Type,
+    membership: &'a Membership,
+    bindings: Vec<Option<Argument>>,
+}
+
+/// One argument reading supplies a type or leaves the callback's type open.
+#[derive(Clone)]
+pub(super) struct MemberReading<'a> {
+    /// The type from this reading, if it supplies one.
+    pub(super) ty: Option<Type>,
+    patterns: Vec<FittedAlternative<'a>>,
+}
+
+impl MemberReading<'_> {
+    /// Keep the ordinary supplied type where no membership describes it.
+    pub(super) fn unchanged(actual: &Type) -> Self {
+        Self {
+            ty: Some(actual.clone()),
+            patterns: Vec::new(),
+        }
+    }
+
+    /// Only a matching membership can constrain other choices in the trial.
+    pub(super) fn evidence_type(&self) -> Option<&Type> {
+        if self.patterns.is_empty() {
+            return None;
+        }
+        self.ty.as_ref()
+    }
+
+    fn same_binding(&self, other: &Self) -> bool {
+        match (&self.ty, &other.ty) {
+            (None, None) => true,
+            (Some(one), Some(two)) => same_type(one, two) == Some(true),
+            _ => false,
+        }
+    }
+
+    fn specificity(&self, other: &Self) -> Specific {
+        self.patterns
+            .iter()
+            .zip(&other.patterns)
+            .fold(Specific::Same, |order, (one, two)| {
+                order.and(alternative_specificity(
+                    (one.pattern, &one.membership.generics, &one.bindings),
+                    (two.pattern, &two.membership.generics, &two.bindings),
+                ))
+            })
+    }
+}
+
+/// Choose a unique best compatible reading of the complete call (GEN-3).
+/// A trial never commits generic bindings to a later trial.
+pub(super) fn select_readings(
+    choices: &[Vec<MemberReading<'_>>],
+    compatible: impl Fn(&[Option<&Type>]) -> bool,
+) -> Result<Vec<Option<Type>>, ()> {
+    let variable: Vec<_> = choices
+        .iter()
+        .enumerate()
+        .filter(|(_, options)| options.len() > 1)
+        .map(|(position, options)| (position, options.as_slice()))
+        .collect();
+    let mut evidence: Vec<_> = choices
+        .iter()
+        .map(|options| match options.as_slice() {
+            [only] => only.evidence_type(),
+            _ => None,
+        })
+        .collect();
+    if !compatible(&evidence) {
+        return Err(());
+    }
+    let mut best: Vec<Vec<usize>> = Vec::new();
+    let mut trial = Vec::new();
+    if search_readings(&variable, &compatible, &mut evidence, &mut trial, &mut best) {
+        return Err(());
+    }
+    let first = best.first().ok_or(())?;
+    if best
+        .iter()
+        .skip(1)
+        .any(|other| distinct_bindings(&variable, first, other))
+    {
+        return Err(());
+    }
+    let mut selected = choices
+        .iter()
+        .map(|options| options.first().map(|option| option.ty.clone()))
+        .collect::<Option<Vec<_>>>()
+        .ok_or(())?;
+    for ((position, options), &index) in variable.into_iter().zip(first) {
+        selected[position] = options[index].ty.clone();
+    }
+    Ok(selected)
+}
+
+fn distinct_bindings(
+    choices: &[(usize, &[MemberReading<'_>])],
+    one: &[usize],
+    two: &[usize],
+) -> bool {
+    choices
+        .iter()
+        .zip(one.iter().zip(two))
+        .any(|((_, options), (&one, &two))| !options[one].same_binding(&options[two]))
+}
+
+fn search_readings<'a>(
+    choices: &[(usize, &'a [MemberReading<'a>])],
+    compatible: &impl Fn(&[Option<&'a Type>]) -> bool,
+    evidence: &mut [Option<&'a Type>],
+    trial: &mut Vec<usize>,
+    best: &mut Vec<Vec<usize>>,
+) -> bool {
+    let compare = |one: &[usize], two: &[usize]| {
+        choices.iter().zip(one.iter().zip(two)).fold(
+            Specific::Same,
+            |order, ((_, options), (&one, &two))| {
+                order.and(options[one].specificity(&options[two]))
+            },
+        )
+    };
+    if trial.len() == choices.len() {
+        if best
+            .iter()
+            .any(|other| compare(other, trial) == Specific::More)
+        {
+            return false;
+        }
+        best.retain(|other| compare(trial, other) != Specific::More);
+        best.push(trial.clone());
+        // Two different readings that are already maximal for every
+        // argument remain ambiguous however the search finishes.
+        let maximal = best.iter().filter(|reading| {
+            choices.iter().zip(*reading).all(|((_, options), &chosen)| {
+                options
+                    .iter()
+                    .all(|option| option.specificity(&options[chosen]) != Specific::More)
+            })
+        });
+        let mut maximal = maximal;
+        return maximal
+            .next()
+            .is_some_and(|first| maximal.any(|other| distinct_bindings(choices, first, other)));
+    }
+    let (position, options) = choices[trial.len()];
+    for (index, option) in options.iter().enumerate() {
+        trial.push(index);
+        let dominated = best.iter().any(|other| {
+            compare(other, trial) == Specific::More
+                && choices
+                    .iter()
+                    .zip(other)
+                    .skip(trial.len())
+                    .all(|((_, options), &chosen)| {
+                        options.iter().all(|option| {
+                            matches!(
+                                options[chosen].specificity(option),
+                                Specific::Same | Specific::More
+                            )
+                        })
+                    })
+        });
+        evidence[position] = option.evidence_type();
+        if !dominated
+            && compatible(evidence)
+            && search_readings(choices, compatible, evidence, trial, best)
+        {
+            return true;
+        }
+        trial.pop();
+    }
+    evidence[position] = None;
+    false
 }
 
 fn selected_type(bindings: &[Option<Argument>], target: usize) -> Option<&Type> {

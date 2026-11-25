@@ -1,0 +1,44 @@
+module demo.callback_alternatives
+
+const fn take_second<B>(flag: bool, b: B) -> B => b
+
+operator first_or_whole<P, A>(arg: A) -> P
+impl const fn first_or_whole<P>(arg: list<P, 2>) -> P => arg[0]
+impl const fn first_or_whole<P>(arg: P) -> P => arg
+
+operator choose_arguments<R, C, ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> C
+impl const fn choose_arguments<R, ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> tuple<R, bool>
+    requires each arg in arg_keys(As) { As[arg] in {Ps[arg], list<Ps[arg], 2>} }
+{
+    return (f(...{for arg in arg_keys(Ps): first_or_whole<Ps[arg]>(args[arg])}), true)
+}
+
+fn mapped_members(flags: list<bool, 2>, xs: list<i64, 2>) -> list<i64, 2> =>
+    map(take_second, flags, xs)
+fn mapped_whole(flags: list<bool, 2>, xs: list<i64, 2>) -> list<list<i64, 2>, 2> =>
+    map(take_second, flags, xs)
+fn selected_member(flags: list<bool, 2>, xs: list<i64, 2>) -> tuple<i64, bool> =>
+    choose_arguments(take_second, flags, xs)
+fn selected_whole(flags: list<bool, 2>, xs: list<i64, 2>) -> tuple<list<i64, 2>, bool> =>
+    choose_arguments(take_second, flags, xs)
+
+test core_map_prefers_members {
+    assert eval mapped_members(flags: [[true, false]], xs: [[3, 4]]) == [[3, 4]]
+}
+
+test core_map_uses_whole_list_when_result_requires_it {
+    assert eval mapped_whole(flags: [[true, false]], xs: [[3, 4]]) ==
+        [[[3, 4], [3, 4]]]
+}
+
+test user_operator_prefers_members {
+    assert eval selected_member(flags: [[true, false]], xs: [[3, 4]]) == [(3, true)]
+}
+
+test user_operator_uses_whole_list_when_result_requires_it {
+    assert eval selected_whole(flags: [[true, false]], xs: [[3, 4]]) == [([3, 4], true)]
+}

@@ -1711,35 +1711,15 @@ impl<'a> Typer<'a> {
             .zip(bound)
             .enumerate()
             .filter(|(_, (given, _))| given.by_function);
-        // A caller can give a candidate's direct callback result its type.
-        // Where the result wraps a bare callback type, first infer that
-        // member from the dependent inputs, then check the enclosing place.
-        let wrapped_result = signature.result.as_ref().and_then(|result| {
-            functions.clone().find_map(|(_, (argument, slot))| {
-                argument.dependent_callback.as_ref()?;
-                let Type::Function(template) = &signature.parameters[slot.parameter()?].ty else {
-                    return None;
-                };
-                let callback = template.result.as_ref()?;
-                let index = bare_parameter(callback, &signature.generics)?;
-                (callback != result && mentions(result, &[signature.generics[index].at]))
-                    .then_some(index)
-            })
-        });
         // A function already known contributes its types in declaration
         // order, before any later argument can decide them (GEN-2).
         // An unresolved callback contributes only what the probe knows.
-        let CandidateBindings {
-            generics: mut found,
-            type_packs,
-            callback_result,
-            ..
-        } = candidate_bindings(
+        let (mut found, type_packs, _) = candidate_bindings(
             self,
             signature,
             (module, candidate),
             (given, bound),
-            (wanted, wrapped_result),
+            wanted,
             (&|earlier, later| self.widens(earlier, later), None),
             &mut |_| unreachable!("whole argument inference does not choose result reads"),
         )?;
@@ -1834,7 +1814,6 @@ impl<'a> Typer<'a> {
                         excluded: &excluded,
                         evidence: Some(&evidence),
                         result_shapes: &result_shapes,
-                        result_after_arguments: callback_result.as_ref(),
                     },
                 )
             } else {
@@ -3533,17 +3512,12 @@ fn instance<'s>(
             false,
         ));
     }
-    let CandidateBindings {
-        generics: mut found,
-        type_packs,
-        nullable_result_fallback,
-        ..
-    } = candidate_bindings(
+    let (mut found, type_packs, nullable_result_fallback) = candidate_bindings(
         typer,
         signature,
         (module, declaration),
         (given, bound),
-        (wanted, None),
+        wanted,
         (widens, converting),
         choose,
     )?;
@@ -3639,14 +3613,6 @@ fn enum_conversion_destination<'a>(one: &'a Type, two: &'a Type) -> Option<&'a T
     }
 }
 
-/// Bindings of a candidate trial, including a result considered after a bare callback's inputs.
-struct CandidateBindings {
-    generics: Vec<Option<Argument>>,
-    type_packs: Vec<hir::TypePackArgument>,
-    nullable_result_fallback: bool,
-    callback_result: Option<Type>,
-}
-
 /// Infer a candidate's generic parameters from the requested result and
 /// the arguments known so far. Unresolved parameters can still provide
 /// the known parts of a function template (FN-17, GEN-2, GEN-6).
@@ -3656,7 +3622,7 @@ fn candidate_bindings(
     signature: &Signature,
     (module, declaration): (usize, &Declaration),
     (given, bound): (&[Given], &[Place]),
-    (wanted, wrapped_result): (&Wanted, Option<usize>),
+    wanted: &Wanted,
     (widens, converting): (
         &dyn Fn(&Type, &Type) -> bool,
         Option<(
@@ -3667,7 +3633,7 @@ fn candidate_bindings(
         )>,
     ),
     choose: &mut dyn FnMut([Option<ResultBinding>; 3]) -> ResultBinding,
-) -> Option<CandidateBindings> {
+) -> Option<(Vec<Option<Argument>>, Vec<hir::TypePackArgument>, bool)> {
     let generics = &signature.generics;
     let mut found: Vec<Option<Argument>> = vec![None; generics.len()];
     if let Some(callback) = &wanted.callback {
@@ -3724,7 +3690,6 @@ fn candidate_bindings(
     // inputs". The `V` of core's `get<V>(store: GlobalState, const key:
     // str) -> V` is the `i64?` that `get<i64?>(global_state, key)`
     // writes (core's CAP-6).
-    let supplied = wrapped_result.map(|index| (index, found[index].clone()));
     let result_fallback =
         signature
             .result
@@ -3733,12 +3698,6 @@ fn candidate_bindings(
             .and_then(|(result, place)| {
                 infer_from_place(result, place, wanted.written, generics, &mut found)
             });
-    let callback_result = supplied.and_then(|(index, value)| {
-        let Argument::Type(ty) = std::mem::replace(&mut found[index], value)? else {
-            return None;
-        };
-        Some(ty)
-    });
     // The generic parameters an argument decided: what the call writes,
     // or its place expects, is not widened (GEN-2).
     let mut by_argument = vec![false; generics.len()];
@@ -3964,12 +3923,11 @@ fn candidate_bindings(
     if !solved_result {
         bind(&mut found);
     }
-    Some(CandidateBindings {
-        generics: found,
+    Some((
+        found,
         type_packs,
-        nullable_result_fallback: provisional_result.is_some() && !solved_result,
-        callback_result,
-    })
+        provisional_result.is_some() && !solved_result,
+    ))
 }
 
 /// ERR-12 and ERR-15: a result of a nullable value can supply the
@@ -4021,7 +3979,7 @@ fn infer_payload<'t>(
 /// How specific one type of a candidate's signature is beside another's
 /// in the same place.
 #[derive(Clone, Copy, PartialEq)]
-enum Specific {
+pub(super) enum Specific {
     /// As specific: the same shape, variables where the other has them.
     Same,
     /// More: concrete, or structured, where the other has a variable.
@@ -4035,7 +3993,7 @@ enum Specific {
 
 impl Specific {
     /// The two together: what holds of a whole whose parts are these.
-    fn and(self, other: Specific) -> Specific {
+    pub(super) fn and(self, other: Specific) -> Specific {
         match (self, other) {
             (Specific::Same, other) | (other, Specific::Same) => other,
             (Specific::More, Specific::More) => Specific::More,
@@ -4378,10 +4336,10 @@ fn ranking_type(
 }
 
 /// GEN-3 compares alternatives with GEN-12's structural ordering.
-pub(super) fn alternative_outranks(
+pub(super) fn alternative_specificity(
     (better, better_generics, better_found): (&Type, &[GenericParameter], &[Option<Argument>]),
     (worse, worse_generics, worse_found): (&Type, &[GenericParameter], &[Option<Argument>]),
-) -> bool {
+) -> Specific {
     let length = |found: &[Option<Argument>], index| match found.get(index)? {
         Some(Argument::Type(Type::Tuple(types))) => Some(types.len()),
         _ => None,
@@ -4424,7 +4382,7 @@ pub(super) fn alternative_outranks(
             generics: worse_generics,
             pack_length: &worse_length,
         },
-    ) == Specific::More
+    )
 }
 
 /// True when `better` outranks `worse`, each a candidate a call admits

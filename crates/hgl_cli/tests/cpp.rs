@@ -3121,8 +3121,21 @@ fn function_parameters_run_on_the_sdk() {
         "demo.bare_callback_templates.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.bare_callback_templates.hgl"),
     );
+    let alternatives = write(
+        &root,
+        "demo.callback_alternatives.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.callback_alternatives.hgl"),
+    );
     let output = hgl_in(
-        &["test", &file, &library, &templates, "--target", "cpp"],
+        &[
+            "test",
+            &file,
+            &library,
+            &templates,
+            &alternatives,
+            "--target",
+            "cpp",
+        ],
         &[],
         &[],
     );
@@ -3134,7 +3147,7 @@ fn function_parameters_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 14 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 18 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

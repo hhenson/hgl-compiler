@@ -808,7 +808,7 @@ transpiler: partial
 
 analyser: partial
 
-- A bare operator or generic function takes a list or dictionary member's type for a split input and the argument's own type for a whole input. The candidate's declared membership supplies that evidence (GEN-3, FN-17).
+- A bare operator or generic function prefers the collection member when its type fits the call. A known type can require a less specific whole-collection reading. The candidate's declared membership supplies both possibilities, and the call still splits an input (GEN-3, FN-17, MAP-3).
 
 transpiler: partial
 

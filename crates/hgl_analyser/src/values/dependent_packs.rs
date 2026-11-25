@@ -509,7 +509,6 @@ impl Typer<'_> {
                     excluded: &excluded,
                     evidence: evidence.as_ref().filter(|_| for_this.is_some()),
                     result_shapes: &result_shapes,
-                    result_after_arguments: None,
                 },
             );
             let mut reflected = reflect(&template, &callback);

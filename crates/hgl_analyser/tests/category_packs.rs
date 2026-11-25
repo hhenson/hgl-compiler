@@ -73,32 +73,65 @@ fn keyed(values: dict<str, i64>) -> dict<str, i64> => map(identity, values)
 
 #[test]
 fn bare_callback_checks_every_input_of_a_shared_generic() {
-    // GEN-3 and FN-17: the second list gives i64 to the bare function.
-    // Writing the callback type explicitly can instead pass it whole.
+    // GEN-3 and FN-17: both arguments must agree on T. The second
+    // may stay whole when its member type conflicts with the first.
     let source = r#"module m
 const fn first<T>(x: T, y: T) -> T => x
 fn mixed(x: list<list<i64, 2>, 2>, y: list<i64, 2>) -> list<list<i64, 2>, 2> =>
 "#;
-    rejects(
-        &format!("{source}    map(first, x, y)"),
-        "type/generic.unresolved",
-    );
+    accepts(&format!("{source}    map(first, x, y)"));
     accepts(&format!("{source}    map(first<list<i64, 2>>, x, y)"));
 }
 
 #[test]
-fn bare_map_keeps_member_inference_under_a_nested_result_place() {
-    // MAP-2 and FN-17. The place checks the map's result after bare
-    // member inference. A written callback type can take the list whole.
-    let source = r#"module m
-const fn second<T>(flag: bool, value: T) -> T => value
-fn mapped(flags: list<bool, 2>, x: list<i64, 2>) -> list<list<i64, 2>, 2> =>
-"#;
+fn bare_callback_uses_compatible_sibling_choices_in_either_declaration_order() {
+    // GEN-3 and FN-17: the receiver's result does not determine T.
+    // The sibling types resolve it consistently across the two inputs.
+    for alternatives in [
+        "Inputs[k], list<Inputs[k], 2>",
+        "list<Inputs[k], 2>, Inputs[k]",
+    ] {
+        let declarations = format!(
+            r#"module m
+const fn first<T>(x: T, y: T) -> T => x
+fn pass<R, ...Inputs, ...Actual>(f: fn(...{{Inputs}}) -> R, args: ...{{Actual for f}}) -> i64
+    requires each k in arg_keys(Actual) {{ Actual[k] in {{{alternatives}}} }} => 3
+"#
+        );
+        accepts(&format!(
+            "{declarations}fn mixed(x: list<list<i64, 2>, 2>, y: list<i64, 2>) -> i64 => pass(first, x, y)"
+        ));
+        rejects(
+            &format!(
+                "{declarations}fn mixed(x: list<list<i64, 2>, 2>, y: list<str, 2>) -> i64 => pass(first, x, y)"
+            ),
+            "type/generic.unresolved",
+        );
+        rejects(
+            &format!(
+                "{declarations}fn mixed(x: list<list<i64, 2>, 2>, y: list<str, 2>) -> i64 => pass(first, y, x)"
+            ),
+            "type/generic.unresolved",
+        );
+    }
+}
+
+#[test]
+fn bare_callback_rejects_incomparable_whole_call_choices() {
+    // GEN-3 and GEN-12: x prefers the list's element, but y admits
+    // two incomparable shapes that make different shared bindings fit.
     rejects(
-        &format!("{source}    map(second, flags, x)"),
-        "operator/operator.no_candidate",
+        r#"module m
+const x_key: str = "x"
+const y_key: str = "y"
+const fn first<T>(x: T, y: T) -> T => x
+fn call<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires As[x_key] in {Ps[x_key], list<Ps[x_key], 2>}
+        && As[y_key] in {tuple<i64, Ps[y_key]>, tuple<Ps[y_key], list<i64, 2>>} => 3
+fn work(x: list<i64, 2>, y: tuple<i64, list<i64, 2>>) -> i64 => call(first, x, y)
+"#,
+        "type/generic.unresolved",
     );
-    accepts(&format!("{source}    map(second<list<i64, 2>>, flags, x)"));
 }
 
 #[test]

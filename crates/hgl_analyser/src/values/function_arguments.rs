@@ -5,7 +5,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
 use super::arguments::{Slot, Takes};
-use super::callback_evidence::CallbackEvidence;
+use super::callback_evidence::{CallbackEvidence, MemberReading, select_readings};
 use super::candidates::{
     CallbackOption, CallbackOptionSource, CallbackRequest, Given, Key, Wanted, in_instance,
 };
@@ -335,7 +335,6 @@ impl<'a> Typer<'a> {
             (
                 constrained.as_ref().unwrap_or(template),
                 given.as_ref().map(|(given, _)| given.as_slice()),
-                inputs.result_after_arguments,
             ),
         )?;
         let map = signature
@@ -699,7 +698,7 @@ impl<'a> Typer<'a> {
             node,
             name,
             (&module.declarations[operator.declaration], public),
-            (template, Some(given), None),
+            (template, Some(given)),
         )?;
         if generics
             .iter()
@@ -735,7 +734,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         name: &SyntaxToken,
         (declared, signature): (&Declaration, &Signature),
-        (template, given, result_after_arguments): (&FunctionType, Option<&[Given]>, Option<&Type>),
+        (template, given): (&FunctionType, Option<&[Given]>),
     ) -> Option<ReferenceArguments> {
         let written = self.reference_written(node, name);
         let ExplicitGenerics {
@@ -756,11 +755,6 @@ impl<'a> Typer<'a> {
                     &mut found,
                 );
             }
-        }
-        // A candidate's enclosing result may fill a type that neither the
-        // callback template nor its supplied inputs determined (FN-17).
-        if let (Some(written), Some(result)) = (&signature.result, result_after_arguments) {
-            infer(written, result, &signature.generics, &mut found);
         }
         // GEN-2 and GEN-8: a generic value parameter nothing says
         // anything of takes the default declared by the callback.
@@ -1466,8 +1460,6 @@ pub(super) struct CallbackInputs<'a> {
     pub(super) evidence: Option<&'a CallbackEvidence>,
     /// Known parts of the callback result required by other static arguments.
     pub(super) result_shapes: &'a [Type],
-    /// A place binding for a nested result, available after member inference (FN-17).
-    pub(super) result_after_arguments: Option<&'a Type>,
 }
 
 impl CallbackInputs<'_> {
@@ -1520,16 +1512,18 @@ impl ReferenceShape {
     /// Trial substitution preserves whatever is already known. A tuple
     /// pack can take the sequence this type gives it, as in the final
     /// reference inference. Keep this trial separate from that inference.
-    fn fits<'r>(
+    fn fits<'i, 'r>(
         &self,
         typer: &Typer<'_>,
         signature: &Signature,
-        (input, actual): (&Type, &Type),
+        mut arguments: impl Iterator<Item = (&'i Type, &'i Type)> + Clone,
         result_shapes: impl Iterator<Item = &'r Type>,
     ) -> bool {
         let mut result_shapes = result_shapes.peekable();
         let mut found = self.found.clone();
-        infer(input, actual, &signature.generics, &mut found);
+        for (input, actual) in arguments.clone() {
+            infer(input, actual, &signature.generics, &mut found);
+        }
         let packs = tuple_pack_bindings(&signature.generics, &mut found, &typer.signature.generics);
         let packs = PackTypes::new(&signature.generics, &packs);
         let map: Vec<_> = signature
@@ -1541,15 +1535,16 @@ impl ReferenceShape {
         let compatible = |expected: &Type, actual: &Type| {
             same_type(expected, actual) != Some(false) || typer.admits(expected, actual)
         };
-        packs
-            .project(input, &map)
-            .is_ok_and(|expected| compatible(&expected, actual))
-            && signature.result.as_ref().is_none_or(|result| {
-                result_shapes.peek().is_none()
-                    || packs
-                        .project(result, &map)
-                        .is_ok_and(|result| result_shapes.all(|shape| compatible(shape, &result)))
-            })
+        arguments.all(|(input, actual)| {
+            packs
+                .project(input, &map)
+                .is_ok_and(|expected| compatible(&expected, actual))
+        }) && signature.result.as_ref().is_none_or(|result| {
+            result_shapes.peek().is_none()
+                || packs
+                    .project(result, &map)
+                    .is_ok_and(|result| result_shapes.all(|shape| compatible(shape, &result)))
+        })
     }
 }
 
@@ -1575,8 +1570,7 @@ fn reflected_arguments(
         .enumerate()
         .filter(|(_, parameter)| !inputs.excluded.contains(&parameter.name.as_str()));
     let mut pack_position = fixed;
-    let mut projected = false;
-    let mut given: Vec<_> = inputs
+    let supplied: Vec<_> = inputs
         .supplied
         .unwrap_or_default()
         .iter()
@@ -1590,80 +1584,105 @@ fn reflected_arguments(
                 pack_position += 1;
                 Key::Position(position)
             };
-            let mut type_evidence = true;
-            let ty = if let Some(evidence) = evidence {
-                let slot = key.public_parameter(public);
-                let name = key
-                    .name()
-                    .or_else(|| slot.map(|slot| public.parameters[slot].name.as_str()));
-                let position = match key {
-                    Key::Position(position) => position.checked_sub(fixed),
-                    _ => None,
-                };
-                let settled = slot.is_some_and(|slot| {
-                    let before = public.parameters[..slot]
-                        .iter()
-                        .filter(|parameter| !parameter.configuration)
-                        .count();
-                    template
-                        .ordinary_parameters()
-                        .nth(before)
-                        .is_some_and(|parameter| whole(parameter.ty()))
-                });
-                let parameter =
-                    callback_parameter(public, &key).map(|slot| &public.parameters[slot].ty);
-                let needs_evidence = declared_shape.is_none_or(|shape| {
-                    parameter.is_some_and(|ty| mentions(ty, &shape.unresolved))
-                });
-                // FN-17: a bare operator already declares a whole
-                // input when its public parameter has this exact type.
-                let whole_operator_input = declared_shape.is_none()
-                    && slot.is_some_and(|slot| {
-                        same_type(&public.parameters[slot].ty, &value.ty) == Some(true)
-                    });
-                if settled || !needs_evidence || whole_operator_input {
-                    value.ty.clone()
-                } else {
-                    evidence
-                        .resolve(name, position, &value.ty, |resolved| {
-                            shape.zip(parameter).is_none_or(|(shape, parameter)| {
-                                shape.fits(
-                                    typer,
-                                    public,
-                                    (parameter, resolved),
-                                    inputs
-                                        .result_shapes
-                                        .iter()
-                                        .chain(declared_result.clone())
-                                        .chain(evidence.result_shapes()),
-                                )
-                            })
-                        })
-                        .map_err(|()| {
-                            typer.diagnostics.emit(error(
-                            Category::Type,
-                            codes::GENERIC_UNRESOLVED,
-                            value.at,
-                            "this argument does not determine a unique type for the bare function"
-                                .to_string(),
-                            "GEN-3",
-                        ));
-                        })?
-                        .unwrap_or_else(|| {
-                            type_evidence = false;
-                            value.ty.clone()
-                        })
-                }
-            } else {
-                value.ty.clone()
+            (key, *value)
+        })
+        .collect();
+    let parameters: Vec<_> = supplied
+        .iter()
+        .map(|(key, _)| callback_parameter(public, key).map(|slot| &public.parameters[slot].ty))
+        .collect();
+    let result_shapes = inputs
+        .result_shapes
+        .iter()
+        .chain(declared_result)
+        .chain(evidence.map_or(&[][..], CallbackEvidence::result_shapes));
+    let choices: Vec<_> = supplied
+        .iter()
+        .zip(&parameters)
+        .map(|((key, value), parameter)| {
+            let unchanged = || vec![MemberReading::unchanged(&value.ty)];
+            let Some(evidence) = evidence else {
+                return unchanged();
             };
+            let slot = key.public_parameter(public);
+            let name = key
+                .name()
+                .or_else(|| slot.map(|slot| public.parameters[slot].name.as_str()));
+            let position = match key {
+                Key::Position(position) => position.checked_sub(fixed),
+                _ => None,
+            };
+            let settled = slot.is_some_and(|slot| {
+                let before = public.parameters[..slot]
+                    .iter()
+                    .filter(|parameter| !parameter.configuration)
+                    .count();
+                template
+                    .ordinary_parameters()
+                    .nth(before)
+                    .is_some_and(|parameter| whole(parameter.ty()))
+            });
+            let needs_evidence = declared_shape
+                .is_none_or(|shape| parameter.is_some_and(|ty| mentions(ty, &shape.unresolved)));
+            // FN-17: a bare operator already declares a whole input
+            // when its public parameter has the actual argument type.
+            let whole_operator_input = declared_shape.is_none()
+                && slot.is_some_and(|slot| {
+                    same_type(&public.parameters[slot].ty, &value.ty) == Some(true)
+                });
+            if settled || !needs_evidence || whole_operator_input {
+                return unchanged();
+            }
+            let mut readings = evidence.readings(name, position, &value.ty);
+            if let Some((shape, parameter)) = shape.zip(*parameter) {
+                readings.retain(|reading| {
+                    reading.evidence_type().is_none_or(|actual| {
+                        shape.fits(
+                            typer,
+                            public,
+                            std::iter::once((parameter, actual)),
+                            result_shapes.clone(),
+                        )
+                    })
+                });
+            }
+            if readings.is_empty() {
+                return unchanged();
+            }
+            readings
+        })
+        .collect();
+    let readings = select_readings(&choices, |trial| {
+        let arguments = parameters
+            .iter()
+            .zip(trial)
+            .filter_map(|(parameter, actual)| Some(((*parameter)?, (*actual)?)));
+        arguments.clone().next().is_none()
+            || shape.is_none_or(|shape| shape.fits(typer, public, arguments, result_shapes.clone()))
+    })
+    .map_err(|()| {
+        typer.diagnostics.emit(error(
+            Category::Type,
+            codes::GENERIC_UNRESOLVED,
+            typer.at(node),
+            "these arguments do not determine a unique type for the bare function".to_string(),
+            "GEN-3",
+        ));
+    })?;
+    let mut projected = false;
+    let mut given: Vec<_> = supplied
+        .into_iter()
+        .zip(readings)
+        .map(|((key, value), ty)| {
+            let type_evidence = ty.is_some();
+            let ty = ty.unwrap_or_else(|| value.ty.clone());
             projected |= !type_evidence || ty != value.ty;
             let mut argument = callback_operand(0, node, value.at, ty);
             argument.key = key;
             argument.type_evidence = type_evidence;
-            Ok(argument)
+            argument
         })
-        .collect::<Result<_, _>>()?;
+        .collect();
     // Fixed inputs specify their own types even where the enclosing
     // declaration supplies them or the callback has a default (FN-17).
     for (index, input) in template.ordinary_parameters().enumerate() {
