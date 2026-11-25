@@ -28,10 +28,13 @@ parser: done
 
 - Contract body forms: none, `{}`, hook markers
 
-analyser: partial
+analyser: done
 
 - `start` and `stop` need `when` and are unique; a const implementation has no hook
-- Left: graph or node by body, where a later pass reads it
+- Native temporal function and candidate implementations retain graph or node phase
+  in `Module::phases`, selected by their contract's `when;` marker. Declarations
+  without a body and native const implementations have no temporal phase.
+- Native contracts keep their own hook/inject validation rather than HGL node-body checks.
 
 ## NATIVE-4
 
