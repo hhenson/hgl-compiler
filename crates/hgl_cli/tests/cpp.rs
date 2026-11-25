@@ -4060,8 +4060,21 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         "src/demo.keyed_cancellation.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.keyed_cancellation.hgl"),
     );
+    let last_write = write(
+        &root,
+        "src/demo.keyed_last_write.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.keyed_last_write.hgl"),
+    );
     let output = hgl_in(
-        &["test", &file, &constants, &cancellations, "--target", "cpp"],
+        &[
+            "test",
+            &file,
+            &constants,
+            &cancellations,
+            &last_write,
+            "--target",
+            "cpp",
+        ],
         &[],
         &[],
     );
@@ -4073,7 +4086,7 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 17 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 21 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -5727,6 +5740,29 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
         stdout.ends_with("executable cases: 32 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// FN-9, CRUN-7: a selected child uses the run store before its user node
+/// starts and again when the branch is re-entered.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn selected_children_use_the_run_store_at_startup_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("selected_child_store");
+    let file = write(
+        &root,
+        "demo.store.child_start.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.store.child_start.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

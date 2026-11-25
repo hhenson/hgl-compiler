@@ -4361,9 +4361,16 @@ pub(super) fn category_holds(program: &Program, ty: &Type, category: SyntaxKind)
     if let Some(known) = known_category(ty, category) {
         return Some(known);
     }
-    let at = match ty {
-        Type::Parameter { at, .. } => *at,
-        Type::PackMember { pack, key, .. } if guaranteed_member(program, *pack, key) => *pack,
+    let (at, subject) = match ty {
+        Type::Parameter { at, .. } => (*at, CategorySubject::Parameter(*at)),
+        Type::PackMember { pack, key, .. } => (
+            *pack,
+            CategorySubject::Member {
+                pack: *pack,
+                key,
+                guaranteed: guaranteed_member(program, *pack, key),
+            },
+        ),
         _ => return None,
     };
     for (index, module) in program.modules.iter().enumerate() {
@@ -4373,7 +4380,7 @@ pub(super) fn category_holds(program: &Program, ty: &Type, category: SyntaxKind)
             };
             if parameters.iter().any(|generic| generic.at == at) {
                 let file = module.declarations[position].at.file;
-                return category_facts(&condition, module, file, at, true)
+                return category_facts(&condition, module, file, subject, true)
                     .into_iter()
                     .find_map(|(stated, positive)| {
                         if stated == category {
@@ -4388,6 +4395,17 @@ pub(super) fn category_holds(program: &Program, ty: &Type, category: SyntaxKind)
         }
     }
     None
+}
+
+/// The symbolic type whose declaration may state a category (GEN-3, GEN-17).
+#[derive(Clone, Copy)]
+enum CategorySubject<'a> {
+    Parameter(Location),
+    Member {
+        pack: Location,
+        key: &'a Constant,
+        guaranteed: bool,
+    },
 }
 
 /// GEN-7 and GEN-10: only an existing member inherits universal facts.
@@ -4419,23 +4437,23 @@ fn category_facts(
     node: &SyntaxNode,
     module: &crate::Module,
     file: FileId,
-    at: Location,
+    subject: CategorySubject<'_>,
     positive: bool,
 ) -> Vec<(SyntaxKind, bool)> {
     match node.kind() {
         SyntaxKind::ConstraintParen => node.children().next().map_or_else(Vec::new, |inner| {
-            category_facts(&inner, module, file, at, positive)
+            category_facts(&inner, module, file, subject, positive)
         }),
         SyntaxKind::ConstraintNot => node.children().next().map_or_else(Vec::new, |inner| {
-            category_facts(&inner, module, file, at, !positive)
+            category_facts(&inner, module, file, subject, !positive)
         }),
         SyntaxKind::ConstraintBinary => {
             let mut children = node.children();
             let (Some(left), Some(right)) = (children.next(), children.next()) else {
                 return Vec::new();
             };
-            let mut left = category_facts(&left, module, file, at, positive);
-            let right = category_facts(&right, module, file, at, positive);
+            let mut left = category_facts(&left, module, file, subject, positive);
+            let right = category_facts(&right, module, file, subject, positive);
             if has_token(node, SyntaxKind::AmpAmp) == positive {
                 left.extend(right);
             } else {
@@ -4444,6 +4462,17 @@ fn category_facts(
             left
         }
         SyntaxKind::ConstraintEach if positive => {
+            let at = match subject {
+                CategorySubject::Parameter(at)
+                | CategorySubject::Member {
+                    pack: at,
+                    guaranteed: true,
+                    ..
+                } => at,
+                CategorySubject::Member {
+                    guaranteed: false, ..
+                } => return Vec::new(),
+            };
             let mut children = node.children();
             let (Some(view), Some(body)) = (children.next(), children.next()) else {
                 return Vec::new();
@@ -4462,7 +4491,13 @@ fn category_facts(
             else {
                 return Vec::new();
             };
-            category_facts(&body, module, file, Location::new(file, bound.span()), true)
+            category_facts(
+                &body,
+                module,
+                file,
+                CategorySubject::Parameter(Location::new(file, bound.span())),
+                true,
+            )
         }
         SyntaxKind::ConstraintRelation if tokens(node).any(|token| token.text() == "in") => {
             let mut children = node.children();
@@ -4472,11 +4507,23 @@ fn category_facts(
             if right.kind() != SyntaxKind::ConstraintCategory {
                 return Vec::new();
             }
-            let Some(name) = name_token(&left) else {
-                return Vec::new();
+            let matches = match subject {
+                CategorySubject::Parameter(at) => name_token(&left).is_some_and(|name| {
+                    module.uses.iter().any(|used| {
+                        used.at == Location::new(file, name.span())
+                            && matches!(&used.binding, Binding::Local { at: declared, .. } if *declared == at)
+                    })
+                }),
+                // GEN-17: a category asserted for one reflected key is
+                // evidence only for that member.
+                CategorySubject::Member { pack, key, .. } => module.written.iter().any(|written| {
+                    written.at.file == file
+                        && written.at.span.start == left.span().start
+                        && matches!(&written.ty, Type::PackMember { pack: written_pack, key: written_key, .. }
+                            if *written_pack == pack && written_key.value.same(&key.value) == Some(true))
+                }),
             };
-            if !module.uses.iter().any(|used| used.at == Location::new(file, name.span())
-                && matches!(&used.binding, Binding::Local { at: declared, .. } if *declared == at)) {
+            if !matches {
                 return Vec::new();
             }
             vec![(

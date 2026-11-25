@@ -14,7 +14,7 @@
 #pragma once
 
 #include <hglrt/failure.h>
-#include <hglrt/traces.h>
+#include <hglrt/value_text.h>
 
 #include <hgraph/types/generated.h>
 
@@ -51,7 +51,7 @@ namespace detail {
 /// has: the catalogue has no code for it.
 template <class K>
 [[noreturn]] void unmatched(const K& key) {
-    fail_uncoded("no case of the `switch` has the value " + testing::text_of(key));
+    fail_uncoded("no case of the `switch` has the value " + hglrt::text_of(key));
 }
 } // namespace detail
 

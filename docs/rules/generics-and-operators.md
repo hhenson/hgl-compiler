@@ -48,6 +48,7 @@ parser: done
 analyser: partial
 
 - Category membership tests the nominal kind, including generic structs, and excludes nullable types, other composites, native types and ordinary constants. Stated category facts are preserved through generic calls; negation and disjunction do not invent positive category evidence. The complete `examples.categories` illustration executes all three selections, with the separate `i64` call rejected.
+- A category stated for a reflected pack member applies to that pack and key (GEN-7, GEN-17).
 - A positive conjunctive `any` equality binds one unresolved generic from the first matching pack entry, with tentative bindings discarded on a failed trial and conjuncts revisited to a fixed point. Negation and disjunction only test supplied bindings.
 - Bare bool generic terms and their negations are checked at calls and candidates; positive terms also state a bool bound in a generic body.
 - Inequality constraints parse and test resolved operands, including named module constants, without binding.
