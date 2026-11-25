@@ -139,7 +139,11 @@ pub(crate) fn walk_body_calls(body: &hir::Body, visit: &mut dyn FnMut(&hir::Expr
     });
 }
 /// Types the bodies of the program, filling in [`Module::bodies`].
-pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
+pub(crate) fn check(
+    program: &mut Program,
+    diagnostics: &mut Diagnostics,
+) -> crate::store_keys::KeyUses {
+    program.instance_sites = program.modules.iter().map(InstanceSites::new).collect();
     // The signature of what has none: a test, a run statement, a
     // constant.
     let empty = Signature {
@@ -374,14 +378,33 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
     operators::inherit_configuration_defaults(program);
-    program.const_demands = crate::const_inputs::demands(program);
+    (
+        program.const_demands,
+        program.runtime_store_keys,
+        program.generic_store_bodies,
+        program.changing_store_slots,
+    ) = crate::const_inputs::demands(program);
     let source = requirements::independent_source_bodies(program);
     let mut instance_calls = operator_defaults::check(program, &source, diagnostics);
-    forwarded_packs::check_instances(program, &mut instance_calls, &source, diagnostics);
-    requirements::instances_hold(program, instance_calls, &source, diagnostics);
+    let mut store_keys = crate::store_keys::KeyUses::default();
+    forwarded_packs::check_instances(
+        program,
+        &mut instance_calls,
+        &source,
+        &mut store_keys,
+        diagnostics,
+    );
+    requirements::instances_hold(
+        program,
+        instance_calls,
+        &source,
+        &mut store_keys,
+        diagnostics,
+    );
     // TYPE-10, TYPE-11: the sizes each struct application written in a
     // type gives the struct's lists and windows.
     sizes::applied_sizes(program, diagnostics);
+    store_keys
 }
 
 /// What the earlier passes found of `module`, by where each is written:
@@ -413,6 +436,45 @@ fn tables(
     (bindings, written, calls)
 }
 
+/// Positions of the lexical records an instance can revisit (GEN-7).
+/// A reread uses the declaration's range instead of rebuilding the
+/// enclosing module's lookup tables for every concrete configuration.
+#[derive(Debug, Clone)]
+pub(crate) struct InstanceSites {
+    bindings: Vec<Site>,
+    written: Vec<Site>,
+    calls: Vec<Site>,
+}
+
+type Site = ((FileId, u32), usize);
+
+impl InstanceSites {
+    fn new(module: &Module) -> Self {
+        Self {
+            bindings: index_sites(module.uses.iter().map(|used| used.at)),
+            written: index_sites(module.written.iter().map(|written| written.at)),
+            calls: index_sites(module.call_arguments.iter().map(|call| call.at)),
+        }
+    }
+}
+
+fn index_sites(locations: impl Iterator<Item = Location>) -> Vec<Site> {
+    let mut sites: Vec<_> = locations
+        .enumerate()
+        .map(|(index, at)| ((at.file, at.span.start), index))
+        .collect();
+    sites.sort_unstable();
+    sites
+}
+
+fn sites_in<'a>(sites: &'a [Site], declaration: &Declaration) -> &'a [Site] {
+    let file = declaration.at.file;
+    let span = declaration.syntax.span();
+    let start = sites.partition_point(|(position, _)| *position < (file, span.start));
+    let end = sites.partition_point(|(position, _)| *position < (file, span.end));
+    &sites[start..end]
+}
+
 /// Check the lexical body with the concrete types of an instance
 /// (GEN-7). Endpoint admission and forwarded calls use the same local
 /// flow and written annotations as ordinary source checking.
@@ -426,10 +488,17 @@ pub(crate) fn reread_instance_body(
 ) -> Option<hir::Body> {
     let owner = &program.modules[module];
     let declared = &owner.declarations[declaration];
-    let (bindings, mut written, mut calls) = tables(owner);
-    let span = declared.syntax.span();
-    let in_body =
-        |(file, start)| file == declared.at.file && (span.start..span.end).contains(&start);
+    let fallback;
+    let sites = if let Some(sites) = program.instance_sites.get(module) {
+        sites
+    } else {
+        fallback = InstanceSites::new(owner);
+        &fallback
+    };
+    let bindings = sites_in(&sites.bindings, declared)
+        .iter()
+        .map(|&(at, index)| (at, &owner.uses[index].binding))
+        .collect();
     let absent: Vec<_> = map
         .iter()
         .filter_map(|(at, argument)| matches!(argument, Argument::NoResult).then_some(*at))
@@ -442,25 +511,21 @@ pub(crate) fn reread_instance_body(
             )
     };
     let mut absent_type_uses = HashMap::new();
-    let projected: Vec<_> = owner
-        .written
+    let projected: Vec<_> = sites_in(&sites.written, declared)
         .iter()
-        .filter_map(|written| {
-            let key = (written.at.file, written.at.span.start);
-            if !in_body(key) {
-                return None;
-            }
+        .map(|&(key, index)| {
+            let written = &owner.written[index];
             if needs_absent_type(&written.ty) {
                 absent_type_uses.insert(key, written.at);
             }
-            Some((key, project(&written.ty)))
+            (key, project(&written.ty))
         })
         .collect();
-    written.extend(projected.iter().map(|(at, ty)| (*at, ty)));
-    let projected_calls: Vec<_> = calls
+    let written = projected.iter().map(|(at, ty)| (*at, ty)).collect();
+    let projected_calls: Vec<_> = sites_in(&sites.calls, declared)
         .iter()
-        .filter(|&(&at, _)| in_body(at))
-        .map(|(&at_key, call)| {
+        .map(|&(at_key, index)| {
+            let call = &owner.call_arguments[index];
             let arguments = call
                 .arguments
                 .iter()
@@ -493,7 +558,10 @@ pub(crate) fn reread_instance_body(
             )
         })
         .collect();
-    calls.extend(projected_calls.iter().map(|(at, call)| (*at, call)));
+    let calls = projected_calls
+        .iter()
+        .map(|(at, call)| (*at, call))
+        .collect();
     let selecting = RefCell::new(Vec::new());
     let reading = Signature {
         generics: match &owner.details[declaration] {

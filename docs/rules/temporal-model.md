@@ -126,7 +126,16 @@ transpiler: partial
   The first read of retained data after each write copies the samples in time
   and space proportional to their count. A later read reuses that copy until
   another write or withdrawal.
-- Left: Reports unsupported reads and writes of `out` and its children.
+- A multiply written set or dictionary result stages delta assignments and a
+  final return. Cancellation leaves an already valid result silent, including
+  when the change cancels inside a nested keyed entry. The staging records only
+  keys named by the writes. Output validity, modification and its clock are
+  visible to the handlers as they write. Single-write nodes keep direct publication.
+- Left: An evaluation that reads `all_valid(out)` or `delta_value(out)`
+  still publishes as it writes and can tick with an empty delta (#878).
+  A whole assignment to `out`, invalidation, other output observations or
+  tuple-valued dictionary entries keep their existing keyed publication path.
+  Unsupported reads and writes of `out` and its children are reported.
   Other publication forms are under TYPE-9 and window observation limits are under END-9.
 
 ## TIME-8
@@ -135,7 +144,9 @@ analyser: partial
 
 - `inject` names one of the listed capabilities and binds each but `out` to a local of the type core declares for it; `alarm` and `scheduler` in one node are rejected (`inject.alarm_and_scheduler`)
 - `run_config` is an application's and an integration test's, and no function's (`inject.position`, RUN-6); braces after any other capability are `inject.configuration`
-- A key of the global store written out is used with one type in a program: a `put` or a `get` of another type than its earlier use is `store.key_type`, at the later use
+- A known global store key, including one resolved from a `const` parameter, is
+  used with one type in a program. A conflicting `put` or `get` is `store.key_type`
+  at the later use (CAP-6).
 - A capability type may be written as the whole type of a parameter of a `const fn` or native value function, or as a type listed in an operator declaration's membership (GEN-3). Other positions reject with `capability.as_value`.
 - The analyser reports `capability.as_value` for a capability held in `state`, `cache`, a tuple, list, set, dictionary or struct, returned or published, or given to a parameter written as a generic parameter or `any` (hhenson/hgl_spec#73). A `let` and an argument to a parameter of its type are uses. A property is read with its type (NATIVE-6).
 - A capture by an anonymous function is reported: of the injected name by the resolver (`name.captured`, FN-14), and of a `let` it is bound to or a parameter of its type here

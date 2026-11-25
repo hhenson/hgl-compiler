@@ -25,15 +25,18 @@
 //! path. A key's child as a graph connection (EXPR-7) is the `references`
 //! family's, a designation of the entry.
 
-use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind};
+use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Node, Stmt, walk_statement_nodes};
 use hgl_analyser::{Scalar, Type};
+use hgl_diagnostics::Location;
+use hgl_lower::nodes::Handler;
 
 use super::Emitter;
 use super::forms::Family;
 use super::graphs::WIRING;
-use super::nodes::{Kind, Role};
+use super::nodes::{Kind, OUT, Role};
 use super::statements::Scope;
 use super::types::cpp_type;
+use super::values::INDENT;
 use crate::runtime;
 
 /// The family of sets and dictionaries.
@@ -77,6 +80,147 @@ fn schema(emitter: &mut Emitter, ty: &Type) -> Option<String> {
     }
 }
 
+/// How many keyed writes a path can make before it finishes or reaches
+/// the next statement. We only need to distinguish zero, one and many.
+#[derive(Clone, Copy)]
+struct Writes {
+    continuing: Option<usize>,
+    maximum: usize,
+}
+
+impl Writes {
+    const NONE: Self = Self {
+        continuing: Some(0),
+        maximum: 0,
+    };
+
+    fn followed_by(self, next: Self) -> Self {
+        let Some(prior) = self.continuing else {
+            return self;
+        };
+        Self {
+            continuing: next.continuing.map(|count| (prior + count).min(2)),
+            maximum: self.maximum.max((prior + next.maximum).min(2)),
+        }
+    }
+
+    fn alternative(self, other: Self) -> Self {
+        Self {
+            continuing: self.continuing.max(other.continuing),
+            maximum: self.maximum.max(other.maximum),
+        }
+    }
+}
+
+fn expression_writes(value: &Expr, out: usize) -> Writes {
+    match &value.kind {
+        ExprKind::Block { statements, value } => statement_writes(statements, out).followed_by(
+            value
+                .as_deref()
+                .map_or(Writes::NONE, |v| expression_writes(v, out)),
+        ),
+        ExprKind::If {
+            condition,
+            then,
+            otherwise,
+            ..
+        } => expression_writes(condition, out).followed_by(
+            expression_writes(then, out).alternative(
+                otherwise
+                    .as_deref()
+                    .map_or(Writes::NONE, |v| expression_writes(v, out)),
+            ),
+        ),
+        _ => Writes::NONE,
+    }
+}
+
+fn statement_writes(statements: &[Stmt], out: usize) -> Writes {
+    statements.iter().fold(Writes::NONE, |writes, statement| {
+        let next = match statement {
+            Stmt::Assign { local, value, .. } if *local == out => expression_writes(value, out)
+                .followed_by(Writes {
+                    continuing: Some(1),
+                    maximum: 1,
+                }),
+            Stmt::Return { value, .. } => Writes {
+                continuing: None,
+                maximum: usize::from(value.is_some()),
+            },
+            Stmt::Expr(value)
+            | Stmt::Assign { value, .. }
+            | Stmt::Declare {
+                value: Some(value), ..
+            } => expression_writes(value, out),
+            Stmt::For { body, .. } | Stmt::While { body, .. } => {
+                let iteration = statement_writes(body, out);
+                let repeats = iteration.continuing.unwrap_or(0) > 0;
+                Writes {
+                    continuing: Some(usize::from(repeats) * 2),
+                    maximum: if repeats { 2 } else { iteration.maximum },
+                }
+            }
+            Stmt::Switch { cases, default, .. } => cases.iter().fold(
+                default
+                    .as_deref()
+                    .map_or(Writes::NONE, |body| statement_writes(body, out)),
+                |paths, case| paths.alternative(statement_writes(&case.body, out)),
+            ),
+            _ => Writes::NONE,
+        };
+        writes.followed_by(next)
+    })
+}
+
+// Keyed deltas can cancel inside a keyed child. A tuple child has a
+// different delta representation and keeps its existing publication path.
+fn staged_shape(ty: &Type) -> bool {
+    match ty {
+        Type::Dict { value, .. } => staged_shape(value),
+        Type::Set(_) | Type::Scalar(_) => true,
+        _ => false,
+    }
+}
+
+fn stages_writes(selected: &[(&Handler<'_>, Location)], out: usize) -> bool {
+    let mut eligible = true;
+    let mut writes = Writes::NONE;
+    for (handler, _) in selected {
+        let mut check = |node| match node {
+            Node::Statement(Stmt::Assign { local, value, .. }) if *local == out => {
+                eligible &= matches!(value.ty, Type::Delta(_));
+            }
+            Node::Expression(Expr {
+                kind:
+                    ExprKind::Endpoint {
+                        operation,
+                        inputs: Some(inputs),
+                    },
+                ..
+            }) if inputs.contains(&out) => {
+                eligible &= matches!(
+                    operation,
+                    EndpointOperation::Valid
+                        | EndpointOperation::Modified
+                        | EndpointOperation::LastModified
+                );
+            }
+            Node::Expression(Expr {
+                kind: ExprKind::Local(local) | ExprKind::EndpointOf(local),
+                ..
+            }) if *local == out => eligible = false,
+            _ => {}
+        };
+        walk_statement_nodes(handler.body, &mut check);
+        for condition in &handler.conditions {
+            condition.walk_nodes(&mut check);
+        }
+        let when = statement_writes(handler.body, out);
+        writes = writes.followed_by(when.alternative(Writes::NONE));
+    }
+    eligible && writes.maximum >= 2
+}
+
 impl Family for Keyed {
     fn schema(&self, emitter: &mut Emitter<'_>, ty: &Type) -> Option<String> {
         schema(emitter, ty)
@@ -113,6 +257,39 @@ impl Family for Keyed {
         Some(format!(
             "::{}::keyed_publish({view}, {value});",
             runtime::NAMESPACE
+        ))
+    }
+
+    // END-5 updates one publication through the evaluation; TIME-7
+    // leaves a valid keyed result silent if those changes cancel.
+    fn evaluation(
+        &self,
+        emitter: &mut Emitter<'_>,
+        ty: &Type,
+        selected: &[(&Handler<'_>, Location)],
+        handlers: &str,
+    ) -> Option<String> {
+        schema(emitter, ty)?;
+        let context = emitter.temporal.as_ref()?;
+        let out = context.roles.iter().position(|role| *role == Role::Out)?;
+        if !staged_shape(ty)
+            || context
+                .signature
+                .as_ref()
+                .is_some_and(|signature| signature.reference)
+            || !stages_writes(selected, out)
+        {
+            return None;
+        }
+        let indent = INDENT.repeat(2);
+        let inner: String = handlers
+            .lines()
+            .map(|line| format!("{INDENT}{line}\n"))
+            .collect();
+        let library = runtime::NAMESPACE;
+        Some(format!(
+            "{indent}::{library}::KeyedEvaluation<decltype({OUT})> keyed_evaluation_{{{OUT}}};\n\
+             {indent}keyed_evaluation_.run([&](auto& {OUT}) {{\n{inner}{indent}}});\n"
         ))
     }
 

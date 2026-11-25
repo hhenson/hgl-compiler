@@ -25,6 +25,7 @@ use super::nodes::{
     nested, registration,
 };
 use super::statements::Scope;
+use super::store;
 use super::values::INDENT;
 use crate::runtime;
 
@@ -96,6 +97,7 @@ impl Emitter<'_> {
         let end = declaration.syntax.text_range().end().into();
         // SOURCE-1: what the source's declarations and hooks add to its
         // node (`scheduling`): nothing for one that has none.
+        let store_keys = store::Keys::of(self, index, signature, body);
         let Some(hooked) = self.source_hooks(signature, body) else {
             return;
         };
@@ -221,6 +223,9 @@ impl Emitter<'_> {
         let mut stop = vec![state.clone()];
         stop.extend(hooked.stop_parameters.iter().cloned());
         let closing = self.debug_end(at, end, format!("{INDENT}}}\n"));
+        let Some(prepare) = store_keys.prepare(self, signature, body) else {
+            return;
+        };
         let text = format!(
             "// {shown}\n\
              struct {IMPLEMENTATION}\n{{\n\
@@ -240,7 +245,7 @@ impl Emitter<'_> {
              {kept}\
              {INDENT}{INDENT}::std::optional<body_type_> frame_{{}};\n\
              {INDENT}{INDENT}::std::optional<body_type_::iterator> at_{{}};\n\
-             {INDENT}}};\n\n\
+             {INDENT}}};\n{prepare}\n\
              {INDENT}static void start({start})\n{INDENT}{{\n\
              {INDENT}{INDENT}state_.set(state_type_{{}});\n\
              {INDENT}{INDENT}state_type_& kept_ = state_.modify();\n\

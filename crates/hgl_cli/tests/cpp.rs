@@ -4046,7 +4046,16 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         "src/demo.keyed_constants.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.keyed_constants.hgl"),
     );
-    let output = hgl_in(&["test", &file, &constants, "--target", "cpp"], &[], &[]);
+    let cancellations = write(
+        &root,
+        "src/demo.keyed_cancellation.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.keyed_cancellation.hgl"),
+    );
+    let output = hgl_in(
+        &["test", &file, &constants, &cancellations, "--target", "cpp"],
+        &[],
+        &[],
+    );
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -4055,9 +4064,38 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 17 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
+}
+
+/// TIME-7: mutually exclusive writes still use the single-write path.
+#[test]
+fn single_keyed_write_needs_no_staging() {
+    let root = scratch("single-keyed-write");
+    let source = write(
+        &root,
+        "src/demo.single_keyed_write.hgl",
+        r#"module demo.single_keyed_write
+export fn selected(step: i64) -> set<i64> {
+    inject out
+    when {
+        if step == 1 { out = delta<set<i64>>(added: [5]) }
+        else { out = delta<set<i64>>(removed: [5]) }
+    }
+}
+"#,
+    );
+    let out = root.join("out");
+    let result = hgl_in(
+        &["emit", &source, "--target", "cpp", "--out", &argument(&out)],
+        &[],
+        &[],
+    );
+    assert!(result.status.success(), "{}", text(&result.stderr));
+    let cpp = fs::read_to_string(out.join("modules/mod-demo-single_keyed_write.cpp")).unwrap();
+    assert!(cpp.contains("::hglrt::keyed_publish(out_"), "{cpp}");
+    assert!(!cpp.contains("KeyedEvaluation"), "{cpp}");
 }
 
 /// Nested dictionary entry observations retain the final child's validity,
@@ -5588,6 +5626,100 @@ fn store_values_and_failure_places_on_the_sdk() {
         let stderr = text(&output.stderr);
         assert_eq!(stderr.lines().last(), Some(said.as_str()), "{stderr}");
     }
+}
+
+/// CAP-6: a key only known when making the graph can fail with `store.key_type`.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn store_key_types_resolved_at_graph_build_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("store_keys");
+    let file = write(
+        &root,
+        "keys.hgl",
+        r#"module probes.store_keys
+const fn select_key(prefix: str) -> str => prefix + ".key"
+
+fn write_key(const key: str) {
+    inject global_state
+    put(global_state, key, 7)
+    put(global_state, key, "wrong")
+}
+
+fn read_key(value: i64, const key: str) -> i64 {
+    inject global_state
+    put(global_state, key, 7)
+    let saved: i64 = get(global_state, key)
+    value + saved
+}
+
+test ordinary {
+    assert eval read_key(value: [2], key: "run.output.mine") == [9]
+}
+
+test resolved_at_run {
+    assert raises("store.key_type") { eval write_key(key: select_key(prefix: "dynamic")) }
+}
+"#,
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// CAP-6 and CRUN-8 check fixed hook keys before start and recursive keys
+/// at the store operation that uses them. TIME-8: fixedness is per route,
+/// so one helper is checked in source, at the build or at its operation by
+/// the route it is called on.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("reserved_store_keys");
+    let generic = write(
+        &root,
+        "demo.store.generic_keys.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.store.generic_keys.hgl"),
+    );
+    let output = hgl_in(&["test", &generic], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.contains("rejection cases: 4 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    let routes = write(
+        &root,
+        "demo.store.reserved_routes.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.store.reserved_routes.hgl"),
+    );
+    let output = hgl_in(&["test", &routes], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.contains("rejection cases: 2 passed, 0 failed\n"),
+        "{stdout}"
+    );
+    let file = write(
+        &root,
+        "demo.store.reserved.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.store.reserved.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 32 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
 }
 
 /// A failure names the HGL line of the statement it is raised in, though

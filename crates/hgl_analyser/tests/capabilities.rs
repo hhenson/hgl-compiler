@@ -621,3 +621,221 @@ fn the_supplied_core_declares_scheduling_and_the_store() {
     assert!(locals(&checked, "counted").contains(&"total: i64".to_string()));
     assert!(locals(&checked, "lookup").contains(&"price: result<i64, error>".to_string()));
 }
+
+/// TIME-8 and CAP-6 apply to names resolved through ordinary const arguments.
+#[test]
+fn store_key_checks_follow_resolved_const_arguments() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+fn save(const key: str) {
+    inject global_state
+    put(global_state, key, 7)
+}
+fn forward(const name: str = "run.output") { save(key: name) }
+fn different(const key: str) {
+    inject global_state
+    put(global_state, key, 7)
+    let text: str = get(global_state, key)
+}
+test ordinary { eval forward(name: "run.output.mine") }
+test reserved { eval forward() }
+test conflict { eval different(key: "app.key") }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:10:21 injectable/store.key_type TIME-8",
+            "m.hgl:13:17 injectable/store.reserved_key TIME-8",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// A generic store use binds its payload type in each instance (CAP-6, TIME-8).
+#[test]
+fn store_key_types_are_compared_across_instances() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+fn save<V>(const key: str, const value: V) {
+    inject global_state
+    put(global_state, key, value)
+}
+fn twice(const key: str) {
+    save(key: key, value: 7)
+    save(key: "other", value: "allowed")
+    save(key: key, value: "wrong")
+}
+test conflict { eval twice(key: "shared") }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:9:5 injectable/store.key_type TIME-8"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// A helper may compute its actual key in recursion. A key written
+/// directly in a store operation is still checked at that operation.
+#[test]
+fn store_key_checks_distinguish_a_recursive_value_from_a_written_key() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn recursive_put(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { recursive_put(store, depth - 1, key + ".output") }
+}
+fn indirect(const prefix: str) {
+    inject global_state
+    when {}
+    stop { recursive_put(global_state, 1, prefix) }
+}
+test cooked_prefix { eval indirect(prefix: "run.output") }
+const fn direct_put(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { put(store, "run.output", 7) }
+    else { direct_put(store, depth - 1, key + ".output") }
+}
+const fn alpha(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { beta(store, depth - 1, key + ".output") }
+}
+const fn beta(store: GlobalState, depth: i64, const forwarded_key: str) {
+    alpha(store, depth, forwarded_key)
+}
+fn mutual(const start_key: str) {
+    inject global_state
+    when {}
+    stop { alpha(global_state, 1, start_key) }
+}
+test indirect_cycle { eval mutual(start_key: "run.output") }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:13:32 injectable/store.reserved_key TIME-8"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// TIME-8: fixedness is per route. One helper is reached from a cycle that
+/// changes its key, "the call that uses it fails ... as it is evaluated",
+/// and from a node with a key the text fixes, which "rejects" in source
+/// at the call that fixes it (GEN-7, CAP-6). A key a computation gives
+/// is left to the graph's build.
+#[test]
+fn store_key_checks_are_per_route_through_a_helper() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn supply(prefix: str) -> str => prefix
+const fn save(store: GlobalState, const key: str) { put(store, key, 7) }
+const fn recur(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { save(store, key) }
+    else { recur(store, depth - 1, key + ".output") }
+}
+fn routes(const computed: str) {
+    inject global_state
+    when {}
+    stop {
+        recur(global_state, 1, "run")
+        recur(global_state, 1, "run.output")
+        save(global_state, computed)
+        save(global_state, "user.direct")
+        save(global_state, "run.output")
+    }
+}
+test t { eval routes(computed: supply("run.output")) }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:16:9 injectable/store.reserved_key TIME-8"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// TIME-8: a key two `const` parameters exchange on the way round is the
+/// run's, though another check reads the parameter for each instance of
+/// the cycle: the instances give the helper no key of their own.
+#[test]
+fn an_instance_of_a_cycle_gives_its_helper_no_changed_key() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn save(store: GlobalState, const key: str) { put(store, key, 7) }
+const fn swap(store: GlobalState, depth: i64, const key: str, const next: str) -> str {
+    if depth == 0 {
+        save(store, key)
+        return ""
+    }
+    let label = format(key)
+    return swap(store, depth - 1, next, key) + label
+}
+fn hook(const depth: i64) {
+    inject global_state
+    when {}
+    stop { let text = swap(global_state, depth, "run.output", "user.next") }
+}
+test t { eval hook(depth: 1) }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        Vec::<String>::new(),
+        "{}",
+        checked.report
+    );
+}
+
+/// TIME-8: "Where a function calls itself, directly or through other
+/// functions, and the key can differ between the calls on the way round",
+/// the key is the run's. A candidate that calls its own operator closes
+/// such a cycle, and a key two `const` parameters exchange in a function
+/// that reads neither is "exchanged on the way round". Neither is checked
+/// in source, and no instance is made for each key the cycle reaches.
+#[test]
+fn cycles_through_an_operator_and_exchanges_are_the_runs() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+operator step<S, T>(store: S, depth: i64, const key: str, value: T) requires S in {GlobalState}
+impl const fn step<T>(store: GlobalState, depth: i64, const key: str, value: T) requires T in {i64, f64} {
+    if depth == 0 { put(store, key, value) }
+    else { step(store, depth - 1, key + ".output", value) }
+}
+const fn sb(store: GlobalState, depth: i64, const p: str, const q: str) {
+    if depth == 0 { sa(store, 0, p) }
+    else { sb(store, depth - 1, q, p) }
+}
+const fn sa(store: GlobalState, depth: i64, const a: str) {
+    put(store, a, 1)
+    if depth > 0 { sb(store, depth - 1, a, a) }
+}
+fn hook(const key: str, const depth: i64) {
+    inject global_state
+    when {}
+    stop {
+        step(global_state, depth, key, 1)
+        sb(global_state, depth, "user.x", "run.output")
+    }
+}
+test first { eval hook(key: "run", depth: 0) }
+test grows { eval hook(key: "user", depth: 2) }
+test unused { eval hook(key: "run.output", depth: 1) }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        Vec::<String>::new(),
+        "{}",
+        checked.report
+    );
+}
