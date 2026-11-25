@@ -983,13 +983,12 @@ impl Signature {
     }
 
     /// Fixed parameters that take positional arguments, with their slots.
-    /// Under the FN-8 trial the positional pack takes the remaining arguments.
-    /// Core's `join` uses the trailing named parameter for its separator (OPS-11).
+    /// They precede the packs (FN-8). Configuration is named in braces (FN-18).
+    /// This keeps the separator of Core's `join` out of its pieces (OPS-11).
     pub(crate) fn positional_parameters(&self) -> impl Iterator<Item = (usize, &Parameter)> {
         self.parameters
             .iter()
             .enumerate()
-            .take_while(|(_, parameter)| parameter.pack != Some(Pack::Positional))
             .filter(|(_, parameter)| !parameter.configuration && parameter.pack.is_none())
     }
 

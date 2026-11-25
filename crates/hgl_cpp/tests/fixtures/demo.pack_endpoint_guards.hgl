@@ -63,3 +63,52 @@ fn selected_graph(first: i64, other: i64) -> i64 => selected<0>(first, other)
 test a_const_key_selects_the_entry {
     assert eval selected_graph(first: [_, 5], other: [_, _]) == [_, 5]
 }
+
+fn all_valid_header<const Key: i64>(items: ...list<i64, 2>) -> i64 {
+    when all_valid(items[Key]) { return items[0][0] }
+}
+
+fn all_valid_body<const Key: i64>(items: ...list<i64, 2>) -> i64 {
+    when valid([]) {
+        if all_valid(items[Key]) { return items[0][1] }
+    }
+}
+
+fn defer_header(input: list<i64, 2>) -> i64 => all_valid_header<0>(input)
+fn defer_body(input: list<i64, 2>) -> i64 => all_valid_body<0>(input)
+
+# GEN-7, TIME-1: the instance's key selects the entry whose children
+# the guard admits. A partial first publication still gives no read.
+test deferred_all_valid_guards_the_selected_child {
+    assert eval defer_header(input: [
+        delta<list<i64, 2>>(updated: [1: 7]),
+        delta<list<i64, 2>>(updated: [0: 9]),
+    ]) == [_, 9]
+    assert eval defer_body(input: [
+        delta<list<i64, 2>>(updated: [1: 7]),
+        delta<list<i64, 2>>(updated: [0: 9]),
+    ]) == [_, 7]
+}
+
+fn entry_activity<const Other: i64>(items: ...i64) -> tuple<bool, bool> {
+    when modified(items[0]) && valid([]) {
+        return (is_active<i64>(input: items[0]), is_active(items[Other]))
+    }
+}
+
+fn positional_activity(first: i64, other: i64) -> tuple<bool, bool> =>
+    entry_activity<1>(first, other)
+
+fn named_entry_activity<...As>(items: ...{As}) -> bool {
+    when modified(items["first"]) && valid([]) { return is_active(items["other"]) }
+}
+
+fn named_activity(first: i64, other: i64) -> bool =>
+    named_entry_activity(first: first, other: other)
+
+# TIME-3, TIME-9, FN-19: querying activity exposes the actual input
+# subscription even if a handler's modified predicate guards its body.
+test only_the_selected_pack_entry_is_active {
+    assert eval positional_activity(first: [5, _, 7], other: [_, 8, _]) == [(true, false), _, (true, false)]
+    assert eval named_activity(first: [5, _, 7], other: [_, 8, _]) == [false, _, false]
+}
