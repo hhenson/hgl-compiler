@@ -1786,7 +1786,7 @@ pub(super) fn public_inputs<'a>(public: &Signature, given: &'a [Given]) -> Vec<O
     inputs
 }
 
-/// The native value candidate whose fallback must be supplied (ERR-6).
+/// The Core value candidate whose fallback must be supplied (ERR-6).
 pub(super) fn core_dictionary_fallback(
     program: &Program,
     module: usize,
@@ -1800,7 +1800,7 @@ pub(super) fn core_dictionary_fallback(
         && program.core() == Some(module)
         && matches!(
             candidate.kind,
-            DeclarationKind::NativeCandidate(Role::Value, _)
+            DeclarationKind::Implementation(Role::Value, _)
         )
         && matches!(store.ty, Type::Dict { .. })
         && fallback.name == "fallback"
