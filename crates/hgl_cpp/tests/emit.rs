@@ -3516,3 +3516,20 @@ export fn descriptors(value: list<Type>) -> list<Type> => value
             .any(|message| message.contains("list<Type>"))
     );
 }
+
+/// TYPE-18: primitive type-call operands whose old stubs have no type
+/// remain a clean target decline until #874 settles those spellings.
+#[test]
+fn type_queries_of_untyped_primitive_calls_decline_cleanly() {
+    for operand in ["str(1)", r#"bytes("a")"#, "any(1)"] {
+        let source = format!("module m\ntest query {{ assert type({operand}) == type(1) }}\n");
+        let emitted = emit_with(&[("m.hgl", &source)], &hgl_cpp::runtime::provides);
+        let blocked = emitted
+            .blocked("query")
+            .expect("the unresolved operand is declined");
+        assert!(
+            blocked.contains("a type value that is not resolved"),
+            "{operand}: {blocked}"
+        );
+    }
+}

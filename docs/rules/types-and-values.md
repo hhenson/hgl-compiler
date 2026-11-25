@@ -316,4 +316,4 @@ transpiler: partial
 
 - Emits ordinary Type values, equality, inequality, set elements and dictionary keys. Core's native conversion returns canonical diagnostic spelling (FMT-5). Queries in constants, parameter and field defaults, generic functions, node handlers and graph composition execute without evaluating the operand.
 - Ordinary structs holding Type retain their value layout and omit auxiliary delta layouts under the proposed TYPE-16 rule.
-- Left: Type-valued generic struct arguments (#871) and Type-containing connections decline cleanly with `target.unsupported` before native compilation.
+- Left: Type-valued generic struct arguments (#871), Type-containing connections, and queries of primitive type-call operands whose old checker stub leaves their type unknown (#874) decline cleanly with `target.unsupported` before native compilation.
