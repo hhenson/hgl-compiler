@@ -134,10 +134,10 @@ gap = { ? U+0020 or U+0009 ? } ;
 error_category = ? a source category of the diagnostic catalog ? ;
 # types-and-values.md
 type = type_base, [ "?" ] ;
-type_base = scalar_type | named_type | tuple_type | list_type | set_type | dict_type | rolling_window_type | "signal" | endpoint_type | "atomic", "<", value_type, ">" | result_type | "error" | delta_type | pack_member ;
+type_base = "Type" | scalar_type | named_type | tuple_type | list_type | set_type | dict_type | rolling_window_type | "signal" | endpoint_type | "atomic", "<", value_type, ">" | result_type | "error" | delta_type | pack_member ;
 pack_member = IDENTIFIER, "[", IDENTIFIER, "]" ;
 value_type = value_type_base, [ "?" ] ;
-value_type_base = scalar_type | named_type | value_tuple_type | value_list_type | set_type | value_dict_type | result_type | "error" | delta_type ;
+value_type_base = "Type" | scalar_type | named_type | value_tuple_type | value_list_type | set_type | value_dict_type | result_type | "error" | delta_type ;
 scalar_type = "bool" | "i64" | "f64" | "str" | "bytes" | "any" | "date" | "time" | "datetime" | "duration" | "civil_datetime" | "timezone" | "zoned_datetime" | "zoned_time" | "tenor" ;
 named_type = ( IDENTIFIER | qualified_name ), [ generic_arguments ] ;
 tuple_type = "tuple", "<", type, { ",", type }, ">" ;
