@@ -538,9 +538,14 @@ transpiler: done
 analyser: done
 
 - `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get` gives a `result<V, error>`, with V written by the caller or inferred from the place
-- A known `"run.output"` key is rejected (`store.reserved_key`), including where
-  a call supplies a fixed `const` argument or generic value. An instance
-  rejection is reported at the making call (GEN-7).
+- A `"run.output"` key the text fixes is rejected (`store.reserved_key`):
+  a constant expression, or a `const` argument or generic value given
+  through the calls that reach it. An instance rejection is reported at
+  the call that fixes the key (GEN-7).
+- A key that can differ between the calls of a cycle is not checked in
+  source: one computed on the way round, exchanged with another `const`
+  parameter, or given anew by a literal or a default. A helper given such
+  a key is left to the run on that route only (TIME-8).
 - A known key is used with one type in a program. A `put` or a `get` of a
   different type than an earlier use is `store.key_type` (TIME-8).
 
@@ -554,12 +559,14 @@ transpiler: partial
   strict dictionary lookup (ERR-6).
 - Reading or writing a key whose stored type differs gives `store.key_type`.
 - A key computed in composition fails with `store.reserved_key` if it is
-  `"run.output"`. A node checks direct and forwardable fixed hook keys when the
-  SDK attaches it to its graph, before any start hook. The run's own recording
+  `"run.output"`. A graph's call checks it as the graph is built. A node
+  checks its fixed hook keys, and those it hands helpers, when the SDK
+  attaches it to its graph, before any start hook. The run's own recording
   uses that key.
-- A key that can change between calls in a recursive cycle is checked at the
-  store operation. This includes a key computed in the cycle, exchanged with
-  another parameter, or supplied anew by a default (TIME-8).
+- A key that can differ between the calls of a cycle is checked at the
+  store operation, as it is evaluated. A helper outside the cycle checks it
+  only on the routes that hand it such a key: the borrowed store carries
+  the route (TIME-8).
 - Left: a temporal child graph using the surrounding store is declined (CRUN-7).
 
 ## CAP-7
@@ -744,8 +751,9 @@ transpiler: partial
 
 analyser: done
 
-- A known `"run.output"` key is rejected (`store.reserved_key`), including where
-  a call supplies a fixed `const` argument or generic value (CAP-6).
+- A `"run.output"` key the text fixes is rejected (`store.reserved_key`),
+  including where a call supplies a fixed `const` argument or generic
+  value (CAP-6).
 
 transpiler: partial
 
@@ -753,8 +761,8 @@ transpiler: partial
   stop. Outputless entries have no recording.
 - A program's key computed in composition or resolved at node attachment
   fails with `store.reserved_key` if it names the recording key. A key that
-  can change in a recursive cycle fails when the store operation uses it
-  (CAP-6).
+  can differ between the calls of a cycle fails when the store operation
+  uses it, on that route (CAP-6).
 - Left: Unsupported record types follow CEVAL-4.
 
 runner: planned
