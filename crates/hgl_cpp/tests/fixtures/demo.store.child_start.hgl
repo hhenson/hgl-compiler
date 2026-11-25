@@ -59,6 +59,27 @@ fn selected_failure(enabled: bool, pulse: i64) -> i64 {
     }
 }
 
+# TIME-8: the alias's resolved capability type supplies the store view.
+fn selected_logger_alias(enabled: bool, pulse: i64) -> i64 {
+    inject global_state
+    put(global_state, "visits", 0)
+    let logger = global_state
+    if enabled {
+        put(logger, "visits", 9)
+        read_at_start(pulse)
+    } else { read_now(pulse) }
+}
+
+fn selected_kept_alias(enabled: bool, pulse: i64) -> i64 {
+    inject global_state
+    put(global_state, "visits", 0)
+    let kept = global_state
+    if enabled {
+        put(kept, "visits", 9)
+        read_at_start(pulse)
+    } else { read_now(pulse) }
+}
+
 test writes_before_dependent_start_on_each_selection {
     assert eval selected_if(enabled: [false, true, true, false, true],
         pulse: [0, 0, 0, 0, 0], step: 1) == [0, 2, 2, 2, 6]
@@ -75,4 +96,9 @@ test selected_child_can_write_without_a_result {
 test an_unselected_child_does_not_read_the_store {
     assert eval selected_failure(enabled: [false, false], pulse: [1, 2]) == [1, 2]
     assert raises("value.missing_key") { eval selected_failure(enabled: [false, true], pulse: [1, 2]) }
+}
+
+test store_aliases_keep_the_capability_type {
+    assert eval selected_logger_alias(enabled: [false, true, false], pulse: [0, 0, 0]) == [0, 9, 9]
+    assert eval selected_kept_alias(enabled: [false, true, false], pulse: [0, 0, 0]) == [0, 9, 9]
 }

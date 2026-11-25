@@ -10,7 +10,7 @@ use hgl_lower::graphs::named_in;
 use super::Emitter;
 use super::configuration;
 use super::graphs::WIRING;
-use super::names::{identifier, string};
+use super::names::{self, identifier, string};
 use super::nodes::{Context, Kind, Role};
 use super::statements::Scope;
 use super::values::INDENT;
@@ -160,14 +160,13 @@ impl StoreStart {
             evaluation
                 .push("[[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out".into());
         }
-        let mut body = emitter.capabilities(
-            scope.body,
-            &[self.store],
-            statements,
-            Hook::Start,
-            false,
-            &mut parameters,
-        )?;
+        // The plan selected the store by its resolved type (TIME-8).
+        // The local's spelling only names the borrowed value in the hook.
+        let (view, capability) = super::endpoints::capability("global_state")?;
+        let parameter = names::temporary("store_view", self.store);
+        let store = identifier(&locals[self.store].name);
+        parameters.push(format!("{view} {parameter}"));
+        let mut body = format!("{INDENT}{INDENT}const {capability} {store}{{{parameter}}};\n");
         let mut startup = Scope::cold(program, scope.body);
         emitter.in_context(&mut context, |emitter| {
             emitter.statements(&mut startup, statements, 2, &mut body);
