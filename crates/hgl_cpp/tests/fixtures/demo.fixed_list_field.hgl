@@ -33,3 +33,85 @@ test the_fitted_pack_reads_the_same_position {
         delta<Book>(top: 1),
     ]) == [_, 5, 5]
 }
+
+struct Level {
+    price: i64
+    size: i64
+}
+
+struct BookLevels {
+    top: i64
+    levels: list<Level, 2>
+}
+
+fn level_price(book: BookLevels) -> i64 {
+    when valid(book.levels[1].price) { return book.levels[1].price }
+}
+
+# TIME-1: the selected field reads while the list member's other field is absent.
+test a_field_below_a_fixed_position_reads_its_endpoint {
+    assert eval level_price(book: [
+        delta<BookLevels>(top: 1),
+        delta<BookLevels>(levels: delta<list<Level, 2>>(updated: [1: delta<Level>(price: 7)])),
+    ]) == [_, 7]
+}
+
+struct Grid {
+    top: i64
+    cells: list<list<i64, 2>, 2>
+}
+
+fn grid_cell(grid: Grid) -> i64 {
+    when valid(grid.cells[1][0]) { return grid.cells[1][0] }
+}
+
+# TIME-1: a selected position reads while the enclosing list member is partial.
+test a_position_below_a_fixed_position_reads_its_endpoint {
+    assert eval grid_cell(grid: [
+        delta<Grid>(top: 1),
+        delta<Grid>(cells: delta<list<list<i64, 2>, 2>>(
+            updated: [1: delta<list<i64, 2>>(updated: [0: 4])],
+        )),
+    ]) == [_, 4]
+}
+
+struct Row {
+    slots: list<i64, 2>
+    size: i64
+}
+
+struct Table {
+    rows: list<Row, 2>
+    top: i64
+}
+
+const ROW: i64 = 1
+const SLOT: i64 = 0
+
+fn table_slot(table: Table) -> i64 {
+    when valid(table.rows[ROW].slots[SLOT]) { return table.rows[ROW].slots[SLOT] }
+}
+
+# TIME-1: a mixed path preserves the admitted position and its constant selectors.
+test mixed_fields_and_positions_read_the_final_child {
+    assert eval table_slot(table: [
+        delta<Table>(top: 1),
+        delta<Table>(rows: delta<list<Row, 2>>(
+            updated: [1: delta<Row>(slots: delta<list<i64, 2>>(updated: [0: 9]))],
+        )),
+    ]) == [_, 9]
+}
+
+fn leading_slot(rows: list<Row, 2>) -> i64 {
+    when valid(rows[ROW].slots[SLOT]) { return rows[ROW].slots[SLOT] }
+}
+
+# TIME-1: the path can start with a position before entering the fixed-list field.
+test a_fixed_list_field_below_a_position_reads_the_final_child {
+    assert eval leading_slot(rows: [
+        delta<list<Row, 2>>(updated: [0: delta<Row>(size: 1)]),
+        delta<list<Row, 2>>(updated: [1: delta<Row>(
+            slots: delta<list<i64, 2>>(updated: [0: 12]),
+        )]),
+    ]) == [_, 12]
+}
