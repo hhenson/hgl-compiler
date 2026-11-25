@@ -108,18 +108,10 @@ pub(crate) fn key_types(
 }
 
 impl Program {
-    /// On which routes `const` parameter `slot` of `declaration` can hold
-    /// a store key that differs between the calls of a cycle (TIME-8).
-    pub fn store_route(&self, declaration: (usize, usize), slot: usize) -> crate::StoreRoute {
-        self.store_routes
-            .get(&(declaration, slot))
-            .copied()
-            .unwrap_or_default()
-    }
-
-    /// Whether any `const` parameter of the program can hold such a key.
-    pub fn has_store_routes(&self) -> bool {
-        !self.store_routes.is_empty()
+    /// Whether `const` parameter `slot` of `declaration` is one of a cycle
+    /// whose store key can differ between its calls (TIME-8).
+    pub fn store_key_changes(&self, declaration: (usize, usize), slot: usize) -> bool {
+        self.changing_store_slots.contains(&(declaration, slot))
     }
 
     /// Whether TIME-8 leaves this store key to a recursive operation: the

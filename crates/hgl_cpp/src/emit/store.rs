@@ -1,4 +1,9 @@
-//! Fixes a node's store keys as the SDK attaches it to a graph (CAP-6, FN-1).
+//! The checks of the run's own store key (CAP-6, TIME-8). Every store
+//! operation checks its key as it is evaluated. A node also checks, as the
+//! SDK attaches it to a graph, the keys its configuration fixes (FN-1):
+//! the earlier place for a key the graph fixes. Source checking is the
+//! earlier place for a key the text fixes. Those places decide only when
+//! a reserved key fails, never whether.
 
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -7,12 +12,10 @@ use hgl_analyser::hir::{
     Argument, Body, Callee, Expr, ExprKind, Form, Node, Raise, Value, ValueCategory,
     walk_statement_nodes, walk_statements,
 };
-use hgl_analyser::{
-    DeclarationKind, Detail, Parameter, Program, Role, Signature, StoreRoute, Type,
-};
+use hgl_analyser::{DeclarationKind, Detail, Parameter, Program, Role, Signature, Type};
 use hgl_diagnostics::Location;
 use hgl_lower::calls::{LeftOut, left_out};
-use hgl_lower::instances::{Instance, Instances};
+use hgl_lower::instances::Instances;
 
 use super::Emitter;
 use super::names::{self, identifier};
@@ -22,9 +25,9 @@ use crate::runtime;
 
 /// Store keys checked when the SDK attaches a node.
 pub(super) struct Keys {
+    /// Each key, written with the node's configuration.
     values: Vec<Expr>,
-    contains_fixed: bool,
-    complete: bool,
+    /// Whether the node is core's recorder, which writes the run's key.
     pub(super) recorder: bool,
 }
 
@@ -41,8 +44,6 @@ impl Keys {
             && program.modules[module].declarations[declaration].name == "record";
         let mut keys = Self {
             values: Vec::new(),
-            contains_fixed: false,
-            complete: true,
             recorder,
         };
         if recorder {
@@ -81,7 +82,8 @@ impl Keys {
 
     /// Record a key for attachment as its node's configuration fixes it.
     /// A key that differs between the calls of a cycle on this route is
-    /// left to its operation (TIME-8), as is one the source check proved.
+    /// left to its operation (TIME-8), as is one the source check proved,
+    /// and one that cannot be written with the configuration.
     fn read(
         &mut self,
         program: &Program,
@@ -93,20 +95,11 @@ impl Keys {
         {
             return;
         }
-        self.contains_fixed = true;
-        let Some(projected) = project(program, key, bindings, remaining) else {
-            self.complete = false;
-            return;
-        };
-        if !source_safe(program, &projected) {
+        if let Some(projected) = project(program, key, bindings, remaining)
+            && !source_safe(program, &projected)
+        {
             self.values.push(projected);
         }
-    }
-
-    /// Marks the borrowed capability so fixed keys already checked at
-    /// attachment do not need checking in each hook invocation.
-    pub(super) fn prechecked(&self) -> bool {
-        self.contains_fixed && self.complete
     }
 
     /// The SDK invokes prepare once on first attachment, including for a
@@ -247,8 +240,8 @@ impl ForwardedKeys<'_> {
         if self.path.contains(&identity) {
             return;
         }
+        // A route not followed leaves its keys to their operations.
         if spend(&self.remaining).is_none() || self.path.len() == 64 {
-            keys.complete = false;
             return;
         }
         let instance = self.instances.find_call(program, callee, arguments);
@@ -256,7 +249,6 @@ impl ForwardedKeys<'_> {
             (&instance.signature, &instance.body)
         } else {
             let Some(body) = unit.bodies.get(declaration).and_then(Option::as_ref) else {
-                keys.complete = false;
                 return;
             };
             (signature, body)
@@ -277,7 +269,7 @@ impl ForwardedKeys<'_> {
                 });
                 // TIME-8: a parameter its cycle changes varies on every
                 // route, and one given a varying key varies on this one.
-                if program.store_route(identity, declared_slot) == StoreRoute::Changing
+                if program.store_key_changes(identity, declared_slot)
                     || written.is_some_and(|argument| {
                         caller.changes(&argument.value)
                             || program.store_key_at_execution(&argument.value)
@@ -457,230 +449,9 @@ pub(super) fn source_safe(program: &Program, key: &Expr) -> bool {
         .is_some_and(|key| key != "run.output")
 }
 
-pub(super) fn proof_argument(name: &str, fixed_keys_checked: bool) -> &'static str {
-    if name == "global_state" && fixed_keys_checked {
-        ", true"
-    } else {
-        ""
-    }
-}
-
-/// How the key of a store operation is checked where it is used (TIME-8).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum KeyCheck {
-    /// Always: the key can differ between the calls of a cycle on every
-    /// route into the operation.
-    Always,
-    /// Where attachment did not prove it, or where one of these route bits
-    /// of the enclosing function's parameters is set (`Routes`).
-    Unless(u64),
-}
-
-/// The C++ that hands `value` on as a key, checked as `check` says.
-/// `store` is the borrowed store, which carries attachment's proof and
-/// the route; `KeyCheck::Always` reads neither.
-pub(super) fn checked(value: &str, store: Option<&str>, check: KeyCheck) -> String {
+/// The C++ that hands `value` on to a store operation as its key, checked
+/// there, as the operation is evaluated (TIME-8, CAP-6).
+pub(super) fn checked(value: &str) -> String {
     let library = runtime::NAMESPACE;
-    match (check, store) {
-        (KeyCheck::Unless(0), Some(store)) => {
-            format!("::{library}::use_fixed_store_key({store}, {value})")
-        }
-        (KeyCheck::Unless(bits), Some(store)) => {
-            format!("::{library}::use_fixed_store_key({store}, {value}, {bits:#x}ull)")
-        }
-        (KeyCheck::Always, _) | (KeyCheck::Unless(_), None) => {
-            format!("::{library}::checked_store_key({value})")
-        }
-    }
-}
-
-/// Whether a `const` parameter of the value function being written can
-/// hold a key that differs between the calls of a cycle (TIME-8).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Varying {
-    /// On no route.
-    Never,
-    /// On every route: the parameter is one the cycle changes.
-    Always,
-    /// On the routes that set this bit of the borrowed store
-    /// (`GlobalState::routed`): a function outside the cycle, or one the
-    /// cycle hands it on to unchanged, given a changed key on some calls.
-    Route(u64),
-}
-
-/// The routes of the value function being written: how each of its
-/// parameters, by local, can vary (TIME-8). Fixedness is per route: one
-/// helper can be given a changed key from a cycle and a fixed key
-/// elsewhere, and only the first is checked at its operation. A value
-/// function's store comes from its caller, so each value function has
-/// these, all `Never` where nothing varies; other code makes its own
-/// store, on which nothing varies.
-#[derive(Default)]
-pub(super) struct Routes {
-    varying: Vec<Varying>,
-}
-
-/// One bit for each parameter position up to this one; a later
-/// parameter that varies on a route is checked as one that always does.
-const ROUTE_BITS: usize = 64;
-
-impl Routes {
-    /// The routes of declaration `identity`, written as `signature`, or
-    /// as its instance `instance`.
-    pub(super) fn of(
-        program: &Program,
-        identity: (usize, usize),
-        signature: &Signature,
-        instance: Option<&Instance>,
-    ) -> Self {
-        if !program.has_store_routes() {
-            return Self::default();
-        }
-        let varying = (0..signature.parameters.len())
-            .map(|local| {
-                let slot = instance.map_or(local, |instance| instance.original_parameter(local));
-                match program.store_route(identity, slot) {
-                    StoreRoute::Fixed => Varying::Never,
-                    StoreRoute::Changing => Varying::Always,
-                    StoreRoute::Inherited if slot < ROUTE_BITS => Varying::Route(1 << slot),
-                    StoreRoute::Inherited => Varying::Always,
-                }
-            })
-            .collect();
-        Self { varying }
-    }
-
-    fn of_local(&self, local: usize) -> Varying {
-        self.varying.get(local).copied().unwrap_or(Varying::Never)
-    }
-
-    /// How a key read from these parameters is checked at its operation.
-    pub(super) fn key(&self, key: &Expr) -> KeyCheck {
-        let mut bits = 0;
-        let mut always = false;
-        key.walk(&mut |part| {
-            if let ExprKind::Local(local) = part.kind {
-                match self.of_local(local) {
-                    Varying::Never => {}
-                    Varying::Always => always = true,
-                    Varying::Route(bit) => bits |= bit,
-                }
-            }
-        });
-        if always {
-            KeyCheck::Always
-        } else {
-            KeyCheck::Unless(bits)
-        }
-    }
-}
-
-/// The route a value call gives the store it hands on (TIME-8): for each
-/// parameter of the callee that can vary on some route, whether it does
-/// on this one. Written only into a callee that has such a parameter.
-pub(super) struct CallRoute {
-    /// The positions of the callee's store parameters.
-    stores: Vec<usize>,
-    /// The bits set on every call written here.
-    always: u64,
-    /// Bits set where a bit of the caller's own route is.
-    inherited: Vec<(u64, u64)>,
-}
-
-impl CallRoute {
-    /// The route of a call of `callee` as `signature`, or as its instance
-    /// `instance`, from code whose routes are `caller`: `None` in code
-    /// that makes its own store, where nothing varies, and a callee that
-    /// varies on no route.
-    pub(super) fn of(
-        program: &Program,
-        callee: &Callee,
-        instance: Option<&Instance>,
-        signature: &Signature,
-        arguments: &[Argument],
-        caller: Option<&Routes>,
-    ) -> Option<Self> {
-        // Code that makes its own store hands it on with no bit set.
-        let caller = caller?;
-        if !program.has_store_routes() {
-            return None;
-        }
-        let identity = callee.declaration()?;
-        if !matches!(
-            program.modules[identity.0].declarations[identity.1].kind,
-            DeclarationKind::Function(Role::Value)
-                | DeclarationKind::Implementation(Role::Value, _)
-        ) {
-            return None;
-        }
-        let store = program.capability_type("global_state")?;
-        let stores: Vec<_> = signature
-            .parameters
-            .iter()
-            .enumerate()
-            .filter_map(|(index, parameter)| (parameter.ty == store).then_some(index))
-            .collect();
-        let routed: Vec<_> = (0..signature.parameters.len())
-            .map(|local| instance.map_or(local, |instance| instance.original_parameter(local)))
-            .filter(|&slot| {
-                slot < ROUTE_BITS && program.store_route(identity, slot) == StoreRoute::Inherited
-            })
-            .collect();
-        if stores.is_empty() || routed.is_empty() {
-            return None;
-        }
-        let mut route = Self {
-            stores,
-            always: 0,
-            inherited: Vec::new(),
-        };
-        for slot in routed {
-            let bit = 1u64 << slot;
-            // A slot left to its default is given the same value on each
-            // call: it varies on no route.
-            let Some(argument) = arguments
-                .iter()
-                .find(|argument| argument.parameter == Some(slot) && argument.pack.is_none())
-            else {
-                continue;
-            };
-            // An instance written for a const input has the cycle's key
-            // in place of the parameter: the analyser marks the argument.
-            if program.store_key_at_execution(&argument.value) {
-                route.always |= bit;
-                continue;
-            }
-            let mut from = 0;
-            argument.value.walk(&mut |part| {
-                if let ExprKind::Local(local) = part.kind {
-                    match caller.of_local(local) {
-                        Varying::Never => {}
-                        Varying::Always => route.always |= bit,
-                        Varying::Route(caller_bit) => from |= caller_bit,
-                    }
-                }
-            });
-            if route.always & bit == 0 && from != 0 {
-                route.inherited.push((from, bit));
-            }
-        }
-        Some(route)
-    }
-
-    /// Hand each store argument on with this call's route. A held
-    /// argument is the caller's store, whose route the bits read.
-    pub(super) fn forward(&self, given: &mut [String]) {
-        for &index in &self.stores {
-            let store = &given[index];
-            let mut bits: Vec<_> = self
-                .inherited
-                .iter()
-                .map(|(from, bit)| format!("({store}.varies({from:#x}ull) ? {bit:#x}ull : 0ull)"))
-                .collect();
-            if self.always != 0 || bits.is_empty() {
-                bits.insert(0, format!("{:#x}ull", self.always));
-            }
-            given[index] = format!("{store}.routed({})", bits.join(" | "));
-        }
-    }
+    format!("::{library}::checked_store_key({value})")
 }

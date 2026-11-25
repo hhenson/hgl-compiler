@@ -26,9 +26,9 @@ pub struct Program {
     /// at an operation, and as an argument that hands a key to a helper
     /// with the store (TIME-8). The run decides them.
     pub(crate) runtime_store_keys: HashSet<Location>,
-    /// The `const` slots that can hold a store key a cycle changes, and
-    /// on which routes (TIME-8). A slot not here varies on none.
-    pub(crate) store_routes: crate::const_inputs::StoreRoutes,
+    /// The `const` slots of a cycle whose store key can differ between its
+    /// calls (TIME-8).
+    pub(crate) changing_store_slots: crate::const_inputs::ChangingSlots,
     /// Bodies that read a generic value to fix a run-store key.
     pub(crate) generic_store_bodies: HashSet<(usize, usize)>,
     /// Lexical lookup ranges reused across concrete checks of one body.

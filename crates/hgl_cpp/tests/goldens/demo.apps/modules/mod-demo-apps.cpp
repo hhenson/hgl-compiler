@@ -130,7 +130,7 @@ struct impl_
         [[maybe_unused]] const ::hglrt::GlobalState global_state{capability_01_};
         // when, line 17 (TIME-3)
         {
-            if (::hglrt::le__T_T<::hgraph::Int>(::hglrt::checked_value(value), ::hglrt::require_result(::hglrt::get_store_result<::hgraph::Int>(global_state, ::hgraph::Str{"limit"}), ::std::source_location::current())))
+            if (::hglrt::le__T_T<::hgraph::Int>(::hglrt::checked_value(value), ::hglrt::require_result(::hglrt::get_store_result<::hgraph::Int>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"limit"})), ::std::source_location::current())))
             {
                 out_.set(::hglrt::checked_value(value));
                 return;
@@ -156,8 +156,8 @@ struct impl_
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Int limit, [[maybe_unused]] const ::hglrt::list<::hgraph::Int>& values)
     {
         [[maybe_unused]] const ::hglrt::GlobalState global_state{wiring_.global_state()};
-        ::hglrt::put_GlobalState_str_V<::hgraph::Int>(global_state, ::hgraph::Str{"limit"}, limit);
-        [[maybe_unused]] const ::hgraph::Int seen = ::hglrt::require_result(::hglrt::get_store_result<::hgraph::Int>(global_state, ::hgraph::Str{"limit"}), ::std::source_location::current());
+        ::hglrt::put_GlobalState_str_V<::hgraph::Int>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"limit"}), limit);
+        [[maybe_unused]] const ::hgraph::Int seen = ::hglrt::require_result(::hglrt::get_store_result<::hgraph::Int>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"limit"})), ::std::source_location::current());
         return ::hgl::demo::apps::m_::w_::limited(wiring_, ::hgl::demo::apps::m_::w_::ticks(wiring_, values, ::hgl::core::m_::c_::mul_1_1i64_1duration_d48_(seen, ::hgraph::TimeDelta{1000000})));
     }
 };
@@ -203,7 +203,7 @@ struct impl_
         [[maybe_unused]] const ::hglrt::GlobalState global_state{capability_01_};
         // when, line 39 (TIME-3)
         {
-            ::hglrt::put_GlobalState_str_V<::hgraph::Int>(global_state, ::hgraph::Str{"last"}, ::hglrt::checked_value(value));
+            ::hglrt::put_GlobalState_str_V<::hgraph::Int>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"last"}), ::hglrt::checked_value(value));
         }
     }
 };

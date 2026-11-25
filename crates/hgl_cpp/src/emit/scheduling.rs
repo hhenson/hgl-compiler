@@ -455,12 +455,7 @@ impl Emitter<'_> {
     /// `cache`, a `state`, a `start`, or a `stop` has its declarations,
     /// then `start`, then one block that holds every `yield`, then
     /// `stop`". `None` where one is not written yet, which is reported.
-    pub(super) fn source_hooks(
-        &mut self,
-        signature: &Signature,
-        body: &Body,
-        store_keys: &super::store::Keys,
-    ) -> Option<Hooked> {
+    pub(super) fn source_hooks(&mut self, signature: &Signature, body: &Body) -> Option<Hooked> {
         let mut states: Vec<(usize, Option<&Expr>)> = Vec::new();
         let mut injected: Vec<usize> = Vec::new();
         let mut start: Option<&[Stmt]> = None;
@@ -541,9 +536,8 @@ impl Emitter<'_> {
             members.push_str(&format!("{two}::{library}::Lent<{made}> {member}{{}};\n"));
             let parameter = names::temporary("capability", local);
             eval_parameters.push(format!("{view} {parameter}"));
-            let proof = super::store::proof_argument(name, store_keys.prechecked());
             eval_before.push_str(&format!(
-                "{two}const ::{library}::Lending<{made}> {}{{kept_.{SLOT}->{member}, {made}{{{parameter}{proof}}}}};\n",
+                "{two}const ::{library}::Lending<{made}> {}{{kept_.{SLOT}->{member}, {made}{{{parameter}}}}};\n",
                 names::temporary("lent", local)
             ));
         }
@@ -580,8 +574,8 @@ impl Emitter<'_> {
             body,
             &injected,
             &reached,
-            (Hook::Start, false),
-            store_keys.prechecked(),
+            Hook::Start,
+            false,
             &mut start_parameters,
         )?;
         let mut start_before =
@@ -608,8 +602,8 @@ impl Emitter<'_> {
                 body,
                 &injected,
                 statements,
-                (Hook::Stop, false),
-                store_keys.prechecked(),
+                Hook::Stop,
+                false,
                 &mut stop_parameters,
             )?;
             stop_after.push_str(&kept_bound);

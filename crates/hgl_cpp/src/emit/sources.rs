@@ -98,7 +98,7 @@ impl Emitter<'_> {
         // SOURCE-1: what the source's declarations and hooks add to its
         // node (`scheduling`): nothing for one that has none.
         let store_keys = store::Keys::of(self, index, signature, body);
-        let Some(hooked) = self.source_hooks(signature, body, &store_keys) else {
+        let Some(hooked) = self.source_hooks(signature, body) else {
             return;
         };
         let result = signature

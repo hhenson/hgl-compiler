@@ -170,7 +170,6 @@ pub(crate) fn module(
         temporal: None,
         ahead: Vec::new(),
         control: control::State::default(),
-        routes: None,
     };
     let declared = &program.modules[index];
     let declarations = (0..declared.declarations.len())
@@ -248,10 +247,6 @@ struct Emitter<'a> {
     /// What the control family keeps while it writes a graph: what has a
     /// value where a child graph is written (`control`).
     control: control::State,
-    /// The routes of the value function being written: which of its
-    /// parameters can hold a store key that varies in a cycle (TIME-8,
-    /// `store`). `None` in code that makes its own store.
-    routes: Option<store::Routes>,
 }
 
 impl Emitter<'_> {

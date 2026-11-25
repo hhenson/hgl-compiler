@@ -25,27 +25,13 @@ type Declaration = (usize, usize);
 type Slot = (Declaration, usize);
 pub(crate) type Demands = HashMap<Declaration, BTreeMap<usize, Demand>>;
 
-/// Whether a `const` parameter can hold a store key that differs between
-/// the calls of a cycle (TIME-8: "Where a function calls itself, directly
-/// or through other functions, and the key can differ between the calls
-/// on the way round ... the call that uses it fails with that code as it
-/// is evaluated"). Fixedness is per route: a parameter is `Inherited`
-/// where some routes into it carry such a key and others may not.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum StoreRoute {
-    /// On no route: "A key handed round unchanged is as fixed as in a
-    /// function that does not call itself."
-    #[default]
-    Fixed,
-    /// On the routes that hand it a key a cycle changed: a function
-    /// outside the cycle, or one that hands the key round unchanged.
-    Inherited,
-    /// On every route: a parameter of the cycle that its calls change,
-    /// exchange or give anew.
-    Changing,
-}
-
-pub(crate) type StoreRoutes = HashMap<Slot, StoreRoute>;
+/// The `const` slots of a cycle whose key can differ between its calls
+/// (TIME-8: "Where a function calls itself, directly or through other
+/// functions, and the key can differ between the calls on the way round
+/// ... the call that uses it fails with that code as it is evaluated"):
+/// those its calls change, exchange or give anew. "A key handed round
+/// unchanged is as fixed as in a function that does not call itself."
+pub(crate) type ChangingSlots = HashSet<Slot>;
 
 /// Selected value calls or the resolved demand for a generic instance and slot.
 pub(crate) type SelectedDemands = RefCell<HashMap<InstanceSlot, SelectedDemand>>;
@@ -979,7 +965,7 @@ pub(crate) fn demands(
     Demands,
     HashSet<Location>,
     HashSet<Declaration>,
-    StoreRoutes,
+    ChangingSlots,
 ) {
     let mut required = Demands::new();
     let mut uses: HashMap<Slot, Vec<(Slot, Demand)>> = HashMap::new();
@@ -1123,7 +1109,13 @@ pub(crate) fn demands(
                         program.modules[called.0].details.get(called.1)
                     && (borrows_store(target) || is_graph(called))
                 {
-                    store_calls.record(caller, signature, called, target, arguments);
+                    let argument_for = |slot: usize| {
+                        arguments
+                            .iter()
+                            .find(|argument| argument.parameter == Some(slot))
+                            .map(|argument| &argument.value)
+                    };
+                    store_calls.record(caller, signature, called, target, argument_for);
                     for argument in arguments {
                         slots_read(&argument.value, &bindings, &slots, |slot| {
                             store_arguments
@@ -1176,8 +1168,8 @@ pub(crate) fn demands(
         }
     }
     let observed_keys = store_reads.values().flatten().copied().collect();
-    let store_routes = store_calls.routes(observed_keys, &uses);
-    let changes_in_cycle = |slot: &Slot| store_routes.get(slot) == Some(&StoreRoute::Changing);
+    let changing = store_calls.changed(observed_keys, &uses);
+    let changes_in_cycle = |slot: &Slot| changing.contains(slot);
     while let Some(((declaration, slot), demand)) = pending.pop_front() {
         if demand == Demand::StoreKey {
             let position = (declaration, slot);
@@ -1210,7 +1202,7 @@ pub(crate) fn demands(
         .chain(store_arguments)
         .filter_map(|(at, slots)| slots.iter().any(changes_in_cycle).then_some(at))
         .collect();
-    (required, runtime_store_keys, generic_reads, store_routes)
+    (required, runtime_store_keys, generic_reads, changing)
 }
 
 fn names_generic_value(value: &Expr) -> bool {
@@ -1233,33 +1225,33 @@ struct StoreInput {
 }
 
 impl StoreCalls {
-    fn record(
+    /// Record a call from `caller`, written as `signature`, of `callee`,
+    /// written as `target`; `argument_for` gives the argument of each of
+    /// the callee's slots, where the call writes one.
+    fn record<'a>(
         &mut self,
         caller: Declaration,
         signature: &Signature,
         callee: Declaration,
         target: &Signature,
-        arguments: &[Argument],
+        argument_for: impl Fn(usize) -> Option<&'a Expr>,
     ) {
         self.calls.insert((caller, callee));
         for (slot, parameter) in target.parameters.iter().enumerate() {
             if !parameter.constant {
                 continue;
             }
-            let forwarded = arguments
-                .iter()
-                .find(|argument| argument.parameter == Some(slot))
-                .and_then(|argument| match argument.value.kind {
-                    ExprKind::Local(local)
-                        if signature
-                            .parameters
-                            .get(local)
-                            .is_some_and(|parameter| parameter.constant) =>
-                    {
-                        Some(local)
-                    }
-                    _ => None,
-                });
+            let forwarded = argument_for(slot).and_then(|argument| match argument.kind {
+                ExprKind::Local(local)
+                    if signature
+                        .parameters
+                        .get(local)
+                        .is_some_and(|parameter| parameter.constant) =>
+                {
+                    Some(local)
+                }
+                _ => None,
+            });
             self.inputs.push(StoreInput {
                 caller,
                 callee: (callee, slot),
@@ -1268,17 +1260,16 @@ impl StoreCalls {
         }
     }
 
-    /// Classify each `const` slot by the routes that can hand it a key
-    /// that differs between the calls of a cycle (TIME-8). A slot of a
-    /// cycle that its calls change is `Changing`. A slot that such a slot
-    /// reaches through further calls, inside or outside the cycle, is
-    /// `Inherited`: other routes into it can still fix its key.
-    /// `observed` holds the slots a store operation's key reads.
-    fn routes(
+    /// The slots of each cycle whose key can differ between its calls
+    /// (TIME-8): one the cycle's calls compute or give anew, one that
+    /// receives another parameter on the way round, and what such a slot
+    /// is handed on to in the cycle. `observed` holds the slots a store
+    /// operation's key reads.
+    fn changed(
         self,
         mut observed: HashSet<Slot>,
         uses: &HashMap<Slot, Vec<(Slot, Demand)>>,
-    ) -> StoreRoutes {
+    ) -> ChangingSlots {
         let mut graph = DiGraph::<Declaration, ()>::new();
         let mut nodes = HashMap::new();
         for &(caller, callee) in &self.calls {
@@ -1301,18 +1292,13 @@ impl StoreCalls {
                 .get(&caller)
                 .is_some_and(|cycle| cycles.get(&callee) == Some(cycle))
         };
-        // Each slot an argument of a store-borrowing call reads, to the
-        // callee's slot: `outgoing` for every such call, `outside` (from
-        // callee to caller) for one that leaves the caller's cycle.
+        // From a callee's slot to each slot of its caller that a call
+        // leaving the caller's cycle reads for it.
         let mut outside = HashMap::<Slot, Vec<Slot>>::new();
-        let mut outgoing = HashMap::<Slot, Vec<Slot>>::new();
         for (&to, senders) in uses {
             for &(from, _) in senders {
-                if self.calls.contains(&(from.0, to.0)) {
-                    outgoing.entry(from).or_default().push(to);
-                    if !same_cycle(from.0, to.0) {
-                        outside.entry(to).or_default().push(from);
-                    }
+                if self.calls.contains(&(from.0, to.0)) && !same_cycle(from.0, to.0) {
+                    outside.entry(to).or_default().push(from);
                 }
             }
         }
@@ -1345,21 +1331,7 @@ impl StoreCalls {
             }
         }
         follow_slots(&mut changed, &forwarded);
-        // A changed key reaches further calls only on the routes through
-        // the cycle; the callee keeps its other routes.
-        let mut reached = changed.clone();
-        follow_slots(&mut reached, &outgoing);
-        reached
-            .into_iter()
-            .map(|slot| {
-                let route = if changed.contains(&slot) {
-                    StoreRoute::Changing
-                } else {
-                    StoreRoute::Inherited
-                };
-                (slot, route)
-            })
-            .collect()
+        changed
     }
 }
 

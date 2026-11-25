@@ -50,8 +50,8 @@ struct impl_
         [[maybe_unused]] const ::hglrt::GlobalState global_state{capability_01_};
         // when, line 16 (TIME-3)
         {
-            ::hglrt::put_GlobalState_str_V<::hgl::demo::store::m_::Quote>(global_state, ::hgraph::Str{"quote"}, ::hgl::demo::store::m_::Quote{::hglrt::checked_value(value), ::hglrt::add__i64_i64(::hglrt::checked_value(value), 1)});
-            out_.set((::hglrt::require_result(::hglrt::get_store_result<::hgl::demo::store::m_::Quote>(global_state, ::hgraph::Str{"quote"}), ::std::source_location::current())).ask);
+            [&] { const ::hglrt::GlobalState& argument_00_ = global_state; const ::hgraph::Str argument_01_ = ::hglrt::checked_store_key(::hgraph::Str{"quote"}); const ::hgl::demo::store::m_::Quote argument_02_ = ::hgl::demo::store::m_::Quote{::hglrt::checked_value(value), ::hglrt::add__i64_i64(::hglrt::checked_value(value), 1)}; return ::hglrt::put_GlobalState_str_V<::hgl::demo::store::m_::Quote>(argument_00_, argument_01_, argument_02_); }();
+            out_.set((::hglrt::require_result(::hglrt::get_store_result<::hgl::demo::store::m_::Quote>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"quote"})), ::std::source_location::current())).ask);
             return;
         }
     }
@@ -78,8 +78,8 @@ struct impl_
         [[maybe_unused]] const ::hglrt::GlobalState global_state{capability_01_};
         // when, line 25 (TIME-3)
         {
-            ::hglrt::put_GlobalState_str_V<::std::tuple<::hgraph::Int, ::hgraph::Str>>(global_state, ::hgraph::Str{"pair"}, ::std::tuple<::hgraph::Int, ::hgraph::Str>{::hglrt::checked_value(value), ::hgraph::Str{"x"}});
-            out_.set(::std::get<0>(::hglrt::require_result(::hglrt::get_store_result<::std::tuple<::hgraph::Int, ::hgraph::Str>>(global_state, ::hgraph::Str{"pair"}), ::std::source_location::current())));
+            ::hglrt::put_GlobalState_str_V<::std::tuple<::hgraph::Int, ::hgraph::Str>>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"pair"}), ::std::tuple<::hgraph::Int, ::hgraph::Str>{::hglrt::checked_value(value), ::hgraph::Str{"x"}});
+            out_.set(::std::get<0>(::hglrt::require_result(::hglrt::get_store_result<::std::tuple<::hgraph::Int, ::hgraph::Str>>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"pair"})), ::std::source_location::current())));
             return;
         }
     }
@@ -107,8 +107,8 @@ struct impl_
         // when, line 33 (TIME-3)
         {
             [[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Int> given = ::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"a"}, ::hglrt::checked_value(value)}});
-            ::hglrt::put_GlobalState_str_V<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(global_state, ::hgraph::Str{"book"}, given);
-            [[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Int> book = ::hglrt::require_result(::hglrt::get_store_result<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(global_state, ::hgraph::Str{"book"}), ::std::source_location::current());
+            ::hglrt::put_GlobalState_str_V<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"book"}), given);
+            [[maybe_unused]] const ::hglrt::dict<::hgraph::Str, ::hgraph::Int> book = ::hglrt::require_result(::hglrt::get_store_result<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"book"})), ::std::source_location::current());
             [[maybe_unused]] const ::std::optional<::hgraph::Int> found = ::hglrt::result_or_null(::hglrt::get_dict_result<::hgraph::Str, ::hgraph::Int>(book, ::hgraph::Str{"a"}));
             if ((!found.has_value()))
             {
@@ -143,9 +143,9 @@ struct impl_
         // when, line 45 (TIME-3)
         {
             [[maybe_unused]] const ::hglrt::set<::hgraph::Int> members = ::hglrt::set<::hgraph::Int>{::hglrt::checked_value(value), ::hglrt::add__i64_i64(::hglrt::checked_value(value), 1)};
-            ::hglrt::put_GlobalState_str_V<::hglrt::set<::hgraph::Int>>(global_state, ::hgraph::Str{"members"}, members);
+            ::hglrt::put_GlobalState_str_V<::hglrt::set<::hgraph::Int>>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"members"}), members);
             [[maybe_unused]] ::hgraph::Int n = 0;
-            const ::hglrt::set<::hgraph::Int> items_00_ = ::hglrt::require_result(::hglrt::get_store_result<::hglrt::set<::hgraph::Int>>(global_state, ::hgraph::Str{"members"}), ::std::source_location::current());
+            const ::hglrt::set<::hgraph::Int> items_00_ = ::hglrt::require_result(::hglrt::get_store_result<::hglrt::set<::hgraph::Int>>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"members"})), ::std::source_location::current());
             for ([[maybe_unused]] const ::hgraph::Int& member : items_00_)
             {
                 n = ::hglrt::add__i64_i64(n, member);
@@ -177,10 +177,10 @@ struct impl_
         [[maybe_unused]] const ::hglrt::GlobalState global_state{capability_01_};
         // when, line 56 (TIME-3)
         {
-            ::hglrt::put_GlobalState_str_V<::hglrt::set_delta<::hgraph::Int>>(global_state, ::hgraph::Str{"change"}, ::hglrt::set_delta<::hgraph::Int>{::hglrt::set<::hgraph::Int>{::hglrt::checked_value(value)}, ::hglrt::set<::hgraph::Int>{}});
+            [&] { const ::hglrt::GlobalState& argument_00_ = global_state; const ::hgraph::Str argument_01_ = ::hglrt::checked_store_key(::hgraph::Str{"change"}); const ::hglrt::set_delta<::hgraph::Int> argument_02_ = ::hglrt::set_delta<::hgraph::Int>{::hglrt::set<::hgraph::Int>{::hglrt::checked_value(value)}, ::hglrt::set<::hgraph::Int>{}}; return ::hglrt::put_GlobalState_str_V<::hglrt::set_delta<::hgraph::Int>>(argument_00_, argument_01_, argument_02_); }();
             [[maybe_unused]] ::hgraph::Int n = 0;
-            const ::hglrt::set<::hgraph::Int> items_00_ = (::hglrt::require_result(::hglrt::get_store_result<::hglrt::set_delta<::hgraph::Int>>(global_state, ::hgraph::Str{"change"}), ::std::source_location::current())).added;
-            for ([[maybe_unused]] const ::hgraph::Int& member : items_00_)
+            const ::hglrt::set<::hgraph::Int> items_03_ = (::hglrt::require_result(::hglrt::get_store_result<::hglrt::set_delta<::hgraph::Int>>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"change"})), ::std::source_location::current())).added;
+            for ([[maybe_unused]] const ::hgraph::Int& member : items_03_)
             {
                 n = ::hglrt::add__i64_i64(n, member);
             }
@@ -233,8 +233,8 @@ struct impl_
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x)
     {
         [[maybe_unused]] const ::hglrt::GlobalState global_state{wiring_.global_state()};
-        ::hglrt::put_GlobalState_str_V<::hgl::demo::store::m_::Quote>(global_state, ::hgraph::Str{"q"}, ::hgl::demo::store::m_::Quote{5, 6});
-        [[maybe_unused]] const ::hgl::demo::store::m_::Quote q = ::hglrt::require_result(::hglrt::get_store_result<::hgl::demo::store::m_::Quote>(global_state, ::hgraph::Str{"q"}), ::std::source_location::current());
+        [&] { const ::hglrt::GlobalState& argument_00_ = global_state; const ::hgraph::Str argument_01_ = ::hglrt::checked_store_key(::hgraph::Str{"q"}); const ::hgl::demo::store::m_::Quote argument_02_ = ::hgl::demo::store::m_::Quote{5, 6}; return ::hglrt::put_GlobalState_str_V<::hgl::demo::store::m_::Quote>(argument_00_, argument_01_, argument_02_); }();
+        [[maybe_unused]] const ::hgl::demo::store::m_::Quote q = ::hglrt::require_result(::hglrt::get_store_result<::hgl::demo::store::m_::Quote>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"q"})), ::std::source_location::current());
         return ::hgl::demo::store::m_::w_::bid_plus(wiring_, x, (q).bid);
     }
 };
@@ -256,7 +256,7 @@ struct impl_
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] const ::hglrt::list<::hgraph::Int>& values)
     {
         [[maybe_unused]] const ::hglrt::GlobalState global_state{wiring_.global_state()};
-        [[maybe_unused]] const ::hgraph::Int by = ::hglrt::require_result(::hglrt::get_store_result<::hgraph::Int>(global_state, ::hgraph::Str{"by"}), ::std::source_location::current());
+        [[maybe_unused]] const ::hgraph::Int by = ::hglrt::require_result(::hglrt::get_store_result<::hgraph::Int>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"by"})), ::std::source_location::current());
         return ::hgl::demo::store::m_::w_::bid_plus(wiring_, ::hgl::demo::store::m_::w_::ticks(wiring_, values), by);
     }
 };
@@ -376,7 +376,7 @@ struct impl_
         [[maybe_unused]] const ::hglrt::GlobalState global_state{capability_01_};
         // when, line 93 (TIME-3)
         {
-            [[maybe_unused]] const ::hgl::demo::store::m_::Quote q = ::hglrt::require_result(::hglrt::get_store_result<::hgl::demo::store::m_::Quote>(global_state, ::hgraph::Str{"base"}), ::std::source_location::current());
+            [[maybe_unused]] const ::hgl::demo::store::m_::Quote q = ::hglrt::require_result(::hglrt::get_store_result<::hgl::demo::store::m_::Quote>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"base"})), ::std::source_location::current());
             ::hglrt::publish(out_, [&]() -> ::hgl::demo::store::m_::Quote { const ::hgraph::Int field_00_ = ::hglrt::add__i64_i64((q).bid, ::hglrt::checked_value(value)); const ::hgraph::Int field_01_ = ::hglrt::add__i64_i64((q).ask, ::hglrt::checked_value(value)); return ::hgl::demo::store::m_::Quote{field_00_, field_01_}; }());
             return;
         }

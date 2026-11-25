@@ -24,12 +24,6 @@ impl Emitter<'_> {
         // graph, or test resumes its own emission after the helper.
         let outer = self.temporal.take();
         let control = std::mem::take(&mut self.control);
-        // TIME-8: an anonymous value function is given its store, which
-        // it hands on with a route of its own; nothing of it varies.
-        let routes = std::mem::replace(
-            &mut self.routes,
-            function.template.value.then(super::store::Routes::default),
-        );
         let definition = if function.template.value {
             self.anonymous_value(function, signature, &name)
         } else {
@@ -43,7 +37,6 @@ impl Emitter<'_> {
         };
         self.temporal = outer;
         self.control = control;
-        self.routes = routes;
         self.ahead
             .push(format!("namespace {{\n{}}}\n", definition?));
         if function.template.value {

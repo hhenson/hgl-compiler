@@ -1279,8 +1279,10 @@ fn an_applications_parts_are_evaluated_in_the_order_written() {
         unit.find(text)
             .unwrap_or_else(|| panic!("{text} in\n{unit}"))
     };
-    let values = "const ::hglrt::list<::hgraph::Int> argument_00_ = ";
-    let every = "const ::hgraph::TimeDelta argument_01_ = ";
+    // The store's `put` holds its three arguments first: its key is
+    // checked where the call is evaluated (CAP-6).
+    let values = "const ::hglrt::list<::hgraph::Int> argument_03_ = ";
+    let every = "const ::hgraph::TimeDelta argument_04_ = ";
     assert!(
         at("::hglrt::application::Store store_;") < at("const ::hglrt::RunConfig run_config = ")
     );
@@ -1290,7 +1292,7 @@ fn an_applications_parts_are_evaluated_in_the_order_written() {
     assert!(at(every) < at("const ::hglrt::testing::Bounds bounds_ = "));
     // The entry, wired in the run, is given what was held.
     assert!(
-        at("argument_02_ = argument_00_; const ::hgraph::TimeDelta argument_03_ = argument_01_;")
+        at("argument_05_ = argument_03_; const ::hgraph::TimeDelta argument_06_ = argument_04_;")
             > at("bounds_ = ")
     );
 }
@@ -1333,11 +1335,11 @@ fn every_ordinary_value_is_put_in_the_store() {
 /// TIME-8: "Where a function calls itself ... and the key can differ
 /// between the calls on the way round ... the call that uses it fails ...
 /// as it is evaluated", and "a key handed round unchanged is as fixed as in
-/// a function that does not call itself" (CAP-6). Fixedness is per route:
-/// a helper given a key its cycle changes checks it at its operation on
-/// that route only, and attachment checks only the node's fixed keys.
+/// a function that does not call itself" (CAP-6). Every store operation
+/// checks its key as it is evaluated, on every route; attachment checks,
+/// earlier, only the keys the node's configuration fixes.
 #[test]
-fn a_key_a_cycle_changes_is_checked_on_its_route_only() {
+fn every_store_operation_checks_its_key_and_attachment_the_fixed_ones() {
     let emitted = emit_with(
         &[(
             "m.hgl",
@@ -1355,6 +1357,7 @@ fn both(const key: str, const fixed: str) {
         save(global_state, fixed)
         middle(global_state, fixed)
         recur(global_state, 1, key)
+        put(global_state, "user.literal", 1)
     }
 }
 "#,
@@ -1373,35 +1376,37 @@ fn both(const key: str, const fixed: str) {
         let start = module.find(name).unwrap_or_else(|| panic!("{name}"));
         &module[start..start + module[start..].find("\n}\n").unwrap()]
     };
-    // The helper checks its key where a route says it varies: its second
-    // parameter, bit 1 << 1.
+    // The helper checks its key wherever it is called from.
     assert!(
-        piece("void save(").contains("::hglrt::use_fixed_store_key(store, key, 0x2ull)"),
+        piece("void save(").contains(
+            "put_GlobalState_str_V<::hgraph::Int>(store, ::hglrt::checked_store_key(key), 7)"
+        ),
         "{module}"
     );
-    // The cycle hands its changed key on with that bit set; a helper in
-    // between passes on the bit of its own route.
+    // The store is handed on as it is, and carries no proof.
     assert!(
-        piece("void recur(").contains("middle(store.routed(0x2ull), key)"),
+        piece("void recur(").contains("middle(store, key)"),
         "{module}"
     );
     assert!(
-        piece("void middle(")
-            .contains("save(store.routed((store.varies(0x2ull) ? 0x2ull : 0ull)), name)"),
+        piece("void middle(").contains("save(store, name)"),
         "{module}"
     );
-    // The node's own calls set no bit, and attachment checks only the key
-    // that is fixed on every route.
     let node = &module[module.find("namespace n_::both").unwrap()..];
-    assert!(node.contains("save(global_state, fixed.value())"), "{node}");
     assert!(
-        node.contains("middle(global_state, fixed.value())"),
+        node.contains("const ::hglrt::GlobalState global_state{capability_"),
         "{node}"
     );
     assert!(
-        node.contains("recur(global_state, 1, key.value())"),
+        !node.contains("global_state{capability_00_, true}"),
         "{node}"
     );
+    // A literal key is checked at its operation too.
+    assert!(
+        node.contains("::hglrt::checked_store_key(::hgraph::Str{\"user.literal\"})"),
+        "{node}"
+    );
+    // Attachment checks only the key fixed on every route, once.
     assert_eq!(node.matches("prepare_store_key(").count(), 1, "{node}");
     assert!(node.contains("{ return fixed; }"), "{node}");
 }
@@ -1440,7 +1445,7 @@ fn a_statement_names_its_hgl_file_and_line() {
     // built (FN-9).
     let put = lines
         .iter()
-        .position(|line| line.contains("put_GlobalState_str_V<::hgraph::Int>(global_state, ::hgraph::Str{\"limit\"}, limit)"))
+        .position(|line| line.contains("put_GlobalState_str_V<::hgraph::Int>(global_state, ::hglrt::checked_store_key(::hgraph::Str{\"limit\"}), limit)"))
         .expect("the graph's put is written");
     assert_eq!(lines[put - 1], "#line 26 \"demo.apps.hgl\"");
     // After each piece the unit's own numbering again, the line after the

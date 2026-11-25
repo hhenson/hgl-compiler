@@ -713,14 +713,9 @@ impl Emitter<'_> {
                 })
                 .collect();
             let used: Vec<Stmt> = initialized.iter().chain(statements).cloned().collect();
-            let Some(made) = self.capabilities(
-                body,
-                &injected,
-                &used,
-                (Hook::Start, dated.start),
-                store_keys.prechecked(),
-                &mut hook,
-            ) else {
+            let Some(made) =
+                self.capabilities(body, &injected, &used, Hook::Start, dated.start, &mut hook)
+            else {
                 return;
             };
             written.push_str(&made);
@@ -773,8 +768,8 @@ impl Emitter<'_> {
             body,
             &injected,
             &all,
-            (Hook::When, dated.evaluation),
-            store_keys.prechecked(),
+            Hook::When,
+            dated.evaluation,
             &mut hook,
         ) else {
             return;
@@ -893,8 +888,8 @@ impl Emitter<'_> {
                 body,
                 &injected,
                 statements,
-                (Hook::Stop, dated.stop),
-                store_keys.prechecked(),
+                Hook::Stop,
+                dated.stop,
                 &mut hook,
             ) else {
                 return;
@@ -1021,8 +1016,8 @@ impl Emitter<'_> {
         body: &Body,
         injected: &[usize],
         statements: &[Stmt],
-        (hook, dated): (Hook, bool),
-        fixed_keys_checked: bool,
+        hook: Hook,
+        dated: bool,
         parameters: &mut Vec<String>,
     ) -> Option<String> {
         let mut written = String::new();
@@ -1037,9 +1032,8 @@ impl Emitter<'_> {
             };
             let parameter = names::temporary("capability", local);
             parameters.push(format!("{view} {parameter}"));
-            let proof = super::store::proof_argument(name, fixed_keys_checked);
             written.push_str(&format!(
-                "{INDENT}{INDENT}[[maybe_unused]] const {made} {}{{{parameter}{}{proof}}};\n",
+                "{INDENT}{INDENT}[[maybe_unused]] const {made} {}{{{parameter}{}}};\n",
                 identifier(name),
                 super::scheduling::made_in(name, hook, dated, parameters)
             ));

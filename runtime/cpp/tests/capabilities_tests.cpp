@@ -236,28 +236,15 @@ TEST_CASE("an absent key fails with value.missing_key (CAP-6)") {
     CHECK(hglrt::get_GlobalState_str<hglrt::i64>(store, "limit") == 3);
 }
 
-TEST_CASE("a key that varies on a cycle's route is checked where it is used (TIME-8, CAP-6)") {
-    hgraph::GlobalState state;
-    const hglrt::GlobalState unproven{state.view()};
-    const hglrt::GlobalState proven{state.view(), true};
-    // Without attachment's proof every use is checked.
+TEST_CASE("every store operation checks its key where it is used (TIME-8, CAP-6)") {
+    // The run's own key fails with its code, wherever else it was checked.
     hglrt::testing::raises("store.reserved_key", [&] {
-        (void)hglrt::use_fixed_store_key(unproven, hglrt::str{"run.output"});
+        (void)hglrt::checked_store_key(hglrt::str{"run.output"});
     });
-    // Attachment checked the node's fixed keys: a fixed use is not checked again.
-    CHECK(hglrt::use_fixed_store_key(proven, hglrt::str{"run.output"}) == "run.output");
-    // On a route where parameter 1 varies, a key that reads it is checked.
-    const hglrt::GlobalState routed = proven.routed(std::uint64_t{1} << 1);
-    CHECK(routed.varies(std::uint64_t{1} << 1));
-    CHECK_FALSE(routed.varies(std::uint64_t{1} << 2));
-    CHECK(hglrt::use_fixed_store_key(routed, hglrt::str{"run.output"}, std::uint64_t{1} << 2) ==
-          "run.output");
-    hglrt::testing::raises("store.reserved_key", [&] {
-        (void)hglrt::use_fixed_store_key(routed, hglrt::str{"run.output"}, std::uint64_t{1} << 1);
-    });
-    // A new route replaces the old one; the proof is kept.
-    CHECK_FALSE(routed.routed(0).varies(std::uint64_t{1} << 1));
-    CHECK(routed.routed(0).fixed_keys_checked());
+    // Any other key is handed on as it is.
+    const hglrt::str key{"run.output.mine"};
+    CHECK(&hglrt::checked_store_key(key) == &key);
+    CHECK(hglrt::checked_store_key(hglrt::str{"user.key"}) == "user.key");
 }
 
 TEST_CASE("a run's configuration reads each field as supplied, null where it is left out (CAP-7)") {

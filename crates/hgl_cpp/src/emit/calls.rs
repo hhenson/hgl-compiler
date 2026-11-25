@@ -307,15 +307,14 @@ impl Emitter<'_> {
         let signature = native_pack
             .as_ref()
             .map_or(signature, |pack| &pack.signature);
-        let store_key = program
-            .store_arguments(callee, arguments)
-            .filter(|(_, key)| {
-                !super::store::source_safe(program, key)
-                    && !self
-                        .temporal
-                        .as_ref()
-                        .is_some_and(|context| context.run_recorder)
-            });
+        // TIME-8, CAP-6: every store operation checks its key as it is
+        // evaluated, but core's recorder, which writes the run's own key.
+        let store_key = program.store_key_argument(callee, arguments).filter(|_| {
+            !self
+                .temporal
+                .as_ref()
+                .is_some_and(|context| context.run_recorder)
+        });
         let assigns = signature.parameters.iter().any(|parameter| parameter.var);
         if assigns && !statement {
             return self.missing(at, "a call that assigns a place, inside an expression");
@@ -331,15 +330,6 @@ impl Emitter<'_> {
                 |instance| instance.parameter(argument),
             )
         };
-        // TIME-8: the callee's keys that vary on this call's route.
-        let store_route = super::store::CallRoute::of(
-            program,
-            callee,
-            concrete,
-            signature,
-            arguments,
-            self.routes.as_ref(),
-        );
         let given_places: Vec<usize> = runtime_arguments(arguments)
             .filter(|(_, argument)| {
                 parameter_for(argument)
@@ -435,25 +425,10 @@ impl Emitter<'_> {
                 ));
                 continue;
             }
-            let key = store_key.filter(|(_, key)| std::ptr::eq(*key, &argument.value));
+            let key = store_key.is_some_and(|key| std::ptr::eq(key, &argument.value));
             let value = self.expression(scope, &argument.value);
-            let value = if let Some((store, key)) = key {
-                // TIME-8: a key that can differ between the calls of a
-                // cycle is checked here, as the call is evaluated. One
-                // fixed on this route is checked here only where the
-                // store carries no proof from the node's attachment.
-                let check = if program.store_key_at_execution(key) {
-                    super::store::KeyCheck::Always
-                } else {
-                    self.routes
-                        .as_ref()
-                        .map_or(super::store::KeyCheck::Unless(0), |routes| routes.key(key))
-                };
-                let store = match check {
-                    super::store::KeyCheck::Always => None,
-                    super::store::KeyCheck::Unless(_) => Some(self.expression(scope, store)),
-                };
-                super::store::checked(&value, store.as_deref(), check)
+            let value = if key {
+                super::store::checked(&value)
             } else {
                 value
             };
@@ -508,7 +483,7 @@ impl Emitter<'_> {
             written.push((
                 index,
                 value,
-                key.is_some() || self.may_fail_here(&argument.value),
+                key || self.may_fail_here(&argument.value),
                 held,
             ));
         }
@@ -587,10 +562,7 @@ impl Emitter<'_> {
                 DeclarationKind::NativeCandidate(..)
             )
         });
-        let joined = |mut given: Vec<String>| {
-            if let Some(route) = &store_route {
-                route.forward(&mut given);
-            }
+        let joined = |given: Vec<String>| {
             let argument = |(slot, parameter): (usize, &hgl_analyser::Parameter)| {
                 (!matches!(parameter.ty, Type::Function(_))).then(|| given[slot].as_str())
             };
