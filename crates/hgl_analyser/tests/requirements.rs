@@ -370,6 +370,334 @@ fn reflected_member_same_key_constraints_intersect_in_any_order() {
     }
 }
 
+/// GEN-7, TYPE-9, TYPE-16: an unresolved type that can normalize when its
+/// generic parameter is supplied (`delta<T>`, `atomic<T>`, nested lists,
+/// nullable wrappers, open function types, open list extents) cannot be
+/// discarded as disjoint when intersecting same-key reflected bounds.
+/// Genuine structural disjointness still narrows in either conjunction order.
+#[test]
+fn reflected_member_intersection_keeps_normalizing_open_types() {
+    let base = concat!(
+        "const k: str = \"size\"\n",
+        "const fn allowed<X>(v: X) -> X requires X == str => v\n",
+        "const fn allowed_i64_or_str<X>(v: X) -> X requires X in {i64, str} => v\n",
+        "const fn allowed_i64<X>(v: X) -> X requires X == i64 => v\n",
+        "operator str_op<X>(v: X) -> i64\n",
+        "impl const fn str_op(v: str) -> i64 => 1\n",
+        "const fn sig_i64(size: i64) -> i64 => 1\n",
+        "const fn sig_str(size: str) -> i64 => 1\n",
+        "const fn sig_list(size: list<i64>) -> i64 => 1\n",
+        "const fn sig_pair(size: list<i64, 2>) -> i64 => 1\n",
+        "const fn sig_opt(size: i64?) -> i64 => 1\n",
+        "const fn sig_tuple(size: tuple<i64, str>) -> i64 => 1\n",
+    );
+    let decl = concat!(
+        "const fn demonstration<T, ...P>(f: const fn(...{P}) -> i64, ",
+        "t: T, v: P[k]) -> P[k]\n",
+    );
+    let op_decl = concat!(
+        "const fn op_demo<T, ...P>(f: const fn(...{P}) -> i64, ",
+        "t: T, v: P[k]) -> i64\n",
+    );
+
+    // Unsound narrowing regressions: both conjunction orders must reject at
+    // declaration AND with a concrete invocation where the open type
+    // normalizes into the concrete set (for both callee requires and operators).
+    let rejecting_with_calls = [
+        (
+            "P[k] in {delta<T>, str} && P[k] in {i64, str}",
+            "test actual { assert demonstration(sig_i64, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_i64, 2, 3) == 1 }\n",
+        ),
+        (
+            "P[k] in {i64, str} && P[k] in {delta<T>, str}",
+            "test actual { assert demonstration(sig_i64, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_i64, 2, 3) == 1 }\n",
+        ),
+        (
+            "each a in arg_keys(P) { P[a] in {delta<T>, str} } && P[k] in {i64, str}",
+            "test actual { assert demonstration(sig_i64, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_i64, 2, 3) == 1 }\n",
+        ),
+        (
+            "P[k] in {i64, str} && each a in arg_keys(P) { P[a] in {delta<T>, str} }",
+            "test actual { assert demonstration(sig_i64, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_i64, 2, 3) == 1 }\n",
+        ),
+        (
+            "P[k] == delta<T> && P[k] in {i64, str}",
+            "test actual { assert demonstration(sig_i64, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_i64, 2, 3) == 1 }\n",
+        ),
+        (
+            "P[k] in {i64, str} && P[k] == delta<T>",
+            "test actual { assert demonstration(sig_i64, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_i64, 2, 3) == 1 }\n",
+        ),
+        (
+            "P[k] in {atomic<T>, str} && P[k] in {i64, str}",
+            "test actual { assert demonstration(sig_i64, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_i64, 2, 3) == 1 }\n",
+        ),
+        (
+            "P[k] in {i64, str} && P[k] in {atomic<T>, str}",
+            "test actual { assert demonstration(sig_i64, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_i64, 2, 3) == 1 }\n",
+        ),
+        (
+            "P[k] in {list<delta<T>>, str} && P[k] in {list<i64>, str}",
+            "test actual { assert demonstration(sig_list, 2, [3]) == [3] }\n",
+            "test actual { assert op_demo(sig_list, 2, [3]) == 1 }\n",
+        ),
+        (
+            "P[k] in {list<i64>, str} && P[k] in {list<delta<T>>, str}",
+            "test actual { assert demonstration(sig_list, 2, [3]) == [3] }\n",
+            "test actual { assert op_demo(sig_list, 2, [3]) == 1 }\n",
+        ),
+        (
+            "P[k] in {list<atomic<T>>, str} && P[k] in {list<i64>, str}",
+            "test actual { assert demonstration(sig_list, 2, [3]) == [3] }\n",
+            "test actual { assert op_demo(sig_list, 2, [3]) == 1 }\n",
+        ),
+        (
+            "P[k] in {list<i64>, str} && P[k] in {list<atomic<T>>, str}",
+            "test actual { assert demonstration(sig_list, 2, [3]) == [3] }\n",
+            "test actual { assert op_demo(sig_list, 2, [3]) == 1 }\n",
+        ),
+        (
+            "P[k] in {list<delta<T>, 2>, str} && P[k] in {list<i64, 2>, str}",
+            "test actual { assert demonstration(sig_pair, 2, [3, 4]) == [3, 4] }\n",
+            "test actual { assert op_demo(sig_pair, 2, [3, 4]) == 1 }\n",
+        ),
+        (
+            "P[k] in {list<i64, 2>, str} && P[k] in {list<delta<T>, 2>, str}",
+            "test actual { assert demonstration(sig_pair, 2, [3, 4]) == [3, 4] }\n",
+            "test actual { assert op_demo(sig_pair, 2, [3, 4]) == 1 }\n",
+        ),
+        (
+            "P[k] in {delta<T>?, str} && P[k] in {i64?, str}",
+            "test actual { assert demonstration(sig_opt, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_opt, 2, 3) == 1 }\n",
+        ),
+        (
+            "P[k] in {i64?, str} && P[k] in {delta<T>?, str}",
+            "test actual { assert demonstration(sig_opt, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_opt, 2, 3) == 1 }\n",
+        ),
+        (
+            "P[k] in {atomic<T?>, str} && P[k] in {i64?, str}",
+            "test actual { assert demonstration(sig_opt, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_opt, 2, 3) == 1 }\n",
+        ),
+        (
+            "P[k] in {i64?, str} && P[k] in {atomic<T?>, str}",
+            "test actual { assert demonstration(sig_opt, 2, 3) == 3 }\n",
+            "test actual { assert op_demo(sig_opt, 2, 3) == 1 }\n",
+        ),
+        (
+            "P[k] in {tuple<delta<T>, str>, str} && P[k] in {tuple<i64, str>, str}",
+            "test actual { assert demonstration(sig_tuple, 2, (3, \"a\")) == (3, \"a\") }\n",
+            "test actual { assert op_demo(sig_tuple, 2, (3, \"a\")) == 1 }\n",
+        ),
+        (
+            "P[k] in {tuple<i64, str>, str} && P[k] in {tuple<delta<T>, str>, str}",
+            "test actual { assert demonstration(sig_tuple, 2, (3, \"a\")) == (3, \"a\") }\n",
+            "test actual { assert op_demo(sig_tuple, 2, (3, \"a\")) == 1 }\n",
+        ),
+    ];
+    for (condition, fn_call, op_call) in rejecting_with_calls {
+        for (label, suffix) in [("decl", ""), ("call", fn_call)] {
+            let checked = module(&format!(
+                "{base}{decl}    requires {condition} => allowed<P[k]>(v)\n{suffix}"
+            ));
+            assert_eq!(
+                checked.findings.len(),
+                1,
+                "fn {label} {condition}\n{}",
+                checked.report
+            );
+            assert_eq!(
+                checked.findings[0].code, "constraint/requires.unmet",
+                "fn {label} {condition}\n{}",
+                checked.report
+            );
+        }
+        for (label, suffix) in [("decl", ""), ("call", op_call)] {
+            let checked = module(&format!(
+                "{base}{op_decl}    requires {condition} => str_op(v)\n{suffix}"
+            ));
+            assert_eq!(
+                checked.findings.len(),
+                1,
+                "op {label} {condition}\n{}",
+                checked.report
+            );
+            assert_eq!(
+                checked.findings[0].code, "operator/operator.no_candidate",
+                "op {label} {condition}\n{}",
+                checked.report
+            );
+        }
+    }
+
+    // Declaration rejections for additional normalizing/open shapes:
+    // `delta<T?>`, `delta<delta<T>>`, `atomic<delta<T>>`, nested `dict`/`result`,
+    // tuple pack expansion `tuple<Us>`, and open list size vs unbounded `list<i64>`.
+    for condition in [
+        "P[k] in {delta<T?>, str} && P[k] in {i64, str}",
+        "P[k] in {i64, str} && P[k] in {delta<T?>, str}",
+        "P[k] in {delta<delta<T>>, str} && P[k] in {i64, str}",
+        "P[k] in {i64, str} && P[k] in {delta<delta<T>>, str}",
+        "P[k] in {atomic<delta<T>>, str} && P[k] in {i64, str}",
+        "P[k] in {i64, str} && P[k] in {atomic<delta<T>>, str}",
+        "P[k] in {dict<str, delta<T>>, str} && P[k] in {dict<str, i64>, str}",
+        "P[k] in {dict<str, i64>, str} && P[k] in {dict<str, delta<T>>, str}",
+        "P[k] in {dict<str, atomic<T>>, str} && P[k] in {dict<str, i64>, str}",
+        "P[k] in {dict<str, i64>, str} && P[k] in {dict<str, atomic<T>>, str}",
+        "P[k] in {result<delta<T>, error>, str} && P[k] in {result<i64, error>, str}",
+        "P[k] in {result<i64, error>, str} && P[k] in {result<delta<T>, error>, str}",
+    ] {
+        let checked = module(&format!(
+            "{base}{decl}    requires {condition} => allowed<P[k]>(v)\n"
+        ));
+        assert_eq!(
+            checked.findings.len(),
+            1,
+            "extra decl {condition}\n{}",
+            checked.report
+        );
+        assert_eq!(
+            checked.findings[0].code, "constraint/requires.unmet",
+            "extra decl {condition}\n{}",
+            checked.report
+        );
+    }
+    for condition in [
+        "P[k] in {tuple<Us>, str} && P[k] in {tuple<i64, str>, str}",
+        "P[k] in {tuple<i64, str>, str} && P[k] in {tuple<Us>, str}",
+    ] {
+        let checked = module(&format!(
+            "{base}const fn pack_tuple<...Us, ...P>(f: const fn(...{{P}}) -> i64, \
+             u: tuple<Us>, v: P[k]) -> P[k]\n    requires {condition} => allowed<P[k]>(v)\n\
+             test actual {{ assert pack_tuple(sig_tuple, (2, \"a\"), (3, \"b\")) == (3, \"b\") }}\n"
+        ));
+        assert_eq!(
+            checked.findings.len(),
+            1,
+            "pack tuple {condition}\n{}",
+            checked.report
+        );
+        assert_eq!(
+            checked.findings[0].code, "constraint/requires.unmet",
+            "pack tuple {condition}\n{}",
+            checked.report
+        );
+    }
+    for condition in [
+        "P[k] in {list<i64, N>, str} && P[k] in {list<i64>, str}",
+        "P[k] in {list<i64>, str} && P[k] in {list<i64, N>, str}",
+    ] {
+        let checked = module(&format!(
+            "{base}const fn open_extent<N, ...P>(f: const fn(...{{P}}) -> i64, \
+             x: list<i64, N>, v: P[k]) -> P[k]\n    requires {condition} => allowed<P[k]>(v)\n"
+        ));
+        assert_eq!(
+            checked.findings.len(),
+            1,
+            "open extent {condition}\n{}",
+            checked.report
+        );
+        assert_eq!(
+            checked.findings[0].code, "constraint/requires.unmet",
+            "open extent {condition}\n{}",
+            checked.report
+        );
+    }
+
+    // Positive controls: when the callee handles every type admitted by the
+    // intersection, both declaration and concrete calls succeed in either order.
+    for condition in [
+        "P[k] in {delta<T>, str} && P[k] in {i64, str}",
+        "P[k] in {i64, str} && P[k] in {delta<T>, str}",
+        "P[k] in {atomic<T>, str} && P[k] in {i64, str}",
+        "P[k] in {i64, str} && P[k] in {atomic<T>, str}",
+        "P[k] == delta<T> && P[k] in {i64, str}",
+        "P[k] in {i64, str} && P[k] == delta<T>",
+    ] {
+        let checked = module(&format!(
+            "{base}{decl}    requires {condition} => allowed_i64_or_str<P[k]>(v)\n\
+             test ok {{\n\
+                 assert demonstration(sig_i64, 2, 3) == 3\n\
+                 assert demonstration(sig_str, \"a\", \"b\") == \"b\"\n\
+             }}\n"
+        ));
+        assert_eq!(
+            checked.summary(),
+            NONE,
+            "either {condition}\n{}",
+            checked.report
+        );
+    }
+    for condition in [
+        "P[k] in {delta<T>, str} && P[k] == i64",
+        "P[k] == i64 && P[k] in {delta<T>, str}",
+        "P[k] in {atomic<T>, str} && P[k] == i64",
+        "P[k] == i64 && P[k] in {atomic<T>, str}",
+    ] {
+        let checked = module(&format!(
+            "{base}{decl}    requires {condition} => allowed_i64<P[k]>(v)\n\
+             test ok {{ assert demonstration(sig_i64, 2, 3) == 3 }}\n"
+        ));
+        assert_eq!(
+            checked.summary(),
+            NONE,
+            "exact i64 {condition}\n{}",
+            checked.report
+        );
+    }
+
+    // Real disjoint controls: outer constructors that never normalize into the
+    // competing concrete type still narrow to `str` in both orders (for both
+    // declaration and concrete invocation, and for both callee requires and operators).
+    for condition in [
+        "P[k] in {list<delta<T>>, str} && P[k] in {i64, str}",
+        "P[k] in {i64, str} && P[k] in {list<delta<T>>, str}",
+        "P[k] in {list<atomic<T>>, str} && P[k] in {i64, str}",
+        "P[k] in {i64, str} && P[k] in {list<atomic<T>>, str}",
+        "P[k] in {delta<list<T>>, str} && P[k] in {i64, str}",
+        "P[k] in {i64, str} && P[k] in {delta<list<T>>, str}",
+        "P[k] in {atomic<list<T>>, str} && P[k] in {i64, str}",
+        "P[k] in {i64, str} && P[k] in {atomic<list<T>>, str}",
+        "P[k] in {delta<T>?, str} && P[k] in {i64, str}",
+        "P[k] in {i64, str} && P[k] in {delta<T>?, str}",
+        "P[k] in {list<delta<T>, 3>, str} && P[k] in {list<i64, 2>, str}",
+        "P[k] in {list<i64, 2>, str} && P[k] in {list<delta<T>, 3>, str}",
+        "T in {f64, bool} && P[k] in {delta<T>, str} && P[k] in {i64, str}",
+        "T in {f64, bool} && P[k] in {i64, str} && P[k] in {delta<T>, str}",
+    ] {
+        let checked_fn = module(&format!(
+            "{base}{decl}    requires {condition} => allowed<P[k]>(v)\n\
+             test ok {{ assert demonstration(sig_str, 1.5, \"ok\") == \"ok\" }}\n"
+        ));
+        assert_eq!(
+            checked_fn.summary(),
+            NONE,
+            "disjoint fn {condition}\n{}",
+            checked_fn.report
+        );
+        let checked_op = module(&format!(
+            "{base}{op_decl}    requires {condition} => str_op(v)\n\
+             test ok {{ assert op_demo(sig_str, 1.5, \"ok\") == 1 }}\n"
+        ));
+        assert_eq!(
+            checked_op.summary(),
+            NONE,
+            "disjoint op {condition}\n{}",
+            checked_op.report
+        );
+    }
+}
+
 /// GEN-7: a concrete reflected result must recheck its consumers, including
 /// a second operator and a local initialized with the first call.
 #[test]

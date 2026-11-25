@@ -1064,7 +1064,7 @@ impl<'a> Typer<'a> {
                                 .collect()
                         })
                         .collect();
-                    let types = Self::intersect_member_bounds(matching);
+                    let types = self.intersect_member_bounds(matching);
                     if !types.is_empty() {
                         choices.push(((*pack, key), types));
                     }
@@ -1078,25 +1078,31 @@ impl<'a> Typer<'a> {
 
     /// Intersect all positive bounds stated for one reflected pack member
     /// regardless of conjunction order (GEN-3, GEN-7, GEN-10). Concrete
-    /// bounds narrow the candidate set before open ones; without a concrete
-    /// bound, only a unique known-subset open bound is kept so differing
-    /// type variables stay conservative in both orders. An empty
-    /// intersection leaves the member unproved.
-    fn intersect_member_bounds(bounds: Vec<Vec<Type>>) -> Vec<Type> {
+    /// bounds narrow the candidate set before open ones; open bounds never
+    /// discard a type that an unresolved normalizing or open form can later
+    /// become. Without a concrete bound, only a known-subset open bound is
+    /// kept so differing type variables stay conservative in both orders.
+    /// An empty intersection leaves the member unproved.
+    fn intersect_member_bounds(&self, bounds: Vec<Vec<Type>>) -> Vec<Type> {
         let is_concrete = |ty: &Type| {
             whole(ty)
                 && !ty.any_part(
-                    &|part| matches!(part, Type::Parameter { .. } | Type::PackMember { .. }),
+                    &|part| {
+                        matches!(part, Type::Parameter { .. } | Type::PackMember { .. })
+                            || matches!(
+                                part,
+                                Type::Function(template) if template.named_pack.is_some()
+                            )
+                    },
                     &|constant| constant.value.key().is_none(),
                 )
         };
         let (mut closed, open): (Vec<Vec<Type>>, Vec<Vec<Type>>) = bounds
             .into_iter()
             .partition(|set| set.iter().all(is_concrete));
-        let (base, rest) = if !closed.is_empty() {
+        let (base, closed_rest, open_rest) = if !closed.is_empty() {
             let first = closed.remove(0);
-            closed.extend(open);
-            (first, closed)
+            (first, closed, open)
         } else if !open.is_empty() {
             // Without a concrete bound, keep an open bound only when every
             // other open bound is known to contain every element of it.
@@ -1111,16 +1117,20 @@ impl<'a> Typer<'a> {
             }) else {
                 return Vec::new();
             };
-            (chosen.clone(), Vec::new())
+            (chosen.clone(), Vec::new(), Vec::new())
         } else {
             return Vec::new();
         };
         let mut intersected = Vec::new();
         for ty in base {
-            if rest.iter().all(|other| {
+            if closed_rest.iter().all(|other| {
                 other
                     .iter()
-                    .any(|candidate| same_type(&ty, candidate) != Some(false))
+                    .any(|candidate| same_type(&ty, candidate) == Some(true))
+            }) && open_rest.iter().all(|other| {
+                other
+                    .iter()
+                    .any(|candidate| self.types_may_meet(&ty, candidate))
             }) && !intersected
                 .iter()
                 .any(|existing| same_type(existing, &ty) == Some(true))
@@ -1129,6 +1139,231 @@ impl<'a> Typer<'a> {
             }
         }
         intersected
+    }
+
+    /// True when some valid instantiation of the enclosing generics may make
+    /// `left` and `right` normalize to the same type (TYPE-9, TYPE-10, TYPE-14,
+    /// TYPE-16, GEN-7). Used only so an open bound never discards a type that
+    /// an unresolved normalizing or open form can later become.
+    fn types_may_meet(&self, left: &Type, right: &Type) -> bool {
+        fn atomic_may_unwrap(payload: &Type) -> bool {
+            match payload {
+                Type::Unknown
+                | Type::Parameter { .. }
+                | Type::PackMember { .. }
+                | Type::Scalar(_)
+                | Type::Error
+                | Type::Result { .. }
+                | Type::Atomic(_)
+                | Type::Delta(_)
+                | Type::Named {
+                    kind: NamedKind::Enum | NamedKind::Native,
+                    ..
+                } => true,
+                Type::Nullable(inner) => atomic_may_unwrap(inner),
+                _ => false,
+            }
+        }
+        fn delta_may_normalize(of: &Type) -> bool {
+            match of {
+                Type::Unknown
+                | Type::Parameter { .. }
+                | Type::PackMember { .. }
+                | Type::Scalar(_)
+                | Type::Error
+                | Type::ErrorContext
+                | Type::Result { .. }
+                | Type::Named {
+                    kind: NamedKind::Enum | NamedKind::Native,
+                    ..
+                }
+                | Type::Delta(_)
+                | Type::Atomic(_)
+                | Type::RollingWindow { .. }
+                | Type::Tuple(_) => true,
+                Type::Nullable(inner) => matches!(
+                    **inner,
+                    Type::Unknown
+                        | Type::Parameter { .. }
+                        | Type::PackMember { .. }
+                        | Type::RollingWindow { .. }
+                        | Type::Atomic(_)
+                        | Type::Signal
+                        | Type::Delta(_)
+                        | Type::Nullable(_)
+                ),
+                _ => false,
+            }
+        }
+        let may_change_shape = |ty: &Type| match ty {
+            Type::Unknown | Type::Parameter { .. } | Type::PackMember { .. } => true,
+            Type::Atomic(inner) => atomic_may_unwrap(inner),
+            Type::Delta(inner) => delta_may_normalize(inner),
+            _ => false,
+        };
+        if may_change_shape(left) || may_change_shape(right) {
+            return true;
+        }
+        let constants_may_meet = |left: &Constant, right: &Constant| {
+            matches!(left.value, ConstantValue::Unknown)
+                || matches!(right.value, ConstantValue::Unknown)
+                || left.value.same(&right.value) != Some(false)
+        };
+        let is_pack_type = |ty: &Type| {
+            matches!(
+                ty,
+                Type::Parameter { at, .. }
+                    if self
+                        .signature
+                        .generics
+                        .iter()
+                        .find(|generic| generic.at == *at)
+                        .is_none_or(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
+            )
+        };
+        match (left, right) {
+            (
+                Type::Named {
+                    module,
+                    declaration,
+                    arguments,
+                    ..
+                },
+                Type::Named {
+                    module: other_module,
+                    declaration: other_declaration,
+                    arguments: other_arguments,
+                    ..
+                },
+            ) => {
+                if module != other_module || declaration != other_declaration {
+                    return false;
+                }
+                let has_pack = |args: &[Argument]| {
+                    args.iter()
+                        .any(|arg| matches!(arg, Argument::Type(ty) if is_pack_type(ty)))
+                };
+                if has_pack(arguments) || has_pack(other_arguments) {
+                    return true;
+                }
+                arguments.len() == other_arguments.len()
+                    && arguments
+                        .iter()
+                        .zip(other_arguments)
+                        .all(|pair| match pair {
+                            (Argument::Type(left), Argument::Type(right)) => {
+                                self.types_may_meet(left, right)
+                            }
+                            (Argument::Constant(left), Argument::Constant(right)) => {
+                                constants_may_meet(left, right)
+                            }
+                            (Argument::NoResult, Argument::NoResult) => true,
+                            _ => false,
+                        })
+            }
+            (Type::Tuple(left), Type::Tuple(right)) => {
+                if left.iter().any(is_pack_type) || right.iter().any(is_pack_type) {
+                    return true;
+                }
+                left.len() == right.len()
+                    && left
+                        .iter()
+                        .zip(right)
+                        .all(|(left, right)| self.types_may_meet(left, right))
+            }
+            (
+                Type::List { element, size },
+                Type::List {
+                    element: other_element,
+                    size: other_size,
+                },
+            ) => {
+                let sizes = match (size, other_size) {
+                    (Some(left), Some(right)) => {
+                        constants_may_meet(left, right)
+                            || left.value.same_extent(&right.value)
+                            || right.value.same_extent(&left.value)
+                    }
+                    (Some(size), None) | (None, Some(size)) => size.value.key().is_none(),
+                    (None, None) => true,
+                };
+                sizes && self.types_may_meet(element, other_element)
+            }
+            (Type::Set(left), Type::Set(right))
+            | (Type::Endpoint(left), Type::Endpoint(right))
+            | (Type::Atomic(left), Type::Atomic(right))
+            | (Type::Delta(left), Type::Delta(right))
+            | (Type::Nullable(left), Type::Nullable(right)) => self.types_may_meet(left, right),
+            (
+                Type::Dict { key, value },
+                Type::Dict {
+                    key: other_key,
+                    value: other_value,
+                },
+            ) => self.types_may_meet(key, other_key) && self.types_may_meet(value, other_value),
+            (
+                Type::RollingWindow {
+                    value,
+                    maximum,
+                    minimum,
+                },
+                Type::RollingWindow {
+                    value: other_value,
+                    maximum: other_maximum,
+                    minimum: other_minimum,
+                },
+            ) => {
+                let minimum = minimum.as_ref().unwrap_or(maximum);
+                let other_minimum = other_minimum.as_ref().unwrap_or(other_maximum);
+                constants_may_meet(maximum, other_maximum)
+                    && constants_may_meet(minimum, other_minimum)
+                    && self.types_may_meet(value, other_value)
+            }
+            (
+                Type::Result { value, error },
+                Type::Result {
+                    value: other_value,
+                    error: other_error,
+                },
+            ) => self.types_may_meet(value, other_value) && self.types_may_meet(error, other_error),
+            (Type::Trace { cell: left, .. }, Type::Trace { cell: right, .. }) => {
+                names_parameter(left) || names_parameter(right) || self.types_may_meet(left, right)
+            }
+            (Type::Function(left), Type::Function(right)) => {
+                if left.value != right.value || left.reference != right.reference {
+                    return false;
+                }
+                if left.named_pack.is_some() || right.named_pack.is_some() {
+                    return true;
+                }
+                let left_params: Vec<_> = left.ordinary_parameters().collect();
+                let right_params: Vec<_> = right.ordinary_parameters().collect();
+                if left_params
+                    .iter()
+                    .chain(&right_params)
+                    .any(|param| param.declared().is_some_and(|decl| decl.pack.is_some()))
+                {
+                    return true;
+                }
+                let results = match (&left.result, &right.result) {
+                    (Some(left), Some(right)) => self.types_may_meet(left, right),
+                    (None, None) => true,
+                    (Some(_), None) => left.result_admits_none,
+                    (None, Some(_)) => right.result_admits_none,
+                };
+                results
+                    && left_params.len() == right_params.len()
+                    && left_params
+                        .iter()
+                        .zip(&right_params)
+                        .all(|(left, right)| self.types_may_meet(left.ty(), right.ty()))
+            }
+            (Type::Scalar(left), Type::Scalar(right)) => left == right,
+            (Type::Signal, Type::Signal)
+            | (Type::Error, Type::Error)
+            | (Type::ErrorContext, Type::ErrorContext) => true,
+            _ => false,
+        }
     }
 
     /// A positive membership of a named member in a finite set of types.
