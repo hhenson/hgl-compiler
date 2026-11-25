@@ -1,6 +1,8 @@
 //! Emit the checked places of Core's native value-format call (FMT-2,
 //! FMT-4, FMT-5, FMT-7 and FMT-9). C++ sees individual compiled fmt patterns
 //! and typed values. Argument expressions run once in source order.
+//! Core's value `debug_print` calls this formatter and flushes the line
+//! through `write` (DBG-1, DBG-3, DBG-9).
 //! Graph calls currently lift this value formatter (FMT-6, FMT-8, FN-11),
 //! so whole inputs use value rendering until #434 supplies the graph body.
 
