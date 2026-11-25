@@ -541,11 +541,13 @@ analyser: partial
 - A `"run.output"` key the text fixes is rejected (`store.reserved_key`):
   a constant expression, or a `const` argument or generic value given
   through the calls that reach it. An instance rejection is reported at
-  the call that fixes the key (GEN-7).
+  the call that fixes the key (GEN-7). Source is the earlier place; the
+  target's operation checks every key.
 - A key that can differ between the calls of a cycle is not checked in
   source: one computed on the way round, exchanged with another `const`
-  parameter, or given anew by a literal or a default. A helper given such
-  a key is left to the run on that route only (TIME-8).
+  parameter in any function of the cycle, or given anew by a literal or a
+  default. A cycle closed through an operator's candidates is one. No
+  instance is made for each key such a cycle reaches (TIME-8).
 - A known key is used with one type in a program. A `put` or a `get` of a
   different type than an earlier use is `store.key_type` (TIME-8).
 - Left: a helper outside the cycle that also formats its key is checked
@@ -560,15 +562,13 @@ transpiler: partial
 - Reading an absent store key gives `value.missing_key`, the same code as a
   strict dictionary lookup (ERR-6).
 - Reading or writing a key whose stored type differs gives `store.key_type`.
-- A key computed in composition fails with `store.reserved_key` if it is
-  `"run.output"`. A graph's call checks it as the graph is built. A node
-  checks its fixed hook keys, and those it hands helpers, when the SDK
-  attaches it to its graph, before any start hook. The run's own recording
-  uses that key.
-- A key that can differ between the calls of a cycle is checked at the
-  store operation, as it is evaluated. A helper outside the cycle checks it
-  only on the routes that hand it such a key: the borrowed store carries
-  the route (TIME-8).
+- Every store operation checks its key as it is evaluated, and fails with
+  `store.reserved_key` on `"run.output"`. Only core's recorder, which keeps
+  the run's output under that key, writes it (TIME-8).
+- Earlier places fail a key the graph fixes: a graph's call as the graph
+  is built, and a node's keys its configuration fixes, its own and those it
+  hands helpers, when the SDK attaches it, before any start hook. A key
+  that can differ between the calls of a cycle is left to the operation.
 - Left: a temporal child graph using the surrounding store is declined (CRUN-7).
 
 ## CAP-7
@@ -751,20 +751,20 @@ transpiler: partial
 
 ## CRUN-8
 
-analyser: done
+analyser: partial
 
 - A `"run.output"` key the text fixes is rejected (`store.reserved_key`),
   including where a call supplies a fixed `const` argument or generic
   value (CAP-6).
+- Left: a helper outside a cycle that also formats its key (CAP-6, #877).
 
 transpiler: partial
 
 - Adds recording to a result-bearing entry and retrieves the timestamped deltas after
   stop. Outputless entries have no recording.
-- A program's key computed in composition or resolved at node attachment
-  fails with `store.reserved_key` if it names the recording key. A key that
-  can differ between the calls of a cycle fails when the store operation
-  uses it, on that route (CAP-6).
+- A program's key that names the recording key fails with
+  `store.reserved_key` at its store operation, and earlier as the graph is
+  built or the node attaches where those fix it (CAP-6).
 - Left: Unsupported record types follow CEVAL-4.
 
 runner: planned
