@@ -775,25 +775,33 @@ impl<'a> Typer<'a> {
             .filter_map(|(reads, chosen)| (Some(reads.len()) == fewest).then_some(chosen))
             .collect::<Vec<_>>();
         // GEN-5: compare exact matches before declared specificity.
+        let exact =
+            |left: &Chosen<'_>, right: &Chosen<'_>| self.exact_match(left, right, given, widening);
         retain_preferred(&mut selected, |left, right| {
-            self.exact_match(left, right, given) == Specific::More
+            exact(left, right) == Specific::More
         });
         retain_preferred(&mut selected, |left, right| {
-            self.exact_match(left, right, given) == Specific::Same && outranks(left, right, public)
+            exact(left, right) == Specific::Same && outranks(left, right, public)
         });
-        // GEN-7: a possible candidate that an admitted candidate outranks
-        // cannot change the selection when its condition is settled.
-        let outranks =
-            |left: &Chosen<'_>, right: &Chosen<'_>| match self.exact_match(left, right, given) {
-                Specific::More => true,
-                Specific::Same => outranks(left, right, public),
-                Specific::Less | Specific::Neither => false,
-            };
+        // GEN-7: keep the generic body's provisional structural match
+        // when an exact candidate may win only after substitution.
+        let generic_operand = !possible.is_empty()
+            && given.iter().any(|given| {
+                self.signature
+                    .generics
+                    .iter()
+                    .any(|generic| mentions(given.ty(), &[generic.at]))
+            });
+        let settles = |left: &Chosen<'_>, right: &Chosen<'_>| match exact(left, right) {
+            Specific::More => true,
+            Specific::Same => outranks(left, right, public),
+            Specific::Less | Specific::Neither => generic_operand && outranks(left, right, public),
+        };
         untold |= possible.iter().any(|(reads, unknown)| {
             fewest.is_none_or(|fewest| {
                 *reads < fewest
                     || *reads == fewest
-                        && !selected.iter().any(|admitted| outranks(admitted, unknown))
+                        && !selected.iter().any(|admitted| settles(admitted, unknown))
             })
         });
         if widening && selected.len() > 1 {
@@ -820,7 +828,7 @@ impl<'a> Typer<'a> {
                     role(chosen) != Some(preferred)
                         && selected.iter().any(|other| {
                             role(other) == Some(preferred)
-                                && self.exact_match(other, chosen, given) == Specific::Same
+                                && exact(other, chosen) == Specific::Same
                                 && other
                                     .taken
                                     .parameters
@@ -846,7 +854,13 @@ impl<'a> Typer<'a> {
     /// GEN-5: the exact match wins where it takes an argument as it is
     /// and the other candidate widens it. Opposite preferences across
     /// arguments leave the candidates incomparable.
-    fn exact_match(&self, left: &Chosen, right: &Chosen, given: &[Given]) -> Specific {
+    fn exact_match(
+        &self,
+        left: &Chosen,
+        right: &Chosen,
+        given: &[Given],
+        widening: bool,
+    ) -> Specific {
         given.iter().zip(&left.bound).zip(&right.bound).fold(
             Specific::Same,
             |order, ((argument, &left_place), &right_place)| {
@@ -857,8 +871,8 @@ impl<'a> Typer<'a> {
                     let right = (right, right_place, right_type);
                     callback_match(left, right, given)
                 } else if let (Some(left), Some(right)) = (left_type, right_type) {
-                    let widening = |expected| self.argument_widening(argument, expected);
-                    match (widening(left), widening(right)) {
+                    let widens = |expected| self.argument_widening(argument, expected, widening);
+                    match (widens(left), widens(right)) {
                         (Some(false), Some(true)) => Specific::More,
                         (Some(true), Some(false)) => Specific::Less,
                         _ => Specific::Same,
@@ -874,8 +888,17 @@ impl<'a> Typer<'a> {
     /// GEN-5 distinguishes exact types from nullable, parent, and `any`
     /// widenings. Nullable widening includes `delta<V>` to `delta<V?>`
     /// (TYPE-16). Literal precision is settled before admission.
-    fn argument_widening(&self, argument: &Given, expected: &Type) -> Option<bool> {
-        let actual = argument.ty();
+    fn argument_widening(&self, argument: &Given, expected: &Type, widening: bool) -> Option<bool> {
+        let floated = Type::Scalar(Scalar::F64);
+        let actual = if widening
+            && argument.explicit.is_none()
+            && accepts_float(expected)
+            && is_integer_literal(&argument.value)
+        {
+            &floated
+        } else {
+            argument.ty()
+        };
         if argument.by_place || !whole(actual) || !whole(expected) {
             return None;
         }

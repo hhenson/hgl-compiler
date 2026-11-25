@@ -4777,6 +4777,66 @@ const fn opposed(a: delta<set<i64>>, b: i64) -> i64 => select_delta(a, b)
     );
 }
 
+/// GEN-7: an admitted fallback proves the generic call while an exact
+/// candidate's requirements are resolved in each concrete instance.
+#[test]
+fn generic_exact_candidates_keep_an_admitted_fallback() {
+    let checked = module(
+        r#"operator ps2<T>(value: T) -> i64
+impl const fn ps2<U>(value: U?) -> i64 => 1
+impl const fn ps2<U>(value: U) -> i64 requires U == i64 => 2
+const fn g6<T>(x: T) -> i64 => ps2(x)
+
+operator ps3<T>(value: T) -> i64
+impl const fn ps3(value: any) -> i64 => 1
+impl const fn ps3<U>(value: U) -> i64 requires U in {i64, f64} => 2
+const fn g7<T>(x: T) -> i64 => ps3(x)
+fn h3<T>(x: T) -> i64 => ps3(x)
+
+test makes_instances {
+    assert g6(5) == 2
+    assert g6("s") == 1
+    assert g7(5) == 2
+    assert g7("s") == 1
+    assert eval h3(x: [5]) == [2]
+    assert eval h3(x: ["s"]) == [1]
+}
+"#,
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+}
+
+/// EXPR-5 and GEN-5: the floating-point pass compares a widened integer
+/// literal as an `f64`, including against a further nullable widening.
+#[test]
+fn a_literal_taken_as_f64_compares_as_f64() {
+    let checked = module(
+        r#"abstract struct Shape { id: i64 }
+struct Round: Shape { radius: f64 }
+operator k4<A, B>(a: A, b: B) -> i64
+impl const fn k4(a: Shape, b: f64) -> i64 => 1
+impl const fn k4(a: Round, b: f64?) -> i64 => 2
+const fn integer_literal(r: Round) -> i64 => k4(r, 1)
+const fn float_literal(r: Round) -> i64 => k4(r, 1.0)
+
+operator k5<T>(x: T) -> i64
+impl const fn k5(x: f64) -> i64 => 1
+impl const fn k5(x: f64?) -> i64 => 2
+const fn use_integer() -> i64 => k5(1)
+const fn use_float() -> i64 => k5(1.0)
+"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:7:46 operator/operator.ambiguous GEN-5",
+            "m.hgl:8:44 operator/operator.ambiguous GEN-5",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-5 and FN-17: an ordinary argument cannot give a type to a
 /// callback input written concrete by both candidates.
 #[test]
