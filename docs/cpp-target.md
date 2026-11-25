@@ -95,6 +95,14 @@ artifacts after a plain build and files for modules removed from the sources.
 The `build.ninja` manifest and `hgl build --format json` inventory identify
 the units and executables in the current build.
 
+Use `hgl build --clean --out DIR` to rebuild the project from scratch. The
+compiler holds the workspace lock while clearing generated project files and
+building their replacements. This also removes obsolete modules, applications
+and test outputs identifiable from their generated sources. Add
+`--compile-commands` to regenerate the compilation database and `--debug` for
+debug symbols. Clean applies to the selected workspace. Other workspaces and
+the shared native toolchain cache are independent.
+
 Reuse assumes that the SDK and dependency prefixes are fixed installations.
 The key includes the prefixes and hashes the SDK version file and its runtime
 and wiring libraries. Use a fresh native cache and workspace after updating

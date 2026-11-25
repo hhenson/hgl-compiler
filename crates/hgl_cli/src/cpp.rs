@@ -6,6 +6,7 @@
 
 mod application;
 mod build;
+mod clean;
 mod commands;
 mod debug_tests;
 mod plan;
@@ -80,11 +81,18 @@ impl BuildSession {
         roots: &[PathBuf],
         keep: Option<&Path>,
         debug: bool,
+        clean: bool,
         interrupt: &Interrupt,
     ) -> Result<Self, String> {
         let cache = build::cache()?;
         let workspace = Workspace::open(keep, roots, &cache, debug)?;
         let previous = PreviousBuild::read(&workspace);
+        let previous = if clean {
+            clean::workspace(&workspace, previous.is_some())?;
+            None
+        } else {
+            previous
+        };
         let found = if debug {
             Toolchain::find_debug(interrupt)
         } else {

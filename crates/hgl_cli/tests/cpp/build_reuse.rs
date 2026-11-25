@@ -129,6 +129,100 @@ exec "$HGL_TEST_REAL_NINJA" "$@"
     }
 }
 
+/// Clean rebuilds unchanged units and retires generated outputs left by an earlier program.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn clean_rebuilds_the_workspace_and_removes_retired_units() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("clean-rebuild");
+    write(&root, "src/stamped.hgl", SOURCE);
+    let app = write(&root, "src/app.hgl", APP);
+    let ninja = NinjaTrace::new(&root);
+    let sources = argument(&root.join("src"));
+    let workspace = argument(&ninja.workspace);
+    let build = |options: &[&str]| {
+        let out = ninja
+            .hgl(&[
+                "build",
+                &sources,
+                "--out",
+                &workspace,
+                "--compile-commands",
+                "--format",
+                "json",
+            ])
+            .args(options)
+            .output()
+            .unwrap();
+        serde_json::from_str::<Value>(&success(out)).unwrap()
+    };
+    assert_eq!(build(&["--clean", "--tests"])["reused"], false);
+    assert_eq!(build(&["--tests"])["reused"], true);
+    fs::remove_file(app).unwrap();
+    build(&[]);
+    let retired = [
+        "applications/app-demo-app.cpp",
+        "run/app-demo-app",
+        "obj/applications/app-demo-app.o",
+        "tests/test-demo-stamped.cpp",
+        "bin/test-demo-stamped",
+        "obj/tests/test-demo-stamped.o",
+    ];
+    for file in retired {
+        assert!(ninja.workspace.join(file).is_file(), "{file}");
+    }
+    let object = ninja.workspace.join("obj/modules/mod-demo-stamped.o");
+    let old = File::open(&object).unwrap();
+    old.set_modified(std::time::SystemTime::UNIX_EPOCH).unwrap();
+    let handwritten = write(&ninja.workspace, "modules/manual.cpp", "// mine");
+    let other = write(
+        &ninja.workspace,
+        "debug/compile_commands.json",
+        "other profile",
+    );
+    let got = build(&["--clean"]);
+    assert_eq!(got["reused"], false);
+    assert_eq!(
+        got["compileCommands"],
+        argument(&ninja.workspace.join("compile_commands.json"))
+    );
+    assert_ne!(
+        fs::metadata(object).unwrap().modified().unwrap(),
+        old.metadata().unwrap().modified().unwrap()
+    );
+    for file in retired {
+        assert!(!ninja.workspace.join(file).exists(), "{file}");
+    }
+    assert_eq!(fs::read_to_string(handwritten).unwrap(), "// mine");
+    assert_eq!(fs::read_to_string(other).unwrap(), "other profile");
+    assert_eq!(build(&[])["reused"], true);
+
+    write(
+        &root,
+        "src/stamped.hgl",
+        "module demo.stamped\nconst fn broken() -> i64 => false",
+    );
+    assert!(
+        !ninja
+            .hgl(&["build", &sources, "--out", &workspace, "--clean"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(!ninja.workspace.join(".hgl-built.json").exists());
+    assert!(
+        !ninja
+            .workspace
+            .join("obj/modules/mod-demo-stamped.o")
+            .exists()
+    );
+    write(&root, "src/stamped.hgl", SOURCE);
+    assert_eq!(build(&[])["reused"], false);
+}
+
 /// The compilation database comes from the exact workspace Ninja rules,
 /// can be restored on a hit, and preserves a reader's complete snapshot.
 #[test]
