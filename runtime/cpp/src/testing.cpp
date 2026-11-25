@@ -290,14 +290,10 @@ std::pair<datetime, std::optional<datetime>> resolved(const Bounds& bounds, Mode
                                   ? earliest_start()
                                   : std::chrono::floor<duration>(hgraph::engine_clock::now());
     const datetime start = bounds.start.value_or(unstated);
-    // CRUN-3: "a run's start is no earlier than the first [`earliest_start`]
-    // and its end no later than the second [`latest_end`]". CRUN-3 reserves
-    // the epoch itself for `never`. Neither rule names the failure of a run
-    // outside them: each fails with no code.
     if (start < earliest_start()) {
-        fail_uncoded("the run's start is before the earliest evaluation time");
+        fail(codes::run_bounds, "the run's start is before the earliest evaluation time");
     }
-    const auto past_latest_end = [] { fail_uncoded("the run's end is after the latest end"); };
+    const auto past_latest_end = [] { fail(codes::run_bounds, "the run's end is after the latest end"); };
     std::optional<datetime> end = bounds.end;
     if (bounds.length.has_value()) {
         // A length that puts the end after the latest end, one too long for
@@ -314,17 +310,15 @@ std::pair<datetime, std::optional<datetime>> resolved(const Bounds& bounds, Mode
     return {start, end};
 }
 
-Run::Run(datetime start) : start_(start) {}
-
 Run::Run(datetime start, hgraph::GraphExecutorValue executor)
     : start_(start), executor_(std::move(executor)) {}
 
 bool Run::has(std::string_view key) const {
-    return executor_.has_value() && store().contains(key);
+    return store().contains(key);
 }
 
 hgraph::GlobalStateView Run::store() const {
-    return executor_->view().graph().global_state();
+    return executor_.view().graph().global_state();
 }
 
 Run run(const Entry& entry, const Bounds& bounds, Mode mode) {
@@ -335,10 +329,6 @@ Run run(const Entry& entry, const Bounds& bounds, Mode mode) {
     // either": a run with no end ends at the latest end, which hgraph's own
     // last time is later than.
     const datetime end = given_end.value_or(latest_end());
-    if (end <= start) {
-        // hgraph has no run that ends where it starts, so none is made.
-        return Run(start);
-    }
     hgraph::GraphExecutorBuilder builder;
     builder.graph_builder(std::move(wiring).finish())
         .mode(mode == Mode::simulation ? hgraph::GraphExecutorMode::Simulation
@@ -354,7 +344,16 @@ Run run(const Entry& entry, const Bounds& bounds, Mode mode) {
     hgraph::GraphExecutorValue executor = builder.make_executor();
     {
         const UnderWay registered(executor.view());
-        executor.view().run();
+        const auto view = executor.view();
+        if (end <= start) {
+            // The SDK's run loop requires end > start. Drive just the graph's
+            // lifecycle with the original executor mode and bounds (CRUN-1).
+            const auto graph = view.graph();
+            graph.start(start);
+            graph.stop();
+        } else {
+            view.run();
+        }
     }
     return Run(start, std::move(executor));
 }

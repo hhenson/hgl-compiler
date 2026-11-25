@@ -163,9 +163,10 @@ fn integer_range(root: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics)
     }
 }
 
-/// FN-8: "Packs have no defaults, cannot be const, and follow all fixed
-/// parameters", and "`...{Fields}` captures the named ones ... where
-/// `Fields` is a declared type pack."
+/// FN-8: packs have no defaults and cannot be const. For the proposed
+/// trial, a fixed parameter may follow a positional pack and be given by
+/// name alone. A named pack follows every fixed parameter and names a
+/// declared type pack, `...{Fields}`.
 fn packs(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) {
     let at = |token: &SyntaxToken| Location::new(file, token.span());
     // The declaration's type packs: its generic parameters written
@@ -182,8 +183,8 @@ fn packs(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
         .into_iter()
         .flat_map(|list| list.children())
         .filter(|child| child.kind() == SyntaxKind::Param);
-    // The `...` of the first pack met, once one has been.
-    let mut pack_seen: Option<SyntaxToken> = None;
+    // The `...` of the first named pack met, once one has been.
+    let mut named_pack_seen: Option<SyntaxToken> = None;
     // The name of the first parameter met that may be omitted, once one
     // has been.
     let mut omissible_seen: Option<SyntaxToken> = None;
@@ -200,17 +201,17 @@ fn packs(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
         };
         let Some(ellipsis) = ellipsis else {
             // A fixed parameter.
-            if let Some(pack) = &pack_seen {
+            if let Some(pack) = &named_pack_seen {
                 diagnostics.emit(
                     error(
                         Category::Type,
                         codes::PACK_ORDER,
                         at(name),
-                        format!("parameter `{}` follows a pack", name.text()),
+                        format!("parameter `{}` follows a named pack", name.text()),
                         "FN-8",
                     )
                     .with_related(at(pack), "the pack is here")
-                    .with_note("packs follow all fixed parameters"),
+                    .with_note("a named pack follows all fixed parameters"),
                 );
             }
             // UNIT-8: "A parameter that may be omitted follows every
@@ -267,6 +268,7 @@ fn packs(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
         // `...{Fields}`: what is in the braces is a declared type pack,
         // by its bare name.
         if let Some(named) = child(&parameter, SyntaxKind::PackType) {
+            named_pack_seen.get_or_insert(ellipsis);
             let inner = named.children().next();
             let pack_name = inner
                 .as_ref()
@@ -295,7 +297,6 @@ fn packs(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
                 );
             }
         }
-        pack_seen.get_or_insert(ellipsis);
     }
 }
 

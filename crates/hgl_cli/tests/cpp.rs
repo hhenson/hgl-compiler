@@ -2235,6 +2235,50 @@ fn an_integration_tests_run_configuration_runs_on_the_sdk() {
     );
 }
 
+/// The empty interval keeps both hooks (CRUN-1), and invalid bounds fail with
+/// `run.bounds` before either hook runs (CRUN-3).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn zero_cycle_hooks_and_run_bounds_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("run-bounds-lifecycle");
+    let file = write(
+        &root,
+        "lifecycle.hgl",
+        r#"module probes.run_lifecycle
+fn fail_start(const divisor: i64) {
+    start { let checked = 1 // divisor }
+    when {}
+}
+fn fail_stop(const divisor: i64) {
+    when {}
+    stop { let checked = 1 // divisor }
+}
+test zero_length_runs_start {
+    assert raises("numeric.division_by_zero") { eval{length: 0us} fail_start(divisor: 0) }
+}
+test zero_length_runs_stop {
+    assert raises("numeric.division_by_zero") { eval{length: 0us} fail_stop(divisor: 0) }
+}
+test lower_bound {
+    assert raises("run.bounds") { eval{start: never, length: 1us} fail_start(divisor: 0) }
+}
+test upper_bound {
+    assert raises("run.bounds") { eval{end: forever} fail_start(divisor: 0) }
+}
+"#,
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The activity of a node's inputs and the temporal form of an enum on
 /// the SDK (`demo.activity`): a passive input wakes no node and is read
 /// where another wakes it, activity belongs to each binding of one
@@ -2777,7 +2821,7 @@ fn forwarded_packs_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 19 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 20 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
