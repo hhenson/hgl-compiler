@@ -88,7 +88,7 @@ impl BuildSession {
         let workspace = Workspace::open(keep, roots, &cache, debug)?;
         let previous = PreviousBuild::read(&workspace);
         let previous = if clean {
-            clean::workspace(&workspace, previous.is_some())?;
+            clean::workspace(&workspace, previous.as_ref())?;
             None
         } else {
             previous

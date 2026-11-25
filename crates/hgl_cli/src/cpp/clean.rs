@@ -8,10 +8,14 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use super::build::{MANIFEST_HEADER, Workspace};
+use super::stamp::PreviousBuild;
 
 /// The caller holds the workspace lock until the replacement build completes.
-pub(super) fn workspace(workspace: &Workspace, stamped: bool) -> Result<(), String> {
-    clean(&workspace.directory, stamped)
+pub(super) fn workspace(
+    workspace: &Workspace,
+    previous: Option<&PreviousBuild>,
+) -> Result<(), String> {
+    clean(&workspace.directory, previous)
         .map_err(|error| format!("cannot clean {}: {error}", workspace.directory.display()))
 }
 
@@ -23,7 +27,7 @@ fn has_header(path: &Path, header: &str) -> io::Result<bool> {
     Ok(bytes.strip_suffix(b"\n") == Some(header.as_bytes()))
 }
 
-fn clean(root: &Path, stamped: bool) -> io::Result<()> {
+fn clean(root: &Path, previous: Option<&PreviousBuild>) -> io::Result<()> {
     // Check every output directory before inspecting children. Never follow a
     // directory link into a source tree, a shared native cache or another build.
     for dir in [
@@ -62,7 +66,7 @@ fn clean(root: &Path, stamped: bool) -> io::Result<()> {
     let owned = match fs::symlink_metadata(&manifest) {
         Ok(info) if info.is_file() && has_header(&manifest, MANIFEST_HEADER)? => true,
         Ok(_) => return Err(io::Error::other("build.ninja is not an HGL build manifest")),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => stamped,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => previous.is_some(),
         Err(e) => return Err(e),
     };
     let mut products: Vec<PathBuf> = [
@@ -108,7 +112,13 @@ fn clean(root: &Path, stamped: bool) -> io::Result<()> {
                 continue;
             }
             if dir.starts_with("debug-sources") {
-                if owned && name.ends_with(".hgl.source") {
+                // Debug copies have no generated header. Both the relative name
+                // and the bytes must match a copy recorded by the compiler.
+                if name.ends_with(".hgl.source")
+                    && entry.file_type()?.is_file()
+                    && previous
+                        .is_some_and(|build| build.matches_artifact(root, &format!("{dir}/{name}")))
+                {
                     sources.push(path);
                 }
                 continue;
@@ -194,8 +204,42 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         let file = workspace.path().join("compile_commands.json");
         fs::write(&file, "keep").unwrap();
-        assert!(clean(workspace.path(), false).is_err());
+        assert!(clean(workspace.path(), None).is_err());
         assert_eq!(fs::read_to_string(file).unwrap(), "keep");
+    }
+
+    /// 0.2.9's v2 stamp records the exact bytes of debug copies. Preserve
+    /// handwritten neighbours and copies the user has edited since the build.
+    #[test]
+    fn cleans_only_matching_debug_copies_from_a_v2_workspace() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let workspace = Workspace::open(Some(root), &[], root, false).unwrap();
+        let copies = root.join("debug-sources");
+        fs::create_dir(&copies).unwrap();
+        fs::write(copies.join("core.hgl.source"), "original").unwrap();
+        fs::write(copies.join("calendar.hgl.source"), "user edit").unwrap();
+        fs::write(copies.join("notes.hgl.source"), "original").unwrap();
+        let digest = blake3::hash(b"original").to_hex().to_string();
+        let stamp = serde_json::json!({
+            "version": 2, "key": "old", "program": {"units": [], "applications": [], "tests": null},
+            "artifacts": [
+                {"path":"debug-sources/core.hgl.source", "digest": digest},
+                {"path":"debug-sources/calendar.hgl.source", "digest": digest}
+            ]
+        });
+        fs::write(root.join(".hgl-built.json"), stamp.to_string()).unwrap();
+        let previous = PreviousBuild::read(&workspace).unwrap();
+        clean(root, Some(&previous)).unwrap();
+        assert!(!copies.join("core.hgl.source").exists());
+        assert_eq!(
+            fs::read_to_string(copies.join("calendar.hgl.source")).unwrap(),
+            "user edit"
+        );
+        assert_eq!(
+            fs::read_to_string(copies.join("notes.hgl.source")).unwrap(),
+            "original"
+        );
     }
 
     #[cfg(unix)]
@@ -214,7 +258,7 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), workspace.path().join("obj/modules")).unwrap();
         let sentinel = outside.path().join("mod-demo.o");
         fs::write(&sentinel, "keep").unwrap();
-        assert!(clean(workspace.path(), false).is_err());
+        assert!(clean(workspace.path(), None).is_err());
         assert!(db.is_file());
         assert_eq!(fs::read_to_string(sentinel).unwrap(), "keep");
     }

@@ -160,6 +160,19 @@ fn clean_rebuilds_the_workspace_and_removes_retired_units() {
     };
     assert_eq!(build(&["--clean", "--tests"])["reused"], false);
     assert_eq!(build(&["--tests"])["reused"], true);
+    // Debug builds since 0.2.9 stamp each bundled source copy with its digest.
+    build(&["--debug", "--tests"]);
+    let debug_copy = ninja.workspace.join("debug-sources/core.hgl.source");
+    assert!(debug_copy.is_file());
+    let nearby = write(
+        &ninja.workspace,
+        "debug-sources/notes.hgl.source",
+        "handwritten",
+    );
+    build(&["--clean", "--tests"]);
+    assert!(!debug_copy.exists());
+    assert_eq!(fs::read_to_string(nearby).unwrap(), "handwritten");
+
     fs::remove_file(app).unwrap();
     build(&[]);
     let retired = [
