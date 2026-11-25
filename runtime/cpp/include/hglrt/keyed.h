@@ -410,6 +410,67 @@ struct publisher<hgraph::TSS<K>> : keyed_detail::KeyedPublisher<hgraph::TSS<K>> 
 template <class K, class V>
 struct publisher<hgraph::TSD<K, V>> : keyed_detail::KeyedPublisher<hgraph::TSD<K, V>> {};
 
+namespace keyed_detail {
+/// Observe the live children of a keyed map through a dictionary of publications.
+template <class K, class V>
+struct PublishedMapEntries {
+    using Schema = hgraph::TSD<K, V>;
+    static constexpr auto name = "hgl.map_published_entries";
+
+    static void eval(hgraph::In<"children", Schema, hgraph::InputValidity::Unchecked> children,
+                     hgraph::Out<Schema> out) {
+        const auto& endpoint = out.base();
+        auto result = endpoint.as_dict();
+        auto mutation = result.begin_mutation(endpoint.evaluation_time());
+        const auto remove = [&](const hgraph::ValueView& key) {
+            // TIME-7: removing a key the result never held cannot wake a reader.
+            if (result.contains(key)) {
+                static_cast<void>(mutation.erase(key));
+            }
+        };
+        for (const auto& key : children.removed_keys()) {
+            remove(key);
+        }
+        for (const auto& [key, child] : children.modified_items()) {
+            const auto& source = child.base();
+            if (!source.valid()) {
+                // MAP-10: an invalidated child keeps its lifecycle key but
+                // withdraws its entry from the result.
+                remove(key);
+                continue;
+            }
+            if (source.schema()->kind == hgraph::TSTypeKind::TS) {
+                mutation.set(key, source.value());
+                continue;
+            }
+            const bool published = result.contains(key);
+            hgraph::TSOutputView entry{endpoint.output(), mutation.at(key), endpoint.evaluation_time()};
+            if (published) {
+                hgraph::forward_delta(entry, source);
+            } else {
+                hgraph::reconcile_current_state(entry, source, {
+                    .scope = hgraph::TSCurrentReconcileScope::Sample,
+                    .sample_all = true,
+                    .membership = true,
+                });
+            }
+        }
+        if (children.valid() && !out.valid()) {
+            mutation.touch();
+        }
+    }
+};
+} // namespace keyed_detail
+
+/// MAP-10, SET-1: expose the keys and ticks of published map entries.
+template <class K, class V>
+hgraph::Port<hgraph::TSD<K, V>> published_map_entries(
+    hgraph::Wiring& wiring, hgraph::Port<hgraph::TSD<K, V>> children
+) {
+    return hgraph::wire<keyed_detail::PublishedMapEntries<K, V>>(wiring, children)
+        .template as<hgraph::TSD<K, V>>();
+}
+
 // ---- A dictionary's entry (TIME-1, TIME-9, EXPR-7) -------------------------
 //
 // TIME-1: "A child of a collection (TIME-9), an element, a field or an

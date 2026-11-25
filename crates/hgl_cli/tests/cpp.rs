@@ -2709,6 +2709,49 @@ export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values,
     );
 }
 
+/// MAP-1, MAP-2 and MAP-9: report the checked keyed forms the target declines.
+#[test]
+fn keyed_map_declines_name_the_unsupported_form() {
+    let root = scratch("keyed-map-declines");
+    let file = write(
+        &root,
+        "demo.keyed_map_declines.hgl",
+        r#"module demo.keyed_map_declines
+
+const fn twice(x: i64) -> i64 => x * 2
+fn applied(member: i64, f: fn(i64) -> i64) -> i64 => f(member)
+fn const_key(member: i64, const key: i64) -> i64 => member + key
+fn sum_members(left: i64, right: i64) -> i64 => left + right
+
+export fn mapped_const_key(items: dict<i64, i64>) -> dict<i64, i64> => map(const_key, items)
+export fn mapped_function(items: dict<i64, i64>) -> dict<i64, i64> => map(applied, items, twice)
+export fn mapped_pair(a: dict<i64, i64>, b: dict<i64, i64>) -> dict<i64, i64> => map(sum_members, a, b)
+"#,
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert!(checked.status.success(), "{}", text(&checked.stderr));
+    let out = root.join("emitted");
+    let emitted = hgl_in(
+        &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
+        &[],
+        &[],
+    );
+    let stderr = text(&emitted.stderr);
+    assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+    for reason in [
+        "a keyed map with a const key parameter",
+        "a keyed map passing a function argument to its child",
+        "a keyed map with multiple split dictionaries",
+    ] {
+        assert!(stderr.contains(reason), "{stderr}");
+    }
+    assert_eq!(
+        stderr.matches("error[build/target.unsupported]").count(),
+        3,
+        "{stderr}"
+    );
+}
+
 /// RED-5 and TYPE-14: a plain seed widens to the selected nullable accumulator.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
@@ -3875,7 +3918,7 @@ fn concrete_generic_struct_traces_run_on_the_sdk() {
 }
 
 /// `demo.keyed`, the temporal form of a set and of a dictionary (TYPE-9,
-/// TIME-7, TIME-9, END-3, END-4, TST-9): every test of it passes on the
+/// FN-3, TIME-7, TIME-9, END-3, END-4, TST-9): every test of it passes on the
 /// SDK, and under the sanitizers where `HGL_CPP_FLAGS` names them.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
@@ -3898,7 +3941,7 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

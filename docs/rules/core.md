@@ -759,7 +759,8 @@ runner: planned
 transpiler: partial
 
 - Fixed-size list `map` runs its HGL candidates. C++ wires a result-bearing keyed map over one split dictionary.
-- Left: native growing lists, multiple split dictionaries and native resultless maps (#370).
+- Core currently declares result-bearing native map candidates. Native calls with resultless callbacks reject during checking.
+- Left: native growing lists and multiple split dictionaries (#370).
 
 ## MAP-2
 
@@ -767,7 +768,7 @@ transpiler: partial
 
 - A fixed-size map binds positional and named inputs, splits the fitted list inputs, and supplies whole inputs to each child. An explicitly specialized operator can supply the callback's member types (FN-17). An omitted callback input uses the callback's default (FN-8, UNIT-8).
 - The native one-dictionary map binds the callback's checked arguments, passes the selected dictionary entry, and gives each whole input to every child.
-- Left: multiple split dictionaries and growing lists (#370). Bare operator selection is tracked in #776 and inline dictionary argument fitting in #826.
+- Left: a function supplied to a keyed child, multiple split dictionaries and growing lists (#370). Bare operator selection is tracked in #776 and inline dictionary argument fitting in #826.
 
 ## MAP-3
 
@@ -814,7 +815,7 @@ transpiler: partial
 transpiler: partial
 
 - A fixed-size map supplies each child's position to the default `key` parameter or the renamed parameter. The supported keyed map supplies a key connection when the child starts, regardless of the parameter's position.
-- Left: key injection in the other native forms (#370).
+- Left: C++ declines a keyed map that injects its key into a `const` parameter. Key injection in the other native forms remains in #370.
 
 ## MAP-10
 
@@ -822,8 +823,9 @@ transpiler: partial
 
 - Fixed-size results hold the children's publications. A callback with no result runs at each fixed position, and the map gives no result. A failure that leaves a child leaves either form.
 - The C++ target's existing [size-zero temporal list limit](https://github.com/hhenson/hgl-compiler/issues/829) applies to both fixed-size forms (TYPE-10).
-- The native one-dictionary map holds the children's publications, propagates a child failure and removes an entry when its child stops.
-- Left: other native result shapes and native callbacks with no result (#370).
+- The native one-dictionary map holds published entries, propagates a child failure and removes an entry when its child stops. Lifecycle changes of an unpublished child leave an already valid result silent (TIME-7).
+- Proposed. Invalidating a child result removes its entry until that child publishes again.
+- Left: other native result shapes (#370).
 
 ## RED-1
 

@@ -13,6 +13,7 @@ use hgl_analyser::{
     Argument as GenericArgument, ConstantValue, DeclarationKind, Detail, FieldRef, GenericKind,
     Parameter, Program, Role, Type, substitute_within,
 };
+use hgl_diagnostics::Location;
 
 /// The evaluated arguments of a call in written order, keeping their
 /// positions in the analysed argument list (EXPR-2). A function
@@ -141,19 +142,44 @@ pub enum KeyedMapInput {
     Whole(usize),
     /// A value passed to a compile-time parameter.
     Configuration(usize),
-    /// A compile-time callable that needs no runtime input.
-    Static,
+}
+
+/// A checked keyed map form that the single-dictionary adapter cannot bind.
+pub enum KeyedMapProblem {
+    /// The key is a connection, but this callback takes a constant.
+    ConstantKey(Location),
+    /// A dependent argument supplies the child with a static callable.
+    FunctionArgument(Location),
+    /// More than one dictionary needs to be split.
+    MultipleSplitDictionaries,
 }
 
 /// Bind the checked dependent pack to the selected callback's own slots.
 /// A missing callback argument stays omitted, so it keeps its own default.
-pub fn one_dictionary_map(program: &Program, value: &Expr) -> Option<KeyedMap> {
+pub fn keyed_map_call(
+    program: &Program,
+    value: &Expr,
+) -> Option<Result<KeyedMap, KeyedMapProblem>> {
     let ExprKind::Call {
         callee, arguments, ..
     } = &value.kind
     else {
         return None;
     };
+    if let Callee::DeferredOperator(call) = callee
+        && matches!(call.expected, Some(Type::Dict { .. }))
+        && Some(call.identity.module) == program.core()
+        && program.modules[call.identity.module].declarations[call.identity.declaration].name == "map"
+        && arguments.iter().any(|argument| matches!(argument.value.kind, ExprKind::Unread))
+        && let Some(callback) = arguments.iter().find(|argument| {
+            matches!(&argument.value.ty, Type::Function(function)
+                if function.parameters.iter().any(|parameter| matches!(parameter.ty(), Type::Function(_))))
+        })
+    {
+        // The checker can defer a forwarded function argument before the
+        // native candidate and its dependent pack slots are recorded.
+        return Some(Err(KeyedMapProblem::FunctionArgument(callback.value.at)));
+    }
     // MAP-4: the selected result carries the split dictionary's key type.
     let Type::Dict { key, value: result } = &value.ty else {
         return None;
@@ -222,6 +248,12 @@ pub fn one_dictionary_map(program: &Program, value: &Expr) -> Option<KeyedMap> {
         .enumerate()
         .filter(|(_, arg)| arg.parameter == Some(pack_parameter))
         .collect();
+    if let Some((_, argument)) = supplied
+        .iter()
+        .find(|(_, argument)| matches!(argument.value.ty, Type::Function(_)))
+    {
+        return Some(Err(KeyedMapProblem::FunctionArgument(argument.value.at)));
+    }
     let parameters = function.parameters.iter().enumerate().filter(|(_, item)| {
         item.declared()
             .is_none_or(|declared| !declared.configuration)
@@ -237,6 +269,9 @@ pub fn one_dictionary_map(program: &Program, value: &Expr) -> Option<KeyedMap> {
             PackKey::Name(name.to_string())
         });
         let (input, expr) = if name == Some(key_name.as_str()) {
+            if item.declared().is_some_and(|parameter| parameter.constant) {
+                return Some(Err(KeyedMapProblem::ConstantKey(callback.at)));
+            }
             (KeyedMapInput::Key, None)
         } else {
             let Some(&(source, arg)) = supplied
@@ -246,9 +281,7 @@ pub fn one_dictionary_map(program: &Program, value: &Expr) -> Option<KeyedMap> {
                 continue;
             };
             matched += 1;
-            if matches!(arg.value.kind, ExprKind::StaticCallable(_)) {
-                (KeyedMapInput::Static, Some(arg.value.clone()))
-            } else if item.declared().is_some_and(|parameter| parameter.constant) {
+            if item.declared().is_some_and(|parameter| parameter.constant) {
                 (
                     KeyedMapInput::Configuration(source),
                     Some(arg.value.clone()),
@@ -277,6 +310,9 @@ pub fn one_dictionary_map(program: &Program, value: &Expr) -> Option<KeyedMap> {
             }),
         });
     }
+    if splits > 1 {
+        return Some(Err(KeyedMapProblem::MultipleSplitDictionaries));
+    }
     if splits != 1 || supplied.len() != matched {
         return None;
     }
@@ -293,11 +329,11 @@ pub fn one_dictionary_map(program: &Program, value: &Expr) -> Option<KeyedMap> {
         at: callback.at,
         category: ValueCategory::Connection,
     };
-    Some(KeyedMap {
+    Some(Ok(KeyedMap {
         keys,
         callback,
         inputs,
-    })
+    }))
 }
 
 /// What a call that leaves a parameter out gives it (UNIT-8).

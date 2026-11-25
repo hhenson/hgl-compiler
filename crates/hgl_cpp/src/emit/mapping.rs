@@ -1,10 +1,10 @@
 //! Writes result-bearing keyed map over one split dictionary (MAP-1, MAP-2).
-//! hgraph owns child lifetime and the result entries (MAP-7, MAP-10).
+//! hgraph owns child lifetime. The keyed publisher exposes the children's publications (MAP-7, MAP-10).
 
 use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Local};
 use hgl_analyser::{LocalKind, Type};
 use hgl_diagnostics::Location;
-use hgl_lower::calls::{KeyedMap, KeyedMapInput};
+use hgl_lower::calls::{KeyedMap, KeyedMapInput, KeyedMapProblem};
 
 use super::Emitter;
 use super::anonymous::anonymous_arguments;
@@ -27,9 +27,21 @@ impl Emitter<'_> {
         &mut self,
         scope: &mut Scope,
         value: &Expr,
-        map: &KeyedMap,
+        map: Result<KeyedMap, KeyedMapProblem>,
         held: HeldInputs<'_>,
     ) -> String {
+        let map = match map {
+            Ok(map) => map,
+            Err(KeyedMapProblem::ConstantKey(at)) => {
+                return self.missing(at, "a keyed map with a const key parameter");
+            }
+            Err(KeyedMapProblem::FunctionArgument(at)) => {
+                return self.missing(at, "a keyed map passing a function argument to its child");
+            }
+            Err(KeyedMapProblem::MultipleSplitDictionaries) => {
+                return self.missing(value.at, "a keyed map with multiple split dictionaries");
+            }
+        };
         let ExprKind::Call { arguments, .. } = &value.kind else {
             return self.missing(value.at, "this keyed map");
         };
@@ -42,7 +54,7 @@ impl Emitter<'_> {
             );
         }
 
-        let mut callback = map.callback.clone();
+        let mut callback = map.callback;
         let ExprKind::Call {
             callee,
             arguments: bound,
@@ -77,9 +89,6 @@ impl Emitter<'_> {
             let ty = &argument.value.ty;
             let at = argument.value.at;
             let binding = map.inputs.get(position).copied();
-            if matches!(binding, Some(KeyedMapInput::Static)) {
-                continue;
-            }
             let scalar = matches!(binding, Some(KeyedMapInput::Configuration(_)))
                 || binding.is_none() && !argument.value.is_connection();
             if scalar {
@@ -129,7 +138,7 @@ impl Emitter<'_> {
                     runtime_parameters.push(parameter);
                     input_ports.push(format!("{parent}.erased()"));
                 }
-                Some(KeyedMapInput::Configuration(_) | KeyedMapInput::Static) => unreachable!(),
+                Some(KeyedMapInput::Configuration(_)) => unreachable!(),
             }
             given.push(Given {
                 position,
@@ -247,9 +256,10 @@ impl Emitter<'_> {
             "[&] {{ {wiring}{captures}\
              const ::std::array<::hgraph::WiringPortRef, {}> inputs_{{{}}}; \
              constexpr ::std::array<::std::size_t, 1> split_{{{split}}}; \
-             return ::hgraph::Port<{result}>{{{WIRING}, ::hgraph::compiled::map_(\
+             const ::hgraph::Port<{result}> children_{{{WIRING}, ::hgraph::compiled::map_(\
              {WIRING}, inputs_, split_, ::hgraph::compile_subgraph<{name}>({}), \
-             ::hgraph::MapKeyArg::{key_policy}, {keys})}}; }}()",
+             ::hgraph::MapKeyArg::{key_policy}, {keys})}}; \
+             return ::hglrt::published_map_entries({WIRING}, children_); }}()",
             input_ports.len(),
             input_ports.join(", "),
             compile.join(", "),
