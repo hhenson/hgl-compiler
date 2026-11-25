@@ -1034,15 +1034,6 @@ impl<'a> Typer<'a> {
                     }) {
                         return false;
                     }
-                    let mut matching = bounds.iter().filter(|member| {
-                        member.pack == *pack
-                            && match &member.key {
-                                StatedPackKey::One(stated) => {
-                                    stated.substituted(&constant_at).same(&key.value) == Some(true)
-                                }
-                                StatedPackKey::Every(_) => true,
-                            }
-                    });
                     let project = |member: &StatedPackMember, ty: &Type| {
                         let ty = substitute_within(ty, given);
                         match member.key {
@@ -1052,28 +1043,29 @@ impl<'a> Typer<'a> {
                             }
                         }
                     };
-                    let equality = matching.clone().find_map(|member| match &member.types {
-                        StatedMemberTypes::Equal(ty) => Some(project(member, ty)),
-                        StatedMemberTypes::Alternatives(_) => None,
-                    });
-                    // An equality to an open type does not displace a
-                    // finite membership for this same pack key.
-                    let types = if equality
-                        .as_ref()
-                        .is_some_and(|ty| whole(ty) && !names_parameter(ty))
-                    {
-                        equality.map(|ty| vec![ty])
-                    } else {
-                        matching
-                            .find_map(|member| match &member.types {
-                                StatedMemberTypes::Equal(_) => None,
-                                StatedMemberTypes::Alternatives(types) => {
-                                    Some(types.iter().map(|ty| project(member, ty)).collect())
+                    let matching: Vec<Vec<Type>> = bounds
+                        .iter()
+                        .filter(|member| {
+                            member.pack == *pack
+                                && match &member.key {
+                                    StatedPackKey::One(stated) => {
+                                        stated.substituted(&constant_at).same(&key.value)
+                                            == Some(true)
+                                    }
+                                    StatedPackKey::Every(_) => true,
                                 }
-                            })
-                            .or_else(|| equality.map(|ty| vec![ty]))
-                    };
-                    if let Some(types) = types {
+                        })
+                        .map(|member| {
+                            member
+                                .types
+                                .values()
+                                .iter()
+                                .map(|ty| project(member, ty))
+                                .collect()
+                        })
+                        .collect();
+                    let types = Self::intersect_member_bounds(matching);
+                    if !types.is_empty() {
                         choices.push(((*pack, key), types));
                     }
                     false
@@ -1082,6 +1074,61 @@ impl<'a> Typer<'a> {
             );
         }
         choices.into_inner()
+    }
+
+    /// Intersect all positive bounds stated for one reflected pack member
+    /// regardless of conjunction order (GEN-3, GEN-7, GEN-10). Concrete
+    /// bounds narrow the candidate set before open ones; without a concrete
+    /// bound, only a unique known-subset open bound is kept so differing
+    /// type variables stay conservative in both orders. An empty
+    /// intersection leaves the member unproved.
+    fn intersect_member_bounds(bounds: Vec<Vec<Type>>) -> Vec<Type> {
+        let is_concrete = |ty: &Type| {
+            whole(ty)
+                && !ty.any_part(
+                    &|part| matches!(part, Type::Parameter { .. } | Type::PackMember { .. }),
+                    &|constant| constant.value.key().is_none(),
+                )
+        };
+        let (mut closed, open): (Vec<Vec<Type>>, Vec<Vec<Type>>) = bounds
+            .into_iter()
+            .partition(|set| set.iter().all(is_concrete));
+        let (base, rest) = if !closed.is_empty() {
+            let first = closed.remove(0);
+            closed.extend(open);
+            (first, closed)
+        } else if !open.is_empty() {
+            // Without a concrete bound, keep an open bound only when every
+            // other open bound is known to contain every element of it.
+            let Some(chosen) = open.iter().find(|set| {
+                open.iter().all(|other| {
+                    set.iter().all(|ty| {
+                        other
+                            .iter()
+                            .any(|candidate| same_type(ty, candidate) == Some(true))
+                    })
+                })
+            }) else {
+                return Vec::new();
+            };
+            (chosen.clone(), Vec::new())
+        } else {
+            return Vec::new();
+        };
+        let mut intersected = Vec::new();
+        for ty in base {
+            if rest.iter().all(|other| {
+                other
+                    .iter()
+                    .any(|candidate| same_type(&ty, candidate) != Some(false))
+            }) && !intersected
+                .iter()
+                .any(|existing| same_type(existing, &ty) == Some(true))
+            {
+                intersected.push(ty);
+            }
+        }
+        intersected
     }
 
     /// A positive membership of a named member in a finite set of types.

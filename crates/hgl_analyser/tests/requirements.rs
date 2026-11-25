@@ -69,6 +69,307 @@ fn reflected_member_conjuncts_prove_the_same_call_in_either_order() {
     }
 }
 
+/// GEN-3, GEN-7 and GEN-10: positive constraints on the same reflected key
+/// admit their intersection in any conjunction order, for both generic calls
+/// and operators, while retaining rejections when a failing type remains or
+/// the intersection is empty.
+#[test]
+fn reflected_member_same_key_constraints_intersect_in_any_order() {
+    let helper = concat!(
+        "const k: str = \"item\"\n",
+        "const other: str = \"other\"\n",
+        "const fn num_only<T>(value: T) -> T requires T in {i64, f64} => value\n",
+        "const fn pair_only<T>(value: T) -> T requires T == list<i64, 2> => value\n",
+    );
+    let fn_decl =
+        "const fn check<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, x: Ps[k]) -> Ps[k]\n";
+
+    // Positive: finite same-key intersections prove both callee requires and operators.
+    for condition in [
+        "Ps[k] in {str, f64} && Ps[k] in {f64}",
+        "Ps[k] in {f64} && Ps[k] in {str, f64}",
+        "each a in arg_keys(Ps) { Ps[a] in {str, f64} } && Ps[k] in {f64}",
+        "Ps[k] in {f64} && each a in arg_keys(Ps) { Ps[a] in {str, f64} }",
+        "each a in arg_keys(Ps) { Ps[a] in {i64, f64} } && Ps[k] in {str, f64}",
+        "Ps[k] in {str, f64} && each a in arg_keys(Ps) { Ps[a] in {i64, f64} }",
+        "each a in arg_keys(Ps) { Ps[a] in {str, f64} } && each b in arg_keys(Ps) { Ps[b] in {bool, f64} }",
+        "each a in arg_keys(Ps) { Ps[a] in {str, f64} && Ps[a] in {bool, f64} }",
+        "Ps[k] in {str, bool, f64} && Ps[k] in {str, i64, f64} && Ps[k] in {bool, i64, f64}",
+        "Ps[k] in {str, f64} && Ps[k] == f64",
+        "Ps[k] == f64 && Ps[k] in {str, f64}",
+        "Ps[k] == T && Ps[k] in {str, f64} && Ps[k] in {i64, f64}",
+        "Ps[k] in {list<T, 2>, f64} && Ps[k] in {str, f64}",
+        "Ps[k] in {str, f64} && Ps[k] in {list<T, 2>, f64}",
+    ] {
+        let checked_fn = module(&format!(
+            "{helper}{fn_decl}    requires {condition} => num_only<Ps[k]>(x)\n"
+        ));
+        assert_eq!(
+            checked_fn.summary(),
+            NONE,
+            "fn {condition}\n{}",
+            checked_fn.report
+        );
+        let checked_op = module(&format!(
+            "{helper}{fn_decl}    requires {condition} => x - x\n"
+        ));
+        assert_eq!(
+            checked_op.summary(),
+            NONE,
+            "op {condition}\n{}",
+            checked_op.report
+        );
+    }
+
+    // Positive: symbolic key parameter combines universal and explicit bounds in either order.
+    for condition in [
+        "each a in arg_keys(Ps) { Ps[a] in {str, f64} } && Ps[key] in {f64}",
+        "Ps[key] in {f64} && each a in arg_keys(Ps) { Ps[a] in {str, f64} }",
+    ] {
+        let checked = module(&format!(
+            "{helper}const fn sym<const key: str, ...Ps>(f: const fn(...{{Ps}}) -> i64, \
+             x: Ps[key]) -> Ps[key]\n    requires {condition} => num_only<Ps[key]>(x)\n"
+        ));
+        assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+    }
+
+    // Positive: open size/type pattern narrows a concrete set in either order.
+    for condition in [
+        "Ps[k] == list<i64, N> && Ps[k] in {list<i64, 2>, str}",
+        "Ps[k] in {list<i64, 2>, str} && Ps[k] == list<i64, N>",
+        "Ps[k] == list<T, 2> && Ps[k] in {list<i64, 2>, str}",
+        "Ps[k] in {list<i64, 2>, str} && Ps[k] == list<T, 2>",
+    ] {
+        let checked = module(&format!(
+            "{helper}const fn sized<T, const N: i64, ...Ps>(f: const fn(...{{Ps}}) -> i64, \
+             t: T, x: Ps[k]) -> Ps[k]\n    requires {condition} => pair_only<Ps[k]>(x)\n"
+        ));
+        assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+    }
+
+    // Negative: intersection still admits a failing type, is empty/contradictory,
+    // mentions an unconstrained type parameter, names a different key, or stands
+    // inside disjunction/negation/existential.
+    for condition in [
+        "Ps[k] in {str, i64, f64} && Ps[k] in {str, f64}",
+        "Ps[k] in {str, f64} && Ps[k] in {str, i64, f64}",
+        "each a in arg_keys(Ps) { Ps[a] in {str, i64, f64} } && Ps[k] in {str, f64}",
+        "Ps[k] in {str, f64} && each a in arg_keys(Ps) { Ps[a] in {str, i64, f64} }",
+        "Ps[k] in {str} && Ps[k] in {f64}",
+        "Ps[k] in {f64} && Ps[k] in {str}",
+        "Ps[k] == str && Ps[k] in {f64}",
+        "Ps[k] in {f64} && Ps[k] == str",
+        "Ps[k] == i64 && Ps[k] in {str}",
+        "Ps[k] == f64 && Ps[k] == str",
+        "Ps[k] == str && Ps[k] == f64",
+        "Ps[k] in {T, f64} && Ps[k] in {str, f64}",
+        "Ps[k] in {str, f64} && Ps[k] in {T, f64}",
+        "Ps[k] in {str, f64} && Ps[other] in {f64}",
+        "Ps[k] in {str, f64} && (Ps[k] in {f64} || Ps[k] in {bool})",
+        "Ps[k] in {str, f64} && !(Ps[k] == str)",
+        "Ps[k] in {str, f64} && any a in arg_keys(Ps) { Ps[a] == f64 }",
+    ] {
+        let checked_fn = module(&format!(
+            "{helper}{fn_decl}    requires {condition} => num_only<Ps[k]>(x)\n"
+        ));
+        assert_eq!(
+            checked_fn.findings.len(),
+            1,
+            "fn {condition}\n{}",
+            checked_fn.report
+        );
+        assert_eq!(
+            checked_fn.findings[0].code, "constraint/requires.unmet",
+            "fn {condition}\n{}",
+            checked_fn.report
+        );
+        let checked_op = module(&format!(
+            "{helper}{fn_decl}    requires {condition} => x - x\n"
+        ));
+        assert_eq!(
+            checked_op.findings.len(),
+            1,
+            "op {condition}\n{}",
+            checked_op.report
+        );
+        assert_eq!(
+            checked_op.findings[0].code, "operator/operator.no_candidate",
+            "op {condition}\n{}",
+            checked_op.report
+        );
+    }
+
+    // Open bounds with different type or constant variables stay conservative
+    // in both conjunction orders: never admit one order and reject the other.
+    let open_helper = concat!(
+        "const k: str = \"item\"\n",
+        "struct Pair { a: i64\n b: i64 }\n",
+        "operator same_type_op<A, B>(a: A, b: B) -> i64\n",
+        "impl const fn same_type_op<X>(a: X, b: X) -> i64 => 1\n",
+        "const fn struct_only<X>(value: X) -> X requires X in struct => value\n",
+    );
+    let open_decl = concat!(
+        "const fn check<T, U, ...Ps>(f: const fn(...{Ps}) -> i64, ",
+        "t: T, u: U, x: Ps[k]) -> Ps[k]\n",
+    );
+    for condition in [
+        "T in struct && Ps[k] == T && Ps[k] == U",
+        "T in struct && Ps[k] == U && Ps[k] == T",
+        "T in struct && Ps[k] in {T, Pair} && Ps[k] in {U, Pair}",
+        "T in struct && Ps[k] in {U, Pair} && Ps[k] in {T, Pair}",
+    ] {
+        let checked = module(&format!(
+            "{open_helper}{open_decl}    requires {condition} => struct_only<Ps[k]>(x)\n"
+        ));
+        assert_eq!(
+            checked.findings.len(),
+            1,
+            "open struct {condition}\n{}",
+            checked.report
+        );
+        assert_eq!(
+            checked.findings[0].code, "constraint/requires.unmet",
+            "open struct {condition}\n{}",
+            checked.report
+        );
+    }
+    let open_pair_decl = concat!(
+        "const fn check_pair<T, U, ...Ps>(f: const fn(...{Ps}) -> i64, ",
+        "t: T, u: U, x: Ps[k]) -> i64\n",
+    );
+    for condition in [
+        "Ps[k] == T && Ps[k] == U",
+        "Ps[k] == U && Ps[k] == T",
+        "Ps[k] in {T, i64} && Ps[k] in {U, i64}",
+        "Ps[k] in {U, i64} && Ps[k] in {T, i64}",
+    ] {
+        let checked = module(&format!(
+            "{open_helper}{open_pair_decl}    requires {condition} => same_type_op(x, t)\n"
+        ));
+        assert_eq!(
+            checked.findings.len(),
+            1,
+            "open op {condition}\n{}",
+            checked.report
+        );
+        assert_eq!(
+            checked.findings[0].code, "operator/operator.no_candidate",
+            "open op {condition}\n{}",
+            checked.report
+        );
+    }
+    let open_list_decl = concat!(
+        "const fn check_list<T, U, ...Ps>(f: const fn(...{Ps}) -> i64, ",
+        "lt: list<T, 2>, u: U, x: Ps[k]) -> i64\n",
+    );
+    for condition in [
+        "Ps[k] == list<T, 2> && Ps[k] == list<U, 2>",
+        "Ps[k] == list<U, 2> && Ps[k] == list<T, 2>",
+        "Ps[k] in {list<T, 2>, Pair} && Ps[k] in {list<U, 2>, Pair}",
+        "Ps[k] in {list<U, 2>, Pair} && Ps[k] in {list<T, 2>, Pair}",
+    ] {
+        let checked = module(&format!(
+            "{open_helper}{open_list_decl}    requires {condition} => same_type_op(x, lt)\n"
+        ));
+        assert_eq!(
+            checked.findings.len(),
+            1,
+            "open list {condition}\n{}",
+            checked.report
+        );
+        assert_eq!(
+            checked.findings[0].code, "operator/operator.no_candidate",
+            "open list {condition}\n{}",
+            checked.report
+        );
+    }
+    for condition in [
+        "Ps[k] == list<i64, N> && Ps[k] == list<i64, M>",
+        "Ps[k] == list<i64, M> && Ps[k] == list<i64, N>",
+    ] {
+        let checked = module(&format!(
+            "{open_helper}const fn check_sizes<const N: i64, const M: i64, ...Ps>(\
+             f: const fn(...{{Ps}}) -> i64, ln: list<i64, N>, x: Ps[k]) -> i64\n\
+             requires {condition} => same_type_op(x, ln)\n"
+        ));
+        assert_eq!(
+            checked.findings.len(),
+            1,
+            "open sizes {condition}\n{}",
+            checked.report
+        );
+        assert_eq!(
+            checked.findings[0].code, "operator/operator.no_candidate",
+            "open sizes {condition}\n{}",
+            checked.report
+        );
+    }
+
+    // Positive controls: same-variable open subset or open bounds alongside a concrete set.
+    for condition in [
+        "Ps[k] == list<T, 2> && Ps[k] in {list<T, 2>, Pair}",
+        "Ps[k] in {list<T, 2>, Pair} && Ps[k] == list<T, 2>",
+    ] {
+        let checked = module(&format!(
+            "{open_helper}{open_list_decl}    requires {condition} => same_type_op(x, lt)\n"
+        ));
+        assert_eq!(
+            checked.summary(),
+            NONE,
+            "same-var list subset {condition}\n{}",
+            checked.report
+        );
+    }
+    for condition in [
+        "Ps[k] == list<i64, N> && Ps[k] in {list<i64, N>, Pair}",
+        "Ps[k] in {list<i64, N>, Pair} && Ps[k] == list<i64, N>",
+    ] {
+        let checked = module(&format!(
+            "{open_helper}const fn check_sizes<const N: i64, ...Ps>(\
+             f: const fn(...{{Ps}}) -> i64, ln: list<i64, N>, x: Ps[k]) -> i64\n\
+             requires {condition} => same_type_op(x, ln)\n"
+        ));
+        assert_eq!(
+            checked.summary(),
+            NONE,
+            "same-var size subset {condition}\n{}",
+            checked.report
+        );
+    }
+    for condition in [
+        "Ps[k] == T && Ps[k] == T",
+        "Ps[k] == T && Ps[k] in {T, str}",
+        "Ps[k] in {T, str} && Ps[k] == T",
+        "each a in arg_keys(Ps) { Ps[a] in {T, str} } && Ps[k] == T",
+        "Ps[k] == T && each a in arg_keys(Ps) { Ps[a] in {T, str} }",
+    ] {
+        let checked = module(&format!(
+            "{open_helper}{open_pair_decl}    requires {condition} => same_type_op(x, t)\n"
+        ));
+        assert_eq!(
+            checked.summary(),
+            NONE,
+            "same-var open subset {condition}\n{}",
+            checked.report
+        );
+    }
+    for condition in [
+        "Ps[k] == T && Ps[k] == U && Ps[k] in {i64, f64}",
+        "Ps[k] == U && Ps[k] == T && Ps[k] in {i64, f64}",
+        "Ps[k] in {i64, f64} && Ps[k] == T && Ps[k] == U",
+    ] {
+        let checked = module(&format!(
+            "{helper}{open_decl}    requires {condition} => num_only<Ps[k]>(x)\n"
+        ));
+        assert_eq!(
+            checked.summary(),
+            NONE,
+            "open + concrete {condition}\n{}",
+            checked.report
+        );
+    }
+}
+
 /// GEN-7: a concrete reflected result must recheck its consumers, including
 /// a second operator and a local initialized with the first call.
 #[test]

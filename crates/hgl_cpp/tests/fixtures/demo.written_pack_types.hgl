@@ -195,6 +195,20 @@ const fn either_number<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -
 const fn every_number<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
     requires each key in arg_keys(Ps) { Ps[key] in {i64, f64} } => exact_number<Ps[item_key]>(item) + item
 
+const fn narrowed_wide_first<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires Ps[item_key] in {str, f64} && Ps[item_key] in {f64} => exact_number<Ps[item_key]>(item)
+
+const fn narrowed_narrow_first<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires Ps[item_key] in {f64} && Ps[item_key] in {str, f64} => exact_number<Ps[item_key]>(item)
+
+const fn narrowed_each_first<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires each key in arg_keys(Ps) { Ps[key] in {str, f64} } && Ps[item_key] in {f64}
+    => exact_number<Ps[item_key]>(item) + item
+
+const fn narrowed_key_first<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires Ps[item_key] in {f64} && each key in arg_keys(Ps) { Ps[key] in {str, f64} }
+    => exact_number<Ps[item_key]>(item) + item
+
 test each_proves_the_member_type {
     assert every_integer(num, 11) == 11
     assert every_sized<2>(pair, [3, 4]) == [3, 4]
@@ -202,6 +216,10 @@ test each_proves_the_member_type {
     assert either_number(real_item, 1.5) == 1.5
     assert every_number(num, 12) == 24
     assert every_number(real_item, 2.5) == 5.0
+    assert narrowed_wide_first(real_item, 1.5) == 1.5
+    assert narrowed_narrow_first(real_item, 1.5) == 1.5
+    assert narrowed_each_first(real_item, 2.5) == 5.0
+    assert narrowed_key_first(real_item, 2.5) == 5.0
 }
 
 test a_nonmatching_member_rejects_the_universal_requirement {
