@@ -2340,6 +2340,34 @@ fn operator_candidates_have_distinct_cpp_names_on_the_sdk() {
     );
 }
 
+/// GEN-5 and FMT-5: admitted exact types, inferred callback inputs and
+/// a nullable formatted payload select the appropriate candidates.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn exact_candidate_matches_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("exact-candidates");
+    let file = write(
+        &root,
+        "demo.exact_candidates.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.exact_candidates.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// GEN-5 and GEN-7: value, node and graph instances choose their own
 /// operator candidate, including across modules and through a symbol.
 /// ERR-15: the choice uses the whole operands before implicit reads.
@@ -4017,7 +4045,16 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         "src/demo.keyed_constants.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.keyed_constants.hgl"),
     );
-    let output = hgl_in(&["test", &file, &constants, "--target", "cpp"], &[], &[]);
+    let cancellations = write(
+        &root,
+        "src/demo.keyed_cancellation.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.keyed_cancellation.hgl"),
+    );
+    let output = hgl_in(
+        &["test", &file, &constants, &cancellations, "--target", "cpp"],
+        &[],
+        &[],
+    );
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -4026,9 +4063,38 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 17 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
+}
+
+/// TIME-7: mutually exclusive writes still use the single-write path.
+#[test]
+fn single_keyed_write_needs_no_staging() {
+    let root = scratch("single-keyed-write");
+    let source = write(
+        &root,
+        "src/demo.single_keyed_write.hgl",
+        r#"module demo.single_keyed_write
+export fn selected(step: i64) -> set<i64> {
+    inject out
+    when {
+        if step == 1 { out = delta<set<i64>>(added: [5]) }
+        else { out = delta<set<i64>>(removed: [5]) }
+    }
+}
+"#,
+    );
+    let out = root.join("out");
+    let result = hgl_in(
+        &["emit", &source, "--target", "cpp", "--out", &argument(&out)],
+        &[],
+        &[],
+    );
+    assert!(result.status.success(), "{}", text(&result.stderr));
+    let cpp = fs::read_to_string(out.join("modules/mod-demo-single_keyed_write.cpp")).unwrap();
+    assert!(cpp.contains("::hglrt::keyed_publish(out_"), "{cpp}");
+    assert!(!cpp.contains("KeyedEvaluation"), "{cpp}");
 }
 
 /// Nested dictionary entry observations retain the final child's validity,
