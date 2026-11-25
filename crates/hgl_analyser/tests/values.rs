@@ -4737,7 +4737,8 @@ const fn choose_with_generic(x: i64) -> i64 => pick(generic, x)
     }
 }
 
-/// GEN-5: candidates that widen different arguments are incomparable.
+/// GEN-5: candidates that widen different arguments are incomparable,
+/// including when one widening promotes a delta under TYPE-16.
 #[test]
 fn opposite_widenings_leave_a_call_ambiguous() {
     let checked = module(
@@ -4752,6 +4753,11 @@ operator visit<T, R>(f: fn(i64) -> R, value: T) -> R
 impl fn visit<R>(f: fn(i64) -> R, value: i64?) -> R => f(1)
 impl fn visit(f: fn(i64), value: i64) => f(value)
 fn call(value: i64) { visit(fn(x) => x + 1, value) }
+
+operator select_delta<A, B>(a: A, b: B) -> i64
+impl const fn select_delta(a: delta<set<i64>>, b: i64?) -> i64 => 1
+impl const fn select_delta(a: delta<set<i64>?>, b: i64) -> i64 => 2
+const fn opposed(a: delta<set<i64>>, b: i64) -> i64 => select_delta(a, b)
 "#,
     );
     let codes: Vec<_> = checked
@@ -4761,7 +4767,11 @@ fn call(value: i64) { visit(fn(x) => x + 1, value) }
         .collect();
     assert_eq!(
         codes,
-        ["operator/operator.ambiguous", "operator/operator.ambiguous"],
+        [
+            "operator/operator.ambiguous",
+            "operator/operator.ambiguous",
+            "operator/operator.ambiguous",
+        ],
         "{}",
         checked.report
     );

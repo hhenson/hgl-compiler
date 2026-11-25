@@ -872,7 +872,8 @@ impl<'a> Typer<'a> {
     }
 
     /// GEN-5 distinguishes exact types from nullable, parent, and `any`
-    /// widenings. Literal precision is settled before admission.
+    /// widenings. Nullable widening includes `delta<V>` to `delta<V?>`
+    /// (TYPE-16). Literal precision is settled before admission.
     fn argument_widening(&self, argument: &Given, expected: &Type) -> Option<bool> {
         let actual = argument.ty();
         if argument.by_place || !whole(actual) || !whole(expected) {
@@ -884,6 +885,8 @@ impl<'a> Typer<'a> {
         (matches!(expected, Type::Scalar(Scalar::Any))
             || matches!(expected, Type::Nullable(inner)
                 if !matches!(actual, Type::Nullable(_)) && self.admits(inner, actual))
+            || matches!(expected, Type::Delta(of)
+                if matches!(of.as_ref(), Type::Nullable(_)) && self.admits(expected, actual))
             || self.widens(actual, expected))
         .then_some(true)
     }

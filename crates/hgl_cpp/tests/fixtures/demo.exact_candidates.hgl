@@ -13,6 +13,10 @@ impl const fn anywhere<T>(value: T) -> i64 => 1
 impl const fn anywhere(value: i64?) -> i64 => 2
 impl const fn anywhere(value: any) -> i64 => 3
 
+operator pick_delta<T>(value: T) -> i64
+impl const fn pick_delta<T>(value: T) -> i64 => 1
+impl const fn pick_delta(value: delta<set<i64>?>) -> i64 => 2
+
 abstract struct Shape { id: i64 }
 struct Round: Shape { radius: f64 }
 operator kind<T>(value: T) -> i64
@@ -23,11 +27,15 @@ test exact_types {
     let number: i64 = 7
     let maybe: i64? = 7
     let circle = Round(id: 1, radius: 1.5)
+    let changes = delta<set<i64>>(added: [1])
+    let maybe_changes = delta<set<i64>?>(value: changes)
     assert pick(number) == 1
     assert pick(maybe) == 2
     assert choose(number) == 1
     assert anywhere(number) == 1
     assert kind(circle) == 1
+    assert pick_delta(changes) == 1
+    assert pick_delta(maybe_changes) == 2
 }
 
 operator from_input<R, F, K>(f: fn(F) -> i64, x: R, k: K) -> i64
