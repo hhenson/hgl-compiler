@@ -9,6 +9,8 @@
 //!
 //! So [`classify`] looks only at which constructs a body holds,
 //! wherever it holds them, and reports nothing.
+//! Native temporal implementation contracts retain their NATIVE-3 phase
+//! from the `when;` marker; their contract validation stays in `forms`.
 //!
 //! [`check`] then holds each body to the shape its phase has (FN-2):
 //!
@@ -35,12 +37,23 @@ pub(crate) fn classify(program: &mut Program) {
     }
 }
 
-/// What the body of `declaration` describes, when it is a temporal
-/// function or a temporal candidate with a body written in HGL.
+/// What a temporal HGL body or native implementation contract describes.
 fn phase_of(declaration: &Declaration) -> Option<Phase> {
     match declaration.kind {
         DeclarationKind::Function(Role::Temporal)
         | DeclarationKind::Implementation(Role::Temporal, _) => {}
+        DeclarationKind::NativeImplementation(Role::Temporal)
+        | DeclarationKind::NativeCandidateImplementation(Role::Temporal) => {
+            // NATIVE-3: `{}` denotes a graph and `{ when; }` a node.
+            // Native markers are contracts, not HGL runtime statements.
+            let contract = child(&declaration.syntax, SyntaxKind::NativeContractBody)?;
+            let node = contract
+                .children()
+                .filter(|part| part.kind() == SyntaxKind::NativeHook)
+                .filter_map(|hook| hook.first_token())
+                .any(|keyword| keyword.kind() == SyntaxKind::KwWhen);
+            return Some(if node { Phase::Node } else { Phase::Graph });
+        }
         _ => return None,
     }
     // FN-3: "Iteration and conditionals follow the containing phase.
@@ -140,7 +153,11 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
                 in_value_function(declaration, file, diagnostics);
             }
             yield_placement(&declaration.syntax, file, value_function, diagnostics);
-            if module.phases.get(index) == Some(&Some(Phase::Node)) {
+            // NATIVE-3 contracts have their own hook/inject validation in
+            // forms::hooks; their markers are no ordinary HGL node body.
+            if module.phases.get(index) == Some(&Some(Phase::Node))
+                && declaration.syntax.kind() != SyntaxKind::NativeFnDecl
+            {
                 let outputless = matches!(
                     module.details.get(index),
                     Some(Detail::Callable(signature)) if signature.result.is_none()

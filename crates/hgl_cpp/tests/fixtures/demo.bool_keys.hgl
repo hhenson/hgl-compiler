@@ -1,0 +1,41 @@
+module demo.bool_keys
+
+# TYPE-9 and TIME-1: a typed input reads Boolean membership whole.
+const fn only_true(members: set<bool>) -> bool => members == [true]
+fn read_bools(members: set<bool>) -> bool => only_true(members)
+
+test a_boolean_set_input {
+    assert eval read_bools(members: [
+        [true],
+        delta<set<bool>>(added: [false]),
+        delta<set<bool>>(removed: [false]),
+        delta<set<bool>>(removed: [true]),
+    ]) == [true, false, true, false]
+}
+
+# TYPE-9 and TIME-7: whole and delta publications are read as set values.
+fn write_bools(step: i64) -> set<bool> {
+    when {
+        if step == 1 { return [true] }
+        if step == 2 { return delta<set<bool>>(added: [false]) }
+        if step == 3 { return delta<set<bool>>(removed: [true]) }
+        return []
+    }
+}
+
+test a_boolean_set_result {
+    assert eval write_bools(step: [1, 2, 3, 4]) == [[true], [true, false], [false], []]
+}
+
+# SET-1: additions/removals tick a dictionary's key set; value-only changes do not.
+fn watch_bool_keys(book: dict<bool, i64>) -> set<bool> => keys(dictionary: book)
+
+test a_boolean_dictionary_key_set {
+    assert eval watch_bool_keys(book: [
+        [true: 1],
+        delta<dict<bool, i64>>(updated: [false: 2]),
+        delta<dict<bool, i64>>(updated: [true: 3]),
+        delta<dict<bool, i64>>(removed: [true]),
+        delta<dict<bool, i64>>(removed: [false]),
+    ]) == [[true], [true, false], _, [false], []]
+}

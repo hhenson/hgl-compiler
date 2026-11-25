@@ -143,6 +143,8 @@ transpiler: partial
 
 - Writes structural temporal lists, tuples, structs, sets and dictionaries, including
   atomic struct connections, and maps supported children to endpoints.
+- Boolean membership reads typed SDK proxies as Boolean values, including temporal
+  set inputs/results and a dictionary's Boolean key set (TIME-1, SET-1).
 - Gives concrete struct applications with supported type arguments their own nominal
   schemas and maps their substituted fields to child endpoints.
 - Left: Reports abstract temporal structs, structs with generic value arguments,
@@ -235,7 +237,8 @@ transpiler: partial
 
 - Uses optionals for ordinary `T?`, preserves null in admitted collection types and
   compares a nullable value with its T. Writes nullable scalar and enum connections and
-  lifts T to a supported `T?` connection.
+  lifts T to a supported `T?` connection. A refined read in a temporal branch
+  uses a connection of the payload's type (ERR-12).
 - Left: Temporal nullable composites and generic applications where nullability would
   incorrectly nest are unsupported (TYPE-9, TYPE-3).
 
@@ -293,3 +296,11 @@ transpiler: done
 
 - Uses the shared SDK tenor scalar and preserves its two forms and checked counts in
   emitted values.
+
+## TYPE-18
+
+parser: planned
+analyser: planned
+transpiler: planned
+
+- Left: Type values, `type(e)`, and their C++ lowering are tracked in #864.

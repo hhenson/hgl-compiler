@@ -28,7 +28,8 @@ use super::requirements::{Condition, holds};
 use super::{Candidate, Typer};
 use crate::constant::Fault;
 use crate::declared::{
-    agree, bind_result, names_parameter, substitute_with_packs, substitute_within,
+    agree, bind_result, names_parameter, substitute_with_members, substitute_with_packs,
+    substitute_within, weight,
 };
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
@@ -685,6 +686,24 @@ impl<'a> Typer<'a> {
                         .then_some(position)
                     })
                     .collect();
+                let valued_anonymous_parameters = given
+                    .iter()
+                    .zip(&bound)
+                    .filter_map(|(given, &place)| {
+                        let Place::Parameter(index) = place else {
+                            return None;
+                        };
+                        if !given.by_function
+                            || !matches!(given.ty(), Type::Function(function) if function.result.is_some())
+                        {
+                            return None;
+                        }
+                        let node = ungrouped(given.node.clone());
+                        (node.kind() == SyntaxKind::FnExpr
+                            && child(&node, SyntaxKind::ReturnType).is_none())
+                        .then_some(index)
+                    })
+                    .collect();
                 let chosen = Chosen {
                     module,
                     declaration,
@@ -694,6 +713,7 @@ impl<'a> Typer<'a> {
                     type_packs,
                     bound: bound.clone(),
                     callbacks,
+                    valued_anonymous_parameters,
                     ambiguous_reads: false,
                     nullable_result_fallback,
                     selecting: None,
@@ -1717,23 +1737,50 @@ impl<'a> Typer<'a> {
         {
             return Settled::Elsewhere;
         }
-        // The memberships of the parameters the call names: each such
-        // parameter, as an argument's type, a constant it gives, or the
-        // output it asks for.
+        let evidence_types: Vec<_> = given
+            .iter()
+            .map(Given::ty)
+            .chain(wanted.place)
+            .chain(wanted.among.iter().flatten())
+            .chain(
+                operator_generics
+                    .iter()
+                    .filter_map(|argument| match argument {
+                        Argument::Type(ty) => Some(ty),
+                        Argument::Constant(_) | Argument::NoResult => None,
+                    }),
+            )
+            .collect();
+        let uses_member = evidence_types.iter().any(|ty| {
+            ty.any_part(
+                &|part| matches!(part, Type::PackMember { pack, .. } if own.contains(pack)),
+                &|_| false,
+            )
+        });
+        let member_dependencies = if uses_member {
+            self.stated_member_dependencies(&evidence_types)
+        } else {
+            Vec::new()
+        };
+        // Ordinary memberships can constrain the call directly or through
+        // the stated type or key of one of its reflected members.
         let memberships: Vec<(Location, Vec<Argument>)> = self
             .memberships()
             .into_iter()
             .filter(|(parameter, _)| {
                 let one = [*parameter];
-                given.iter().any(|given| {
-                    mentions(given.ty(), &one)
-                        || self
-                            .read_constant(&given.node, None)
-                            .is_ok_and(|value| value.names_one_of(&one))
-                }) || wanted.place.is_some_and(|place| mentions(place, &one))
+                member_dependencies.contains(parameter)
+                    || given.iter().any(|given| {
+                        mentions(given.ty(), &one)
+                            || self
+                                .read_constant(&given.node, None)
+                                .is_ok_and(|value| value.names_one_of(&one))
+                    })
+                    || wanted.place.is_some_and(|place| mentions(place, &one))
             })
             .collect();
-        let admits_without_membership = memberships.is_empty() && !untold;
+        let admits_without_membership =
+            memberships.is_empty() && !untold && (provisional.is_some() || !uses_member);
         if admits_without_membership && (!generic_operands || provisional.is_none()) {
             return Settled::Elsewhere;
         }
@@ -1772,10 +1819,26 @@ impl<'a> Typer<'a> {
         // The report where nothing the `requires` states settles it.
         let operator_name =
             &program.modules[operator.module].declarations[operator.declaration].name;
+        let unresolved = |typer: &Self| {
+            typer.no_one_candidate((operator_name, name), public, (given, wanted), (true, &[]))
+        };
         let unsettled = |typer: &Self| {
-            typer
-                .no_one_candidate((operator_name, name), public, (given, wanted), (true, &[]))
-                .with_note(super::operators::UNSETTLED)
+            let report = unresolved(typer).with_note(super::operators::UNSETTLED);
+            if uses_member {
+                report.with_note(
+                    "state a reflected member's type or finite alternatives, for example \
+                     `requires Ps[k] == i64` or `requires Ps[k] in {i64, f64}` (GEN-7, GEN-17)",
+                )
+            } else {
+                report
+            }
+        };
+        let proof_limit = |typer: &Self| {
+            unresolved(typer).with_note(format!(
+                "the analyser's limit of {} combinations of stated requirements was reached \
+                 while proving this call (GEN-7)",
+                crate::INSTANCES
+            ))
         };
         let constants = given.iter().all(|given| {
             !given.by_place
@@ -1784,37 +1847,90 @@ impl<'a> Typer<'a> {
                     Err(Fault::NotConstant)
                 )
         });
-        let combinations = combinations(&memberships);
-        if !constants || memberships.is_empty() || combinations.len() > crate::INSTANCES {
+        let mut ordinary_trials = combinations(&memberships);
+        if memberships.is_empty() && uses_member {
+            ordinary_trials.push(Vec::new());
+        }
+        if !constants || ordinary_trials.is_empty() {
             return Settled::Rejected(unsettled(self));
+        }
+        if ordinary_trials.len() > crate::INSTANCES {
+            return Settled::Rejected(proof_limit(self));
         }
         // Each combination of members, as an instance would have it.
         let before = std::mem::take(&mut self.instance);
-        let packs = PackTypes::new(&[], &[]);
+        let bound = self.bound.clone();
+        let no_packs = PackTypes::new(&[], &[]);
         let mut failed = None;
-        for combination in &combinations {
-            self.instance = combination.clone();
-            let mark = self.mark();
-            let outcome = match self.select_at_instance(&record, &packs, None) {
-                // What a call is held to once its candidate is selected
-                // (`Typer::called`): a `var` parameter's place among them.
-                AtInstance::Selected(chosen, given) => {
-                    let start = self.diagnostics.len();
-                    self.called(operator, *chosen, given, Vec::new(), (form, name));
-                    self.diagnostics.as_slice()[start..].first().cloned()
-                }
-                AtInstance::Rejected(report) => Some(report),
-                AtInstance::Untold => Some(unsettled(self)),
+        let mut tried = 0;
+        'ordinary: for combination in &ordinary_trials {
+            let bindings: Vec<_> = bound
+                .iter()
+                .chain(combination)
+                .map(|(at, arg)| (*at, arg))
+                .collect();
+            let member_choices = if uses_member {
+                self.stated_member_choices(&evidence_types, &bindings)
+            } else {
+                Vec::new()
             };
-            self.take_back(mark, false);
-            if let Some(report) = outcome {
-                failed = Some((combination.clone(), report));
+            let mut member_trials = combinations(&member_choices);
+            if member_choices.is_empty() {
+                if memberships.is_empty() {
+                    failed = Some((Vec::new(), Vec::new(), unsettled(self)));
+                    break;
+                }
+                member_trials.push(Vec::new());
+            }
+            tried += member_trials.len();
+            if tried > crate::INSTANCES {
+                failed = Some((Vec::new(), Vec::new(), proof_limit(self)));
                 break;
+            }
+            self.instance = combination.clone();
+            for members in member_trials {
+                let mark = self.mark();
+                let selected = if members.is_empty() {
+                    self.select_at_instance(&record, &no_packs, None)
+                } else {
+                    // Stated member types can use symbolic keys. They
+                    // supply just those members, without a pack's arity.
+                    let known = |pack, _: &str, key: &Constant| {
+                        members.iter().find_map(|((at, given), ty)| {
+                            (*at == pack && given.value.same(&key.value) == Some(true))
+                                .then(|| ty.clone())
+                        })
+                    };
+                    let bound = members.iter().map(|(_, ty)| weight(ty)).max().unwrap_or(1);
+                    let declared: Vec<_> = bindings.iter().map(|(at, _)| *at).collect();
+                    self.select_with_types(&record, None, &|ty| {
+                        placed(
+                            substitute_with_members(ty, &bindings, &known, bound),
+                            &declared,
+                        )
+                    })
+                };
+                let outcome = match selected {
+                    // What a call is held to once its candidate is selected
+                    // (`Typer::called`): a `var` parameter's place among them.
+                    AtInstance::Selected(chosen, given) => {
+                        let start = self.diagnostics.len();
+                        self.called(operator, *chosen, given, Vec::new(), (form, name));
+                        self.diagnostics.as_slice()[start..].first().cloned()
+                    }
+                    AtInstance::Rejected(report) => Some(report),
+                    AtInstance::Untold => Some(unsettled(self)),
+                };
+                self.take_back(mark, false);
+                if let Some(report) = outcome {
+                    failed = Some((combination.clone(), members, report));
+                    break 'ordinary;
+                }
             }
         }
         self.instance = before;
-        if let Some((combination, report)) = failed {
-            let members: Vec<String> = combination
+        if let Some((combination, pack_members, report)) = failed {
+            let mut members: Vec<String> = combination
                 .iter()
                 .map(|(at, member)| {
                     let parameter = self
@@ -1831,6 +1947,31 @@ impl<'a> Typer<'a> {
                     format!("`{parameter}` = `{member}`")
                 })
                 .collect();
+            let reflected = !pack_members.is_empty();
+            members.extend(pack_members.into_iter().map(|((pack, key), ty)| {
+                let name = self
+                    .signature
+                    .generics
+                    .iter()
+                    .find(|generic| generic.at == pack)
+                    .map_or("_", |generic| generic.name.as_str());
+                let key = match key.value {
+                    ConstantValue::Str(name) => format!("{name:?}"),
+                    ConstantValue::Int(index) => index.to_string(),
+                    _ => key.text,
+                };
+                format!("`{name}[{key}]` = `{ty}`")
+            }));
+            if members.is_empty() {
+                return Settled::Rejected(report);
+            }
+            if reflected {
+                return Settled::Rejected(report.with_note(format!(
+                    "for {}, which the declaration's `requires` admits: the body must \
+                     support the call under its stated requirements (GEN-7)",
+                    members.join(" and ")
+                )));
+            }
             return Settled::Rejected(report.with_note(format!(
                 "for {}, which the declaration's `requires` admits: a membership authorises an \
                  operation only where each listed member has a candidate for it (GEN-3, \
@@ -1925,6 +2066,17 @@ impl<'a> Typer<'a> {
         // GEN-17: a reflected member supplies its concrete type before
         // the requested result and operands are matched against candidates.
         let in_place = |ty: &Type| placed(packs.project(ty, &map).unwrap_or(Type::Unknown), &own);
+        self.select_with_types(selecting, values, &in_place)
+    }
+
+    /// Select against a concrete instance or against one combination of
+    /// the declaration's stated requirements (GEN-5, GEN-7).
+    fn select_with_types(
+        &mut self,
+        selecting: &Selecting,
+        values: Option<Vec<Expr>>,
+        in_place: &impl Fn(&Type) -> Type,
+    ) -> AtInstance<'a> {
         self.graph = selecting.graph;
         let operator = selecting.operator;
         let program = self.program;
@@ -2160,24 +2312,22 @@ pub(super) enum Settled {
 /// each generic parameter, each as an instance would give the
 /// parameters: for `T in {i64, f64}` and `U in {str}`, `(i64, str)` and
 /// `(f64, str)`. None where there is no membership.
-pub(super) fn combinations(
-    memberships: &[(Location, Vec<Argument>)],
-) -> Vec<Vec<(Location, Argument)>> {
+pub(super) fn combinations<K: Clone, V: Clone>(memberships: &[(K, Vec<V>)]) -> Vec<Vec<(K, V)>> {
     if memberships.is_empty() {
         return Vec::new();
     }
-    let mut all: Vec<Vec<(Location, Argument)>> = vec![Vec::new()];
+    let mut all: Vec<Vec<(K, V)>> = vec![Vec::new()];
     for (at, members) in memberships {
-        let mut next = Vec::with_capacity(all.len() * members.len());
+        let mut next = Vec::new();
         for combination in &all {
             for member in members {
                 let mut more = combination.clone();
-                more.push((*at, member.clone()));
+                more.push((at.clone(), member.clone()));
                 next.push(more);
-            }
-            // Past the bound on instances there are too many to try.
-            if next.len() > crate::INSTANCES {
-                return next;
+                // Past the bound on instances there are too many to try.
+                if next.len() > crate::INSTANCES {
+                    return next;
+                }
             }
         }
         all = next;
@@ -3011,6 +3161,8 @@ pub(super) struct Chosen<'s> {
     bound: Vec<Place>,
     /// The concrete named pack of a static callback, when it has one.
     callbacks: Vec<(usize, hir::TypePackArgument)>,
+    /// Slots where the candidate's reading retains an unwritten callback result.
+    valued_anonymous_parameters: Vec<usize>,
     /// Equally preferred choices of which operands to read (ERR-15).
     pub(super) ambiguous_reads: bool,
     /// A nullable place supplied an unresolved bare success type for
@@ -3530,6 +3682,7 @@ struct RankingType<'a, 'candidate> {
     ty: &'a Type,
     written: Option<&'a Type>,
     candidate: &'a Chosen<'candidate>,
+    retains_anonymous_value: bool,
 }
 
 impl<'a> RankingType<'a, '_> {
@@ -3554,6 +3707,7 @@ impl<'a> RankingType<'a, '_> {
         Self {
             ty,
             written,
+            retains_anonymous_value: false,
             ..self
         }
     }
@@ -3602,6 +3756,7 @@ impl<'a> RankingType<'a, '_> {
         elements.iter().zip(written).map(move |(ty, written)| Self {
             ty,
             written,
+            retains_anonymous_value: false,
             ..self
         })
     }
@@ -3697,15 +3852,21 @@ fn specificity(left: RankingType<'_, '_>, right: RankingType<'_, '_>) -> Specifi
         (Type::Function(l), Type::Function(r))
             if l.value == r.value
                 && l.parameters.len() == r.parameters.len()
-                && (l.result.is_none() && r.result_admits_none
-                    || r.result.is_none() && l.result_admits_none) =>
+                && (l.result.is_none()
+                    && (r.result_admits_none || right.retains_anonymous_value)
+                    || r.result.is_none()
+                        && (l.result_admits_none || left.retains_anonymous_value)) =>
         {
-            // GEN-12: a written absence is more specific than a result
-            // that can bind to none. Keep the inputs' specificity too.
-            let result = if l.result.is_none() {
-                Specific::More
-            } else {
-                Specific::Less
+            // GEN-5 keeps the value of an anonymous body with no written
+            // result. GEN-12 otherwise prefers a written absence over a
+            // result that can bind to none. The inputs still count.
+            let result = match (
+                l.result.is_none(),
+                left.retains_anonymous_value,
+                right.retains_anonymous_value,
+            ) {
+                (false, true, _) | (true, _, false) => Specific::More,
+                _ => Specific::Less,
             };
             l.parameters
                 .iter()
@@ -3884,8 +4045,9 @@ fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
         .candidate_parameters(better.declared)
         .zip(public.candidate_parameters(worse.declared))
         .filter_map(|(better_index, worse_index)| {
-            let better_type = &better.declared.parameters[better_index?].ty;
-            let worse_type = &worse.declared.parameters[worse_index?].ty;
+            let (better_index, worse_index) = (better_index?, worse_index?);
+            let better_type = &better.declared.parameters[better_index].ty;
+            let worse_type = &worse.declared.parameters[worse_index].ty;
             let better_expanded = ranking_type(better, better_type);
             let worse_expanded = ranking_type(worse, worse_type);
             Some(specificity(
@@ -3893,11 +4055,17 @@ fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
                     ty: &better_expanded,
                     written: Some(better_type),
                     candidate: better,
+                    retains_anonymous_value: better
+                        .valued_anonymous_parameters
+                        .contains(&better_index),
                 },
                 RankingType {
                     ty: &worse_expanded,
                     written: Some(worse_type),
                     candidate: worse,
+                    retains_anonymous_value: worse
+                        .valued_anonymous_parameters
+                        .contains(&worse_index),
                 },
             ))
         })

@@ -99,8 +99,9 @@ analyser: partial
 
 transpiler: partial
 
-- Wires an error boundary around a resolved graph call or lifted helper and exposes its
-  normal value and error results.
+- Wires an error boundary around a resolved temporal function, a temporal
+  HGL operator candidate, or a lifted helper and exposes its value and error
+  connections.
 - Left: A target with no supported call or recording form, an unavailable packed
   instance and other capture reads are reported.
 
@@ -157,6 +158,7 @@ analyser: done
 transpiler: done
 
 - C++ reads the payload at the recorded expression and reports `value.null` in its recorded phase. A null publication on a required connection fails its consumer that cycle, before handler or lifted-call admission. This includes an input bound through a pack.
+- A refined connection in a temporal branch projects its present payload. That projection follows its source's validity when the branch changes.
 
 ## ERR-13
 

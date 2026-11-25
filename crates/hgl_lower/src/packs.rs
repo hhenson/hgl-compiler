@@ -100,8 +100,8 @@ impl Captures {
     /// Expand the packed inputs, remove the static inputs and remap
     /// local identities. A use of a pack itself still needs a typed
     /// pack expression or reflection.
-    /// Ordinary slots keep their places relative to the expanded pack,
-    /// including a `join` separator after its pieces (OPS-11).
+    /// A configuration parameter keeps its own slot, as the separator
+    /// does when expanding Core's `join` pieces (FN-18, OPS-11).
     pub(crate) fn expand(
         self,
         signature: &mut Signature,

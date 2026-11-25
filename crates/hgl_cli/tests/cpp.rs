@@ -8,6 +8,8 @@
 //! runs them, as the CI job for C++ does. Run with no C++ SDK named,
 //! they say so and have nothing to check.
 
+#[path = "cpp/bool_keys.rs"]
+mod bool_keys;
 #[cfg(unix)]
 #[path = "cpp/build_reuse.rs"]
 mod build_reuse;
@@ -1025,8 +1027,8 @@ fn nested_forms_run_on_the_sdk() {
     );
 }
 
-/// TIME-1: a guarded position of a fixed-list field reads its endpoint,
-/// including when the struct input is supplied by a fitted pack.
+/// TIME-1: a guarded child of a fixed-list field reads its own endpoint
+/// through nested fields or positions, including a fitted struct input.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn fixed_list_fields_run_on_the_sdk() {
@@ -1043,7 +1045,7 @@ fn fixed_list_fields_run_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2235,6 +2237,50 @@ fn an_integration_tests_run_configuration_runs_on_the_sdk() {
     );
 }
 
+/// The empty interval keeps both hooks (CRUN-1), and invalid bounds fail with
+/// `run.bounds` before either hook runs (CRUN-3).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn zero_cycle_hooks_and_run_bounds_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("run-bounds-lifecycle");
+    let file = write(
+        &root,
+        "lifecycle.hgl",
+        r#"module probes.run_lifecycle
+fn fail_start(const divisor: i64) {
+    start { let checked = 1 // divisor }
+    when {}
+}
+fn fail_stop(const divisor: i64) {
+    when {}
+    stop { let checked = 1 // divisor }
+}
+test zero_length_runs_start {
+    assert raises("numeric.division_by_zero") { eval{length: 0us} fail_start(divisor: 0) }
+}
+test zero_length_runs_stop {
+    assert raises("numeric.division_by_zero") { eval{length: 0us} fail_stop(divisor: 0) }
+}
+test lower_bound {
+    assert raises("run.bounds") { eval{start: never, length: 1us} fail_start(divisor: 0) }
+}
+test upper_bound {
+    assert raises("run.bounds") { eval{end: forever} fail_start(divisor: 0) }
+}
+"#,
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// The activity of a node's inputs and the temporal form of an enum on
 /// the SDK (`demo.activity`): a passive input wakes no node and is read
 /// where another wakes it, activity belongs to each binding of one
@@ -2607,8 +2653,9 @@ fn let_bound_packs_run_on_the_sdk() {
 }
 
 /// MAP-1, RED-1, RED-4 and RED-5: C++ reports the remaining native forms.
-/// A capture-free ordered fold is written, and FN-14 permits the captured
-/// callback even though the engine cannot wire it in an ordered reduction.
+/// A map of one split dictionary and a capture-free ordered fold are written.
+/// FN-14 permits the captured callback even though the engine cannot wire it
+/// in an ordered reduction.
 #[test]
 fn native_mapping_forms_decline_cpp_emission() {
     let root = scratch("native-mapping-forms");
@@ -2618,10 +2665,13 @@ fn native_mapping_forms_decline_cpp_emission() {
         r#"module demo.native_mapping
 
 fn twice_for_map(item: i64) -> i64 => item * 2
+fn sum_for_map(left: i64, right: i64) -> i64 => left + right
 const fn fold_digit(accumulated: i64, member: i64) -> i64 => accumulated * 10 + member
 
 export fn keyed_map(values: dict<str, i64>, selected: set<str>) -> dict<str, i64> =>
     map{keys: selected}(twice_for_map, values)
+export fn joined_map(left: dict<str, i64>, right: dict<str, i64>) -> dict<str, i64> =>
+    map(sum_for_map, left, right)
 export fn growing_map(values: list<i64>) -> list<i64> => map(twice_for_map, values)
 export fn growing_tree(values: list<i64>) -> i64 => reduce(add_, values, 0)
 export fn ordered_growing(values: list<i64>) -> i64 => reduce(fold_digit, values, 0)
@@ -2650,9 +2700,70 @@ export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values,
         !stderr.contains("reduce(fold_digit, values, 0)"),
         "{stderr}"
     );
+    assert!(!stderr.contains("map{keys: selected}"), "{stderr}");
+    assert!(stderr.contains("map(sum_for_map, left, right)"), "{stderr}");
     assert_eq!(
         stderr.matches("error[build/target.unsupported]").count(),
         6,
+        "{stderr}"
+    );
+}
+
+/// MAP-1, MAP-2 and MAP-9: report the checked keyed forms the target declines.
+#[test]
+fn keyed_map_declines_name_the_unsupported_form() {
+    let root = scratch("keyed-map-declines");
+    let file = write(
+        &root,
+        "demo.keyed_map_declines.hgl",
+        r#"module demo.keyed_map_declines
+
+const fn twice(x: i64) -> i64 => x * 2
+fn applied(member: i64, f: fn(i64) -> i64) -> i64 => f(member)
+fn const_key(member: i64, const key: i64) -> i64 => member + key
+fn sum_members(left: i64, right: i64) -> i64 => left + right
+
+export fn mapped_const_key(items: dict<i64, i64>) -> dict<i64, i64> => map(const_key, items)
+export fn mapped_function(items: dict<i64, i64>) -> dict<i64, i64> => map(applied, items, twice)
+export fn mapped_local(items: dict<i64, i64>) -> dict<i64, i64> {
+    let r = map(applied, items, twice)
+    return r
+}
+export fn mapped_keys(items: dict<i64, i64>) -> set<i64> => keys(map(applied, items, twice))
+export fn fixed_local(items: list<i64, 3>) -> list<i64, 3> {
+    let r = map(applied, items, twice)
+    return r
+}
+export fn mapped_pair(a: dict<i64, i64>, b: dict<i64, i64>) -> dict<i64, i64> => map(sum_members, a, b)
+"#,
+    );
+    let checked = hgl_in(&["check", &file], &[], &[]);
+    assert!(checked.status.success(), "{}", text(&checked.stderr));
+    let out = root.join("emitted");
+    let emitted = hgl_in(
+        &["emit", &file, "--target", "cpp", "--out", &argument(&out)],
+        &[],
+        &[],
+    );
+    let stderr = text(&emitted.stderr);
+    assert_eq!(emitted.status.code(), Some(1), "{stderr}");
+    for reason in [
+        "a keyed map with a const key parameter",
+        "a keyed map passing a function argument to its child",
+        "a keyed map with multiple split dictionaries",
+    ] {
+        assert!(stderr.contains(reason), "{stderr}");
+    }
+    assert_eq!(
+        stderr
+            .matches("a keyed map passing a function argument to its child")
+            .count(),
+        3,
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("error[build/target.unsupported]").count(),
+        8,
         "{stderr}"
     );
 }
@@ -2777,7 +2888,7 @@ fn forwarded_packs_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 20 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 19 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2855,7 +2966,7 @@ fn packed_input_guards_run_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -3107,7 +3218,7 @@ fn written_pack_member_types_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 6 passed, 0 failed\nexecutable cases: 7 passed, 0 failed, 0 not run\n"
+            "rejection cases: 6 passed, 0 failed\nexecutable cases: 8 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );
@@ -3639,6 +3750,28 @@ fn lifting_code_runs_on_the_sdk() {
     );
 }
 
+/// ERR-7 gives graph and node operator candidates the same capture boundary.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn temporal_operator_captures_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("operator_capture");
+    let file = write(
+        &root,
+        "demo.capture.operators.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.capture.operators.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// RUN-6, UNIT-14: an entry receives the supplied configuration's start;
 /// an omitted start is still null when the argument is evaluated.
 #[test]
@@ -3717,6 +3850,29 @@ fn control_flow_runs_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 18 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// TYPE-14 and ERR-12: a temporal branch consumes its refined nullable
+/// connection as a payload, including in a temporal reduce callback.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn nullable_graph_branches_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("nullable-branches");
+    let file = write(
+        &root,
+        "demo.nullable_branches.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.nullable_branches.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -3823,7 +3979,7 @@ fn concrete_generic_struct_traces_run_on_the_sdk() {
 }
 
 /// `demo.keyed`, the temporal form of a set and of a dictionary (TYPE-9,
-/// TIME-7, TIME-9, END-3, END-4, TST-9): every test of it passes on the
+/// FN-3, TIME-7, TIME-9, END-3, END-4, TST-9): every test of it passes on the
 /// SDK, and under the sanitizers where `HGL_CPP_FLAGS` names them.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
@@ -3837,7 +3993,12 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         "src/demo.keyed.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.keyed.hgl"),
     );
-    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let constants = write(
+        &root,
+        "src/demo.keyed_constants.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.keyed_constants.hgl"),
+    );
+    let output = hgl_in(&["test", &file, &constants, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -3846,7 +4007,7 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 11 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
