@@ -486,8 +486,8 @@ impl<'a> Typer<'a> {
     /// its arguments." Nothing is reported where it cannot be told
     /// ([`requires_holds`]). A named operator requirement is told for a
     /// generic parameter of the declaration being read too: it holds
-    /// where that declaration states it (GEN-7). `false` leaves a call
-    /// using unsupported pack-member evidence for the target to decline.
+    /// where that declaration states it (GEN-7). `false` keeps an
+    /// unproved reflected argument symbolic after reporting its failure.
     pub(super) fn requires_met(
         &mut self,
         at: Location,
@@ -536,7 +536,7 @@ impl<'a> Typer<'a> {
     /// GEN-3 and GEN-10: a function that receives resolved type packs
     /// must have a requirement known to hold for those types. Report
     /// both a false condition and a form this pass cannot judge. An
-    /// unsupported stated member fact returns `false` as `requires_met` does.
+    /// unproved reflected member returns `false` as `requires_met` does.
     pub(super) fn pack_requires_met(
         &mut self,
         at: Location,
@@ -702,32 +702,28 @@ impl<'a> Typer<'a> {
             .iter()
             .map(|generic| generic.at)
             .collect();
-        let stated_members = self.stated_pack_members();
-        // Existing checks still report unmet ordinary generic requirements.
-        // A proof needed only for a reflected type can remain untold.
-        let unread_packs = if passes_on(generics, &own) || packs_pass_on(type_packs, &own) {
-            HashSet::new()
-        } else {
-            self.unread_stated_packs(&stated_members)
-        };
-        let stated_members = stated_members
-            .into_iter()
-            .filter(|member| {
-                reflects(generics, &[member.pack]) || packs_pass_on(type_packs, &[member.pack])
+        let evidence_types = generics
+            .iter()
+            .filter_map(|argument| match argument {
+                Argument::Type(ty) => Some(ty),
+                _ => None,
             })
+            .chain(type_packs.iter().flat_map(|pack| &pack.types))
             .collect::<Vec<_>>();
+        let dependencies = self.stated_member_dependencies(&evidence_types);
+        let reflected = evidence_types.iter().any(|ty| {
+            ty.any_part(
+                &|part| matches!(part, Type::PackMember { pack, .. } if own.contains(pack)),
+                &|_| false,
+            )
+        });
         let memberships: Vec<(Location, Vec<Argument>)> = self
             .memberships()
             .into_iter()
             .filter(|(parameter, _)| {
-                let parameter = &[*parameter];
-                passes_on(generics, parameter)
-                    || packs_pass_on(type_packs, parameter)
-                    || stated_members.iter().any(|member| {
-                        let key_depends = matches!(&member.key, StatedPackKey::One(key)
-                            if key.names_one_of(parameter));
-                        key_depends || mentions(&member.ty, parameter)
-                    })
+                dependencies.contains(parameter)
+                    || passes_on(generics, &[*parameter])
+                    || packs_pass_on(type_packs, &[*parameter])
             })
             .collect();
         let mut combinations = super::candidates::combinations(&memberships);
@@ -737,79 +733,12 @@ impl<'a> Typer<'a> {
         let bound = self.bound.clone();
         let name = &program.modules[callee.0].declarations[callee.1].name;
         let body = &self.declaration.name;
-        let mut readable = true;
-        for combination in combinations.iter().take(crate::INSTANCES + 1) {
+        let mut remaining = crate::INSTANCES;
+        for combination in &combinations {
             let given: Vec<(Location, &Argument)> = bound
                 .iter()
                 .chain(combination)
                 .map(|(at, argument)| (*at, argument))
-                .collect();
-            // The lookup and its evidence use the same combination's
-            // arguments. The substituted member types also set the size bound.
-            let constant_at = |at| match given.iter().find(|(declared, _)| *declared == at)?.1 {
-                Argument::Constant(constant) => Some(constant.value.clone()),
-                Argument::Type(_) | Argument::NoResult => None,
-            };
-            let projected_members = stated_members
-                .iter()
-                .map(|member| StatedPackMember {
-                    pack: member.pack,
-                    site: member.site,
-                    key: match &member.key {
-                        StatedPackKey::One(key) => {
-                            StatedPackKey::One(key.substituted(&constant_at))
-                        }
-                        StatedPackKey::Every(key) => StatedPackKey::Every(*key),
-                    },
-                    ty: substitute_within(&member.ty, &given),
-                })
-                .collect::<Vec<_>>();
-            let member_weight = projected_members
-                .iter()
-                .map(|member| weight(&member.ty))
-                .max()
-                .unwrap_or(1);
-            let unread = std::cell::Cell::new(false);
-            let member_type = |pack, _: &str, key: &Constant| {
-                let found = projected_members
-                    .iter()
-                    .filter(|member| member.pack == pack)
-                    .find_map(|member| match &member.key {
-                        StatedPackKey::One(stated) if stated.same(&key.value) == Some(true) => {
-                            Some(member.ty.clone())
-                        }
-                        StatedPackKey::Every(bound) => Some(substitute_within(
-                            &member.ty,
-                            &[(*bound, &Argument::Constant(key.clone()))],
-                        )),
-                        StatedPackKey::One(_) => None,
-                    });
-                if found.is_none() && unread_packs.contains(&pack) {
-                    unread.set(true);
-                }
-                found
-            };
-            let project = |ty: &Type| {
-                placed(
-                    substitute_with_members(ty, &given, &member_type, member_weight),
-                    &own,
-                )
-            };
-            let placed_generics: Vec<Argument> = generics
-                .iter()
-                .map(|argument| match argument {
-                    Argument::Type(ty) => Argument::Type(project(ty)),
-                    Argument::Constant(_) | Argument::NoResult => given_in(argument, &given, &own),
-                })
-                .collect();
-            let placed_packs: Vec<_> = type_packs
-                .iter()
-                .cloned()
-                .map(|mut pack| {
-                    pack.infer_from_arguments = false;
-                    pack.place_types(project);
-                    pack
-                })
                 .collect();
             // ERR-9: "Failure during argument evaluation precedes later
             // admission checks": a generic argument worked out from the
@@ -836,16 +765,58 @@ impl<'a> Typer<'a> {
                 });
                 return true;
             }
-            let held = self
-                .requires_told_with_packs(callee, &placed_generics, &placed_packs, None)
-                .map(|(_, held, _)| held);
-            if held == Some(Some(true)) {
-                continue;
+            let member_choices = self.stated_member_choices(&evidence_types, &given);
+            let mut member_trials = super::candidates::combinations(&member_choices);
+            if member_trials.is_empty() {
+                member_trials.push(Vec::new());
             }
-            if held == Some(None) && unread.get() {
-                readable = false;
-                continue;
-            }
+            let Some(rest) = remaining.checked_sub(member_trials.len()) else {
+                self.diagnostics.emit(untold_with_reason(
+                    program,
+                    callee,
+                    at,
+                    condition,
+                    "the analyser's limit on combinations of stated requirements was reached",
+                ));
+                return !reflected;
+            };
+            remaining = rest;
+            let failed = member_trials.iter().find_map(|members| {
+                let member_type = |pack, _: &str, key: &Constant| {
+                    members.iter().find_map(|((at, stated), ty)| {
+                        (*at == pack && stated.value.same(&key.value) == Some(true))
+                            .then(|| ty.clone())
+                    })
+                };
+                let bound = members.iter().map(|(_, ty)| weight(ty)).max().unwrap_or(1);
+                let project = |ty: &Type| {
+                    placed(
+                        substitute_with_members(ty, &given, &member_type, bound),
+                        &own,
+                    )
+                };
+                let placed_generics = generics
+                    .iter()
+                    .map(|argument| match argument {
+                        Argument::Type(ty) => Argument::Type(project(ty)),
+                        _ => given_in(argument, &given, &own),
+                    })
+                    .collect::<Vec<_>>();
+                let placed_packs = type_packs
+                    .iter()
+                    .cloned()
+                    .map(|mut pack| {
+                        pack.infer_from_arguments = false;
+                        pack.place_types(project);
+                        pack
+                    })
+                    .collect::<Vec<_>>();
+                let held = self
+                    .requires_told_with_packs(callee, &placed_generics, &placed_packs, None)
+                    .map(|(_, held, _)| held);
+                (held != Some(Some(true))).then_some(held)
+            });
+            let Some(held) = failed else { continue };
             let members = self.members_named(combination);
             let message = match (held, members.is_empty()) {
                 (Some(Some(false)), false) => format!(
@@ -887,13 +858,13 @@ impl<'a> Typer<'a> {
                          makes this hold"
                 )),
             );
-            return true;
+            return !reflected;
         }
-        readable
+        true
     }
 
-    /// A positive equality states one GEN-17 member's type. An `each`
-    /// over the same pack's keys can state a type for every member (GEN-10).
+    /// Positive equality and membership constrain a GEN-17 member's
+    /// type. An `each` over the same pack's keys constrains every member.
     fn stated_pack_members(&self) -> Vec<StatedPackMember> {
         let Some(condition) = child(&self.declaration.syntax, SyntaxKind::RequiresClause)
             .and_then(|clause| clause.children().next())
@@ -914,7 +885,7 @@ impl<'a> Typer<'a> {
         let mut members = Vec::new();
         for term in terms {
             if term.kind() == SyntaxKind::ConstraintRelation {
-                members.extend(self.stated_member_equality(&term));
+                members.extend(self.stated_member_bound(&term));
                 continue;
             }
             // An existential `any` never proves an arbitrary member's type.
@@ -944,7 +915,7 @@ impl<'a> Typer<'a> {
             let mut relations = Vec::new();
             conjoined_relations(&body, &mut relations);
             for relation in relations {
-                let Some(mut member) = self.stated_member_equality(&relation) else {
+                let Some(mut member) = self.stated_member_bound(&relation) else {
                     continue;
                 };
                 if member.pack == pack.at
@@ -958,8 +929,11 @@ impl<'a> Typer<'a> {
         members
     }
 
-    /// The member and type asserted equal in one GEN-3 relation.
-    fn stated_member_equality(&self, relation: &SyntaxNode) -> Option<StatedPackMember> {
+    /// The member and type bound stated in one GEN-3 relation.
+    fn stated_member_bound(&self, relation: &SyntaxNode) -> Option<StatedPackMember> {
+        if tokens(relation).any(|token| token.text() == "in") {
+            return self.stated_member_membership(relation);
+        }
         if !has_token(relation, SyntaxKind::EqEq) {
             return None;
         }
@@ -972,20 +946,15 @@ impl<'a> Typer<'a> {
         let readable = |given| {
             whole(given) && !given.any_part(&|ty| matches!(ty, Type::PackMember { .. }), &|_| false)
         };
-        let (pack, key, given, site) = match (*left, *right) {
-            (Type::PackMember { pack, key, .. }, given) if readable(given) => {
-                (pack, key, given, left_at)
-            }
-            (given, Type::PackMember { pack, key, .. }) if readable(given) => {
-                (pack, key, given, right_at)
-            }
+        let (pack, key, given) = match (*left, *right) {
+            (Type::PackMember { pack, key, .. }, given) if readable(given) => (pack, key, given),
+            (given, Type::PackMember { pack, key, .. }) if readable(given) => (pack, key, given),
             _ => return None,
         };
         Some(StatedPackMember {
             pack: *pack,
-            site,
             key: StatedPackKey::One(key.value.clone()),
-            ty: given.clone(),
+            types: StatedMemberTypes::Equal(given.clone()),
         })
     }
 
@@ -1023,7 +992,7 @@ impl<'a> Typer<'a> {
             .filter(|at| {
                 let one = &[*at];
                 used.iter().any(|member| {
-                    mentions(&member.ty, one)
+                    member.types.values().iter().any(|ty| mentions(ty, one))
                         || matches!(&member.key, StatedPackKey::One(key) if key.names_one_of(one))
                 })
             })
@@ -1037,18 +1006,8 @@ impl<'a> Typer<'a> {
         types: &[&Type],
         given: &[(Location, &Argument)],
     ) -> Vec<((Location, Constant), Vec<Type>)> {
-        let equalities = self.stated_pack_members();
-        let mut relations = Vec::new();
-        if let Some(condition) = child(&self.declaration.syntax, SyntaxKind::RequiresClause)
-            .and_then(|clause| clause.children().next())
-        {
-            conjoined_relations(&condition, &mut relations);
-        }
-        let memberships: Vec<_> = relations
-            .iter()
-            .filter_map(|relation| self.stated_member_membership(relation))
-            .collect();
-        if equalities.is_empty() && memberships.is_empty() {
+        let bounds = self.stated_pack_members();
+        if bounds.is_empty() {
             return Vec::new();
         }
         let constant_at = |at| match given.iter().find(|(declared, _)| *declared == at)?.1 {
@@ -1075,23 +1034,27 @@ impl<'a> Typer<'a> {
                     }) {
                         return false;
                     }
-                    let equality = equalities.iter().find_map(|member| {
-                        if member.pack != *pack {
-                            return None;
-                        }
-                        match &member.key {
-                            StatedPackKey::One(stated)
-                                if stated.substituted(&constant_at).same(&key.value)
-                                    == Some(true) =>
-                            {
-                                Some(substitute_within(&member.ty, given))
+                    let mut matching = bounds.iter().filter(|member| {
+                        member.pack == *pack
+                            && match &member.key {
+                                StatedPackKey::One(stated) => {
+                                    stated.substituted(&constant_at).same(&key.value) == Some(true)
+                                }
+                                StatedPackKey::Every(_) => true,
                             }
-                            StatedPackKey::Every(bound) => Some(substitute_within(
-                                &substitute_within(&member.ty, given),
-                                &[(*bound, &Argument::Constant(key.clone()))],
-                            )),
-                            StatedPackKey::One(_) => None,
+                    });
+                    let project = |member: &StatedPackMember, ty: &Type| {
+                        let ty = substitute_within(ty, given);
+                        match member.key {
+                            StatedPackKey::One(_) => ty,
+                            StatedPackKey::Every(bound) => {
+                                substitute_within(&ty, &[(bound, &Argument::Constant(key.clone()))])
+                            }
                         }
+                    };
+                    let equality = matching.clone().find_map(|member| match &member.types {
+                        StatedMemberTypes::Equal(ty) => Some(project(member, ty)),
+                        StatedMemberTypes::Alternatives(_) => None,
                     });
                     // An equality to an open type does not displace a
                     // finite membership for this same pack key.
@@ -1101,18 +1064,12 @@ impl<'a> Typer<'a> {
                     {
                         equality.map(|ty| vec![ty])
                     } else {
-                        memberships
-                            .iter()
-                            .find(|(at, stated, _)| {
-                                *at == *pack
-                                    && stated.substituted(&constant_at).same(&key.value)
-                                        == Some(true)
-                            })
-                            .map(|(_, _, members)| {
-                                members
-                                    .iter()
-                                    .map(|ty| substitute_within(ty, given))
-                                    .collect()
+                        matching
+                            .find_map(|member| match &member.types {
+                                StatedMemberTypes::Equal(_) => None,
+                                StatedMemberTypes::Alternatives(types) => {
+                                    Some(types.iter().map(|ty| project(member, ty)).collect())
+                                }
                             })
                             .or_else(|| equality.map(|ty| vec![ty]))
                     };
@@ -1128,13 +1085,7 @@ impl<'a> Typer<'a> {
     }
 
     /// A positive membership of a named member in a finite set of types.
-    fn stated_member_membership(
-        &self,
-        relation: &SyntaxNode,
-    ) -> Option<(Location, ConstantValue, Vec<Type>)> {
-        if !tokens(relation).any(|token| token.text() == "in") {
-            return None;
-        }
+    fn stated_member_membership(&self, relation: &SyntaxNode) -> Option<StatedPackMember> {
         let mut operands = relation.children();
         let (member, set) = (operands.next()?, operands.next()?);
         if set.kind() != SyntaxKind::ConstraintSet {
@@ -1153,35 +1104,11 @@ impl<'a> Typer<'a> {
                     .then(|| (*ty).clone())
             })
             .collect::<Option<_>>()?;
-        (!types.is_empty()).then_some((*pack, key.value.clone(), types))
-    }
-
-    /// Packs named by a stated member expression for which we read no
-    /// usable equality, such as an existential `any` or a relation to another member.
-    fn unread_stated_packs(&self, members: &[StatedPackMember]) -> HashSet<Location> {
-        let Some(clause) = child(&self.declaration.syntax, SyntaxKind::RequiresClause) else {
-            return HashSet::new();
-        };
-        let unread = RefCell::new(HashSet::new());
-        for node in clause.descendants() {
-            let site = node.span().start;
-            if members.iter().any(|member| member.site == site) {
-                continue;
-            }
-            if let Some(ty) = self.written.get(&(self.file, site)) {
-                // `any_part` visits the members nested inside a type too.
-                ty.any_part(
-                    &|part| {
-                        if let Type::PackMember { pack, .. } = part {
-                            unread.borrow_mut().insert(*pack);
-                        }
-                        false
-                    },
-                    &|_| false,
-                );
-            }
-        }
-        unread.into_inner()
+        (!types.is_empty()).then_some(StatedPackMember {
+            pack: *pack,
+            key: StatedPackKey::One(key.value.clone()),
+            types: StatedMemberTypes::Alternatives(types),
+        })
     }
 
     /// Reports a `requires` that does not hold, or is not told for a
@@ -2265,9 +2192,22 @@ fn required_calls(node: &SyntaxNode, calls: &mut Vec<SyntaxNode>) {
 /// A reflected member type stated by a positive requirement (GEN-17).
 struct StatedPackMember {
     pack: Location,
-    site: u32,
     key: StatedPackKey,
-    ty: Type,
+    types: StatedMemberTypes,
+}
+
+enum StatedMemberTypes {
+    Equal(Type),
+    Alternatives(Vec<Type>),
+}
+
+impl StatedMemberTypes {
+    fn values(&self) -> &[Type] {
+        match self {
+            Self::Equal(ty) => std::slice::from_ref(ty),
+            Self::Alternatives(types) => types,
+        }
+    }
 }
 
 /// One declared key, or the key parameter of a universal requirement.

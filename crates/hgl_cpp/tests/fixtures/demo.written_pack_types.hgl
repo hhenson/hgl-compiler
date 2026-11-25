@@ -187,9 +187,21 @@ const fn every_integer<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -
 const fn every_sized<const N: i64, ...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
     requires N == 2 && each key in arg_keys(Ps) { Ps[key] == list<i64, N> } => exact_list<Ps[item_key]>(item)
 
+const fn exact_number<T>(value: T) -> T requires T in {i64, f64} => value
+
+const fn either_number<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires Ps[item_key] in {i64, f64} => exact_number<Ps[item_key]>(item)
+
+const fn every_number<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key]
+    requires each key in arg_keys(Ps) { Ps[key] in {i64, f64} } => exact_number<Ps[item_key]>(item) + item
+
 test each_proves_the_member_type {
     assert every_integer(num, 11) == 11
     assert every_sized<2>(pair, [3, 4]) == [3, 4]
+    assert either_number(num, 11) == 11
+    assert either_number(real_item, 1.5) == 1.5
+    assert every_number(num, 12) == 24
+    assert every_number(real_item, 2.5) == 5.0
 }
 
 test a_nonmatching_member_rejects_the_universal_requirement {
