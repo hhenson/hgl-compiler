@@ -25,6 +25,7 @@ use hgl_lower::types::fixed_list_size;
 
 use super::Emitter;
 use super::composites;
+use super::expressions::integer_literal;
 use super::names::{self, identifier};
 use crate::runtime;
 
@@ -295,10 +296,14 @@ impl Emitter<'_> {
                     .collect();
                 let name = names::declared_type(declaration, index);
                 self.piece.is_type = true;
+                let enumerators = if members.is_empty() {
+                    String::new()
+                } else {
+                    format!("    {},\n", members.join(",\n    "))
+                };
                 self.piece.declaration = format!(
-                    "// enum {} (TYPE-7)\nenum class {name}\n{{\n    {},\n}};\n",
+                    "// enum {} (TYPE-7)\nenum class {name}\n{{\n{enumerators}}};\n",
                     declaration.name,
-                    members.join(",\n    ")
                 );
                 // What names the enum to the runtime library (`values.h`,
                 // `EnumNames`): its HGL name qualified with its module's
@@ -322,8 +327,31 @@ impl Emitter<'_> {
                         ),
                         None => format!("{}::{}", declared.path, declaration.name),
                     };
+                    let Some(numbers) = read
+                        .members
+                        .iter()
+                        .map(|member| member.value)
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        self.unsupported(at, "an enum with unresolved member numbers");
+                        return;
+                    };
+                    // TYPE-7: an enum's C++ ordinal stays separate from
+                    // the signed number an HGL conversion uses.
+                    let numbers = if numbers.iter().copied().eq(0..) {
+                        String::new()
+                    } else {
+                        format!(
+                            ", {{{}}}",
+                            numbers
+                                .into_iter()
+                                .map(integer_literal)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    };
                     self.piece.declaration.push_str(&format!(
-                        "constexpr ::{}::EnumNames<{name}, {}> hgl_enum({name}) noexcept\n{{\n    return {{{}, {{{}}}}};\n}}\n",
+                        "constexpr ::{}::EnumNames<{name}, {}> hgl_enum({name}) noexcept\n{{\n    return {{{}, {{{}}}{numbers}}};\n}}\n",
                         runtime::NAMESPACE,
                         members.len(),
                         names::string(&qualified),

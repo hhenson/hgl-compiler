@@ -102,6 +102,15 @@ struct EnumNames {
     std::string_view type;
     /// Each member and its name, as HGL writes it.
     std::pair<E, std::string_view> members[N];
+    /// Member numbers in declaration order. The runtime's enums use
+    /// ordinary numbering from zero. Generated enums can write other numbers.
+    std::array<i64, N> numbers = [] {
+        std::array<i64, N> ordinals{};
+        for (std::size_t index = 0; index < N; ++index) {
+            ordinals[index] = static_cast<i64>(index);
+        }
+        return ordinals;
+    }();
 };
 
 /// An enumeration the library can name: one whose `hgl_enum` gives its

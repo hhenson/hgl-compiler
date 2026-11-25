@@ -109,11 +109,13 @@ analyser: done
 - A member is of its enum, and `.member` is given its enum by the type its place expects
 - A call of the enum's name constructs a member from an `i64` or a `str`, one argument by position; a constant that is no member's number or name is `member.unknown`
 - A construction from a constant that names a member is read as that member: a `switch` label, a `const` argument and a generic value argument take it as they take `Side.buy`
+- Core's `convert` candidates select explicit conversions to a member's name or number and from its number (OPS-4, OPS-7).
 
 transpiler: partial
 
 - Emits enum members and constructs members from names or numbers. Supplies enum
   payload, constant and trace forms.
+- Supplies the enum's source names and numbers to Core's conversion natives.
 - Left: An unavailable enum layout or unsupported construction source is reported. A
   failed construction lacks `enum.no_member`.
 

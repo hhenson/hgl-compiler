@@ -640,11 +640,17 @@ impl Emitter<'_> {
                 self.unsupported(at, &shown);
                 return None;
             };
-            let Some(gives) = self.named_type(gives) else {
-                self.unsupported(at, &format!("the type `{gives}`"));
-                return None;
-            };
-            first.push(gives);
+            // OPS-4: the generic enum destination of `convert(i64)` is
+            // already the first template argument. A fixed result is extra.
+            if !matches!(gives, Type::Parameter { at, .. }
+                if signature.generics.first().is_some_and(|generic| generic.at == *at))
+            {
+                let Some(gives) = self.named_type(gives) else {
+                    self.unsupported(at, &format!("the type `{gives}`"));
+                    return None;
+                };
+                first.push(gives);
+            }
         }
         self.templated(&names::native(name), &first, generics, at)
     }
