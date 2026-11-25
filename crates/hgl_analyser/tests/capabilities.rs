@@ -794,3 +794,48 @@ test t { eval hook(depth: 1) }
         checked.report
     );
 }
+
+/// TIME-8: "Where a function calls itself, directly or through other
+/// functions, and the key can differ between the calls on the way round",
+/// the key is the run's. A candidate that calls its own operator closes
+/// such a cycle, and a key two `const` parameters exchange in a function
+/// that reads neither is "exchanged on the way round". Neither is checked
+/// in source, and no instance is made for each key the cycle reaches.
+#[test]
+fn cycles_through_an_operator_and_exchanges_are_the_runs() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+operator step<S, T>(store: S, depth: i64, const key: str, value: T) requires S in {GlobalState}
+impl const fn step<T>(store: GlobalState, depth: i64, const key: str, value: T) requires T in {i64, f64} {
+    if depth == 0 { put(store, key, value) }
+    else { step(store, depth - 1, key + ".output", value) }
+}
+const fn sb(store: GlobalState, depth: i64, const p: str, const q: str) {
+    if depth == 0 { sa(store, 0, p) }
+    else { sb(store, depth - 1, q, p) }
+}
+const fn sa(store: GlobalState, depth: i64, const a: str) {
+    put(store, a, 1)
+    if depth > 0 { sb(store, depth - 1, a, a) }
+}
+fn hook(const key: str, const depth: i64) {
+    inject global_state
+    when {}
+    stop {
+        step(global_state, depth, key, 1)
+        sb(global_state, depth, "user.x", "run.output")
+    }
+}
+test first { eval hook(key: "run", depth: 0) }
+test grows { eval hook(key: "user", depth: 2) }
+test unused { eval hook(key: "run.output", depth: 1) }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        Vec::<String>::new(),
+        "{}",
+        checked.report
+    );
+}

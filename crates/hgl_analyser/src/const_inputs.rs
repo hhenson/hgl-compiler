@@ -1069,6 +1069,30 @@ pub(crate) fn demands(
                     let Some(Detail::Callable(parameters)) = candidate.details.get(member) else {
                         continue;
                     };
+                    // TIME-8: a call an instance resolves reaches each
+                    // candidate it can select, so a cycle closed through
+                    // the operator is a cycle.
+                    if uses_store && (borrows_store(parameters) || is_graph((unit, member))) {
+                        let argument_for =
+                            |position: usize| selection.argument_for(parameters, position);
+                        store_calls.record(
+                            caller,
+                            signature,
+                            (unit, member),
+                            parameters,
+                            argument_for,
+                        );
+                        for position in 0..parameters.parameters.len() {
+                            if let Some(argument) = argument_for(position) {
+                                slots_read(argument, &bindings, &slots, |slot| {
+                                    store_arguments
+                                        .entry(argument.at)
+                                        .or_default()
+                                        .push((caller, slot));
+                                });
+                            }
+                        }
+                    }
                     for (position, _) in parameters
                         .parameters
                         .iter()
@@ -1350,9 +1374,12 @@ fn follow_slots(slots: &mut HashSet<Slot>, edges: &HashMap<Slot, Vec<Slot>>) {
     }
 }
 
-/// Trace the inputs of a key around a cycle. A round trip can feed a
-/// different parameter back to this declaration. Another store-using
-/// helper on the way round can also read a different key.
+/// Trace the inputs of a key back round a cycle, through the slots that
+/// hand it on unchanged (TIME-8: "where it is another `const` parameter,
+/// as two exchanged on the way round are"). The key is exchanged where
+/// the trace reaches two slots of one function, that of the key or any
+/// other on the way round, and where it reaches a slot of a function that
+/// reads keys which is none of its keys.
 fn cycle_passes_another_key(
     read: Slot,
     received: &HashMap<Slot, Vec<Slot>>,
@@ -1360,13 +1387,15 @@ fn cycle_passes_another_key(
     readers: &HashSet<Declaration>,
 ) -> bool {
     let mut seen = HashSet::from([read]);
+    let mut reached = HashMap::from([read]);
     let mut waiting = vec![read];
     while let Some(slot) = waiting.pop() {
         for &source in received.get(&slot).into_iter().flatten() {
             if !seen.insert(source) {
                 continue;
             }
-            if source.0 == read.0 || (readers.contains(&source.0) && !observed.contains(&source)) {
+            let exchanged = *reached.entry(source.0).or_insert(source.1) != source.1;
+            if exchanged || (readers.contains(&source.0) && !observed.contains(&source)) {
                 return true;
             }
             waiting.push(source);
