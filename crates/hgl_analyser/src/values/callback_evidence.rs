@@ -23,7 +23,7 @@ use crate::{Program, ReflectedPack};
 pub(super) struct CallbackEvidence {
     arguments: Vec<ArgumentPatterns>,
     results: Vec<Type>,
-    equalities: Vec<EnclosingEqualities>,
+    enclosing_bindings: Vec<EnclosingBindings>,
 }
 
 impl CallbackEvidence {
@@ -50,13 +50,13 @@ impl CallbackEvidence {
         &self.results
     }
 
-    /// Result shapes a reading learns through enclosing equalities (GEN-3).
+    /// Result shapes a reading learns from enclosing bindings and equalities (GEN-3).
     pub(super) fn trial_result_shapes<'a>(
         &self,
         program: &Program,
         readings: impl IntoIterator<Item = &'a MemberReading<'a>>,
     ) -> Result<Vec<Type>, ()> {
-        if self.equalities.is_empty() {
+        if self.enclosing_bindings.is_empty() {
             return Ok(Vec::new());
         }
         let bindings: Vec<_> = readings
@@ -64,7 +64,7 @@ impl CallbackEvidence {
             .flat_map(|reading| reading.shared_bindings())
             .collect();
         let mut results = Vec::new();
-        for scope in &self.equalities {
+        for scope in &self.enclosing_bindings {
             if let Some(result) = scope.result_shape(program, &bindings)? {
                 results.push(result);
             }
@@ -261,8 +261,13 @@ impl CallbackEvidence {
                 .extend(relations.iter().filter_map(|(relation, bound)| {
                     ArgumentPatterns::read(relation, *bound, source, target, &generics, &type_at)
                 }));
-            if !equalities.is_empty() {
-                evidence.equalities.push(EnclosingEqualities {
+            if !equalities.is_empty()
+                || template
+                    .result
+                    .as_ref()
+                    .is_some_and(|result| mentions(result, &own))
+            {
+                evidence.enclosing_bindings.push(EnclosingBindings {
                     module,
                     declaration,
                     generics: signature.generics.clone(),
@@ -356,7 +361,7 @@ impl CallbackEvidence {
     }
 }
 
-struct EnclosingEqualities {
+struct EnclosingBindings {
     module: usize,
     declaration: usize,
     generics: Vec<GenericParameter>,
@@ -365,7 +370,7 @@ struct EnclosingEqualities {
     result: Option<Type>,
 }
 
-impl EnclosingEqualities {
+impl EnclosingBindings {
     fn result_shape(
         &self,
         program: &Program,
