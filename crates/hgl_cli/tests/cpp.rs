@@ -8,6 +8,8 @@
 //! runs them, as the CI job for C++ does. Run with no C++ SDK named,
 //! they say so and have nothing to check.
 
+#[path = "cpp/bool_keys.rs"]
+mod bool_keys;
 #[cfg(unix)]
 #[path = "cpp/build_reuse.rs"]
 mod build_reuse;

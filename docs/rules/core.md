@@ -877,6 +877,7 @@ transpiler: planned
 transpiler: done
 
 - The value candidate gives the dictionary's keys. The temporal candidate projects hgraph's key set, which publishes membership changes and is silent on a value-only update.
+- Boolean-keyed dictionary cases cover both membership changes and silent value-only updates on the SDK.
 
 ## SET-2
 
