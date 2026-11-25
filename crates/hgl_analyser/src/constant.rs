@@ -2661,7 +2661,7 @@ pub(crate) fn same_temporal(left: &Temporal, right: &Temporal) -> bool {
 
 /// The microseconds from 0001-01-01T00:00Z to the instant a
 /// `datetime` or a `zoned_datetime` is. `i128` holds every one without overflow.
-fn instant(parts: &Temporal) -> Option<i128> {
+pub(crate) fn instant(parts: &Temporal) -> Option<i128> {
     let date = parts.date?;
     let time = parts.time?;
     let offset = parts.offset?;
