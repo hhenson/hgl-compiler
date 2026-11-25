@@ -5734,6 +5734,29 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     );
 }
 
+/// FN-9, CRUN-7: a selected child uses the run store before its user node
+/// starts and again when the branch is re-entered.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn selected_children_use_the_run_store_at_startup_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("selected_child_store");
+    let file = write(
+        &root,
+        "demo.store.child_start.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.store.child_start.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// A failure names the HGL line of the statement it is raised in, though
 /// the target writes more than one line of C++ for it: `xs[i] = ys[j]`
 /// holds its index and checks its place first (EXPR-2), and its value

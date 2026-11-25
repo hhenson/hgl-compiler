@@ -69,6 +69,7 @@ use super::graphs::WIRING;
 use super::names::{self, identifier};
 use super::nodes::{Context, Kind, Role};
 use super::statements::Scope;
+use super::store_start::StoreStart;
 use super::values::INDENT;
 use crate::runtime;
 
@@ -106,6 +107,43 @@ struct Branch {
     statements: Vec<Stmt>,
     /// What it gives after them.
     tail: Tail,
+}
+
+impl Branch {
+    /// Separate a selected child's store operations from wiring (FN-9).
+    /// A use outside the prefix leaves the whole branch unsupported.
+    fn store_start(&self, program: &Program, store: usize) -> Result<Option<StoreStart>, ()> {
+        let (prefix, result, ordered) = match (&self.tail, self.statements.split_last()) {
+            (Tail::Value(value), _) => (self.statements.as_slice(), Some(value.as_ref()), true),
+            (
+                Tail::Returns,
+                Some((
+                    Stmt::Return {
+                        value: Some(value), ..
+                    },
+                    prefix,
+                )),
+            ) => (prefix, Some(value), true),
+            (Tail::Nothing | Tail::Outputless, _) => (self.statements.as_slice(), None, true),
+            _ => (self.statements.as_slice(), None, false),
+        };
+        let mut read = Vec::new();
+        let mut declared = Vec::new();
+        let mut note = |node| named_in(node, &mut read, &mut declared);
+        walk_statement_nodes(&self.statements, &mut note);
+        if let Some(value) = result {
+            value.walk_nodes(&mut note);
+        }
+        if !read.contains(&store) {
+            return Ok(None);
+        }
+        if !ordered {
+            return Err(());
+        }
+        StoreStart::of(program, store, prefix, result)
+            .map(Some)
+            .ok_or(())
+    }
 }
 
 /// What selects a branch.
@@ -1353,16 +1391,37 @@ impl Emitter<'_> {
         }
         let bound = self.control.bound.clone();
         let inputs = taken(locals, &bound, &[], read.clone(), &declared);
-        let configured = self.configured(scope, &read, &declared, &bound);
+        let mut configured = self.configured(scope, &read, &declared, &bound);
+        let store = program.capability_type("global_state").and_then(|ty| {
+            configured
+                .iter()
+                .copied()
+                .find(|&local| locals[local].ty == ty)
+        });
+        let mut startups = vec![None; branches.len()];
+        if let Some(store) = store {
+            for (branch, startup) in branches.iter().zip(&mut startups) {
+                let Ok(plan) = branch.store_start(program, store) else {
+                    self.unsupported(
+                        at,
+                        "a selected child's store when its reads determine wiring or its startup cannot be ordered",
+                    );
+                    return None;
+                };
+                *startup = plan;
+            }
+            configured.retain(|&local| local != store);
+        }
         if self.reads_a_capability(scope, &configured, at) {
             return None;
         }
-        for branch in branches {
+        for (branch, startup) in branches.iter().zip(&startups) {
             let tails: Vec<&Expr> = match &branch.tail {
                 Tail::Value(value) => vec![&**value],
                 _ => Vec::new(),
             };
-            if self.computes_while_built(&branch.statements, &tails) {
+            let prefix = startup.map_or(0, |plan| plan.count);
+            if self.computes_while_built(&branch.statements[prefix..], &tails) {
                 return None;
             }
         }
@@ -1400,7 +1459,7 @@ impl Emitter<'_> {
         let mut structs = String::new();
         let mut compiled = Vec::new();
         let mut fallback = None;
-        for (position, branch) in branches.iter().enumerate() {
+        for (position, (branch, startup)) in branches.iter().zip(startups).enumerate() {
             let graph = names::temporary("branch", position);
             let mut parameters = vec![format!("[[maybe_unused]] ::hgraph::Wiring& {WIRING}")];
             let takes_key = matches!(branch.key, Key::Unmatched);
@@ -1418,15 +1477,33 @@ impl Emitter<'_> {
                     names::string(&locals[*local].name)
                 ));
             }
-            let body = self.branch_body(
+            let mut body = self.branch_body(
                 scope,
                 branch,
+                startup.map_or(0, |plan| plan.count),
                 &inputs,
                 &configured,
                 result,
                 (&key_type, &output),
                 at,
             )?;
+            let mut starter = String::new();
+            if let Some(plan) = startup {
+                let (definition, wired) =
+                    plan.emit(self, scope, &branch.statements[..plan.count], &configured)?;
+                starter = definition;
+                let indent = INDENT.repeat(3);
+                body = if plan.rank_result {
+                    format!(
+                        "{indent}const auto store_start_port_ = {wired};\n\
+                         {indent}const auto child_result_ = [&]() -> {returns}\n{indent}{{\n{body}{indent}}}();\n\
+                         {indent}{WIRING}.add_rank_dependency(child_result_.node(), store_start_port_.node());\n\
+                         {indent}return child_result_;\n",
+                    )
+                } else {
+                    format!("{indent}{wired};\n{body}")
+                };
+            }
             let comment = match &branch.key {
                 Key::Label(label, None) => {
                     format!("The branch selected while the condition is `{label}`.")
@@ -1443,7 +1520,7 @@ impl Emitter<'_> {
             };
             structs.push_str(&format!(
                 "{INDENT}// {comment}\n{INDENT}struct {graph}\n{INDENT}{{\n\
-                 {INDENT}{INDENT}static constexpr auto name = {label};\n\
+                 {INDENT}{INDENT}static constexpr auto name = {label};\n{starter}\
                  {INDENT}{INDENT}static {returns} compose({})\n{INDENT}{INDENT}{{\n{body}{INDENT}{INDENT}}}\n{INDENT}}};\n\n",
                 parameters.join(", ")
             ));
@@ -1544,6 +1621,7 @@ impl Emitter<'_> {
         &mut self,
         scope: &mut Scope,
         branch: &Branch,
+        prefix: usize,
         inputs: &[usize],
         configured: &[usize],
         result: Option<&Type>,
@@ -1564,7 +1642,7 @@ impl Emitter<'_> {
                 ),
             });
         }
-        let mut all = branch.statements.clone();
+        let mut all = branch.statements[prefix..].to_vec();
         let mut text = String::new();
         let mut bound: Vec<usize> = inputs.iter().chain(configured).copied().collect();
         match &branch.tail {

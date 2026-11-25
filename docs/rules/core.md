@@ -580,7 +580,10 @@ transpiler: partial
   is built, and a node's keys its configuration fixes, its own and those it
   hands helpers, when the SDK attaches it, before any start hook. A key
   that can differ between the calls of a cycle is left to the operation.
-- Left: a temporal child graph using the surrounding store is declined (CRUN-7).
+- A selected branch may use the surrounding store during its startup
+  prefix (FN-9, CRUN-7).
+- Left: store-dependent child wiring and startup outside the supported
+  branch form (#541).
 
 ## CAP-7
 
@@ -758,7 +761,11 @@ transpiler: partial
 
 - Creates one store for a run, populated by the application before graph construction,
   and executes its wiring-time store calls in order.
-- Left: a temporal branch using its surrounding graph's store is declined by the target (FN-9, CAP-6).
+- Executes the ordinary store prefix of a selected branch before its
+  directly wired scalar node starts. Every activation uses the same run
+  store (FN-9, CAP-6).
+- Left: store-dependent child wiring and startup outside that branch
+  form (#541).
 
 ## CRUN-8
 
