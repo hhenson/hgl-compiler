@@ -8,6 +8,8 @@
 //! runs them, as the CI job for C++ does. Run with no C++ SDK named,
 //! they say so and have nothing to check.
 
+#[path = "cpp/bool_keys.rs"]
+mod bool_keys;
 #[cfg(unix)]
 #[path = "cpp/build_reuse.rs"]
 mod build_reuse;
@@ -1025,8 +1027,8 @@ fn nested_forms_run_on_the_sdk() {
     );
 }
 
-/// TIME-1: a guarded position of a fixed-list field reads its endpoint,
-/// including when the struct input is supplied by a fitted pack.
+/// TIME-1: a guarded child of a fixed-list field reads its own endpoint
+/// through nested fields or positions, including a fitted struct input.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn fixed_list_fields_run_on_the_sdk() {
@@ -1043,7 +1045,7 @@ fn fixed_list_fields_run_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -2231,6 +2233,50 @@ fn an_integration_tests_run_configuration_runs_on_the_sdk() {
     );
     assert!(
         stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// The empty interval keeps both hooks (CRUN-1), and invalid bounds fail with
+/// `run.bounds` before either hook runs (CRUN-3).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn zero_cycle_hooks_and_run_bounds_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("run-bounds-lifecycle");
+    let file = write(
+        &root,
+        "lifecycle.hgl",
+        r#"module probes.run_lifecycle
+fn fail_start(const divisor: i64) {
+    start { let checked = 1 // divisor }
+    when {}
+}
+fn fail_stop(const divisor: i64) {
+    when {}
+    stop { let checked = 1 // divisor }
+}
+test zero_length_runs_start {
+    assert raises("numeric.division_by_zero") { eval{length: 0us} fail_start(divisor: 0) }
+}
+test zero_length_runs_stop {
+    assert raises("numeric.division_by_zero") { eval{length: 0us} fail_stop(divisor: 0) }
+}
+test lower_bound {
+    assert raises("run.bounds") { eval{start: never, length: 1us} fail_start(divisor: 0) }
+}
+test upper_bound {
+    assert raises("run.bounds") { eval{end: forever} fail_start(divisor: 0) }
+}
+"#,
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

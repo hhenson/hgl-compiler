@@ -20,7 +20,7 @@ transpiler: partial
 
 - Checks validity of reads, preserving silence, null and equal publications. Whole and
   child reads use the value's temporal family.
-- A guarded position of a fixed-list field reads that position's endpoint.
+- A guarded child below a fixed-list field follows its fields and positions to its own endpoint.
 - Left: Whole reads, publications, temporal schemas and deltas outside TYPE-9's families
   are reported. Output reads, narrowed endpoint reads without a supported reader, and
   the projection limits of EXPR-7 remain.

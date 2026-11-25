@@ -81,10 +81,13 @@ const hgraph::TSValueTypeMetaData* ts_meta() {
 }
 
 /// `element`, a member or a key as an hgraph view gives it, as a `K`: an
-/// input's typed view gives a `K`, and an output's an erased value.
+/// input's typed view gives a `K` (or vector<bool>'s proxy for Boolean
+/// membership), and an output's an erased value (TYPE-9, TIME-1).
 template <class K, class Element>
 K key_of(const Element& element) {
-    if constexpr (std::is_same_v<std::remove_cvref_t<Element>, K>) {
+    if constexpr (std::is_same_v<std::remove_cvref_t<Element>, K> ||
+                  (std::is_same_v<K, bool> &&
+                   std::is_same_v<std::remove_cvref_t<Element>, std::vector<bool>::reference>)) {
         return element;
     } else {
         return element.template checked_as<K>();

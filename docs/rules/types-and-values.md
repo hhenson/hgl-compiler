@@ -143,6 +143,8 @@ transpiler: partial
 
 - Writes structural temporal lists, tuples, structs, sets and dictionaries, including
   atomic struct connections, and maps supported children to endpoints.
+- Boolean membership reads typed SDK proxies as Boolean values, including temporal
+  set inputs/results and a dictionary's Boolean key set (TIME-1, SET-1).
 - Gives concrete struct applications with supported type arguments their own nominal
   schemas and maps their substituted fields to child endpoints.
 - Left: Reports abstract temporal structs, structs with generic value arguments,
