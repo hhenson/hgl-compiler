@@ -1,0 +1,104 @@
+module demo.store.child_start
+
+fn read_now(pulse: i64) -> i64 {
+    inject global_state
+    when { return get<i64>(global_state, "visits") }
+}
+
+fn read_at_start(pulse: i64) -> i64 {
+    state seen: i64 = -1
+    inject global_state
+    start { seen = get<i64>(global_state, "visits") }
+    when { return seen }
+}
+
+# FN-9, CRUN-7: store operations occur in source order on each activation,
+# before the selected node's start. An unchanged selector does not restart it.
+fn selected_if(enabled: bool, pulse: i64, const step: i64) -> i64 {
+    inject global_state
+    put(global_state, "visits", 0)
+    if enabled {
+        let visits: i64 = get(global_state, "visits")
+        put(global_state, "visits", visits + step)
+        let updated: i64 = get(global_state, "visits")
+        put(global_state, "visits", updated * 2)
+        read_at_start(pulse)
+    } else {
+        read_now(pulse)
+    }
+}
+
+fn selected_switch(choice: i64, pulse: i64) -> i64 {
+    inject global_state
+    put(global_state, "visits", 0)
+    switch choice {
+        case 1:
+            put(global_state, "visits", 5)
+            return read_at_start(pulse)
+        default: return read_now(pulse)
+    }
+}
+
+# A write-only child does not publish. The independent reader wakes
+# in a later cycle, so it observes the write without ordering two peers.
+fn selected_sink(enabled: bool, pulse: i64) -> i64 {
+    inject global_state
+    put(global_state, "visits", 0)
+    if enabled { put(global_state, "visits", 7) }
+    return read_now(pulse)
+}
+
+fn selected_failure(enabled: bool, pulse: i64) -> i64 {
+    inject global_state
+    if enabled {
+        let missing: i64 = get(global_state, "missing")
+        put(global_state, "visits", missing)
+        pulse
+    } else {
+        pulse
+    }
+}
+
+# TIME-8: the alias's resolved capability type supplies the store view.
+fn selected_logger_alias(enabled: bool, pulse: i64) -> i64 {
+    inject global_state
+    put(global_state, "visits", 0)
+    let logger = global_state
+    if enabled {
+        put(logger, "visits", 9)
+        read_at_start(pulse)
+    } else { read_now(pulse) }
+}
+
+fn selected_kept_alias(enabled: bool, pulse: i64) -> i64 {
+    inject global_state
+    put(global_state, "visits", 0)
+    let kept = global_state
+    if enabled {
+        put(kept, "visits", 9)
+        read_at_start(pulse)
+    } else { read_now(pulse) }
+}
+
+test writes_before_dependent_start_on_each_selection {
+    assert eval selected_if(enabled: [false, true, true, false, true],
+        pulse: [0, 0, 0, 0, 0], step: 1) == [0, 2, 2, 2, 6]
+}
+
+test selected_switch_branch_orders_its_start {
+    assert eval selected_switch(choice: [0, 1, 0], pulse: [0, 0, 0]) == [0, 5, 5]
+}
+
+test selected_child_can_write_without_a_result {
+    assert eval selected_sink(enabled: [false, true, false], pulse: [0, _, 0]) == [0, _, 7]
+}
+
+test an_unselected_child_does_not_read_the_store {
+    assert eval selected_failure(enabled: [false, false], pulse: [1, 2]) == [1, 2]
+    assert raises("value.missing_key") { eval selected_failure(enabled: [false, true], pulse: [1, 2]) }
+}
+
+test store_aliases_keep_the_capability_type {
+    assert eval selected_logger_alias(enabled: [false, true, false], pulse: [0, 0, 0]) == [0, 9, 9]
+    assert eval selected_kept_alias(enabled: [false, true, false], pulse: [0, 0, 0]) == [0, 9, 9]
+}

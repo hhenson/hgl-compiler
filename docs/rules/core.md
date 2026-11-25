@@ -140,6 +140,7 @@ transpiler: done
 analyser: partial
 
 - In a value function, ordering between two of one ordered type and equality between two values of one type, by symbol and by name through core's candidates
+- Selects Core's unsigned-octet ordering candidates when both operands are `bytes`.
 - An operand that is a generic parameter is compared as its declaration's requirements state (GEN-7)
 - Two zoned datetimes, in a value function, a hook and a graph: `==` and `!=` select core's candidates for them. The ordinary `utc` parameter can be a lifted input (EXPR-14). A zoned type has no ordering.
 - Left: a comparison with a nullable operand; other types in temporal bodies
@@ -148,6 +149,7 @@ transpiler: done
 
 - Writes core's ordered comparison and value equality, including zoned equality and the
   `utc` option.
+- Compares `bytes` lexicographically as unsigned octets (TYPE-1).
 
 ## OPS-3
 
@@ -578,7 +580,10 @@ transpiler: partial
   is built, and a node's keys its configuration fixes, its own and those it
   hands helpers, when the SDK attaches it, before any start hook. A key
   that can differ between the calls of a cycle is left to the operation.
-- Left: a temporal child graph using the surrounding store is declined (CRUN-7).
+- A selected branch may use the surrounding store during its startup
+  prefix (FN-9, CRUN-7).
+- Left: store-dependent child wiring and startup outside the supported
+  branch form (#541).
 
 ## CAP-7
 
@@ -756,7 +761,11 @@ transpiler: partial
 
 - Creates one store for a run, populated by the application before graph construction,
   and executes its wiring-time store calls in order.
-- Left: a temporal branch using its surrounding graph's store is declined by the target (FN-9, CAP-6).
+- Executes the ordinary store prefix of a selected branch before its
+  directly wired scalar node starts. Every activation uses the same run
+  store (FN-9, CAP-6).
+- Left: store-dependent child wiring and startup outside that branch
+  form (#541).
 
 ## CRUN-8
 
