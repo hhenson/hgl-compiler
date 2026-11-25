@@ -108,8 +108,7 @@ parser: done
 
 analyser: partial
 
-- Packs have no defaults and are not const. A named pack follows fixed parameters and names a type pack of its declaration.
-- Proposed trial: a fixed parameter after a positional pack takes an argument by name alone. The pack takes every position left by the fixed parameters before it (EXPR-2).
+- Packs have no defaults and are not const. A fixed parameter after either pack reports `pack.order`. A named pack names a type pack of its declaration.
 - Function and operator calls bind leftover positional and named arguments to their corresponding packs and check the known element type. The HIR keeps each argument's pack slot and position or source name.
 - A second positional pack or a second named pack in one declaration reports `pack.duplicate` at its parameter name. A declaration may have one of each kind.
 - A dependent call matches the supplied arguments to the selected callback, excluding the parameters named by `without`. A defaulted parameter is reflected and contributes no argument unless supplied.
