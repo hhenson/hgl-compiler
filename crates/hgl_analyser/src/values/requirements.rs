@@ -2755,7 +2755,8 @@ pub(super) fn instances_hold(
             let constants = made.constants.values.as_slice();
             let recheck_values = dependent_patterns.contains(&made.callee)
                 || !constants.is_empty()
-                || program.generic_store_bodies.contains(&made.callee);
+                || program.generic_store_bodies.contains(&made.callee)
+                || crate::type_values::has_instance_query(program, made.callee);
             let recheck_resultless = made.generics.contains(&Argument::NoResult);
             let declaration = &unit.declarations[made.callee.1];
             if recheck_resultless

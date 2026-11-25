@@ -407,6 +407,10 @@ impl Program {
             || pending_forwards.is_some()
             || !inputs.constants.is_empty()
             || self.generic_store_bodies.contains(&(module, declaration))
+            // TYPE-18: a cold query's operand is absent from runtime HIR.
+            // Re-read it with concrete inputs so selected result types are
+            // retained without retaining or executing the operand's calls.
+            || crate::type_values::has_instance_query(self, (module, declaration))
             || (!generics.is_empty()
                 && (crate::values::has_dependent_index(&body)
                     || crate::formatting::has_dependent_formatting(

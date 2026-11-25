@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
-use hgl_parser::HasSpan;
+use hgl_parser::{HasSpan, SyntaxKind};
 
 use crate::{
     Argument, ConstantValue, Detail, GenericKind, GenericParameter, NamedKind, Program, Type,
@@ -18,6 +18,19 @@ fn parameters(program: &Program, (module, declaration): (usize, usize)) -> &[Gen
         Detail::Struct(read) => &read.generics,
         _ => &[],
     }
+}
+
+/// TYPE-18 and GEN-7: a generic cold query needs the ordinary source reader
+/// again with its concrete inputs. Its operand's calls never enter runtime
+/// HIR, so placement cannot recover a newly selected result from those calls.
+pub(crate) fn has_instance_query(program: &Program, declaration: (usize, usize)) -> bool {
+    matches!(
+        &program.modules[declaration.0].details[declaration.1],
+        Detail::Callable(signature) if !signature.generics.is_empty()
+    ) && program.modules[declaration.0].declarations[declaration.1]
+        .syntax
+        .descendants()
+        .any(|node| node.kind() == SyntaxKind::TypeOfExpr)
 }
 
 /// TYPE-18 and GEN-13: an unmarked function parameter may be a value named
@@ -110,16 +123,17 @@ fn declaration_deltas(
     })
 }
 
-/// Declarations whose saved delta operands or deferred Type parameter names
+/// Declarations whose deltas, cold queries or deferred Type parameter names
 /// need checking once a making call supplies their kinds (GEN-7/13, TYPE-16/18).
 /// Feed the existing bounded instance traversal rather than walking calls again.
 pub(crate) fn instance_declarations(program: &Program) -> Vec<(usize, usize)> {
     let mut declarations = Vec::new();
     for (module, unit) in program.modules.iter().enumerate() {
         for declaration in 0..unit.declarations.len() {
-            if parameters(program, (module, declaration))
-                .iter()
-                .any(|generic| generic.name == "Type" && generic.kind == GenericKind::Plain)
+            if has_instance_query(program, (module, declaration))
+                || parameters(program, (module, declaration))
+                    .iter()
+                    .any(|generic| generic.name == "Type" && generic.kind == GenericKind::Plain)
                 || declaration_deltas(program, (module, declaration)).any(|input| {
                     input.payload.any_part(
                         &|part| matches!(part, Type::Parameter { .. } | Type::PackMember { .. }),

@@ -118,3 +118,29 @@ test canonical_generic_arguments {
     assert convert<str>(type(Timed<5m>(value: 1))) == "Timed<300000000us>"
     assert convert<str>(type(Scaled<1>(value: 1))) == "Scaled<1.0>"
 }
+
+# TYPE-18, GEN-7: select each instance's result, never run the operand.
+operator cold_items<T, C>(value: T) -> C
+impl const fn cold_items<T>(value: T) -> list<i64, 2> {
+    assert false
+    return [1, 2]
+}
+impl const fn cold_items(value: i64) -> list<i64, 3> {
+    assert false
+    return [1, 2, 3]
+}
+const fn selected_kind<T>(value: T) -> Type => type(cold_items(value))
+const SELECTED_KIND: Type = selected_kind(1)
+fn selected_graph<T>(value: T) -> str => convert<str>(type(cold_items(value)))
+fn selected_node<T>(value: T) -> str {
+    when valid(value) { return convert<str>(type(cold_items(value))) }
+}
+test instance_selected_query {
+    assert convert<str>(type(cold_items(1))) == "list<i64, 3>"
+    assert convert<str>(selected_kind(1)) == "list<i64, 3>"
+    assert convert<str>(selected_kind(true)) == "list<i64, 2>"
+    assert convert<str>(SELECTED_KIND) == "list<i64, 3>"
+    assert eval selected_graph(value: [1, 2]) == ["list<i64, 3>"]
+    assert eval selected_graph(value: [true]) == ["list<i64, 2>"]
+    assert eval selected_node(value: [1, 2]) == ["list<i64, 3>", "list<i64, 3>"]
+}

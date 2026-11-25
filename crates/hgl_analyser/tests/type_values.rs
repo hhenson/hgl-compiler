@@ -673,3 +673,96 @@ fn canonical_type_text_separates_enum_spelling_from_identity() {
         assert!(before.unwrap().contains("m::Mode.on"));
     }
 }
+
+/// TYPE-18 and GEN-7: query results use the instance-selected candidate,
+/// and the cold operand makes no runtime call in that instance's body.
+#[test]
+fn a_generic_type_query_uses_the_instance_selected_result() {
+    use hgl_analyser::hir::{Callee, walk_statements};
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+operator items<T, C>(value: T) -> C
+impl const fn items<T>(value: T) -> list<i64, 2> => [1, 2]
+impl const fn items(value: i64) -> list<i64, 3> => [1, 2, 3]
+const fn kind<T>(value: T) -> Type => type(items(value))
+const fn concrete() -> Type => kind(1)
+const fn generic() -> Type => kind(true)
+"#,
+    )]);
+    assert_eq!(checked.summary(), Vec::<String>::new());
+    for (caller, expected) in [("concrete", "list<i64, 3>"), ("generic", "list<i64, 2>")] {
+        let mut called = None;
+        walk_statements(&common::body(&checked, caller).statements, &mut |value| {
+            if let ExprKind::Call {
+                callee:
+                    Callee::Function {
+                        module,
+                        declaration,
+                        generics,
+                        requirements,
+                        ..
+                    },
+                ..
+            } = &value.kind
+            {
+                called = Some((
+                    *module,
+                    *declaration,
+                    generics.clone(),
+                    requirements.clone(),
+                ));
+            }
+        });
+        let (module, declaration, generics, requirements) = called.unwrap();
+        let (_, body) = checked
+            .program
+            .instance(module, declaration, &generics, &requirements)
+            .unwrap();
+        let mut queried = Vec::new();
+        let mut calls = 0;
+        walk_statements(&body.statements, &mut |value| match &value.kind {
+            ExprKind::Literal(Value::Type(ty)) => queried.push(ty.canonical_spelling()),
+            ExprKind::Call { .. } => calls += 1,
+            _ => {}
+        });
+        assert_eq!(queried, [expected]);
+        assert_eq!(calls, 0);
+    }
+}
+
+/// TYPE-18 still checks an unevaluated operand after GEN-7 selection changes
+/// its result. A query does not hide an invalid operation on that result.
+#[test]
+fn an_instance_type_query_keeps_selected_operand_diagnostics() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+operator items<T, C>(value: T) -> C
+impl const fn items<T>(value: T) -> list<i64, 2> => [1, 2]
+impl const fn items(value: bool) -> set<i64> => [3]
+const fn kind<T>(value: T) -> Type => type(items(value)[0])
+const fn concrete() -> Type => kind(true)
+"#,
+    )]);
+    assert!(
+        checked
+            .findings
+            .iter()
+            .any(|finding| { finding.code == "type/type.mismatch" && finding.rule == "EXPR-7" }),
+        "{}",
+        checked.report
+    );
+    assert!(checked.report.contains("kind<bool>"), "{}", checked.report);
+}
+
+/// TYPE-18: retyping the cold operand makes no recursive body instance.
+#[test]
+fn recursive_calls_inside_type_queries_remain_cold() {
+    let checked = check(&[(
+        "m.hgl",
+        "module m\nconst fn grow<T>(value: T) -> Type => type(grow((value, value)))\n\
+         const fn concrete() -> Type => grow(1)\n",
+    )]);
+    assert_eq!(checked.summary(), Vec::<String>::new());
+}
