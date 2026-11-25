@@ -9,7 +9,7 @@ mod common;
 
 use common::{Checked, body, check, locals, module};
 use hgl_analyser::hir::{BinaryOperator, Callee, Expr, ExprKind, Form, Stmt, UnaryOperator};
-use hgl_analyser::{Argument, ConstantValue, Detail};
+use hgl_analyser::{Argument, ConstantValue, Detail, Type};
 
 /// No findings.
 const NONE: [&str; 0] = [];
@@ -2563,13 +2563,13 @@ fn a_generic_candidates_condition_is_checked_at_the_call() {
 #[test]
 fn equally_specific_generic_candidates_are_ambiguous() {
     let checked = module(concat!(
-        "operator join<L, R>(lhs: L, rhs: R) -> i64\n",
-        "impl const fn join<T>(lhs: T, rhs: i64) -> i64 => 1\n",
-        "impl const fn join<T>(lhs: i64, rhs: T) -> i64 => 2\n",
+        "operator fuse<L, R>(lhs: L, rhs: R) -> i64\n",
+        "impl const fn fuse<T>(lhs: T, rhs: i64) -> i64 => 1\n",
+        "impl const fn fuse<T>(lhs: i64, rhs: T) -> i64 => 2\n",
         "const fn uses(n: i64, text: str) {\n",
-        "    let one = join(text, n)\n",
-        "    let two = join(n, text)\n",
-        "    let tie = join(n, n)\n",
+        "    let one = fuse(text, n)\n",
+        "    let two = fuse(n, text)\n",
+        "    let tie = fuse(n, n)\n",
         "}\n",
     ));
     assert_eq!(
@@ -4689,6 +4689,70 @@ test no_zero { assert vr3(add_, [5, 2]) == 7 }
 "#,
     );
     assert!(!checked.rejected, "{}", checked.report);
+}
+
+/// GEN-5 and FN-17: prefer a shared inferred type over its nullable
+/// widening only after the existing candidate comparisons leave a tie.
+#[test]
+fn inferred_callback_inputs_break_only_existing_candidate_ties() {
+    let checked = module(
+        r#"operator shared<R, F>(f: const fn(F) -> i64, x: R) -> i64
+impl const fn shared<R>(f: const fn(R) -> i64, x: R) -> i64 => f(x)
+impl const fn shared<R>(f: const fn(R?) -> i64, x: R) -> i64 => f(x) + 100
+operator pick<R, F>(f: const fn(F) -> i64, x: R) -> i64
+impl const fn pick<R>(f: const fn(R) -> i64, x: R) -> i64 => f(x)
+impl const fn pick<R>(f: const fn(R?) -> i64, x: R) -> i64 => f(x) + 100
+impl const fn pick(f: const fn(i64?) -> i64, x: i64) -> i64 => f(x) + 300
+const fn generic<T>(value: T) -> i64 => 3
+
+const fn choose_shared(x: i64) -> i64 => shared(fn(v) => 3, x)
+const fn choose_concrete(x: i64) -> i64 => pick(fn(v) => 3, x)
+const fn choose_with_generic(x: i64) -> i64 => pick(generic, x)
+"#,
+    );
+    assert!(!checked.rejected, "{}", checked.report);
+    for (name, expected) in [
+        ("choose_shared", "R"),
+        ("choose_concrete", "i64?"),
+        ("choose_with_generic", "i64?"),
+    ] {
+        let [
+            Stmt::Return {
+                value: Some(value), ..
+            },
+        ] = body(&checked, name).statements.as_slice()
+        else {
+            panic!("{name} returns a candidate call");
+        };
+        let ExprKind::Call { callee, .. } = &value.kind else {
+            panic!("{name} returns a candidate call");
+        };
+        let (module, declaration) = callee.declaration().expect("the selected candidate");
+        let Detail::Callable(signature) = &checked.program.modules[module].details[declaration]
+        else {
+            panic!("the selected candidate has a signature");
+        };
+        let Type::Function(callback) = &signature.parameters[0].ty else {
+            panic!("the candidate has a callback parameter");
+        };
+        assert_eq!(callback.parameters[0].ty().to_string(), expected, "{name}");
+    }
+}
+
+/// GEN-5 and FN-17: an ordinary argument cannot give a type to a
+/// callback input written concrete by both candidates.
+#[test]
+fn unrelated_arguments_do_not_rank_concrete_callback_inputs() {
+    let checked = module(
+        r#"operator pick<F>(f: fn(F) -> i64, x: str, n: i64) -> i64
+impl fn pick(f: fn(i64) -> i64, x: str, n: i64) -> i64 => f(n)
+impl fn pick(f: fn(i64?) -> i64, x: str, n: i64) -> i64 => f(n) + 100
+
+fn choose(x: str, n: i64) -> i64 => pick(fn(v) => 3, x, n)
+"#,
+    );
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "operator/operator.ambiguous");
 }
 
 /// GEN-5 and FN-17: a selected callback's body reports its own error.

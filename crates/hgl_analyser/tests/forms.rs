@@ -119,7 +119,7 @@ fn pack_parameters_are_accepted_in_their_forms() {
             // UNIT-8: a `const` parameter may have a default; a temporal
             // one may not.
             "fn both<T, ...Fields>(const first: T = seed(), rest: ...T, fields: ...{Fields}) {}\n",
-            "operator join<...Ts{2:8}>(parts: ...Ts) -> str\n",
+            "operator fuse<...Ts{2:8}>(parts: ...Ts) -> str\n",
             "native fn collect<T>(items: ...T) -> list<T>\n",
             "const fn seed() -> i64 => 1\n",
         ),
@@ -846,10 +846,10 @@ fn an_operator_call_records_positional_and_named_captures() {
     }
 }
 
-/// FN-8: "Packs have no defaults, cannot be const, and follow all fixed
-/// parameters."
+/// FN-8: packs have no defaults and cannot be const. The proposed trial
+/// keeps fixed parameters before a named pack.
 #[test]
-fn a_pack_has_no_default_is_not_const_and_comes_last() {
+fn a_pack_has_no_default_is_not_const_and_named_packs_follow_fixed_parameters() {
     let checked = check(&[(
         "m.hgl",
         concat!(
@@ -859,6 +859,7 @@ fn a_pack_has_no_default_is_not_const_and_comes_last() {
             "fn early<T>(rest: ...T, last: T, const size: i64 = 1) {}\n",
             "operator all<T>(const rest: ...T = 1, last: T) -> T\n",
             "native fn tick<T>(rest: ...T, last: T) -> T\n",
+            "fn early_named<...Fs>(rest: ...{Fs}, last: i64) {}\n",
             // A pack named `const` is not a const pack (FN-5).
             "fn named<T>(const: ...T) {}\n",
         ),
@@ -868,13 +869,29 @@ fn a_pack_has_no_default_is_not_const_and_comes_last() {
         [
             "m.hgl:2:28 type/pack.default FN-8",
             "m.hgl:3:16 type/pack.const FN-8",
-            "m.hgl:4:25 type/pack.order FN-8",
-            "m.hgl:4:40 type/pack.order FN-8",
             "m.hgl:5:17 type/pack.const FN-8",
             "m.hgl:5:34 type/pack.default FN-8",
-            "m.hgl:5:39 type/pack.order FN-8",
-            "m.hgl:6:31 type/pack.order FN-8",
+            "m.hgl:7:38 type/pack.order FN-8",
         ]
+    );
+}
+
+/// Proposed FN-8 and EXPR-2: a positional pack keeps all remaining
+/// positions. A following fixed parameter takes its argument by name.
+#[test]
+fn a_parameter_after_a_positional_pack_is_named() {
+    let checked = module(concat!(
+        "const fn pieces(values: ...str, separator: str) -> str => separator\n",
+        "const fn missing() -> str => pieces(\"a\", \"b\", \" \")\n",
+        "const fn supplied() -> str => pieces(\"a\", \"b\", separator: \" \")\n",
+        "const fn with_default(values: ...str, separator: str = \" \") -> str => separator\n",
+        "const fn defaulted() -> str => with_default(\"a\", \"b\", \" \")\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:30 type/argument.missing EXPR-2"],
+        "{}",
+        checked.report
     );
 }
 
