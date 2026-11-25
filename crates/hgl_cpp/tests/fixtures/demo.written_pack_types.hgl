@@ -69,6 +69,23 @@ test operator_reflected_member_types {
     assert inferred_pick(num, 11) == 11
 }
 
+# GEN-3 and GEN-7: a member's equality or finite membership makes
+# an arithmetic candidate known before a concrete instance supplies it.
+const fn real_item(item: f64) -> i64 => 0
+const fn add_integer<...Ps>(
+    f: const fn(...{Ps}) -> i64, a: Ps[item_key], b: Ps[item_key]
+) -> Ps[item_key] requires Ps[item_key] == i64 => a + b
+
+const fn add_number<const key: str, ...Ps>(
+    f: const fn(...{Ps}) -> i64, a: Ps[key], b: Ps[key]
+) -> Ps[key] requires Ps[key] in {i64, f64} => a + b
+
+test reflected_member_arithmetic {
+    assert add_integer(num, 2, 3) == 5
+    assert add_number<"item">(num, 3, 4) == 7
+    assert add_number<"item">(real_item, 1.5, 2.5) == 4.0
+}
+
 fn operator_graph<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
     select_member<Ps[item_key]>(item)
 

@@ -14,6 +14,61 @@ use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Stmt, ValueCategor
 /// No lines.
 const NONE: [&str; 0] = [];
 
+/// GEN-3, GEN-7 and GEN-17: a reflected member's stated type can
+/// authorize arithmetic. Every alternative must admit it.
+#[test]
+fn a_reflected_members_type_proves_arithmetic() {
+    let definitions = concat!(
+        "const key: str = \"item\"\n",
+        "const fn total<...Ps>(f: const fn(...{Ps}) -> i64, ",
+        "a: Ps[key], b: Ps[key]) -> Ps[key]\n",
+    );
+    for condition in [
+        "Ps[key] == i64",
+        "Ps[key] in {i64, f64}",
+        "each k in arg_keys(Ps) { Ps[k] == i64 }",
+    ] {
+        let checked = module(&format!("{definitions}    requires {condition} => a + b\n"));
+        assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+    }
+    for condition in [
+        "Ps[key] in {i64, bool}",
+        "Ps[key] != str",
+        "any k in arg_keys(Ps) { Ps[k] == i64 }",
+    ] {
+        let checked = module(&format!("{definitions}    requires {condition} => a + b\n"));
+        assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+        assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+    }
+    let symbolic = module(concat!(
+        "const fn total<const key: str, ...Ps>(f: const fn(...{Ps}) -> i64, ",
+        "a: Ps[key], b: Ps[key]) -> Ps[key]\n",
+        "    requires Ps[key] in {i64, f64} => a + b\n",
+    ));
+    assert_eq!(symbolic.summary(), NONE, "{}", symbolic.report);
+}
+
+/// GEN-7 and GEN-17: two reflected keys need independent trial types.
+#[test]
+fn a_reflected_pack_keeps_distinct_memberships_for_its_keys() {
+    let checked = module(concat!(
+        "const left: str = \"left\"\n",
+        "const right: str = \"right\"\n",
+        "operator match_pair<T, U>(a: T, b: U) -> i64\n",
+        "impl const fn match_pair(a: i64, b: i64) -> i64 => a + b\n",
+        "impl const fn match_pair(a: f64, b: f64) -> i64 => 0\n",
+        "const fn broken<...Ps>(f: const fn(...{Ps}) -> i64, a: Ps[left], b: Ps[right]) -> i64\n",
+        "    requires Ps[left] in {i64, f64} && Ps[right] in {i64, f64} => match_pair(a, b)\n",
+    ));
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+    assert!(
+        checked.report.contains(r#"`Ps["left"]` = `i64`"#),
+        "{}",
+        checked.report
+    );
+}
+
 #[test]
 fn a_type_inequality_tests_the_resolved_argument() {
     // GEN-3: `T != f64` tests a known type as `!(T == f64)` and binds nothing.

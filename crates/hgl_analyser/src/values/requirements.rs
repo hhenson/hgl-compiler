@@ -989,6 +989,122 @@ impl<'a> Typer<'a> {
         })
     }
 
+    /// The finite choices a body states for the reflected members a
+    /// call uses. Keep the key as well as the pack (GEN-3, GEN-7, GEN-17).
+    pub(super) fn stated_member_choices(
+        &self,
+        types: &[&Type],
+        given: &[(Location, &Argument)],
+    ) -> Vec<((Location, Constant), Vec<Type>)> {
+        let equalities = self.stated_pack_members();
+        let mut relations = Vec::new();
+        if let Some(condition) = child(&self.declaration.syntax, SyntaxKind::RequiresClause)
+            .and_then(|clause| clause.children().next())
+        {
+            conjoined_relations(&condition, &mut relations);
+        }
+        let memberships: Vec<_> = relations
+            .iter()
+            .filter_map(|relation| self.stated_member_membership(relation))
+            .collect();
+        if equalities.is_empty() && memberships.is_empty() {
+            return Vec::new();
+        }
+        let constant_at = |at| match given.iter().find(|(declared, _)| *declared == at)?.1 {
+            Argument::Constant(constant) => Some(constant.value.clone()),
+            Argument::Type(_) | Argument::NoResult => None,
+        };
+        let choices = RefCell::new(Vec::<((Location, Constant), Vec<Type>)>::new());
+        for ty in types {
+            ty.any_part(
+                &|part| {
+                    let Type::PackMember { pack, key, .. } = part else {
+                        return false;
+                    };
+                    if !self.signature.generics.iter().any(|slot| slot.at == *pack) {
+                        return false;
+                    }
+                    let key = Constant {
+                        text: key.text.clone(),
+                        value: key.value.substituted(&constant_at),
+                    };
+                    let mut choices = choices.borrow_mut();
+                    if choices.iter().any(|((other_pack, other_key), _)| {
+                        *other_pack == *pack && other_key.value.same(&key.value) == Some(true)
+                    }) {
+                        return false;
+                    }
+                    let equality = equalities.iter().find_map(|member| {
+                        if member.pack != *pack {
+                            return None;
+                        }
+                        match &member.key {
+                            StatedPackKey::One(stated)
+                                if stated.substituted(&constant_at).same(&key.value)
+                                    == Some(true) =>
+                            {
+                                Some(substitute_within(&member.ty, given))
+                            }
+                            StatedPackKey::Every(bound) => Some(substitute_within(
+                                &substitute_within(&member.ty, given),
+                                &[(*bound, &Argument::Constant(key.clone()))],
+                            )),
+                            StatedPackKey::One(_) => None,
+                        }
+                    });
+                    if let Some(ty) = equality {
+                        choices.push(((*pack, key), vec![ty]));
+                    } else if let Some((_, _, members)) =
+                        memberships.iter().find(|(at, stated, _)| {
+                            *at == *pack
+                                && stated.substituted(&constant_at).same(&key.value) == Some(true)
+                        })
+                    {
+                        choices.push((
+                            (*pack, key),
+                            members
+                                .iter()
+                                .map(|ty| substitute_within(ty, given))
+                                .collect(),
+                        ));
+                    }
+                    false
+                },
+                &|_| false,
+            );
+        }
+        choices.into_inner()
+    }
+
+    /// A positive membership of a named member in a finite set of types.
+    fn stated_member_membership(
+        &self,
+        relation: &SyntaxNode,
+    ) -> Option<(Location, ConstantValue, Vec<Type>)> {
+        if !tokens(relation).any(|token| token.text() == "in") {
+            return None;
+        }
+        let mut operands = relation.children();
+        let (member, set) = (operands.next()?, operands.next()?);
+        if set.kind() != SyntaxKind::ConstraintSet {
+            return None;
+        }
+        let Type::PackMember { pack, key, .. } =
+            self.written.get(&(self.file, member.span().start))?
+        else {
+            return None;
+        };
+        let types: Vec<_> = set
+            .children()
+            .map(|item| {
+                let ty = self.written.get(&(self.file, item.span().start))?;
+                (whole(ty) && !ty.any_part(&|ty| matches!(ty, Type::PackMember { .. }), &|_| false))
+                    .then(|| (*ty).clone())
+            })
+            .collect::<Option<_>>()?;
+        (!types.is_empty()).then_some((*pack, key.value.clone(), types))
+    }
+
     /// Packs named by a stated member expression for which we read no
     /// usable equality, such as an existential `any` or a relation to another member.
     fn unread_stated_packs(&self, members: &[StatedPackMember]) -> HashSet<Location> {
