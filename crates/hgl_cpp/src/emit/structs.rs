@@ -420,7 +420,16 @@ impl Family for Structs {
             // that child's admission", which the analyser has proved; it
             // is read as the child's own form reads it.
             ExprKind::Field { .. } | ExprKind::Index { .. } if hook => {
-                let (view, out) = child_view(emitter, scope, value)?;
+                let Some((view, out)) = child_view(emitter, scope, value) else {
+                    let field = outer_fixed_list_field(value)?;
+                    let (_, false) = child_view(emitter, scope, field)? else {
+                        return None;
+                    };
+                    let view = emitter.read_endpoint_view(scope, value)?;
+                    scope.read = true;
+                    scope.acted = true;
+                    return Some(format!("::{}::checked_whole({view})", runtime::NAMESPACE));
+                };
                 if out {
                     return Some(emitter.missing(value.at, "a read of a part of `out`"));
                 }
@@ -571,16 +580,32 @@ fn endpoint_type(
     }
 }
 
+/// Find the first fixed-list field a read indexes as it follows a
+/// structural input. TIME-1 admits the final child of this path.
+fn outer_fixed_list_field(mut value: &Expr) -> Option<&Expr> {
+    let mut field = None;
+    loop {
+        match &value.kind {
+            ExprKind::Index { base, .. } => {
+                if matches!(base.kind, ExprKind::Field { .. })
+                    && matches!(base.ty, Type::List { size: Some(_), .. })
+                {
+                    field = Some(base.as_ref());
+                }
+                value = base;
+            }
+            ExprKind::Field { base, .. } => value = base,
+            _ => return field,
+        }
+    }
+}
+
 /// The view of `value`, a temporal input, `out`, or a field of a struct
 /// or a position of a tuple of either, at any depth (TIME-1: "A child of
 /// a collection ... is an endpoint whether or not it is valid"), and
 /// whether it is `out` or a part of it. `None` for anything else: a
 /// child of another collection is its own family's.
-pub(super) fn child_view(
-    emitter: &mut Emitter,
-    scope: &Scope,
-    value: &Expr,
-) -> Option<(String, bool)> {
+fn child_view(emitter: &mut Emitter, scope: &Scope, value: &Expr) -> Option<(String, bool)> {
     match &value.kind {
         ExprKind::Local(local) => {
             let view = emitter.view(&scope.body.locals, *local)?;
