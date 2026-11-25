@@ -551,6 +551,7 @@ transpiler: partial
 - Reading an absent store key gives `value.missing_key`, the same code as a
   strict dictionary lookup (ERR-6).
 - Left: a temporal child graph using the surrounding store is declined (CRUN-7).
+- Left: The execution catalogue lists `store.reserved_key`. #543 implements its checks.
 
 ## CAP-7
 
@@ -743,6 +744,7 @@ transpiler: partial
   stop. Outputless entries have no recording.
 - Left: Unsupported record types follow CEVAL-4. The reserved `run.output` check covers
   literal keys at source checking. Keys resolved at graph construction remain unchecked.
+- Left: The execution catalogue lists `store.reserved_key`. #543 implements its checks.
 
 runner: planned
 
