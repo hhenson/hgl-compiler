@@ -215,7 +215,7 @@ failure from old results.
 
 ## What hgraph is asked for
 
-The SDK is hgraph 0.9.31. It compares native Float zero signs during
+The SDK is hgraph 0.9.32. It compares native Float zero signs during
 interning ([hgraph 1866](https://github.com/hhenson/hgraph/issues/1866)).
 HGL tuples and lists can still hide their floats from that comparison,
 so their nodes use unique wiring.

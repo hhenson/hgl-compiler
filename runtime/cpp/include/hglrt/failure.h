@@ -52,6 +52,10 @@ inline constexpr std::string_view null_read = "value.null";
 inline constexpr std::string_view index_out_of_range = "value.index_out_of_range";
 /// A strict dictionary lookup or a read of an absent global store key (ERR-6, CAP-6).
 inline constexpr std::string_view missing_key = "value.missing_key";
+/// A get or put expects another type than a global store entry holds (CAP-6).
+inline constexpr std::string_view store_key_type = "store.key_type";
+/// A program tries to use the run's own recording key (CAP-6, CRUN-8).
+inline constexpr std::string_view store_reserved_key = "store.reserved_key";
 /// A result outside its type's range (NUM-2, OPS-10), and text repeated a
 /// count below zero (OPS-1).
 inline constexpr std::string_view out_of_range = "numeric.out_of_range";

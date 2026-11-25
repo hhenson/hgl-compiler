@@ -40,6 +40,7 @@
 #include <source_location>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace hglrt {
 
@@ -310,6 +311,37 @@ void schedule_Alarm_duration(const Alarm& capability, duration at,
 void schedule_Alarm_datetime(const Alarm& capability, datetime at);
 
 // ---- The global store (CAP-6) ------------------------------------------------
+
+/// The run's recording key (CRUN-8).
+inline constexpr std::string_view run_output = "run.output";
+
+/// Validate a user store key where its value is fixed (CAP-6).
+void require_store_key(std::string_view key, std::source_location where);
+
+/// Hand a key on to a store operation, checked as the operation is
+/// evaluated (CAP-6, TIME-8): every operation checks its key every time.
+/// Source checking and attachment only fail a reserved key earlier.
+/// The original value and its lifetime are kept.
+template <typename Key>
+decltype(auto) checked_store_key(
+    Key&& key, std::source_location where = std::source_location::current()) {
+    require_store_key(key, where);
+    return std::forward<Key>(key);
+}
+
+/// Check a projected hook key at attachment, the earlier place for a key
+/// the graph fixes. A failed read keeps the hook's own failure handling and
+/// control flow (ERR-5, ERR-12, ERR-15).
+template <typename Read>
+void prepare_store_key(Read read, std::source_location where) {
+    str key;
+    try {
+        key = read();
+    } catch (const Failure&) {
+        return;
+    }
+    require_store_key(key, where);
+}
 
 /// `GlobalState` (CAP-6), what `inject global_state` binds: the run's store,
 /// "a run-wide store of ordinary values under string keys", as hgraph's

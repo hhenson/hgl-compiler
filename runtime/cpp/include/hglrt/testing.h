@@ -109,8 +109,7 @@ void expect_different(const Left& left, const Right& right) {
 
 // ---- Runs (CRUN-1 to CRUN-8, CEVAL-1, CEVAL-6) ---------------------------
 
-/// The key a run's recording is put under (CRUN-8).
-inline constexpr std::string_view run_output = "run.output";
+using ::hglrt::run_output;
 
 /// How a run keeps time (RUN-3): a simulation's cycles are at the times its
 /// nodes ask for, one after the other; a run in real time, an integration

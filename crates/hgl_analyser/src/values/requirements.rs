@@ -2448,6 +2448,7 @@ pub(super) fn instances_hold(
     program: &Program,
     mut given: Vec<Made>,
     source: &IndependentSourceBodies,
+    store_keys: &mut crate::store_keys::KeyUses,
     diagnostics: &mut Diagnostics,
 ) {
     let declared_reports = diagnostics.len();
@@ -2628,6 +2629,7 @@ pub(super) fn instances_hold(
         .chain(dependent_indices.iter().copied())
         .chain(dependent_patterns.iter().copied())
         .chain(program.const_demands.keys().copied())
+        .chain(program.generic_store_bodies.iter().copied())
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -2750,7 +2752,9 @@ pub(super) fn instances_hold(
             let recheck_results = selecting.iter().any(|call| call.result.is_some());
             let recheck_indices = dependent_indices.contains(&made.callee);
             let constants = made.constants.values.as_slice();
-            let recheck_format = dependent_patterns.contains(&made.callee) || !constants.is_empty();
+            let recheck_values = dependent_patterns.contains(&made.callee)
+                || !constants.is_empty()
+                || program.generic_store_bodies.contains(&made.callee);
             let recheck_resultless = made.generics.contains(&Argument::NoResult);
             let declaration = &unit.declarations[made.callee.1];
             if recheck_resultless
@@ -2809,7 +2813,7 @@ pub(super) fn instances_hold(
                 || recheck_endpoints
                 || recheck_results
                 || recheck_indices
-                || recheck_format
+                || recheck_values
                 || recheck_tests
                 || recheck_resultless
             {
@@ -2861,13 +2865,13 @@ pub(super) fn instances_hold(
                     made_after_inference(program, declared_body, instance, &mut instance_calls);
                 }
             }
-            if (recheck_indices || recheck_format || recheck_tests || recheck_resultless)
+            if (recheck_indices || recheck_values || recheck_tests || recheck_resultless)
                 && !recheck_graph
                 && !recheck_endpoints
             {
                 let paths = chain.paths(program, &root_calls);
                 for report in body_reports.as_slice() {
-                    if (recheck_format || recheck_tests) && diagnostics.as_slice().contains(report)
+                    if (recheck_values || recheck_tests) && diagnostics.as_slice().contains(report)
                     {
                         continue;
                     }
@@ -2915,6 +2919,11 @@ pub(super) fn instances_hold(
                     diagnostics,
                     "this endpoint read in the generic hook is checked for this instance",
                 );
+            }
+            if let Some(instance) = &instance
+                && !body_reports.has_errors()
+            {
+                store_keys.in_instance(program, &instance.body, made.at);
             }
             if inner.is_empty() && selecting.is_empty() && instance_calls.is_empty() {
                 continue;

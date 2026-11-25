@@ -93,6 +93,8 @@ pub(super) struct Context {
     /// `modified([])` is written, where it is `true` read as a value
     /// (TIME-3, `scheduling`).
     pub(super) selected_empty: bool,
+    /// Core's private recorder can write the key reserved for the run's result.
+    pub(super) run_recorder: bool,
 }
 
 impl Context {
@@ -109,6 +111,7 @@ impl Context {
             signature: None,
             timer: None,
             selected_empty: false,
+            run_recorder: false,
         }
     }
 }
@@ -446,6 +449,8 @@ impl Emitter<'_> {
         let placed_at = declaration.at;
         let end = declaration.syntax.text_range().end().into();
         let mut context = Context::new(Kind::Hook(Hook::When), body.locals.len());
+        let store_keys = super::store::Keys::of(self, index, signature, body);
+        context.run_recorder = store_keys.recorder;
         context.result = signature.result.clone();
         // FN-16: a reference result publishes a designation. Its
         // contextual result form is read from the designated endpoint.
@@ -670,6 +675,10 @@ impl Emitter<'_> {
                 "\n{INDENT}// The node's `state` and `cache` (TIME-6).\n{INDENT}struct state_type_\n{INDENT}{{\n{members}{INDENT}}};\n"
             ));
         }
+        let Some(prepare) = store_keys.prepare(self, signature, body) else {
+            return;
+        };
+        text.push_str(&prepare);
         let configs: Vec<String> = parameters
             .iter()
             .zip(&signature.parameters)

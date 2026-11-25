@@ -226,11 +226,25 @@ TEST_CASE("an absent key fails with value.missing_key (CAP-6)") {
         (void)hglrt::get_GlobalState_str<hglrt::str>(store, "limit");
         FAIL("nothing was raised");
     } catch (const hglrt::Failure& failure) {
+        CHECK(failure.error().code == "store.key_type");
         CHECK(failure.error().message == "the global store holds a value of another type under 'limit'");
     }
     // "A key keeps the type of its first value".
-    CHECK_THROWS_AS(hglrt::put_GlobalState_str_V(store, "limit", hglrt::str{"three"}), hglrt::Failure);
+    hglrt::testing::raises("store.key_type", [&] {
+        hglrt::put_GlobalState_str_V(store, "limit", hglrt::str{"three"});
+    });
     CHECK(hglrt::get_GlobalState_str<hglrt::i64>(store, "limit") == 3);
+}
+
+TEST_CASE("every store operation checks its key where it is used (TIME-8, CAP-6)") {
+    // The run's own key fails with its code, wherever else it was checked.
+    hglrt::testing::raises("store.reserved_key", [&] {
+        (void)hglrt::checked_store_key(hglrt::str{"run.output"});
+    });
+    // Any other key is handed on as it is.
+    const hglrt::str key{"run.output.mine"};
+    CHECK(&hglrt::checked_store_key(key) == &key);
+    CHECK(hglrt::checked_store_key(hglrt::str{"user.key"}) == "user.key");
 }
 
 TEST_CASE("a run's configuration reads each field as supplied, null where it is left out (CAP-7)") {

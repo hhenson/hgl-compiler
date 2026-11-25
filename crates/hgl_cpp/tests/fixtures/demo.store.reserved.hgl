@@ -1,0 +1,514 @@
+module demo.store.reserved
+const fn computed(prefix: str) -> str => prefix + ".output"
+fn write_key(const key: str) {
+    inject global_state
+    put(global_state, key, 7)
+}
+fn read_key(const key: str) {
+    inject global_state
+    let held: i64 = get(global_state, key)
+}
+fn has_key(const key: str) {
+    inject global_state
+    let present = has(global_state, key)
+}
+fn hook_key(const key: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { put(global_state, key, 7) }
+}
+fn source_key(const key: str, const divisor: i64) -> i64 {
+    inject global_state
+    start { let checked = 1 // divisor }
+    {
+        let present = has(global_state, key)
+        yield 0us: if present { 1 } else { 2 }
+    }
+}
+test composition_put_check {
+    assert raises("store.reserved_key") { eval write_key(key: computed(prefix: "run")) }
+    eval write_key(key: computed(prefix: "user"))
+}
+test composition_get_check {
+    assert raises("store.reserved_key") { eval read_key(key: computed(prefix: "run")) }
+    assert raises("value.missing_key") { eval read_key(key: computed(prefix: "user")) }
+}
+test composition_has_check {
+    assert raises("store.reserved_key") { eval has_key(key: computed(prefix: "run")) }
+    eval has_key(key: computed(prefix: "user"))
+}
+test hook_check_before_start {
+    assert raises("store.reserved_key") { eval hook_key(key: computed(prefix: "run"), divisor: 0) }
+    eval hook_key(key: computed(prefix: "user"), divisor: 1)
+}
+test source_check_before_start {
+    assert raises("store.reserved_key") { eval source_key(key: computed(prefix: "run"), divisor: 0) }
+    assert eval source_key(key: computed(prefix: "user"), divisor: 1) == [2]
+}
+fn selected(enabled: bool, const key: str, const divisor: i64) {
+    if enabled { hook_key(key: key, divisor: divisor) }
+}
+test no_forbidden_key_in_unselected_child {
+    eval selected(enabled: [false], key: computed(prefix: "run"), divisor: 0)
+}
+test chosen_child_checks_before_start {
+    assert raises("store.reserved_key") {
+        eval selected(enabled: [false, true], key: computed(prefix: "run"), divisor: 0)
+    }
+}
+
+const fn supply(prefix: str) -> str => prefix
+const fn inner(store: GlobalState, const prefix: str) {
+    put(store, prefix + ".output", 7)
+}
+const fn outer(store: GlobalState, const name: str) {
+    inner(store, name)
+}
+fn indirect(const prefix: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { outer(global_state, prefix) }
+}
+test transitive_key_check_before_start {
+    assert raises("store.reserved_key") { eval indirect(prefix: supply(prefix: "run"), divisor: 0) }
+    eval indirect(prefix: supply(prefix: "user"), divisor: 1)
+}
+
+const fn read_nullable(store: GlobalState, const key: str?) {
+    put(store, key, 7)
+}
+const fn nullable_key(key: str) -> str? => key
+fn indirect_nullable(const divisor: i64, const key: str?) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { read_nullable(global_state, key) }
+}
+test nullable_forwarding_checks_the_payload {
+    assert raises("store.reserved_key") {
+        eval indirect_nullable(divisor: 0, key: nullable_key("run.output"))
+    }
+    eval indirect_nullable(divisor: 1, key: nullable_key("user.key"))
+}
+
+fn guard_nullable(enabled: bool, const key: str?) {
+    inject global_state
+    when {
+        if enabled { put(global_state, key, 7) }
+    }
+}
+test an_unread_nullable_key_keeps_its_guard {
+    eval guard_nullable(enabled: [false])
+    assert raises("value.null") { eval guard_nullable(enabled: [false, true]) }
+}
+
+const fn recursive_put(store: GlobalState, remaining: i64, const key: str) {
+    if remaining == 0 { put(store, key, 7) }
+    else { recursive_put(store, remaining - 1, key + ".output") }
+}
+fn recursive_hook(const prefix: str, const divisor: i64, const depth: i64 = 1) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { recursive_put(global_state, depth, prefix) }
+}
+test recursive_helper_uses_the_key_it_reaches {
+    eval recursive_hook(prefix: supply("user"), divisor: 1)
+    eval recursive_hook(prefix: supply("run.output"), divisor: 1)
+    eval recursive_hook(prefix: "run.output", divisor: 1)
+}
+test recursive_helper_checks_the_key_at_the_operation {
+    assert raises("store.reserved_key") { eval recursive_hook(prefix: supply("run"), divisor: 1) }
+    assert raises("numeric.division_by_zero") { eval recursive_hook(prefix: supply("run"), divisor: 0) }
+    assert raises("store.reserved_key") {
+        eval recursive_hook(prefix: "run.output", divisor: 1, depth: 0)
+    }
+}
+
+const fn first_helper(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { second_helper(store, depth - 1, key + ".output") }
+}
+const fn second_helper(store: GlobalState, depth: i64, const forwarded_key: str) {
+    first_helper(store, depth, forwarded_key)
+}
+fn mutual_hook(const depth: i64, const key: str) {
+    inject global_state
+    when {}
+    stop { first_helper(global_state, depth, key) }
+}
+test indirect_cycle_uses_the_key_it_reaches {
+    eval mutual_hook(depth: 1, key: "run.output")
+}
+test indirect_cycle_checks_the_key_at_the_operation {
+    assert raises("store.reserved_key") { eval mutual_hook(depth: 0, key: "run.output") }
+}
+
+# A growing graph key is evaluated by the builder (TIME-8, FN-9).
+fn grow(value: i64, const key: str, const depth: i64) -> i64 {
+    inject global_state
+    if depth == 0 {
+        put(global_state, key, 1)
+        return value
+    }
+    return grow(value, key + ".x", depth - 1)
+}
+fn last_key(value: i64, const key: str) -> i64 {
+    inject global_state
+    when { return value }
+    stop { put(global_state, key, 7) }
+}
+fn grow_node(value: i64, const key: str, const depth: i64) -> i64 {
+    if depth == 0 { return last_key(value, key) }
+    return grow_through(value, key + ".x", depth - 1)
+}
+fn grow_through(value: i64, const key: str, const depth: i64) -> i64 =>
+    grow_node(value, key, depth)
+
+test growing_graph_keys_resolve_during_wiring {
+    assert eval grow(value: [1], key: "user", depth: 3) == [1]
+    assert eval grow_node(value: [1], key: "run.output", depth: 3) == [1]
+}
+
+const fn recur_with_tag(store: GlobalState, depth: i64, const key: str, const tag: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { recur_with_tag(store, depth - 1, key, tag + ".x") }
+}
+fn fixed_key_in_cycle(const key: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { recur_with_tag(global_state, 1, key, "tag") }
+}
+test unchanged_key_is_checked_before_start {
+    assert raises("store.reserved_key") {
+        eval fixed_key_in_cycle(key: supply("run.output"), divisor: 0)
+    }
+    eval fixed_key_in_cycle(key: supply("user.key"), divisor: 1)
+}
+
+const fn recur_with_default(store: GlobalState, depth: i64, const key: str = "run.output") {
+    if depth == 0 { put(store, key, 7) }
+    else { recur_with_default(store, depth - 1) }
+}
+fn default_key_in_cycle(const depth: i64, const key: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { recur_with_default(global_state, depth, key) }
+}
+test recursive_default_is_checked_where_used {
+    eval default_key_in_cycle(depth: 0, key: supply("user.key"), divisor: 1)
+    assert raises("store.reserved_key") {
+        eval default_key_in_cycle(depth: 1, key: supply("user.key"), divisor: 1)
+    }
+    assert raises("numeric.division_by_zero") {
+        eval default_key_in_cycle(depth: 1, key: supply("user.key"), divisor: 0)
+    }
+}
+
+const fn rotate_key(store: GlobalState, depth: i64, const key: str, const next: str, const last: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { rotate_key(store, depth - 1, next, last, key) }
+}
+fn rotate_hook(const depth: i64, const key: str, const next: str, const last: str) {
+    inject global_state
+    when {}
+    stop { rotate_key(global_state, depth, key, next, last) }
+}
+test a_rotation_checks_the_key_its_operation_receives {
+    eval rotate_hook(depth: 2, key: "run.output", next: "user.next", last: "user.last")
+    assert raises("store.reserved_key") {
+        eval rotate_hook(depth: 3, key: "run.output", next: "user.next", last: "user.last")
+    }
+}
+
+const fn shift_key(store: GlobalState, depth: i64, swap: bool, const key: str, const next: str) {
+    if depth == 0 { put(store, key, 7) }
+    else if swap { shift_key(store, depth - 1, false, next, key) }
+    else { shift_key(store, depth - 1, false, key, "user.replacement") }
+}
+fn shift_hook(const depth: i64, const key: str, const next: str) {
+    inject global_state
+    when {}
+    stop { shift_key(global_state, depth, true, key, next) }
+}
+test a_swap_in_one_branch_checks_only_the_effective_key {
+    eval shift_hook(depth: 1, key: "run.output", next: "user.next")
+    assert raises("store.reserved_key") {
+        eval shift_hook(depth: 1, key: "user.key", next: "run.output")
+    }
+}
+
+const fn exchange_first(store: GlobalState, depth: i64, const key: str, const next: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { exchange_second(store, depth - 1, next, key) }
+}
+const fn exchange_second(store: GlobalState, depth: i64, const key: str, const next: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { exchange_first(store, depth - 1, next, key) }
+}
+fn exchange_hook(const depth: i64, const key: str, const other: str) {
+    inject global_state
+    when {}
+    stop { exchange_first(global_state, depth, key, other) }
+}
+test an_exchange_through_a_second_helper_uses_its_own_key {
+    eval exchange_hook(depth: 1, key: "run.output", other: "user.other")
+    eval exchange_hook(depth: 1, key: supply("run.output"), other: "user.other")
+    assert raises("store.reserved_key") {
+        eval exchange_hook(depth: 2, key: supply("run.output"), other: "user.other")
+    }
+}
+
+# TIME-8, CAP-6: fixedness is per route. `save_key` is reached from a
+# cycle that changes its key, through `middle_key`, and, outside any
+# cycle, with a key fixed when the graph is built.
+const fn save_key(store: GlobalState, const key: str) { put(store, key, 7) }
+const fn middle_key(store: GlobalState, const name: str) { save_key(store, name) }
+const fn grow_key(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { middle_key(store, key) }
+    else { grow_key(store, depth - 1, key + ".output") }
+}
+fn routed_hook(const key: str, const fixed: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop {
+        save_key(global_state, fixed)
+        middle_key(global_state, fixed)
+        grow_key(global_state, 1, key)
+    }
+}
+fn routed_value(value: i64, const key: str) -> i64 {
+    inject global_state
+    when {
+        grow_key(global_state, 1, key)
+        return get<i64>(global_state, key + ".output") + value
+    }
+}
+test a_key_the_cycle_changes_fails_at_its_operation {
+    assert raises("store.reserved_key") {
+        eval routed_hook(key: supply("run"), fixed: supply("user.fixed"), divisor: 1)
+    }
+    assert raises("store.reserved_key") {
+        eval routed_hook(key: "run", fixed: "user.fixed", divisor: 1)
+    }
+    assert raises("numeric.division_by_zero") {
+        eval routed_hook(key: supply("run"), fixed: supply("user.fixed"), divisor: 0)
+    }
+}
+test b_the_cycle_uses_the_key_it_reaches {
+    eval routed_hook(key: supply("run.output"), fixed: supply("user.fixed"), divisor: 1)
+    eval routed_hook(key: "run.output", fixed: "user.fixed", divisor: 1)
+    assert eval routed_value(value: [1], key: supply("run.output")) == [8]
+}
+test d_a_computed_key_outside_the_cycle_fails_the_build {
+    assert raises("store.reserved_key") {
+        eval routed_hook(key: supply("user"), fixed: supply("run.output"), divisor: 0)
+    }
+}
+
+const fn save_two(store: GlobalState, const changed: str, const kept: str) {
+    put(store, kept, 1)
+    put(store, changed, 2)
+}
+const fn pair_key(store: GlobalState, depth: i64, const key: str, const tag: str) {
+    if depth == 0 { save_two(store, key, tag) }
+    else { pair_key(store, depth - 1, key + ".output", tag) }
+}
+fn pair_hook(const key: str, const tag: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { pair_key(global_state, 1, key, tag) }
+}
+test one_helper_checks_each_key_on_its_own_route {
+    assert raises("store.reserved_key") {
+        eval pair_hook(key: supply("run"), tag: supply("user.tag"), divisor: 1)
+    }
+    assert raises("store.reserved_key") {
+        eval pair_hook(key: supply("user"), tag: supply("run.output"), divisor: 0)
+    }
+    eval pair_hook(key: supply("run.output"), tag: supply("user.tag"), divisor: 1)
+}
+
+# A format reads the cycle's key, so the target writes an instance for
+# each key: the instance still leaves its changed key to the operation.
+const fn swap_label(store: GlobalState, depth: i64, const key: str, const next: str) -> str {
+    if depth == 0 {
+        save_key(store, key)
+        return ""
+    }
+    let label = format(key)
+    return swap_label(store, depth - 1, next, key) + label
+}
+fn label_hook(const depth: i64) {
+    inject global_state
+    when {}
+    stop { let text = swap_label(global_state, depth, "run.output", "user.next") }
+}
+test an_instance_of_a_cycle_leaves_its_changed_key_to_the_operation {
+    eval label_hook(depth: 1)
+    assert raises("store.reserved_key") { eval label_hook(depth: 2) }
+}
+
+# TIME-8: a cycle whose key reaches its operation through an operator
+# chosen in a generic body. Each forger writes the recording's own type.
+operator keep_value<S, T>(store: S, const key: str, value: T) requires S in {GlobalState}
+impl const fn keep_value(store: GlobalState, const key: str, value: list<tuple<datetime, i64>>) {
+    put(store, key, value)
+}
+impl const fn keep_value(store: GlobalState, const key: str, value: f64) {
+    put(store, key + ".f", value)
+}
+const fn keep_generic<T>(store: GlobalState, const key: str, value: T)
+    requires T in {list<tuple<datetime, i64>>, f64} {
+    keep_value(store, key, value)
+}
+const fn keep_cycle(store: GlobalState, depth: i64, const key: str, value: list<tuple<datetime, i64>>) {
+    if depth == 0 { keep_generic(store, key, value) }
+    else { keep_cycle(store, depth - 1, key + ".output", value) }
+}
+fn keep_forger(value: i64, const key: str, const fixed: str, const divisor: i64) -> i64 {
+    inject clock, global_state
+    start { let checked = 1 // divisor }
+    when { return value }
+    stop {
+        put(global_state, fixed, 1)
+        keep_cycle(global_state, 1, key, [(clock.evaluation_time, 999)])
+    }
+}
+test a_cycle_through_an_operator_in_a_generic_body_fails_at_its_operation {
+    assert raises("store.reserved_key") {
+        eval keep_forger(value: [1, 2], key: "run", fixed: "user.keep", divisor: 1)
+    }
+    assert raises("store.reserved_key") {
+        eval keep_forger(value: [1, 2], key: supply("run"), fixed: supply("user.keep"), divisor: 1)
+    }
+    assert raises("numeric.division_by_zero") {
+        eval keep_forger(value: [1, 2], key: supply("run"), fixed: supply("user.keep"), divisor: 0)
+    }
+    assert eval keep_forger(value: [1, 2], key: supply("run.output"), fixed: supply("user.keep"), divisor: 1) == [1, 2]
+}
+
+# TIME-8: a cycle closed through its own operator, a candidate calling it.
+operator step_key<S, T>(store: S, depth: i64, const key: str, value: T) requires S in {GlobalState}
+impl const fn step_key<T>(store: GlobalState, depth: i64, const key: str, value: T)
+    requires T in {list<tuple<datetime, i64>>, i64} {
+    if depth == 0 { put(store, key, value) }
+    else { step_key(store, depth - 1, key + ".output", value) }
+}
+fn step_forger(value: i64, const key: str, const depth: i64, const divisor: i64) -> i64 {
+    inject clock, global_state
+    start { let checked = 1 // divisor }
+    when { return value }
+    stop { step_key(global_state, depth, key, [(clock.evaluation_time, 999)]) }
+}
+fn step_plain(const key: str, const depth: i64) {
+    inject global_state
+    when {}
+    stop { step_key(global_state, depth, key, 1) }
+}
+test a_cycle_through_its_own_operator_fails_at_its_operation {
+    assert raises("store.reserved_key") {
+        eval step_forger(value: [1, 2], key: supply("run"), depth: 1, divisor: 1)
+    }
+    assert raises("store.reserved_key") {
+        eval step_forger(value: [1, 2], key: "run", depth: 1, divisor: 1)
+    }
+    assert raises("numeric.division_by_zero") {
+        eval step_forger(value: [1, 2], key: supply("run"), depth: 1, divisor: 0)
+    }
+}
+test a_cycle_through_its_own_operator_uses_the_key_it_reaches {
+    assert eval step_forger(value: [1, 2], key: supply("run.output"), depth: 1, divisor: 1) == [1, 2]
+    assert eval step_forger(value: [1, 2], key: "run.output", depth: 1, divisor: 1) == [1, 2]
+    eval step_plain(key: "run", depth: 0)
+    eval step_plain(key: "user", depth: 2)
+}
+
+# TIME-8: two keys exchanged on the way round in a function that reads
+# neither; the function it calls puts the one it is given.
+const fn exchange_keys(store: GlobalState, depth: i64, const p: str, const q: str, value: list<tuple<datetime, i64>>) {
+    if depth == 0 { put_exchanged(store, 0, p, value) }
+    else { exchange_keys(store, depth - 1, q, p, value) }
+}
+const fn put_exchanged(store: GlobalState, depth: i64, const a: str, value: list<tuple<datetime, i64>>) {
+    put(store, a, value)
+    if depth > 0 { exchange_keys(store, depth - 1, a, a, value) }
+}
+fn exchange_forger(value: i64, const p: str, const q: str, const depth: i64, const divisor: i64) -> i64 {
+    inject clock, global_state
+    start { let checked = 1 // divisor }
+    when { return value }
+    stop { exchange_keys(global_state, depth, p, q, [(clock.evaluation_time, 999)]) }
+}
+test an_exchange_in_a_function_that_reads_no_key_fails_at_its_operation {
+    assert raises("store.reserved_key") {
+        eval exchange_forger(value: [1, 2], p: supply("user.x"), q: supply("run.output"), depth: 1, divisor: 1)
+    }
+    assert raises("store.reserved_key") {
+        eval exchange_forger(value: [1, 2], p: "user.x", q: "run.output", depth: 1, divisor: 1)
+    }
+    assert raises("numeric.division_by_zero") {
+        eval exchange_forger(value: [1, 2], p: supply("user.x"), q: supply("run.output"), depth: 1, divisor: 0)
+    }
+}
+test an_exchange_in_a_function_that_reads_no_key_uses_the_key_it_reaches {
+    assert eval exchange_forger(value: [1, 2], p: supply("run.output"), q: supply("user.x"), depth: 1, divisor: 1) == [1, 2]
+    assert eval exchange_forger(value: [1, 2], p: "user.x", q: "run.output", depth: 0, divisor: 1) == [1, 2]
+    assert eval exchange_forger(value: [1, 2], p: supply("user.x"), q: supply("run.output"), depth: 2, divisor: 1) == [1, 2]
+}
+
+# EXPR-2, TIME-8: the operation's own check follows its arguments, each
+# evaluated once in the order written. The key is a cycle's, left to it.
+const fn order_put(store: GlobalState, depth: i64, const key: str, divisor: i64, const form: i64) {
+    if depth == 0 {
+        if form == 0 { put(store, key, 1 // divisor) }
+        else if form == 1 { put(value: 1 // divisor, key: key, store: store) }
+        else { put(store, key, get<i64>(store, "user.absent") + 1) }
+    }
+    else { order_put(store, depth - 1, key + ".output", divisor, form) }
+}
+fn order_hook(const key: str, divisor: i64, const form: i64) {
+    inject global_state
+    when { order_put(global_state, 1, key, divisor, form) }
+}
+test the_operation_checks_its_key_after_its_arguments {
+    assert raises("numeric.division_by_zero") { eval order_hook(key: "run", divisor: [0], form: 0) }
+    assert raises("numeric.division_by_zero") { eval order_hook(key: "run", divisor: [0], form: 1) }
+    assert raises("value.missing_key") { eval order_hook(key: "run", divisor: [1], form: 2) }
+    assert raises("store.reserved_key") { eval order_hook(key: "run", divisor: [1], form: 0) }
+    assert raises("store.reserved_key") { eval order_hook(key: "run", divisor: [1], form: 1) }
+    eval order_hook(key: "run.output", divisor: [1], form: 0)
+}
+
+# A value argument's own effect has happened when the operation fails.
+const fn side_value(store: GlobalState, value: i64) -> i64 {
+    put(store, "user.side", value)
+    return value
+}
+const fn side_cycle(store: GlobalState, depth: i64, const key: str, value: i64) {
+    if depth == 0 { put(store, key, side_value(store, value)) }
+    else { side_cycle(store, depth - 1, key + ".output", value) }
+}
+fn side_node(value: i64, const key: str) -> i64 {
+    inject global_state
+    when {
+        side_cycle(global_state, 1, key, value)
+        return value
+    }
+}
+fn side_after(failed: error) -> i64 {
+    inject global_state
+    when { return get<i64>(global_state, "user.side") }
+}
+fn side_effect(value: i64, const key: str) -> i64 {
+    return side_after(capture(side_node, value: value, key: key).error)
+}
+test a_value_argument_acts_before_the_operation_fails {
+    assert eval side_effect(value: [5], key: "run") == [5]
+}
