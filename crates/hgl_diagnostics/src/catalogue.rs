@@ -72,6 +72,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Operator, "test.implementation"),
     (Category::Operator, "impl.unknown_operator"),
     (Category::Operator, "impl.pack"),
+    (Category::Operator, "impl.parameter"),
     (Category::Operator, "impl.result"),
     (Category::Operator, "impl.requires"),
     (Category::Operator, "impl.option_kind"),

@@ -1,0 +1,58 @@
+module demo.exact_candidates
+
+operator pick<T>(value: T) -> i64
+impl const fn pick(value: i64) -> i64 => 1
+impl const fn pick(value: i64?) -> i64 => 2
+
+operator choose<T>(value: T) -> i64
+impl const fn choose<T>(value: T) -> i64 => 1
+impl const fn choose(value: i64?) -> i64 => 2
+
+operator anywhere<T>(value: T) -> i64
+impl const fn anywhere<T>(value: T) -> i64 => 1
+impl const fn anywhere(value: i64?) -> i64 => 2
+impl const fn anywhere(value: any) -> i64 => 3
+
+abstract struct Shape { id: i64 }
+struct Round: Shape { radius: f64 }
+operator kind<T>(value: T) -> i64
+impl const fn kind(value: Round) -> i64 => 1
+impl const fn kind(value: Shape) -> i64 => 2
+
+test exact_types {
+    let number: i64 = 7
+    let maybe: i64? = 7
+    let circle = Round(id: 1, radius: 1.5)
+    assert pick(number) == 1
+    assert pick(maybe) == 2
+    assert choose(number) == 1
+    assert anywhere(number) == 1
+    assert kind(circle) == 1
+}
+
+operator from_input<R, F, K>(f: fn(F) -> i64, x: R, k: K) -> i64
+impl fn from_input<R>(f: fn(R) -> i64, x: R, k: i64) -> i64 => f(x)
+impl fn from_input<R>(f: fn(R?) -> i64, x: R, k: i64?) -> i64 => f(x) + 100
+fn exact_callback_inputs(value: i64, key: i64) -> i64 => from_input(fn(x) => 3, value, key)
+
+operator nullable_input<R, F>(f: fn(F) -> i64, x: R?) -> i64
+impl fn nullable_input<R>(f: fn(R) -> i64, x: R?) -> i64 => 3
+impl fn nullable_input<R>(f: fn(R?) -> i64, x: R?) -> i64 => f(x) + 100
+fn from_nullable(value: i64?) -> i64 => nullable_input(fn(x) => 3, value)
+
+test inferred_callback_inputs {
+    assert eval exact_callback_inputs(value: [7], key: [2]) == [3]
+    assert eval from_nullable(value: [7]) == [3]
+}
+
+struct Label { number: i64 }
+impl const fn convert(value: Label) -> str => "payload"
+impl const fn convert(value: Label?) -> str => "nullable"
+
+test format_selects_the_payload_conversion {
+    let present: Label? = Label(number: 7)
+    let absent: Label? = null
+    assert convert<str>(present) == "nullable"
+    assert format("{}", present) == "payload"
+    assert format("{}", absent) == "null"
+}

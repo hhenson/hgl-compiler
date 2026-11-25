@@ -1205,7 +1205,7 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         // The candidate for `str` is temporal.
         "    let text = doubled(s)\n",
         "    let wrong: str = doubled(a)\n",
-        "    let tie = pick(a, a)\n",
+        "    let exact = pick(a, a)\n",
         // GEN-6: "A candidate may give any of its inputs a default."
         "    let short = pick(s)\n",
         // UNIT-8: a parameter written `T?` needs no default to be
@@ -1288,7 +1288,6 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "m.hgl:18:25 name/argument.unknown EXPR-2",
             "m.hgl:19:16 operator/operator.no_candidate GEN-5",
             "m.hgl:20:22 operator/operator.no_candidate GEN-5",
-            "m.hgl:21:15 operator/operator.ambiguous GEN-5",
             "m.hgl:24:19 operator/operator.no_candidate GEN-5",
             "m.hgl:25:20 operator/operator.no_candidate GEN-5",
             "m.hgl:27:19 operator/operator.no_candidate GEN-5",
@@ -1305,7 +1304,6 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "`doubled` has no parameter `number`",
             "no value candidate of operator `doubled` takes `str`",
             "no value candidate of operator `doubled` takes `i64` and gives `str`",
-            "2 value candidates of operator `pick` take `i64`, `i64` equally",
             "no value candidate of operator `pick` takes `f64`",
             "operator `only` has no value candidate, and a value function selects among those",
             "no value candidate of operator `pick` takes `null`, `i64`",
@@ -1332,7 +1330,7 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "other: _",
             "text: _",
             "wrong: str",
-            "tie: _",
+            "exact: i64",
             "short: str",
             "one: i64",
             "missing: _",
@@ -4692,9 +4690,9 @@ test no_zero { assert vr3(add_, [5, 2]) == 7 }
 }
 
 /// GEN-5 and FN-17: prefer a shared inferred type over its nullable
-/// widening only after the existing candidate comparisons leave a tie.
+/// widening before comparing the declared types for specificity.
 #[test]
-fn inferred_callback_inputs_break_only_existing_candidate_ties() {
+fn inferred_callback_inputs_prefer_the_shared_type_before_specificity() {
     let checked = module(
         r#"operator shared<R, F>(f: const fn(F) -> i64, x: R) -> i64
 impl const fn shared<R>(f: const fn(R) -> i64, x: R) -> i64 => f(x)
@@ -4713,8 +4711,8 @@ const fn choose_with_generic(x: i64) -> i64 => pick(generic, x)
     assert!(!checked.rejected, "{}", checked.report);
     for (name, expected) in [
         ("choose_shared", "R"),
-        ("choose_concrete", "i64?"),
-        ("choose_with_generic", "i64?"),
+        ("choose_concrete", "R"),
+        ("choose_with_generic", "R"),
     ] {
         let [
             Stmt::Return {
@@ -4737,6 +4735,36 @@ const fn choose_with_generic(x: i64) -> i64 => pick(generic, x)
         };
         assert_eq!(callback.parameters[0].ty().to_string(), expected, "{name}");
     }
+}
+
+/// GEN-5: candidates that widen different arguments are incomparable.
+#[test]
+fn opposite_widenings_leave_a_call_ambiguous() {
+    let checked = module(
+        r#"abstract struct Shape { id: i64 }
+struct Round: Shape { radius: f64 }
+operator pick<A, B>(a: A, b: B) -> i64
+impl const fn pick(a: Round, b: Shape) -> i64 => 1
+impl const fn pick(a: Shape, b: Round) -> i64 => 2
+const fn choose(a: Round, b: Round) -> i64 => pick(a, b)
+
+operator visit<T, R>(f: fn(i64) -> R, value: T) -> R
+impl fn visit<R>(f: fn(i64) -> R, value: i64?) -> R => f(1)
+impl fn visit(f: fn(i64), value: i64) => f(value)
+fn call(value: i64) { visit(fn(x) => x + 1, value) }
+"#,
+    );
+    let codes: Vec<_> = checked
+        .findings
+        .iter()
+        .map(|finding| finding.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        ["operator/operator.ambiguous", "operator/operator.ambiguous"],
+        "{}",
+        checked.report
+    );
 }
 
 /// GEN-5 and FN-17: an ordinary argument cannot give a type to a
