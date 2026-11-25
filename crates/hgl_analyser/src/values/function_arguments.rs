@@ -328,11 +328,15 @@ impl<'a> Typer<'a> {
             })
             .transpose()
             .ok()?;
-        let constrained = inputs.expected_result(node, template).map(|result| {
-            let mut template = template.clone();
-            template.result = Some(result.clone());
-            template
-        });
+        let result_shapes: Vec<_> = given.iter().flat_map(|read| &read.result_shapes).collect();
+        let constrained = inputs
+            .requested_result(node, template, &result_shapes)
+            .filter(|result| template.result.as_ref() != Some(*result))
+            .map(|result| {
+                let mut template = template.clone();
+                template.result = Some(result.clone());
+                template
+            });
         let ReferenceArguments {
             generics,
             type_packs,
@@ -343,7 +347,7 @@ impl<'a> Typer<'a> {
             (declared, signature),
             (
                 constrained.as_ref().unwrap_or(template),
-                given.as_ref().map(|(given, _)| given.as_slice()),
+                given.as_ref().map(|read| read.given.as_slice()),
             ),
         )?;
         let map = signature
@@ -362,8 +366,8 @@ impl<'a> Typer<'a> {
         }
         // GEN-3: an earlier argument's binding cannot discard a different
         // member type another argument supplies to the same generic.
-        if let Some((given, true)) = given
-            && let Some(argument) = given.iter().find(|argument| {
+        if let Some(given) = given.filter(|read| read.projected)
+            && let Some(argument) = given.given.iter().find(|argument| {
                 callback_parameter(signature, &argument.key).is_some_and(|slot| {
                     known.as_ref().is_some_and(|shape| {
                         mentions(&signature.parameters[slot].ty, &shape.unresolved)
@@ -446,7 +450,11 @@ impl<'a> Typer<'a> {
                 })
                 .collect()
         });
-        let mut given = if reflected {
+        let ReflectedArguments {
+            mut given,
+            result_shapes: reflected_results,
+            ..
+        } = if reflected {
             reflected_arguments(
                 self,
                 public,
@@ -456,9 +464,8 @@ impl<'a> Typer<'a> {
                 ReflectedTarget::Operator(operator, &candidates),
             )
             .ok()?
-            .0
         } else {
-            Vec::new()
+            ReflectedArguments::default()
         };
         if let Some(pack) = &template.named_pack
             && !given
@@ -565,7 +572,10 @@ impl<'a> Typer<'a> {
                 });
             }
         }
-        let result_shapes: Vec<_> = inputs.known_result_shapes(node, template).collect();
+        let result_shapes: Vec<_> = inputs
+            .known_result_shapes(node, template)
+            .chain(&reflected_results)
+            .collect();
         let wanted = Wanted {
             place: inputs.requested_result(node, request, &result_shapes),
             among: explicit
@@ -1619,6 +1629,14 @@ enum ReflectedTarget<'a, 's> {
     Operator(OperatorRef, &'s [Candidate<'a>]),
 }
 
+/// The argument and result evidence from one complete reflected reading.
+#[derive(Default)]
+struct ReflectedArguments {
+    given: Vec<Given>,
+    projected: bool,
+    result_shapes: Vec<Type>,
+}
+
 fn reflected_arguments<'a>(
     typer: &mut Typer<'a>,
     public: &Signature,
@@ -1626,7 +1644,7 @@ fn reflected_arguments<'a>(
     node: &SyntaxNode,
     inputs: &CallbackInputs<'_>,
     target: ReflectedTarget<'a, '_>,
-) -> Result<(Vec<Given>, bool), ()> {
+) -> Result<ReflectedArguments, ()> {
     let evidence = inputs
         .evidence
         .filter(|_| node.kind() == SyntaxKind::NameExpr);
@@ -1741,9 +1759,16 @@ fn reflected_arguments<'a>(
     let at = typer.at(node);
     let mut select = |check_operator| {
         select_readings(&choices, |trial, complete| {
-            if evidence.is_some_and(|evidence| !evidence.equalities_hold(typer.program, trial)) {
+            let trial_shapes = evidence.map_or_else(
+                || Ok(Vec::new()),
+                |evidence| {
+                    evidence.trial_result_shapes(typer.program, trial.iter().flatten().copied())
+                },
+            );
+            let Ok(trial_shapes) = trial_shapes else {
                 return false;
-            }
+            };
+            let shapes: Vec<_> = result_shapes.iter().copied().chain(&trial_shapes).collect();
             let arguments = parameters
                 .iter()
                 .zip(trial)
@@ -1752,7 +1777,7 @@ fn reflected_arguments<'a>(
                 });
             if arguments.clone().next().is_some()
                 && shape.is_some_and(|shape| {
-                    !shape.fits(typer, public, arguments, result_shapes.iter().copied())
+                    !shape.fits(typer, public, arguments, shapes.iter().copied())
                 })
             {
                 return false;
@@ -1777,14 +1802,14 @@ fn reflected_arguments<'a>(
                     .map(|reading| reading.and_then(|reading| reading.ty.as_ref())),
             );
             let wanted = Wanted {
-                place: inputs.requested_result(node, template, &result_shapes),
+                place: inputs.requested_result(node, template, &shapes),
                 among: None,
                 written: false,
                 callback: Some(CallbackRequest {
                     reference: template.reference,
                     values: &[],
                     reflected: Some(inputs.excluded),
-                    result_shapes: &result_shapes,
+                    result_shapes: &shapes,
                 }),
             };
             let mark = typer.mark();
@@ -1826,14 +1851,23 @@ fn reflected_arguments<'a>(
             "GEN-3",
         ));
     })?;
-    Ok(reflected_operands(
+    let result_shapes = evidence.map_or_else(
+        || Ok(Vec::new()),
+        |evidence| evidence.trial_result_shapes(typer.program, readings.iter().copied()),
+    )?;
+    let (given, projected) = reflected_operands(
         public,
         template,
         node,
         at,
         &supplied,
-        readings.iter().map(Option::as_ref),
-    ))
+        readings.iter().map(|reading| reading.ty.as_ref()),
+    );
+    Ok(ReflectedArguments {
+        given,
+        projected,
+        result_shapes,
+    })
 }
 
 /// Turn a chosen reading into the synthetic arguments used to check its callback.

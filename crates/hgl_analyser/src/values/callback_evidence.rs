@@ -50,23 +50,26 @@ impl CallbackEvidence {
         &self.results
     }
 
-    /// A complete or partial reading cannot contradict an enclosing equality (GEN-3).
-    pub(super) fn equalities_hold(
+    /// Result shapes a reading learns through enclosing equalities (GEN-3).
+    pub(super) fn trial_result_shapes<'a>(
         &self,
         program: &Program,
-        readings: &[Option<&MemberReading<'_>>],
-    ) -> bool {
+        readings: impl IntoIterator<Item = &'a MemberReading<'a>>,
+    ) -> Result<Vec<Type>, ()> {
         if self.equalities.is_empty() {
-            return true;
+            return Ok(Vec::new());
         }
         let bindings: Vec<_> = readings
-            .iter()
-            .flatten()
+            .into_iter()
             .flat_map(|reading| reading.shared_bindings())
             .collect();
-        self.equalities
-            .iter()
-            .all(|scope| scope.agrees(program, &bindings))
+        let mut results = Vec::new();
+        for scope in &self.equalities {
+            if let Some(result) = scope.result_shape(program, &bindings)? {
+                results.push(result);
+            }
+        }
+        Ok(results)
     }
 
     /// Read the receiver's evidence and, in an operator trial, its candidate's.
@@ -265,6 +268,7 @@ impl CallbackEvidence {
                     generics: signature.generics.clone(),
                     found,
                     equalities,
+                    result: template.result.clone(),
                 });
             }
         }
@@ -358,17 +362,22 @@ struct EnclosingEqualities {
     generics: Vec<GenericParameter>,
     found: Vec<Option<Argument>>,
     equalities: Vec<(Type, Type)>,
+    result: Option<Type>,
 }
 
 impl EnclosingEqualities {
-    fn agrees(&self, program: &Program, bindings: &[(Location, &Argument)]) -> bool {
+    fn result_shape(
+        &self,
+        program: &Program,
+        bindings: &[(Location, &Argument)],
+    ) -> Result<Option<Type>, ()> {
         let mut found = self.found.clone();
         let mut learned = false;
         for (generic, slot) in self.generics.iter().zip(&mut found) {
             for (_, value) in bindings.iter().filter(|(at, _)| *at == generic.at) {
                 if let Some(before) = slot {
                     if same_argument(before, value) == Some(false) {
-                        return false;
+                        return Err(());
                     }
                 } else {
                     *slot = Some((*value).clone());
@@ -377,7 +386,7 @@ impl EnclosingEqualities {
             }
         }
         if !learned {
-            return true;
+            return Ok(None);
         }
         let unit = &program.modules[self.module];
         let declaration = &unit.declarations[self.declaration];
@@ -388,13 +397,35 @@ impl EnclosingEqualities {
             .zip(&found)
             .filter_map(|(generic, value)| Some((generic.at, value.as_ref()?)))
             .collect();
-        self.equalities.iter().all(|(left, right)| {
+        if self.equalities.iter().any(|(left, right)| {
             let left = substitute_within(left, &map);
             let right = substitute_within(right, &map);
-            names_parameter(&left)
-                || names_parameter(&right)
-                || same_type(&left, &right) != Some(false)
-        })
+            !names_parameter(&left)
+                && !names_parameter(&right)
+                && same_type(&left, &right) == Some(false)
+        }) {
+            return Err(());
+        }
+        let unknown_type = Argument::Type(Type::Unknown);
+        let unknown_value = Argument::Constant(unsaid());
+        let partial: Vec<_> = self
+            .generics
+            .iter()
+            .zip(&found)
+            .map(|(generic, value)| {
+                let unknown = if matches!(generic.kind, GenericKind::Value(_)) {
+                    &unknown_value
+                } else {
+                    &unknown_type
+                };
+                (generic.at, value.as_ref().unwrap_or(unknown))
+            })
+            .collect();
+        Ok(self
+            .result
+            .as_ref()
+            .map(|ty| substitute_within(ty, &partial))
+            .filter(|ty| !open(ty)))
     }
 }
 
@@ -505,7 +536,7 @@ fn same_argument(one: &Argument, two: &Argument) -> Option<bool> {
 pub(super) fn select_readings<'a>(
     choices: &'a [Vec<MemberReading<'a>>],
     mut compatible: impl FnMut(&[Option<&MemberReading<'a>>], bool) -> bool,
-) -> Result<Vec<Option<Type>>, ReadingFailure> {
+) -> Result<Vec<&'a MemberReading<'a>>, ReadingFailure> {
     let variable: Vec<_> = choices
         .iter()
         .enumerate()
@@ -543,11 +574,11 @@ pub(super) fn select_readings<'a>(
     }
     let mut selected = choices
         .iter()
-        .map(|options| options.first().map(|option| option.ty.clone()))
+        .map(|options| options.first())
         .collect::<Option<Vec<_>>>()
         .ok_or(ReadingFailure::NoMatch)?;
     for ((position, options), &index) in variable.into_iter().zip(first) {
-        selected[position] = options[index].ty.clone();
+        selected[position] = &options[index];
     }
     Ok(selected)
 }

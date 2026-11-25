@@ -208,6 +208,43 @@ fn reverse(x: dict<str, i64>, y: dict<i64, i64>) -> i64 => choose(sample, b: y, 
 }
 
 #[test]
+fn a_reflected_argument_can_constrain_the_callback_result() {
+    // GEN-3 and FN-17: the anchor fixes K, hence the callback's R.
+    // The argument reading must fit that result in either input order.
+    accepts(
+        r#"module m
+const left: str = "anchor"
+const right: str = "v"
+operator last<A, B, O>(anchor: A, v: B) -> O
+impl const fn last(anchor: bool, v: i64) -> i64 => v
+impl const fn last(anchor: bool, v: list<i64, 2>) -> str => "chosen"
+operator decide<K, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> bool
+impl fn decide<K, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> bool
+    requires R == K && As[left] == dict<K, Ps[left]>
+        && As[right] in {Ps[right], list<Ps[right], 2>} => true
+fn full(a: dict<str, bool>, xs: list<i64, 2>) -> bool => decide(last, a, xs)
+fn flip(a: dict<str, bool>, xs: list<i64, 2>) -> bool => decide(last, v: xs, anchor: a)
+fn forced(a: dict<str, bool>, xs: list<i64, 2>) -> bool =>
+    decide(last<bool, list<i64, 2>, str>, a, xs)
+"#,
+    );
+    accepts(
+        r#"module m
+const left: str = "anchor"
+const right: str = "v"
+const fn last<T>(anchor: bool, v: T) -> T => v
+fn decide<K, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> bool
+    requires R == K && As[left] == tuple<K, Ps[left]>
+        && As[right] in {Ps[right], list<Ps[right], 2>} => true
+fn full(a: tuple<list<i64, 2>, bool>, xs: list<i64, 2>) -> bool => decide(last, a, xs)
+fn flip(a: tuple<list<i64, 2>, bool>, xs: list<i64, 2>) -> bool => decide(last, v: xs, anchor: a)
+fn forced(a: tuple<list<i64, 2>, bool>, xs: list<i64, 2>) -> bool =>
+    decide(last<list<i64, 2>>, a, xs)
+"#,
+    );
+}
+
+#[test]
 fn distinct_shared_keys_can_leave_the_best_readings_ambiguous() {
     // GEN-3: one dictionary can split, but the call leaves open which
     // one. Each choice fits its own K and disagrees on the split input.
