@@ -2708,7 +2708,7 @@ export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values,
     );
 }
 
-/// MAP-1, MAP-2 and MAP-9: report the checked keyed forms the target declines.
+/// MAP-1 and MAP-2: report the checked keyed forms the target declines.
 #[test]
 fn keyed_map_declines_name_the_unsupported_form() {
     let root = scratch("keyed-map-declines");
@@ -2719,10 +2719,8 @@ fn keyed_map_declines_name_the_unsupported_form() {
 
 const fn twice(x: i64) -> i64 => x * 2
 fn applied(member: i64, f: fn(i64) -> i64) -> i64 => f(member)
-fn const_key(member: i64, const key: i64) -> i64 => member + key
 fn sum_members(left: i64, right: i64) -> i64 => left + right
 
-export fn mapped_const_key(items: dict<i64, i64>) -> dict<i64, i64> => map(const_key, items)
 export fn mapped_function(items: dict<i64, i64>) -> dict<i64, i64> => map(applied, items, twice)
 export fn mapped_local(items: dict<i64, i64>) -> dict<i64, i64> {
     let r = map(applied, items, twice)
@@ -2747,7 +2745,6 @@ export fn mapped_pair(a: dict<i64, i64>, b: dict<i64, i64>) -> dict<i64, i64> =>
     let stderr = text(&emitted.stderr);
     assert_eq!(emitted.status.code(), Some(1), "{stderr}");
     for reason in [
-        "a keyed map with a const key parameter",
         "a keyed map passing a function argument to its child",
         "a keyed map with multiple split dictionaries",
     ] {
@@ -2762,7 +2759,7 @@ export fn mapped_pair(a: dict<i64, i64>, b: dict<i64, i64>) -> dict<i64, i64> =>
     );
     assert_eq!(
         stderr.matches("error[build/target.unsupported]").count(),
-        8,
+        7,
         "{stderr}"
     );
 }

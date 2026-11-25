@@ -814,10 +814,14 @@ transpiler: partial
 
 ## MAP-9
 
+analyser: partial
+
+- A keyed map rejects a callback whose selected key parameter is `const`, because the child's key is a connection (`connection.as_constant`, FN-1).
+
 transpiler: partial
 
 - A fixed-size map supplies each child's position to the default `key` parameter or the renamed parameter. The supported keyed map supplies a key connection when the child starts, regardless of the parameter's position.
-- Left: C++ declines a keyed map that injects its key into a `const` parameter. Key injection in the other native forms remains in #370.
+- Left: Key injection in the other native forms remains in #370.
 
 ## MAP-10
 
