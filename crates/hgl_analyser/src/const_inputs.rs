@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 use hgl_diagnostics::{Diagnostics, Location};
+use petgraph::algo::kosaraju_scc;
+use petgraph::graph::DiGraph;
 
 use crate::formatting;
 use crate::hir::{
@@ -15,7 +17,8 @@ use crate::hir::{
     ValueCategory,
 };
 use crate::{
-    Argument as GenericArgument, Binding, ConstantValue, Detail, Program, Role, Scalar, Type,
+    Argument as GenericArgument, Binding, ConstantValue, Detail, Program, Role, Scalar, Signature,
+    Type,
 };
 
 type Declaration = (usize, usize);
@@ -948,7 +951,16 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
     let mut pending = VecDeque::new();
     let mut candidates: HashMap<Declaration, Vec<Declaration>> = HashMap::new();
     let mut store_reads: HashMap<Location, Vec<Slot>> = HashMap::new();
-    let mut changed_in_recursion = HashSet::new();
+    let mut store_calls = StoreCalls::default();
+    let store = program.capability_type("global_state");
+    let borrows_store = |signature: &Signature| {
+        store.as_ref().is_some_and(|store| {
+            signature
+                .parameters
+                .iter()
+                .any(|parameter| &parameter.ty == store)
+        })
+    };
     for (module, unit) in program.modules.iter().enumerate() {
         for (declaration, declared) in unit.declarations.iter().enumerate() {
             if let Some((Role::Value, Some(operator))) = declared.kind.candidate() {
@@ -974,7 +986,8 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
                 .filter(|(_, parameter)| parameter.constant)
                 .map(|(position, parameter)| (parameter.at, position))
                 .collect();
-            if slots.is_empty() {
+            let uses_store = borrows_store(signature);
+            if slots.is_empty() && !uses_store {
                 continue;
             }
             let caller = (module_index, declaration);
@@ -1060,21 +1073,12 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
                 let Some(called) = callee.declaration() else {
                     return;
                 };
-                if called == caller {
-                    let unchanged: HashSet<_> = arguments
-                        .iter()
-                        .filter_map(|argument| match argument.value.kind {
-                            ExprKind::Local(local) if argument.parameter == Some(local) => {
-                                Some(local)
-                            }
-                            _ => None,
-                        })
-                        .collect();
-                    changed_in_recursion.extend(
-                        slots.values().copied().filter_map(|slot| {
-                            (!unchanged.contains(&slot)).then_some((caller, slot))
-                        }),
-                    );
+                if uses_store
+                    && let Some(Detail::Callable(target)) =
+                        program.modules[called.0].details.get(called.1)
+                    && borrows_store(target)
+                {
+                    store_calls.record(caller, signature, called, target, arguments);
                 }
                 if let Some(signature) = formatting::value_signature(program, callee)
                     && let Some(pattern) = formatting::argument(signature, arguments, "fmt_str")
@@ -1112,6 +1116,7 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
             }
         }
     }
+    let changed_in_recursion = store_calls.changed();
     while let Some(((declaration, slot), demand)) = pending.pop_front() {
         if demand == Demand::StoreKey && changed_in_recursion.contains(&(declaration, slot)) {
             continue;
@@ -1141,6 +1146,108 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
         })
         .collect();
     (required, runtime_store_keys)
+}
+
+/// Ordinary calls that can pass the run's store around a recursive cycle.
+#[derive(Default)]
+struct StoreCalls {
+    calls: HashSet<(Declaration, Declaration)>,
+    inputs: Vec<StoreInput>,
+}
+
+struct StoreInput {
+    caller: Declaration,
+    callee: Slot,
+    forwarded: Option<usize>,
+}
+
+impl StoreCalls {
+    fn record(
+        &mut self,
+        caller: Declaration,
+        signature: &Signature,
+        callee: Declaration,
+        target: &Signature,
+        arguments: &[Argument],
+    ) {
+        self.calls.insert((caller, callee));
+        for (slot, parameter) in target.parameters.iter().enumerate() {
+            if !parameter.constant {
+                continue;
+            }
+            let forwarded = arguments
+                .iter()
+                .find(|argument| argument.parameter == Some(slot))
+                .and_then(|argument| match argument.value.kind {
+                    ExprKind::Local(local)
+                        if signature
+                            .parameters
+                            .get(local)
+                            .is_some_and(|parameter| parameter.constant) =>
+                    {
+                        Some(local)
+                    }
+                    _ => None,
+                });
+            self.inputs.push(StoreInput {
+                caller,
+                callee: (callee, slot),
+                forwarded,
+            });
+        }
+    }
+
+    /// A callee slot that a cycle computes may have another value each
+    /// time around. Follow that value through the cycle's plain forwarding.
+    fn changed(self) -> HashSet<Slot> {
+        let mut graph = DiGraph::<Declaration, ()>::new();
+        let mut nodes = HashMap::new();
+        for (caller, callee) in self.calls {
+            let caller = *nodes
+                .entry(caller)
+                .or_insert_with(|| graph.add_node(caller));
+            let callee = *nodes
+                .entry(callee)
+                .or_insert_with(|| graph.add_node(callee));
+            graph.add_edge(caller, callee, ());
+        }
+        let mut cycles = HashMap::new();
+        for (number, declarations) in kosaraju_scc(&graph).into_iter().enumerate() {
+            if declarations.len() > 1 || graph.contains_edge(declarations[0], declarations[0]) {
+                cycles.extend(declarations.into_iter().map(|node| (graph[node], number)));
+            }
+        }
+        let mut changed = HashSet::new();
+        let mut forwarded: HashMap<Slot, Vec<Slot>> = HashMap::new();
+        for input in self.inputs {
+            let Some(cycle) = cycles.get(&input.caller) else {
+                continue;
+            };
+            if cycles.get(&input.callee.0) != Some(cycle) {
+                continue;
+            }
+            if let Some(local) = input.forwarded {
+                forwarded
+                    .entry((input.caller, local))
+                    .or_default()
+                    .push(input.callee);
+            } else {
+                changed.insert(input.callee);
+            }
+        }
+        let mut pending: Vec<_> = changed.iter().copied().collect();
+        while let Some(slot) = pending.pop() {
+            pending.extend(
+                forwarded
+                    .get(&slot)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|followed| changed.insert(*followed)),
+            );
+        }
+        changed
+    }
 }
 
 /// Whether a call of a function parameter gives this slot of its template

@@ -5490,7 +5490,7 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 12 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 14 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

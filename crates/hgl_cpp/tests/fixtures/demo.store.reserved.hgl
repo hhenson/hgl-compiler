@@ -126,3 +126,22 @@ test recursive_helper_checks_the_key_at_the_operation {
         eval recursive_hook(prefix: "run.output", divisor: 1, depth: 0)
     }
 }
+
+const fn first_helper(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { second_helper(store, depth - 1, key + ".output") }
+}
+const fn second_helper(store: GlobalState, depth: i64, const forwarded_key: str) {
+    first_helper(store, depth, forwarded_key)
+}
+fn mutual_hook(const depth: i64, const key: str) {
+    inject global_state
+    when {}
+    stop { first_helper(global_state, depth, key) }
+}
+test indirect_cycle_uses_the_key_it_reaches {
+    eval mutual_hook(depth: 1, key: "run.output")
+}
+test indirect_cycle_checks_the_key_at_the_operation {
+    assert raises("store.reserved_key") { eval mutual_hook(depth: 0, key: "run.output") }
+}

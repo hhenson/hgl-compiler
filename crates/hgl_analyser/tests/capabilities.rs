@@ -701,6 +701,19 @@ const fn direct_put(store: GlobalState, depth: i64, const key: str) {
     if depth == 0 { put(store, "run.output", 7) }
     else { direct_put(store, depth - 1, key + ".output") }
 }
+const fn alpha(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { beta(store, depth - 1, key + ".output") }
+}
+const fn beta(store: GlobalState, depth: i64, const forwarded_key: str) {
+    alpha(store, depth, forwarded_key)
+}
+fn mutual(const start_key: str) {
+    inject global_state
+    when {}
+    stop { alpha(global_state, 1, start_key) }
+}
+test indirect_cycle { eval mutual(start_key: "run.output") }
 "#,
     )]);
     assert_eq!(
