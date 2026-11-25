@@ -1935,7 +1935,7 @@ call of its wiring function (`graphs::temporal_call`), so no other
 unit instantiates hgraph's templates of a node, and a node's struct and
 state never leave its unit. A generic one is written for each instance
 `hgl_lower::instances` collects, `n_::i_::f::of_i64::impl_` and
-`w_::i_::f::of_i64`. hgraph 0.9.30 compares native Float zero signs when it
+`w_::i_::f::of_i64`. hgraph 0.9.31 compares native Float zero signs when it
 interns nodes. When an opaque HGL configuration can hide an `f64`,
 `nodes::opaque_float_configuration` selects `Wiring::add_unique_node`
 to preserve the zero signs (NUM-2).
