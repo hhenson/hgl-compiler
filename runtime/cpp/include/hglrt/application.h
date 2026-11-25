@@ -68,9 +68,6 @@ template <class T>
 Output run(Store& store, const testing::Entry& entry, const testing::Bounds& bounds, testing::Mode mode) {
     const testing::Run ran = testing::run(detail::seeded(store, entry), bounds, mode);
     std::vector<Publication> published;
-    if (!ran.built()) {
-        return published;
-    }
     for (const auto& [at, value] : testing::recording<T>(ran).entries) {
         published.push_back(Publication{detail::instant_text(at), testing::text_of(value)});
     }

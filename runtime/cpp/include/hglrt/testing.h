@@ -133,7 +133,7 @@ struct Bounds {
 /// an HGL error with code `run.end_and_length`"). CRUN-3: "a run's start is
 /// no earlier than the first [`earliest_start`] and its end no later than the
 /// second [`latest_end`]": a start before the one and an end, given or from
-/// a length, after the other each fail with no code.
+/// a length, after the other each fail with `run.bounds`.
 std::pair<datetime, std::optional<datetime>> resolved(const Bounds& bounds, Mode mode = Mode::simulation);
 
 /// What wires a run's entry: given the run's graph and the instant it
@@ -144,18 +144,11 @@ using Entry = std::function<void(hgraph::Wiring& wiring, datetime start)>;
 /// holds what its nodes put there.
 class Run {
   public:
-    /// A run from `start` that ran no cycle, because its end was its start
-    /// or before it: its graph was not built, and its store is empty.
-    explicit Run(datetime start);
-
     /// A run from `start` that its executor `executor` has run.
     Run(datetime start, hgraph::GraphExecutorValue executor);
 
     /// The instant the run started at.
     [[nodiscard]] datetime start() const noexcept { return start_; }
-
-    /// Whether its graph was built and run: false for a run with no cycle.
-    [[nodiscard]] bool built() const noexcept { return executor_.has_value(); }
 
     /// Whether `key` holds a value in the run's store.
     [[nodiscard]] bool has(std::string_view key) const;
@@ -164,9 +157,6 @@ class Run {
     /// one that is absent or of another type fails (CAP-6).
     template <class V>
     [[nodiscard]] V get(std::string_view key) const {
-        if (!executor_.has_value()) {
-            hglrt::raise(hglrt::detail::store_missing(key));
-        }
         return get_GlobalState_str<V>(GlobalState{store()}, key);
     }
 
@@ -174,7 +164,7 @@ class Run {
     [[nodiscard]] hgraph::GlobalStateView store() const;
 
     datetime start_;
-    std::optional<hgraph::GraphExecutorValue> executor_;
+    hgraph::GraphExecutorValue executor_;
 };
 
 /// Runs the entry `entry` within `bounds`, in simulation or in real time
@@ -182,8 +172,7 @@ class Run {
 /// cycles, and stops it, once each"; CRUN-2: "`start` is inclusive and `end`
 /// exclusive"). A run with no end ends at the latest end (CRUN-3: "no cycle
 /// runs at" `forever`). A run whose end is not after its start runs no
-/// cycle, and its graph is not built; its entry is still wired, so that
-/// what the entry checks as it is wired, the traces it replays, is checked. A run of a test
+/// cycle. Its graph is built, started and stopped. A run of a test
 /// whose time limit has passed (TST-17, host.h) is stopped, at once where it
 /// starts after the limit, and ends as it does at its end. A failure of the
 /// run escapes, as hgraph gives it.
@@ -244,9 +233,7 @@ Recording<T> evaluate(const Entry& entry, const Bounds& bounds = {}, Mode mode =
     {
         const detail::Holding<T> keeping(held);
         const Run ran = run(entry, bounds, mode);
-        // CEVAL-4: with no cycle the recording starts empty, and none added
-        // to it.
-        out = ran.built() ? recording<T>(ran) : Recording<T>{ran.start(), {}};
+        out = recording<T>(ran);
     }
     if (!held.empty()) {
         out.held = std::move(held);
