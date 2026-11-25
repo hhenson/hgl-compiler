@@ -99,8 +99,9 @@ analyser: partial
 
 transpiler: partial
 
-- Wires an error boundary around a resolved graph call or lifted helper and exposes its
-  normal value and error results.
+- Wires an error boundary around a resolved temporal function, a temporal
+  HGL operator candidate, or a lifted helper and exposes its value and error
+  connections.
 - Left: A target with no supported call or recording form, an unavailable packed
   instance and other capture reads are reported.
 

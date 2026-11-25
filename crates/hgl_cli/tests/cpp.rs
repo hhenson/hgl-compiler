@@ -3685,6 +3685,28 @@ fn lifting_code_runs_on_the_sdk() {
     );
 }
 
+/// ERR-7 gives graph and node operator candidates the same capture boundary.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn temporal_operator_captures_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("operator_capture");
+    let file = write(
+        &root,
+        "demo.capture.operators.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.capture.operators.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// RUN-6, UNIT-14: an entry receives the supplied configuration's start;
 /// an omitted start is still null when the argument is evaluated.
 #[test]
