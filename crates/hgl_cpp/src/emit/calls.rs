@@ -307,6 +307,16 @@ impl Emitter<'_> {
         let signature = native_pack
             .as_ref()
             .map_or(signature, |pack| &pack.signature);
+        // TIME-8, CAP-6: every store operation checks its key as it is
+        // evaluated, but core's recorder, which writes the run's own key.
+        // The check is the call's own: it follows every argument, which is
+        // evaluated once in the order written (EXPR-2).
+        let store_key = program.store_key_argument(callee, arguments).filter(|_| {
+            !self
+                .temporal
+                .as_ref()
+                .is_some_and(|context| context.run_recorder)
+        });
         let assigns = signature.parameters.iter().any(|parameter| parameter.var);
         if assigns && !statement {
             return self.missing(at, "a call that assigns a place, inside an expression");
@@ -350,6 +360,8 @@ impl Emitter<'_> {
         // position, what is written for it, whether it may fail, and how
         // it is held where it is evaluated before the call.
         let mut written: Vec<(usize, String, bool, Held)> = Vec::new();
+        // The store operation's key, which the call checks as it starts.
+        let mut checked_key = None;
         for (_, argument) in runtime_arguments(arguments) {
             let Some(index) =
                 parameter_for(argument).filter(|&index| index < signature.parameters.len())
@@ -417,6 +429,10 @@ impl Emitter<'_> {
                 ));
                 continue;
             }
+            let key = store_key.is_some_and(|key| std::ptr::eq(key, &argument.value));
+            if key {
+                checked_key = Some(index);
+            }
             let value = self.expression(scope, &argument.value);
             // TYPE-10: the ordinary unsized parameter takes the fixed
             // list's entries. Read the array once, in argument order.
@@ -466,7 +482,15 @@ impl Emitter<'_> {
             } else {
                 (value, Held::Value(ty))
             };
-            written.push((index, value, self.may_fail_here(&argument.value), held));
+            // The key counts as one that may fail, so that any other that
+            // may is held first, in the order written, and the call's own
+            // check comes after them all.
+            written.push((
+                index,
+                value,
+                key || self.may_fail_here(&argument.value),
+                held,
+            ));
         }
         let mut defaulted: Vec<(usize, String, bool, Held)> = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
@@ -543,7 +567,12 @@ impl Emitter<'_> {
                 DeclarationKind::NativeCandidate(..)
             )
         });
-        let joined = |given: Vec<String>| {
+        let joined = |mut given: Vec<String>| {
+            // The key, read or held, is checked where the operation is
+            // called: after the arguments, before the operation runs.
+            if let Some(index) = checked_key {
+                given[index] = super::store::checked(&given[index]);
+            }
             let argument = |(slot, parameter): (usize, &hgl_analyser::Parameter)| {
                 (!matches!(parameter.ty, Type::Function(_))).then(|| given[slot].as_str())
             };

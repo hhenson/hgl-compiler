@@ -202,6 +202,12 @@ void schedule_Alarm_datetime(const Alarm& capability, datetime at) {
 
 // ---- The global store ----------------------------------------------------------
 
+void require_store_key(std::string_view key, std::source_location where) {
+    if (key == run_output) {
+        fail(codes::store_reserved_key, "the key 'run.output' is the run's own", where);
+    }
+}
+
 bool has_GlobalState_str(const GlobalState& store, std::string_view key) {
     return store.view().contains(key);
 }
@@ -211,7 +217,8 @@ error detail::store_missing(std::string_view key) {
 }
 
 error detail::store_type(std::string_view key) {
-    return make_error(std::format("the global store holds a value of another type under '{}'", key));
+    return make_error(std::format("the global store holds a value of another type under '{}'", key),
+                      std::string{codes::store_key_type});
 }
 
 } // namespace hglrt

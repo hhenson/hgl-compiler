@@ -1,0 +1,31 @@
+module demo.store.reserved_routes
+# TIME-8, CAP-6: a helper given a key its cycle changes is left to the
+# run on that route; called outside any cycle with a key the text fixes,
+# it rejects at the call that fixes it (GEN-7).
+const fn save_key(store: GlobalState, const key: str) { put(store, key, 7) }
+const fn grow_key(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { save_key(store, key) }
+    else { grow_key(store, depth - 1, key + ".output") }
+}
+fn direct(const key: str) {
+    inject global_state
+    when {}
+    stop { save_key(global_state, key) }
+}
+fn both(const key: str) {
+    inject global_state
+    when {}
+    stop {
+        grow_key(global_state, 1, "run.output")
+        save_key(global_state, key)
+    }
+}
+
+test c_a_fixed_key_outside_the_cycle_rejects {
+    # expect-error(injectable, "store.reserved_key")
+    eval direct(key: "run.output")
+}
+test e_only_the_fixed_route_rejects {
+    # expect-error(injectable, "store.reserved_key")
+    eval both(key: "run.output")
+}
