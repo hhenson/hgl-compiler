@@ -102,6 +102,7 @@ mod store_keys;
 mod syntax;
 mod test_candidates;
 pub use test_candidates::TestCandidateScope;
+mod type_values;
 mod types;
 mod values;
 

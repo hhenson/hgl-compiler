@@ -1648,6 +1648,8 @@ pub struct PackInput {
 /// The value of a literal.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
+    /// A type, without evaluating the expression that names it (TYPE-18).
+    Type(Box<Type>),
     /// An integer.
     Int(i64),
     /// A float.

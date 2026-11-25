@@ -26,6 +26,13 @@ impl Reader<'_> {
 
     /// `Quote`, `pc::Curve`, `Box<i64>`, or a generic parameter.
     pub(super) fn named(&mut self, node: &SyntaxNode, position: Position) -> Type {
+        // TYPE-18: `Type` is the language's type of a type, not a
+        // declaration supplied by the program or by core.
+        if child(node, SyntaxKind::QualifiedName).is_none()
+            && name_token(node).is_some_and(|name| name.text() == "Type")
+        {
+            return Type::TypeValue;
+        }
         let list = child(node, SyntaxKind::GenericArgs);
         let name = name_token(node);
         let binding = name

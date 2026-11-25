@@ -123,6 +123,21 @@ impl<'a> Typer<'a> {
         let at = self.at(node);
         let (kind, ty) = match node.kind() {
             SyntaxKind::Literal => self.literal(node, expected),
+            SyntaxKind::TypeOfExpr => {
+                let mark = self.mark();
+                let ty = node
+                    .children()
+                    .next()
+                    .map_or(Type::Unknown, |operand| self.expression(&operand, None).ty);
+                // TYPE-18 evaluates nothing of the operand. Its local
+                // effects and deferred calls do not belong to the body.
+                self.restore_read(mark, false);
+                self.constants.remember_type(at, ty.clone());
+                (
+                    ExprKind::Literal(Value::Type(Box::new(ty))),
+                    Type::TypeValue,
+                )
+            }
             SyntaxKind::NameExpr => return self.name(node),
             // "Parentheses select grouping" (EXPR-1): the expression
             // inside, where it stands.

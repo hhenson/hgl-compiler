@@ -1007,6 +1007,15 @@ impl Resolver<'_> {
     /// Resolves the name a node uses: its `alias::name`, or its first
     /// identifier.
     fn name_of(&mut self, node: &SyntaxNode) -> Option<Binding> {
+        // TYPE-18: the built-in type `Type` needs no declaration.
+        if node.kind() == SyntaxKind::NamedType
+            && child(node, SyntaxKind::QualifiedName).is_none()
+            && identifiers(node)
+                .next()
+                .is_some_and(|name| name.text() == "Type")
+        {
+            return None;
+        }
         if let Some(qualified) = child(node, SyntaxKind::QualifiedName) {
             let mut names = identifiers(&qualified);
             let alias = names.next()?;

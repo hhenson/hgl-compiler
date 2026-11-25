@@ -96,6 +96,8 @@ pub(crate) struct Scope<'s> {
 /// constant has that one value wherever it is read").
 #[derive(Default)]
 pub(crate) struct Constants {
+    /// Types already checked in the enclosing lexical reading (TYPE-18).
+    types: RefCell<HashMap<Location, Type>>,
     /// The constants being worked out, so that one whose value depends
     /// on itself, which is reported as that (`constant.cycle`), ends
     /// here.
@@ -103,6 +105,13 @@ pub(crate) struct Constants {
     /// The values worked out, by module and declaration. A constant many
     /// others name is read once.
     known: RefCell<HashMap<(usize, usize), Result<Typed, Fault>>>,
+}
+
+impl Constants {
+    /// Keep a type query's checked operand type without its value or effects.
+    pub(crate) fn remember_type(&self, at: Location, ty: Type) {
+        self.types.borrow_mut().insert(at, ty);
+    }
 }
 
 // ---- What a reading gives ----
@@ -584,6 +593,18 @@ fn value(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Ty
     let expected = expected.map(non_null);
     match node.kind() {
         SyntaxKind::Literal => literal_constant(node, expected),
+        SyntaxKind::TypeOfExpr => {
+            let at = Location::new(scope.file, node.span());
+            let known = scope.constants.types.borrow().get(&at).cloned();
+            let ty = known.or_else(|| crate::values::query_type(scope.program, scope.file, node));
+            match ty {
+                Some(ty) if ty != Type::Unknown => Ok(Typed::of(
+                    ConstantValue::Type(Box::new(ty)),
+                    Some(Type::TypeValue),
+                )),
+                _ => Ok(Typed::unevaluated(Some(Type::TypeValue))),
+            }
+        }
         // EXPR-1: "Parentheses select grouping": `(2.0)` is `2.0`.
         SyntaxKind::ParenExpr => match node.children().next() {
             Some(inner) => value(&inner, expected, scope),
@@ -704,6 +725,7 @@ pub(crate) fn temporal_type(parts: &Temporal) -> Scalar {
 impl From<Value> for ConstantValue {
     fn from(value: Value) -> ConstantValue {
         match value {
+            Value::Type(ty) => ConstantValue::Type(ty),
             Value::Int(value) => ConstantValue::Int(value),
             Value::Float(value) => ConstantValue::Float(value),
             Value::Bool(value) => ConstantValue::Bool(value),
@@ -721,6 +743,7 @@ impl ConstantValue {
     /// after the analyser write for a generic value parameter's value.
     pub fn literal(&self) -> Option<Value> {
         Some(match self {
+            ConstantValue::Type(ty) => Value::Type(ty.clone()),
             ConstantValue::Int(value) => Value::Int(*value),
             ConstantValue::Float(value) => Value::Float(*value),
             ConstantValue::Bool(value) => Value::Bool(*value),
@@ -2577,6 +2600,7 @@ impl ConstantValue {
             (V::Int(_), V::Float(_)) | (V::Float(_), V::Int(_)) => None,
             (V::Int(left), V::Int(right)) => Some(left == right),
             (V::Float(left), V::Float(right)) => Some(floats(*left, *right)),
+            (V::Type(left), V::Type(right)) => Some(left.identity()? == right.identity()?),
             (V::Bool(left), V::Bool(right)) => Some(left == right),
             (V::Str(left), V::Str(right)) => Some(left == right),
             (V::StringSet(left), V::StringSet(right)) => Some(left == right),
@@ -2687,6 +2711,7 @@ impl ConstantValue {
             )
         };
         Some(match self {
+            V::Type(ty) => format!("type({})", ty.identity()?),
             V::Int(value) => value.to_string(),
             // `0.0` and `-0.0` are one value (NUM-4); `{:?}` writes a
             // float so that it reads back as itself.

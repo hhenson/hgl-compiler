@@ -419,6 +419,10 @@ fn substitute(
         })
     };
     let constant = |constant: &Constant| match &constant.value {
+        ConstantValue::Type(ty) => Constant {
+            text: constant.text.clone(),
+            value: ConstantValue::Type(part(ty)),
+        },
         ConstantValue::Parameter { at, .. } => {
             given(*at).cloned().unwrap_or_else(|| constant.clone())
         }
@@ -586,9 +590,12 @@ fn substitute(
             inner @ Type::Nullable(_) => inner,
             inner => Type::Nullable(Box::new(inner)),
         },
-        Type::Scalar(_) | Type::Signal | Type::Error | Type::ErrorContext | Type::Unknown => {
-            ty.clone()
-        }
+        Type::TypeValue
+        | Type::Scalar(_)
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext
+        | Type::Unknown => ty.clone(),
     }
 }
 
@@ -643,7 +650,8 @@ pub(crate) fn weight(ty: &Type) -> usize {
                 .sum::<usize>()
                 + function.result.as_ref().map_or(0, weight)
         }
-        Type::Scalar(_)
+        Type::TypeValue
+        | Type::Scalar(_)
         | Type::Parameter { .. }
         | Type::PackMember { .. }
         | Type::Signal
@@ -1499,6 +1507,7 @@ impl Structs<'_> {
                 self.walk(error, in_collection, may_be_empty, found, path, budget);
             }
             Type::Function(_)
+            | Type::TypeValue
             | Type::Scalar(_)
             | Type::Parameter { .. }
             | Type::PackMember { .. }
@@ -2099,6 +2108,7 @@ fn grown(ty: &Type, in_group: &dyn Fn(Id) -> bool) -> Option<String> {
         Type::RollingWindow { value, .. } => grown(value, in_group),
         Type::Result { value, error } => grown(value, in_group).or_else(|| grown(error, in_group)),
         Type::Function(_)
+        | Type::TypeValue
         | Type::Scalar(_)
         | Type::Parameter { .. }
         | Type::PackMember { .. }

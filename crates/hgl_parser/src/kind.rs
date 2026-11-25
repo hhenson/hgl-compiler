@@ -298,6 +298,8 @@ define_syntax_kinds! {
         DeltaConstructor,
         /// `str(value)`, `bytes(value)` or `any(value)`
         TypeCall,
+        /// `type(expression)`: its statically known type (TYPE-18).
+        TypeOfExpr,
         /// `fn(x) => x + 1` or `fn(x: i64) -> i64 { return x }`
         FnExpr,
         /// `x` or `x: i64` in a function expression's parameters

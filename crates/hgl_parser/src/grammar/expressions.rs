@@ -428,6 +428,17 @@ impl Parser<'_> {
             Int | Float | Str | Duration | Tenor | Temporal | KwTrue | KwFalse | KwNull => {
                 self.leaf(Literal);
             }
+            Ident if self.at_word("type") && self.nth(1) == LParen && self.suffix_at(1) => {
+                self.start(TypeOfExpr);
+                self.bump();
+                self.attached(Bracket::Call);
+                self.bump();
+                self.nested(Context::PLAIN, |parser| {
+                    parser.expression();
+                    parser.close(RParen);
+                });
+                self.finish();
+            }
             Ident => self.name_expr(),
             // `delta` is a reserved word. In an expression it begins a
             // delta constructor and nothing else.

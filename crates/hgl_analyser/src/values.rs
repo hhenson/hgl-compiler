@@ -125,6 +125,8 @@ mod sizes;
 mod statements;
 // `-`, `!` and the operators with two operands, as calls of core's (NUM-1, EXPR-6).
 mod symbols;
+mod type_queries;
+pub(crate) use type_queries::query_type;
 
 /// Walk calls and constructions in a body, including static references
 /// and the independently scoped bodies of anonymous functions.

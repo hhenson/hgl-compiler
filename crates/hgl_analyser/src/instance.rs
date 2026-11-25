@@ -519,6 +519,11 @@ impl Program {
         functions: &[(usize, Callee)],
     ) {
         expression.ty = instance.project(&expression.ty);
+        // TYPE-18: a generic query holds the instance's operand type,
+        // even though the literal's own type is always `Type`.
+        if let ExprKind::Literal(Value::Type(ty)) = &mut expression.kind {
+            **ty = instance.project(ty);
+        }
         // ERR-14 and ERR-15: the generic child can look nonnullable
         // before placement. A nullable child compares its own payload
         // with null and still fails if the endpoint is unset.
@@ -1160,6 +1165,10 @@ pub(crate) fn placed(argument: &Argument, map: &Map) -> Argument {
         Argument::Type(ty) => Argument::Type(substitute_within(ty, map)),
         Argument::NoResult => Argument::NoResult,
         Argument::Constant(constant) => match &constant.value {
+            ConstantValue::Type(ty) => Argument::Constant(Constant {
+                text: constant.text.clone(),
+                value: ConstantValue::Type(Box::new(substitute_within(ty, map))),
+            }),
             ConstantValue::Parameter { at, .. } => given(*at)
                 .map(|given| Argument::Constant(given.clone()))
                 .unwrap_or_else(|| argument.clone()),
