@@ -2725,6 +2725,15 @@ fn sum_members(left: i64, right: i64) -> i64 => left + right
 
 export fn mapped_const_key(items: dict<i64, i64>) -> dict<i64, i64> => map(const_key, items)
 export fn mapped_function(items: dict<i64, i64>) -> dict<i64, i64> => map(applied, items, twice)
+export fn mapped_local(items: dict<i64, i64>) -> dict<i64, i64> {
+    let r = map(applied, items, twice)
+    return r
+}
+export fn mapped_keys(items: dict<i64, i64>) -> set<i64> => keys(map(applied, items, twice))
+export fn fixed_local(items: list<i64, 3>) -> list<i64, 3> {
+    let r = map(applied, items, twice)
+    return r
+}
 export fn mapped_pair(a: dict<i64, i64>, b: dict<i64, i64>) -> dict<i64, i64> => map(sum_members, a, b)
 "#,
     );
@@ -2746,8 +2755,15 @@ export fn mapped_pair(a: dict<i64, i64>, b: dict<i64, i64>) -> dict<i64, i64> =>
         assert!(stderr.contains(reason), "{stderr}");
     }
     assert_eq!(
-        stderr.matches("error[build/target.unsupported]").count(),
+        stderr
+            .matches("a keyed map passing a function argument to its child")
+            .count(),
         3,
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("error[build/target.unsupported]").count(),
+        8,
         "{stderr}"
     );
 }

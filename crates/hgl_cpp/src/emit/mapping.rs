@@ -193,6 +193,11 @@ impl Emitter<'_> {
         let Some(child_result) = self.temporal_schema(&callback.ty, callback.at) else {
             return "0".to_string();
         };
+        let call = if map.keys.is_some() {
+            format!("::hglrt::keyed_map_child_result({WIRING}, {call})")
+        } else {
+            call
+        };
         let key_policy = if key_parameter.is_some() {
             "First"
         } else {

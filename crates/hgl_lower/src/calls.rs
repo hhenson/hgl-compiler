@@ -154,6 +154,28 @@ pub enum KeyedMapProblem {
     MultipleSplitDictionaries,
 }
 
+// MAP-4: an untyped graph local has no result place to reveal the
+// collection. A known split dictionary argument can still identify it.
+fn deferred_map_splits_dictionary(
+    arguments: &[Argument],
+    parameters: &[hgl_analyser::FunctionParameter],
+) -> bool {
+    let split = |argument: &Argument| match &argument.value.ty {
+        Type::Dict { value, .. } | Type::List { element: value, .. }
+            if parameters
+                .iter()
+                .any(|parameter| parameter.ty() == value.as_ref())
+                && parameters
+                    .iter()
+                    .all(|parameter| parameter.ty() != &argument.value.ty) =>
+        {
+            Some(matches!(argument.value.ty, Type::Dict { .. }))
+        }
+        _ => None,
+    };
+    arguments.iter().filter_map(split).reduce(|a, b| a && b) == Some(true)
+}
+
 /// Bind the checked dependent pack to the selected callback's own slots.
 /// A missing callback argument stays omitted, so it keeps its own default.
 pub fn keyed_map_call(
@@ -167,14 +189,25 @@ pub fn keyed_map_call(
         return None;
     };
     if let Callee::DeferredOperator(call) = callee
-        && matches!(call.expected, Some(Type::Dict { .. }))
         && Some(call.identity.module) == program.core()
-        && program.modules[call.identity.module].declarations[call.identity.declaration].name == "map"
-        && arguments.iter().any(|argument| matches!(argument.value.kind, ExprKind::Unread))
-        && let Some(callback) = arguments.iter().find(|argument| {
-            matches!(&argument.value.ty, Type::Function(function)
-                if function.parameters.iter().any(|parameter| matches!(parameter.ty(), Type::Function(_))))
+        && program.modules[call.identity.module].declarations[call.identity.declaration].name
+            == "map"
+        && arguments
+            .iter()
+            .any(|argument| matches!(argument.value.kind, ExprKind::Unread))
+        && let Some((callback, function)) = arguments.iter().find_map(|argument| {
+            let Type::Function(function) = &argument.value.ty else {
+                return None;
+            };
+            function
+                .parameters
+                .iter()
+                .any(|parameter| matches!(parameter.ty(), Type::Function(_)))
+                .then_some((argument, function))
         })
+        && (matches!(call.expected, Some(Type::Dict { .. }))
+            || matches!(call.expected, None | Some(Type::Unknown))
+                && deferred_map_splits_dictionary(arguments, &function.parameters))
     {
         // The checker can defer a forwarded function argument before the
         // native candidate and its dependent pack slots are recorded.

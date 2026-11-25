@@ -823,8 +823,8 @@ transpiler: partial
 
 - Fixed-size results hold the children's publications. A callback with no result runs at each fixed position, and the map gives no result. A failure that leaves a child leaves either form.
 - The C++ target's existing [size-zero temporal list limit](https://github.com/hhenson/hgl-compiler/issues/829) applies to both fixed-size forms (TYPE-10).
-- The native one-dictionary map holds published entries, propagates a child failure and removes an entry when its child stops. Lifecycle changes of an unpublished child leave an already valid result silent (TIME-7).
-- Proposed. Invalidating a child result removes its entry until that child publishes again.
+- The native one-dictionary map holds published entries, including a child's first empty dictionary, and publishes a valid empty dictionary once if no child publishes. Lifecycle changes of an unpublished child leave an already valid result silent (TIME-7). A child failure propagates, and an entry is removed when its child stops.
+- Proposed. Invalidating a child result removes its entry until that child publishes again. Under explicit keys, a pass-through result withdraws when its split entry leaves, while the child remains alive (MAP-8).
 - Left: other native result shapes (#370).
 
 ## RED-1

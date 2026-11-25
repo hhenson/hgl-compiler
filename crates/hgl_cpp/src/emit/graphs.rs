@@ -686,9 +686,24 @@ impl Family for Graphs {
                 callee: Callee::Anonymous(function),
                 ..
             } if !function.template.value => Some(emitter.temporal_call(scope, value, &[])),
-            ExprKind::Call { callee, .. } => {
+            ExprKind::Call {
+                callee, arguments, ..
+            } => {
                 if let Some(map) = keyed_map_call(emitter.program, value) {
                     return Some(emitter.keyed_map(scope, value, map, HeldInputs::default()));
+                }
+                if matches!(callee, Callee::DeferredOperator(_))
+                    && let Some((inner, problem)) = arguments.iter().find_map(|argument| {
+                        let problem = keyed_map_call(emitter.program, &argument.value)?.err()?;
+                        Some((&argument.value, problem))
+                    })
+                {
+                    return Some(emitter.keyed_map(
+                        scope,
+                        inner,
+                        Err(problem),
+                        HeldInputs::default(),
+                    ));
                 }
                 let (module, declaration) = callee.declaration()?;
                 let declared = &emitter.program.modules[module].declarations[declaration];

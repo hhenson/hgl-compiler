@@ -411,6 +411,27 @@ template <class K, class V>
 struct publisher<hgraph::TSD<K, V>> : keyed_detail::KeyedPublisher<hgraph::TSD<K, V>> {};
 
 namespace keyed_detail {
+// An explicit lifecycle key can outlive a split entry. A compiled child
+// that gives its boundary port needs a node to publish that withdrawal.
+template <class V>
+struct MapChildForward {
+    static void eval(hgraph::In<"source", V, hgraph::InputValidity::Unchecked> source,
+                     hgraph::Out<V> out) {
+        const auto& output = [&]() -> const hgraph::TSOutputView& {
+            if constexpr (std::is_base_of_v<hgraph::TSOutputView, hgraph::Out<V>>) {
+                return out;
+            } else {
+                return out.base();
+            }
+        }();
+        if (source.valid()) {
+            hgraph::forward_delta(output, source.base());
+        } else if (output.valid()) {
+            static_cast<void>(output.begin_mutation(output.evaluation_time()).invalidate());
+        }
+    }
+};
+
 /// Observe the live children of a keyed map through a dictionary of publications.
 template <class K, class V>
 struct PublishedMapEntries {
@@ -428,39 +449,70 @@ struct PublishedMapEntries {
                 static_cast<void>(mutation.erase(key));
             }
         };
-        for (const auto& key : children.removed_keys()) {
-            remove(key);
-        }
-        for (const auto& [key, child] : children.modified_items()) {
-            const auto& source = child.base();
-            if (!source.valid()) {
-                // MAP-10: an invalidated child keeps its lifecycle key but
-                // withdraws its entry from the result.
-                remove(key);
-                continue;
-            }
-            if (source.schema()->kind == hgraph::TSTypeKind::TS) {
-                mutation.set(key, source.value());
-                continue;
-            }
-            const bool published = result.contains(key);
-            hgraph::TSOutputView entry{endpoint.output(), mutation.at(key), endpoint.evaluation_time()};
-            if (published) {
-                hgraph::forward_delta(entry, source);
-            } else {
-                hgraph::reconcile_current_state(entry, source, {
-                    .scope = hgraph::TSCurrentReconcileScope::Sample,
-                    .sample_all = true,
-                    .membership = true,
-                });
+        // This input is bound directly to the compiled map's output. Its
+        // output data has sparse cursors for removals and modified slots.
+        const auto input = children.base().as_dict();
+        const auto data = children.base().bound_output().data_view().as_dict();
+        const auto now = endpoint.evaluation_time();
+        if (data.structural_delta_current(now)) {
+            for (auto slot = data.next_membership_removed_slot(); slot != hgraph::TS_DATA_NO_CHILD_ID;
+                 slot = data.next_membership_removed_slot(slot)) {
+                // A membership removal retains its key even if the
+                // child never published a value.
+                remove(data.key_at_slot(slot));
             }
         }
-        if (children.valid() && !out.valid()) {
+        if (data.modified(now)) {
+            for (auto slot = data.next_modified_slot(); slot != hgraph::TS_DATA_NO_CHILD_ID;
+                 slot = data.next_modified_slot(slot)) {
+                if (!data.slot_live(slot)) {
+                    continue;
+                }
+                const auto key = data.key_at_slot(slot);
+                const auto source = input.at_slot(slot);
+                if (!source.valid()) {
+                    // MAP-10: an invalidated child keeps its lifecycle key
+                    // but withdraws its entry from the result.
+                    remove(key);
+                    continue;
+                }
+                if (source.schema()->kind == hgraph::TSTypeKind::TS) {
+                    mutation.set(key, source.value());
+                    continue;
+                }
+                const bool published = result.contains(key);
+                hgraph::TSOutputView entry{endpoint.output(), mutation.at(key), now};
+                if (published) {
+                    hgraph::forward_delta(entry, source);
+                } else {
+                    hgraph::reconcile_current_state(entry, source, {
+                        .scope = hgraph::TSCurrentReconcileScope::Sample,
+                        .sample_all = true,
+                        .membership = true,
+                    });
+                    // An empty dictionary has no child delta to make it
+                    // valid but is itself a publication (MAP-10, TIME-7).
+                    if (source.schema()->kind == hgraph::TSTypeKind::TSD && !entry.valid()) {
+                        entry.as_dict().begin_mutation(now).touch();
+                    }
+                }
+            }
+        }
+        if (!out.valid() && children.valid()) {
             mutation.touch();
         }
     }
 };
 } // namespace keyed_detail
+
+/// MAP-8 and MAP-10: materialize a boundary result whose input can withdraw independently.
+template <class V>
+hgraph::Port<V> keyed_map_child_result(hgraph::Wiring& wiring, hgraph::Port<V> source) {
+    if (source.erased().is_boundary_source()) {
+        return hgraph::wire<keyed_detail::MapChildForward<V>>(wiring, source).template as<V>();
+    }
+    return source;
+}
 
 /// MAP-10, SET-1: expose the keys and ticks of published map entries.
 template <class K, class V>
