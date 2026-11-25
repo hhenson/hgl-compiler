@@ -2524,7 +2524,7 @@ fn conjoined_relations(node: &SyntaxNode, relations: &mut Vec<SyntaxNode>) {
 }
 
 /// Select terms only from the condition itself and the sides of `&&`.
-fn conjoined_terms(
+pub(super) fn conjoined_terms(
     node: &SyntaxNode,
     take: &dyn Fn(SyntaxKind) -> bool,
     terms: &mut Vec<SyntaxNode>,

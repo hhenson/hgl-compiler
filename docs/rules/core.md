@@ -806,6 +806,10 @@ transpiler: partial
 
 ## MAP-2
 
+analyser: partial
+
+- A bare operator or generic function prefers the collection member when its type fits the call. A known type can require a less specific whole-collection reading. The candidate's declared membership supplies both possibilities, and the call still splits an input (GEN-3, FN-17, MAP-3).
+
 transpiler: partial
 
 - A fixed-size map binds positional and named inputs, splits the fitted list inputs, and supplies whole inputs to each child. An explicitly specialized operator can supply the callback's member types (FN-17). An omitted callback input uses the callback's default (FN-8, UNIT-8).

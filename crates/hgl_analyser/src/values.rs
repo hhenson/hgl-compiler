@@ -75,6 +75,7 @@ mod constants;
 // Blocks, `if`, `while`, `for` and `switch` (CTRL-5, CTRL-10 to CTRL-15).
 mod control;
 // A delta as a type of its own: its properties and its construction (TYPE-16).
+mod callback_evidence;
 mod deltas;
 mod dependent_packs;
 pub(crate) use dependent_packs::PackTypes;

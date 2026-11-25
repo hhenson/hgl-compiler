@@ -3098,6 +3098,7 @@ fn pack_entries_with_unread_constant_keys_decline_cpp_emission() {
 /// temporal calls. Captured values and connections reach their bodies
 /// through a node hook, a graph and another static function parameter.
 /// MAP-2: map fits its split inputs to an explicit operator's member types.
+/// GEN-3: a bare callback takes the member or whole input type from the call.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn function_parameters_run_on_the_sdk() {
@@ -3115,7 +3116,29 @@ fn function_parameters_run_on_the_sdk() {
         "demo.callback_library.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.callback_library.hgl"),
     );
-    let output = hgl_in(&["test", &file, &library, "--target", "cpp"], &[], &[]);
+    let templates = write(
+        &root,
+        "demo.bare_callback_templates.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.bare_callback_templates.hgl"),
+    );
+    let alternatives = write(
+        &root,
+        "demo.callback_alternatives.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.callback_alternatives.hgl"),
+    );
+    let output = hgl_in(
+        &[
+            "test",
+            &file,
+            &library,
+            &templates,
+            &alternatives,
+            "--target",
+            "cpp",
+        ],
+        &[],
+        &[],
+    );
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -3124,7 +3147,7 @@ fn function_parameters_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 5 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 20 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

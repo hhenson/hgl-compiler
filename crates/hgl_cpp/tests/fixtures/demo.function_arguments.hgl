@@ -346,3 +346,209 @@ test explicit_operator_callbacks_with_split_inputs {
     assert eval choose_forwarded_integer(value: [3]) == [4]
     assert eval choose_forwarded_float(value: [3.0]) == [7]
 }
+
+fn sum_bare_pairs(left: list<i64, 2>, right: list<i64, 2>) -> list<i64, 2> =>
+    map(add_, left, right)
+
+fn multiply_bare(values: list<f64, 2>, factor: f64) -> list<f64, 2> =>
+    map(mul_, values, factor)
+
+fn double_bare(values: list<i64, 2>) -> list<i64, 2> =>
+    map(double_member, value: values)
+
+fn identity_bare(values: list<i64, 2>) -> list<i64, 2> =>
+    map(identity, values)
+
+fn whole_forwarded(values: list<i64, 2>) -> list<i64, 2> =>
+    forward_member(identity, values)
+
+fn first_if<T>(enabled: bool, values: list<T, 2>) -> T =>
+    if enabled { values[0] } else { values[1] }
+
+fn explicit_whole_list(enabled: list<bool, 2>, values: list<i64, 2>) -> list<i64, 2> =>
+    map(first_if<i64>, enabled, values)
+
+# GEN-3, FN-17, MAP-2: a bare callback takes member types from the
+# declared split alternatives. Ordinary forwarding supplies whole types.
+test bare_callbacks_with_split_inputs {
+    assert eval sum_bare_pairs(left: [[1, 2]], right: [[3, 4]]) == [[4, 6]]
+    assert eval multiply_bare(values: [[2.0, 3.0]], factor: [4.0]) == [[8.0, 12.0]]
+    assert eval double_bare(values: [[2, 3]]) == [[4, 6]]
+    assert eval identity_bare(values: [[2, 3]]) == [[2, 3]]
+    assert eval whole_forwarded(values: [[2, 3]]) == [[2, 3]]
+    assert eval explicit_whole_list(enabled: [[true, false]], values: [[2, 3]]) == [[2, 3]]
+}
+
+# GEN-5, GEN-6 and FN-17: each candidate derives callback types from its
+# own alternatives. The mode selects the candidate before another
+# candidate's narrower pattern can determine the type of the bare name.
+operator choose_input<M, R, ...Ps, ...As>(
+    mode: M, f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+impl fn choose_input<R, ...Ps, ...As>(
+    mode: i64, f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k]} } => 1
+impl fn choose_input<R, ...Ps, ...As>(
+    mode: str, f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {list<Ps[k], 2>} } => 2
+
+fn choose_whole(items: list<i64, 2>) -> i64 => choose_input(7, identity, items)
+fn choose_split(items: list<i64, 2>) -> i64 => choose_input("split", identity, items)
+fn choose_generic<T>(items: list<T, 2>) -> i64 => choose_input(7, identity, items)
+
+test bare_callbacks_use_their_own_candidate_evidence {
+    assert eval choose_whole(items: [[2, 3]]) == [1]
+    assert eval choose_split(items: [[2, 3]]) == [2]
+    assert eval choose_generic<i64>(items: [[2, 3]]) == [1]
+}
+
+# GEN-2, GEN-3 and FN-17: written and ordinary-input bindings stay fixed
+# when the enclosing declaration's alternatives supply callback inputs.
+operator list_only<T>(items: T) -> i64
+impl fn list_only(items: list<i64, 2>) -> i64 => items[0]
+operator dict_only<T>(items: T) -> i64
+impl fn dict_only(items: dict<str, i64>) -> i64 => 3
+
+fn sized_callback<const N: i64, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], N>} } => 70
+fn keyed_callback<K, R, ...Ps, ...As>(mark: K, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], dict<K, Ps[k]>} } => 72
+
+fn list_binding(items: list<i64, 2>) -> i64 => sized_callback<3>(list_only, items)
+fn dict_binding(items: dict<str, i64>) -> i64 => keyed_callback(3, dict_only, items)
+fn list_split(items: list<i64, 2>) -> i64 => sized_callback<2>(identity, items)
+fn dict_split(items: dict<str, i64>) -> i64 => keyed_callback("key", identity, items)
+
+# GEN-3 and FN-17: the callback has a generic, but the list input is
+# already fixed by its declaration or by the receiving result type.
+fn fixed_list<const N: i64 = 0>(items: list<i64, 2>) -> i64 => N
+fn first_item<T>(items: list<T, 2>) -> T => items[0]
+operator fixed_whole_operator(items: list<i64, 2>) -> i64
+impl fn fixed_whole_operator(items: list<i64, 2>) -> i64 => items[0]
+fn sized_i64_callback<const N: i64, ...Ps, ...As>(f: fn(...{Ps}) -> i64, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], N>} } => 71
+
+fn fixed_list_binding(items: list<i64, 2>) -> i64 => sized_callback<2>(fixed_list, items)
+fn result_list_binding(items: list<i64, 2>) -> i64 => sized_i64_callback<2>(first_item, items)
+fn operator_list_binding(items: list<i64, 2>) -> i64 =>
+    sized_callback<2>(fixed_whole_operator, items)
+
+# The fixed input stays whole when another input of the same callback
+# still needs to learn its type from a split argument.
+fn fixed_and_inferred<T>(whole: list<i64, 2>, value: T) -> T => value
+fn mixed_callback<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+          && R == str => 73
+fn mixed_list_binding(items: list<i64, 2>, words: list<str, 2>) -> i64 =>
+    mixed_callback(fixed_and_inferred, whole: items, value: words)
+
+# GEN-2 and FN-17: this reflected callback determines the earlier
+# fixed callback's template even when that callback is written first.
+operator then_apply<R, ...Ps, ...As>(
+    g: fn(R) -> R, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+impl fn then_apply<R, ...Ps, ...As>(
+    g: fn(R) -> R, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} } => 1
+
+fn callback_order(value: i64) -> i64 => then_apply(identity, identity, value)
+
+# MAP-2: the ordinary Core candidate splits values and supplies the
+# fixed table whole despite the callback's unrelated generic.
+const fn scale_with_table<T>(x: i64, table: list<i64, 2>, factor: T) -> i64 => x + table[1]
+fn map_with_whole_table(values: list<i64, 2>, table: list<i64, 2>) -> list<i64, 2> =>
+    map(scale_with_table, values, table, 3)
+
+# GEN-3: a split alternative cannot change a callback's list input
+# into a scalar. If both candidates for the input are still lists,
+# normal specificity chooses the nested list's member.
+fn nested_callback<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+          && R == i64 => 74
+fn partially_known_list(items: list<i64, 2>) -> i64 => sized_callback<2>(first_item, items)
+fn both_list_shapes_fit(items: list<list<i64, 2>, 2>) -> i64 => nested_callback(first_item, items)
+
+test bare_callbacks_keep_known_outer_bindings {
+    assert eval list_binding(items: [[5, 6]]) == [70]
+    assert eval dict_binding(items: [["a": 8]]) == [72]
+    assert eval list_split(items: [[5, 6]]) == [70]
+    assert eval dict_split(items: [["a": 8]]) == [72]
+    assert eval fixed_list_binding(items: [[5, 6]]) == [70]
+    assert eval result_list_binding(items: [[5, 6]]) == [71]
+    assert eval operator_list_binding(items: [[5, 6]]) == [70]
+    assert eval partially_known_list(items: [[5, 6]]) == [70]
+    assert eval both_list_shapes_fit(items: [[[5, 6], [7, 8]]]) == [74]
+    assert eval mixed_list_binding(items: [[5, 6]], words: [["a", "b"]]) == [73]
+    assert eval callback_order(value: [4]) == [1]
+    assert eval map_with_whole_table(values: [[1, 2]], table: [[10, 20]]) == [[21, 22]]
+}
+
+# GEN-2 and GEN-3: the i64 alternative supplies no binding for the
+# scalar input. The other argument can still resolve their shared T.
+fn pair_first<T>(a: T, b: T) -> T => a
+fn sibling_callback<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64, list<Ps[k], 2>} } => 75
+fn sibling_order(x: i64, pair: list<i64, 2>) -> i64 => sibling_callback(pair_first, x, pair)
+fn sibling_reverse(x: i64, pair: list<i64, 2>) -> i64 => sibling_callback(pair_first, pair, x)
+
+# GEN-2 and GEN-8: N is already three when the public constraint
+# determines which callback alternatives fit a list of two.
+operator default_public<R, ...Ps, ...As, const N: i64 = 3>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], N>} }
+impl fn default_public<R, ...Ps, ...As, const N: i64 = 3>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64 => 76
+operator default_both<R, ...Ps, ...As, const N: i64 = 3>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], N>} }
+impl fn default_both<R, ...Ps, ...As, const N: i64 = 3>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], N>} } => 77
+
+fn public_default(items: list<i64, 2>) -> i64 => default_public(identity, items)
+fn public_and_candidate_default(items: list<i64, 2>) -> i64 => default_both(identity, items)
+
+# GEN-3, GEN-4 and GEN-6: the selected reading meets the requirements
+# of both the public signature and the candidate.
+operator whole_candidate<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+impl fn whole_candidate<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k]} } => 78
+fn combined_requirements(items: list<i64, 2>) -> i64 => whole_candidate(identity, items)
+
+# FN-17 and GEN-12: the earlier callback already says that shared R
+# is a list. The dependent callback then resolves its element type.
+fn keep_list<T>(items: list<T, 2>) -> list<T, 2> => items
+fn then_apply_function<R, ...Ps, ...As>(g: fn(R) -> R, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} } => 79
+fn shared_shape_operator(items: list<i64, 2>) -> i64 => then_apply(keep_list, identity, items)
+fn shared_shape_function(items: list<i64, 2>) -> i64 => then_apply_function(keep_list, identity, items)
+
+test bare_callback_constraints_across_the_call {
+    assert eval sibling_order(x: [4], pair: [[5, 6]]) == [75]
+    assert eval sibling_reverse(x: [4], pair: [[5, 6]]) == [75]
+    assert eval public_default(items: [[5, 6]]) == [76]
+    assert eval public_and_candidate_default(items: [[5, 6]]) == [77]
+    assert eval combined_requirements(items: [[5, 6]]) == [78]
+    assert eval shared_shape_operator(items: [[5, 6]]) == [1]
+    assert eval shared_shape_function(items: [[5, 6]]) == [79]
+}
+
+# GEN-3 and FN-17: positive equalities resolve the callback result
+# before the dependent membership can choose between whole and split.
+fn require_list<R, L, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires R == L && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} } && L == list<i64, 2> => 80
+fn require_scalar<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} } && R == i64 => 81
+operator require_public<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires R == list<i64, 2> && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+impl fn require_public<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64 => 82
+
+# FN-17: a candidate's result type resolves the callback even when
+# the winning i64 alternative gives no binding of its own.
+operator require_candidate<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+impl fn require_candidate<...Ps, ...As>(f: fn(...{Ps}) -> i64, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => 83
+
+fn equality_choices(items: list<i64, 2>) -> i64 =>
+    require_list(identity, items) + require_scalar(identity, items) + require_public(identity, items)
+fn candidate_result(value: i64) -> i64 => require_candidate(identity, value)
+
+test bare_callback_results_from_requirements {
+    assert eval equality_choices(items: [[1, 2]]) == [243]
+    assert eval candidate_result(value: [5]) == [83]
+}
