@@ -124,6 +124,21 @@ fn input_known(value: i64) -> i64 => select(fixed, value)
 }
 
 #[test]
+fn a_nonbinding_argument_still_has_to_fit_the_type_its_sibling_supplies() {
+    // GEN-2, GEN-3 and FN-17: y decides T=str, but the non-binding i64
+    // alternative cannot make the original i64 argument a str.
+    rejects(
+        r#"module m
+fn pair<T>(x: T, y: T) -> T => x
+fn select<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => 3
+fn invalid(x: i64, y: str) -> i64 => select(pair, x, y)
+"#,
+        "type/generic.unresolved",
+    );
+}
+
+#[test]
 fn bare_callback_trials_keep_the_public_operator_diagnostic() {
     // GEN-3 and GEN-4: a public condition belongs to the operator, even
     // when more than one callback trial independently fails it.

@@ -142,48 +142,96 @@ impl CallbackEvidence {
         evidence
     }
 
-    /// Read the most specific alternatives compatible with the argument and
-    /// the callback input. A non-binding winner is still a winner (GEN-3).
+    /// Select among compatible alternatives within each positive
+    /// membership (GEN-3). A winner that gives no binding leaves the
+    /// input open for other type evidence.
     pub(super) fn resolve(
         &self,
         name: Option<&str>,
         position: Option<usize>,
         actual: &Type,
         compatible: impl Fn(&Type) -> bool,
-    ) -> Result<Type, ()> {
-        let mut matches = Vec::new();
-        for membership in &self.0 {
-            if membership.applies(name, position) {
-                matches.extend(membership.patterns.iter().filter_map(|pattern| {
-                    let bindings = membership.fit(pattern, actual)?;
-                    if let Some(Argument::Type(ty)) = &bindings[membership.target]
-                        && !compatible(ty)
-                    {
-                        return None;
-                    }
-                    Some((membership, pattern, bindings))
-                }));
-            }
-        }
+    ) -> Result<Option<Type>, ()> {
+        let groups: Vec<Vec<_>> = self
+            .0
+            .iter()
+            .filter(|membership| membership.applies(name, position))
+            .map(|membership| {
+                membership
+                    .patterns
+                    .iter()
+                    .filter_map(|pattern| {
+                        let bindings = membership.fit(pattern, actual)?;
+                        if selected_type(&bindings, membership.target)
+                            .is_some_and(|ty| !compatible(ty))
+                        {
+                            return None;
+                        }
+                        Some((membership, pattern, bindings))
+                    })
+                    .collect()
+            })
+            .collect();
+        let permitted = |ty: &Type| {
+            groups.iter().all(|group| {
+                group.iter().any(|(membership, _, bindings)| {
+                    selected_type(bindings, membership.target)
+                        .is_none_or(|other| same_type(ty, other) != Some(false))
+                })
+            })
+        };
         let mut resolved = None;
-        for (membership, pattern, bindings) in &matches {
-            if matches.iter().any(|(other, candidate, found)| {
-                alternative_outranks(
-                    (candidate, &other.generics, found),
-                    (pattern, &membership.generics, bindings),
-                )
-            }) {
-                continue;
+        let mut nonbinding = false;
+        for group in &groups {
+            let admitted: Vec<_> = group
+                .iter()
+                .filter(|(membership, _, bindings)| {
+                    selected_type(bindings, membership.target).is_none_or(permitted)
+                })
+                .collect();
+            let mut binding = None;
+            let mut open = false;
+            let mut conflicting = false;
+            for (membership, pattern, bindings) in &admitted {
+                if admitted.iter().any(|(other, candidate, found)| {
+                    alternative_outranks(
+                        (candidate, &other.generics, found),
+                        (pattern, &membership.generics, bindings),
+                    )
+                }) {
+                    continue;
+                }
+                let Some(ty) = selected_type(bindings, membership.target) else {
+                    open = true;
+                    continue;
+                };
+                conflicting |=
+                    binding.is_some_and(|previous| same_type(previous, ty) != Some(true));
+                binding = Some(ty);
             }
-            let Some(Argument::Type(ty)) = &bindings[membership.target] else {
+            // This requirement supplies no binding where one of its
+            // best alternatives is independent of the callback input.
+            if open {
+                nonbinding = true;
+            } else if conflicting {
                 return Err(());
-            };
-            if resolved.is_some_and(|previous| same_type(previous, ty) != Some(true)) {
-                return Err(());
+            } else if let Some(ty) = binding {
+                if resolved.is_some_and(|previous| same_type(previous, ty) != Some(true)) {
+                    return Err(());
+                }
+                resolved = Some(ty);
             }
-            resolved = Some(ty);
         }
-        Ok(resolved.unwrap_or(actual).clone())
+        Ok(resolved
+            .or_else(|| (!nonbinding).then_some(actual))
+            .cloned())
+    }
+}
+
+fn selected_type(bindings: &[Option<Argument>], target: usize) -> Option<&Type> {
+    match &bindings[target] {
+        Some(Argument::Type(ty)) => Some(ty),
+        _ => None,
     }
 }
 

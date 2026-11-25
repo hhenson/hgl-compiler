@@ -1104,7 +1104,7 @@ impl<'a> Typer<'a> {
                 value
                     .clone()
                     .or_else(|| {
-                        dependent.filter(|pack| pack.without.contains(&generic.at))?;
+                        dependent?;
                         self.default_constant(declared, generic)
                             .map(Argument::Constant)
                     })
@@ -1159,6 +1159,7 @@ impl<'a> Typer<'a> {
                         value: value.clone(),
                         by_place: false,
                         by_function: false,
+                        type_evidence: true,
                         dependent_callback: None,
                         explicit: None,
                         retried: false,
@@ -1173,6 +1174,26 @@ impl<'a> Typer<'a> {
             .map(|given| (given.key.name(), &given.value))
             .collect();
         let excluded = dependent.map_or_else(Vec::new, |pack| pack_exclusions(pack, &map));
+        let result_shapes = dependent
+            .filter(|_| evidence.as_ref().is_some_and(|value| !value.is_empty()))
+            .and_then(|pack| {
+                let parameter = public
+                    .parameters
+                    .iter()
+                    .find(|parameter| parameter.at == pack.function)?;
+                let Type::Function(template) = &parameter.ty else {
+                    return None;
+                };
+                Some(self.sibling_result_shapes(
+                    public,
+                    template.result.as_ref(),
+                    &map,
+                    written.iter().filter_map(|(key, node, _)| {
+                        Some((&public.parameters[key.public_parameter(public)?].ty, node))
+                    }),
+                ))
+            })
+            .unwrap_or_default();
         written
             .into_iter()
             .enumerate()
@@ -1233,6 +1254,7 @@ impl<'a> Typer<'a> {
                         value: replayed.arguments[position].value.clone(),
                         by_place,
                         by_function,
+                        type_evidence: true,
                         dependent_callback,
                         explicit: explicit.cloned(),
                         retried: by_place || by_function,
@@ -1244,6 +1266,7 @@ impl<'a> Typer<'a> {
                         value,
                         by_place: false,
                         by_function: false,
+                        type_evidence: true,
                         dependent_callback: None,
                         explicit: None,
                         retried: false,
@@ -1258,6 +1281,7 @@ impl<'a> Typer<'a> {
                             supplied: Some(&supplied),
                             excluded: &excluded,
                             evidence: evidence.as_ref(),
+                            result_shapes: &result_shapes,
                         }
                     } else {
                         CallbackInputs::default()
@@ -1274,6 +1298,7 @@ impl<'a> Typer<'a> {
                         value,
                         by_place: false,
                         by_function,
+                        type_evidence: true,
                         dependent_callback,
                         explicit: None,
                         retried: by_function,
@@ -1293,6 +1318,7 @@ impl<'a> Typer<'a> {
                         },
                         by_place: false,
                         by_function: true,
+                        type_evidence: true,
                         dependent_callback,
                         explicit: None,
                         retried: true,
@@ -1306,6 +1332,7 @@ impl<'a> Typer<'a> {
                         value,
                         by_place: false,
                         by_function: false,
+                        type_evidence: true,
                         dependent_callback: None,
                         explicit: Some(ty.clone()),
                         retried: false,
@@ -1624,6 +1651,7 @@ impl<'a> Typer<'a> {
             key,
             by_place,
             by_function: false,
+            type_evidence: true,
             dependent_callback: None,
             value,
             explicit: None,

@@ -447,7 +447,7 @@ operator then_apply<R, ...Ps, ...As>(
     g: fn(R) -> R, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
 impl fn then_apply<R, ...Ps, ...As>(
     g: fn(R) -> R, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
-    requires each k in arg_keys(As) { As[k] in {Ps[k]} } => 1
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} } => 1
 
 fn callback_order(value: i64) -> i64 => then_apply(identity, identity, value)
 
@@ -479,4 +479,51 @@ test bare_callbacks_keep_known_outer_bindings {
     assert eval mixed_list_binding(items: [[5, 6]], words: [["a", "b"]]) == [73]
     assert eval callback_order(value: [4]) == [1]
     assert eval map_with_whole_table(values: [[1, 2]], table: [[10, 20]]) == [[21, 22]]
+}
+
+# GEN-2 and GEN-3: the i64 alternative supplies no binding for the
+# scalar input. The other argument can still resolve their shared T.
+fn pair_first<T>(a: T, b: T) -> T => a
+fn sibling_callback<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64, list<Ps[k], 2>} } => 75
+fn sibling_order(x: i64, pair: list<i64, 2>) -> i64 => sibling_callback(pair_first, x, pair)
+fn sibling_reverse(x: i64, pair: list<i64, 2>) -> i64 => sibling_callback(pair_first, pair, x)
+
+# GEN-2 and GEN-8: N is already three when the public constraint
+# determines which callback alternatives fit a list of two.
+operator default_public<R, ...Ps, ...As, const N: i64 = 3>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], N>} }
+impl fn default_public<R, ...Ps, ...As, const N: i64 = 3>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64 => 76
+operator default_both<R, ...Ps, ...As, const N: i64 = 3>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], N>} }
+impl fn default_both<R, ...Ps, ...As, const N: i64 = 3>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], N>} } => 77
+
+fn public_default(items: list<i64, 2>) -> i64 => default_public(identity, items)
+fn public_and_candidate_default(items: list<i64, 2>) -> i64 => default_both(identity, items)
+
+# GEN-3, GEN-4 and GEN-6: the selected reading meets the requirements
+# of both the public signature and the candidate.
+operator whole_candidate<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+impl fn whole_candidate<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k]} } => 78
+fn combined_requirements(items: list<i64, 2>) -> i64 => whole_candidate(identity, items)
+
+# FN-17 and GEN-12: the earlier callback already says that shared R
+# is a list. The dependent callback then resolves its element type.
+fn keep_list<T>(items: list<T, 2>) -> list<T, 2> => items
+fn then_apply_function<R, ...Ps, ...As>(g: fn(R) -> R, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} } => 79
+fn shared_shape_operator(items: list<i64, 2>) -> i64 => then_apply(keep_list, identity, items)
+fn shared_shape_function(items: list<i64, 2>) -> i64 => then_apply_function(keep_list, identity, items)
+
+test bare_callback_constraints_across_the_call {
+    assert eval sibling_order(x: [4], pair: [[5, 6]]) == [75]
+    assert eval sibling_reverse(x: [4], pair: [[5, 6]]) == [75]
+    assert eval public_default(items: [[5, 6]]) == [76]
+    assert eval public_and_candidate_default(items: [[5, 6]]) == [77]
+    assert eval combined_requirements(items: [[5, 6]]) == [78]
+    assert eval shared_shape_operator(items: [[5, 6]]) == [1]
+    assert eval shared_shape_function(items: [[5, 6]]) == [79]
 }

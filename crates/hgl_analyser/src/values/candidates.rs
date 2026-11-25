@@ -1792,6 +1792,17 @@ impl<'a> Typer<'a> {
                     .map(|&index| (checking[index].key.name(), &checking[index].value))
                     .collect();
                 let excluded: Vec<_> = reading.excluded.iter().map(String::as_str).collect();
+                let Type::Function(written) = &parameter.ty else {
+                    return None;
+                };
+                let result_shapes = self.sibling_result_shapes(
+                    signature,
+                    written.result.as_ref(),
+                    &map,
+                    checking.iter().zip(bound).filter_map(|(argument, slot)| {
+                        Some((&signature.parameters[slot.parameter()?].ty, &argument.node))
+                    }),
+                );
                 self.operator_function_argument(
                     &given.node,
                     &reading.template,
@@ -1799,6 +1810,7 @@ impl<'a> Typer<'a> {
                         supplied: Some(&supplied),
                         excluded: &excluded,
                         evidence: Some(&evidence),
+                        result_shapes: &result_shapes,
                     },
                 )
             } else {
@@ -2927,6 +2939,9 @@ pub(super) struct Given {
     pub(super) by_place: bool,
     /// FN-17: read this static argument against the candidate's template.
     pub(super) by_function: bool,
+    /// A matching membership can leave this input for other arguments
+    /// to resolve. It still has its original type for admission (GEN-3).
+    pub(super) type_evidence: bool,
     /// FN-17: an operator candidate can derive a different reflected input
     /// type for the same bare function name.
     pub(super) dependent_callback: Option<Box<DependentCallback>>,
@@ -2971,6 +2986,15 @@ impl Given {
         self.explicit.as_ref().unwrap_or(&self.value.ty)
     }
 
+    /// An argument that contributes a type when resolving a bare callback.
+    pub(super) fn inference_type(&self) -> &Type {
+        if self.type_evidence {
+            self.ty()
+        } else {
+            &Type::Unknown
+        }
+    }
+
     /// An operand of a symbol, which is read before the symbol's
     /// candidates are: in the place `position`, with the value it has.
     pub(super) fn read(position: usize, node: SyntaxNode, value: Expr) -> Given {
@@ -2979,6 +3003,7 @@ impl Given {
             node,
             by_place: false,
             by_function: false,
+            type_evidence: true,
             dependent_callback: None,
             value,
             explicit: None,
@@ -3671,7 +3696,7 @@ fn candidate_bindings(
             continue;
         }
         for given in arguments {
-            let actual = given.ty();
+            let actual = given.inference_type();
             let actual = match converting {
                 Some((typer, forms, payload_parameters, rejects_form))
                     if !given.by_place && given.explicit.is_none() =>

@@ -14,7 +14,7 @@ use super::dependent_packs::PackTypes;
 use super::fit::{accepts_float, is_integer_literal, open, whole};
 use super::forwarded_packs::spread_operands;
 use super::inference::{
-    ExplicitGenerics, infer, mentions, pack_bounds, tuple_pack_bindings, type_pack,
+    ExplicitGenerics, infer, mentions, pack_bounds, tuple_pack_bindings, type_pack, unsaid,
 };
 use crate::declared::{agree, names_parameter, same_type, substitute_within};
 use crate::hir::{
@@ -83,6 +83,132 @@ impl<'a> Typer<'a> {
             at,
             category: ValueCategory::Value,
         }
+    }
+
+    /// Fixed sibling callbacks can constrain the shared result while
+    /// leaving its element types open (GEN-2, GEN-12, FN-17).
+    pub(super) fn sibling_result_shapes<'b>(
+        &self,
+        signature: &Signature,
+        result: Option<&Type>,
+        bindings: &[(Location, &Argument)],
+        siblings: impl IntoIterator<Item = (&'b Type, &'b SyntaxNode)>,
+    ) -> Vec<Type> {
+        let Some(result) = result else {
+            return Vec::new();
+        };
+        let known: Vec<_> = signature
+            .generics
+            .iter()
+            .map(|generic| {
+                bindings.iter().find_map(|(at, value)| {
+                    if *at != generic.at {
+                        return None;
+                    }
+                    match value {
+                        Argument::Type(ty) if !whole(ty) => None,
+                        Argument::Constant(value)
+                            if matches!(value.value, ConstantValue::Unknown) =>
+                        {
+                            None
+                        }
+                        value => Some((*value).clone()),
+                    }
+                })
+            })
+            .collect();
+        let mut shapes = Vec::new();
+        for (expected, node) in siblings {
+            let Type::Function(expected) = expected else {
+                continue;
+            };
+            if expected.named_pack.is_some() {
+                continue;
+            }
+            let node = ungrouped(node.clone());
+            if node.kind() != SyntaxKind::NameExpr || self.local_of(&node).is_some() {
+                continue;
+            }
+            let Some((module, declarations)) =
+                name_token(&node).and_then(|name| self.declarations(&name))
+            else {
+                continue;
+            };
+            let unit = &self.program.modules[module];
+            let preferred = if expected.value {
+                Role::Value
+            } else {
+                Role::Temporal
+            };
+            let kind = |index: usize| unit.declarations[index].kind;
+            let declared = declarations
+                .iter()
+                .copied()
+                .find(|&index| kind(index) == crate::program::DeclarationKind::Operator)
+                .or_else(|| {
+                    declarations
+                        .iter()
+                        .copied()
+                        .find(|&index| kind(index).role() == Some(preferred))
+                })
+                .or_else(|| {
+                    declarations
+                        .iter()
+                        .copied()
+                        .find(|&index| kind(index).role().is_some())
+                });
+            let Some(Detail::Callable(actual)) = declared.map(|index| &unit.details[index]) else {
+                continue;
+            };
+            let unknown_type = Argument::Type(Type::Unknown);
+            let unknown_value = Argument::Constant(unsaid());
+            let placeholders: Vec<_> = actual
+                .generics
+                .iter()
+                .map(|generic| {
+                    let value = if matches!(generic.kind, GenericKind::Value(_)) {
+                        &unknown_value
+                    } else {
+                        &unknown_type
+                    };
+                    (generic.at, value)
+                })
+                .collect();
+            let packs: Vec<_> = actual
+                .generics
+                .iter()
+                .filter_map(|generic| {
+                    matches!(generic.kind, GenericKind::Pack { .. }).then_some(generic.at)
+                })
+                .collect();
+            let inputs = expected
+                .ordinary_parameters()
+                .zip(
+                    actual
+                        .parameters
+                        .iter()
+                        .filter(|input| !input.configuration),
+                )
+                .map(|(expected, actual)| (expected.ty(), &actual.ty));
+            for (expected, actual) in inputs.chain(expected.result.iter().zip(&actual.result)) {
+                if mentions(actual, &packs) {
+                    continue;
+                }
+                let mut found = known.clone();
+                infer(expected, actual, &signature.generics, &mut found);
+                let map: Vec<_> = signature
+                    .generics
+                    .iter()
+                    .zip(&found)
+                    .filter_map(|(generic, value)| Some((generic.at, value.as_ref()?)))
+                    .collect();
+                let shape = substitute_within(&substitute_within(result, &map), &placeholders);
+                if !open(&shape) && shape != *result && !shapes.contains(&shape) {
+                    shapes.push(shape);
+                }
+            }
+        }
+        shapes
     }
 
     fn function_target(
@@ -301,7 +427,9 @@ impl<'a> Typer<'a> {
             Vec::new()
         };
         if let Some(pack) = &template.named_pack
-            && !given.iter().any(|argument| whole(argument.ty()))
+            && !given
+                .iter()
+                .any(|argument| whole(argument.inference_type()))
         {
             self.diagnostics.emit(error(
                 Category::Type,
@@ -612,7 +740,7 @@ impl<'a> Typer<'a> {
             if let Some(index) = callback_parameter(signature, &given.key) {
                 infer(
                     &signature.parameters[index].ty,
-                    given.ty(),
+                    given.inference_type(),
                     &signature.generics,
                     &mut found,
                 );
@@ -1320,6 +1448,8 @@ pub(super) struct CallbackInputs<'a> {
     pub(super) excluded: &'a [&'a str],
     /// The enclosing declaration's positive memberships of a supplied argument type.
     pub(super) evidence: Option<&'a CallbackEvidence>,
+    /// Known parts of the callback result required by other static arguments.
+    pub(super) result_shapes: &'a [Type],
 }
 
 /// Learn the bindings that precede dependent argument evidence (GEN-2, FN-17).
@@ -1362,7 +1492,13 @@ impl ReferenceShape {
     /// Trial substitution preserves whatever is already known. A tuple
     /// pack can take the sequence this type gives it, as in the final
     /// reference inference. Keep this trial separate from that inference.
-    fn fits(&self, typer: &Typer<'_>, signature: &Signature, input: &Type, actual: &Type) -> bool {
+    fn fits(
+        &self,
+        typer: &Typer<'_>,
+        signature: &Signature,
+        (input, actual): (&Type, &Type),
+        result_shapes: &[Type],
+    ) -> bool {
         let mut found = self.found.clone();
         infer(input, actual, &signature.generics, &mut found);
         let packs = tuple_pack_bindings(&signature.generics, &mut found, &typer.signature.generics);
@@ -1373,9 +1509,18 @@ impl ReferenceShape {
             .zip(&found)
             .filter_map(|(generic, value)| value.as_ref().map(|value| (generic.at, value)))
             .collect();
-        packs.project(input, &map).is_ok_and(|expected| {
-            same_type(&expected, actual) != Some(false) || typer.admits(&expected, actual)
-        })
+        let compatible = |expected: &Type, actual: &Type| {
+            same_type(expected, actual) != Some(false) || typer.admits(expected, actual)
+        };
+        packs
+            .project(input, &map)
+            .is_ok_and(|expected| compatible(&expected, actual))
+            && signature.result.as_ref().is_none_or(|result| {
+                result_shapes.is_empty()
+                    || packs.project(result, &map).is_ok_and(|result| {
+                        result_shapes.iter().all(|shape| compatible(shape, &result))
+                    })
+            })
     }
 }
 
@@ -1415,6 +1560,7 @@ fn reflected_arguments(
                 pack_position += 1;
                 Key::Position(position)
             };
+            let mut type_evidence = true;
             let ty = if let Some(evidence) = evidence {
                 let slot = key.public_parameter(public);
                 let name = key
@@ -1451,7 +1597,12 @@ fn reflected_arguments(
                     evidence
                         .resolve(name, position, &value.ty, |resolved| {
                             shape.zip(parameter).is_none_or(|(shape, parameter)| {
-                                shape.fits(typer, public, parameter, resolved)
+                                shape.fits(
+                                    typer,
+                                    public,
+                                    (parameter, resolved),
+                                    inputs.result_shapes,
+                                )
                             })
                         })
                         .map_err(|()| {
@@ -1464,13 +1615,18 @@ fn reflected_arguments(
                             "GEN-3",
                         ));
                         })?
+                        .unwrap_or_else(|| {
+                            type_evidence = false;
+                            value.ty.clone()
+                        })
                 }
             } else {
                 value.ty.clone()
             };
-            projected |= ty != value.ty;
+            projected |= !type_evidence || ty != value.ty;
             let mut argument = callback_operand(0, node, value.at, ty);
             argument.key = key;
+            argument.type_evidence = type_evidence;
             Ok(argument)
         })
         .collect::<Result<_, _>>()?;

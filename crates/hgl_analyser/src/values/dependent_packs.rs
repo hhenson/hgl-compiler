@@ -485,6 +485,22 @@ impl Typer<'_> {
                 .iter()
                 .map(|(offset, value)| (assigned[*offset].name_text(), value))
                 .collect();
+            let result_shapes =
+                if for_this.is_some() && evidence.as_ref().is_some_and(|value| !value.is_empty()) {
+                    self.sibling_result_shapes(
+                        signature,
+                        match &parameter.ty {
+                            Type::Function(written) => written.result.as_ref(),
+                            _ => None,
+                        },
+                        map,
+                        assigned.iter().filter_map(|entry| {
+                            Some((&signature.parameters[entry.slot?].ty, &entry.value))
+                        }),
+                    )
+                } else {
+                    Vec::new()
+                };
             let mut callback = self.function_argument_with_inputs(
                 &assigned[position].value,
                 &template,
@@ -492,6 +508,7 @@ impl Typer<'_> {
                     supplied: for_this.is_some().then_some(&arguments),
                     excluded: &excluded,
                     evidence: evidence.as_ref().filter(|_| for_this.is_some()),
+                    result_shapes: &result_shapes,
                 },
             );
             let mut reflected = reflect(&template, &callback);
