@@ -38,8 +38,8 @@ use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
 use crate::syntax::{child, name_token, tokens, ungrouped};
 use crate::types::{
-    Argument, Constant, ConstantValue, Detail, FunctionType, GenericKind, GenericParameter, Pack,
-    Scalar, Signature, Type,
+    Argument, Constant, ConstantValue, Detail, FunctionType, GenericKind, GenericParameter,
+    NamedKind, Pack, Scalar, Signature, Type,
 };
 use crate::{codes, error};
 
@@ -3588,6 +3588,28 @@ fn instance<'s>(
     ))
 }
 
+/// The one destination that core's two permitted enum results share.
+fn enum_conversion_destination<'a>(one: &'a Type, two: &'a Type) -> Option<&'a Type> {
+    match (one, two) {
+        (destination, Type::Result { value, error })
+        | (Type::Result { value, error }, destination)
+            if **error == Type::Error
+                && destination == value.as_ref()
+                && matches!(
+                    destination,
+                    Type::Named {
+                        kind: NamedKind::Enum,
+                        ..
+                    } | Type::Parameter { .. }
+                        | Type::PackMember { .. }
+                ) =>
+        {
+            Some(destination)
+        }
+        _ => None,
+    }
+}
+
 /// Infer a candidate's generic parameters from the requested result and
 /// the arguments known so far. Unresolved parameters can still provide
 /// the known parts of a function template (FN-17, GEN-2, GEN-6).
@@ -3643,6 +3665,22 @@ fn candidate_bindings(
                 text: constant_text(&given.node),
                 value,
             }));
+        }
+    }
+    // OPS-4, OPS-7: `convert<E>` states the enum even when the result's
+    // place says nothing. The policy still selects `E` or `result<E, error>`.
+    if Some(module) == typer.program.core()
+        && declaration.name == "convert"
+        && let Some(result) = signature.result.as_ref()
+        && let Some([one, two]) = wanted.among.as_deref()
+        && let Some(destination) = enum_conversion_destination(one, two)
+    {
+        let success = match result {
+            Type::Result { value, error } if **error == Type::Error => value.as_ref(),
+            other => other,
+        };
+        if bare_parameter(success, generics).is_some() {
+            infer(success, destination, generics, &mut found);
         }
     }
     // GEN-5: "Match candidates against the requested output before
