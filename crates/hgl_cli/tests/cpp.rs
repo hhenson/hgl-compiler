@@ -1027,8 +1027,8 @@ fn nested_forms_run_on_the_sdk() {
     );
 }
 
-/// TIME-1: a guarded position of a fixed-list field reads its endpoint,
-/// including when the struct input is supplied by a fitted pack.
+/// TIME-1: a guarded child of a fixed-list field reads its own endpoint
+/// through nested fields or positions, including a fitted struct input.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn fixed_list_fields_run_on_the_sdk() {
@@ -1045,7 +1045,7 @@ fn fixed_list_fields_run_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
