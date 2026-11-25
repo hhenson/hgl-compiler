@@ -8,25 +8,42 @@ use super::Candidate;
 use super::candidates::alternative_outranks;
 use super::dependent_packs::dependent_slot;
 use super::fit::whole;
-use super::inference::{infer, type_pack};
+use super::inference::{infer, mentions, type_pack};
 use super::requirements::{conjoined_terms, pack_view};
 use crate::declared::{
     same_type, substitute_with_members, substitute_with_packs, substitute_within, weight,
 };
+use crate::program::{Declaration, Module};
 use crate::syntax::{child, tokens};
-use crate::types::{Argument, ConstantValue, GenericKind, GenericParameter, Type};
+use crate::types::{Argument, ConstantValue, GenericKind, GenericParameter, Signature, Type};
 use crate::{Program, ReflectedPack};
 
 /// Selection evidence only. The enclosing call still receives the original argument.
 #[derive(Default)]
-pub(super) struct CallbackEvidence(Vec<Membership>);
+pub(super) struct CallbackEvidence {
+    memberships: Vec<Membership>,
+    results: Vec<Type>,
+}
 
 impl CallbackEvidence {
     /// Does any positive membership give a type to this callback?
     pub(super) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.memberships.is_empty()
     }
 
+    /// A known result that fits the open template and every declaration.
+    pub(super) fn expected_result(&self, current: &Type) -> Option<&Type> {
+        let (result, rest) = self.results.split_first()?;
+        (!self.is_empty()
+            && !whole(current)
+            && same_type(current, result) != Some(false)
+            && rest
+                .iter()
+                .all(|other| same_type(result, other) == Some(true)))
+        .then_some(result)
+    }
+
+    /// Read the receiver's evidence and, in an operator trial, its candidate's.
     pub(super) fn from_callables<'a, 'b>(
         program: &Program,
         callables: impl IntoIterator<Item = (Candidate<'a>, &'b [(Location, &'b Argument)])>,
@@ -54,11 +71,11 @@ impl CallbackEvidence {
             };
             let source = &signature.generics[source];
             let callback = unit.dependent_packs[&supplied.at].function;
-            let Some(target) = signature.parameters.iter().find_map(|parameter| {
+            let Some(template) = signature.parameters.iter().find_map(|parameter| {
                 if parameter.at == callback
                     && let Type::Function(template) = &parameter.ty
                 {
-                    template.named_pack.as_ref()
+                    Some(template)
                 } else {
                     None
                 }
@@ -66,6 +83,17 @@ impl CallbackEvidence {
                 continue;
             };
             let declared = &unit.declarations[declaration];
+            if let Some(result) = template
+                .result
+                .as_ref()
+                .and_then(|result| required_result(unit, declared, signature, result, &fixed))
+                && !evidence.results.contains(&result)
+            {
+                evidence.results.push(result);
+            }
+            let Some(target) = &template.named_pack else {
+                continue;
+            };
             let Some(condition) = child(&declared.syntax, SyntaxKind::RequiresClause)
                 .and_then(|clause| clause.children().next())
             else {
@@ -134,7 +162,7 @@ impl CallbackEvidence {
             let mut generics = signature.generics.clone();
             generics.push(variable);
             evidence
-                .0
+                .memberships
                 .extend(relations.iter().filter_map(|(relation, bound)| {
                     Membership::read(relation, *bound, source, target, &generics, &type_at)
                 }));
@@ -153,7 +181,7 @@ impl CallbackEvidence {
         compatible: impl Fn(&Type) -> bool,
     ) -> Result<Option<Type>, ()> {
         let groups: Vec<Vec<_>> = self
-            .0
+            .memberships
             .iter()
             .filter(|membership| membership.applies(name, position))
             .map(|membership| {
@@ -226,6 +254,46 @@ impl CallbackEvidence {
             .or_else(|| (!nonbinding).then_some(actual))
             .cloned())
     }
+}
+
+/// A positive equality can give a callback result independently of the
+/// surrounding result's provisional binding (GEN-3, FN-17).
+fn required_result(
+    unit: &Module,
+    declaration: &Declaration,
+    signature: &Signature,
+    written: &Type,
+    fixed: &[(Location, &Argument)],
+) -> Option<Type> {
+    let own: Vec<_> = signature
+        .generics
+        .iter()
+        .map(|generic| generic.at)
+        .collect();
+    if !mentions(written, &own) {
+        return whole(written).then(|| written.clone());
+    }
+    let mut found: Vec<_> = own
+        .iter()
+        .map(|&at| {
+            // Trial the equality without a provisional guess for the type
+            // it must prove. Other generics can supply known data to it.
+            if mentions(written, &[at]) {
+                return None;
+            }
+            fixed
+                .iter()
+                .find_map(|(key, value)| (*key == at).then(|| (*value).clone()))
+        })
+        .collect();
+    super::quantifiers::bind(unit, declaration, &signature.generics, &[], &mut found);
+    let solved: Vec<_> = own
+        .iter()
+        .zip(&found)
+        .filter_map(|(&at, value)| Some((at, value.as_ref()?)))
+        .collect();
+    let result = substitute_within(written, &solved);
+    (whole(&result) && !mentions(&result, &own)).then_some(result)
 }
 
 fn selected_type(bindings: &[Option<Argument>], target: usize) -> Option<&Type> {

@@ -527,3 +527,28 @@ test bare_callback_constraints_across_the_call {
     assert eval shared_shape_operator(items: [[5, 6]]) == [1]
     assert eval shared_shape_function(items: [[5, 6]]) == [79]
 }
+
+# GEN-3 and FN-17: positive equalities resolve the callback result
+# before the dependent membership can choose between whole and split.
+fn require_list<R, L, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires R == L && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} } && L == list<i64, 2> => 80
+fn require_scalar<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} } && R == i64 => 81
+operator require_public<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires R == list<i64, 2> && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+impl fn require_public<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64 => 82
+
+# FN-17: a candidate's result type resolves the callback even when
+# the winning i64 alternative gives no binding of its own.
+operator require_candidate<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+impl fn require_candidate<...Ps, ...As>(f: fn(...{Ps}) -> i64, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => 83
+
+fn equality_choices(items: list<i64, 2>) -> i64 =>
+    require_list(identity, items) + require_scalar(identity, items) + require_public(identity, items)
+fn candidate_result(value: i64) -> i64 => require_candidate(identity, value)
+
+test bare_callback_results_from_requirements {
+    assert eval equality_choices(items: [[1, 2]]) == [243]
+    assert eval candidate_result(value: [5]) == [83]
+}

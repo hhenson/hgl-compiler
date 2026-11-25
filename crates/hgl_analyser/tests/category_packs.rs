@@ -139,6 +139,21 @@ fn invalid(x: i64, y: str) -> i64 => select(pair, x, y)
 }
 
 #[test]
+fn a_callback_result_equality_still_requires_a_compatible_operand() {
+    // GEN-3 and FN-17: the stated str result fixes identity's input,
+    // but the original list fits neither str nor list<str, 2>.
+    rejects(
+        r#"module m
+fn identity<T>(value: T) -> T => value
+fn select<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires R == str && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} } => 3
+fn invalid(input: list<i64, 2>) -> i64 => select(identity, input)
+"#,
+        "constraint/requires.unmet",
+    );
+}
+
+#[test]
 fn bare_callback_trials_keep_the_public_operator_diagnostic() {
     // GEN-3 and GEN-4: a public condition belongs to the operator, even
     // when more than one callback trial independently fails it.

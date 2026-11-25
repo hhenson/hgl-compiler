@@ -319,6 +319,11 @@ impl<'a> Typer<'a> {
             .map(|_| reflected_arguments(self, signature, template, node, inputs, known.as_ref()))
             .transpose()
             .ok()?;
+        let constrained = inputs.expected_result(node, template).map(|result| {
+            let mut template = template.clone();
+            template.result = Some(result.clone());
+            template
+        });
         let ReferenceArguments {
             generics,
             type_packs,
@@ -327,7 +332,10 @@ impl<'a> Typer<'a> {
             node,
             name,
             (declared, signature),
-            (template, given.as_ref().map(|(given, _)| given.as_slice())),
+            (
+                constrained.as_ref().unwrap_or(template),
+                given.as_ref().map(|(given, _)| given.as_slice()),
+            ),
         )?;
         let map = signature
             .generics
@@ -542,7 +550,9 @@ impl<'a> Typer<'a> {
             }
         }
         let wanted = Wanted {
-            place: request.result.as_ref(),
+            place: inputs
+                .expected_result(node, template)
+                .or(request.result.as_ref()),
             among: explicit
                 .as_ref()
                 .and_then(|operator| operator.among.clone()),
@@ -1452,6 +1462,16 @@ pub(super) struct CallbackInputs<'a> {
     pub(super) result_shapes: &'a [Type],
 }
 
+impl CallbackInputs<'_> {
+    /// The enclosing requirement or candidate fixes a bare callback result.
+    fn expected_result(&self, node: &SyntaxNode, template: &FunctionType) -> Option<&Type> {
+        if node.kind() != SyntaxKind::NameExpr {
+            return None;
+        }
+        self.evidence?.expected_result(template.result.as_ref()?)
+    }
+}
+
 /// Learn the bindings that precede dependent argument evidence (GEN-2, FN-17).
 fn infer_reference_template(
     signature: &Signature,
@@ -1492,13 +1512,14 @@ impl ReferenceShape {
     /// Trial substitution preserves whatever is already known. A tuple
     /// pack can take the sequence this type gives it, as in the final
     /// reference inference. Keep this trial separate from that inference.
-    fn fits(
+    fn fits<'r>(
         &self,
         typer: &Typer<'_>,
         signature: &Signature,
         (input, actual): (&Type, &Type),
-        result_shapes: &[Type],
+        result_shapes: impl Iterator<Item = &'r Type>,
     ) -> bool {
+        let mut result_shapes = result_shapes.peekable();
         let mut found = self.found.clone();
         infer(input, actual, &signature.generics, &mut found);
         let packs = tuple_pack_bindings(&signature.generics, &mut found, &typer.signature.generics);
@@ -1516,10 +1537,10 @@ impl ReferenceShape {
             .project(input, &map)
             .is_ok_and(|expected| compatible(&expected, actual))
             && signature.result.as_ref().is_none_or(|result| {
-                result_shapes.is_empty()
-                    || packs.project(result, &map).is_ok_and(|result| {
-                        result_shapes.iter().all(|shape| compatible(shape, &result))
-                    })
+                result_shapes.peek().is_none()
+                    || packs
+                        .project(result, &map)
+                        .is_ok_and(|result| result_shapes.all(|shape| compatible(shape, &result)))
             })
     }
 }
@@ -1538,6 +1559,7 @@ fn reflected_arguments(
     let operator_shape = (declared_shape.is_none() && evidence.is_some())
         .then(|| ReferenceShape::new(public, template));
     let shape = declared_shape.or(operator_shape.as_ref());
+    let required_result = inputs.expected_result(node, template);
     let fixed = public.positional_parameters().count();
     let mut remaining = public
         .positional_parameters()
@@ -1601,7 +1623,7 @@ fn reflected_arguments(
                                     typer,
                                     public,
                                     (parameter, resolved),
-                                    inputs.result_shapes,
+                                    inputs.result_shapes.iter().chain(required_result),
                                 )
                             })
                         })

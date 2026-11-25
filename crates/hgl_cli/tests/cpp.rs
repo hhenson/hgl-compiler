@@ -3125,7 +3125,7 @@ fn function_parameters_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 9 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
