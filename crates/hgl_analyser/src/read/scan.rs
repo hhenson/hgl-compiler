@@ -4,7 +4,7 @@ use hgl_diagnostics::Location;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::Span;
 
-use crate::program::{Binding, DeclarationKind, LocalKind};
+use crate::program::{Binding, DeclarationKind, LocalKind, Role};
 use crate::syntax::{child, name_token, tokens};
 use crate::types::{CallArguments, DeltaInput, Type};
 
@@ -76,7 +76,7 @@ impl Reader<'_> {
                     // arguments are checked against is for the pass that
                     // selects them.
                     if let Some(list) = child(&node, SyntaxKind::GenericArgs) {
-                        self.arguments(&list, Position::OPEN, None, None);
+                        self.arguments(&list, Position::OPEN, None, None, false);
                     }
                 }
                 SyntaxKind::ConstraintRelation
@@ -361,7 +361,8 @@ impl Reader<'_> {
                 .map(|argument| self.at(argument.span()))
                 .collect();
             let callee = self.callable_named(node);
-            let arguments = self.arguments(&list, Position::ARGUMENT, None, callee);
+            let paired = self.callable_has_pair(node);
+            let arguments = self.arguments(&list, Position::ARGUMENT, None, callee, paired);
             self.read.insert(span.start, Type::Unknown);
             self.calls.push(CallArguments {
                 at: self.at(span),
@@ -374,7 +375,8 @@ impl Reader<'_> {
     }
 
     /// The function or operator the name `node` uses is bound to: the
-    /// first of a pair (FN-4), whose generic parameters are the other's.
+    /// first of a pair (FN-4). A contextual Type argument of a pair is
+    /// deferred until the expression reader selects a role.
     fn callable_named(&self, node: &SyntaxNode) -> Option<Id> {
         let name = name_token(node)?;
         let Some(Binding::Declarations {
@@ -396,6 +398,29 @@ impl Reader<'_> {
                 )
             })
             .map(|index| (*module, index))
+    }
+
+    /// FN-4/6: generic kinds belong to the selected definition of a pair.
+    fn callable_has_pair(&self, node: &SyntaxNode) -> bool {
+        let Some(name) = name_token(node) else {
+            return false;
+        };
+        let Some(Binding::Declarations {
+            module,
+            declarations,
+        }) = self.bindings.get(&(self.file, name.span().start)).copied()
+        else {
+            return false;
+        };
+        let has = |role| {
+            declarations.iter().any(|&index| {
+                self.program.modules[*module].declarations[index]
+                    .kind
+                    .binding_role()
+                    == Some(role)
+            })
+        };
+        has(Role::Value) && has(Role::Temporal)
     }
 
     /// True when the name `node` uses is bound to a function or an

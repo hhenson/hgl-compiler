@@ -447,6 +447,7 @@ pub(crate) fn reread_parameter_default(
     (module, declaration): (usize, usize),
     arguments: &[Argument],
     default: &DefaultExpr,
+    project: &dyn Fn(&Type) -> Type,
     diagnostics: &mut Diagnostics,
 ) -> Option<DefaultExpr> {
     let owner = &program.modules[module];
@@ -475,7 +476,10 @@ pub(crate) fn reread_parameter_default(
     let mut signature = super::candidates::in_instance(read, &map);
     // Keep the source location used by default_at, but read only this
     // omitted parameter. Other defaults are independent (UNIT-7).
-    signature.parameters = vec![signature.parameters[index].clone()];
+    signature.parameters = vec![Parameter {
+        ty: project(&read.parameters[index].ty),
+        ..read.parameters[index].clone()
+    }];
     let (bindings, mut written, mut calls) = tables(owner);
     let span = initialized.span();
     let within =
@@ -483,7 +487,7 @@ pub(crate) fn reread_parameter_default(
     let types: Vec<_> = written
         .iter()
         .filter(|&(&at, _)| within(at))
-        .map(|(&at, ty)| (at, substitute_within(ty, &map)))
+        .map(|(&at, ty)| (at, project(ty)))
         .collect();
     written.extend(types.iter().map(|(at, ty)| (*at, ty)));
     let applied_calls: Vec<_> = calls
@@ -497,7 +501,15 @@ pub(crate) fn reread_parameter_default(
                     arguments: call
                         .arguments
                         .iter()
-                        .map(|(at, argument)| (*at, crate::instance::placed(argument, &map)))
+                        .map(|(at, argument)| {
+                            (
+                                *at,
+                                match argument {
+                                    Argument::Type(ty) => Argument::Type(project(ty)),
+                                    _ => crate::instance::placed(argument, &map),
+                                },
+                            )
+                        })
                         .collect(),
                 },
             )

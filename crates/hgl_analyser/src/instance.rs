@@ -169,21 +169,28 @@ impl Program {
         parameter: &Parameter,
         diagnostics: &mut Diagnostics,
     ) -> DefaultExpr {
-        self.specialize_parameter_default(default, operator, generics, parameter, diagnostics)
+        self.specialize_parameter_default(default, operator, generics, &[], parameter, diagnostics)
     }
 
     /// Places a default in its defining callable's scope and fits it
-    /// against the selected parameter type (UNIT-7, UNIT-8).
+    /// against the selected parameter type (UNIT-7, UNIT-8). A cold type
+    /// query also receives the call's bound type packs (GEN-10, TYPE-18).
     pub fn specialize_parameter_default(
         &self,
         default: &DefaultExpr,
         operator: (usize, usize),
         generics: &[Argument],
+        type_packs: &[TypePackArgument],
         parameter: &Parameter,
         diagnostics: &mut Diagnostics,
     ) -> DefaultExpr {
         let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
             return default.clone();
+        };
+        let type_packs = if default.has_type_query() {
+            type_packs
+        } else {
+            &[]
         };
         let types: Vec<_> = signature
             .generics
@@ -209,12 +216,13 @@ impl Program {
                 &mut reports.borrow_mut(),
             )
         };
+        let packs = PackTypes::new(&signature.generics, type_packs);
         let instance = InstanceArguments {
             declaration: operator,
             generics,
             types: &types,
-            packs: &PackTypes::new(&[], &[]),
-            type_packs: &[],
+            packs: &packs,
+            type_packs,
             pack_inputs: &[],
             constants: &[],
             test_candidates: None,
@@ -230,6 +238,7 @@ impl Program {
                 operator,
                 generics,
                 default,
+                &|ty| instance.project(ty),
                 &mut reports.borrow_mut(),
             )
             .unwrap_or_else(|| default.clone())

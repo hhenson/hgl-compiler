@@ -34,7 +34,7 @@ impl Reader<'_> {
             if let Some(list) = child(node, SyntaxKind::GenericArgs) {
                 // TYPE-18 gives Type no parameters. Still read supplied
                 // arguments so their own errors are not hidden (GEN-2).
-                self.arguments(&list, Position::ARGUMENT, None, None);
+                self.arguments(&list, Position::ARGUMENT, None, None, false);
                 self.diagnostics.emit(error(
                     Category::Type,
                     codes::GENERIC_ARGUMENT_COUNT,
@@ -87,6 +87,7 @@ impl Reader<'_> {
                 },
                 target,
                 None,
+                false,
             )
         });
         // No binding: the name is left for the prelude, or the resolver
@@ -421,6 +422,7 @@ impl Reader<'_> {
         position: Position,
         target: Option<Id>,
         values_of: Option<Id>,
+        defer_contextual: bool,
     ) -> Vec<Argument> {
         // The name and kind of each generic parameter of the target.
         let (target_name, parameters): (String, Vec<(String, Kind)>) = match target {
@@ -576,7 +578,17 @@ impl Reader<'_> {
                 })
             };
 
-            if kind == SyntaxKind::Hole {
+            if defer_contextual
+                && kind == SyntaxKind::NamedType
+                && child(&argument, SyntaxKind::QualifiedName).is_none()
+                && child(&argument, SyntaxKind::GenericArgs).is_none()
+                && name_token(&argument).is_some_and(|name| name.text() == "Type")
+            {
+                // FN-4/6, GEN-14: a pair can declare different kinds.
+                // Keep the contextual spelling until body typing selects
+                // its role, rather than using declaration order.
+                arguments.push(Argument::Type(Type::TypeValue));
+            } else if kind == SyntaxKind::Hole {
                 // GEN-8: `_` in an `instantiate` keeps a parameter open.
                 arguments.push(Argument::Type(Type::Unknown));
             } else if !is_type(kind) && !self.indexed_pack(&argument) {

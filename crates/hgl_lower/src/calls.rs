@@ -453,6 +453,7 @@ pub fn left_out<'p>(
                 default,
                 owner,
                 callee.generics(),
+                callee.type_packs(),
                 parameter,
                 &mut diagnostics,
             );

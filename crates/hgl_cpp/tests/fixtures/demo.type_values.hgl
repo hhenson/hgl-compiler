@@ -168,3 +168,16 @@ test concrete_query_defaults {
     assert body_control("one") == "tuple<bool, bool>"
     assert original("one", tag: type(1)) == "i64"
 }
+
+# TYPE-18, GEN-10, UNIT-7: identical body/default queries keep type packs.
+const fn pack_inspect<...Ts>(v: tuple<Ts>, tag: Type = type(cold_make<tuple<Ts>>())) -> str => format("{}", tag)
+const fn pack_body<...Ts>(v: tuple<Ts>) -> str => format("{}", type(cold_make<tuple<Ts>>()))
+test packed_query_defaults {
+    assert pack_inspect((1, true)) == "list<tuple<i64, bool>>"
+    assert pack_body((1, true)) == "list<tuple<i64, bool>>"
+    assert pack_inspect(("one",)) == "list<tuple<str>>"
+    assert pack_body(("one",)) == "list<tuple<str>>"
+    assert pack_inspect((1, true, "two")) == "list<tuple<i64, bool, str>>"
+    assert pack_body((1, true, "two")) == "list<tuple<i64, bool, str>>"
+    assert pack_inspect((1, true), tag: type(true)) == "bool"
+}

@@ -23,3 +23,28 @@ test callable_type_slots {
     assert count<Type>() == 2
     assert unsettled<Type>() == 1
 }
+
+# GEN-14, FN-4/6: both declaration orders and both role/kind assignments.
+const fn type_first<T>(v: T) -> i64 => 11
+fn type_first<const N: i64>(v: i64) -> i64 => N
+fn value_first<const N: i64>(v: i64) -> i64 => N
+const fn value_first<T>(v: T) -> i64 => 11
+const fn config_first<const N: i64>(tag: Type, v: i64) -> i64 => N
+fn config_first<T>(const tag: T, v: i64) -> i64 => 11
+fn config_last<T>(const tag: T, v: i64) -> i64 => 11
+const fn config_last<const N: i64>(tag: Type, v: i64) -> i64 => N
+fn first_flow(v: i64) -> i64 => type_first<Type>(v)
+fn last_flow(v: i64) -> i64 => value_first<Type>(v)
+fn config_first_flow(v: i64) -> i64 => config_first<Type>(type(1), v)
+fn config_last_flow(v: i64) -> i64 => config_last<Type>(type(1), v)
+test pair_role_kinds {
+    assert type_first<Type>(type(1)) == 11
+    assert value_first<Type>(type(1)) == 11
+    assert type_first<i64>(7) == 11
+    assert eval first_flow(v: [7]) == [2]
+    assert eval last_flow(v: [7]) == [2]
+    assert config_first<Type>(type(1), 7) == 2
+    assert config_last<Type>(type(1), 7) == 2
+    assert eval config_first_flow(v: [7]) == [11]
+    assert eval config_last_flow(v: [7]) == [11]
+}

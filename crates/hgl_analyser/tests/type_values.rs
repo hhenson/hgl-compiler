@@ -857,6 +857,7 @@ const fn original<T>(x: T, tag: Type = type(sample(make<T>()))) -> Type => tag
                 declaration,
             ),
             &[hgl_analyser::Argument::Type(Type::Scalar(argument))],
+            &[],
             &signature.parameters[1],
             &mut diagnostics,
         );
@@ -892,4 +893,139 @@ const fn concrete() -> Type => original("one")
         "{}",
         checked.report
     );
+}
+
+/// GEN-14, FN-4/6: the selected role supplies its own generic kinds,
+/// independently of which declaration of a pair is written first.
+#[test]
+fn contextual_type_arguments_follow_the_selected_pair_role() {
+    for reverse in [false, true] {
+        for inverse in [false, true] {
+            let definitions = if inverse {
+                [
+                    "const fn pick<const N: i64>(tag: Type, v: i64) -> i64 => N",
+                    "fn pick<T>(const tag: T, v: i64) -> i64 => 11",
+                ]
+            } else {
+                [
+                    "const fn pick<T>(v: T) -> i64 => 11",
+                    "fn pick<const N: i64>(v: i64) -> i64 => N",
+                ]
+            };
+            let definitions = if reverse {
+                [definitions[1], definitions[0]]
+            } else {
+                definitions
+            };
+            let uses = if inverse {
+                "fn flow(v: i64) -> i64 => pick<Type>(type(1), v)\ntest obs { assert pick<Type>(type(1), 7) == 3\n assert eval flow(v: [7]) == [11] }"
+            } else {
+                "fn flow(v: i64) -> i64 => pick<Type>(v)\ntest obs { assert pick<Type>(type(1)) == 11\n assert eval flow(v: [7]) == [3] }"
+            };
+            let source = format!(
+                "module m\nconst Type: i64 = 3\n{}\n{}\n{uses}\n",
+                definitions[0], definitions[1]
+            );
+            let checked = check(&[("m.hgl", &source)]);
+            assert_eq!(
+                checked.summary(),
+                Vec::<String>::new(),
+                "{source}\n{}",
+                checked.report
+            );
+        }
+    }
+}
+
+/// TYPE-18, GEN-10, UNIT-7: a default receives the same concrete type
+/// pack as a body query, and different pack instances stay independent.
+#[test]
+fn omitted_query_defaults_keep_the_bound_type_pack() {
+    use hgl_analyser::hir::{Callee, walk_statements};
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn make<T>() -> list<T> => []
+const fn inspect<...Ts>(v: tuple<Ts>, tag: Type = type(make<tuple<Ts>>())) -> str => format("{}", tag)
+const fn pair() -> str => inspect((1, true))
+const fn single() -> str => inspect(("one",))
+"#,
+    )]);
+    assert_eq!(checked.summary(), Vec::<String>::new());
+    for (caller, expected) in [
+        ("pair", "list<tuple<i64, bool>>"),
+        ("single", "list<tuple<str>>"),
+    ] {
+        let mut callee = None;
+        walk_statements(&common::body(&checked, caller).statements, &mut |value| {
+            if let ExprKind::Call {
+                callee: call @ Callee::Function { .. },
+                ..
+            } = &value.kind
+            {
+                callee = Some(call.clone());
+            }
+        });
+        let callee = callee.unwrap();
+        let (module, declaration) = callee.declaration().unwrap();
+        let hgl_analyser::Detail::Callable(signature) =
+            &checked.program.modules[module].details[declaration]
+        else {
+            unreachable!()
+        };
+        let mut diagnostics = hgl_diagnostics::Diagnostics::new();
+        let specialized = checked.program.specialize_parameter_default(
+            checked.program.modules[module].defaults[declaration][1]
+                .as_ref()
+                .unwrap(),
+            (module, declaration),
+            callee.generics(),
+            callee.type_packs(),
+            &signature.parameters[1],
+            &mut diagnostics,
+        );
+        assert!(!diagnostics.has_errors(), "{:?}", diagnostics.as_slice());
+        assert!(
+            matches!(&specialized.value.kind, ExprKind::Literal(Value::Type(ty)) if ty.canonical_spelling() == expected),
+            "{specialized:?}"
+        );
+        assert!(specialized.locals.is_empty());
+    }
+}
+
+/// GEN-14/GEN-8: a callable named Type is ignored in the pair's type
+/// slot and still rejects as a nonconstant in the selected value slot.
+#[test]
+fn paired_type_slots_separate_value_lookup_diagnostics() {
+    for reverse in [false, true] {
+        let declarations = [
+            "const fn pick<T>(v: T) -> i64 => 11",
+            "fn pick<const N: i64>(v: i64) -> i64 => N",
+        ];
+        let source = format!(
+            "module m\nconst fn Type() -> i64 => 3\n{}\n{}\ntest obs {{ assert pick<Type>(type(1)) == 11 }}\n",
+            declarations[usize::from(reverse)],
+            declarations[usize::from(!reverse)]
+        );
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked.summary(),
+            Vec::<String>::new(),
+            "{}",
+            checked.report
+        );
+        let rejected = check(&[(
+            "m.hgl",
+            &format!("{source}\nfn flow(v: i64) -> i64 => pick<Type>(v)\n"),
+        )]);
+        assert!(
+            rejected
+                .findings
+                .iter()
+                .any(|finding| finding.code == "type/generic.argument_constant"
+                    && finding.rule == "GEN-8"),
+            "{}",
+            rejected.report
+        );
+    }
 }
