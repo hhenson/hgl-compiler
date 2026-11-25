@@ -134,12 +134,15 @@ transpiler: partial
 analyser: partial
 
 - A type that is not known is reported once, and nothing is reported of its uses
-- A module constant whose evaluation fails is rejected where it is declared (`constant.failure`, UNIT-13), and nothing is reported of its uses
+- A module constant whose failure the constant reader establishes is rejected where it is declared (`constant.failure`, UNIT-13), and nothing is reported of its uses
 - Known required-constant failures in parameter and field defaults use `constant.failure` (UNIT-8)
 - A generic value argument a generic body works out from its own parameters, `times<(M * 2)>`, whose evaluation fails, or that this compiler does not work out, with what an instance gives them is `generic.argument_constant` at the call that makes the instance, as the same argument written in place is, and the callee's `requires` is then not told ("Failure during argument evaluation precedes later admission checks"); one fault is reported once at each such call
-- Left: A module constant, parameter default or struct-field default initialized
-  by a failing `const fn` call can pass checking because the constant reader does
-  not evaluate calls (#240).
+- Left: Required-constant failures the constant reader cannot establish in module
+  constants, parameter defaults or struct-field defaults can pass checking and
+  fail at runtime — for example, user-defined `const fn` calls (unlike supported
+  enum constructors), indexing expressions such as `[8, 9][11]`, and blocks that
+  bind local values (#240); generic value arguments retain
+  `generic.argument_constant`.
 
 optimiser: planned
 
