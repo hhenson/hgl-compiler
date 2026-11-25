@@ -50,7 +50,7 @@ struct impl_
         [[maybe_unused]] const ::hglrt::GlobalState global_state{capability_01_};
         // when, line 16 (TIME-3)
         {
-            [&] { const ::hglrt::GlobalState& argument_00_ = global_state; const ::hgraph::Str argument_01_ = ::hglrt::checked_store_key(::hgraph::Str{"quote"}); const ::hgl::demo::store::m_::Quote argument_02_ = ::hgl::demo::store::m_::Quote{::hglrt::checked_value(value), ::hglrt::add__i64_i64(::hglrt::checked_value(value), 1)}; return ::hglrt::put_GlobalState_str_V<::hgl::demo::store::m_::Quote>(argument_00_, argument_01_, argument_02_); }();
+            [&] { const ::hglrt::GlobalState& argument_00_ = global_state; const ::hgraph::Str argument_01_ = ::hgraph::Str{"quote"}; const ::hgl::demo::store::m_::Quote argument_02_ = ::hgl::demo::store::m_::Quote{::hglrt::checked_value(value), ::hglrt::add__i64_i64(::hglrt::checked_value(value), 1)}; return ::hglrt::put_GlobalState_str_V<::hgl::demo::store::m_::Quote>(argument_00_, ::hglrt::checked_store_key(argument_01_), argument_02_); }();
             out_.set((::hglrt::require_result(::hglrt::get_store_result<::hgl::demo::store::m_::Quote>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"quote"})), ::std::source_location::current())).ask);
             return;
         }
@@ -177,7 +177,7 @@ struct impl_
         [[maybe_unused]] const ::hglrt::GlobalState global_state{capability_01_};
         // when, line 56 (TIME-3)
         {
-            [&] { const ::hglrt::GlobalState& argument_00_ = global_state; const ::hgraph::Str argument_01_ = ::hglrt::checked_store_key(::hgraph::Str{"change"}); const ::hglrt::set_delta<::hgraph::Int> argument_02_ = ::hglrt::set_delta<::hgraph::Int>{::hglrt::set<::hgraph::Int>{::hglrt::checked_value(value)}, ::hglrt::set<::hgraph::Int>{}}; return ::hglrt::put_GlobalState_str_V<::hglrt::set_delta<::hgraph::Int>>(argument_00_, argument_01_, argument_02_); }();
+            [&] { const ::hglrt::GlobalState& argument_00_ = global_state; const ::hgraph::Str argument_01_ = ::hgraph::Str{"change"}; const ::hglrt::set_delta<::hgraph::Int> argument_02_ = ::hglrt::set_delta<::hgraph::Int>{::hglrt::set<::hgraph::Int>{::hglrt::checked_value(value)}, ::hglrt::set<::hgraph::Int>{}}; return ::hglrt::put_GlobalState_str_V<::hglrt::set_delta<::hgraph::Int>>(argument_00_, ::hglrt::checked_store_key(argument_01_), argument_02_); }();
             [[maybe_unused]] ::hgraph::Int n = 0;
             const ::hglrt::set<::hgraph::Int> items_03_ = (::hglrt::require_result(::hglrt::get_store_result<::hglrt::set_delta<::hgraph::Int>>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"change"})), ::std::source_location::current())).added;
             for ([[maybe_unused]] const ::hgraph::Int& member : items_03_)
@@ -233,7 +233,7 @@ struct impl_
     static ::hgraph::Port<::hgraph::TS<::hgraph::Int>> compose(::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::Port<::hgraph::TS<::hgraph::Int>> x)
     {
         [[maybe_unused]] const ::hglrt::GlobalState global_state{wiring_.global_state()};
-        [&] { const ::hglrt::GlobalState& argument_00_ = global_state; const ::hgraph::Str argument_01_ = ::hglrt::checked_store_key(::hgraph::Str{"q"}); const ::hgl::demo::store::m_::Quote argument_02_ = ::hgl::demo::store::m_::Quote{5, 6}; return ::hglrt::put_GlobalState_str_V<::hgl::demo::store::m_::Quote>(argument_00_, argument_01_, argument_02_); }();
+        [&] { const ::hglrt::GlobalState& argument_00_ = global_state; const ::hgraph::Str argument_01_ = ::hgraph::Str{"q"}; const ::hgl::demo::store::m_::Quote argument_02_ = ::hgl::demo::store::m_::Quote{5, 6}; return ::hglrt::put_GlobalState_str_V<::hgl::demo::store::m_::Quote>(argument_00_, ::hglrt::checked_store_key(argument_01_), argument_02_); }();
         [[maybe_unused]] const ::hgl::demo::store::m_::Quote q = ::hglrt::require_result(::hglrt::get_store_result<::hgl::demo::store::m_::Quote>(global_state, ::hglrt::checked_store_key(::hgraph::Str{"q"})), ::std::source_location::current());
         return ::hgl::demo::store::m_::w_::bid_plus(wiring_, x, (q).bid);
     }

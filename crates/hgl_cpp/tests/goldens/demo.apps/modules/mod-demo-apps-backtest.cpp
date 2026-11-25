@@ -35,7 +35,7 @@ namespace hgl::demo::apps::backtest::m_
 {
     ::hglrt::application::Store store_;
     [[maybe_unused]] const ::hglrt::GlobalState global_state{store_.view()};
-    [&] { const ::hglrt::GlobalState& argument_00_ = global_state; const ::hgraph::Str argument_01_ = ::hglrt::checked_store_key(::hgraph::Str{"limit"}); const ::hgraph::Int& argument_02_ = ::hgl::demo::apps::backtest::m_::limit(); return ::hglrt::put_GlobalState_str_V<::hgraph::Int>(argument_00_, argument_01_, argument_02_); }();
+    [&] { const ::hglrt::GlobalState& argument_00_ = global_state; const ::hgraph::Str argument_01_ = ::hgraph::Str{"limit"}; const ::hgraph::Int& argument_02_ = ::hgl::demo::apps::backtest::m_::limit(); return ::hglrt::put_GlobalState_str_V<::hgraph::Int>(argument_00_, ::hglrt::checked_store_key(argument_01_), argument_02_); }();
     const ::hglrt::testing::Bounds bounds_ = ::hglrt::testing::Bounds{};
     return ::hglrt::application::run<::hgraph::Int>(store_, [&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
         ::hgl::core::m_::w_::i_::record::of_i64(wiring_, ::hgl::demo::apps::m_::w_::bounded(wiring_, ::hglrt::list<::hgraph::Int>{1, 2, 3}), ::hgraph::Str{::hglrt::testing::run_output});

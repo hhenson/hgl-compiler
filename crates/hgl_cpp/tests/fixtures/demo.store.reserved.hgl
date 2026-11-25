@@ -462,3 +462,53 @@ test an_exchange_in_a_function_that_reads_no_key_uses_the_key_it_reaches {
     assert eval exchange_forger(value: [1, 2], p: "user.x", q: "run.output", depth: 0, divisor: 1) == [1, 2]
     assert eval exchange_forger(value: [1, 2], p: supply("user.x"), q: supply("run.output"), depth: 2, divisor: 1) == [1, 2]
 }
+
+# EXPR-2, TIME-8: the operation's own check follows its arguments, each
+# evaluated once in the order written. The key is a cycle's, left to it.
+const fn order_put(store: GlobalState, depth: i64, const key: str, divisor: i64, const form: i64) {
+    if depth == 0 {
+        if form == 0 { put(store, key, 1 // divisor) }
+        else if form == 1 { put(value: 1 // divisor, key: key, store: store) }
+        else { put(store, key, get<i64>(store, "user.absent") + 1) }
+    }
+    else { order_put(store, depth - 1, key + ".output", divisor, form) }
+}
+fn order_hook(const key: str, divisor: i64, const form: i64) {
+    inject global_state
+    when { order_put(global_state, 1, key, divisor, form) }
+}
+test the_operation_checks_its_key_after_its_arguments {
+    assert raises("numeric.division_by_zero") { eval order_hook(key: "run", divisor: [0], form: 0) }
+    assert raises("numeric.division_by_zero") { eval order_hook(key: "run", divisor: [0], form: 1) }
+    assert raises("value.missing_key") { eval order_hook(key: "run", divisor: [1], form: 2) }
+    assert raises("store.reserved_key") { eval order_hook(key: "run", divisor: [1], form: 0) }
+    assert raises("store.reserved_key") { eval order_hook(key: "run", divisor: [1], form: 1) }
+    eval order_hook(key: "run.output", divisor: [1], form: 0)
+}
+
+# A value argument's own effect has happened when the operation fails.
+const fn side_value(store: GlobalState, value: i64) -> i64 {
+    put(store, "user.side", value)
+    return value
+}
+const fn side_cycle(store: GlobalState, depth: i64, const key: str, value: i64) {
+    if depth == 0 { put(store, key, side_value(store, value)) }
+    else { side_cycle(store, depth - 1, key + ".output", value) }
+}
+fn side_node(value: i64, const key: str) -> i64 {
+    inject global_state
+    when {
+        side_cycle(global_state, 1, key, value)
+        return value
+    }
+}
+fn side_after(failed: error) -> i64 {
+    inject global_state
+    when { return get<i64>(global_state, "user.side") }
+}
+fn side_effect(value: i64, const key: str) -> i64 {
+    return side_after(capture(side_node, value: value, key: key).error)
+}
+test a_value_argument_acts_before_the_operation_fails {
+    assert eval side_effect(value: [5], key: "run") == [5]
+}
