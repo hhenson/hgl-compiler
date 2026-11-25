@@ -72,6 +72,7 @@ fn set_control(step: i64) -> set<i64> {
     }
 }
 
+# TIME-7: publish distinct dictionary updates and the final value of a restored key.
 test dictionary_controls_publish_their_changes {
     assert eval dictionary_controls(step: [1, 2, 3, 4]) == [
         [1: 10, 2: 20],
@@ -81,6 +82,7 @@ test dictionary_controls_publish_their_changes {
     ]
 }
 
+# TIME-7: a set member added again after removal appears in the final delta.
 test set_control_publishes_the_last_addition {
     assert eval set_control(step: [1, 2]) == [[1], delta<set<i64>>(added: [7])]
 }
