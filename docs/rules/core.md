@@ -540,7 +540,7 @@ analyser: partial
 - `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get` gives a `result<V, error>`, with V written by the caller or inferred from the place
 - The run's own key, `"run.output"`, written out as a key is rejected (`store.reserved_key`)
 - A key written out is used with one type in a program: a `put` or a `get` of another type than an earlier use is `store.key_type` (TIME-8)
-- Left: a key resolved from a `const` parameter can name `run.output` or bypass the source check for inconsistent types.
+- Left: a key resolved from a `const` parameter can name `run.output` or bypass the source check for inconsistent types (#543).
 
 transpiler: partial
 
@@ -743,6 +743,7 @@ transpiler: partial
   stop. Outputless entries have no recording.
 - Left: Unsupported record types follow CEVAL-4. The reserved `run.output` check covers
   literal keys at source checking. Keys resolved at graph construction remain unchecked.
+- Left: The execution catalogue registers `store.reserved_key`. Its construction and operation checks follow #543.
 
 runner: planned
 

@@ -16,9 +16,8 @@ use crate::Category;
 /// specification's order.
 ///
 /// The catalogue's execution codes, such as `value.missing_key`, name
-/// failures of a running program. They are a different list and are not
-/// here ("The source and execution catalogs are disjoint, but for two
-/// codes": `store.key_type` and `key.unstable` are in both).
+/// failures of a running program. Only `store.key_type`, `store.reserved_key`
+/// and `key.unstable` occur in both lists.
 pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Parse, "syntax.expected_token"),
     (Category::Parse, "syntax.invalid_encoding"),
@@ -221,12 +220,11 @@ pub fn contains(category: Category, code: &str) -> bool {
 
 /// Every execution code of the catalogue, in the specification's
 /// order: a failure of a running program that has a stable code. An
-/// `assert raises("code")` names one (TST-10). "The source and
-/// execution catalogs are disjoint, but for two codes": TIME-8's wake
+/// `assert raises("code")` names one (TST-10). TIME-8's wake
 /// whose duration is not more than zero is `schedule.non_positive_duration`
 /// here, where the program runs, and `schedule.duration_bounds` among the
-/// source codes, where the compiler sees the value; `store.key_type` and
-/// `key.unstable` are in both lists.
+/// source codes, where the compiler sees the value. `store.key_type`,
+/// `store.reserved_key` and `key.unstable` occur in both lists.
 pub const EXECUTION_CODES: &[&str] = &[
     "value.missing_key",
     "key.unstable",
@@ -238,6 +236,7 @@ pub const EXECUTION_CODES: &[&str] = &[
     "enum.no_member",
     "switch.unmatched",
     "store.key_type",
+    "store.reserved_key",
     "numeric.division_by_zero",
     "numeric.out_of_range",
     // The catalogue reserves the code. Runtime emission is planned in #516.
