@@ -25,12 +25,10 @@ use crate::emit::{
     test_identifier, test_namespace,
 };
 use crate::{
-    Application, Executable, File, Output, Test, Unit, application_path, entry_path, header_name,
-    header_path, runtime, test_stem, types_header_name, types_header_path, unit_path,
+    Application, Executable, File, GENERATED_HEADER, Output, Test, Unit, application_path,
+    entry_path, header_name, header_path, runtime, test_stem, types_header_name, types_header_path,
+    unit_path,
 };
-
-/// The first line of every file the target writes.
-const WRITTEN: &str = "// Written by the hgl compiler for hgraph's C++ API. Do not edit.";
 
 /// What blocks each piece of one module: the first form each needs that
 /// is not written, or `None` for one that is clear.
@@ -224,7 +222,7 @@ pub(crate) fn output(
             .filter(|&module| module != index)
             .collect();
         let mut header = format!(
-            "{WRITTEN}\n#pragma once\n\n#include <{}>\n",
+            "{GENERATED_HEADER}\n#pragma once\n\n#include <{}>\n",
             runtime::HEADER
         );
         if !typed.is_empty() {
@@ -551,7 +549,7 @@ fn unit_text(
     test_lines: &mut [Vec<(usize, Location)>],
 ) -> String {
     let path = &program.modules[index].path;
-    let mut unit = format!("{WRITTEN}\n#include \"{}\"\n", header_name(path));
+    let mut unit = format!("{GENERATED_HEADER}\n#include \"{}\"\n", header_name(path));
     if content.pieces().any(|piece| piece.formatting) {
         unit.push_str("#include <hglrt/formatting.h>\n");
     }
@@ -612,7 +610,7 @@ fn types_header(program: &Program, index: usize, typed: &[&Piece]) -> String {
     let namespace = module_namespace(path);
     let declared = namespace.trim_start_matches("::");
     let mut text = format!(
-        "{WRITTEN}\n#pragma once\n\n#include <{}>\n",
+        "{GENERATED_HEADER}\n#pragma once\n\n#include <{}>\n",
         runtime::HEADER
     );
     let named: BTreeSet<usize> = typed
@@ -815,7 +813,7 @@ fn entry(program: &Program, index: usize, clear: &[(usize, &Piece)]) -> String {
     let module = &program.modules[index];
     let tested = test_namespace(&module.path);
     let declared = tested.trim_start_matches("::");
-    let mut text = format!("{WRITTEN}\n#include <{}>\n", runtime::HOST_HEADER);
+    let mut text = format!("{GENERATED_HEADER}\n#include <{}>\n", runtime::HOST_HEADER);
     text.push_str(&format!("\nnamespace {declared}\n{{\n"));
     for (test, _) in clear {
         let name = test_identifier(&module.tests[*test], *test);
@@ -857,7 +855,7 @@ fn application_entry(program: &Program, index: usize) -> String {
     };
     let library = runtime::NAMESPACE;
     format!(
-        "{WRITTEN}\n#include <{}>\n\nnamespace {declared}\n{{\n\
+        "{GENERATED_HEADER}\n#include <{}>\n\nnamespace {declared}\n{{\n\
          ::{library}::application::Output {APPLICATION}();\n}}  // namespace {declared}\n\n\
          // The run statement of `{}` is `{word}`: {mode} (RUN-3).\n\
          int main(int argc, char **argv)\n{{\n    \

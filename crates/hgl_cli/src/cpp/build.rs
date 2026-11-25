@@ -38,6 +38,10 @@ use super::{
     stamp::Stamp,
 };
 
+/// Identifies the program manifest, including those written by older compilers.
+pub(super) const MANIFEST_HEADER: &str =
+    "# Written by hgl: the build of a program written by the cpp target.";
+
 /// The file a workspace's lock is taken on.
 const LOCK: &str = ".hgl-lock";
 
@@ -312,7 +316,11 @@ impl Workspace {
         let database = String::from_utf8(commands.stdout)
             .map_err(|error| format!("Ninja's compilation database is not UTF-8: {error}"))?;
         let path = self.directory.join("compile_commands.json");
-        write_if_changed(&path, &database)?;
+        if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_symlink()) {
+            write_text(&path, &database)?;
+        } else {
+            write_if_changed(&path, &database)?;
+        }
         Ok(path)
     }
 
@@ -515,8 +523,8 @@ pub(crate) fn native_build_child(
 
 /// The `build.ninja` of `output`, built with `description`.
 fn ninja_file(output: &Output, description: &Description, tests: bool) -> String {
-    let mut text = String::from(
-        "# Written by hgl: the build of a program written by the cpp target.\n\
+    let mut text = format!(
+        "{MANIFEST_HEADER}\n\
          # It is written again whenever it changes.\n\
          ninja_required_version = 1.10\n\n",
     );
