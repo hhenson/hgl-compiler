@@ -102,6 +102,31 @@ fn pass_whole(items: list<i64, 2>) -> i64 => whole(keep, items)
     accepts(source);
 }
 
+#[test]
+fn bare_callback_trials_keep_the_public_operator_diagnostic() {
+    // GEN-3 and GEN-4: a public condition belongs to the operator, even
+    // when more than one callback trial independently fails it.
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+fn identity<T>(x: T) -> T => x
+operator choose<M, R, ...Ps, ...As>(mode: M, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires M in {i64, str}
+impl fn choose<R, ...Ps, ...As>(mode: i64, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k]} } => 1
+impl fn choose<R, ...Ps, ...As>(mode: str, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {list<Ps[k], 2>} } => 2
+fn invalid(items: list<i64, 2>) -> i64 => choose(true, identity, items)
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(
+        checked.findings[0].code, "constraint/requires.unmet",
+        "{}",
+        checked.report
+    );
+}
+
 const CATEGORIES: &str = "module m\n\
 struct Point { x: f64\n y: f64 }\n\
 struct Label { text: str }\n\

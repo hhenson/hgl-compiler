@@ -79,6 +79,7 @@ struct Admissions<'s> {
 struct FunctionTrials<'a> {
     prepared: Vec<FunctionTrial<'a>>,
     failed: Vec<Vec<Diagnostic>>,
+    public_failures: Vec<Vec<Diagnostic>>,
 }
 
 struct FunctionTrial<'a> {
@@ -262,6 +263,15 @@ impl<'a> Typer<'a> {
         let Some(mut trials) = function_trials else {
             return ((Vec::new(), untold), Vec::new());
         };
+        // GEN-4: a public requirement belongs to the operator. If all
+        // complete public readings reported the same failure, it is one
+        // operator diagnostic, even when multiple candidates saw it.
+        if trials.prepared.is_empty()
+            && let Some((first, rest)) = trials.public_failures.split_first()
+            && rest.iter().all(|failure| failure == first)
+        {
+            return ((Vec::new(), untold), first.clone());
+        }
         if trials.failed.is_empty()
             && given
                 .iter()
@@ -384,7 +394,9 @@ impl<'a> Typer<'a> {
                             match result {
                                 Ok(request) => Some(request),
                                 Err(()) => {
-                                    trials.failed.push(diagnostics);
+                                    if !diagnostics.is_empty() {
+                                        trials.public_failures.push(diagnostics);
+                                    }
                                     continue;
                                 }
                             }
@@ -1722,7 +1734,13 @@ impl<'a> Typer<'a> {
         let unknown_type = Argument::Type(Type::Unknown);
         let unknown_value = Argument::Constant(super::inference::unsaid());
         let mut checking = given.to_vec();
-        for (position, (given, slot)) in functions {
+        // A reflected callback can establish the result type that other
+        // callback templates need, regardless of their written order.
+        let dependent = functions
+            .clone()
+            .filter(|(_, (argument, _))| argument.dependent_callback.is_some());
+        let other = functions.filter(|(_, (argument, _))| argument.dependent_callback.is_none());
+        for (position, (given, slot)) in dependent.chain(other) {
             let parameter = signature.parameters.get(slot.parameter()?)?;
             let map: Vec<_> = generics
                 .iter()

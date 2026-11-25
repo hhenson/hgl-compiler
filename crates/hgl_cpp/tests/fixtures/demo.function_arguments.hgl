@@ -437,6 +437,22 @@ fn mixed_callback<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> 
 fn mixed_list_binding(items: list<i64, 2>, words: list<str, 2>) -> i64 =>
     mixed_callback(fixed_and_inferred, whole: items, value: words)
 
+# GEN-2 and FN-17: this reflected callback determines the earlier
+# fixed callback's template even when that callback is written first.
+operator then_apply<R, ...Ps, ...As>(
+    g: fn(R) -> R, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+impl fn then_apply<R, ...Ps, ...As>(
+    g: fn(R) -> R, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k]} } => 1
+
+fn callback_order(value: i64) -> i64 => then_apply(identity, identity, value)
+
+# MAP-2: the ordinary Core candidate splits values and supplies the
+# fixed table whole despite the callback's unrelated generic.
+const fn scale_with_table<T>(x: i64, table: list<i64, 2>, factor: T) -> i64 => x + table[1]
+fn map_with_whole_table(values: list<i64, 2>, table: list<i64, 2>) -> list<i64, 2> =>
+    map(scale_with_table, values, table, 3)
+
 test bare_callbacks_keep_known_outer_bindings {
     assert eval list_binding(items: [[5, 6]]) == [70]
     assert eval dict_binding(items: [["a": 8]]) == [72]
@@ -445,4 +461,6 @@ test bare_callbacks_keep_known_outer_bindings {
     assert eval fixed_list_binding(items: [[5, 6]]) == [70]
     assert eval result_list_binding(items: [[5, 6]]) == [71]
     assert eval mixed_list_binding(items: [[5, 6]], words: [["a", "b"]]) == [73]
+    assert eval callback_order(value: [4]) == [1]
+    assert eval map_with_whole_table(values: [[1, 2]], table: [[10, 20]]) == [[21, 22]]
 }
