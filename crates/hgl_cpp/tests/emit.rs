@@ -3475,3 +3475,48 @@ fn callable_size_limit_checks_wide_growth_before_copying() {
     assert_eq!(emitted.blocked("growing").as_deref(), Some(expected));
     assert_eq!(emitted.blocked("independent"), None);
 }
+
+/// TYPE-18: Type-valued generic struct arguments wait for #871 and
+/// decline by name before any invalid C++ reaches a compiler.
+#[test]
+fn a_type_valued_generic_struct_argument_declines_cleanly() {
+    let emitted = emit(&[(
+        "m.hgl",
+        r#"
+module m
+struct Tagged<const Kind: Type> { value: i64 }
+test tag { let value = Tagged<type(1)>(value: 7) }
+"#,
+    )]);
+    let blocked = emitted.blocked("tag").expect("the form is not emitted");
+    assert!(
+        blocked.contains("Type-valued generic argument of `Tagged`"),
+        "{blocked}"
+    );
+}
+
+/// TYPE-18, Proposed: source connection checking awaits its diagnostic,
+/// but the target never writes a temporal Type or a value that holds one.
+#[test]
+fn type_connections_decline_on_the_target() {
+    let emitted = emit(&[(
+        "m.hgl",
+        r#"
+module m
+export fn descriptor(value: Type) -> Type => value
+export fn descriptors(value: list<Type>) -> list<Type> => value
+"#,
+    )]);
+    assert!(
+        emitted
+            .reported
+            .iter()
+            .any(|message| message.contains("temporal value of `Type`"))
+    );
+    assert!(
+        emitted
+            .reported
+            .iter()
+            .any(|message| message.contains("list<Type>"))
+    );
+}

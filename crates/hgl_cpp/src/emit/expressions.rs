@@ -588,6 +588,14 @@ impl Emitter<'_> {
     /// A literal of type `ty` as C++.
     fn literal(&mut self, literal: &Value, ty: &Type, at: Location) -> String {
         match literal {
+            Value::Type(ty) => match ty.identity() {
+                Some(identity) => format!(
+                    "::hglrt::type_value{{{}, {}}}",
+                    names::string(&identity),
+                    names::string(&ty.canonical_spelling()),
+                ),
+                None => self.missing(at, "a type value that is not resolved"),
+            },
             Value::Int(number) => integer_literal(*number),
             // `{:?}` writes the shortest text that reads back as the
             // same `f64`, always with a `.` or an exponent, as C++ reads

@@ -139,6 +139,13 @@ made<str> decoded(const bytes& value);
 
 // ---- Conversions that cannot fail (OPS-6) ----------------------------------
 
+/// TYPE-18, FMT-5: a type's canonical diagnostic spelling.
+template <class To = str>
+    requires std::same_as<To, str>
+To convert_Type(const type_value& value) {
+    return value.spelling;
+}
+
 /// `convert(value: i64) -> f64`, `-> bool`, `-> str`: the nearest `f64`, a
 /// tie to the even one; false for zero and true otherwise; its decimal
 /// digits.

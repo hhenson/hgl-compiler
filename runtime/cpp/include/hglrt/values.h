@@ -73,6 +73,18 @@ using zoned_datetime = hgraph::ZonedDateTime;
 /// business days, hgraph's `Tenor` (tenors.h).
 using tenor = hgraph::Tenor;
 
+/// `Type` (TYPE-18): its compiled identity and diagnostic spelling.
+/// Equality and hashing use identity; names in separate modules may
+/// have the same spelling without naming the same type.
+struct type_value {
+    str identity;
+    str spelling;
+
+    friend bool operator==(const type_value& lhs, const type_value& rhs) {
+        return lhs.identity == rhs.identity;
+    }
+};
+
 /// `list<T>` (TYPE-4): a `std::vector<T>` with a hash, so that hgraph can
 /// hold it as configuration (see the head of this file). It is a vector in
 /// every other way, and a function that takes a `std::vector<T>` takes it.
@@ -444,6 +456,13 @@ const hgraph::ValueTypeMetaData* named_scalar_meta(
 }
 
 } // namespace hglrt::detail
+
+template <>
+struct std::hash<hglrt::type_value> {
+    std::size_t operator()(const hglrt::type_value& value) const {
+        return std::hash<hglrt::str>{}(value.identity);
+    }
+};
 
 template <class T>
 struct std::hash<hglrt::list<T>> {

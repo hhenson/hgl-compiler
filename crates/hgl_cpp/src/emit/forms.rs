@@ -227,6 +227,9 @@ impl Emitter<'_> {
     /// or `None`, reported nowhere, where no family writes one: for a
     /// family that asks what the form of a part of its own is.
     pub(super) fn temporal_schema_of(&mut self, ty: &Type) -> Option<String> {
+        if self.program.holds_type_value(ty) {
+            return None;
+        }
         FAMILIES.iter().find_map(|family| family.schema(self, ty))
     }
 

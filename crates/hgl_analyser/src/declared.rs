@@ -130,6 +130,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             read.members = members;
         }
     }
+    crate::type_values::check_deltas(program, diagnostics);
 }
 
 // ---- Enums (TYPE-7) ----

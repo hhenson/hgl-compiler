@@ -31,6 +31,18 @@ impl Reader<'_> {
         if child(node, SyntaxKind::QualifiedName).is_none()
             && name_token(node).is_some_and(|name| name.text() == "Type")
         {
+            if let Some(list) = child(node, SyntaxKind::GenericArgs) {
+                // TYPE-18 gives Type no parameters. Still read supplied
+                // arguments so their own errors are not hidden (GEN-2).
+                self.arguments(&list, Position::ARGUMENT, None, None);
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::GENERIC_ARGUMENT_COUNT,
+                    self.at(node.span()),
+                    "`Type` is not a generic type and takes no generic arguments".to_string(),
+                    "GEN-2",
+                ));
+            }
             return Type::TypeValue;
         }
         let list = child(node, SyntaxKind::GenericArgs);

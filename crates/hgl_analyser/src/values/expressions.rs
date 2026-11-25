@@ -125,6 +125,10 @@ impl<'a> Typer<'a> {
             SyntaxKind::Literal => self.literal(node, expected),
             SyntaxKind::TypeOfExpr => {
                 let mark = self.mark();
+                let lifecycle = (self.hook, self.initializing, self.caching);
+                self.hook = None;
+                self.initializing = false;
+                self.caching = false;
                 let ty = node
                     .children()
                     .next()
@@ -132,6 +136,7 @@ impl<'a> Typer<'a> {
                 // TYPE-18 evaluates nothing of the operand. Its local
                 // effects and deferred calls do not belong to the body.
                 self.restore_read(mark, false);
+                (self.hook, self.initializing, self.caching) = lifecycle;
                 self.constants.remember_type(at, ty.clone());
                 (
                     ExprKind::Literal(Value::Type(Box::new(ty))),
