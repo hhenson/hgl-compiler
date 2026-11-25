@@ -334,3 +334,23 @@ test one_helper_checks_each_key_on_its_own_route {
     }
     eval pair_hook(key: supply("run.output"), tag: supply("user.tag"), divisor: 1)
 }
+
+# A format reads the cycle's key, so the target writes an instance for
+# each key: the instance still leaves its changed key to the operation.
+const fn swap_label(store: GlobalState, depth: i64, const key: str, const next: str) -> str {
+    if depth == 0 {
+        save_key(store, key)
+        return ""
+    }
+    let label = format(key)
+    return swap_label(store, depth - 1, next, key) + label
+}
+fn label_hook(const depth: i64) {
+    inject global_state
+    when {}
+    stop { let text = swap_label(global_state, depth, "run.output", "user.next") }
+}
+test an_instance_of_a_cycle_leaves_its_changed_key_to_the_operation {
+    eval label_hook(depth: 1)
+    assert raises("store.reserved_key") { eval label_hook(depth: 2) }
+}

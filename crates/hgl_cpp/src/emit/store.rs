@@ -278,7 +278,10 @@ impl ForwardedKeys<'_> {
                 // TIME-8: a parameter its cycle changes varies on every
                 // route, and one given a varying key varies on this one.
                 if program.store_route(identity, declared_slot) == StoreRoute::Changing
-                    || written.is_some_and(|argument| caller.changes(&argument.value))
+                    || written.is_some_and(|argument| {
+                        caller.changes(&argument.value)
+                            || program.store_key_at_execution(&argument.value)
+                    })
                 {
                     return Binding {
                         value: None,
@@ -641,6 +644,12 @@ impl CallRoute {
             else {
                 continue;
             };
+            // An instance written for a const input has the cycle's key
+            // in place of the parameter: the analyser marks the argument.
+            if program.store_key_at_execution(&argument.value) {
+                route.always |= bit;
+                continue;
+            }
             let mut from = 0;
             argument.value.walk(&mut |part| {
                 if let ExprKind::Local(local) = part.kind {

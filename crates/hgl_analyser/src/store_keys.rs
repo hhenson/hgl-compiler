@@ -122,7 +122,9 @@ impl Program {
         !self.store_routes.is_empty()
     }
 
-    /// Whether TIME-8 leaves this store key to a recursive operation.
+    /// Whether TIME-8 leaves this store key to a recursive operation: the
+    /// key of an operation, or an argument that hands a helper with the
+    /// store a key its cycle changes, in the declaration or an instance.
     pub fn store_key_at_execution(&self, key: &Expr) -> bool {
         self.runtime_store_keys.contains(&key.at)
     }
