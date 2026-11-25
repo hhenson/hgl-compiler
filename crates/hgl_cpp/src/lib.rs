@@ -45,6 +45,10 @@ use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Diagnostics, Location};
 use hgl_lower::instances::CallableLimits;
 
+/// First line of each generated C++ source and header, also used to identify older build outputs.
+pub const GENERATED_HEADER: &str =
+    "// Written by the hgl compiler for hgraph's C++ API. Do not edit.";
+
 /// The name `hgl emit --target` takes for this target.
 pub const TARGET: &str = "cpp";
 
