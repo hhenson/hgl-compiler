@@ -1224,6 +1224,40 @@ fn effects(value: i64) {
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
 }
 
+/// GEN-5 and GEN-12, #794: the callback's retained result and the
+/// concrete inputs favour different candidates.
+#[test]
+fn a_concrete_callback_input_can_conflict_with_a_retained_result() {
+    let checked = module(
+        r#"
+operator visit<T, R>(f: fn(T) -> R, value: T) -> R
+impl fn visit<T, R>(f: fn(T) -> R, value: T) -> R => f(value)
+impl fn visit(f: fn(i64), value: i64) => f(value)
+
+fn call(value: i64) { visit(fn(x) => x + 1, value) }
+"#,
+    );
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "operator/operator.ambiguous");
+}
+
+/// GEN-5 and GEN-12, #794: even with identical callback inputs, another
+/// argument can favour the candidate that discards the callback's value.
+#[test]
+fn a_concrete_ordinary_parameter_can_conflict_with_a_retained_result() {
+    let checked = module(
+        r#"
+operator visit<T, R>(f: fn(i64) -> R, value: T) -> R
+impl fn visit<T, R>(f: fn(i64) -> R, value: T) -> R => f(1)
+impl fn visit(f: fn(i64), value: i64) => f(value)
+
+fn call(value: i64) { visit(fn(x) => x + 1, value) }
+"#,
+    );
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "operator/operator.ambiguous");
+}
+
 /// GEN-1: a call of an instance whose result is absent is a statement.
 #[test]
 fn resultless_calls_reject_in_value_positions() {
