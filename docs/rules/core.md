@@ -552,6 +552,10 @@ analyser: partial
   different type than an earlier use is `store.key_type` (TIME-8).
 - Left: a helper outside the cycle that also formats its key is checked
   in source for each key an instance of the cycle gives it (#877).
+- Left: two forms the text fixes are judged as cycles, so their key fails
+  at the operation: one key handed round through two `const` parameters
+  of a function, and a cycle that only an operator candidate no instance
+  selects would close (#885).
 
 transpiler: partial
 
@@ -756,7 +760,8 @@ analyser: partial
 - A `"run.output"` key the text fixes is rejected (`store.reserved_key`),
   including where a call supplies a fixed `const` argument or generic
   value (CAP-6).
-- Left: a helper outside a cycle that also formats its key (CAP-6, #877).
+- Left: a helper outside a cycle that also formats its key (CAP-6, #877);
+  two forms judged as cycles fail at the operation (CAP-6, #885).
 
 transpiler: partial
 
