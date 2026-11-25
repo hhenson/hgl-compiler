@@ -601,7 +601,7 @@ impl Reader<'_> {
                 // known to be a type is not: a declared type, or a
                 // generic parameter settled as a type.
                 let is_type = kind != SyntaxKind::NamedType
-                    || matches!(ty, Type::Named { .. })
+                    || matches!(ty, Type::TypeValue | Type::Named { .. })
                     || self.is_type_parameter(&ty);
                 if want == Kind::Value && is_type {
                     self.argument_kind(&argument, mismatch("a value", "a type"));

@@ -107,3 +107,14 @@ test contextual_type_names {
     assert NamedChoice.Type == NamedChoice.Type
     assert convert<str>(descriptor) == "i64"
 }
+
+# FMT-5: enum constant identity is qualified, display spelling is its name.
+enum TextMode { on, off }
+struct Moded<const mode: TextMode> { value: i64 }
+struct Timed<const span: duration> { value: i64 }
+struct Scaled<const ratio: f64> { value: i64 }
+test canonical_generic_arguments {
+    assert convert<str>(type(Moded<TextMode.on>(value: 1))) == "Moded<TextMode.on>"
+    assert convert<str>(type(Timed<5m>(value: 1))) == "Timed<300000000us>"
+    assert convert<str>(type(Scaled<1>(value: 1))) == "Scaled<1.0>"
+}

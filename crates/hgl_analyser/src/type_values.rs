@@ -317,9 +317,37 @@ impl Type {
     /// the expression that supplied them.
     pub fn canonical_spelling(&self) -> String {
         let one = Type::canonical_spelling;
-        let constant = |value: &crate::Constant| match &value.value {
-            ConstantValue::Type(ty) => one(ty),
-            value_ => value_.key().unwrap_or_else(|| value.text.clone()),
+        // FMT-5: display names are not identity keys. In particular an enum
+        // member has its declared type's name, just as a named type does;
+        // the module identity remains in ConstantValue::key for equality.
+        fn value_spelling(value: &ConstantValue) -> Option<String> {
+            Some(match value {
+                ConstantValue::Type(ty) => ty.canonical_spelling(),
+                ConstantValue::Member(member) => match &member.of {
+                    Some(of) => format!(
+                        "{}.{}",
+                        of.written.rsplit("::").next().unwrap_or(&of.written),
+                        member.name
+                    ),
+                    None => format!(".{}", member.name),
+                },
+                ConstantValue::List(values) | ConstantValue::Tuple(values) => {
+                    let text = values
+                        .iter()
+                        .map(value_spelling)
+                        .collect::<Option<Vec<_>>>()?
+                        .join(", ");
+                    if matches!(value, ConstantValue::List(_)) {
+                        format!("[{text}]")
+                    } else {
+                        format!("({text})")
+                    }
+                }
+                _ => value.key()?,
+            })
+        }
+        let constant = |value: &crate::Constant| {
+            value_spelling(&value.value).unwrap_or_else(|| value.text.clone())
         };
         match self {
             Type::Named {

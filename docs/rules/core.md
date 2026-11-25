@@ -992,6 +992,7 @@ analyser: partial
 transpiler: partial
 
 - A Type value converts to its canonical diagnostic spelling, including fixed collection sizes, generic arguments and nullable suffixes (TYPE-18).
+- Enum arguments display their declared enum name, independently of their qualified identity key. Left: generic-type diagnostics retain source-form duration/float arguments while Type values normalize them (#909).
 - Value defaults are written in Core's scalar forms. The growing list, fixed list, set and dictionary candidates use each member's conversion and traversal order, quote and escape strings and render absent members as `null`.
 - Left: tuple and struct text candidates (#434, #512).
 

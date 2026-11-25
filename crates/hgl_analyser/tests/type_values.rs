@@ -611,3 +611,65 @@ const fn outer(var Type: i64) -> i64 => (fn() -> i64 => count<Type>())()
         callable.report
     );
 }
+
+/// GEN-14: the descriptor is a type, never an implicit value for a known
+/// const slot. Ordinary integer constants named Type still fill that slot.
+#[test]
+fn contextual_type_descriptor_rejects_known_value_slots() {
+    for use_site in [
+        "const fn take(value: Sized<Type>) {}",
+        "test t { let value: Sized<Type>? = null\n assert value == null }",
+        "test t { let value = Sized<Type>(value: 1) }",
+    ] {
+        let source = format!("module m\nstruct Sized<const N: i64> {{ value: i64 }}\n{use_site}\n");
+        let checked = check(&[("m.hgl", &source)]);
+        assert!(
+            checked.findings.iter().any(|finding| {
+                finding.code == "type/generic.argument_kind" && finding.rule == "GEN-14"
+            }),
+            "{source}\n{}",
+            checked.report
+        );
+    }
+    let accepted = check(&[(
+        "m.hgl",
+        "module m\nconst Type: i64 = 2\nstruct Sized<const N: i64> { value: i64 }\n\
+         const fn take(value: Sized<Type>) -> i64 => value.value\n\
+         test t { let value: Sized<Type> = Sized<Type>(value: 1)\n\
+         let absent: Sized<Type>? = null\n assert take(value) == 1\n assert absent == null }\n",
+    )]);
+    assert_eq!(accepted.summary(), Vec::<String>::new());
+}
+
+/// FMT-5 and TYPE-18: enum identity stays qualified, while diagnostic
+/// spelling uses the enum's declared name, including inside compound values.
+#[test]
+fn canonical_type_text_separates_enum_spelling_from_identity() {
+    let checked = check(&[(
+        "m.hgl",
+        "module m\nenum Mode { on, off }\n\
+         struct Moded<const M: Mode> { value: i64 }\n\
+         struct ModeList<const M: list<Mode>> { value: i64 }\n\
+         const fn observe(first: Moded<Mode.on>, second: ModeList<[Mode.on]>) {}\n",
+    )]);
+    assert_eq!(checked.summary(), Vec::<String>::new());
+    let module = checked.program.module("m").unwrap();
+    let declaration = module
+        .declarations
+        .iter()
+        .position(|declaration| declaration.name == "observe")
+        .unwrap();
+    let hgl_analyser::Detail::Callable(signature) = &module.details[declaration] else {
+        panic!("observe has a signature");
+    };
+    for (parameter, expected) in signature
+        .parameters
+        .iter()
+        .zip(["Moded<Mode.on>", "ModeList<[Mode.on]>"])
+    {
+        let before = parameter.ty.identity();
+        assert_eq!(parameter.ty.canonical_spelling(), expected);
+        assert_eq!(parameter.ty.identity(), before);
+        assert!(before.unwrap().contains("m::Mode.on"));
+    }
+}

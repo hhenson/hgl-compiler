@@ -1,0 +1,12 @@
+module demo.type_argument_kinds
+
+# GEN-14: a known value slot uses the ordinary constant named Type.
+const Type: i64 = 2
+struct Sized<const count: i64> { value: i64 }
+const fn read(value: Sized<Type>) -> i64 => value.value
+test value_named_type {
+    let present: Sized<Type> = Sized<Type>(value: 12)
+    let absent: Sized<Type>? = null
+    assert read(present) == 12
+    assert absent == null
+}

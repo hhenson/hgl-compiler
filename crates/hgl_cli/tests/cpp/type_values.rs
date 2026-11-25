@@ -16,7 +16,12 @@ fn type_values_run_on_the_sdk() {
         "demo.type_values.hgl",
         include_str!("../../../hgl_cpp/tests/fixtures/demo.type_values.hgl"),
     );
-    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let kinds = write(
+        &root,
+        "demo.type_argument_kinds.hgl",
+        include_str!("../../../hgl_cpp/tests/fixtures/demo.type_argument_kinds.hgl"),
+    );
+    let output = hgl_in(&["test", &file, &kinds, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
@@ -26,7 +31,7 @@ fn type_values_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 0 passed, 0 failed\nexecutable cases: 8 passed, 0 failed, 0 not run\n"
+            "rejection cases: 0 passed, 0 failed\nexecutable cases: 10 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );

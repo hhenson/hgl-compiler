@@ -311,10 +311,11 @@ analyser: partial
 - A cold operand retains the call-role rules of its source place (FN-3). A graph query of a temporal call retains its payload type and wires no call.
 - Type constants compare and form collection keys by canonical type identity (GEN-13), independently of their text. The type of a value annotated `any` is `any`.
 - Proposed: an explicit delta of Type or a value that stores one rejects with `shape/delta.unsupported_shape` (TYPE-16).
-- Left: a query of an inferred local used as a generic value argument (#871); source rejection of Type-containing connections (the target declines them).
+- Left: late generic-value query reading (#871), including same-module calls, constructors, annotated or inferred locals, module constants formed from those operands, and lost operand diagnostics. Type-containing connections lack the proposed source rejection (#907); nested forbidden-delta diagnostics may duplicate or cascade (#908). A cold query of its own declared constant reports a cycle (#910).
 
 transpiler: partial
 
 - Emits ordinary Type values, equality, inequality, set elements and dictionary keys. Core's native conversion returns canonical diagnostic spelling (FMT-5). Queries in constants, parameter and field defaults, generic functions, node handlers and graph composition execute without evaluating the operand.
 - Ordinary structs holding Type retain their value layout and omit auxiliary delta layouts under the proposed TYPE-16 rule. Storage dependencies are computed once after fields resolve and reused across emitted modules.
-- Left: Type-valued generic struct arguments (#871), Type-containing connections, and queries of primitive type-call operands whose old checker stub leaves their type unknown (#874) decline cleanly with `target.unsupported` before native compilation.
+- Enum generic arguments use their declared enum name in text; qualified identity remains separate, including inside compound constant arguments.
+- Left: Type-valued generic struct arguments (#871), Type-containing connections (#907), primitive type-call operands left untyped by their checker stub (#874), and unresolved anonymous-function/resultless-block query operands (#906) decline cleanly with `target.unsupported` before native compilation. Generic-type diagnostics still preserve source-form duration/float arguments rather than the canonical Type value spelling (#909).
