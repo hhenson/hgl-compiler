@@ -93,7 +93,7 @@ struct list : std::vector<T> {
 ///     }
 ///
 /// and it is all an enum needs to be a value of the library: its HGL name
-/// (`type_name`), its text (TYPE-7: "`Type.member` names one", testing.h's
+/// (`type_name`), its text (TYPE-7: "`Type.member` names one", `value_text.h`'s
 /// `text_of`), and its schema, with which hgraph holds it, a list of it and a
 /// recording of it.
 template <class E, std::size_t N>
@@ -102,6 +102,24 @@ struct EnumNames {
     std::string_view type;
     /// Each member and its name, as HGL writes it.
     std::pair<E, std::string_view> members[N];
+    /// Member numbers in declaration order. The runtime's enums use
+    /// ordinary numbering from zero. Generated enums can write other numbers.
+    std::array<i64, N> numbers = [] {
+        std::array<i64, N> ordinals{};
+        for (std::size_t index = 0; index < N; ++index) {
+            ordinals[index] = static_cast<i64>(index);
+        }
+        return ordinals;
+    }();
+};
+
+/// An empty enum still identifies the type of a port or conversion
+/// result (TYPE-7, OPS-7). Its metadata contains zero members.
+template <class E>
+struct EnumNames<E, 0> {
+    std::string_view type;
+    std::array<std::pair<E, std::string_view>, 0> members{};
+    std::array<i64, 0> numbers{};
 };
 
 /// An enumeration the library can name: one whose `hgl_enum` gives its
@@ -313,7 +331,7 @@ std::size_t hash_of(const T& value) {
 }
 
 /// What a header of this library says of a value type it declares that the
-/// chains of `type_name` and of `testing::text_of` (traces.h) do not know, a
+/// chains of `type_name` and of `text_of` (value_text.h) do not know, a
 /// set's or a dictionary's (keyed.h) and a struct's (structs.h) among them: a
 /// specialization gives `name()`, the HGL name of the type, `text(value)`,
 /// a value of it as the language writes it, and `hash(value)`, its hash

@@ -2,7 +2,7 @@
 #include "host_state.h"
 
 #include <hglrt/host.h>
-#include <hglrt/traces.h>
+#include <hglrt/value_text.h>
 
 #include <charconv>
 #include <chrono>
@@ -165,7 +165,7 @@ Outcome bounded(Body body, std::chrono::microseconds limit, std::chrono::millise
     // The limit as the language writes a duration, as `@timeout(5s)` has it
     // (LEX-11), and as a trace's text does.
     const std::string said =
-        "timed out: it was still running after its limit of " + detail::scalar_text(limit);
+        "timed out: it was still running after its limit of " + hglrt::detail::scalar_text(limit);
     lock.unlock();
     detail::stop_runs();
     lock.lock();

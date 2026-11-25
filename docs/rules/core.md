@@ -159,10 +159,10 @@ analyser: done
 
 ## OPS-4
 
-analyser: partial
+analyser: done
 
 - Resolves declared conversions in value functions, node hooks and graph composition. A list of concrete structs converts to a list of their abstract parent (OPS-6).
-- Left: the enum conversions awaiting Core declarations and target support (#514).
+- Selects the enum candidates for a written enum destination or an enum operand. Other pairings are rejected at the operator.
 
 transpiler: done
 
@@ -189,6 +189,7 @@ transpiler: done
 
 - Uses the runtime conversion natives and the generated conversion of a list of concrete
   structs to a list of their abstract parent.
+- The enum natives use the member's HGL name and number, including explicit and sparse numbers.
 
 ## OPS-7
 
@@ -200,6 +201,8 @@ transpiler: done
 
 - Emits rounding, NaN and invalid-input policies through the selected conversion. The
   checked conversion preserves its ordinary tagged result.
+- Proposed: an integer without a member gives `convert.invalid` in the
+  checked result or raises it under `.fail`.
 
 ## OPS-8
 
@@ -1031,9 +1034,11 @@ transpiler: partial
 
 ## DBG-1
 
-transpiler: planned
+transpiler: partial
 
-- #434.
+- Core's value candidate writes and flushes one line to the program's standard output
+  where it is executed. Its output stays separate from publications and test outcomes.
+- Left: the HGL graph candidate (#434).
 
 ## DBG-2
 
@@ -1043,9 +1048,14 @@ transpiler: planned
 
 ## DBG-3
 
-transpiler: planned
+analyser: done
 
-- #434.
+- The value candidate forwards the pattern and both packs through the FMT-9 checks.
+  An explicit `Marked<T>` retains the mark exception.
+
+transpiler: done
+
+- Value functions and handlers execute Core's line write at the call.
 
 ## DBG-4
 
@@ -1079,6 +1089,7 @@ transpiler: planned
 
 ## DBG-9
 
-transpiler: planned
+transpiler: partial
 
-- #434.
+- The bundled HGL value candidate calls `format` and `write` with flushing.
+- Left: the HGL graph candidate and its options (#434).
