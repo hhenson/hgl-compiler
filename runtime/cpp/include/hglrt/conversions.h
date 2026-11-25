@@ -256,4 +256,43 @@ detail::converted<str, invalid> convert_bytes(const bytes& value,
     return detail::outcome<str, invalid>(detail::decoded(value), where);
 }
 
+/// TYPE-7, OPS-6: an enum converts to the member's name or signed number.
+template <class To, class E>
+    requires std::is_enum_v<E>
+To convert_E(E value) {
+    static_assert(std::same_as<To, str> || std::same_as<To, i64>);
+    if constexpr (named_enum<E>) {
+        const auto enumeration = hgl_enum(value);
+        for (std::size_t index = 0; index < enumeration.numbers.size(); ++index) {
+            const auto& [member, name] = enumeration.members[index];
+            if (member == value) {
+                if constexpr (std::same_as<To, str>) {
+                    return str{name};
+                } else {
+                    return enumeration.numbers[index];
+                }
+            }
+        }
+    }
+    // Every HGL enum value is one of its members (TYPE-7).
+    std::unreachable();
+}
+
+/// TYPE-7, OPS-7, OPS-8: a number with no member fails under `invalid`.
+template <class E, InvalidPolicy invalid>
+    requires std::is_enum_v<E>
+detail::converted<E, invalid>
+convert_i64(i64 value, std::source_location where = std::source_location::current()) {
+    if constexpr (named_enum<E>) {
+        const auto enumeration = hgl_enum(E{});
+        for (std::size_t index = 0; index < enumeration.numbers.size(); ++index) {
+            if (enumeration.numbers[index] == value) {
+                return enumeration.members[index].first;
+            }
+        }
+    }
+    return detail::outcome<E, invalid>(
+        std::unexpected(detail::conversion_reason{"no enum member has that number"}), where);
+}
+
 } // namespace hglrt

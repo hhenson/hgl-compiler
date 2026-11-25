@@ -114,6 +114,24 @@ struct EnumNames {
     std::string_view type;
     /// Each member and its name, as HGL writes it.
     std::pair<E, std::string_view> members[N];
+    /// Member numbers in declaration order. The runtime's enums use
+    /// ordinary numbering from zero. Generated enums can write other numbers.
+    std::array<i64, N> numbers = [] {
+        std::array<i64, N> ordinals{};
+        for (std::size_t index = 0; index < N; ++index) {
+            ordinals[index] = static_cast<i64>(index);
+        }
+        return ordinals;
+    }();
+};
+
+/// An empty enum still identifies the type of a port or conversion
+/// result (TYPE-7, OPS-7). Its metadata contains zero members.
+template <class E>
+struct EnumNames<E, 0> {
+    std::string_view type;
+    std::array<std::pair<E, std::string_view>, 0> members{};
+    std::array<i64, 0> numbers{};
 };
 
 /// An enumeration the library can name: one whose `hgl_enum` gives its

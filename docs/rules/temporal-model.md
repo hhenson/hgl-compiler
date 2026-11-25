@@ -129,8 +129,10 @@ transpiler: partial
 - A multiply written set or dictionary result stages delta assignments and a
   final return. Cancellation leaves an already valid result silent, including
   when the change cancels inside a nested keyed entry. The staging records only
-  keys named by the writes. Output validity, modification and its clock are
-  visible to the handlers as they write. Single-write nodes keep direct publication.
+  keys named by the writes. A scalar dictionary entry that is withdrawn and
+  restored during the evaluation publishes its final value. Output validity,
+  modification and its clock are visible to the handlers as they write.
+  Single-write nodes keep direct publication.
 - Left: An evaluation that reads `all_valid(out)` or `delta_value(out)`
   still publishes as it writes and can tick with an empty delta (#878).
   A whole assignment to `out`, invalidation, other output observations or

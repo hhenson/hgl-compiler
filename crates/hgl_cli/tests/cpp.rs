@@ -4052,8 +4052,21 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         "src/demo.keyed_cancellation.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.keyed_cancellation.hgl"),
     );
+    let last_write = write(
+        &root,
+        "src/demo.keyed_last_write.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.keyed_last_write.hgl"),
+    );
     let output = hgl_in(
-        &["test", &file, &constants, &cancellations, "--target", "cpp"],
+        &[
+            "test",
+            &file,
+            &constants,
+            &cancellations,
+            &last_write,
+            "--target",
+            "cpp",
+        ],
         &[],
         &[],
     );
@@ -4065,7 +4078,7 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 17 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 21 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
