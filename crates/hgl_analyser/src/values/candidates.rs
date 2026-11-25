@@ -3547,14 +3547,15 @@ impl Specific {
 /// A type expanded at the admitted arity, with its declared form retained
 /// so a tuple's pack stays distinguishable even when it captures no entries.
 #[derive(Clone, Copy)]
-struct RankingType<'a, 'candidate> {
+struct RankingType<'a> {
     ty: &'a Type,
     written: Option<&'a Type>,
-    candidate: &'a Chosen<'candidate>,
+    generics: &'a [GenericParameter],
+    pack_length: &'a dyn Fn(usize) -> Option<usize>,
     retains_anonymous_value: bool,
 }
 
-impl<'a> RankingType<'a, '_> {
+impl<'a> RankingType<'a> {
     fn child(self, ty: &'a Type, index: usize) -> Self {
         let written = self.written.and_then(|written| match written {
             Type::Nullable(inner)
@@ -3589,7 +3590,7 @@ impl<'a> RankingType<'a, '_> {
     }
 
     fn pack_index(self, element: &Type) -> Option<usize> {
-        let generics = &self.candidate.declared.generics;
+        let generics = self.generics;
         bare_parameter(element, generics)
             .filter(|&index| matches!(generics[index].kind, GenericKind::Pack { .. }))
     }
@@ -3600,7 +3601,7 @@ impl<'a> RankingType<'a, '_> {
         let mut has_pack = false;
         for element in self.tuple_source()? {
             if let Some(index) = self.pack_index(element) {
-                ranked_pack_length(self.candidate, index)?;
+                (self.pack_length)(index)?;
                 has_pack = true;
             }
         }
@@ -3617,7 +3618,7 @@ impl<'a> RankingType<'a, '_> {
             .flat_map(move |element| {
                 let length = self
                     .pack_index(element)
-                    .and_then(|index| ranked_pack_length(self.candidate, index))
+                    .and_then(self.pack_length)
                     .unwrap_or(1);
                 std::iter::repeat_n(Some(element), length)
             })
@@ -3639,7 +3640,7 @@ impl<'a> RankingType<'a, '_> {
 /// variables outrank unconstrained ones." GEN-12: "Compare structural
 /// specificity component by component". So `tuple<i64, T>` is more
 /// specific than `tuple<U, V>`, and `list<T>` than `T`.
-fn specificity(left: RankingType<'_, '_>, right: RankingType<'_, '_>) -> Specific {
+fn specificity(left: RankingType<'_>, right: RankingType<'_>) -> Specific {
     let all = |pairs: &mut dyn Iterator<Item = Specific>| pairs.fold(Specific::Same, Specific::and);
     let compare = |l, r, index| specificity(left.child(l, index), right.child(r, index));
     match (left.ty, right.ty) {
@@ -3877,32 +3878,77 @@ fn ranked_pack_length(chosen: &Chosen<'_>, index: usize) -> Option<usize> {
 /// GEN-5 and GEN-10: compare tuple components at the admitted arity.
 /// Expanding a pack for ranking repeats its variable, not the concrete
 /// inferred types: inference must not make an unconstrained candidate specific.
-fn ranking_type(chosen: &Chosen<'_>, ty: &Type) -> Type {
+fn ranking_type(
+    ty: &Type,
+    generics: &[GenericParameter],
+    pack_length: &dyn Fn(usize) -> Option<usize>,
+    weight: usize,
+) -> Type {
     let sequence = |at| {
-        let (index, generic) =
-            chosen
-                .declared
-                .generics
-                .iter()
-                .enumerate()
-                .find(|(_, generic)| {
-                    generic.at == at && matches!(generic.kind, GenericKind::Pack { .. })
-                })?;
+        let (index, generic) = generics.iter().enumerate().find(|(_, generic)| {
+            generic.at == at && matches!(generic.kind, GenericKind::Pack { .. })
+        })?;
         Some(vec![
             Type::Parameter {
                 at,
                 name: generic.name.clone()
             };
-            ranked_pack_length(chosen, index)?
+            pack_length(index)?
         ])
     };
-    let weight = chosen
-        .type_packs
-        .iter()
-        .map(|pack| pack.types.len().saturating_add(1))
-        .max()
-        .unwrap_or(1);
     substitute_with_packs(ty, &[], &|_, _, _| None, &sequence, weight)
+}
+
+/// GEN-3 compares alternatives with GEN-12's structural ordering.
+pub(super) fn alternative_outranks(
+    (better, better_generics, better_found): (&Type, &[GenericParameter], &[Option<Argument>]),
+    (worse, worse_generics, worse_found): (&Type, &[GenericParameter], &[Option<Argument>]),
+) -> bool {
+    let length = |found: &[Option<Argument>], index| match found.get(index)? {
+        Some(Argument::Type(Type::Tuple(types))) => Some(types.len()),
+        _ => None,
+    };
+    let weight = |generics: &[GenericParameter], length: &dyn Fn(usize) -> Option<usize>| {
+        generics
+            .iter()
+            .enumerate()
+            .filter_map(|(index, generic)| {
+                matches!(generic.kind, GenericKind::Pack { .. })
+                    .then(|| length(index).map(|length| length.saturating_add(1)))?
+            })
+            .max()
+            .unwrap_or(1)
+    };
+    let better_length = |index| length(better_found, index);
+    let worse_length = |index| length(worse_found, index);
+    let better_expanded = ranking_type(
+        better,
+        better_generics,
+        &better_length,
+        weight(better_generics, &better_length),
+    );
+    let worse_expanded = ranking_type(
+        worse,
+        worse_generics,
+        &worse_length,
+        weight(worse_generics, &worse_length),
+    );
+    specificity(
+        RankingType {
+            ty: &better_expanded,
+            written: Some(better),
+            generics: better_generics,
+            pack_length: &better_length,
+            retains_anonymous_value: false,
+        },
+        RankingType {
+            ty: &worse_expanded,
+            written: Some(worse),
+            generics: worse_generics,
+            pack_length: &worse_length,
+            retains_anonymous_value: false,
+        },
+    ) == Specific::More
 }
 
 /// True when `better` outranks `worse`, each a candidate a call admits
@@ -3910,6 +3956,16 @@ fn ranking_type(chosen: &Chosen<'_>, ty: &Type) -> Type {
 /// compared place for place ([`specificity`]), and more
 /// specific in one (GEN-5, GEN-12).
 fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
+    let pack_weight = |chosen: &Chosen| {
+        chosen
+            .type_packs
+            .iter()
+            .map(|pack| pack.types.len().saturating_add(1))
+            .max()
+            .unwrap_or(1)
+    };
+    let better_length = |index| ranked_pack_length(better, index);
+    let worse_length = |index| ranked_pack_length(worse, index);
     let whole = public
         .candidate_parameters(better.declared)
         .zip(public.candidate_parameters(worse.declared))
@@ -3917,13 +3973,26 @@ fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
             let (better_index, worse_index) = (better_index?, worse_index?);
             let better_type = &better.declared.parameters[better_index].ty;
             let worse_type = &worse.declared.parameters[worse_index].ty;
-            let better_expanded = ranking_type(better, better_type);
-            let worse_expanded = ranking_type(worse, worse_type);
+            let better_generics = &better.declared.generics;
+            let worse_generics = &worse.declared.generics;
+            let better_expanded = ranking_type(
+                better_type,
+                better_generics,
+                &better_length,
+                pack_weight(better),
+            );
+            let worse_expanded = ranking_type(
+                worse_type,
+                worse_generics,
+                &worse_length,
+                pack_weight(worse),
+            );
             Some(specificity(
                 RankingType {
                     ty: &better_expanded,
                     written: Some(better_type),
-                    candidate: better,
+                    generics: better_generics,
+                    pack_length: &better_length,
                     retains_anonymous_value: better
                         .valued_anonymous_parameters
                         .contains(&better_index),
@@ -3931,7 +4000,8 @@ fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
                 RankingType {
                     ty: &worse_expanded,
                     written: Some(worse_type),
-                    candidate: worse,
+                    generics: worse_generics,
+                    pack_length: &worse_length,
                     retains_anonymous_value: worse
                         .valued_anonymous_parameters
                         .contains(&worse_index),

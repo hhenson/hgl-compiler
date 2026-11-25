@@ -18,6 +18,90 @@ fn rejects(source: &str, code: &str) {
     );
 }
 
+#[test]
+fn bare_callback_uses_the_most_specific_declared_membership() {
+    // GEN-3 and FN-17: a direct function can declare the same evidence
+    // as an operator candidate. GEN-12 compares the nested list shape.
+    let source = r#"module m
+const entry: str = "x"
+operator twice<T>(x: T) -> T
+impl fn twice(x: i64) -> i64 => x * 2
+fn nested<R, ...Inputs, ...Actual>(f: fn(...{Inputs}) -> R, args: ...{Actual for f}) -> i64
+    requires each k in arg_keys(Actual) {
+        Actual[k] in {Inputs[k], list<Inputs[k], 2>, list<list<Inputs[k], 2>, 2>}
+    }
+    => 3
+fn single<R, ...Inputs, ...Actual>(f: fn(...{Inputs}) -> R, args: ...{Actual for f}) -> i64
+    requires (Actual[entry] in {Inputs[entry], list<Inputs[entry], 2>})
+    => 4
+fn positional(items: list<list<i64, 2>, 2>) -> i64 => nested(twice, items)
+fn named(items: list<i64, 2>) -> i64 => single(twice, x: items)
+"#;
+    accepts(source);
+}
+
+#[test]
+fn bare_callback_rejects_incomparable_member_types() {
+    // GEN-3 and GEN-12: either alternative fits the dictionary, but
+    // each constrains a different part and they give different types.
+    rejects(
+        r#"module m
+fn identity<T>(x: T) -> T => x
+fn select<R, ...Inputs, ...Actual>(f: fn(...{Inputs}) -> R, args: ...{Actual for f}) -> i64
+    requires each k in arg_keys(Actual) {
+        Actual[k] in {dict<Inputs[k], str>, dict<i64, Inputs[k]>}
+    }
+    => 3
+fn ambiguous(items: dict<i64, str>) -> i64 => select(identity, items)
+"#,
+        "type/generic.unresolved",
+    );
+}
+
+#[test]
+fn bare_map_callback_uses_declared_native_collection_members() {
+    // MAP-2 and FN-17: expanding a list or dictionary is a property of
+    // the admitted declarations, independent of their target support.
+    accepts(
+        r#"module m
+const fn identity<T>(x: T) -> T => x
+fn growing(values: list<i64>) -> list<i64> => map(add_, values, 2)
+fn keyed(values: dict<str, i64>) -> dict<str, i64> => map(identity, values)
+"#,
+    );
+}
+
+#[test]
+fn bare_callback_checks_every_input_of_a_shared_generic() {
+    // GEN-3 and FN-17: the second list gives i64 to the bare function.
+    // Writing the callback type explicitly can instead pass it whole.
+    let source = r#"module m
+const fn first<T>(x: T, y: T) -> T => x
+fn mixed(x: list<list<i64, 2>, 2>, y: list<i64, 2>) -> list<list<i64, 2>, 2> =>
+"#;
+    rejects(
+        &format!("{source}    map(first, x, y)"),
+        "type/generic.unresolved",
+    );
+    accepts(&format!("{source}    map(first<list<i64, 2>>, x, y)"));
+}
+
+#[test]
+fn negative_and_disjoined_memberships_supply_no_bare_callback_evidence() {
+    // GEN-3: a test of argument types can hold without binding a type.
+    let source = r#"module m
+operator keep<T>(x: T) -> i64
+impl fn keep(x: list<i64, 2>) -> i64 => 5
+fn whole<R, ...Inputs, ...Actual>(f: fn(...{Inputs}) -> R, args: ...{Actual for f}) -> i64
+    requires each k in arg_keys(Actual) {
+        Actual[k] in {list<Inputs[k], 2>} || !(Actual[k] in {list<Inputs[k], 2>})
+    }
+    => 3
+fn pass_whole(items: list<i64, 2>) -> i64 => whole(keep, items)
+"#;
+    accepts(source);
+}
+
 const CATEGORIES: &str = "module m\n\
 struct Point { x: f64\n y: f64 }\n\
 struct Label { text: str }\n\

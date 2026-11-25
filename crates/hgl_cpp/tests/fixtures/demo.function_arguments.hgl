@@ -346,3 +346,35 @@ test explicit_operator_callbacks_with_split_inputs {
     assert eval choose_forwarded_integer(value: [3]) == [4]
     assert eval choose_forwarded_float(value: [3.0]) == [7]
 }
+
+fn sum_bare_pairs(left: list<i64, 2>, right: list<i64, 2>) -> list<i64, 2> =>
+    map(add_, left, right)
+
+fn multiply_bare(values: list<f64, 2>, factor: f64) -> list<f64, 2> =>
+    map(mul_, values, factor)
+
+fn double_bare(values: list<i64, 2>) -> list<i64, 2> =>
+    map(double_member, value: values)
+
+fn identity_bare(values: list<i64, 2>) -> list<i64, 2> =>
+    map(identity, values)
+
+fn whole_forwarded(values: list<i64, 2>) -> list<i64, 2> =>
+    forward_member(identity, values)
+
+fn first_if<T>(enabled: bool, values: list<T, 2>) -> T =>
+    if enabled { values[0] } else { values[1] }
+
+fn explicit_whole_list(enabled: list<bool, 2>, values: list<i64, 2>) -> list<i64, 2> =>
+    map(first_if<i64>, enabled, values)
+
+# GEN-3, FN-17, MAP-2: a bare callback takes member types from the
+# declared split alternatives. Ordinary forwarding supplies whole types.
+test bare_callbacks_with_split_inputs {
+    assert eval sum_bare_pairs(left: [[1, 2]], right: [[3, 4]]) == [[4, 6]]
+    assert eval multiply_bare(values: [[2.0, 3.0]], factor: [4.0]) == [[8.0, 12.0]]
+    assert eval double_bare(values: [[2, 3]]) == [[4, 6]]
+    assert eval identity_bare(values: [[2, 3]]) == [[2, 3]]
+    assert eval whole_forwarded(values: [[2, 3]]) == [[2, 3]]
+    assert eval explicit_whole_list(enabled: [[true, false]], values: [[2, 3]]) == [[2, 3]]
+}

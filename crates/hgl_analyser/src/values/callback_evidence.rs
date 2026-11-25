@@ -1,14 +1,16 @@
 //! Type evidence a positive membership gives a bare callback (GEN-3, FN-17).
+//! Part of the analyser's typing pass for static function arguments.
 
 use hgl_diagnostics::Location;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::Candidate;
+use super::candidates::alternative_outranks;
 use super::dependent_packs::dependent_slot;
 use super::fit::whole;
 use super::inference::{infer, type_pack};
 use super::requirements::{conjoined_terms, pack_view};
-use crate::declared::{same_type, substitute_with_members, substitute_within};
+use crate::declared::{same_type, substitute_with_members, substitute_with_packs, weight};
 use crate::syntax::{child, tokens};
 use crate::types::{Argument, ConstantValue, GenericKind, GenericParameter, Type};
 use crate::{Program, ReflectedPack};
@@ -96,15 +98,20 @@ impl CallbackEvidence {
                 );
                 relations.extend(members.into_iter().map(|relation| (relation, Some(key))));
             }
-            let mut generics = signature.generics.clone();
-            let Some(variable) = generics
-                .iter_mut()
+            let Some(mut variable) = signature
+                .generics
+                .iter()
                 .find(|parameter| parameter.at == target.at)
+                .cloned()
             else {
                 continue;
             };
             // One pack member is the type variable we solve for in this pattern.
+            // Give it a separate identity from the declaration of the whole pack.
+            variable.at = Location::new(declared.at.file, condition.span());
             variable.kind = GenericKind::Type;
+            let mut generics = signature.generics.clone();
+            generics.push(variable);
             evidence
                 .0
                 .extend(relations.iter().filter_map(|(relation, bound)| {
@@ -126,19 +133,23 @@ impl CallbackEvidence {
         for membership in &self.0 {
             if membership.applies(name, position) {
                 matches.extend(membership.patterns.iter().filter_map(|pattern| {
-                    Some((membership, pattern, membership.fit(pattern, actual)??))
+                    Some((membership, pattern, membership.fit(pattern, actual)?))
                 }));
             }
         }
         let mut resolved = None;
-        for (membership, pattern, ty) in &matches {
-            let outranked = matches.iter().any(|(other, candidate, _)| {
-                membership.fit(pattern, candidate).is_some()
-                    && other.fit(candidate, pattern).is_none()
-            });
-            if outranked {
+        for (membership, pattern, bindings) in &matches {
+            if matches.iter().any(|(other, candidate, found)| {
+                alternative_outranks(
+                    (candidate, &other.generics, found),
+                    (pattern, &membership.generics, bindings),
+                )
+            }) {
                 continue;
             }
+            let Some(Argument::Type(ty)) = &bindings[membership.target] else {
+                return Err(());
+            };
             if resolved.is_some_and(|previous| same_type(previous, ty) != Some(true)) {
                 return Err(());
             }
@@ -150,7 +161,7 @@ impl CallbackEvidence {
 
 struct Membership {
     key: Option<ConstantValue>,
-    target: Location,
+    target: usize,
     generics: Vec<GenericParameter>,
     patterns: Vec<Type>,
 }
@@ -167,6 +178,8 @@ impl Membership {
         let mut operands = relation.children();
         let left = operands.next()?;
         let right = operands.next()?;
+        let target_index = generics.len().checked_sub(1)?;
+        let variable = generics[target_index].at;
         if right.kind() != SyntaxKind::ConstraintSet
             || !tokens(relation)
                 .any(|token| token.kind() == SyntaxKind::Ident && token.text() == "in")
@@ -191,56 +204,81 @@ impl Membership {
                 &[],
                 &|pack, _, member| {
                     (pack == target.at && member == key).then(|| Type::Parameter {
-                        at: target.at,
+                        at: variable,
                         name: target.name.clone(),
                     })
                 },
                 1,
             );
-            if whole(&pattern)
-                && pattern.any_part(
-                    &|ty| matches!(ty, Type::Parameter { at, .. } if *at == target.at),
-                    &|_| false,
-                )
-            {
+            if whole(&pattern) {
                 patterns.push(pattern);
             }
         }
-        (!patterns.is_empty()).then(|| Self {
-            key: bound.is_none().then(|| key.value.clone()),
-            target: target.at,
-            generics: generics.to_vec(),
-            patterns,
-        })
+        patterns
+            .iter()
+            .any(|pattern| {
+                pattern.any_part(
+                    &|ty| matches!(ty, Type::Parameter { at, .. } if *at == variable),
+                    &|_| false,
+                )
+            })
+            .then(|| Self {
+                key: bound.is_none().then(|| key.value.clone()),
+                target: target_index,
+                generics: generics.to_vec(),
+                patterns,
+            })
     }
 
     fn applies(&self, name: Option<&str>, position: Option<usize>) -> bool {
         match &self.key {
             None => true,
             Some(ConstantValue::Str(key)) => name == Some(key),
-            Some(ConstantValue::Int(key)) => position == usize::try_from(*key).ok(),
+            Some(ConstantValue::Int(key)) => {
+                usize::try_from(*key).is_ok_and(|key| position == Some(key))
+            }
             Some(_) => false,
         }
     }
 
-    fn fit(&self, pattern: &Type, actual: &Type) -> Option<Option<Type>> {
+    fn fit(&self, pattern: &Type, actual: &Type) -> Option<Vec<Option<Argument>>> {
         let mut found = vec![None; self.generics.len()];
         infer(pattern, actual, &self.generics, &mut found);
-        let bindings: Vec<_> = self
-            .generics
+        let mut bindings = Vec::new();
+        let mut packs = Vec::new();
+        for (generic, value) in self.generics.iter().zip(&found) {
+            let Some(value) = value else { continue };
+            if let GenericKind::Pack { minimum, maximum } = generic.kind {
+                let Argument::Type(Type::Tuple(types)) = value else {
+                    return None;
+                };
+                let count = types.len() as u64;
+                if count < minimum || maximum.is_some_and(|maximum| count > maximum) {
+                    return None;
+                }
+                packs.push((generic.at, types));
+            } else {
+                bindings.push((generic.at, value));
+            }
+        }
+        let pack_weight = packs
             .iter()
-            .zip(&found)
-            .filter_map(|(parameter, argument)| Some((parameter.at, argument.as_ref()?)))
-            .collect();
+            .map(|(_, types)| {
+                types
+                    .iter()
+                    .fold(1usize, |sum, ty| sum.saturating_add(weight(ty)))
+            })
+            .max()
+            .unwrap_or(1);
+        let sequence = |at| {
+            packs
+                .iter()
+                .find_map(|(declared, types)| (*declared == at).then(|| (*types).clone()))
+        };
         // Inference keeps its first binding. Verify the entire pattern so
         // repeated parameters and all fixed parts also agree.
-        (same_type(&substitute_within(pattern, &bindings), actual) == Some(true)).then(|| {
-            bindings
-                .into_iter()
-                .find_map(|(at, argument)| match argument {
-                    Argument::Type(ty) if at == self.target => Some(ty.clone()),
-                    _ => None,
-                })
-        })
+        let fitted =
+            substitute_with_packs(pattern, &bindings, &|_, _, _| None, &sequence, pack_weight);
+        (same_type(&fitted, actual) == Some(true)).then_some(found)
     }
 }

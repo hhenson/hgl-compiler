@@ -181,7 +181,18 @@ impl<'a> Typer<'a> {
         }
         let given = inputs
             .supplied
-            .map(|_| self.reflected_arguments(signature, template, node, inputs))
+            .map(|_| {
+                reflected_arguments(
+                    self,
+                    signature,
+                    template,
+                    node,
+                    &CallbackInputs {
+                        evidence: inputs.evidence.filter(|_| !signature.generics.is_empty()),
+                        ..*inputs
+                    },
+                )
+            })
             .transpose()
             .ok()?;
         let ReferenceArguments {
@@ -192,7 +203,7 @@ impl<'a> Typer<'a> {
             node,
             name,
             (declared, signature),
-            (template, given.as_deref()),
+            (template, given.as_ref().map(|(given, _)| given.as_slice())),
         )?;
         let map = signature
             .generics
@@ -207,6 +218,24 @@ impl<'a> Typer<'a> {
         let packs = PackTypes::new(&signature.generics, &type_packs);
         for parameter in &mut taken.parameters {
             parameter.ty = packs.project(&parameter.ty, &map).ok()?;
+        }
+        // GEN-3: an earlier argument's binding cannot discard a different
+        // member type another argument supplies to the same generic.
+        if let Some((given, true)) = given
+            && let Some(argument) = given.iter().find(|argument| {
+                callback_parameter(signature, &argument.key)
+                    .is_some_and(|slot| !self.admits(&taken.parameters[slot].ty, argument.ty()))
+            })
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::GENERIC_UNRESOLVED,
+                argument.value.at,
+                "this argument's derived type conflicts with the bare function's inputs"
+                    .to_string(),
+                "GEN-3",
+            ));
+            return None;
         }
         taken.result = taken
             .result
@@ -264,8 +293,9 @@ impl<'a> Typer<'a> {
         let at = self.at(node);
         let reflected = template.named_pack.is_some();
         let mut given = if reflected {
-            self.reflected_arguments(public, template, node, inputs)
+            reflected_arguments(self, public, template, node, inputs)
                 .ok()?
+                .0
         } else {
             Vec::new()
         };
@@ -587,25 +617,13 @@ impl<'a> Typer<'a> {
             infer(&pattern.ty, actual.ty(), &signature.generics, &mut found);
         }
         for given in given.unwrap_or_default() {
-            let parameter = given
-                .key
-                .public_parameter(signature)
-                .map(|index| &signature.parameters[index])
-                .or_else(|| {
-                    // FN-8 and GEN-2: a homogeneous pack's entries each
-                    // supply evidence for its element type.
-                    let kind = match &given.key {
-                        Key::Position(_) => Pack::Positional,
-                        Key::Name(_) => Pack::Named,
-                        _ => return None,
-                    };
-                    signature.parameters.iter().find(|parameter| {
-                        parameter.pack == Some(kind)
-                            && type_pack(parameter, &signature.generics).is_none()
-                    })
-                });
-            if let Some(parameter) = parameter {
-                infer(&parameter.ty, given.ty(), &signature.generics, &mut found);
+            if let Some(index) = callback_parameter(signature, &given.key) {
+                infer(
+                    &signature.parameters[index].ty,
+                    given.ty(),
+                    &signature.generics,
+                    &mut found,
+                );
             }
         }
         // GEN-2 and GEN-8: a generic value parameter nothing says
@@ -1312,84 +1330,98 @@ pub(super) struct CallbackInputs<'a> {
     pub(super) evidence: Option<&'a CallbackEvidence>,
 }
 
-impl Typer<'_> {
-    fn reflected_arguments(
-        &mut self,
-        public: &Signature,
-        template: &FunctionType,
-        node: &SyntaxNode,
-        inputs: &CallbackInputs<'_>,
-    ) -> Result<Vec<Given>, ()> {
-        let evidence = inputs
-            .evidence
-            .filter(|_| node.kind() == SyntaxKind::NameExpr);
-        let fixed = public.positional_parameters().count();
-        let mut remaining = public
-            .positional_parameters()
-            .map(|(_, parameter)| parameter)
-            .enumerate()
-            .filter(|(_, parameter)| !inputs.excluded.contains(&parameter.name.as_str()));
-        let mut pack_position = fixed;
-        let mut given: Vec<_> = inputs
-            .supplied
-            .unwrap_or_default()
-            .iter()
-            .map(|(name, value)| {
-                let key = if let Some(name) = name {
-                    Key::Name((*name).to_string())
-                } else if let Some((position, _)) = remaining.next() {
-                    Key::Position(position)
-                } else {
-                    let position = pack_position;
-                    pack_position += 1;
-                    Key::Position(position)
+fn reflected_arguments(
+    typer: &mut Typer<'_>,
+    public: &Signature,
+    template: &FunctionType,
+    node: &SyntaxNode,
+    inputs: &CallbackInputs<'_>,
+) -> Result<(Vec<Given>, bool), ()> {
+    let evidence = inputs
+        .evidence
+        .filter(|_| node.kind() == SyntaxKind::NameExpr);
+    let fixed = public.positional_parameters().count();
+    let mut remaining = public
+        .positional_parameters()
+        .map(|(_, parameter)| parameter)
+        .enumerate()
+        .filter(|(_, parameter)| !inputs.excluded.contains(&parameter.name.as_str()));
+    let mut pack_position = fixed;
+    let mut projected = false;
+    let mut given: Vec<_> = inputs
+        .supplied
+        .unwrap_or_default()
+        .iter()
+        .map(|(name, value)| {
+            let key = if let Some(name) = name {
+                Key::Name((*name).to_string())
+            } else if let Some((position, _)) = remaining.next() {
+                Key::Position(position)
+            } else {
+                let position = pack_position;
+                pack_position += 1;
+                Key::Position(position)
+            };
+            let ty = if let Some(evidence) = evidence {
+                let slot = key.public_parameter(public);
+                let name = key
+                    .name()
+                    .or_else(|| slot.map(|slot| public.parameters[slot].name.as_str()));
+                let position = match key {
+                    Key::Position(position) => position.checked_sub(fixed),
+                    _ => None,
                 };
-                let ty = if let Some(evidence) = evidence {
-                    let name = key.name().or_else(|| {
-                        key.public_parameter(public)
-                            .map(|slot| public.parameters[slot].name.as_str())
-                    });
-                    let position = match key {
-                        Key::Position(position) => position.checked_sub(fixed),
-                        _ => None,
-                    };
+                let settled = slot.is_some_and(|slot| {
+                    let before = public.parameters[..slot]
+                        .iter()
+                        .filter(|parameter| !parameter.configuration)
+                        .count();
+                    template
+                        .ordinary_parameters()
+                        .nth(before)
+                        .is_some_and(|parameter| whole(parameter.ty()))
+                });
+                if settled {
+                    value.ty.clone()
+                } else {
                     evidence.resolve(name, position, &value.ty).map_err(|()| {
-                        self.diagnostics.emit(error(
+                        typer.diagnostics.emit(error(
                             Category::Type,
                             codes::GENERIC_UNRESOLVED,
                             value.at,
-                            "this argument gives conflicting types to the bare function"
+                            "this argument does not determine a unique type for the bare function"
                                 .to_string(),
                             "GEN-3",
                         ));
                     })?
-                } else {
-                    value.ty.clone()
-                };
-                let mut argument = callback_operand(0, node, value.at, ty);
-                argument.key = key;
-                Ok(argument)
-            })
-            .collect::<Result<_, _>>()?;
-        // Fixed inputs specify their own types even where the enclosing
-        // declaration supplies them or the callback has a default (FN-17).
-        for (index, input) in template.ordinary_parameters().enumerate() {
-            if whole(input.ty())
-                && let Some(slot) = Key::Position(index).public_parameter(public)
-                && given
-                    .iter()
-                    .all(|given| given.key.public_parameter(public) != Some(slot))
-            {
-                given.push(callback_operand(
-                    index,
-                    node,
-                    self.at(node),
-                    input.ty().clone(),
-                ));
-            }
+                }
+            } else {
+                value.ty.clone()
+            };
+            projected |= ty != value.ty;
+            let mut argument = callback_operand(0, node, value.at, ty);
+            argument.key = key;
+            Ok(argument)
+        })
+        .collect::<Result<_, _>>()?;
+    // Fixed inputs specify their own types even where the enclosing
+    // declaration supplies them or the callback has a default (FN-17).
+    for (index, input) in template.ordinary_parameters().enumerate() {
+        if whole(input.ty())
+            && let Some(slot) = Key::Position(index).public_parameter(public)
+            && given
+                .iter()
+                .all(|given| given.key.public_parameter(public) != Some(slot))
+        {
+            given.push(callback_operand(
+                index,
+                node,
+                typer.at(node),
+                input.ty().clone(),
+            ));
         }
-        Ok(given)
     }
+    Ok((given, projected))
 }
 
 fn callback_operand(position: usize, node: &SyntaxNode, at: Location, ty: Type) -> Given {
@@ -1403,6 +1435,21 @@ fn callback_operand(position: usize, node: &SyntaxNode, at: Location, ty: Type) 
             category: ValueCategory::Value,
         },
     )
+}
+
+/// FN-8 and GEN-2: a homogeneous pack's entries each supply evidence
+/// for its element type.
+fn callback_parameter(signature: &Signature, key: &Key) -> Option<usize> {
+    key.public_parameter(signature).or_else(|| {
+        let kind = match key {
+            Key::Position(_) => Pack::Positional,
+            Key::Name(_) => Pack::Named,
+            _ => return None,
+        };
+        signature.parameters.iter().position(|parameter| {
+            parameter.pack == Some(kind) && type_pack(parameter, &signature.generics).is_none()
+        })
+    })
 }
 
 /// FN-17: fixed inputs are plain. GEN-17 reflects the other inputs as
