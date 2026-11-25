@@ -344,11 +344,33 @@ impl MemberReading<'_> {
     }
 
     fn same_binding(&self, other: &Self) -> bool {
-        match (&self.ty, &other.ty) {
+        let same_input = match (&self.ty, &other.ty) {
             (None, None) => true,
             (Some(one), Some(two)) => same_type(one, two) == Some(true),
             _ => false,
-        }
+        };
+        let supplies = |left: &Self, right: &Self| {
+            left.shared_bindings().all(|(at, value)| {
+                right
+                    .shared_bindings()
+                    .any(|(other, bound)| at == other && same_argument(value, bound) == Some(true))
+            })
+        };
+        same_input && supplies(self, other) && supplies(other, self)
+    }
+
+    fn shared_bindings(&self) -> impl Iterator<Item = (Location, &Argument)> {
+        self.patterns.iter().flat_map(|alternative| {
+            alternative
+                .rule
+                .generics
+                .iter()
+                .zip(&alternative.bindings)
+                // The synthetic last variable belongs to this argument's
+                // callback parameter. Only the enclosing generics are shared.
+                .take(alternative.rule.target)
+                .filter_map(|(generic, value)| Some((generic.at, value.as_ref()?)))
+        })
     }
 
     fn specificity(&self, other: &Self) -> Specific {
@@ -361,6 +383,33 @@ impl MemberReading<'_> {
                     (two.pattern, &two.rule.generics, &two.bindings),
                 ))
             })
+    }
+}
+
+/// GEN-3: e.g. every split argument of one keyed map gives the same K.
+fn shared_bindings_agree(readings: &[Option<&MemberReading<'_>>]) -> bool {
+    let mut bindings = Vec::new();
+    for (at, value) in readings
+        .iter()
+        .flatten()
+        .flat_map(|reading| reading.shared_bindings())
+    {
+        if bindings
+            .iter()
+            .any(|&(other, bound)| at == other && same_argument(value, bound) == Some(false))
+        {
+            return false;
+        }
+        bindings.push((at, value));
+    }
+    true
+}
+
+fn same_argument(one: &Argument, two: &Argument) -> Option<bool> {
+    match (one, two) {
+        (Argument::Type(one), Argument::Type(two)) => same_type(one, two),
+        (Argument::Constant(one), Argument::Constant(two)) => one.value.same(&two.value),
+        _ => Some(one == two),
     }
 }
 
@@ -383,7 +432,7 @@ pub(super) fn select_readings<'a>(
             _ => None,
         })
         .collect();
-    if !compatible(&readings, false) {
+    if !shared_bindings_agree(&readings) || !compatible(&readings, false) {
         return Err(ReadingFailure::NoMatch);
     }
     let mut best: Vec<Vec<usize>> = Vec::new();
@@ -494,6 +543,7 @@ fn search_readings<'a>(
         });
         readings[position] = Some(option);
         if !dominated
+            && shared_bindings_agree(readings)
             && compatible(readings, false)
             && search_readings(choices, compatible, readings, trial, best)
         {

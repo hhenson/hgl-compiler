@@ -60,3 +60,22 @@ test bare_operator_candidates_constrain_the_interpretation {
         [[[3, 4], [3, 4]]]
     assert eval selected_operator_whole(flags: [[true, false]], xs: [[3, 4]]) == [([3, 4], true)]
 }
+
+const fn use_last_whole<T>(value: f64, whole: T) -> i64 => 7
+const fn use_first_whole<T>(whole: T, value: f64) -> i64 => 7
+
+fn mapped_keys(x: dict<str, f64>, y: dict<i64, f64>) -> dict<str, i64> {
+    let chosen = map(use_last_whole, x, y)
+    return chosen
+}
+fn reversed_keys(x: dict<str, f64>, y: dict<i64, f64>) -> dict<str, i64> {
+    let chosen = map(use_first_whole, y, x)
+    return chosen
+}
+
+test map_requires_a_shared_key_only_for_split_arguments {
+    assert eval mapped_keys(x: [["a": 1.0, "b": 2.0]], y: [[10: 3.0]]) ==
+        [["a": 7, "b": 7]]
+    assert eval reversed_keys(x: [["a": 1.0, "b": 2.0]], y: [[10: 3.0]]) ==
+        [["a": 7, "b": 7]]
+}

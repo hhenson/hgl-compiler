@@ -155,6 +155,45 @@ fn work(x: list<i64, 2>, y: list<i64, 2>) -> i64 => keep(first, {operands})
 }
 
 #[test]
+fn a_shared_key_can_require_a_whole_dictionary_in_either_argument_order() {
+    // GEN-3: v's equality decides K = str. The other pack member can
+    // fit the same K only by taking its dictionary whole.
+    let declarations = r#"module m
+const left: str = "v"
+const right: str = "w"
+const fn last<T>(v: f64, w: T) -> i64 => 7
+fn receiver<K, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires As[left] == dict<K, Ps[left]> && As[right] in {Ps[right], dict<K, Ps[right]>}
+    => 7
+"#;
+    for arguments in ["x, y", "w: y, v: x"] {
+        accepts(&format!(
+            "{declarations}fn sample(x: dict<str, f64>, y: dict<i64, f64>) -> i64 => receiver(last, {arguments})"
+        ));
+    }
+    accepts(&format!(
+        "{declarations}fn explicit(x: dict<str, f64>, y: dict<i64, f64>) -> i64 => receiver<str>(last<dict<i64, f64>>, x, y)"
+    ));
+}
+
+#[test]
+fn distinct_shared_keys_can_leave_the_best_readings_ambiguous() {
+    // GEN-3: one dictionary can split, but the call leaves open which
+    // one. Each choice fits its own K and disagrees on the split input.
+    rejects(
+        r#"module m
+const fn ignore<T, U>(v: T, w: U) -> i64 => 7
+fn receiver<K, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires any k in arg_keys(As) { As[k] == dict<K, Ps[k]> }
+        && each k in arg_keys(As) { As[k] in {Ps[k], dict<K, Ps[k]>} }
+    => 7
+fn ambiguous(x: dict<str, f64>, y: dict<i64, f64>) -> i64 => receiver(ignore, x, y)
+"#,
+        "type/generic.unresolved",
+    );
+}
+
+#[test]
 fn known_results_choose_compatible_bare_operator_candidates_in_either_order() {
     // GEN-3 and FN-17: the public result O is independent of the input
     // generics, but each candidate's signature ties the result to a reading.

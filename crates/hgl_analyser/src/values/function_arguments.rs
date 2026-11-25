@@ -1682,7 +1682,7 @@ fn reflected_arguments<'a>(
                 Key::Position(position) => position.checked_sub(fixed),
                 _ => None,
             };
-            let settled = slot.is_some_and(|slot| {
+            let fixed_type = slot.and_then(|slot| {
                 let before = public.parameters[..slot]
                     .iter()
                     .filter(|parameter| !parameter.configuration)
@@ -1690,20 +1690,28 @@ fn reflected_arguments<'a>(
                 template
                     .ordinary_parameters()
                     .nth(before)
-                    .is_some_and(|parameter| whole(parameter.ty()))
+                    .map(FunctionParameter::ty)
+                    .filter(|ty| whole(ty))
             });
-            let needs_evidence = declared_shape
-                .is_none_or(|shape| parameter.is_some_and(|ty| mentions(ty, &shape.unresolved)));
             // FN-17: a bare operator already declares a whole input
             // when its public parameter has the actual argument type.
-            let whole_operator_input = declared_shape.is_none()
-                && slot.is_some_and(|slot| {
-                    same_type(&public.parameters[slot].ty, &value.ty) == Some(true)
-                });
-            if settled || !needs_evidence || whole_operator_input {
+            let fixed_type = fixed_type.or_else(|| {
+                let ty = &public.parameters[slot?].ty;
+                (declared_shape.is_none() && same_type(ty, &value.ty) == Some(true)).then_some(ty)
+            });
+            if declared_shape.is_some() && parameter.is_none() {
                 return unchanged();
             }
+            // A fixed callback input still determines shared generics
+            // of the enclosing call, such as a keyed map's K (GEN-3).
             let mut readings = evidence.readings(name, position, &value.ty);
+            if let Some(fixed) = fixed_type {
+                readings.retain(|reading| {
+                    reading.evidence_type().is_none_or(|ty| {
+                        same_type(fixed, ty) != Some(false) || typer.admits(fixed, ty)
+                    })
+                });
+            }
             if let Some((shape, parameter)) = shape.zip(*parameter) {
                 readings.retain(|reading| {
                     reading.evidence_type().is_none_or(|actual| {
