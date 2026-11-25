@@ -50,6 +50,10 @@ impl fn candidate_scalar_place<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{A
     requires each k in arg_keys(As) { As[k] in {Ps[k], i64}
 } => f(...args)
 
+operator candidate_tuple_place<R, C, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> C
+impl const fn candidate_tuple_place<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> tuple<R, bool>
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => (f(...args), true)
+
 operator candidate_sibling<T, R, ...Ps, ...As>(g: fn(T) -> T, f: fn(...{Ps}) -> R, args: ...{As for f}) -> R
     requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>}
 }
@@ -123,6 +127,8 @@ fn ordinary_candidate_input(xs: list<i64, 2>) -> i64 {
 fn direct_candidate_result(xs: list<i64, 2>) -> list<i64, 2> => candidate_place(id, xs)
 fn explicit_whole_map(flags: list<bool, 2>, xs: list<i64, 2>) -> list<list<i64, 2>, 2> => map(take_second<list<i64, 2>>, flags, xs)
 fn nonbinding_candidate_result(v: i64) -> i64 => candidate_scalar_place(id, v)
+fn nonbinding_tuple_result(v: i64) -> tuple<i64, bool> => candidate_tuple_place(id, v)
+fn explicit_tuple_result(v: i64) -> tuple<i64, bool> => candidate_tuple_place(id<i64>, v)
 fn sibling_candidate_result(xs: list<i64, 2>) -> i64 {
     let r = candidate_sibling(keep_list, id, xs)
     return r[0]
@@ -135,6 +141,8 @@ test candidate_callback_templates {
     assert eval ordinary_candidate_input(xs: [[2, 3]]) == [2]
     assert eval direct_candidate_result(xs: [[6, 7]]) == [[6, 7]]
     assert eval nonbinding_candidate_result(v: [8]) == [8]
+    assert eval nonbinding_tuple_result(v: [3]) == [(3, true)]
+    assert eval explicit_tuple_result(v: [3]) == [(3, true)]
     assert eval explicit_whole_map(flags: [[true, false]], xs: [[1, 2]]) == [[[1, 2], [1, 2]]]
 }
 

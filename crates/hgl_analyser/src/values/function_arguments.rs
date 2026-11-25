@@ -335,6 +335,7 @@ impl<'a> Typer<'a> {
             (
                 constrained.as_ref().unwrap_or(template),
                 given.as_ref().map(|(given, _)| given.as_slice()),
+                inputs.result_after_arguments,
             ),
         )?;
         let map = signature
@@ -698,7 +699,7 @@ impl<'a> Typer<'a> {
             node,
             name,
             (&module.declarations[operator.declaration], public),
-            (template, Some(given)),
+            (template, Some(given), None),
         )?;
         if generics
             .iter()
@@ -734,7 +735,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         name: &SyntaxToken,
         (declared, signature): (&Declaration, &Signature),
-        (template, given): (&FunctionType, Option<&[Given]>),
+        (template, given, result_after_arguments): (&FunctionType, Option<&[Given]>, Option<&Type>),
     ) -> Option<ReferenceArguments> {
         let written = self.reference_written(node, name);
         let ExplicitGenerics {
@@ -755,6 +756,11 @@ impl<'a> Typer<'a> {
                     &mut found,
                 );
             }
+        }
+        // A candidate's enclosing result may fill a type that neither the
+        // callback template nor its supplied inputs determined (FN-17).
+        if let (Some(written), Some(result)) = (&signature.result, result_after_arguments) {
+            infer(written, result, &signature.generics, &mut found);
         }
         // GEN-2 and GEN-8: a generic value parameter nothing says
         // anything of takes the default declared by the callback.
@@ -1460,6 +1466,8 @@ pub(super) struct CallbackInputs<'a> {
     pub(super) evidence: Option<&'a CallbackEvidence>,
     /// Known parts of the callback result required by other static arguments.
     pub(super) result_shapes: &'a [Type],
+    /// A place binding for a nested result, available after member inference (FN-17).
+    pub(super) result_after_arguments: Option<&'a Type>,
 }
 
 impl CallbackInputs<'_> {

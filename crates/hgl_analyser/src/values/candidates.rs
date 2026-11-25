@@ -1729,7 +1729,12 @@ impl<'a> Typer<'a> {
         // A function already known contributes its types in declaration
         // order, before any later argument can decide them (GEN-2).
         // An unresolved callback contributes only what the probe knows.
-        let (mut found, type_packs, _) = candidate_bindings(
+        let CandidateBindings {
+            generics: mut found,
+            type_packs,
+            callback_result,
+            ..
+        } = candidate_bindings(
             self,
             signature,
             (module, candidate),
@@ -1829,6 +1834,7 @@ impl<'a> Typer<'a> {
                         excluded: &excluded,
                         evidence: Some(&evidence),
                         result_shapes: &result_shapes,
+                        result_after_arguments: callback_result.as_ref(),
                     },
                 )
             } else {
@@ -3527,7 +3533,12 @@ fn instance<'s>(
             false,
         ));
     }
-    let (mut found, type_packs, nullable_result_fallback) = candidate_bindings(
+    let CandidateBindings {
+        generics: mut found,
+        type_packs,
+        nullable_result_fallback,
+        ..
+    } = candidate_bindings(
         typer,
         signature,
         (module, declaration),
@@ -3628,6 +3639,14 @@ fn enum_conversion_destination<'a>(one: &'a Type, two: &'a Type) -> Option<&'a T
     }
 }
 
+/// Bindings of a candidate trial, including a result considered after a bare callback's inputs.
+struct CandidateBindings {
+    generics: Vec<Option<Argument>>,
+    type_packs: Vec<hir::TypePackArgument>,
+    nullable_result_fallback: bool,
+    callback_result: Option<Type>,
+}
+
 /// Infer a candidate's generic parameters from the requested result and
 /// the arguments known so far. Unresolved parameters can still provide
 /// the known parts of a function template (FN-17, GEN-2, GEN-6).
@@ -3648,7 +3667,7 @@ fn candidate_bindings(
         )>,
     ),
     choose: &mut dyn FnMut([Option<ResultBinding>; 3]) -> ResultBinding,
-) -> Option<(Vec<Option<Argument>>, Vec<hir::TypePackArgument>, bool)> {
+) -> Option<CandidateBindings> {
     let generics = &signature.generics;
     let mut found: Vec<Option<Argument>> = vec![None; generics.len()];
     if let Some(callback) = &wanted.callback {
@@ -3714,9 +3733,12 @@ fn candidate_bindings(
             .and_then(|(result, place)| {
                 infer_from_place(result, place, wanted.written, generics, &mut found)
             });
-    if let Some((index, value)) = supplied {
-        found[index] = value;
-    }
+    let callback_result = supplied.and_then(|(index, value)| {
+        let Argument::Type(ty) = std::mem::replace(&mut found[index], value)? else {
+            return None;
+        };
+        Some(ty)
+    });
     // The generic parameters an argument decided: what the call writes,
     // or its place expects, is not widened (GEN-2).
     let mut by_argument = vec![false; generics.len()];
@@ -3942,11 +3964,12 @@ fn candidate_bindings(
     if !solved_result {
         bind(&mut found);
     }
-    Some((
-        found,
+    Some(CandidateBindings {
+        generics: found,
         type_packs,
-        provisional_result.is_some() && !solved_result,
-    ))
+        nullable_result_fallback: provisional_result.is_some() && !solved_result,
+        callback_result,
+    })
 }
 
 /// ERR-12 and ERR-15: a result of a nullable value can supply the

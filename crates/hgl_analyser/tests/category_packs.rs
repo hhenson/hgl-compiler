@@ -169,6 +169,21 @@ fn invalid(input: list<i64, 2>) -> i64 => select(identity, input)
 }
 
 #[test]
+fn a_wrapped_candidate_result_can_complete_a_nonbinding_callback() {
+    // GEN-3 and FN-17. The i64 alternative establishes no input
+    // type. The expected tuple result supplies i64 through R instead.
+    accepts(
+        r#"module m
+const fn echo<T>(x: T) -> T => x
+operator apply<R, C, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> C
+impl fn apply<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> tuple<R, bool>
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => (f(...args), true)
+fn entry(arg: i64) -> tuple<i64, bool> => apply(echo, arg)
+"#,
+    );
+}
+
+#[test]
 fn bare_callback_trials_keep_the_public_operator_diagnostic() {
     // GEN-3 and GEN-4: a public condition belongs to the operator, even
     // when more than one callback trial independently fails it.

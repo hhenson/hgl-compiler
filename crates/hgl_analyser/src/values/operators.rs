@@ -1284,6 +1284,7 @@ impl<'a> Typer<'a> {
                             excluded: &excluded,
                             evidence: evidence.as_ref(),
                             result_shapes: &result_shapes,
+                            result_after_arguments: None,
                         }
                     } else {
                         CallbackInputs::default()
