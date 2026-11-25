@@ -296,3 +296,11 @@ transpiler: done
 
 - Uses the shared SDK tenor scalar and preserves its two forms and checked counts in
   emitted values.
+
+## TYPE-18
+
+parser: planned
+analyser: planned
+transpiler: planned
+
+- Left: Type values, `type(e)`, and their C++ lowering are tracked in #864.
