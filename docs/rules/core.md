@@ -140,6 +140,7 @@ transpiler: done
 analyser: partial
 
 - In a value function, ordering between two of one ordered type and equality between two values of one type, by symbol and by name through core's candidates
+- Selects Core's unsigned-octet ordering candidates when both operands are `bytes`.
 - An operand that is a generic parameter is compared as its declaration's requirements state (GEN-7)
 - Two zoned datetimes, in a value function, a hook and a graph: `==` and `!=` select core's candidates for them. The ordinary `utc` parameter can be a lifted input (EXPR-14). A zoned type has no ordering.
 - Left: a comparison with a nullable operand; other types in temporal bodies
@@ -148,6 +149,7 @@ transpiler: done
 
 - Writes core's ordered comparison and value equality, including zoned equality and the
   `utc` option.
+- Compares `bytes` lexicographically as unsigned octets (TYPE-1).
 
 ## OPS-3
 
