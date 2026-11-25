@@ -22,8 +22,13 @@ pub struct Program {
     pub modules: Vec<Module>,
     /// Ordinary const slots observed by compile-time checks, by declaration.
     pub(crate) const_demands: crate::const_inputs::Demands,
-    /// Store key sites that read a const binding changed in a recursive call.
+    /// Store keys that read a const binding changed in a recursive call:
+    /// at an operation, and as an argument that hands a key to a helper
+    /// with the store (TIME-8). The run decides them.
     pub(crate) runtime_store_keys: HashSet<Location>,
+    /// The `const` slots that can hold a store key a cycle changes, and
+    /// on which routes (TIME-8). A slot not here varies on none.
+    pub(crate) store_routes: crate::const_inputs::StoreRoutes,
     /// Bodies that read a generic value to fix a run-store key.
     pub(crate) generic_store_bodies: HashSet<(usize, usize)>,
     /// Lexical lookup ranges reused across concrete checks of one body.

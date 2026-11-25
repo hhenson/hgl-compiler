@@ -89,7 +89,7 @@ mod forms;
 pub mod hir;
 mod imports;
 mod instance;
-pub use const_inputs::{ConstInput, ConstInputFault};
+pub use const_inputs::{ConstInput, ConstInputFault, StoreRoute};
 pub use instance::InstanceInputs;
 mod laws;
 mod phases;

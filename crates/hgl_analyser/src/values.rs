@@ -381,6 +381,7 @@ pub(crate) fn check(
         program.const_demands,
         program.runtime_store_keys,
         program.generic_store_bodies,
+        program.store_routes,
     ) = crate::const_inputs::demands(program);
     let source = requirements::independent_source_bodies(program);
     let mut instance_calls = operator_defaults::check(program, &source, diagnostics);

@@ -723,3 +723,74 @@ test indirect_cycle { eval mutual(start_key: "run.output") }
         checked.report,
     );
 }
+
+/// TIME-8: fixedness is per route. One helper is reached from a cycle that
+/// changes its key, "the call that uses it fails ... as it is evaluated",
+/// and from a node with a key the text fixes, which "rejects" in source
+/// at the call that fixes it (GEN-7, CAP-6). A key a computation gives
+/// is left to the graph's build.
+#[test]
+fn store_key_checks_are_per_route_through_a_helper() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn supply(prefix: str) -> str => prefix
+const fn save(store: GlobalState, const key: str) { put(store, key, 7) }
+const fn recur(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { save(store, key) }
+    else { recur(store, depth - 1, key + ".output") }
+}
+fn routes(const computed: str) {
+    inject global_state
+    when {}
+    stop {
+        recur(global_state, 1, "run")
+        recur(global_state, 1, "run.output")
+        save(global_state, computed)
+        save(global_state, "user.direct")
+        save(global_state, "run.output")
+    }
+}
+test t { eval routes(computed: supply("run.output")) }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:16:9 injectable/store.reserved_key TIME-8"],
+        "{}",
+        checked.report,
+    );
+}
+
+/// TIME-8: a key two `const` parameters exchange on the way round is the
+/// run's, though another check reads the parameter for each instance of
+/// the cycle: the instances give the helper no key of their own.
+#[test]
+fn an_instance_of_a_cycle_gives_its_helper_no_changed_key() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn save(store: GlobalState, const key: str) { put(store, key, 7) }
+const fn swap(store: GlobalState, depth: i64, const key: str, const next: str) -> str {
+    if depth == 0 {
+        save(store, key)
+        return ""
+    }
+    let label = format(key)
+    return swap(store, depth - 1, next, key) + label
+}
+fn hook(const depth: i64) {
+    inject global_state
+    when {}
+    stop { let text = swap(global_state, depth, "run.output", "user.next") }
+}
+test t { eval hook(depth: 1) }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        Vec::<String>::new(),
+        "{}",
+        checked.report
+    );
+}

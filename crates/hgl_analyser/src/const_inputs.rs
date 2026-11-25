@@ -25,6 +25,28 @@ type Declaration = (usize, usize);
 type Slot = (Declaration, usize);
 pub(crate) type Demands = HashMap<Declaration, BTreeMap<usize, Demand>>;
 
+/// Whether a `const` parameter can hold a store key that differs between
+/// the calls of a cycle (TIME-8: "Where a function calls itself, directly
+/// or through other functions, and the key can differ between the calls
+/// on the way round ... the call that uses it fails with that code as it
+/// is evaluated"). Fixedness is per route: a parameter is `Inherited`
+/// where some routes into it carry such a key and others may not.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum StoreRoute {
+    /// On no route: "A key handed round unchanged is as fixed as in a
+    /// function that does not call itself."
+    #[default]
+    Fixed,
+    /// On the routes that hand it a key a cycle changed: a function
+    /// outside the cycle, or one that hands the key round unchanged.
+    Inherited,
+    /// On every route: a parameter of the cycle that its calls change,
+    /// exchange or give anew.
+    Changing,
+}
+
+pub(crate) type StoreRoutes = HashMap<Slot, StoreRoute>;
+
 /// Selected value calls or the resolved demand for a generic instance and slot.
 pub(crate) type SelectedDemands = RefCell<HashMap<InstanceSlot, SelectedDemand>>;
 
@@ -204,6 +226,12 @@ impl Program {
                     .map(|(parameter, value)| (parameter.at, value))
                     .collect();
                 let value = if let Some(given) = given {
+                    // TIME-8: a key a cycle changes is the run's, on this route.
+                    if demand == Demand::StoreKey
+                        && self.runtime_store_keys.contains(&given.value.at)
+                    {
+                        return Err(Unread);
+                    }
                     reader.read(&given.value, INPUT_DEPTH, &[])?
                 } else if let Some(default) = self.inherited_configuration_default(callee, slot) {
                     if let Callee::Candidate {
@@ -945,12 +973,21 @@ fn key_value(value: &Expr, output: &mut String) -> Result<(), ConstInputFault> {
 }
 
 /// Follow demand for a compile-time value back through its call arguments.
-pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>, HashSet<Declaration>) {
+pub(crate) fn demands(
+    program: &Program,
+) -> (
+    Demands,
+    HashSet<Location>,
+    HashSet<Declaration>,
+    StoreRoutes,
+) {
     let mut required = Demands::new();
     let mut uses: HashMap<Slot, Vec<(Slot, Demand)>> = HashMap::new();
     let mut pending = VecDeque::new();
     let mut candidates: HashMap<Declaration, Vec<Declaration>> = HashMap::new();
     let mut store_reads: HashMap<Location, Vec<Slot>> = HashMap::new();
+    // The arguments of calls that hand the store on, and the slots each reads.
+    let mut store_arguments: HashMap<Location, Vec<Slot>> = HashMap::new();
     let mut generic_reads = HashSet::new();
     let mut generic_uses: HashMap<Slot, Vec<Declaration>> = HashMap::new();
     let mut store_calls = StoreCalls::default();
@@ -1087,6 +1124,14 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>, HashSet
                     && (borrows_store(target) || is_graph(called))
                 {
                     store_calls.record(caller, signature, called, target, arguments);
+                    for argument in arguments {
+                        slots_read(&argument.value, &bindings, &slots, |slot| {
+                            store_arguments
+                                .entry(argument.value.at)
+                                .or_default()
+                                .push((caller, slot));
+                        });
+                    }
                 }
                 if let Some(signature) = formatting::value_signature(program, callee)
                     && let Some(pattern) = formatting::argument(signature, arguments, "fmt_str")
@@ -1131,11 +1176,12 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>, HashSet
         }
     }
     let observed_keys = store_reads.values().flatten().copied().collect();
-    let changed_in_recursion = store_calls.changed(&observed_keys);
+    let store_routes = store_calls.routes(observed_keys, &uses);
+    let changes_in_cycle = |slot: &Slot| store_routes.get(slot) == Some(&StoreRoute::Changing);
     while let Some(((declaration, slot), demand)) = pending.pop_front() {
         if demand == Demand::StoreKey {
             let position = (declaration, slot);
-            if changed_in_recursion.contains(&position) {
+            if changes_in_cycle(&position) {
                 continue;
             }
             if let Some(callers) = generic_uses.get(&position) {
@@ -1156,17 +1202,15 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>, HashSet
         }
     }
     // A recursive helper can calculate the actual key before using it.
-    // A separate compile-time check can still need the initial input.
+    // A separate compile-time check can still need the initial input:
+    // an instance made for it is given no key a cycle changes, at an
+    // operation or in the argument that hands it to a helper (TIME-8).
     let runtime_store_keys = store_reads
         .into_iter()
-        .filter_map(|(at, slots)| {
-            slots
-                .iter()
-                .any(|slot| changed_in_recursion.contains(slot))
-                .then_some(at)
-        })
+        .chain(store_arguments)
+        .filter_map(|(at, slots)| slots.iter().any(changes_in_cycle).then_some(at))
         .collect();
-    (required, runtime_store_keys, generic_reads)
+    (required, runtime_store_keys, generic_reads, store_routes)
 }
 
 fn names_generic_value(value: &Expr) -> bool {
@@ -1224,12 +1268,20 @@ impl StoreCalls {
         }
     }
 
-    /// A callee slot that a cycle computes may have another value each
-    /// time around. Follow that value through the cycle's plain forwarding.
-    fn changed(self, observed: &HashSet<Slot>) -> HashSet<Slot> {
+    /// Classify each `const` slot by the routes that can hand it a key
+    /// that differs between the calls of a cycle (TIME-8). A slot of a
+    /// cycle that its calls change is `Changing`. A slot that such a slot
+    /// reaches through further calls, inside or outside the cycle, is
+    /// `Inherited`: other routes into it can still fix its key.
+    /// `observed` holds the slots a store operation's key reads.
+    fn routes(
+        self,
+        mut observed: HashSet<Slot>,
+        uses: &HashMap<Slot, Vec<(Slot, Demand)>>,
+    ) -> StoreRoutes {
         let mut graph = DiGraph::<Declaration, ()>::new();
         let mut nodes = HashMap::new();
-        for (caller, callee) in self.calls {
+        for &(caller, callee) in &self.calls {
             let caller = *nodes
                 .entry(caller)
                 .or_insert_with(|| graph.add_node(caller));
@@ -1244,14 +1296,36 @@ impl StoreCalls {
                 cycles.extend(declarations.into_iter().map(|node| (graph[node], number)));
             }
         }
+        let same_cycle = |caller: Declaration, callee: Declaration| {
+            cycles
+                .get(&caller)
+                .is_some_and(|cycle| cycles.get(&callee) == Some(cycle))
+        };
+        // Each slot an argument of a store-borrowing call reads, to the
+        // callee's slot: `outgoing` for every such call, `outside` (from
+        // callee to caller) for one that leaves the caller's cycle.
+        let mut outside = HashMap::<Slot, Vec<Slot>>::new();
+        let mut outgoing = HashMap::<Slot, Vec<Slot>>::new();
+        for (&to, senders) in uses {
+            for &(from, _) in senders {
+                if self.calls.contains(&(from.0, to.0)) {
+                    outgoing.entry(from).or_default().push(to);
+                    if !same_cycle(from.0, to.0) {
+                        outside.entry(to).or_default().push(from);
+                    }
+                }
+            }
+        }
+        // A key a helper outside the cycle uses is also observed in the
+        // cycle's slot that supplies it: a cycle that exchanges two keys
+        // and delegates its operation still exchanges them.
+        follow_slots(&mut observed, &outside);
+
         let mut changed = HashSet::new();
         let mut forwarded: HashMap<Slot, Vec<Slot>> = HashMap::new();
         let mut received: HashMap<Slot, Vec<Slot>> = HashMap::new();
         for input in self.inputs {
-            let Some(cycle) = cycles.get(&input.caller) else {
-                continue;
-            };
-            if cycles.get(&input.callee.0) != Some(cycle) {
+            if !same_cycle(input.caller, input.callee.0) {
                 continue;
             }
             if let Some(local) = input.forwarded {
@@ -1263,25 +1337,44 @@ impl StoreCalls {
             }
         }
         let readers: HashSet<_> = observed.iter().map(|slot| slot.0).collect();
-        for &read in observed {
+        for &read in &observed {
             if !changed.contains(&read)
-                && cycle_passes_another_key(read, &received, observed, &readers)
+                && cycle_passes_another_key(read, &received, &observed, &readers)
             {
                 changed.insert(read);
             }
         }
-        let mut pending: Vec<_> = changed.iter().copied().collect();
-        while let Some(slot) = pending.pop() {
-            pending.extend(
-                forwarded
-                    .get(&slot)
-                    .into_iter()
-                    .flatten()
-                    .copied()
-                    .filter(|followed| changed.insert(*followed)),
-            );
-        }
-        changed
+        follow_slots(&mut changed, &forwarded);
+        // A changed key reaches further calls only on the routes through
+        // the cycle; the callee keeps its other routes.
+        let mut reached = changed.clone();
+        follow_slots(&mut reached, &outgoing);
+        reached
+            .into_iter()
+            .map(|slot| {
+                let route = if changed.contains(&slot) {
+                    StoreRoute::Changing
+                } else {
+                    StoreRoute::Inherited
+                };
+                (slot, route)
+            })
+            .collect()
+    }
+}
+
+/// Add to `slots` every slot their `edges` reach.
+fn follow_slots(slots: &mut HashSet<Slot>, edges: &HashMap<Slot, Vec<Slot>>) {
+    let mut pending: Vec<_> = slots.iter().copied().collect();
+    while let Some(slot) = pending.pop() {
+        pending.extend(
+            edges
+                .get(&slot)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|to| slots.insert(*to)),
+        );
     }
 }
 
