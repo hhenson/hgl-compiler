@@ -338,7 +338,7 @@ impl Emitter<'_> {
                     };
                     // TYPE-7: an enum's C++ ordinal stays separate from
                     // the signed number an HGL conversion uses.
-                    let numbers = if numbers.iter().copied().eq(0..) {
+                    let numbers = if numbers.iter().copied().eq((0..).take(numbers.len())) {
                         String::new()
                     } else {
                         format!(

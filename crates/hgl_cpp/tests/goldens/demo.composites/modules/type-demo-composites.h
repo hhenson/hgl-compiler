@@ -70,7 +70,7 @@ enum class Side
 };
 constexpr ::hglrt::EnumNames<Side, 2> hgl_enum(Side) noexcept
 {
-    return {"demo.composites::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}}};
+    return {"demo.composites::Side", {{Side::buy, "buy"}, {Side::sell, "sell"}}, {0, 5}};
 }
 
 struct Point;
