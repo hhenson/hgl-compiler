@@ -567,8 +567,10 @@ transpiler: partial
   strict dictionary lookup (ERR-6).
 - Reading or writing a key whose stored type differs gives `store.key_type`.
 - Every store operation checks its key as it is evaluated, and fails with
-  `store.reserved_key` on `"run.output"`. Only core's recorder, which keeps
-  the run's output under that key, writes it (TIME-8).
+  `store.reserved_key` on `"run.output"`. The check follows the call's
+  arguments, each evaluated once in the order written (EXPR-2), and comes
+  before the operation runs. Only core's recorder, which keeps the run's
+  output under that key, writes it (TIME-8).
 - Earlier places fail a key the graph fixes: a graph's call as the graph
   is built, and a node's keys its configuration fixes, its own and those it
   hands helpers, when the SDK attaches it, before any start hook. A key
