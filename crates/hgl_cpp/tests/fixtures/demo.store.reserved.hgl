@@ -262,3 +262,75 @@ test an_exchange_through_a_second_helper_uses_its_own_key {
         eval exchange_hook(depth: 2, key: supply("run.output"), other: "user.other")
     }
 }
+
+# TIME-8, CAP-6: fixedness is per route. `save_key` is reached from a
+# cycle that changes its key, through `middle_key`, and, outside any
+# cycle, with a key fixed when the graph is built.
+const fn save_key(store: GlobalState, const key: str) { put(store, key, 7) }
+const fn middle_key(store: GlobalState, const name: str) { save_key(store, name) }
+const fn grow_key(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { middle_key(store, key) }
+    else { grow_key(store, depth - 1, key + ".output") }
+}
+fn routed_hook(const key: str, const fixed: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop {
+        save_key(global_state, fixed)
+        middle_key(global_state, fixed)
+        grow_key(global_state, 1, key)
+    }
+}
+fn routed_value(value: i64, const key: str) -> i64 {
+    inject global_state
+    when {
+        grow_key(global_state, 1, key)
+        return get<i64>(global_state, key + ".output") + value
+    }
+}
+test a_key_the_cycle_changes_fails_at_its_operation {
+    assert raises("store.reserved_key") {
+        eval routed_hook(key: supply("run"), fixed: supply("user.fixed"), divisor: 1)
+    }
+    assert raises("store.reserved_key") {
+        eval routed_hook(key: "run", fixed: "user.fixed", divisor: 1)
+    }
+    assert raises("numeric.division_by_zero") {
+        eval routed_hook(key: supply("run"), fixed: supply("user.fixed"), divisor: 0)
+    }
+}
+test b_the_cycle_uses_the_key_it_reaches {
+    eval routed_hook(key: supply("run.output"), fixed: supply("user.fixed"), divisor: 1)
+    eval routed_hook(key: "run.output", fixed: "user.fixed", divisor: 1)
+    assert eval routed_value(value: [1], key: supply("run.output")) == [8]
+}
+test d_a_computed_key_outside_the_cycle_fails_the_build {
+    assert raises("store.reserved_key") {
+        eval routed_hook(key: supply("user"), fixed: supply("run.output"), divisor: 0)
+    }
+}
+
+const fn save_two(store: GlobalState, const changed: str, const kept: str) {
+    put(store, kept, 1)
+    put(store, changed, 2)
+}
+const fn pair_key(store: GlobalState, depth: i64, const key: str, const tag: str) {
+    if depth == 0 { save_two(store, key, tag) }
+    else { pair_key(store, depth - 1, key + ".output", tag) }
+}
+fn pair_hook(const key: str, const tag: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { pair_key(global_state, 1, key, tag) }
+}
+test one_helper_checks_each_key_on_its_own_route {
+    assert raises("store.reserved_key") {
+        eval pair_hook(key: supply("run"), tag: supply("user.tag"), divisor: 1)
+    }
+    assert raises("store.reserved_key") {
+        eval pair_hook(key: supply("user"), tag: supply("run.output"), divisor: 0)
+    }
+    eval pair_hook(key: supply("run.output"), tag: supply("user.tag"), divisor: 1)
+}

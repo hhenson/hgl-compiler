@@ -5518,7 +5518,9 @@ test resolved_at_run {
 }
 
 /// CAP-6 and CRUN-8 check fixed hook keys before start and recursive keys
-/// at the store operation that uses them.
+/// at the store operation that uses them. TIME-8: fixedness is per route,
+/// so one helper is checked in source, at the build or at its operation by
+/// the route it is called on.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
 fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
@@ -5538,6 +5540,18 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
         stdout.contains("rejection cases: 4 passed, 0 failed\n"),
         "{stdout}"
     );
+    let routes = write(
+        &root,
+        "demo.store.reserved_routes.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.store.reserved_routes.hgl"),
+    );
+    let output = hgl_in(&["test", &routes], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.contains("rejection cases: 2 passed, 0 failed\n"),
+        "{stdout}"
+    );
     let file = write(
         &root,
         "demo.store.reserved.hgl",
@@ -5547,7 +5561,7 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 20 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 24 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
