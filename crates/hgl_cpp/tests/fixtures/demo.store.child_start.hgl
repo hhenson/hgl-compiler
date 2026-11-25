@@ -80,6 +80,33 @@ fn selected_kept_alias(enabled: bool, pulse: i64) -> i64 {
     } else { read_now(pulse) }
 }
 
+fn selected_switch_aliases(choice: i64, pulse: i64) -> i64 {
+    inject global_state
+    put(global_state, "visits", 0)
+    let first = global_state
+    let second = global_state
+    switch choice {
+        case 1:
+            put(first, "visits", 4)
+            return read_at_start(pulse)
+        case 2:
+            put(second, "visits", 8)
+            return read_at_start(pulse)
+        default: return read_now(pulse)
+    }
+}
+
+fn selected_read_and_write_aliases(enabled: bool, pulse: i64) -> i64 {
+    inject global_state
+    put(global_state, "visits", 0)
+    let kept = global_state
+    if enabled {
+        let visits: i64 = get(global_state, "visits")
+        put(kept, "visits", visits + 1)
+        read_at_start(pulse)
+    } else { read_now(pulse) }
+}
+
 test writes_before_dependent_start_on_each_selection {
     assert eval selected_if(enabled: [false, true, true, false, true],
         pulse: [0, 0, 0, 0, 0], step: 1) == [0, 2, 2, 2, 6]
@@ -101,4 +128,14 @@ test an_unselected_child_does_not_read_the_store {
 test store_aliases_keep_the_capability_type {
     assert eval selected_logger_alias(enabled: [false, true, false], pulse: [0, 0, 0]) == [0, 9, 9]
     assert eval selected_kept_alias(enabled: [false, true, false], pulse: [0, 0, 0]) == [0, 9, 9]
+}
+
+test different_arms_use_the_same_run_store {
+    assert eval selected_switch_aliases(choice: [0, 1, 1, 2, 0, 1],
+        pulse: [0, 0, 0, 0, 0, 0]) == [0, 4, 4, 8, 8, 4]
+}
+
+test aliases_share_the_run_store_within_one_child {
+    assert eval selected_read_and_write_aliases(enabled: [false, true, true, false, true],
+        pulse: [0, 0, 0, 0, 0]) == [0, 1, 1, 1, 2]
 }
