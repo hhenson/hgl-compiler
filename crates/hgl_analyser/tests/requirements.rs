@@ -697,15 +697,15 @@ fn answers_in(checked: &Checked, body: &Body) -> Vec<String> {
 #[test]
 fn a_call_records_what_answers_each_requirement() {
     let checked = module(concat!(
-        "operator join<L, R, O>(lhs: L, rhs: R) -> O\n",
-        "impl const fn join(lhs: i64, rhs: i64) -> i64 => lhs\n",
-        "impl const fn join(lhs: str, rhs: str) -> str => lhs\n",
-        "const fn twice<T>(value: T) -> T requires join(T, T) -> T => join(value, value)\n",
+        "operator fuse<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn fuse(lhs: i64, rhs: i64) -> i64 => lhs\n",
+        "impl const fn fuse(lhs: str, rhs: str) -> str => lhs\n",
+        "const fn twice<T>(value: T) -> T requires fuse(T, T) -> T => fuse(value, value)\n",
         "const fn whole() -> i64 => twice(1)\n",
         "const fn text() -> str => twice(\"a\")\n",
         // Two requirements, and the body's calls of each.
-        "const fn both<T>(value: T) -> T requires neg_(T) -> T && (join(T, T) -> T) =>\n",
-        "    join(neg_(value), value)\n",
+        "const fn both<T>(value: T) -> T requires neg_(T) -> T && (fuse(T, T) -> T) =>\n",
+        "    fuse(neg_(value), value)\n",
         "const fn uses() -> i64 => both(1)\n",
         // A function that states none has none answered.
         "const fn plain(value: i64) -> i64 => value\n",
@@ -713,14 +713,14 @@ fn a_call_records_what_answers_each_requirement() {
     ));
     assert_eq!(checked.summary(), NONE);
     assert_eq!(answers(&checked, "twice"), ["requirement 0"]);
-    assert_eq!(answers(&checked, "whole"), ["join(i64, i64)"]);
-    assert_eq!(answers(&checked, "text"), ["join(str, str)"]);
-    // The call of `join` is met before its argument's call of `neg_`.
+    assert_eq!(answers(&checked, "whole"), ["fuse(i64, i64)"]);
+    assert_eq!(answers(&checked, "text"), ["fuse(str, str)"]);
+    // The call of `fuse` is met before its argument's call of `neg_`.
     assert_eq!(
         answers(&checked, "both"),
         ["requirement 1", "requirement 0"]
     );
-    assert_eq!(answers(&checked, "uses"), ["neg_(i64), join(i64, i64)"]);
+    assert_eq!(answers(&checked, "uses"), ["neg_(i64), fuse(i64, i64)"]);
     assert_eq!(answers(&checked, "calls"), [""]);
 }
 
@@ -733,10 +733,10 @@ fn a_call_records_what_answers_each_requirement() {
 #[test]
 fn a_call_in_a_generic_body_is_answered_by_what_the_body_states() {
     let checked = module(concat!(
-        "operator join<L, R, O>(lhs: L, rhs: R) -> O\n",
-        "impl const fn join(lhs: i64, rhs: i64) -> i64 => lhs\n",
-        "const fn twice<T>(value: T) -> T requires join(T, T) -> T => join(value, value)\n",
-        "const fn outer<U>(value: U) -> U requires neg_(U) -> U && join(U, U) -> U =>\n",
+        "operator fuse<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn fuse(lhs: i64, rhs: i64) -> i64 => lhs\n",
+        "const fn twice<T>(value: T) -> T requires fuse(T, T) -> T => fuse(value, value)\n",
+        "const fn outer<U>(value: U) -> U requires neg_(U) -> U && fuse(U, U) -> U =>\n",
         "    twice(value)\n",
         "const fn top() -> i64 => outer(2)\n",
         // Nothing stated, and a candidate for any one type.
@@ -747,37 +747,37 @@ fn a_call_in_a_generic_body_is_answered_by_what_the_body_states() {
     ));
     assert_eq!(checked.summary(), NONE);
     assert_eq!(answers(&checked, "outer"), ["stated 1"]);
-    assert_eq!(answers(&checked, "top"), ["neg_(i64), join(i64, i64)"]);
+    assert_eq!(answers(&checked, "top"), ["neg_(i64), fuse(i64, i64)"]);
     assert_eq!(answers(&checked, "whatever"), ["show(T)"]);
 }
 
 /// GEN-16: the candidate that answers may state a requirement of its
-/// own, which is answered with it: a `join` of two lists is the
-/// candidate for lists, with the `join` of their elements.
+/// own, which is answered with it: a `fuse` of two lists is the
+/// candidate for lists, with the `fuse` of their elements.
 #[test]
 fn a_candidate_that_answers_has_its_own_requirements_answered() {
     let checked = module(concat!(
-        "operator join<L, R, O>(lhs: L, rhs: R) -> O\n",
-        "impl const fn join(lhs: i64, rhs: i64) -> i64 => lhs\n",
-        "impl const fn join<T>(lhs: list<T>, rhs: list<T>) -> list<T>\n",
-        "    requires join(T, T) -> T => lhs\n",
-        "const fn twice<T>(value: T) -> T requires join(T, T) -> T => join(value, value)\n",
+        "operator fuse<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn fuse(lhs: i64, rhs: i64) -> i64 => lhs\n",
+        "impl const fn fuse<T>(lhs: list<T>, rhs: list<T>) -> list<T>\n",
+        "    requires fuse(T, T) -> T => lhs\n",
+        "const fn twice<T>(value: T) -> T requires fuse(T, T) -> T => fuse(value, value)\n",
         "const fn lists() -> list<i64> => twice([1])\n",
         "const fn nested() -> list<list<i64>> => twice([[1]])\n",
         // A call of the operator itself selects the candidate, and
         // records what answers that candidate's requirement.
-        "const fn direct(a: list<i64>) -> list<i64> => join(a, a)\n",
+        "const fn direct(a: list<i64>) -> list<i64> => fuse(a, a)\n",
     ));
     assert_eq!(checked.summary(), NONE);
     assert_eq!(
         answers(&checked, "lists"),
-        ["join(list<T>, list<T>) [join(i64, i64)]"]
+        ["fuse(list<T>, list<T>) [fuse(i64, i64)]"]
     );
     assert_eq!(
         answers(&checked, "nested"),
-        ["join(list<T>, list<T>) [join(list<T>, list<T>) [join(i64, i64)]]"]
+        ["fuse(list<T>, list<T>) [fuse(list<T>, list<T>) [fuse(i64, i64)]]"]
     );
-    assert_eq!(answers(&checked, "direct"), ["join(i64, i64)"]);
+    assert_eq!(answers(&checked, "direct"), ["fuse(i64, i64)"]);
 }
 
 /// GEN-16: "A requirement names a value operation, whatever declares

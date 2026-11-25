@@ -229,6 +229,16 @@ transpiler: done
 - Uses the duration and instant natives with microsecond rounding and checked ranges for
   the selected arithmetic.
 
+## OPS-11
+
+analyser: done
+
+- Selects `join` for one list of strings or for the proposed positional-pack form. Each form takes `separator` by name under the FN-8 trial.
+
+transpiler: done
+
+- Writes Core's HGL loops using the list or fitted pack entries in order.
+
 ## LIST-1
 
 analyser: done

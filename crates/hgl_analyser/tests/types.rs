@@ -169,7 +169,7 @@ fn a_declarations_types_are_recorded() {
         "}\n",
         "const fn scale<const N: i64>(value: f64, factor: f64 = 2.0) -> list<f64, N> => [value]\n",
         "fn sink(value: f64, const depth: i64 = 3) {}\n",
-        "operator join<T, ...Rest{1:4}>(first: T, rest: ...Rest, named: ...{Rest}) -> str\n",
+        "operator fuse<T, ...Rest{1:4}>(first: T, rest: ...Rest, named: ...{Rest}) -> str\n",
         "native fn collect<...Ts>(items: ...Ts) -> list<any>\n",
     ));
     assert_eq!(checked.summary(), NONE);
@@ -183,7 +183,7 @@ fn a_declarations_types_are_recorded() {
         "(value: f64, const depth: i64 = ...)"
     );
     assert_eq!(
-        signature(&checked, "join"),
+        signature(&checked, "fuse"),
         "<T, ...Rest{1:4}>(first: T, rest: ...Rest, named: ...{Rest}) -> str"
     );
     assert_eq!(
@@ -343,10 +343,10 @@ fn a_name_in_a_type_position_is_a_type() {
     let checked = module(concat!(
         "struct Quote { bid: f64 }\n",
         "const fn helper() -> i64 => 1\n",
-        "operator join(left: str, right: str) -> str\n",
+        "operator fuse(left: str, right: str) -> str\n",
         // A function, an operator, a local.
         "fn f1(value: helper) {}\n",
-        "fn f2(value: join) {}\n",
+        "fn f2(value: fuse) {}\n",
         "const fn f3() -> i64 {\n",
         "    let size = 3\n",
         "    let items: list<size> = []\n",
@@ -376,7 +376,7 @@ fn a_name_in_a_type_position_is_a_type() {
         messages,
         [
             "`helper` is a value function, not a type",
-            "`join` is an operator, not a type",
+            "`fuse` is an operator, not a type",
             "`size` is a `let`, not a type",
             "`N` is a generic value parameter, not a type",
             "`Ts` is a type pack: a sequence of types, not one type",
