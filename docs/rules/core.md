@@ -535,7 +535,7 @@ transpiler: done
 
 ## CAP-6
 
-analyser: done
+analyser: partial
 
 - `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get` gives a `result<V, error>`, with V written by the caller or inferred from the place
 - A `"run.output"` key the text fixes is rejected (`store.reserved_key`):
@@ -548,6 +548,8 @@ analyser: done
   a key is left to the run on that route only (TIME-8).
 - A known key is used with one type in a program. A `put` or a `get` of a
   different type than an earlier use is `store.key_type` (TIME-8).
+- Left: a helper outside the cycle that also formats its key is checked
+  in source for each key an instance of the cycle gives it.
 
 transpiler: partial
 
