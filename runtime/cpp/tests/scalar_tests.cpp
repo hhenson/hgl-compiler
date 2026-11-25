@@ -229,6 +229,27 @@ TEST_CASE("equality and order of one type (OPS-2, NUM-6)") {
     CHECK(hglrt::lt__T_T<hglrt::duration>(hglrt::duration{-1}, hglrt::duration{0}));
 }
 
+TEST_CASE("bytes order raw unsigned octets (TYPE-1, OPS-2, OPS-3)") {
+    using hglrt::bytes;
+    using hglrt::CmpResult;
+    const bytes empty{};
+    const bytes prefix{std::string{"\0", 1}};
+    const bytes low{std::string{"\0\x7f", 2}};
+    const bytes high{std::string{"\0\x80", 2}};
+    const bytes highest{std::string{"\0\xff", 2}};
+
+    CHECK(hglrt::lt__bytes_bytes(empty, prefix));
+    CHECK(hglrt::lt__bytes_bytes(prefix, low));
+    CHECK(hglrt::lt__bytes_bytes(low, high));
+    CHECK(hglrt::lt__bytes_bytes(high, highest));
+    CHECK(hglrt::le__bytes_bytes(high, high));
+    CHECK(hglrt::gt__bytes_bytes(high, low));
+    CHECK(hglrt::ge__bytes_bytes(high, high));
+    CHECK(hglrt::compare__bytes_bytes(low, high) == CmpResult::less);
+    CHECK(hglrt::compare__bytes_bytes(high, high) == CmpResult::equivalent);
+    CHECK(hglrt::compare__bytes_bytes(high, low) == CmpResult::greater);
+}
+
 TEST_CASE("Boolean forms (OPS-5)") {
     CHECK(hglrt::and__bool_bool(true, true));
     CHECK_FALSE(hglrt::and__bool_bool(true, false));
