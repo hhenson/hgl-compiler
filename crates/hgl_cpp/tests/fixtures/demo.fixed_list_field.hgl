@@ -101,3 +101,17 @@ test mixed_fields_and_positions_read_the_final_child {
         )),
     ]) == [_, 9]
 }
+
+fn leading_slot(rows: list<Row, 2>) -> i64 {
+    when valid(rows[ROW].slots[SLOT]) { return rows[ROW].slots[SLOT] }
+}
+
+# TIME-1: the path can start with a position before entering the fixed-list field.
+test a_fixed_list_field_below_a_position_reads_the_final_child {
+    assert eval leading_slot(rows: [
+        delta<list<Row, 2>>(updated: [0: delta<Row>(size: 1)]),
+        delta<list<Row, 2>>(updated: [1: delta<Row>(
+            slots: delta<list<i64, 2>>(updated: [0: 12]),
+        )]),
+    ]) == [_, 12]
+}

@@ -421,10 +421,12 @@ impl Family for Structs {
             // is read as the child's own form reads it.
             ExprKind::Field { .. } | ExprKind::Index { .. } if hook => {
                 let Some((view, out)) = child_view(emitter, scope, value) else {
-                    let field = outer_fixed_list_field(value)?;
-                    let (_, false) = child_view(emitter, scope, field)? else {
+                    let root = fixed_list_field_root(value)?;
+                    if emitter.role(root) != Role::Input
+                        || matches!(scope.body.locals[root].ty, Type::Atomic(_))
+                    {
                         return None;
-                    };
+                    }
                     let view = emitter.read_endpoint_view(scope, value)?;
                     scope.read = true;
                     scope.acted = true;
@@ -580,22 +582,23 @@ fn endpoint_type(
     }
 }
 
-/// Find the first fixed-list field a read indexes as it follows a
-/// structural input. TIME-1 admits the final child of this path.
-fn outer_fixed_list_field(mut value: &Expr) -> Option<&Expr> {
-    let mut field = None;
+/// Find the local root of a path that indexes a fixed-list field.
+/// TIME-1 admits the final child of this path.
+fn fixed_list_field_root(mut value: &Expr) -> Option<usize> {
+    let mut crosses_field = false;
     loop {
         match &value.kind {
             ExprKind::Index { base, .. } => {
                 if matches!(base.kind, ExprKind::Field { .. })
                     && matches!(base.ty, Type::List { size: Some(_), .. })
                 {
-                    field = Some(base.as_ref());
+                    crosses_field = true;
                 }
                 value = base;
             }
             ExprKind::Field { base, .. } => value = base,
-            _ => return field,
+            ExprKind::Local(root) if crosses_field => return Some(*root),
+            _ => return None,
         }
     }
 }
