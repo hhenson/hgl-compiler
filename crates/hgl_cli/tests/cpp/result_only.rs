@@ -1,4 +1,4 @@
-//! GEN-1, GEN-6, GEN-7, GEN-12 and FN-17 on the C++ SDK.
+//! GEN-1, GEN-5, GEN-6, GEN-7, GEN-12 and FN-17 on the C++ SDK.
 
 use super::{argument, hgl_in, scratch, sdk_named, text, write};
 
@@ -43,6 +43,7 @@ export fn execute() {
     through(fn(x) { record(x + 2) }, value)
     relay(fn(x) => { record(x + 3) }, value)
     visit(record, value)
+    visit(fn(x) => record(x + 20), value)
     fetch(value)
     forward(record, value + 4)
 }
@@ -51,9 +52,15 @@ fn valued(value: i64) -> i64 => through(plus_one, value) + through(fn(x) => x + 
 
 fn forwarded(value: i64) -> i64 => forward(plus_one, value)
 
+fn selected(value: i64) -> i64 {
+    let selected = visit(fn(x) => x + 1, value)
+    selected
+}
+
 test results {
     assert eval valued(value: [3]) == [12]
     assert eval forwarded(value: [3]) == [4]
+    assert eval selected(value: [3]) == [4]
 }
 "#,
     );
@@ -79,7 +86,7 @@ eval execute()
     let stderr = text(&run.stderr);
     let mut effects: Vec<_> = stderr.lines().collect();
     effects.sort_unstable();
-    assert_eq!(effects, ["1", "11", "2", "21", "3", "4", "5"]);
+    assert_eq!(effects, ["1", "11", "2", "21", "3", "31", "4", "5"]);
 
     let tests = hgl_in(&["test", &root, "--target", "cpp"], &[], &[]);
     let stdout = text(&tests.stdout);
