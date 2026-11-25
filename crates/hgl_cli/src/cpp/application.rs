@@ -34,6 +34,7 @@ use hgl_cpp::application_stem;
 
 use super::build::Workspace;
 use super::sdk::Hgraph;
+use super::stamp::Stamp;
 
 /// What became of an application given to [`launch`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,10 +209,12 @@ pub(super) fn launch(
     libraries: &Libraries,
     stop: &Stop,
 ) -> RanApplication {
+    let stem = application_stem(path);
+    let relative = format!("results/{stem}.run.txt");
     let results = workspace
         .directory
         .join("results")
-        .join(format!("{}.run.txt", application_stem(path)));
+        .join(format!("{stem}.run.txt"));
     // What an earlier run recorded is not this run's.
     let cleared = match fs::remove_file(&results) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
@@ -275,6 +278,7 @@ pub(super) fn launch(
             ));
         }
     };
+    let _ = Stamp::record_optional(workspace, &[relative.as_str()]);
     let recorded = fs::read_to_string(&results).unwrap_or_default();
     read_run(&recorded).unwrap_or_else(|started| {
         let when = if started { "while running" } else { "before" };

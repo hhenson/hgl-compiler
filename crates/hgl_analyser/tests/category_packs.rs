@@ -478,6 +478,26 @@ fn guaranteed_tuple_members_inherit_only_universal_categories() {
 }
 
 #[test]
+fn a_reflected_category_proves_only_the_named_pack_member() {
+    // GEN-3, GEN-7, GEN-17: the fact has to identify the requested member.
+    let declaration = |requirement| {
+        format!(
+            "module m\nconst field: str = \"field\"\nconst other: str = \"other\"\n\
+             const fn read<...Ps>(f: const fn(...{{Ps}}) -> i64, x: i64) -> result<Ps[field], error>\n\
+                 requires {requirement} => convert<Ps[field]>(x)"
+        )
+    };
+    accepts(&declaration("Ps[field] in enum"));
+    for requirement in [
+        "Ps[other] in enum",
+        "Ps[field] in enum || Ps[other] in enum",
+        "Ps[field] in struct",
+    ] {
+        rejects(&declaration(requirement), "operator/operator.no_candidate");
+    }
+}
+
+#[test]
 fn nested_tuple_evidence_is_revisited_inside_the_named_containers() {
     // GEN-3: retain equations, without rereading values or guessing partitions.
     for (ty, value) in [

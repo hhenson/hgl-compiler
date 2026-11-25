@@ -97,11 +97,13 @@ the units and executables in the current build.
 
 Use `hgl build --clean --out DIR` to rebuild the project from scratch. The
 compiler holds the workspace lock while clearing generated project files and
-building their replacements. This also removes obsolete modules, applications
-and test outputs identifiable from their generated sources. Add
-`--compile-commands` to regenerate the compilation database and `--debug` for
-debug symbols. Clean applies to the selected workspace. Other workspaces and
-the shared native toolchain cache are independent.
+building their replacements. This removes generated C++ sources carrying the
+compiler header, and removes compiled objects, executables, compilation
+databases, debug source copies and run or test results only when unchanged
+from the workspace stamps. Add `--compile-commands` to regenerate the
+compilation database and `--debug` for debug symbols. Clean applies to the
+selected workspace. Other workspaces and the shared native toolchain cache
+are independent.
 
 Reuse assumes that the SDK and dependency prefixes are fixed installations.
 The key includes the prefixes and hashes the SDK version file and its runtime

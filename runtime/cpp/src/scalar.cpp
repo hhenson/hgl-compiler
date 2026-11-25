@@ -4,6 +4,7 @@
 
 #include <hglrt/scalar.h>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -478,11 +479,11 @@ bool ne__i64_f64_f64_f64(i64 lhs, f64 rhs, f64 abs, f64 rel, std::source_locatio
     return !eq__i64_f64_f64_f64(lhs, rhs, abs, rel, where);
 }
 
-// ---- Order and comparison of an i64 and an f64 --------------------------------
+// ---- Order and comparison of mixed numbers and bytes -----------------------
 
 namespace {
 
-/// What `<=>` gives for the order `order` (NUM-6).
+/// What `<=>` gives for the order `order` (OPS-3, NUM-6).
 CmpResult outcome_of(std::partial_ordering order) {
     if (order == std::partial_ordering::less) {
         return CmpResult::less;
@@ -499,6 +500,15 @@ CmpResult outcome_of(std::partial_ordering order) {
 /// How the `f64` `lhs` compares with the `i64` `rhs`, exactly.
 std::partial_ordering compare_exactly(f64 lhs, i64 rhs) {
     return 0 <=> compare_exactly(rhs, lhs);
+}
+
+/// TYPE-1, OPS-2: compare each byte as an unsigned octet.
+std::strong_ordering compare_octets(const bytes& lhs, const bytes& rhs) {
+    return std::lexicographical_compare_three_way(
+        lhs.data.begin(), lhs.data.end(), rhs.data.begin(), rhs.data.end(),
+        [](char left, char right) {
+            return static_cast<unsigned char>(left) <=> static_cast<unsigned char>(right);
+        });
 }
 
 } // namespace
@@ -541,6 +551,26 @@ CmpResult compare__i64_f64(i64 lhs, f64 rhs) {
 
 CmpResult compare__f64_i64(f64 lhs, i64 rhs) {
     return outcome_of(compare_exactly(lhs, rhs));
+}
+
+bool lt__bytes_bytes(const bytes& lhs, const bytes& rhs) {
+    return compare_octets(lhs, rhs) < 0;
+}
+
+bool le__bytes_bytes(const bytes& lhs, const bytes& rhs) {
+    return compare_octets(lhs, rhs) <= 0;
+}
+
+bool gt__bytes_bytes(const bytes& lhs, const bytes& rhs) {
+    return compare_octets(lhs, rhs) > 0;
+}
+
+bool ge__bytes_bytes(const bytes& lhs, const bytes& rhs) {
+    return compare_octets(lhs, rhs) >= 0;
+}
+
+CmpResult compare__bytes_bytes(const bytes& lhs, const bytes& rhs) {
+    return outcome_of(compare_octets(lhs, rhs));
 }
 
 // ---- Boolean forms ---------------------------------------------------------

@@ -135,8 +135,12 @@ transpiler: partial
 
 - Executes the root graph's native store calls at construction in source order. Nodes
   and sources bind their admitted capabilities in the corresponding hooks.
-- Left: A branch or loop child cannot see the surrounding graph's store or captured
-  capabilities. Other graph injections have a defensive report.
+- Runs a selected branch's ordinary store prefix in source order before
+  its directly wired scalar node starts, including on re-entry. Captured
+  connections and write-only branches also admit the prefix.
+  Captured aliases in these prefixes share the run store.
+- Left: Store reads that determine child wiring, startup with multiple
+  user nodes, and loops (#541). Other child capabilities are declined.
 
 ## FN-10
 
