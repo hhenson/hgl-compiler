@@ -1832,6 +1832,7 @@ impl<'a> Typer<'a> {
                 Argument::Type(ty.clone()),
                 Argument::Type(result),
             ],
+            operator_type_packs: Vec::new(),
             module,
             declaration,
             generics,
@@ -2372,6 +2373,7 @@ impl<'a> Typer<'a> {
                 operator: (operator.module, operator.declaration),
                 requirement: index,
                 operator_generics,
+                operator_type_packs: Vec::new(),
                 configuration,
             },
             arguments,
@@ -2656,7 +2658,8 @@ fn nesting<'t>(ty: &'t Type) -> usize {
                 inside(error);
             }
             Type::Function(function) => function.types().for_each(&mut inside),
-            Type::Scalar(_)
+            Type::TypeValue
+            | Type::Scalar(_)
             | Type::Parameter { .. }
             | Type::PackMember { .. }
             | Type::Signal
@@ -2866,6 +2869,7 @@ pub(super) fn instances_hold(
         .chain(dependent_patterns.iter().copied())
         .chain(program.const_demands.keys().copied())
         .chain(program.generic_store_bodies.iter().copied())
+        .chain(crate::type_values::instance_declarations(program))
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -2990,7 +2994,8 @@ pub(super) fn instances_hold(
             let constants = made.constants.values.as_slice();
             let recheck_values = dependent_patterns.contains(&made.callee)
                 || !constants.is_empty()
-                || program.generic_store_bodies.contains(&made.callee);
+                || program.generic_store_bodies.contains(&made.callee)
+                || crate::type_values::has_instance_query(program, made.callee);
             let recheck_resultless = made.generics.contains(&Argument::NoResult);
             let declaration = &unit.declarations[made.callee.1];
             if recheck_resultless
@@ -3024,6 +3029,50 @@ pub(super) fn instances_hold(
                 parent,
                 parents: &parents,
             };
+            let name_reports =
+                crate::type_values::instance_parameter_names(program, made.callee, &made.generics);
+            if !name_reports.is_empty() {
+                let paths = chain.paths(program, &root_calls);
+                for mut report in name_reports {
+                    // TYPE-18 requires the declared name as primary, even
+                    // when GEN-13 determines its kind at a making call.
+                    for call in paths.iter().flatten() {
+                        let label = format!("this call makes the instance `{}`", call.instance);
+                        if !report
+                            .related
+                            .iter()
+                            .any(|related| related.location == call.at && related.message == label)
+                        {
+                            report = report.with_related(call.at, label);
+                        }
+                    }
+                    if !diagnostics.as_slice().contains(&report) {
+                        diagnostics.emit(report);
+                    }
+                }
+                continue;
+            }
+            let enclosing_packs = match &program.modules[made.callee.0].details[made.callee.1] {
+                Detail::Callable(signature) => &signature.generics[..],
+                Detail::Struct(read) => &read.generics[..],
+                _ => &[],
+            };
+            let enclosing_packs =
+                super::dependent_packs::PackTypes::new(enclosing_packs, &made.type_packs);
+            let mut delta_reports = Diagnostics::new();
+            crate::type_values::instance_deltas(
+                program,
+                made.callee,
+                |ty| enclosing_packs.project(ty, &map).ok(),
+                &mut delta_reports,
+            );
+            if delta_reports.has_errors() {
+                let paths = chain.paths(program, &root_calls);
+                for report in delta_reports.as_slice() {
+                    emit_instance_report(report.clone(), &paths, diagnostics);
+                }
+                continue;
+            }
             let recheck_endpoints = endpoint_reads.contains(&made.callee)
                 && matches!(
                     unit.details.get(made.callee.1),
@@ -3180,13 +3229,6 @@ pub(super) fn instances_hold(
                     at: call.at,
                 })
                 .collect();
-            let enclosing_packs = match &program.modules[made.callee.0].details[made.callee.1] {
-                Detail::Callable(signature) => &signature.generics[..],
-                Detail::Struct(read) => &read.generics[..],
-                _ => &[],
-            };
-            let enclosing_packs =
-                super::dependent_packs::PackTypes::new(enclosing_packs, &made.type_packs);
             for call in inner.iter().filter(|call| !replaced.contains(&call.at)) {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with
@@ -5263,7 +5305,8 @@ fn struct_applications(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>
         Type::Function(function) => function
             .types()
             .for_each(|ty| struct_applications(ty, found)),
-        Type::Scalar(_)
+        Type::TypeValue
+        | Type::Scalar(_)
         | Type::Parameter { .. }
         | Type::PackMember { .. }
         | Type::Signal

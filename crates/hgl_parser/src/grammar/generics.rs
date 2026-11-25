@@ -178,7 +178,13 @@ impl Parser<'_> {
         self.start(RequiresClause);
         self.bump();
         if self.goes_on("a constraint") {
-            self.constraint();
+            // GEN-13: reflection in requires keeps its existing form;
+            // ordinary expression queries belong to TYPE-18 instead.
+            let context = Context {
+                constraint: true,
+                ..self.context
+            };
+            self.nested(context, Self::constraint);
         }
         self.finish();
     }

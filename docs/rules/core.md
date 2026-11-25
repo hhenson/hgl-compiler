@@ -999,12 +999,16 @@ transpiler: partial
 
 analyser: partial
 
+- Core declares a native value candidate for `convert<str>(Type)`.
+
 - A user type uses its selected `convert<str>` and rejects if there is no candidate.
 - A nullable field checks the text conversion of its payload type. The target writes that text when present and `null` when absent.
 - Left: tuple and struct text candidates (#434, #512).
 
 transpiler: partial
 
+- A Type value converts to its canonical diagnostic spelling, including fixed collection sizes, generic arguments and nullable suffixes (TYPE-18).
+- Enum arguments display their declared enum name, independently of their qualified identity key. Left: generic-type diagnostics retain source-form duration/float arguments while Type values normalize them (#909).
 - Value defaults are written in Core's scalar forms. The growing list, fixed list, set and dictionary candidates use each member's conversion and traversal order, quote and escape strings and render absent members as `null`.
 - Left: tuple and struct text candidates (#434, #512).
 

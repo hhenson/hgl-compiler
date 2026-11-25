@@ -166,24 +166,72 @@ impl Program {
         default: &DefaultExpr,
         operator: (usize, usize),
         generics: &[Argument],
+        type_packs: &[TypePackArgument],
         parameter: &Parameter,
         diagnostics: &mut Diagnostics,
     ) -> DefaultExpr {
-        self.specialize_parameter_default(default, operator, generics, parameter, diagnostics)
+        let packs = self.operator_default_packs(operator, generics, type_packs);
+        self.specialize_parameter_default(
+            default,
+            operator,
+            generics,
+            &packs,
+            parameter,
+            diagnostics,
+        )
+    }
+
+    /// GEN-6/10/17: inherited defaults use the public operator's packs,
+    /// preserving reflected keys and falling back to positional tuple arguments.
+    /// This applies even when the selected candidate has no generics.
+    pub(crate) fn operator_default_packs(
+        &self,
+        operator: (usize, usize),
+        generics: &[Argument],
+        reflected: &[TypePackArgument],
+    ) -> Vec<TypePackArgument> {
+        let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
+            return Vec::new();
+        };
+        signature
+            .generics
+            .iter()
+            .zip(generics)
+            .enumerate()
+            .filter_map(|(index, (generic, argument))| {
+                if !matches!(generic.kind, crate::GenericKind::Pack { .. }) {
+                    return None;
+                }
+                if let Some(pack) = reflected.iter().find(|pack| pack.parameter == index) {
+                    return Some(pack.clone());
+                }
+                let Argument::Type(Type::Tuple(types)) = argument else {
+                    return None;
+                };
+                Some(TypePackArgument::positional(index, types.clone()))
+            })
+            .collect()
     }
 
     /// Places a default in its defining callable's scope and fits it
-    /// against the selected parameter type (UNIT-7, UNIT-8).
-    pub(crate) fn specialize_parameter_default(
+    /// against the selected parameter type (UNIT-7, UNIT-8). A cold type
+    /// query also receives the call's bound type packs (GEN-10, TYPE-18).
+    pub fn specialize_parameter_default(
         &self,
         default: &DefaultExpr,
         operator: (usize, usize),
         generics: &[Argument],
+        type_packs: &[TypePackArgument],
         parameter: &Parameter,
         diagnostics: &mut Diagnostics,
     ) -> DefaultExpr {
         let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
             return default.clone();
+        };
+        let type_packs = if default.has_type_query() {
+            type_packs
+        } else {
+            &[]
         };
         let types: Vec<_> = signature
             .generics
@@ -209,12 +257,13 @@ impl Program {
                 &mut reports.borrow_mut(),
             )
         };
+        let packs = PackTypes::new(&signature.generics, type_packs);
         let instance = InstanceArguments {
             declaration: operator,
             generics,
             types: &types,
-            packs: &PackTypes::new(&[], &[]),
-            type_packs: &[],
+            packs: &packs,
+            type_packs,
             pack_inputs: &[],
             constants: &[],
             test_candidates: None,
@@ -224,7 +273,20 @@ impl Program {
         };
         // UNIT-7: a default has no formal parameters in scope. Run the
         // same membership-based selection here as in a specialized body.
-        let mut body = default.clone().into_body();
+        let mut body = if default.has_type_query() && !generics.is_empty() {
+            crate::values::reread_parameter_default(
+                self,
+                operator,
+                generics,
+                default,
+                &|ty| instance.project(ty),
+                &mut reports.borrow_mut(),
+            )
+            .unwrap_or_else(|| default.clone())
+        } else {
+            default.clone()
+        }
+        .into_body();
         self.place_body(&mut body, &instance, &[]);
         crate::values::record(self, &mut body, false);
         let mut default = DefaultExpr::from_body(body);
@@ -407,6 +469,10 @@ impl Program {
             || pending_forwards.is_some()
             || !inputs.constants.is_empty()
             || self.generic_store_bodies.contains(&(module, declaration))
+            // TYPE-18: a cold query's operand is absent from runtime HIR.
+            // Re-read it with concrete inputs so selected result types are
+            // retained without retaining or executing the operand's calls.
+            || crate::type_values::has_instance_query(self, (module, declaration))
             || (!generics.is_empty()
                 && (crate::values::has_dependent_index(&body)
                     || crate::formatting::has_dependent_formatting(
@@ -520,6 +586,11 @@ impl Program {
         functions: &[(usize, Callee)],
     ) {
         expression.ty = instance.project(&expression.ty);
+        // TYPE-18: a generic query holds the instance's operand type,
+        // even though the literal's own type is always `Type`.
+        if let ExprKind::Literal(Value::Type(ty)) = &mut expression.kind {
+            **ty = instance.project(ty);
+        }
         // ERR-14 and ERR-15: the generic child can look nonnullable
         // before placement. A nullable child compares its own payload
         // with null and still fails if the endpoint is unset.
@@ -1060,6 +1131,19 @@ fn place_callee(
         }
     }
     if let Callee::Candidate {
+        operator_type_packs,
+        ..
+    }
+    | Callee::Required {
+        operator_type_packs,
+        ..
+    } = callee
+    {
+        for pack in operator_type_packs {
+            pack.place_types(place_type);
+        }
+    }
+    if let Callee::Candidate {
         operator_generics, ..
     }
     | Callee::Required {
@@ -1091,6 +1175,7 @@ fn place_callee(
         Callee::Required {
             requirement,
             operator_generics,
+            operator_type_packs,
             ..
         } => {
             if let Some(Answer::Candidate {
@@ -1104,6 +1189,7 @@ fn place_callee(
                 *callee = Callee::Candidate {
                     operator: *operator,
                     operator_generics: std::mem::take(operator_generics),
+                    operator_type_packs: std::mem::take(operator_type_packs),
                     module: *module,
                     declaration: *declaration,
                     generics: generics.clone(),
@@ -1161,6 +1247,10 @@ pub(crate) fn placed(argument: &Argument, map: &Map) -> Argument {
         Argument::Type(ty) => Argument::Type(substitute_within(ty, map)),
         Argument::NoResult => Argument::NoResult,
         Argument::Constant(constant) => match &constant.value {
+            ConstantValue::Type(ty) => Argument::Constant(Constant {
+                text: constant.text.clone(),
+                value: ConstantValue::Type(Box::new(substitute_within(ty, map))),
+            }),
             ConstantValue::Parameter { at, .. } => given(*at)
                 .map(|given| Argument::Constant(given.clone()))
                 .unwrap_or_else(|| argument.clone()),

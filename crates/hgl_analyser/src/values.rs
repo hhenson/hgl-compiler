@@ -49,7 +49,7 @@ use control::label;
 use endpoints::endpoint_argument;
 
 pub(crate) use candidates::{Selecting, select_in_instance};
-pub(crate) use constants::generic_default;
+pub(crate) use constants::{generic_default, reread_parameter_default};
 pub(crate) use lifting::record;
 
 // The bodies of anonymous functions and their direct calls (FN-7, FN-14).
@@ -126,6 +126,8 @@ mod sizes;
 mod statements;
 // `-`, `!` and the operators with two operands, as calls of core's (NUM-1, EXPR-6).
 mod symbols;
+mod type_queries;
+pub(crate) use type_queries::query_type;
 
 /// Walk calls and constructions in a body, including static references
 /// and the independently scoped bodies of anonymous functions.
@@ -780,6 +782,8 @@ struct Typer<'a> {
     /// are met, and is cut back to where it stood when a branch or a
     /// block ends.
     present: Vec<Fact>,
+    /// TYPE-18: a cold operand asks for declared types, never local values.
+    type_query: bool,
     /// The locals a capability has been bound to, each with the
     /// capability it is: `let bound = clock` (TIME-8: "Binding one to a
     /// `let` ... [is a use]"). The local is then the capability under
@@ -1021,6 +1025,7 @@ impl<'a> Typer<'a> {
             out: None,
             designating: None,
             present: Vec::new(),
+            type_query: false,
             aliases: HashMap::new(),
             bound_children: HashMap::new(),
             binding_child: None,

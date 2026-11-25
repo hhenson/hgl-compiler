@@ -180,7 +180,8 @@ fn parts(ty: &Type) -> Vec<&Type> {
         | Type::RollingWindow { value: inner, .. } => vec![inner],
         Type::Dict { key, value } => vec![key, value],
         Type::Result { value, error } => vec![value, error],
-        Type::Scalar(_)
+        Type::TypeValue
+        | Type::Scalar(_)
         | Type::Parameter { .. }
         | Type::PackMember { .. }
         | Type::Signal

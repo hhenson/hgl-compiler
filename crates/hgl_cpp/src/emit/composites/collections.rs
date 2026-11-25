@@ -270,11 +270,13 @@ fn distinct_keys(entries: &[(Expr, Expr)]) -> bool {
     #[derive(PartialEq)]
     enum Key<'e> {
         Value(&'e Value),
+        Type(String),
         Float(f64),
         Member(usize, usize, usize),
     }
     fn key(expr: &Expr) -> Option<Key<'_>> {
         match &expr.kind {
+            ExprKind::Literal(Value::Type(ty)) => ty.identity().map(Key::Type),
             ExprKind::Literal(Value::Float(number)) => Some(Key::Float(*number)),
             ExprKind::Literal(
                 value @ (Value::Int(_) | Value::Str(_) | Value::Bool(_) | Value::Duration(_)),

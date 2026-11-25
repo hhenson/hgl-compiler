@@ -75,6 +75,15 @@ pub struct DefaultExpr {
 }
 
 impl DefaultExpr {
+    /// TYPE-18: a cold query has become a descriptor literal. Its operand
+    /// must be read again when a generic default acquires concrete types.
+    pub fn has_type_query(&self) -> bool {
+        let mut found = false;
+        self.value
+            .walk(&mut |value| found |= matches!(value.kind, ExprKind::Literal(Value::Type(_))));
+        found
+    }
+
     /// Treat the expression as a body for specialization and analysis of its locals.
     pub fn into_body(self) -> Body {
         Body {
@@ -1193,6 +1202,9 @@ pub enum Callee {
         /// The operator's own generic arguments, used to read inherited
         /// configuration defaults in its defining scope (GEN-6, UNIT-7).
         operator_generics: Vec<GenericArgument>,
+        /// The public operator's resolved packs, including reflected names
+        /// and fixed prefixes used by inherited defaults (GEN-6, GEN-17).
+        operator_type_packs: Vec<TypePackArgument>,
         /// The position of the candidate's module in
         /// `Program::modules`.
         module: usize,
@@ -1224,6 +1236,9 @@ pub enum Callee {
         operator: (usize, usize),
         /// The operator's own generic arguments, for inherited defaults.
         operator_generics: Vec<GenericArgument>,
+        /// Public reflected pack metadata retained until this requirement
+        /// selects its candidate and inherited defaults (GEN-6, GEN-17).
+        operator_type_packs: Vec<TypePackArgument>,
         /// The requirement of the enclosing declaration the call is:
         /// its position among the constraint calls that hold wherever
         /// the declaration's `requires` does, in the order written.
@@ -1648,6 +1663,8 @@ pub struct PackInput {
 /// The value of a literal.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
+    /// A type, without evaluating the expression that names it (TYPE-18).
+    Type(Box<Type>),
     /// An integer.
     Int(i64),
     /// A float.

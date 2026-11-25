@@ -439,6 +439,104 @@ impl<'a> Typer<'a> {
     }
 }
 
+/// TYPE-18, UNIT-7: a cold query in an omitted default must select its
+/// operand with the defining callable's concrete generic arguments.
+/// Reuse the default reader so no formal argument enters that scope.
+pub(crate) fn reread_parameter_default(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    arguments: &[Argument],
+    default: &DefaultExpr,
+    project: &dyn Fn(&Type) -> Type,
+    diagnostics: &mut Diagnostics,
+) -> Option<DefaultExpr> {
+    let owner = &program.modules[module];
+    let declared = &owner.declarations[declaration];
+    let Detail::Callable(read) = &owner.details[declaration] else {
+        return None;
+    };
+    let (index, initialized) =
+        read.parameters
+            .iter()
+            .enumerate()
+            .find_map(|(index, parameter)| {
+                let initialized = default_at(&declared.syntax, parameter)?;
+                let span = initialized.span();
+                (parameter.at.file == default.value.at.file
+                    && span.start <= default.value.at.span.start
+                    && default.value.at.span.start < span.end)
+                    .then_some((index, initialized))
+            })?;
+    let map: Vec<_> = read
+        .generics
+        .iter()
+        .map(|generic| generic.at)
+        .zip(arguments)
+        .collect();
+    let mut signature = super::candidates::in_instance(read, &map);
+    // Keep the source location used by default_at, but read only this
+    // omitted parameter. Other defaults are independent (UNIT-7).
+    signature.parameters = vec![Parameter {
+        ty: project(&read.parameters[index].ty),
+        ..read.parameters[index].clone()
+    }];
+    let (bindings, mut written, mut calls) = tables(owner);
+    let span = initialized.span();
+    let within =
+        |(file, start)| file == default.value.at.file && (span.start..span.end).contains(&start);
+    let types: Vec<_> = written
+        .iter()
+        .filter(|&(&at, _)| within(at))
+        .map(|(&at, ty)| (at, project(ty)))
+        .collect();
+    written.extend(types.iter().map(|(at, ty)| (*at, ty)));
+    let applied_calls: Vec<_> = calls
+        .iter()
+        .filter(|&(&at, _)| within(at))
+        .map(|(&at, call)| {
+            (
+                at,
+                CallArguments {
+                    at: call.at,
+                    arguments: call
+                        .arguments
+                        .iter()
+                        .map(|(at, argument)| {
+                            (
+                                *at,
+                                match argument {
+                                    Argument::Type(ty) => Argument::Type(project(ty)),
+                                    _ => crate::instance::placed(argument, &map),
+                                },
+                            )
+                        })
+                        .collect(),
+                },
+            )
+        })
+        .collect();
+    calls.extend(applied_calls.iter().map(|(at, call)| (*at, call)));
+    let selecting = RefCell::new(Vec::new());
+    let mut typer = Typer::bare(
+        program,
+        owner,
+        declared,
+        &signature,
+        Tables {
+            bindings: &bindings,
+            written: &written,
+            calls: &calls,
+            selecting: &selecting,
+        },
+        diagnostics,
+    );
+    typer.instance = map
+        .iter()
+        .map(|(at, argument)| (*at, (*argument).clone()))
+        .collect();
+    typer.defaults().pop().flatten()
+}
+
 impl Program {
     /// TYPE-5 and UNIT-7: read the default in the defining struct's
     /// lexical scope, with its generic arguments and the applied field type.

@@ -233,6 +233,9 @@ analyser: partial
 
 analyser: partial
 
+- Type constants share canonical identity for equality and collection keys; named declarations remain distinct across modules and constant argument spellings normalize (TYPE-18).
+- Left: an inferred local type query used as a generic value argument and C++ struct arguments holding a Type (#871).
+
 - A plain parameter is a type or a value by its uses in the signature; uses that disagree are rejected, and a struct's parameter nothing uses; a value parameter or a pack is not named as a type; a generic value parameter's default, a callable's or a struct's, is of its declared type, as far as how the default is written says what it is, and of the type a call resolves where that names a type parameter: an implied member, `.slow`, is held to the enum the call resolves, so is no `i64` and no member of an enum that lacks it (`type.mismatch`, TYPE-7)
 - A default that names a generic parameter before its own is of what that one takes, at a call and in a struct written with no arguments (`W2` of `<const A: i64 = 1, const B: i64 = A>` is `W2<1, 1>`); one that names its own, or one after it, gives it no value, so a call that leaves it is `generic.unresolved` (GEN-8); a call in the function's own body that gives a parameter its own, `rec<N>(v)`, gives the default that one and a struct written with no arguments `generic.argument_count`
 - Generic arguments that are the same, each type canonical and each value one constant (UNIT-13), make one type or one instance, and arguments that differ another: of the worked fragment, `Scaled<1>`, `Scaled<1.0>` and `Scaled<1.00>` are one type, and a `Scaled<-0.0>` where a `Scaled<0.0>` is expected is `type.mismatch`
@@ -252,6 +255,9 @@ parser: done
 analyser: partial
 
 - Decides an undecided constructor from what its name resolves to, a generic type, function or operator; a generic type before a comparison's `<` rejected; each argument against its parameter's kind
+- A contextual `Type` argument supplies the descriptor in a known type slot and uses ordinary value lookup in a value slot. Callable signatures and constraints settle their declared slots before call arguments are read, including operator and pack slots. Where the call supplies the kind, module/imported constants and local value bindings take precedence over the descriptor fallback. Value-only lookup diagnostics are retained only on the value path; GEN-8 still requires a constant.
+- With no value named `Type`, a known value slot rejects the descriptor as the wrong argument kind, including struct annotations and constructors.
+- Function pairs defer the contextual spelling until the existing FN-4/6 role selection supplies the receiving signature. Declaration order cannot choose a type or value interpretation.
 - Left: a generic function or operator before a comparison's `<`
 
 ## GEN-15
@@ -299,6 +305,7 @@ analyser: partial
 - In a pack comprehension, `arg_keys` names a declared type pack and the iteration name is a compile-time key. In a concrete inline spread, a membership condition tests that pass's key against the resolved type pack and gives a constant `bool` (GEN-7).
 - A generic call that receives another function parameter checks its pack requirements when the caller supplies the reflected types. The receiver's fixed positions determine which original inputs its pack reflects.
 - An operator callback reflects the public declaration's parameter names and the selected candidate's types (FN-17).
+- An inherited configuration default retains the public operator's reflected pack keys, fixed prefix and forwarding metadata, separately from the selected candidate's packs (GEN-6, TYPE-18).
 - Specializes a pack-member type written as a function call's generic argument (GEN-8), including within another type. A missing key reports `pack.name`. A positive member-type equality, including one stated for each key of a pack, can admit a constrained call under GEN-7. A call with an untold member type remains unsupported in the target.
 
 ## GEN-18

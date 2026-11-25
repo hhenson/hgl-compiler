@@ -51,6 +51,9 @@ pub(crate) struct Context {
     /// A comma here separates entries, so `a<b, c>(d)` could be two
     /// comparisons (GEN-14).
     pub(crate) comma_list: bool,
+    /// GEN-13: within a requires clause, `type(N)` retains its
+    /// established reflection-call tree rather than TYPE-18's value query.
+    pub(crate) constraint: bool,
 }
 
 impl Context {
@@ -60,6 +63,7 @@ impl Context {
         no_brace: false,
         no_gt: false,
         comma_list: false,
+        constraint: false,
     };
     /// Comma-separated expressions: parentheses, sequence brackets,
     /// arguments, operator configuration.
@@ -68,6 +72,7 @@ impl Context {
         no_brace: false,
         no_gt: false,
         comma_list: true,
+        constraint: false,
     };
     /// Delimiters whose commas, if any, do not separate expressions: index
     /// brackets, import sets, constraint sets, property lists, pack types.
@@ -76,6 +81,7 @@ impl Context {
         no_brace: false,
         no_gt: false,
         comma_list: false,
+        constraint: false,
     };
     /// Generic parameters or arguments.
     pub(crate) const ANGLE: Context = Context {
@@ -83,14 +89,16 @@ impl Context {
         no_brace: false,
         no_gt: true,
         comma_list: false,
+        constraint: false,
     };
 
-    /// The four answers packed into one number, for use in a lookup key.
+    /// The five answers packed into one number, for use in a lookup key.
     fn bits(self) -> u8 {
         u8::from(self.newlines)
             | u8::from(self.no_brace) << 1
             | u8::from(self.no_gt) << 2
             | u8::from(self.comma_list) << 3
+            | u8::from(self.constraint) << 4
     }
 }
 
@@ -530,7 +538,14 @@ impl<'a> Parser<'a> {
     ///
     /// `impl FnOnce(&mut Self) -> R` is "any function or closure that can
     /// be called once with the parser and gives an `R`".
-    pub(crate) fn nested<R>(&mut self, context: Context, parse: impl FnOnce(&mut Self) -> R) -> R {
+    pub(crate) fn nested<R>(
+        &mut self,
+        mut context: Context,
+        parse: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        // Parentheses and argument lists remain within their enclosing
+        // requires clause, including during memoized probes (GEN-13).
+        context.constraint |= self.context.constraint;
         let outer = std::mem::replace(&mut self.context, context);
         let result = parse(self);
         self.context = outer;

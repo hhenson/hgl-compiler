@@ -47,7 +47,7 @@ impl Parser<'_> {
     }
 
     /// ```text
-    /// type_base = scalar_type | named_type | tuple_type | list_type | set_type
+    /// type_base = "Type" | scalar_type | named_type | tuple_type | list_type | set_type
     ///           | dict_type | rolling_window_type | "signal" | endpoint_type
     ///           | "atomic", "<", value_type, ">" | result_type | "error" | delta_type
     ///           | pack_member ;

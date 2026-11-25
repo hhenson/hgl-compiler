@@ -6,7 +6,9 @@ use hgl_source::Span;
 
 use crate::constant::{Fault, Typed};
 use crate::syntax::{has_token, name_token, tokens};
-use crate::types::{Constant, ConstantValue, Member, NativeType, Scalar, Type, WrittenType};
+use crate::types::{
+    Constant, ConstantValue, DeltaInput, Member, NativeType, Scalar, Type, WrittenType,
+};
 use crate::{codes, error};
 
 use super::{Position, Reader, is_const, is_type, text_of, type_child};
@@ -704,7 +706,14 @@ impl Reader<'_> {
             );
             return Type::Unknown;
         }
-        Type::delta(self.inner(node, Position::PLAIN))
+        let payload = self.inner(node, Position::PLAIN);
+        // TYPE-16/18: normalization may erase this application, while
+        // the payload's stored fields are not all resolved yet.
+        self.delta_inputs.push(DeltaInput {
+            at: self.at(node.span()),
+            payload: payload.clone(),
+        });
+        Type::delta(payload)
     }
 }
 

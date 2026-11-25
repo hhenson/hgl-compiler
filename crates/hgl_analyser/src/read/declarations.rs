@@ -45,23 +45,28 @@ impl Kind {
     }
 }
 
-/// The kind of each generic parameter of every struct of the program.
+/// The declared kind of each generic parameter of a struct or callable.
 pub(super) type Kinds = HashMap<Id, Vec<Kind>>;
 
-/// Settles the kind of each generic parameter of every struct.
+/// Settles the declared generic kinds of structs and callables.
 ///
 /// A parameter written plain, `T`, is a type or a value by how the
 /// struct's parents and fields use it (GEN-13). One use is as an
 /// argument of another struct, `Grid<N>`, which says what `N` is only
 /// when the kind of `Grid`'s parameter is known. So the structs are read
 /// again and again, each time with what the time before settled, until a
-/// reading settles nothing more. What these readings report is thrown
+/// reading settles nothing more. Callable signatures participate so GEN-14
+/// can choose the contextual Type spelling before a body is read.
+/// What these readings report is thrown
 /// away: `read` reports it once, reading with every kind known.
-pub(super) fn struct_kinds(program: &Program) -> Kinds {
+pub(super) fn declaration_kinds(program: &Program) -> Kinds {
     let mut kinds = Kinds::new();
     for (module, declared) in program.modules.iter().enumerate() {
         for (index, declaration) in declared.declarations.iter().enumerate() {
-            if declaration.kind == DeclarationKind::Struct {
+            if declaration.kind == DeclarationKind::Struct
+                || declaration.kind == DeclarationKind::Operator
+                || declaration.kind.role().is_some()
+            {
                 let written = generic_forms(&declaration.syntax)
                     .iter()
                     .map(|(_, _, form)| match form {
@@ -75,8 +80,8 @@ pub(super) fn struct_kinds(program: &Program) -> Kinds {
         }
     }
     loop {
-        // What this reading settles: a parameter, by its struct and its
-        // position among the struct's parameters, and its kind.
+        // What this reading settles: a declaration's parameter position
+        // and its kind.
         let mut settled: Vec<(Id, usize, Kind)> = Vec::new();
         for (module, declared) in program.modules.iter().enumerate() {
             let mut unheard = Diagnostics::new();
@@ -91,7 +96,13 @@ pub(super) fn struct_kinds(program: &Program) -> Kinds {
                 if !open {
                     continue;
                 }
-                reader.declaration(declaration);
+                // GEN-13: only the signature and stated constraints settle
+                // a callable's kind. Its body cannot change that contract.
+                if declaration.kind == DeclarationKind::Struct {
+                    reader.declaration(declaration);
+                } else {
+                    reader.declaration_signature(declaration);
+                }
                 for (position, generic) in reader.generics.iter().enumerate() {
                     let now = Kind::of(&generic.kind);
                     // A kind once settled stays, so the readings end.
@@ -214,6 +225,14 @@ impl Reader<'_> {
     }
 
     pub(super) fn declaration(&mut self, declaration: &Declaration) -> Detail {
+        let detail = self.declaration_signature(declaration);
+        // Everything else the declaration writes: its constraints and
+        // its body.
+        self.scan(&declaration.syntax);
+        detail
+    }
+
+    fn declaration_signature(&mut self, declaration: &Declaration) -> Detail {
         self.enter(self.module.files[declaration.file].file);
         let node = &declaration.syntax;
         self.in_signature = true;
@@ -244,6 +263,20 @@ impl Reader<'_> {
         // generic parameter is.
         self.constrained(node);
         self.settle_kinds(declaration);
+        // TYPE-18 applies to the GEN-13 kind, not merely its unmarked
+        // spelling: an inferred value parameter named Type remains legal.
+        for generic in &self.generics {
+            if generic.name == "Type" && generic.kind == GenericKind::Type {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::NAME_RESERVED,
+                    generic.at,
+                    "the type parameter name `Type` is reserved for the descriptor type"
+                        .to_string(),
+                    "TYPE-18",
+                ));
+            }
+        }
         match &mut detail {
             Detail::Callable(signature) => {
                 signature.generics = self.generics.clone();
@@ -252,9 +285,6 @@ impl Reader<'_> {
             Detail::Struct(read) => read.generics = self.generics.clone(),
             _ => {}
         }
-        // Everything else the declaration writes: its constraints and
-        // its body.
-        self.scan(node);
         detail
     }
 
@@ -262,6 +292,20 @@ impl Reader<'_> {
     /// `self.generics`.
     fn generic_parameters(&mut self, declaration: &SyntaxNode) {
         let forms = generic_forms(declaration);
+        // TYPE-18: a type pack introduces type names; a value parameter
+        // named Type remains an ordinary value and is not reserved.
+        for (_, name, form) in &forms {
+            if name.text() == "Type" && matches!(form, Form::Pack(..)) {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::NAME_RESERVED,
+                    self.at(name.span()),
+                    "the type parameter name `Type` is reserved for the descriptor type"
+                        .to_string(),
+                    "TYPE-18",
+                ));
+            }
+        }
         // GEN-1: "Generic scope covers the whole declaration", so every
         // parameter is known before the type of any is read: in
         // `<const N: T, T>` the type of `N` is the `T` after it.

@@ -123,6 +123,37 @@ impl<'a> Typer<'a> {
         let at = self.at(node);
         let (kind, ty) = match node.kind() {
             SyntaxKind::Literal => self.literal(node, expected),
+            SyntaxKind::TypeOfExpr => {
+                let mark = self.mark();
+                // A cold block may assign an existing local, including
+                // its graph category or capability alias (TYPE-18).
+                let locals = self.locals.clone();
+                let aliases = self.aliases.clone();
+                let returns = (self.must_return, self.returning_tails.clone());
+                let lifecycle = (self.hook, self.initializing, self.caching);
+                let querying = self.type_query;
+                self.type_query = true;
+                self.hook = None;
+                self.initializing = false;
+                self.caching = false;
+                let ty = node
+                    .children()
+                    .next()
+                    .map_or(Type::Unknown, |operand| self.expression(&operand, None).ty);
+                // TYPE-18 evaluates nothing of the operand. Its local
+                // effects and deferred calls do not belong to the body.
+                self.restore_read(mark, false);
+                self.locals = locals;
+                self.aliases = aliases;
+                (self.must_return, self.returning_tails) = returns;
+                (self.hook, self.initializing, self.caching) = lifecycle;
+                self.type_query = querying;
+                self.constants.remember_type(at, ty.clone());
+                (
+                    ExprKind::Literal(Value::Type(Box::new(ty))),
+                    Type::TypeValue,
+                )
+            }
             SyntaxKind::NameExpr => return self.name(node),
             // "Parentheses select grouping" (EXPR-1): the expression
             // inside, where it stands.
@@ -445,7 +476,8 @@ impl<'a> Typer<'a> {
     /// path reaching a read must assign it."
     pub(super) fn read_local(&mut self, local: LocalId, node: &SyntaxNode) -> Expr {
         let at = self.at(node);
-        if !self.assigned[local] {
+        // TYPE-18 obtains a declared type without evaluating the local.
+        if !self.type_query && !self.assigned[local] {
             self.diagnostics.emit(
                 error(
                     Category::Name,

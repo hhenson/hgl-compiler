@@ -26,6 +26,25 @@ impl Reader<'_> {
 
     /// `Quote`, `pc::Curve`, `Box<i64>`, or a generic parameter.
     pub(super) fn named(&mut self, node: &SyntaxNode, position: Position) -> Type {
+        // TYPE-18: `Type` is the language's type of a type, not a
+        // declaration supplied by the program or by core.
+        if child(node, SyntaxKind::QualifiedName).is_none()
+            && name_token(node).is_some_and(|name| name.text() == "Type")
+        {
+            if let Some(list) = child(node, SyntaxKind::GenericArgs) {
+                // TYPE-18 gives Type no parameters. Still read supplied
+                // arguments so their own errors are not hidden (GEN-2).
+                self.arguments(&list, Position::ARGUMENT, None, None, false);
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::GENERIC_ARGUMENT_COUNT,
+                    self.at(node.span()),
+                    "`Type` is not a generic type and takes no generic arguments".to_string(),
+                    "GEN-2",
+                ));
+            }
+            return Type::TypeValue;
+        }
         let list = child(node, SyntaxKind::GenericArgs);
         let name = name_token(node);
         let binding = name
@@ -68,6 +87,7 @@ impl Reader<'_> {
                 },
                 target,
                 None,
+                false,
             )
         });
         // No binding: the name is left for the prelude, or the resolver
@@ -402,6 +422,7 @@ impl Reader<'_> {
         position: Position,
         target: Option<Id>,
         values_of: Option<Id>,
+        defer_contextual: bool,
     ) -> Vec<Argument> {
         // The name and kind of each generic parameter of the target.
         let (target_name, parameters): (String, Vec<(String, Kind)>) = match target {
@@ -467,7 +488,23 @@ impl Reader<'_> {
             } else {
                 None
             };
-            let want = parameter.map_or(Kind::Unknown, |(_, kind)| *kind);
+            let mut want = parameter.map_or(Kind::Unknown, |(_, kind)| *kind);
+            // GEN-14, TYPE-18: the contextual descriptor spelling follows
+            // a callable's declared slot too. Keep ordinary name lookup for
+            // value and undetermined slots, including a constant named Type.
+            if target.is_none()
+                && placed
+                && at_least > 0
+                && argument.kind() == SyntaxKind::NamedType
+                && argument.text().to_string().trim() == "Type"
+                && let Some(kinds) = values_of.and_then(|id| self.kinds.get(&id))
+            {
+                want = kinds
+                    .get(next)
+                    .or_else(|| kinds.last().filter(|kind| **kind == Kind::Pack))
+                    .copied()
+                    .unwrap_or(Kind::Unknown);
+            }
             // What a value given to this parameter is a value of
             // (EXPR-5), with what an earlier argument gave a type
             // parameter in place: the `T` of `S<T, const v: T>`.
@@ -541,7 +578,17 @@ impl Reader<'_> {
                 })
             };
 
-            if kind == SyntaxKind::Hole {
+            if defer_contextual
+                && kind == SyntaxKind::NamedType
+                && child(&argument, SyntaxKind::QualifiedName).is_none()
+                && child(&argument, SyntaxKind::GenericArgs).is_none()
+                && name_token(&argument).is_some_and(|name| name.text() == "Type")
+            {
+                // FN-4/6, GEN-14: a pair can declare different kinds.
+                // Keep the contextual spelling until body typing selects
+                // its role, rather than using declaration order.
+                arguments.push(Argument::Type(Type::TypeValue));
+            } else if kind == SyntaxKind::Hole {
                 // GEN-8: `_` in an `instantiate` keeps a parameter open.
                 arguments.push(Argument::Type(Type::Unknown));
             } else if !is_type(kind) && !self.indexed_pack(&argument) {
@@ -582,7 +629,7 @@ impl Reader<'_> {
                 // known to be a type is not: a declared type, or a
                 // generic parameter settled as a type.
                 let is_type = kind != SyntaxKind::NamedType
-                    || matches!(ty, Type::Named { .. })
+                    || matches!(ty, Type::TypeValue | Type::Named { .. })
                     || self.is_type_parameter(&ty);
                 if want == Kind::Value && is_type {
                     self.argument_kind(&argument, mismatch("a value", "a type"));
@@ -645,7 +692,22 @@ impl Reader<'_> {
             return None;
         }
         let name = name_token(node)?;
-        let &binding = self.bindings.get(&(self.file, name.span().start))?;
+        let contextual_type =
+            name.text() == "Type" && child(node, SyntaxKind::QualifiedName).is_none();
+        let binding = self.bindings.get(&(self.file, name.span().start)).copied();
+        let Some(binding) = binding else {
+            if contextual_type
+                && self
+                    .module
+                    .contextual_type_reports
+                    .contains_key(&self.at(name.span()))
+            {
+                // A failed ordinary value lookup is not a second reading as
+                // the descriptor type. held emits the retained lookup report.
+                return Some(self.held(node, Err(Fault::Reported), expected, place));
+            }
+            return None;
+        };
         match binding {
             Binding::Local {
                 at,
@@ -678,6 +740,15 @@ impl Reader<'_> {
                 &[declaration]
                     if self.program.modules[*module].declarations[declaration].kind
                         == DeclarationKind::Constant => {}
+                _ if contextual_type
+                    && declarations.iter().all(|&declaration| {
+                        !matches!(
+                            self.program.modules[*module].declarations[declaration].kind,
+                            DeclarationKind::Struct
+                                | DeclarationKind::Enum
+                                | DeclarationKind::NativeType
+                        )
+                    }) => {}
                 _ => return None,
             },
         }
@@ -758,6 +829,22 @@ impl Reader<'_> {
         expected: Option<&Type>,
         place: Option<&str>,
     ) -> Constant {
+        // GEN-14: a type slot never reaches constant evaluation, so value-only
+        // lookup failures cannot reject a valid descriptor argument there.
+        // Keep ordinary UNIT/FN diagnostics when this path selects a value.
+        if node.kind() == SyntaxKind::NamedType
+            && let Some(name) = name_token(node)
+            && let Some(reports) = self
+                .module
+                .contextual_type_reports
+                .get(&self.at(name.span()))
+        {
+            for report in reports {
+                if !self.diagnostics.as_slice().contains(report) {
+                    self.diagnostics.emit(report.clone());
+                }
+            }
+        }
         let value = read.and_then(|read| crate::constant::fit(read, expected, self.program));
         let value = match value {
             // GEN-8: a generic value argument is "a compile-time

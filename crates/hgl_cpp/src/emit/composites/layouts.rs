@@ -75,6 +75,19 @@ pub(super) fn struct_delta_type(
     arguments: &[GenericArgument],
     generic: bool,
 ) -> Option<String> {
+    let declared = &program.modules[module].declarations[declaration];
+    if program
+        .holds_type_value(&Type::Named {
+            name: declared.name.clone(),
+            module,
+            declaration,
+            arguments: arguments.to_vec(),
+            kind: hgl_analyser::NamedKind::Struct,
+        })
+        .ok()?
+    {
+        return None;
+    }
     let name = names::declared_type(
         &program.modules[module].declarations[declaration],
         declaration,
@@ -630,6 +643,21 @@ impl Emitter<'_> {
         };
         let qualified = format!("{namespace}::{name}{arguments}");
         let delta = format!("{namespace}::d_::{name}{arguments}");
+        // TYPE-18, Proposed: these remain ordinary values, but have
+        // no temporal form or auxiliary delta layout (TYPE-16).
+        let stored = read
+            .members
+            .iter()
+            .map(|member| program.holds_type_value(&member.ty))
+            .collect::<Result<Vec<_>, _>>();
+        let Ok(stored) = stored else {
+            self.unsupported(
+                at,
+                "a struct whose stored generic types exceed compiler limits",
+            );
+            return;
+        };
+        let has_delta = !stored.into_iter().any(|holds| holds);
         // Each member: its name, its C++ type, and its delta's property's.
         let mut members: Vec<(String, String, String)> = Vec::new();
         let mut holds = BTreeSet::new();
@@ -638,7 +666,12 @@ impl Emitter<'_> {
                 self.unsupported(member.at, &format!("the type `{}`", member.ty));
                 return;
             };
-            let Some(property) = cpp_type_in(program, &property_type(&member.ty), true) else {
+            let property = if !has_delta {
+                Some(String::new())
+            } else {
+                cpp_type_in(program, &property_type(&member.ty), true)
+            };
+            let Some(property) = property else {
                 self.unsupported(member.at, &format!("the type `delta<{}>`", member.ty));
                 return;
             };
@@ -675,7 +708,9 @@ impl Emitter<'_> {
         };
         let class = if is_abstract { "class" } else { "struct" };
         layout.forward = format!("{template}{class} {name};\n");
-        layout.delta_forward = format!("{template}struct {name};\n");
+        if has_delta {
+            layout.delta_forward = format!("{template}struct {name};\n");
+        }
         let ancestors = ancestors(program, (self.module, index));
         let mut parents = Vec::new();
         for ancestor in &ancestors {
@@ -703,10 +738,12 @@ impl Emitter<'_> {
         layout.holds = holds;
         // A struct's delta is named before any definition: the delta of a
         // list of it is a member of a delta defined before its own.
-        layout.parents.push_str(&format!(
+        if has_delta {
+            layout.parents.push_str(&format!(
             "{specialized}struct {}::delta_of<{qualified}>\n{{\n{INDENT}using type = {delta};\n}};\n",
             runtime::NAMESPACE
         ));
+        }
         let mut definition = comment;
         if is_abstract {
             definition.push_str(&abstract_class(&template, &name, &members, &parents));
@@ -724,11 +761,13 @@ impl Emitter<'_> {
                 );
             }
         }
-        definition.push_str(&format!(
-            "\nnamespace d_\n{{\n// delta<{}> (TYPE-16)\n{}}}  // namespace d_\n",
-            declaration.name,
-            aggregate(&template, &name, &members, |(_, _, property)| property)
-        ));
+        if has_delta {
+            definition.push_str(&format!(
+                "\nnamespace d_\n{{\n// delta<{}> (TYPE-16)\n{}}}  // namespace d_\n",
+                declaration.name,
+                aggregate(&template, &name, &members, |(_, _, property)| property)
+            ));
+        }
         layout.definition = definition;
         let members_of = |of: &str| -> String {
             let pointers: Vec<String> = members
@@ -753,12 +792,24 @@ impl Emitter<'_> {
         if !is_abstract {
             traits.push_str(&members_of(&qualified));
         }
-        traits.push_str(&members_of(&delta));
+        if has_delta {
+            traits.push_str(&members_of(&delta));
+        }
         traits.push_str(&hash_of(&qualified));
-        traits.push_str(&hash_of(&delta));
+        if has_delta {
+            traits.push_str(&hash_of(&delta));
+        }
         // TYPE-9: what hgraph needs to hold it as a temporal value
         // (`structs`).
-        traits.push_str(&self.bundle_traits(index, &qualified, &delta, &specialized, &parameters));
+        if has_delta {
+            traits.push_str(&self.bundle_traits(
+                index,
+                &qualified,
+                &delta,
+                &specialized,
+                &parameters,
+            ));
+        }
         layout.traits = traits;
         self.piece.is_type = true;
         self.piece.layout = Some(Box::new(layout));

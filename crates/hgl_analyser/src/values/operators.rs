@@ -216,6 +216,7 @@ impl<'a> Typer<'a> {
                     among: None,
                     generics: Vec::new(),
                     call_generics: Vec::new(),
+                    type_packs: Vec::new(),
                     unfit: Some(Unfit {
                         generic: index,
                         described,
@@ -281,6 +282,7 @@ impl<'a> Typer<'a> {
             } else {
                 Vec::new()
             },
+            type_packs: Vec::new(),
             unfit: None,
         }
     }
@@ -582,6 +584,7 @@ impl<'a> Typer<'a> {
             among,
             generics: operator_generics,
             call_generics,
+            type_packs: mut operator_type_packs,
             unfit,
         } = self.argument_output_requested(operator, public, found, &given, said);
         // ERR-6: the fallback form gives the payload type a caller writes.
@@ -608,8 +611,12 @@ impl<'a> Typer<'a> {
                 &operator_generics,
                 &mut given,
             ) {
-                Ok(Some(projected)) => requested = Some(projected),
-                Ok(None) => {}
+                Ok(reflected) => {
+                    if let Some(projected) = reflected.projected {
+                        requested = Some(projected);
+                    }
+                    operator_type_packs = reflected.packs;
+                }
                 Err(()) => return (self.unselected(given, Form::Named), Type::Unknown),
             }
         }
@@ -638,13 +645,14 @@ impl<'a> Typer<'a> {
         ) {
             given.retain(value_argument);
             let at = Location::new(self.file, name.span());
-            return self.call_required(
+            let called = self.call_required(
                 operator,
                 result,
                 given,
                 operator_generics,
                 (Form::Named, at),
             );
+            return with_operator_packs(called, operator_type_packs);
         }
         // True where the output requested is the type the call writes
         // for the operator's result that is a type parameter and nothing
@@ -770,14 +778,15 @@ impl<'a> Typer<'a> {
                     payload,
                 )
             });
-        self.called_with_result_diagnostic(
+        let called = self.called_with_result_diagnostic(
             operator,
             chosen,
             given,
             operator_generics,
             (Form::Named, at),
             unresolved,
-        )
+        );
+        with_operator_packs(called, operator_type_packs)
     }
 
     /// Read the public request and reflected keys using this trial's callback.
@@ -797,14 +806,16 @@ impl<'a> Typer<'a> {
         }
         let unit = &self.program.modules[operator.module];
         let dependent = dependent_slot(unit, public);
-        if let Some(projected) = self.reflected_operator_call(
+        let reflected = self.reflected_operator_call(
             (operator, public, dependent),
             (&call.name, &call.list),
             &request.generics,
             given,
-        )? {
+        )?;
+        if let Some(projected) = reflected.projected {
             request.place = Some(projected);
         }
+        request.type_packs = reflected.packs;
         Ok(request)
     }
 
@@ -815,7 +826,7 @@ impl<'a> Typer<'a> {
         (name, list): (&SyntaxToken, &SyntaxNode),
         operator_generics: &[Argument],
         given: &mut [Given],
-    ) -> Result<Option<Type>, ()> {
+    ) -> Result<ReflectedOperatorCall, ()> {
         let program = self.program;
         let unit = &program.modules[operator.module];
         // GEN-6: candidate-only options do not supply a public slot.
@@ -885,7 +896,12 @@ impl<'a> Typer<'a> {
             && result.any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false)
         {
             match packs.project(result, &map) {
-                Ok(ty) if whole(&ty) => return Ok(Some(ty)),
+                Ok(ty) if whole(&ty) => {
+                    return Ok(ReflectedOperatorCall {
+                        projected: Some(ty),
+                        packs: resolved.packs,
+                    });
+                }
                 Ok(_) => {}
                 Err(missing) => {
                     self.pack_member_fault(at, &missing);
@@ -893,7 +909,10 @@ impl<'a> Typer<'a> {
                 }
             }
         }
-        Ok(None)
+        Ok(ReflectedOperatorCall {
+            projected: None,
+            packs: resolved.packs,
+        })
     }
 
     /// A diagnostic trial runs the selected call's own checks first.
@@ -2124,6 +2143,37 @@ impl Typer<'_> {
     }
 }
 
+/// The result projection and keyed packs from one public reflection pass.
+struct ReflectedOperatorCall {
+    projected: Option<Type>,
+    packs: Vec<hir::TypePackArgument>,
+}
+
+/// GEN-6/17: public defaults keep the operator's resolved pack metadata,
+/// independently of the chosen candidate's own generic packs.
+fn with_operator_packs(
+    (mut kind, ty): (ExprKind, Type),
+    packs: Vec<hir::TypePackArgument>,
+) -> (ExprKind, Type) {
+    if !packs.is_empty()
+        && let ExprKind::Call {
+            callee:
+                Callee::Candidate {
+                    operator_type_packs,
+                    ..
+                }
+                | Callee::Required {
+                    operator_type_packs,
+                    ..
+                },
+            ..
+        } = &mut kind
+    {
+        *operator_type_packs = packs;
+    }
+    (kind, ty)
+}
+
 /// ERR-6 requires the fallback's exact type. A literal can take its
 /// expected type under EXPR-5; an open generic is checked in its instance.
 pub(super) fn dictionary_fallback_type(argument: &Given, expected: &Type) -> bool {
@@ -2250,6 +2300,8 @@ pub(super) struct Requested {
     /// Arguments for inherited configuration defaults: an argument-derived
     /// type stays open until the candidate fits its source expression.
     pub(super) call_generics: Vec<Argument>,
+    /// Public keyed packs resolved by the same callback trial (GEN-6, GEN-17).
+    pub(super) type_packs: Vec<hir::TypePackArgument>,
     /// A default the call takes that is not of its parameter's type as
     /// the call resolves it (GEN-13). Nothing is then requested.
     pub(super) unfit: Option<Unfit>,

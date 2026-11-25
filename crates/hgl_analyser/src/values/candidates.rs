@@ -219,6 +219,7 @@ impl<'a> Typer<'a> {
                         if let Some(request) = &trial.request {
                             for chosen in next.known.iter_mut().map(|(_, chosen)| chosen) {
                                 chosen.public_generics = Some(request.call_generics.clone());
+                                chosen.public_type_packs = request.type_packs.clone();
                             }
                         }
                         admitted.include(next);
@@ -773,6 +774,7 @@ impl<'a> Typer<'a> {
                     bound: bound.clone(),
                     callbacks,
                     public_generics: None,
+                    public_type_packs: Vec::new(),
                     dependent_callbacks: given
                         .iter()
                         .enumerate()
@@ -1067,6 +1069,7 @@ impl<'a> Typer<'a> {
             callbacks,
             dependent_callbacks,
             public_generics,
+            public_type_packs,
             mut selecting,
             ..
         } = chosen;
@@ -1283,6 +1286,7 @@ impl<'a> Typer<'a> {
             callee: Callee::Candidate {
                 operator: (operator.module, operator.declaration),
                 operator_generics,
+                operator_type_packs: public_type_packs,
                 module,
                 declaration,
                 generics,
@@ -3449,6 +3453,8 @@ pub(super) struct Chosen<'s> {
     dependent_callbacks: Vec<(usize, Expr)>,
     /// Public defaults and generics as resolved with this candidate's callback.
     public_generics: Option<Vec<Argument>>,
+    /// The public reflection's keys and prefix from that same callback trial.
+    public_type_packs: Vec<hir::TypePackArgument>,
     /// Slots where the candidate's reading retains an unwritten callback result.
     valued_anonymous_parameters: Vec<usize>,
     /// Equally preferred choices of which operands to read (ERR-15).

@@ -1159,6 +1159,15 @@ mod tests {
     }
 
     #[test]
+    fn type_descriptor_name_is_contextual() {
+        // LEX-10, TYPE-18: Type is reserved by its type-name context only.
+        assert_eq!(crate::TokenKind::keyword("Type"), None);
+        for contextual in ["type", "Types", "TypeValue"] {
+            assert_eq!(crate::TokenKind::keyword(contextual), None);
+        }
+    }
+
+    #[test]
     fn non_ascii_letters_do_not_form_identifiers() {
         // LEX-1 admits ASCII letters only.
         let (codes, tokens) = rejected("caf\u{e9}");
