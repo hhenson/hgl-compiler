@@ -238,8 +238,8 @@ fn formatting_checks_known_const_inputs_when_another_is_unread() {
     let checked = with_core(concat!(
         "const fn pattern(value: str) -> str => value\n",
         "const P: str = pattern(\"{}\")\n",
-        "const fn join(const a: str, const b: str, value: f64) -> str => format(a, value) + format(b, value)\n",
-        "test t { assert join(\"{:x}\", P, 1.5) == \"\" }\n",
+        "const fn fuse(const a: str, const b: str, value: f64) -> str => format(a, value) + format(b, value)\n",
+        "test t { assert fuse(\"{:x}\", P, 1.5) == \"\" }\n",
     ));
     assert_eq!(
         checked.summary(),

@@ -975,6 +975,17 @@ impl Signature {
         })
     }
 
+    /// Fixed parameters that take positional arguments, with their slots.
+    /// Under the FN-8 trial the positional pack takes the remaining arguments.
+    /// Core's `join` uses the trailing named parameter for its separator (OPS-11).
+    pub(crate) fn positional_parameters(&self) -> impl Iterator<Item = (usize, &Parameter)> {
+        self.parameters
+            .iter()
+            .enumerate()
+            .take_while(|(_, parameter)| parameter.pack != Some(Pack::Positional))
+            .filter(|(_, parameter)| !parameter.configuration && parameter.pack.is_none())
+    }
+
     /// The signature a struct's declaration is read with: its generic
     /// parameters, and neither a parameter nor a result. What a field's
     /// type or default may name of it is its generic parameters

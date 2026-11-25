@@ -424,6 +424,9 @@ impl<'a> Typer<'a> {
         };
         let (has_positional_pack, positional_pack) = pack(Pack::Positional);
         let (has_named_pack, named_pack) = pack(Pack::Named);
+        // Proposed FN-8 and EXPR-2: the positional pack takes all
+        // positional arguments left by the parameters before it.
+        let positional_slots = &slots[..positional_pack.unwrap_or(slots.len())];
         let mut pack_locations = vec![Vec::new(); slots.len()];
         let mut pack_names = HashSet::new();
         // Which slots have been given a value.
@@ -440,7 +443,7 @@ impl<'a> Typer<'a> {
         // ordinary parameter. Keep the value reads in written order.
         let reserved_through = if entries.first().is_some_and(|(brace, ..)| *brace) {
             let positional = entries.iter().filter(|(_, name, _)| name.is_none()).count();
-            slots
+            positional_slots
                 .iter()
                 .enumerate()
                 .filter(|(_, slot)| slot.takes_position())
@@ -498,13 +501,19 @@ impl<'a> Typer<'a> {
                             "EXPR-2",
                         ));
                     }
-                    // The first slot not yet filled that is no pack; a
-                    // positional pack takes what the others leave
-                    // (FN-8).
-                    let next = (0..slots.len())
-                        .find(|&index| !filled[index] && slots[index].takes_position());
+                    // The first positional slot not yet filled, then
+                    // the pack captures what follows (FN-8).
+                    let next = positional_slots
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, slot)| {
+                            (!filled[index] && slot.takes_position()).then_some(index)
+                        });
                     if next.is_none() && !has_positional_pack && dependent.is_none() {
-                        let fixed = slots.iter().filter(|slot| slot.takes_position()).count();
+                        let fixed = positional_slots
+                            .iter()
+                            .filter(|slot| slot.takes_position())
+                            .count();
                         self.diagnostics.emit(error(
                             Category::Type,
                             codes::ARGUMENT_UNEXPECTED,

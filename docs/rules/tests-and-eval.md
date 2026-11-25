@@ -30,9 +30,9 @@ transpiler: partial
   links its own runnable dependency set. Test-local types and
   callables have distinct generated identities. Generic instances retain the
   test candidates that answer their requirements (GEN-16). Calls within a test get separate instance identities so their candidate scope cannot change production.
-- Left: Modules in a mixed build share declaration headers across their
-  production and test objects. The emitter reports a missing test block or a
-  return in a test defensively.
+- A mixed build's production and test objects share their module declaration
+  header. The emitter has defensive reports for a missing test block and a
+  return in a test.
 
 ## TST-3
 
@@ -42,7 +42,9 @@ analyser: partial
 - Each leading helper is checked as a function of its declared role
 - Outside the call an `eval` or a `run` takes its statements are value code, with `assert` among them: a call of a node, a graph or a source is `call.role` (the code proposed), an operator selects among all its candidates and one that selects a temporal candidate is `call.role` too (GEN-5), a `const` parameter takes any value, and nothing is lifted; the call an `eval` or a `run` takes is read as composition is
 - An eval of a target with a result is a trace of the result's type, bound with `let` and compared; a trace, or a value that holds one, stored in a field or given to a temporal function is `trace.escape`; one given to a `const fn` is the list of its publications there (TST-16)
-- Left: an `eval` or a `run` outside a named test, which is not read; a trace returned
+- Left: `eval` and `run` in ordinary functions can pass source checking
+  without being read. This includes an eval returned by a named test's
+  helper (#837).
 
 ## TST-4
 
@@ -76,15 +78,19 @@ analyser: partial
 - A generic target's parameters are found from the cells, or from a trace an eval gave; a tuple that names one, `tuple<T, T>`, has its cells read as any tuple's once they are found
 - A trace is an argument of the eval's call and of no call inside it, which takes a value there (`type.mismatch`)
 - Its configuration, `eval{length: 4s} target(...)`, is read before the call, each entry a field of core's `RunConfig` (RUN-6)
-- Left: a generic target given structural cells other than a tuple's
+- A typed struct cell or a growing-list cell can supply generic arguments of
+  the target.
+- Left: A dictionary cell written as pairs can lose its context before the
+  eval infers the member type. A written generic argument supplies that
+  context (#838).
 
 transpiler: partial
 
 - Runs resolved value and temporal functions with replayed literal or recorded traces
   and ordinary configuration. Applies ordinary value helper lifting and expands
   supported packed inputs.
-- Left: An unresolved eval target or an unsupported trace cell or target input is
-  reported. Missing native replay or recording support is reported under CEVAL-1.
+- Missing native replay or recording support is reported under CEVAL-1. The
+  test with the unsupported input is omitted (TST-14).
 
 ## TST-6
 
@@ -102,7 +108,6 @@ runner: planned
 analyser: partial
 
 - A timed trace's keys are all durations or all datetimes; constant duration keys strictly increase (`trace.key_order`); it has no `_` (`trace.placeholder`); an eval's traces and its expectation share dense or timed notation (`trace.style`), and separate timed traces can use absolute or relative keys
-- Left: the order of datetime keys, which are not evaluated
 
 runner: planned
 
@@ -112,6 +117,8 @@ transpiler: done
 
 - Emits timed replay from duration offsets or absolute times and compares a timed
   expectation at its recorded timestamps.
+- The C++ harness checks the order of absolute datetime keys in both input
+  traces and expectations.
 
 ## TST-8
 
@@ -129,8 +136,10 @@ transpiler: partial
 
 - Replays scalar false, zero and empty values as present and dispatches whole and delta
   cells through their publication forms.
-- Left: Trace cells for types outside TYPE-9's supported families, and trace literals or
-  comparisons without an appropriate harness context, are reported.
+- Reports trace literals or comparisons that reach emission without a harness
+  context.
+- Left: Replay for temporal forms without a C++ representation (TYPE-9,
+  TYPE-10, #829).
 
 runner: planned
 
@@ -193,8 +202,7 @@ transpiler: partial
 
 - The target excludes a case whose reachable code cannot be emitted and retains
   independent supported cases, with the first source-located reason.
-- Left: Rejection-case selection and metadata checks belong to the runner. Unsupported
-  C++ cases are tracked by the core suite checker.
+- The Core suite checker tracks unsupported C++ cases.
 
 ## TST-15
 
@@ -214,7 +222,8 @@ analyser: partial
 
 - A trace given to a `const fn`, an eval or a `let` bound to one, is a `list<tuple<datetime, delta<T>>>` there: it is held to the parameter's type and says what a generic parameter is; a window's holds its arrivals, V
 - A sequence written as a `const fn`'s argument is the list it is written as
-- Left: a value that holds a trace, `[seen]`, which is given as it is and not held to the parameter's type
+- Left: A trace nested in a value such as `[seen]` remains a trace during
+  argument checking.
 
 transpiler: partial
 
