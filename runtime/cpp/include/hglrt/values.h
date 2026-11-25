@@ -393,6 +393,8 @@ std::string type_name() {
         }(std::make_index_sequence<std::tuple_size_v<T>>{});
     } else if constexpr (named_enum<T>) {
         return std::string{hgl_enum(T{}).type};
+    } else if constexpr (std::is_enum_v<T> && requires { hgl_empty_enum_name_(T{}); }) {
+        return std::string{hgl_empty_enum_name_(T{})};
     } else if constexpr (requires { value_form<T>::name(); }) {
         return value_form<T>::name();
     } else if constexpr (requires { T::hgl_name; }) {

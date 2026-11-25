@@ -305,13 +305,25 @@ impl Emitter<'_> {
                     "// enum {} (TYPE-7)\nenum class {name}\n{{\n{enumerators}}};\n",
                     declaration.name,
                 );
-                // What names the enum to the runtime library (`values.h`,
-                // `EnumNames`): its HGL name qualified with its module's
-                // path, and each member's, by which the library prints a
-                // member (`Side.buy`) and registers the enum with hgraph,
-                // which a temporal value of it needs. An enum of no member
-                // has no value to name.
-                if !members.is_empty() {
+                let qualified = match declaration.test_owner {
+                    Some(owner) => format!(
+                        "{}::{}::{}",
+                        declared.path, declared.tests[owner].name, declaration.name
+                    ),
+                    None => format!("{}::{}", declared.path, declaration.name),
+                };
+                let qualified = names::string(&qualified);
+                // TYPE-7: an empty enum still names the success type of
+                // a result, even though no conversion produces a member.
+                if members.is_empty() {
+                    self.piece.declaration.push_str(&format!(
+                        "constexpr ::std::string_view hgl_empty_enum_name_({name}) noexcept\n{{\n    return {qualified};\n}}\n"
+                    ));
+                } else {
+                    // What names the enum to the runtime library (`values.h`,
+                    // `EnumNames`): its HGL name qualified with its module's
+                    // path, and each member's, by which the library prints a
+                    // member (`Side.buy`) and registers the enum with hgraph.
                     let named: Vec<String> = read
                         .members
                         .iter()
@@ -320,13 +332,6 @@ impl Emitter<'_> {
                             format!("{{{name}::{written}, {}}}", names::string(&member.name))
                         })
                         .collect();
-                    let qualified = match declaration.test_owner {
-                        Some(owner) => format!(
-                            "{}::{}::{}",
-                            declared.path, declared.tests[owner].name, declaration.name
-                        ),
-                        None => format!("{}::{}", declared.path, declaration.name),
-                    };
                     let Some(numbers) = read
                         .members
                         .iter()
@@ -351,10 +356,9 @@ impl Emitter<'_> {
                         )
                     };
                     self.piece.declaration.push_str(&format!(
-                        "constexpr ::{}::EnumNames<{name}, {}> hgl_enum({name}) noexcept\n{{\n    return {{{}, {{{}}}{numbers}}};\n}}\n",
+                        "constexpr ::{}::EnumNames<{name}, {}> hgl_enum({name}) noexcept\n{{\n    return {{{qualified}, {{{}}}{numbers}}};\n}}\n",
                         runtime::NAMESPACE,
                         members.len(),
-                        names::string(&qualified),
                         named.join(", ")
                     ));
                 }

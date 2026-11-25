@@ -116,6 +116,8 @@ transpiler: partial
 - Emits enum members and constructs members from names or numbers. Supplies enum
   payload, constant and trace forms.
 - Supplies the enum's source names and numbers to Core's conversion natives.
+- Names an empty enum in a lifted conversion's result type. Each incoming
+  number gives an Err under the checked policy (OPS-7, proposed).
 - Left: An unavailable enum layout or unsupported construction source is reported. A
   failed construction lacks `enum.no_member`.
 
