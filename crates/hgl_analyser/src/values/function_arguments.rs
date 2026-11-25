@@ -5,6 +5,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
 use super::arguments::{Slot, Takes};
+use super::callback_evidence::CallbackEvidence;
 use super::candidates::{
     CallbackOption, CallbackOptionSource, CallbackRequest, Given, Key, Wanted, in_instance,
 };
@@ -180,7 +181,9 @@ impl<'a> Typer<'a> {
         }
         let given = inputs
             .supplied
-            .map(|_| reflected_arguments(signature, template, node, self.at(node), inputs));
+            .map(|_| self.reflected_arguments(signature, template, node, inputs))
+            .transpose()
+            .ok()?;
         let ReferenceArguments {
             generics,
             type_packs,
@@ -261,7 +264,8 @@ impl<'a> Typer<'a> {
         let at = self.at(node);
         let reflected = template.named_pack.is_some();
         let mut given = if reflected {
-            reflected_arguments(public, template, node, at, inputs)
+            self.reflected_arguments(public, template, node, inputs)
+                .ok()?
         } else {
             Vec::new()
         };
@@ -1304,54 +1308,88 @@ pub(super) struct CallbackInputs<'a> {
     pub(super) supplied: Option<&'a [(Option<&'a str>, &'a Expr)]>,
     /// Parameters the enclosing declaration will give the callback (FN-8).
     pub(super) excluded: &'a [&'a str],
+    /// The enclosing declaration's positive memberships of a supplied argument type.
+    pub(super) evidence: Option<&'a CallbackEvidence>,
 }
 
-fn reflected_arguments(
-    public: &Signature,
-    template: &FunctionType,
-    node: &SyntaxNode,
-    at: Location,
-    inputs: &CallbackInputs<'_>,
-) -> Vec<Given> {
-    let fixed = public.positional_parameters().count();
-    let mut remaining = public
-        .positional_parameters()
-        .map(|(_, parameter)| parameter)
-        .enumerate()
-        .filter(|(_, parameter)| !inputs.excluded.contains(&parameter.name.as_str()));
-    let mut pack_position = fixed;
-    let mut given: Vec<_> = inputs
-        .supplied
-        .unwrap_or_default()
-        .iter()
-        .map(|(name, value)| {
-            let key = if let Some(name) = name {
-                Key::Name((*name).to_string())
-            } else if let Some((position, _)) = remaining.next() {
-                Key::Position(position)
-            } else {
-                let position = pack_position;
-                pack_position += 1;
-                Key::Position(position)
-            };
-            let mut argument = callback_operand(0, node, value.at, value.ty.clone());
-            argument.key = key;
-            argument
-        })
-        .collect();
-    // Fixed inputs specify their own types even where the enclosing
-    // declaration supplies them or the callback has a default (FN-17).
-    for (index, input) in template.ordinary_parameters().enumerate() {
-        if whole(input.ty())
-            && let Some(slot) = Key::Position(index).public_parameter(public)
-            && given
-                .iter()
-                .all(|given| given.key.public_parameter(public) != Some(slot))
-        {
-            given.push(callback_operand(index, node, at, input.ty().clone()));
+impl Typer<'_> {
+    fn reflected_arguments(
+        &mut self,
+        public: &Signature,
+        template: &FunctionType,
+        node: &SyntaxNode,
+        inputs: &CallbackInputs<'_>,
+    ) -> Result<Vec<Given>, ()> {
+        let evidence = inputs
+            .evidence
+            .filter(|_| node.kind() == SyntaxKind::NameExpr);
+        let fixed = public.positional_parameters().count();
+        let mut remaining = public
+            .positional_parameters()
+            .map(|(_, parameter)| parameter)
+            .enumerate()
+            .filter(|(_, parameter)| !inputs.excluded.contains(&parameter.name.as_str()));
+        let mut pack_position = fixed;
+        let mut given: Vec<_> = inputs
+            .supplied
+            .unwrap_or_default()
+            .iter()
+            .map(|(name, value)| {
+                let key = if let Some(name) = name {
+                    Key::Name((*name).to_string())
+                } else if let Some((position, _)) = remaining.next() {
+                    Key::Position(position)
+                } else {
+                    let position = pack_position;
+                    pack_position += 1;
+                    Key::Position(position)
+                };
+                let ty = if let Some(evidence) = evidence {
+                    let name = key.name().or_else(|| {
+                        key.public_parameter(public)
+                            .map(|slot| public.parameters[slot].name.as_str())
+                    });
+                    let position = match key {
+                        Key::Position(position) => position.checked_sub(fixed),
+                        _ => None,
+                    };
+                    evidence.resolve(name, position, &value.ty).map_err(|()| {
+                        self.diagnostics.emit(error(
+                            Category::Type,
+                            codes::GENERIC_UNRESOLVED,
+                            value.at,
+                            "this argument gives conflicting types to the bare function"
+                                .to_string(),
+                            "GEN-3",
+                        ));
+                    })?
+                } else {
+                    value.ty.clone()
+                };
+                let mut argument = callback_operand(0, node, value.at, ty);
+                argument.key = key;
+                Ok(argument)
+            })
+            .collect::<Result<_, _>>()?;
+        // Fixed inputs specify their own types even where the enclosing
+        // declaration supplies them or the callback has a default (FN-17).
+        for (index, input) in template.ordinary_parameters().enumerate() {
+            if whole(input.ty())
+                && let Some(slot) = Key::Position(index).public_parameter(public)
+                && given
+                    .iter()
+                    .all(|given| given.key.public_parameter(public) != Some(slot))
+            {
+                given.push(callback_operand(
+                    index,
+                    node,
+                    self.at(node),
+                    input.ty().clone(),
+                ));
+            }
         }
+        Ok(given)
     }
-    given
 }
 
 fn callback_operand(position: usize, node: &SyntaxNode, at: Location, ty: Type) -> Given {

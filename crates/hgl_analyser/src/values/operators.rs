@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
+use super::callback_evidence::CallbackEvidence;
 use super::calls::arguments_of;
 use super::candidates::{Chosen, Given, Key, Settled, Wanted, bound, typed_by_place};
 use super::constants::{constant_text, generic_default};
@@ -395,10 +396,17 @@ impl<'a> Typer<'a> {
         let dependent = dependent_slot(unit, public);
         let dependent_pack =
             dependent.map(|index| &unit.dependent_packs[&public.parameters[index].at]);
+        let evidence = dependent.map(|_| {
+            CallbackEvidence::from_callables(
+                program,
+                std::iter::once((operator.module, operator.declaration, public))
+                    .chain(candidates.iter().copied()),
+            )
+        });
         let signature = (
             public,
             &unit.declarations[operator.declaration],
-            dependent_pack,
+            dependent_pack.zip(evidence.as_ref()),
         );
         let candidate_functions = !candidates.is_empty();
         let written =
@@ -987,13 +995,19 @@ impl<'a> Typer<'a> {
     /// GEN-6 leaves its final function template to each candidate.
     fn read_operator_arguments(
         &mut self,
-        (public, declared, dependent): (&Signature, &Declaration, Option<&DependentPack>),
+        (public, declared, dependent): (
+            &Signature,
+            &Declaration,
+            Option<(&DependentPack, &CallbackEvidence)>,
+        ),
         written: impl IntoIterator<Item = (Key, SyntaxNode, Option<Expr>)>,
         context: Option<&[Option<Argument>]>,
         pack: Option<&hir::TypePackArgument>,
         replay: Option<ReplayedCall<'_>>,
         candidate_functions: bool,
     ) -> Vec<Given> {
+        let evidence = dependent.map(|(_, evidence)| evidence);
+        let dependent = dependent.map(|(pack, _)| pack);
         let resolved: Vec<_> = context
             .unwrap_or_default()
             .iter()
@@ -1103,6 +1117,7 @@ impl<'a> Typer<'a> {
                         CallbackInputs {
                             supplied: Some(&supplied),
                             excluded: &excluded,
+                            evidence,
                         }
                     } else {
                         CallbackInputs::default()
