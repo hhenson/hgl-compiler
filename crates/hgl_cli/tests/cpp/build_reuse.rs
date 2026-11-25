@@ -176,6 +176,16 @@ fn clean_rebuilds_the_workspace_and_removes_retired_units() {
     let object = ninja.workspace.join("obj/modules/mod-demo-stamped.o");
     let old = File::open(&object).unwrap();
     old.set_modified(std::time::SystemTime::UNIX_EPOCH).unwrap();
+    let recorded = write(
+        &ninja.workspace,
+        "results/test-demo-stamped.0.txt",
+        "previous test run",
+    );
+    let note = write(
+        &ninja.workspace,
+        "results/test-demo-stamped.notes.txt",
+        "keep",
+    );
     let handwritten = write(&ninja.workspace, "modules/manual.cpp", "// mine");
     let other = write(
         &ninja.workspace,
@@ -195,6 +205,8 @@ fn clean_rebuilds_the_workspace_and_removes_retired_units() {
     for file in retired {
         assert!(!ninja.workspace.join(file).exists(), "{file}");
     }
+    assert!(!Path::new(&recorded).exists());
+    assert_eq!(fs::read_to_string(note).unwrap(), "keep");
     assert_eq!(fs::read_to_string(handwritten).unwrap(), "// mine");
     assert_eq!(fs::read_to_string(other).unwrap(), "other profile");
     assert_eq!(build(&[])["reused"], true);

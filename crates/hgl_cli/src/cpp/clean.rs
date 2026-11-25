@@ -2,6 +2,7 @@
 //! Generated translation units identify their corresponding objects and executables.
 //! The build directory can also contain user files or the other build profile.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -75,6 +76,7 @@ fn clean(root: &Path, stamped: bool) -> io::Result<()> {
     .map(|p| root.join(p))
     .collect();
     let mut sources = Vec::new();
+    let mut test_stems = HashSet::new();
     let independent = products.len();
     for dir in [
         "modules",
@@ -82,6 +84,7 @@ fn clean(root: &Path, stamped: bool) -> io::Result<()> {
         "applications",
         "debug-sources",
         "debug-sources/native",
+        "results",
     ] {
         let entries = match fs::read_dir(root.join(dir)) {
             Ok(entries) => entries,
@@ -93,6 +96,17 @@ fn clean(root: &Path, stamped: bool) -> io::Result<()> {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
             let path = entry.path();
+            if dir == "results" {
+                // The test host records each invocation as <test stem>.<position>.txt.
+                if let Some((stem, position)) =
+                    name.strip_suffix(".txt").and_then(|s| s.rsplit_once('.'))
+                    && test_stems.contains(stem)
+                    && position.parse::<usize>().is_ok()
+                {
+                    products.push(path);
+                }
+                continue;
+            }
             if dir.starts_with("debug-sources") {
                 if owned && name.ends_with(".hgl.source") {
                     sources.push(path);
@@ -123,6 +137,7 @@ fn clean(root: &Path, stamped: bool) -> io::Result<()> {
             products.push(object.join(format!("{stem}.o.d")));
             match dir {
                 "tests" => {
+                    test_stems.insert(stem.to_owned());
                     products.push(root.join(super::build::test_target_stem(stem)));
                     products.push(root.join("debug-results").join(format!("{stem}.txt")));
                 }
