@@ -21,9 +21,10 @@
 //! out (TYPE-14), and is the type under it (`Type::omission_removed`).
 
 use hgl_analyser::hir::{BinaryOperator, Expr, ExprKind, LocalId, Value};
-use hgl_analyser::{DeclarationKind, Detail, Scalar, Type};
+use hgl_analyser::{Scalar, Type};
 
 use super::Emitter;
+use super::activity::enumeration;
 use super::forms::Family;
 use super::graphs::WIRING;
 use super::names::identifier;
@@ -36,7 +37,7 @@ pub(super) struct Nullables;
 
 /// The C++ type of the payload of `ty`, where `ty` is a nullable this
 /// family writes: of a scalar that has a temporal form (`scalars`), or of
-/// an enum with a member, noted where it is another module's. TYPE-14:
+/// an enum, noted where it is another module's. TYPE-14:
 /// "`T?` denotes an ordinary value that is either a T or null".
 fn payload(emitter: &mut Emitter, ty: &Type) -> Option<String> {
     let Type::Nullable(inner) = ty else {
@@ -45,21 +46,7 @@ fn payload(emitter: &mut Emitter, ty: &Type) -> Option<String> {
     match &**inner {
         Type::Scalar(Scalar::Timezone | Scalar::ZonedTime | Scalar::Any) => None,
         Type::Scalar(_) => emitter.named_type(inner),
-        Type::Named {
-            module,
-            declaration,
-            ..
-        } => {
-            let declared = &emitter.program.modules[*module];
-            if declared.declarations[*declaration].kind != DeclarationKind::Enum {
-                return None;
-            }
-            match declared.details.get(*declaration) {
-                Some(Detail::Enum(read)) if !read.members.is_empty() => emitter.named_type(inner),
-                _ => None,
-            }
-        }
-        _ => None,
+        _ => enumeration(emitter, inner),
     }
 }
 

@@ -313,55 +313,45 @@ impl Emitter<'_> {
                     None => format!("{}::{}", declared.path, declaration.name),
                 };
                 let qualified = names::string(&qualified);
-                // TYPE-7: an empty enum still names the success type of
-                // a result, even though no conversion produces a member.
-                if members.is_empty() {
-                    self.piece.declaration.push_str(&format!(
-                        "constexpr ::std::string_view hgl_empty_enum_name_({name}) noexcept\n{{\n    return {qualified};\n}}\n"
-                    ));
+                // TYPE-7: the enum's name also identifies its port and
+                // result types when there are no members to publish.
+                let named: Vec<String> = read
+                    .members
+                    .iter()
+                    .zip(&members)
+                    .map(|(member, written)| {
+                        format!("{{{name}::{written}, {}}}", names::string(&member.name))
+                    })
+                    .collect();
+                let Some(numbers) = read
+                    .members
+                    .iter()
+                    .map(|member| member.value)
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    self.unsupported(at, "an enum with unresolved member numbers");
+                    return;
+                };
+                // TYPE-7: an enum's C++ ordinal stays separate from
+                // the signed number an HGL conversion uses.
+                let numbers = if numbers.iter().copied().eq((0..).take(numbers.len())) {
+                    String::new()
                 } else {
-                    // What names the enum to the runtime library (`values.h`,
-                    // `EnumNames`): its HGL name qualified with its module's
-                    // path, and each member's, by which the library prints a
-                    // member (`Side.buy`) and registers the enum with hgraph.
-                    let named: Vec<String> = read
-                        .members
-                        .iter()
-                        .zip(&members)
-                        .map(|(member, written)| {
-                            format!("{{{name}::{written}, {}}}", names::string(&member.name))
-                        })
-                        .collect();
-                    let Some(numbers) = read
-                        .members
-                        .iter()
-                        .map(|member| member.value)
-                        .collect::<Option<Vec<_>>>()
-                    else {
-                        self.unsupported(at, "an enum with unresolved member numbers");
-                        return;
-                    };
-                    // TYPE-7: an enum's C++ ordinal stays separate from
-                    // the signed number an HGL conversion uses.
-                    let numbers = if numbers.iter().copied().eq((0..).take(numbers.len())) {
-                        String::new()
-                    } else {
-                        format!(
-                            ", {{{}}}",
-                            numbers
-                                .into_iter()
-                                .map(integer_literal)
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    };
-                    self.piece.declaration.push_str(&format!(
-                        "constexpr ::{}::EnumNames<{name}, {}> hgl_enum({name}) noexcept\n{{\n    return {{{qualified}, {{{}}}{numbers}}};\n}}\n",
-                        runtime::NAMESPACE,
-                        members.len(),
-                        named.join(", ")
-                    ));
-                }
+                    format!(
+                        ", {{{}}}",
+                        numbers
+                            .into_iter()
+                            .map(integer_literal)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                self.piece.declaration.push_str(&format!(
+                    "constexpr ::{}::EnumNames<{name}, {}> hgl_enum({name}) noexcept\n{{\n    return {{{qualified}, {{{}}}{numbers}}};\n}}\n",
+                    runtime::NAMESPACE,
+                    members.len(),
+                    named.join(", ")
+                ));
             }
             DeclarationKind::Struct => self.struct_declaration(index),
             _ => self.unsupported(at, "a native type"),

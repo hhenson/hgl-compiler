@@ -113,6 +113,15 @@ struct EnumNames {
     }();
 };
 
+/// An empty enum still identifies the type of a port or conversion
+/// result (TYPE-7, OPS-7). Its metadata contains zero members.
+template <class E>
+struct EnumNames<E, 0> {
+    std::string_view type;
+    std::array<std::pair<E, std::string_view>, 0> members{};
+    std::array<i64, 0> numbers{};
+};
+
 /// An enumeration the library can name: one whose `hgl_enum` gives its
 /// `EnumNames`.
 template <class E>
@@ -393,8 +402,6 @@ std::string type_name() {
         }(std::make_index_sequence<std::tuple_size_v<T>>{});
     } else if constexpr (named_enum<T>) {
         return std::string{hgl_enum(T{}).type};
-    } else if constexpr (std::is_enum_v<T> && requires { hgl_empty_enum_name_(T{}); }) {
-        return std::string{hgl_empty_enum_name_(T{})};
     } else if constexpr (requires { value_form<T>::name(); }) {
         return value_form<T>::name();
     } else if constexpr (requires { T::hgl_name; }) {
