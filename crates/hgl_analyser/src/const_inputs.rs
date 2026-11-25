@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 use hgl_diagnostics::{Diagnostics, Location};
+use petgraph::algo::kosaraju_scc;
+use petgraph::graph::DiGraph;
 
 use crate::formatting;
 use crate::hir::{
@@ -15,12 +17,21 @@ use crate::hir::{
     ValueCategory,
 };
 use crate::{
-    Argument as GenericArgument, Binding, ConstantValue, Detail, Program, Role, Scalar, Type,
+    Argument as GenericArgument, Binding, ConstantValue, Detail, Phase, Program, Role, Scalar,
+    Signature, Type,
 };
 
 type Declaration = (usize, usize);
 type Slot = (Declaration, usize);
 pub(crate) type Demands = HashMap<Declaration, BTreeMap<usize, Demand>>;
+
+/// The `const` slots of a cycle whose key can differ between its calls
+/// (TIME-8: "Where a function calls itself, directly or through other
+/// functions, and the key can differ between the calls on the way round
+/// ... the call that uses it fails with that code as it is evaluated"):
+/// those its calls change, exchange or give anew. "A key handed round
+/// unchanged is as fixed as in a function that does not call itself."
+pub(crate) type ChangingSlots = HashSet<Slot>;
 
 /// Selected value calls or the resolved demand for a generic instance and slot.
 pub(crate) type SelectedDemands = RefCell<HashMap<InstanceSlot, SelectedDemand>>;
@@ -43,6 +54,8 @@ pub(crate) enum SelectedDemand {
 /// A deferred operator can select a body that only uses this value at run time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Demand {
+    /// A key may be compared during source checking when its value is known.
+    StoreKey,
     IfSelected,
     Always,
 }
@@ -92,10 +105,29 @@ pub enum ConstInputFault {
 const INPUT_BUDGET: usize = 1 << 16;
 const INPUT_DEPTH: usize = 64;
 
+/// Read a string for a source check without requiring the target to know it.
+pub(crate) fn known_store_key(program: &Program, expression: &Expr) -> Option<String> {
+    if program.runtime_store_keys.contains(&expression.at) {
+        return None;
+    }
+    if let ExprKind::Literal(Value::Str(text)) = &expression.kind {
+        return Some(text.clone());
+    }
+    let mut reader = Reader::new(program);
+    reader.read_string_helpers = false;
+    let read = reader.read(expression, INPUT_DEPTH, &[]).ok()?;
+    match read.kind {
+        ExprKind::Literal(Value::Str(text)) => Some(text),
+        _ => None,
+    }
+}
+
 impl Program {
     /// Whether a compile-time check in this declaration needs const inputs.
     pub fn needs_const_inputs(&self, declaration: Declaration) -> bool {
-        self.const_demands.contains_key(&declaration)
+        self.const_demands
+            .get(&declaration)
+            .is_some_and(|slots| slots.values().any(|demand| *demand != Demand::StoreKey))
     }
 
     /// The const inputs a resolved call must have to check its instance.
@@ -105,7 +137,7 @@ impl Program {
         callee: &Callee,
         arguments: &[Argument],
     ) -> Result<Vec<ConstInput>, ConstInputFault> {
-        let known = self.known_const_inputs(callee, arguments);
+        let known = self.read_const_inputs(callee, arguments, false);
         if let Some(limit) = known.limit {
             return Err(limit);
         }
@@ -127,6 +159,15 @@ impl Program {
     /// Analysis can check the known inputs even when another input remains
     /// unread. Lowering requires the complete set through `call_const_inputs`.
     pub(crate) fn known_const_inputs(&self, callee: &Callee, arguments: &[Argument]) -> ReadInputs {
+        self.read_const_inputs(callee, arguments, true)
+    }
+
+    fn read_const_inputs(
+        &self,
+        callee: &Callee,
+        arguments: &[Argument],
+        check_store: bool,
+    ) -> ReadInputs {
         use ConstInputFault::{ReaderLimit, TextLimit, Unread};
 
         let Some((module, declaration)) = callee.declaration() else {
@@ -145,8 +186,9 @@ impl Program {
         // forwarding body makes, and so which of its consts they read.
         let pack_inputs = pack_inputs_of(self, callee, signature, arguments);
         // Give unconditional inputs the first use of the read budget.
-        let ordered = [Demand::Always, Demand::IfSelected]
+        let ordered = [Demand::Always, Demand::IfSelected, Demand::StoreKey]
             .into_iter()
+            .filter(|mode| check_store || *mode != Demand::StoreKey)
             .flat_map(|mode| demand.iter().filter(move |(_, demand)| **demand == mode));
         for (&slot, &demand) in ordered {
             if demand == Demand::IfSelected
@@ -154,6 +196,9 @@ impl Program {
             {
                 continue;
             }
+            // CAP-6: a value function call that computes a key belongs to
+            // graph construction, even when another check could read it.
+            reader.read_string_helpers = demand != Demand::StoreKey;
             let text_before = reader.text_left;
             let input = (|| {
                 let parameter = signature.parameters.get(slot).ok_or(Unread)?;
@@ -167,6 +212,12 @@ impl Program {
                     .map(|(parameter, value)| (parameter.at, value))
                     .collect();
                 let value = if let Some(given) = given {
+                    // TIME-8: a key a cycle changes is the run's, on this route.
+                    if demand == Demand::StoreKey
+                        && self.runtime_store_keys.contains(&given.value.at)
+                    {
+                        return Err(Unread);
+                    }
                     reader.read(&given.value, INPUT_DEPTH, &[])?
                 } else if let Some(default) = self.inherited_configuration_default(callee, slot) {
                     if let Callee::Candidate {
@@ -224,7 +275,7 @@ impl Program {
                     // GEN-13: a text the instance reads that outgrows the
                     // budget ends a walk, a conditional one included once
                     // its instance is known to read it.
-                    known.outgrown |= fault == TextLimit;
+                    known.outgrown |= demand != Demand::StoreKey && fault == TextLimit;
                     reader.text_left = text_before;
                 }
             }
@@ -459,7 +510,7 @@ impl Program {
                         };
                         calls.push((callee.clone(), entries, slot));
                     }
-                    None => {}
+                    Some(Demand::StoreKey) | None => {}
                 }
             }
         });
@@ -476,6 +527,7 @@ struct Reader<'a> {
     steps_left: usize,
     text_left: usize,
     reading: Vec<(Declaration, Option<usize>)>,
+    read_string_helpers: bool,
 }
 
 /// Read a fixed projection for a check that needs its value (FN-1).
@@ -498,6 +550,7 @@ impl<'a> Reader<'a> {
             steps_left: INPUT_BUDGET,
             text_left: INPUT_BUDGET,
             reading: Vec::new(),
+            read_string_helpers: true,
         }
     }
 
@@ -582,7 +635,10 @@ impl<'a> Reader<'a> {
                 arguments,
                 form: Form::Named,
                 ..
-            } if arguments.is_empty() && expression.ty == Type::Scalar(Scalar::Str) => {
+            } if self.read_string_helpers
+                && arguments.is_empty()
+                && expression.ty == Type::Scalar(Scalar::Str) =>
+            {
                 // Match the existing format reader's single-return string
                 // helpers. A general compile-time call is tracked separately.
                 let (module, declaration) = callee.declaration().ok_or(Unread)?;
@@ -903,11 +959,36 @@ fn key_value(value: &Expr, output: &mut String) -> Result<(), ConstInputFault> {
 }
 
 /// Follow demand for a compile-time value back through its call arguments.
-pub(crate) fn demands(program: &Program) -> Demands {
+pub(crate) fn demands(
+    program: &Program,
+) -> (
+    Demands,
+    HashSet<Location>,
+    HashSet<Declaration>,
+    ChangingSlots,
+) {
     let mut required = Demands::new();
     let mut uses: HashMap<Slot, Vec<(Slot, Demand)>> = HashMap::new();
     let mut pending = VecDeque::new();
     let mut candidates: HashMap<Declaration, Vec<Declaration>> = HashMap::new();
+    let mut store_reads: HashMap<Location, Vec<Slot>> = HashMap::new();
+    // The arguments of calls that hand the store on, and the slots each reads.
+    let mut store_arguments: HashMap<Location, Vec<Slot>> = HashMap::new();
+    let mut generic_reads = HashSet::new();
+    let mut generic_uses: HashMap<Slot, Vec<Declaration>> = HashMap::new();
+    let mut store_calls = StoreCalls::default();
+    let store = program.capability_type("global_state");
+    let borrows_store = |signature: &Signature| {
+        store.as_ref().is_some_and(|store| {
+            signature
+                .parameters
+                .iter()
+                .any(|parameter| &parameter.ty == store)
+        })
+    };
+    let is_graph = |(module, declaration): Declaration| {
+        program.modules[module].phases.get(declaration) == Some(&Some(Phase::Graph))
+    };
     for (module, unit) in program.modules.iter().enumerate() {
         for (declaration, declared) in unit.declarations.iter().enumerate() {
             if let Some((Role::Value, Some(operator))) = declared.kind.candidate() {
@@ -933,30 +1014,43 @@ pub(crate) fn demands(program: &Program) -> Demands {
                 .filter(|(_, parameter)| parameter.constant)
                 .map(|(position, parameter)| (parameter.at, position))
                 .collect();
-            if slots.is_empty() {
+            let caller = (module_index, declaration);
+            let uses_store = borrows_store(signature) || is_graph(caller);
+            if slots.is_empty() && !uses_store && signature.generics.is_empty() {
                 continue;
             }
-            let caller = (module_index, declaration);
-            let mut read_pattern = |pattern: &Expr| {
-                if crate::values::fixed_expression(pattern, &|read| {
+            let mut read_compile_time_value = |value: &Expr, demand: Demand| {
+                if crate::values::fixed_expression(value, &|read| {
                     matches!(read.kind, ExprKind::Local(_))
                         && bindings
                             .get(&(read.at.file, read.at.span.start))
                             .is_some_and(|at| slots.contains_key(at))
                 }) {
-                    slots_read(pattern, &bindings, &slots, |slot| {
-                        pending.push_back(((caller, slot), Demand::Always));
+                    if demand == Demand::StoreKey && names_generic_value(value) {
+                        generic_reads.insert(caller);
+                    }
+                    slots_read(value, &bindings, &slots, |slot| {
+                        pending.push_back(((caller, slot), demand));
+                        if demand == Demand::StoreKey {
+                            store_reads
+                                .entry(value.at)
+                                .or_default()
+                                .push((caller, slot));
+                        }
                     });
                 }
             };
             let mut deferred_at = HashSet::new();
             for selection in &module.selecting[declaration] {
+                if let Some(key) = crate::store_keys::deferred_key(program, selection) {
+                    read_compile_time_value(key, Demand::StoreKey);
+                }
                 if selection.graph {
                     continue;
                 }
                 deferred_at.insert(selection.at);
                 if let Some(pattern) = formatting::deferred_pattern(program, selection) {
-                    read_pattern(pattern);
+                    read_compile_time_value(pattern, Demand::Always);
                     continue;
                 }
                 let operator = selection.operator;
@@ -975,6 +1069,30 @@ pub(crate) fn demands(program: &Program) -> Demands {
                     let Some(Detail::Callable(parameters)) = candidate.details.get(member) else {
                         continue;
                     };
+                    // TIME-8: a call an instance resolves reaches each
+                    // candidate it can select, so a cycle closed through
+                    // the operator is a cycle.
+                    if uses_store && (borrows_store(parameters) || is_graph((unit, member))) {
+                        let argument_for =
+                            |position: usize| selection.argument_for(parameters, position);
+                        store_calls.record(
+                            caller,
+                            signature,
+                            (unit, member),
+                            parameters,
+                            argument_for,
+                        );
+                        for position in 0..parameters.parameters.len() {
+                            if let Some(argument) = argument_for(position) {
+                                slots_read(argument, &bindings, &slots, |slot| {
+                                    store_arguments
+                                        .entry(argument.at)
+                                        .or_default()
+                                        .push((caller, slot));
+                                });
+                            }
+                        }
+                    }
                     for (position, _) in parameters
                         .parameters
                         .iter()
@@ -1010,15 +1128,45 @@ pub(crate) fn demands(program: &Program) -> Demands {
                 let Some(called) = callee.declaration() else {
                     return;
                 };
+                if uses_store
+                    && let Some(Detail::Callable(target)) =
+                        program.modules[called.0].details.get(called.1)
+                    && (borrows_store(target) || is_graph(called))
+                {
+                    let argument_for = |slot: usize| {
+                        arguments
+                            .iter()
+                            .find(|argument| argument.parameter == Some(slot))
+                            .map(|argument| &argument.value)
+                    };
+                    store_calls.record(caller, signature, called, target, argument_for);
+                    for argument in arguments {
+                        slots_read(&argument.value, &bindings, &slots, |slot| {
+                            store_arguments
+                                .entry(argument.value.at)
+                                .or_default()
+                                .push((caller, slot));
+                        });
+                    }
+                }
                 if let Some(signature) = formatting::value_signature(program, callee)
                     && let Some(pattern) = formatting::argument(signature, arguments, "fmt_str")
                 {
-                    read_pattern(&pattern.value);
+                    read_compile_time_value(&pattern.value, Demand::Always);
+                }
+                if let Some(key) = program.store_key_argument(callee, arguments) {
+                    read_compile_time_value(key, Demand::StoreKey);
                 }
                 for argument in arguments {
                     let Some(position) = argument.parameter else {
                         continue;
                     };
+                    if !signature.generics.is_empty() && names_generic_value(&argument.value) {
+                        generic_uses
+                            .entry((called, position))
+                            .or_default()
+                            .push(caller);
+                    }
                     slots_read(&argument.value, &bindings, &slots, |slot| {
                         uses.entry((called, position))
                             .or_default()
@@ -1043,7 +1191,19 @@ pub(crate) fn demands(program: &Program) -> Demands {
             }
         }
     }
+    let observed_keys = store_reads.values().flatten().copied().collect();
+    let changing = store_calls.changed(observed_keys, &uses);
+    let changes_in_cycle = |slot: &Slot| changing.contains(slot);
     while let Some(((declaration, slot), demand)) = pending.pop_front() {
+        if demand == Demand::StoreKey {
+            let position = (declaration, slot);
+            if changes_in_cycle(&position) {
+                continue;
+            }
+            if let Some(callers) = generic_uses.get(&position) {
+                generic_reads.extend(callers.iter().copied());
+            }
+        }
         let slots = required.entry(declaration).or_default();
         if slots.get(&slot).is_some_and(|earlier| *earlier >= demand) {
             continue;
@@ -1057,7 +1217,191 @@ pub(crate) fn demands(program: &Program) -> Demands {
             );
         }
     }
-    required
+    // A recursive helper can calculate the actual key before using it.
+    // A separate compile-time check can still need the initial input:
+    // an instance made for it is given no key a cycle changes, at an
+    // operation or in the argument that hands it to a helper (TIME-8).
+    let runtime_store_keys = store_reads
+        .into_iter()
+        .chain(store_arguments)
+        .filter_map(|(at, slots)| slots.iter().any(changes_in_cycle).then_some(at))
+        .collect();
+    (required, runtime_store_keys, generic_reads, changing)
+}
+
+fn names_generic_value(value: &Expr) -> bool {
+    let mut reads = false;
+    value.walk(&mut |value| reads |= matches!(value.kind, ExprKind::GenericValue { .. }));
+    reads
+}
+
+/// Calls that can pass configuration in a recursive graph or store helper.
+#[derive(Default)]
+struct StoreCalls {
+    calls: HashSet<(Declaration, Declaration)>,
+    inputs: Vec<StoreInput>,
+}
+
+struct StoreInput {
+    caller: Declaration,
+    callee: Slot,
+    forwarded: Option<usize>,
+}
+
+impl StoreCalls {
+    /// Record a call from `caller`, written as `signature`, of `callee`,
+    /// written as `target`; `argument_for` gives the argument of each of
+    /// the callee's slots, where the call writes one.
+    fn record<'a>(
+        &mut self,
+        caller: Declaration,
+        signature: &Signature,
+        callee: Declaration,
+        target: &Signature,
+        argument_for: impl Fn(usize) -> Option<&'a Expr>,
+    ) {
+        self.calls.insert((caller, callee));
+        for (slot, parameter) in target.parameters.iter().enumerate() {
+            if !parameter.constant {
+                continue;
+            }
+            let forwarded = argument_for(slot).and_then(|argument| match argument.kind {
+                ExprKind::Local(local)
+                    if signature
+                        .parameters
+                        .get(local)
+                        .is_some_and(|parameter| parameter.constant) =>
+                {
+                    Some(local)
+                }
+                _ => None,
+            });
+            self.inputs.push(StoreInput {
+                caller,
+                callee: (callee, slot),
+                forwarded,
+            });
+        }
+    }
+
+    /// The slots of each cycle whose key can differ between its calls
+    /// (TIME-8): one the cycle's calls compute or give anew, one that
+    /// receives another parameter on the way round, and what such a slot
+    /// is handed on to in the cycle. `observed` holds the slots a store
+    /// operation's key reads.
+    fn changed(
+        self,
+        mut observed: HashSet<Slot>,
+        uses: &HashMap<Slot, Vec<(Slot, Demand)>>,
+    ) -> ChangingSlots {
+        let mut graph = DiGraph::<Declaration, ()>::new();
+        let mut nodes = HashMap::new();
+        for &(caller, callee) in &self.calls {
+            let caller = *nodes
+                .entry(caller)
+                .or_insert_with(|| graph.add_node(caller));
+            let callee = *nodes
+                .entry(callee)
+                .or_insert_with(|| graph.add_node(callee));
+            graph.add_edge(caller, callee, ());
+        }
+        let mut cycles = HashMap::new();
+        for (number, declarations) in kosaraju_scc(&graph).into_iter().enumerate() {
+            if declarations.len() > 1 || graph.contains_edge(declarations[0], declarations[0]) {
+                cycles.extend(declarations.into_iter().map(|node| (graph[node], number)));
+            }
+        }
+        let same_cycle = |caller: Declaration, callee: Declaration| {
+            cycles
+                .get(&caller)
+                .is_some_and(|cycle| cycles.get(&callee) == Some(cycle))
+        };
+        // From a callee's slot to each slot of its caller that a call
+        // leaving the caller's cycle reads for it.
+        let mut outside = HashMap::<Slot, Vec<Slot>>::new();
+        for (&to, senders) in uses {
+            for &(from, _) in senders {
+                if self.calls.contains(&(from.0, to.0)) && !same_cycle(from.0, to.0) {
+                    outside.entry(to).or_default().push(from);
+                }
+            }
+        }
+        // A key a helper outside the cycle uses is also observed in the
+        // cycle's slot that supplies it: a cycle that exchanges two keys
+        // and delegates its operation still exchanges them.
+        follow_slots(&mut observed, &outside);
+
+        let mut changed = HashSet::new();
+        let mut forwarded: HashMap<Slot, Vec<Slot>> = HashMap::new();
+        let mut received: HashMap<Slot, Vec<Slot>> = HashMap::new();
+        for input in self.inputs {
+            if !same_cycle(input.caller, input.callee.0) {
+                continue;
+            }
+            if let Some(local) = input.forwarded {
+                let from = (input.caller, local);
+                forwarded.entry(from).or_default().push(input.callee);
+                received.entry(input.callee).or_default().push(from);
+            } else {
+                changed.insert(input.callee);
+            }
+        }
+        let readers: HashSet<_> = observed.iter().map(|slot| slot.0).collect();
+        for &read in &observed {
+            if !changed.contains(&read)
+                && cycle_passes_another_key(read, &received, &observed, &readers)
+            {
+                changed.insert(read);
+            }
+        }
+        follow_slots(&mut changed, &forwarded);
+        changed
+    }
+}
+
+/// Add to `slots` every slot their `edges` reach.
+fn follow_slots(slots: &mut HashSet<Slot>, edges: &HashMap<Slot, Vec<Slot>>) {
+    let mut pending: Vec<_> = slots.iter().copied().collect();
+    while let Some(slot) = pending.pop() {
+        pending.extend(
+            edges
+                .get(&slot)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|to| slots.insert(*to)),
+        );
+    }
+}
+
+/// Trace the inputs of a key back round a cycle, through the slots that
+/// hand it on unchanged (TIME-8: "where it is another `const` parameter,
+/// as two exchanged on the way round are"). The key is exchanged where
+/// the trace reaches two slots of one function, that of the key or any
+/// other on the way round, and where it reaches a slot of a function that
+/// reads keys which is none of its keys.
+fn cycle_passes_another_key(
+    read: Slot,
+    received: &HashMap<Slot, Vec<Slot>>,
+    observed: &HashSet<Slot>,
+    readers: &HashSet<Declaration>,
+) -> bool {
+    let mut seen = HashSet::from([read]);
+    let mut reached = HashMap::from([read]);
+    let mut waiting = vec![read];
+    while let Some(slot) = waiting.pop() {
+        for &source in received.get(&slot).into_iter().flatten() {
+            if !seen.insert(source) {
+                continue;
+            }
+            let exchanged = *reached.entry(source.0).or_insert(source.1) != source.1;
+            if exchanged || (readers.contains(&source.0) && !observed.contains(&source)) {
+                return true;
+            }
+            waiting.push(source);
+        }
+    }
+    false
 }
 
 /// Whether a call of a function parameter gives this slot of its template
@@ -1168,12 +1512,7 @@ const C: Settings = Settings(part: ("a", -0.0), count: 1)
             let module = &program.modules[0];
             let declaration = module.scope[name][0];
             let constant = module.constants[declaration].as_ref().unwrap();
-            let mut reader = Reader {
-                program: &program,
-                steps_left: INPUT_BUDGET,
-                text_left: INPUT_BUDGET,
-                reading: Vec::new(),
-            };
+            let mut reader = Reader::new(&program);
             let value = reader.read(&constant.value, INPUT_DEPTH, &[]).unwrap();
             let mut output = String::new();
             key_value(&value, &mut output).unwrap();

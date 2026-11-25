@@ -1235,6 +1235,7 @@ pub(super) fn check_instances(
     program: &crate::Program,
     discovered: &mut Vec<super::requirements::Made>,
     source: &IndependentSourceBodies,
+    store_keys: &mut crate::store_keys::KeyUses,
     diagnostics: &mut hgl_diagnostics::Diagnostics,
 ) {
     use super::requirements::{
@@ -1419,6 +1420,9 @@ pub(super) fn check_instances(
                         seen.push(instance);
                         continue;
                     }
+                }
+                if !graph_reports.has_errors() {
+                    store_keys.in_instance(program, &checked.body, written);
                 }
                 let mut link = None;
                 let mut outgrown = false;

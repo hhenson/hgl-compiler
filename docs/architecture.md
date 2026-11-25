@@ -598,7 +598,7 @@ capability.
 | --- | --- | --- |
 | `inject run_config` in a function, in a test that is no integration test, or after an integration test's other statements (the phase pass) | RUN-6 | `inject.position` |
 | Braces after any capability but `run_config` | RUN-6 | `inject.configuration` |
-| A key of the global store written out, used with two types in one program (`store_keys`, once every body is typed) | TIME-8 | `store.key_type` |
+| A key of the global store the text fixes, written out or given by a `const` argument or generic value, used with two types in one program (`store_keys`, once every body is typed) | TIME-8 | `store.key_type` |
 
 ### Integration tests
 
@@ -677,7 +677,7 @@ What is rejected there:
 | `alarm` and `scheduler` injected in one node | `inject.alarm_and_scheduler` | TIME-8 |
 | `scheduled()` in `start` or `stop` | `scheduled.lifecycle` | TIME-9 |
 | A wake asked of the scheduler or the alarm with a duration the compiler sees, a literal or a constant, that is not more than zero, but a zero in `start`: `schedule(scheduler, 0s)` in a `when`. `Typer::wake_durations` judges it where the call is finished | `schedule.duration_bounds` | TIME-8 |
-| The run's own key, `"run.output"`, written out as the key of a `get`, `has` or `put` on the global store. `Typer::store_keys` judges it where the call is finished; a key that is a `const` parameter is known when the graph is built, and is not judged | `store.reserved_key` | TIME-8 |
+| The run's own key, `"run.output"`, as the key of a `get`, `has` or `put` on the global store, where the text fixes it: written out, or given by a `const` argument or generic value through the calls that reach it. `Typer::store_keys` judges it where the call is finished, in the instance the call makes, and the call that fixes it is the place (GEN-7). `const_inputs` finds the `const` slots of each cycle whose key can differ between its calls, a cycle closed through an operator's candidates included; such a key, and one computed in composition, is left to the target, whose every store operation checks its key | `store.reserved_key` | TIME-8 |
 
 `modified([])` subscribes to no input, so only the node's scheduler or
 alarm wakes the handler (TIME-3). It is that selector alone or as a
@@ -1834,6 +1834,7 @@ form, so that `hgl test --target cpp` runs over any program to its end.
 | A temporal value of an enum (TYPE-7, TYPE-16) | hgraph's `TS<Side>`, read, published, replayed, recorded and wired as a constant as a scalar is: its delta is itself |
 | `inject clock`, `logger`, `global_state`; a property of one (TIME-8, CAP-1) | The hook's hgraph view, a parameter of each hook that uses it, and the library's `::hglrt::Clock` made from it at the top of the hook; `clock.evaluation_time()` |
 | `get`, `has`, `put` on the store (CAP-6) | The library's natives, `::hglrt::put_GlobalState_str_V<T>(global_state, key, value)`; every ordinary value is held alike, a struct, a tuple, a set, a dictionary and a delta among them |
+| A store key (TIME-8, CAP-6) | Every store operation hands its key on through `::hglrt::checked_store_key`, which fails with `store.reserved_key` on `"run.output"`; core's recorder alone writes that key. The check is written in the operation's own call, after its arguments: where another argument may fail or act, each is held first in the order written (EXPR-2). Earlier, a graph's call fails as it is built, and a node's static `prepare` checks the keys its configuration fixes, its own and those it hands helpers, as the SDK attaches it; a key a cycle changes is left to the operation |
 | `inject global_state` in a graph; a call on it (FN-9) | `const ::hglrt::GlobalState global_state{wiring_.global_state()};` in `compose`, the store of the wiring the graph is built on, which hgraph carries onto the graph it builds: each call runs once as the graph is built, in the order written, before any node starts (`apps`) |
 | `inject scheduler`, `inject alarm`; `schedule`, `un_schedule`, `reset` (TIME-8, CAP-4, CAP-5) | The hook's `::hgraph::NodeScheduler`, and the library's `::hglrt::Scheduler` or `::hglrt::Alarm` made from it with the hook it is made in, `::hglrt::Hook::evaluation`, in every `eval`; the library's natives (`emit/scheduling.rs`) |
 | What woke a node with a scheduler or an alarm (TIME-3, TIME-9) | Read as `eval` is entered: `timer_woke_`, the scheduler's `is_scheduled_now()` or, for an alarm, that no input ticked (`::hglrt::ticked`), and `input_woke_`. A handler that `scheduled()` selects or that subscribes to no input is guarded by the first, another with no `modified` selector by the second; `scheduled()` read as a `bool` is `timer_woke_`, and `modified([])` is `true` in the handler that selects it and elsewhere that no input published |

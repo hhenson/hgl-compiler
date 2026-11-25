@@ -144,7 +144,9 @@ analyser: partial
 
 - `inject` names one of the listed capabilities and binds each but `out` to a local of the type core declares for it; `alarm` and `scheduler` in one node are rejected (`inject.alarm_and_scheduler`)
 - `run_config` is an application's and an integration test's, and no function's (`inject.position`, RUN-6); braces after any other capability are `inject.configuration`
-- A key of the global store written out is used with one type in a program: a `put` or a `get` of another type than its earlier use is `store.key_type`, at the later use
+- A known global store key, including one resolved from a `const` parameter, is
+  used with one type in a program. A conflicting `put` or `get` is `store.key_type`
+  at the later use (CAP-6).
 - A capability type may be written as the whole type of a parameter of a `const fn` or native value function, or as a type listed in an operator declaration's membership (GEN-3). Other positions reject with `capability.as_value`.
 - The analyser reports `capability.as_value` for a capability held in `state`, `cache`, a tuple, list, set, dictionary or struct, returned or published, or given to a parameter written as a generic parameter or `any` (hhenson/hgl_spec#73). A `let` and an argument to a parameter of its type are uses. A property is read with its type (NATIVE-6).
 - A capture by an anonymous function is reported: of the injected name by the resolver (`name.captured`, FN-14), and of a `let` it is bound to or a parameter of its type here

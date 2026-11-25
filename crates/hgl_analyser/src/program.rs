@@ -3,7 +3,7 @@
 //! These are plain records. The analyser fills them in; nothing here
 //! checks a rule.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::Location;
 use hgl_parser::ast::{AstNode, SourceFile};
@@ -22,6 +22,17 @@ pub struct Program {
     pub modules: Vec<Module>,
     /// Ordinary const slots observed by compile-time checks, by declaration.
     pub(crate) const_demands: crate::const_inputs::Demands,
+    /// Store keys that read a const binding changed in a recursive call:
+    /// at an operation, and as an argument that hands a key to a helper
+    /// with the store (TIME-8). The run decides them.
+    pub(crate) runtime_store_keys: HashSet<Location>,
+    /// The `const` slots of a cycle whose store key can differ between its
+    /// calls (TIME-8).
+    pub(crate) changing_store_slots: crate::const_inputs::ChangingSlots,
+    /// Bodies that read a generic value to fix a run-store key.
+    pub(crate) generic_store_bodies: HashSet<(usize, usize)>,
+    /// Lexical lookup ranges reused across concrete checks of one body.
+    pub(crate) instance_sites: Vec<crate::values::InstanceSites>,
     /// Concrete selected calls already examined for an ordinary const slot.
     pub(crate) selected_const_demands: crate::const_inputs::SelectedDemands,
 }
