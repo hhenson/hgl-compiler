@@ -199,7 +199,8 @@ transpiler: done
 
 - Emits rounding, NaN and invalid-input policies through the selected conversion. The
   checked conversion preserves its ordinary tagged result.
-- An integer without a member gives `convert.invalid` in the checked result or raises it under `.fail`.
+- Proposed: an integer without a member gives `convert.invalid` in the
+  checked result or raises it under `.fail`.
 
 ## OPS-8
 
