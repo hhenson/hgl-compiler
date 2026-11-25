@@ -814,10 +814,14 @@ transpiler: partial
 
 ## MAP-9
 
+analyser: partial
+
+- A keyed map rejects a callback whose selected key parameter is `const`, because the child's key is a connection (`connection.as_constant`, FN-1).
+
 transpiler: partial
 
 - A fixed-size map supplies each child's position to the default `key` parameter or the renamed parameter. The supported keyed map supplies a key connection when the child starts, regardless of the parameter's position.
-- Left: C++ declines a keyed map that injects its key into a `const` parameter. Key injection in the other native forms remains in #370.
+- Left: Key injection in the other native forms remains in #370.
 
 ## MAP-10
 
@@ -861,10 +865,14 @@ transpiler: planned
 
 ## RED-5
 
-transpiler: partial
+transpiler: done
 
-- Ordered folds wait for their required zero and visit positions in order. The growing-list target wires a capture-free callback and starts a returning member's callback with fresh state. A change of list length publishes the result again even if its value stays the same. An omitted zero rejects during candidate selection.
-- Left: callbacks that capture values or connections (FN-14, [hgraph#1914](https://github.com/hhenson/hgraph/issues/1914)).
+- Ordered folds wait for their required zero and visit positions in order.
+  An omitted zero rejects during candidate selection.
+- A growing-list callback retains captured values and reads captured connections
+  (FN-14). A captured connection's tick re-evaluates the fold, and a returning
+  member starts its callback with fresh state. A change of list length
+  publishes the result again even if its value stays the same.
 
 ## RED-6
 

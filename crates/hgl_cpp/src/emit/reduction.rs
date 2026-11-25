@@ -2,10 +2,11 @@
 //! The selected HGL callable becomes the graph of one guarded fold step.
 
 use hgl_analyser::LocalKind;
-use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Local};
+use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Local, ValueCategory};
 use hgl_lower::calls::OrderedReduction;
 
 use super::Emitter;
+use super::anonymous::anonymous_arguments;
 use super::graphs::{HeldInputs, WIRING, widened_from};
 use super::lifting::Given;
 use super::names;
@@ -33,12 +34,6 @@ impl Emitter<'_> {
         else {
             return self.missing(value.at, "an ordered reduction without a combiner");
         };
-        if matches!(callee, Callee::Anonymous(function) if !function.captures.is_empty()) {
-            return self.missing(
-                reduction.combiner.at,
-                "an ordered reduction with a captured callback",
-            );
-        }
         let [accumulator, member] = parameters.as_slice() else {
             return self.missing(value.at, "an ordered reduction without two combiner inputs");
         };
@@ -65,28 +60,74 @@ impl Emitter<'_> {
         };
         let mut callback_scope = Scope::cold(self.program, &callback_body);
         let name = names::temporary("combiner", self.temporary());
-        let given = [(0, "accumulator_".to_string()), (1, "member_".to_string())];
-        let call = if reduction.combiner.is_lifted() {
-            let ports: Vec<Given> = given
-                .into_iter()
-                .zip([accumulator, member])
-                .map(|((position, written), parameter)| Given {
-                    position,
-                    written,
-                    input: Some(parameter.value.ty.clone()),
-                })
-                .collect();
-            self.lifted(
-                &mut callback_scope,
-                &reduction.combiner,
-                &ports,
-                &[],
-                Some(&value.ty),
-            )
+        let mut given: Vec<Given> = [accumulator, member]
+            .into_iter()
+            .zip(["accumulator_", "member_"])
+            .enumerate()
+            .map(|(position, (parameter, written))| Given {
+                position,
+                written: written.to_string(),
+                input: Some(parameter.value.ty.clone()),
+            })
+            .collect();
+        let mut capture_types = Vec::new();
+        let mut capture_values = Vec::new();
+        let mut combiner = std::borrow::Cow::Borrowed(&reduction.combiner);
+        if let Callee::Anonymous(function) = callee
+            && !function.captures.is_empty()
+        {
+            // FN-14: read captures in the enclosing scope. The tuple is
+            // only wiring-time data. Its ports stay connections in the
+            // callback and are bound by the compiled switch and reduce.
+            let Some(bound) = anonymous_arguments(scope, function, parameters) else {
+                return self.missing(at, "an ordered reduction with no enclosing capture");
+            };
+            for (index, capture) in bound[parameters.len()..].iter().enumerate() {
+                let value = &capture.value;
+                let local = &function.body.locals[parameters.len() + index];
+                let (ty, connection) = if reduction.combiner.is_lifted() {
+                    (&value.ty, value.is_connection())
+                } else {
+                    (&local.ty, local.category != ValueCategory::Value)
+                };
+                let (written_type, written, input) = if connection {
+                    let Some(schema) = self.temporal_schema(ty, value.at) else {
+                        return "0".to_string();
+                    };
+                    (
+                        format!("::hgraph::Port<{schema}>"),
+                        self.connection(scope, value, ty),
+                        Some(ty.clone()),
+                    )
+                } else {
+                    let Some(cpp) = self.written_type(ty, value.at) else {
+                        return "0".to_string();
+                    };
+                    (cpp, self.expression(scope, value), None)
+                };
+                capture_types.push(written_type);
+                capture_values.push(written);
+                given.push(Given {
+                    position: parameters.len() + index,
+                    written: format!("::std::get<{index}>(captures_.value())"),
+                    input,
+                });
+            }
+            let ExprKind::Call { arguments, .. } = &mut combiner.to_mut().kind else {
+                unreachable!("the ordered combiner is a call");
+            };
+            *arguments = bound;
+        }
+        let call = if combiner.is_lifted() {
+            self.lifted(&mut callback_scope, &combiner, &given, &[], Some(&value.ty))
         } else {
+            let given: Vec<_> = given
+                .into_iter()
+                .map(|given| (given.position, given.written))
+                .collect();
             self.temporal_call_in_form(
                 &mut callback_scope,
-                &reduction.combiner,
+                &combiner,
                 HeldInputs {
                     given: &given,
                     ..HeldInputs::default()
@@ -94,12 +135,27 @@ impl Emitter<'_> {
                 ResultForm::Whole,
             )
         };
+        let (capture_definition, capture_parameter, capture_argument) = if capture_types.is_empty()
+        {
+            (String::new(), String::new(), String::new())
+        } else {
+            (
+                format!(
+                    "{INDENT}using captures_type_ = ::std::tuple<{}>;\n",
+                    capture_types.join(", ")
+                ),
+                format!(
+                    ",\n{INDENT}{INDENT}::hgraph::Scalar<\"captures\", captures_type_> captures_"
+                ),
+                format!(", {name}::captures_type_{{{}}}", capture_values.join(", ")),
+            )
+        };
         let definition = format!(
             "// RED-5: the callback for one valid member of the ordered fold.\n\
              struct {name}\n{{\n\
-             {INDENT}static ::hgraph::Port<{accumulator_schema}> compose(\n\
+             {capture_definition}{INDENT}static ::hgraph::Port<{accumulator_schema}> compose(\n\
              {INDENT}{INDENT}::hgraph::Wiring& {WIRING}, ::hgraph::Port<{accumulator_schema}> accumulator_,\n\
-             {INDENT}{INDENT}::hgraph::Port<{member_schema}> member_)\n\
+             {INDENT}{INDENT}::hgraph::Port<{member_schema}> member_{capture_parameter})\n\
              {INDENT}{{\n{INDENT}{INDENT}return {call};\n{INDENT}}}\n}};\n"
         );
         let Some(context) = self.temporal.as_mut() else {
@@ -134,7 +190,7 @@ impl Emitter<'_> {
         }
         let runtime = crate::runtime::NAMESPACE;
         format!(
-            "[&] {{ {steps}return ::{runtime}::ordered_list_reduce<{name}>({WIRING}, items_, zero_); }}()"
+            "[&] {{ {steps}return ::{runtime}::ordered_list_reduce<{name}>({WIRING}, items_, zero_{capture_argument}); }}()"
         )
     }
 }

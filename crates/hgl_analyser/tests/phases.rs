@@ -5,6 +5,38 @@ mod common;
 
 use common::{check, check_broken};
 
+/// MAP-9 gives the callback its key as a connection, which a `const`
+/// parameter cannot take (FN-1).
+#[test]
+fn keyed_maps_cannot_supply_the_key_to_a_constant_parameter() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+fn const_key(member: i64, const key: i64) -> i64 => member + key
+fn const_position(const position: i64, member: i64) -> i64 => member + position
+fn connection_key(member: i64, key: i64, const offset: i64) -> i64 => member + key + offset
+
+fn keyed(items: dict<i64, i64>) -> dict<i64, i64> =>
+    map(const_key, items)
+fn renamed(items: dict<i64, i64>) -> dict<i64, i64> =>
+    map{key: "position"}(const_position, items)
+fn with_constant(items: dict<i64, i64>) -> dict<i64, i64> =>
+    map(connection_key, items, offset: 2)
+fn fixed(items: list<i64, 2>) -> list<i64, 2> =>
+    map(const_key, items)
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:7:9 phase/connection.as_constant MAP-9",
+            "m.hgl:9:26 phase/connection.as_constant MAP-9",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// FN-2: "`state`, `cache`, `start`, `when`, `stop`, `yield`, or an
 /// `inject` of any capability but `global_state` classifies that
 /// complete body as runtime ... A graph may inject `global_state`
