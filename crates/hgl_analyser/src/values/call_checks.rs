@@ -16,7 +16,7 @@ use super::statements::child_loop_write;
 use super::{Selected, Typer};
 use crate::declared::substitute_within;
 use crate::hir::{Expr, ExprKind, Form, Hook, LocalId, ValueCategory};
-use crate::program::{LocalKind, Program, Role};
+use crate::program::{DeclarationKind, LocalKind, Program, Role};
 use crate::types::{Argument, ConstantValue, Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
 
@@ -76,10 +76,79 @@ impl<'a> Typer<'a> {
         self.configuration_connections(&selected, connected);
         self.capabilities_given(&selected);
         self.fixed_arguments(&selected);
+        self.keyed_map_key(&selected);
         self.traces_given(&selected, evaluating);
         self.store_keys(&selected);
         self.wake_durations(&selected);
         self.format_arguments(kind);
+    }
+
+    /// MAP-9 gives a keyed map's callback a connection for the child's
+    /// key. A `const` parameter needs a value known when the graph is
+    /// built (FN-1), before the keyed child starts.
+    fn keyed_map_key(&mut self, selected: &Selected) {
+        let &Selected {
+            module,
+            declaration,
+            generics,
+            signature,
+            arguments,
+        } = selected;
+        let Some(signature) = signature else {
+            return;
+        };
+        let declared = &self.program.modules[module].declarations[declaration];
+        if declared.name != "map"
+            || !matches!(
+                declared.kind,
+                DeclarationKind::NativeCandidate(Role::Temporal, _)
+            )
+            || Some(module) != self.program.core()
+            || !matches!(signature.result, Some(Type::Dict { .. }))
+        {
+            return;
+        }
+        let Some(Argument::Constant(key)) = signature
+            .generics
+            .iter()
+            .zip(generics)
+            .find_map(|(parameter, value)| (parameter.name == "key").then_some(value))
+        else {
+            return;
+        };
+        let ConstantValue::Str(key) = &key.value else {
+            return;
+        };
+        let Some(callback) = arguments.iter().find(|argument| {
+            argument
+                .parameter
+                .and_then(|slot| signature.parameters.get(slot))
+                .is_some_and(|parameter| parameter.name == "f")
+        }) else {
+            return;
+        };
+        let Type::Function(function) = &callback.value.ty else {
+            return;
+        };
+        if let Some(parameter) = function
+            .ordinary_parameters()
+            .filter_map(|parameter| parameter.declared())
+            .find(|parameter| parameter.name == *key && parameter.constant)
+        {
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::CONNECTION_AS_CONSTANT,
+                    callback.value.at,
+                    format!("the keyed map gives `{key}` a connection when its child starts"),
+                    "MAP-9",
+                )
+                .with_related(
+                    parameter.at,
+                    "this `const` parameter needs a fixed value (FN-1)",
+                ),
+            );
+        }
     }
 
     /// EXPR-14: in composition, a value function's declared configuration
