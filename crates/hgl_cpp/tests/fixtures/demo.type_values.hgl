@@ -181,3 +181,16 @@ test packed_query_defaults {
     assert pack_body((1, true, "two")) == "list<tuple<i64, bool, str>>"
     assert pack_inspect((1, true), tag: type(true)) == "bool"
 }
+
+# GEN-6/10, UNIT-7, TYPE-18: the operator owns an inherited default's pack.
+operator public_inspect<...Ts>{tag: Type = type(cold_make<tuple<Ts>>())}(v: tuple<Ts>) -> str
+impl const fn public_inspect{tag: Type}(v: tuple<i64, bool>) -> str => format("{}", tag)
+impl const fn public_inspect{tag: Type}(v: tuple<str>) -> str => format("{}", tag)
+test inherited_packed_query_defaults {
+    assert public_inspect((1, true)) == "list<tuple<i64, bool>>"
+    assert public_inspect(("one",)) == "list<tuple<str>>"
+    assert public_inspect((1, true)) == pack_body((1, true))
+    assert public_inspect(("one",)) == pack_body(("one",))
+    assert public_inspect{tag: type(true)}((1, true)) == "bool"
+    assert public_inspect{tag: type(1)}(("one",)) == "i64"
+}

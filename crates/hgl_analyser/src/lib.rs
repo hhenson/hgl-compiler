@@ -103,6 +103,7 @@ mod syntax;
 mod test_candidates;
 pub use test_candidates::TestCandidateScope;
 mod type_values;
+pub use type_values::TypeStorageLimit;
 mod types;
 mod values;
 

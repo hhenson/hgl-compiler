@@ -76,13 +76,16 @@ pub(super) fn struct_delta_type(
     generic: bool,
 ) -> Option<String> {
     let declared = &program.modules[module].declarations[declaration];
-    if program.holds_type_value(&Type::Named {
-        name: declared.name.clone(),
-        module,
-        declaration,
-        arguments: arguments.to_vec(),
-        kind: hgl_analyser::NamedKind::Struct,
-    }) {
+    if program
+        .holds_type_value(&Type::Named {
+            name: declared.name.clone(),
+            module,
+            declaration,
+            arguments: arguments.to_vec(),
+            kind: hgl_analyser::NamedKind::Struct,
+        })
+        .ok()?
+    {
         return None;
     }
     let name = names::declared_type(
@@ -642,10 +645,19 @@ impl Emitter<'_> {
         let delta = format!("{namespace}::d_::{name}{arguments}");
         // TYPE-18, Proposed: these remain ordinary values, but have
         // no temporal form or auxiliary delta layout (TYPE-16).
-        let has_delta = !read
+        let stored = read
             .members
             .iter()
-            .any(|member| program.holds_type_value(&member.ty));
+            .map(|member| program.holds_type_value(&member.ty))
+            .collect::<Result<Vec<_>, _>>();
+        let Ok(stored) = stored else {
+            self.unsupported(
+                at,
+                "a struct whose stored generic types exceed compiler limits",
+            );
+            return;
+        };
+        let has_delta = !stored.into_iter().any(|holds| holds);
         // Each member: its name, its C++ type, and its delta's property's.
         let mut members: Vec<(String, String, String)> = Vec::new();
         let mut holds = BTreeSet::new();

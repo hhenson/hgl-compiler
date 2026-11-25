@@ -408,9 +408,10 @@ fn substitute(
     map: &[(Location, &Argument)],
     member: &PackMember<'_>,
     pack: &dyn Fn(Location) -> Option<Vec<Type>>,
+    applications: bool,
 ) -> Type {
     // `Box::new` puts the substituted part where a `Box<Type>` points.
-    let part = |inner: &Type| Box::new(substitute(inner, map, member, pack));
+    let part = |inner: &Type| Box::new(substitute(inner, map, member, pack, applications));
     // The constant given for the generic value parameter declared at
     // `at`, where `map` gives one.
     let given = |at: Location| {
@@ -478,12 +479,27 @@ fn substitute(
             kind: *kind,
             arguments: arguments
                 .iter()
-                .map(|argument| match argument {
-                    Argument::Type(argument) => {
-                        Argument::Type(substitute(argument, map, member, pack))
-                    }
-                    Argument::Constant(argument) => Argument::Constant(constant(argument)),
-                    Argument::NoResult => Argument::NoResult,
+                .flat_map(|argument| {
+                    let expanded = if applications {
+                        match argument {
+                            Argument::Type(Type::Parameter { at, .. }) => pack(*at),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    let single = expanded.is_none().then(|| match argument {
+                        Argument::Type(argument) => {
+                            Argument::Type(substitute(argument, map, member, pack, applications))
+                        }
+                        Argument::Constant(argument) => Argument::Constant(constant(argument)),
+                        Argument::NoResult => Argument::NoResult,
+                    });
+                    // The ordinary single item needs no per-argument vector;
+                    // only a supplied pack contributes an expanded sequence.
+                    single
+                        .into_iter()
+                        .chain(expanded.into_iter().flatten().map(Argument::Type))
                 })
                 .collect(),
         },
@@ -496,12 +512,12 @@ fn substitute(
                     {
                         return types;
                     }
-                    vec![substitute(element, map, member, pack)]
+                    vec![substitute(element, map, member, pack, applications)]
                 })
                 .collect(),
         ),
         Type::List { element, size } => Type::list(
-            substitute(element, map, member, pack),
+            substitute(element, map, member, pack, applications),
             size.as_ref().map(constant),
         ),
         Type::Set(inner) => Type::Set(part(inner)),
@@ -540,7 +556,7 @@ fn substitute(
             let mut function = function.as_ref().clone();
             for parameter in &mut function.parameters {
                 let ty = parameter.ty_mut();
-                *ty = substitute(ty, map, member, pack);
+                *ty = substitute(ty, map, member, pack, applications);
             }
             // GEN-1: only an unresolved result-only parameter can learn
             // the absence of a result. Another type parameter is a binding.
@@ -552,12 +568,12 @@ fn substitute(
                 _ => false,
             };
             function.result = bind_result(function.result.as_ref(), map)
-                .map(|ty| substitute(ty, map, member, pack));
+                .map(|ty| substitute(ty, map, member, pack, applications));
             Type::Function(Box::new(function))
         }
         // TYPE-16: "In a generic declaration it stays as written until
         // T is known", and is then what the table gives for that T.
-        Type::Delta(inner) => Type::delta(substitute(inner, map, member, pack)),
+        Type::Delta(inner) => Type::delta(substitute(inner, map, member, pack, applications)),
         // TST-5: a tuple's trace cell names its T (`Type::trace_cell`),
         // which the tuple's delta formed again would not. A generic
         // target's parameter that is a tuple naming a parameter,
@@ -570,15 +586,17 @@ fn substitute(
         Type::Trace { cell, style } => {
             let cell = match &**cell {
                 Type::Delta(of) if matches!(**of, Type::Tuple(_)) => {
-                    Type::trace_cell(substitute(of, map, member, pack))
+                    Type::trace_cell(substitute(of, map, member, pack, applications))
                 }
-                own if names_parameter(own) => match substitute(own, map, member, pack) {
-                    of @ (Type::Tuple(_) | Type::Atomic(_) | Type::RollingWindow { .. }) => {
-                        Type::trace_cell(of)
+                own if names_parameter(own) => {
+                    match substitute(own, map, member, pack, applications) {
+                        of @ (Type::Tuple(_) | Type::Atomic(_) | Type::RollingWindow { .. }) => {
+                            Type::trace_cell(of)
+                        }
+                        other => other,
                     }
-                    other => other,
-                },
-                other => substitute(other, map, member, pack),
+                }
+                other => substitute(other, map, member, pack, applications),
             };
             Type::Trace {
                 cell: Box::new(cell),
@@ -587,7 +605,7 @@ fn substitute(
         }
         // TYPE-14: "either a T or null". A `T?` whose T is given a
         // nullable type is that type.
-        Type::Nullable(inner) => match substitute(inner, map, member, pack) {
+        Type::Nullable(inner) => match substitute(inner, map, member, pack, applications) {
             inner @ Type::Nullable(_) => inner,
             inner => Type::Nullable(Box::new(inner)),
         },
@@ -719,7 +737,29 @@ pub(crate) fn substitute_with_packs(
     if weight(ty).saturating_mul(heaviest.max(pack_weight)) > WEIGHT {
         return Type::Unknown;
     }
-    substitute(ty, map, member, pack)
+    substitute(ty, map, member, pack, false)
+}
+
+/// TYPE-18: project stored field types, including forwarded generic type
+/// arguments. Ordinary projection callers retain their existing mode.
+/// None means the existing type-size bound would be exceeded.
+pub(crate) fn substitute_storage(
+    ty: &Type,
+    map: &[(Location, &Argument)],
+    member: &PackMember<'_>,
+    pack: &dyn Fn(Location) -> Option<Vec<Type>>,
+    pack_weight: usize,
+) -> Option<Type> {
+    let heaviest = map
+        .iter()
+        .map(|(_, argument)| match argument {
+            Argument::Type(ty) => weight(ty),
+            _ => 1,
+        })
+        .max()
+        .unwrap_or(1);
+    (weight(ty).saturating_mul(heaviest.max(pack_weight)) <= WEIGHT)
+        .then(|| substitute(ty, map, member, pack, true))
 }
 
 /// TYPE-4: "A field is optional when its type is nullable, `T?`, or an
@@ -2210,7 +2250,7 @@ fn opened(ty: &Type) -> Type {
     if map.is_empty() {
         return ty.clone();
     }
-    substitute(ty, &map, &|_, _, _| None, &|_| None)
+    substitute(ty, &map, &|_, _, _| None, &|_| None, false)
 }
 
 #[derive(Clone, Copy)]

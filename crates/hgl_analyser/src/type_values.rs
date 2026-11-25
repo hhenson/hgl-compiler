@@ -2,7 +2,7 @@
 //! Part of analysis; display spelling is separate from identity so
 //! declarations with the same name in different modules stay distinct.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind};
@@ -10,6 +10,43 @@ use hgl_parser::{HasSpan, SyntaxKind};
 use crate::{
     Argument, ConstantValue, Detail, GenericKind, GenericParameter, NamedKind, Program, Type,
 };
+
+/// The existing generic-instance or type-size bound stopped a storage query.
+/// This is a compiler limit, never evidence that a type stores no Type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TypeStorageLimit;
+
+/// Parameters in a deferred integer key, using the ordinary constant walker.
+fn key_parameters(key: &ConstantValue) -> HashSet<Location> {
+    let found = std::cell::RefCell::new(HashSet::new());
+    key.substituted(&|at| {
+        found.borrow_mut().insert(at);
+        None
+    });
+    found.into_inner()
+}
+
+fn holds_or_report(
+    program: &Program,
+    ty: &Type,
+    at: Location,
+    diagnostics: &mut Diagnostics,
+) -> bool {
+    match program.holds_type_value(ty) {
+        Ok(holds) => holds,
+        Err(_) => {
+            if !diagnostics.as_slice().iter().any(|report| {
+                report.primary == at
+                    && report.code
+                        == hgl_diagnostics::Code::Catalogued(crate::codes::INSTANCE_LIMIT)
+            }) {
+                diagnostics.emit(crate::error(Category::Type, crate::codes::INSTANCE_LIMIT, at,
+                    format!("checking stored generic types exceeds the compiler's {}-instance or type-size bound", crate::INSTANCES), "GEN-13"));
+            }
+            false
+        }
+    }
+}
 
 /// Generic parameters in the declaration's written order.
 fn parameters(program: &Program, (module, declaration): (usize, usize)) -> &[GenericParameter] {
@@ -71,18 +108,27 @@ pub(crate) fn check_deltas(program: &Program, diagnostics: &mut Diagnostics) {
         let mut rejected: Vec<_> = module
             .delta_inputs
             .iter()
-            .filter(|input| program.holds_type_value(&input.payload))
+            .filter(|input| holds_or_report(program, &input.payload, input.at, diagnostics))
             .map(|input| input.at)
             .collect();
         for written in &module.written {
-            if written.ty.any_part(
-                &|part| matches!(part, Type::Delta(payload) if program.holds_type_value(payload)),
+            let limits = std::cell::RefCell::new(Diagnostics::new());
+            let forbidden = written.ty.any_part(
+                &|part| matches!(part, Type::Delta(payload) if holds_or_report(program, payload, written.at, &mut limits.borrow_mut())),
                 &|_| false,
-            ) && !rejected.iter().any(|at| {
-                at.file == written.at.file
-                    && written.at.span.start <= at.span.start
-                    && at.span.end <= written.at.span.end
-            }) {
+            );
+            for report in limits.into_inner().as_slice() {
+                if !diagnostics.as_slice().contains(report) {
+                    diagnostics.emit(report.clone());
+                }
+            }
+            if forbidden
+                && !rejected.iter().any(|at| {
+                    at.file == written.at.file
+                        && written.at.span.start <= at.span.start
+                        && at.span.end <= written.at.span.end
+                })
+            {
                 // Keep checking normalized types too, without reporting a
                 // containing type again for an explicit application above.
                 rejected.push(written.at);
@@ -137,7 +183,7 @@ pub(crate) fn instance_declarations(program: &Program) -> Vec<(usize, usize)> {
                 || declaration_deltas(program, (module, declaration)).any(|input| {
                     input.payload.any_part(
                         &|part| matches!(part, Type::Parameter { .. } | Type::PackMember { .. }),
-                        &|_| false,
+                        &|constant| constant.value.key().is_none(),
                     )
                 })
             {
@@ -158,11 +204,13 @@ pub(crate) fn instance_deltas(
     diagnostics: &mut Diagnostics,
 ) {
     for input in declaration_deltas(program, declaration) {
-        if program.holds_type_value(&input.payload) {
+        if holds_or_report(program, &input.payload, input.at, diagnostics) {
             // The declaration already reported this concrete forbidden operand.
             continue;
         }
-        if project(&input.payload).is_some_and(|payload| program.holds_type_value(&payload)) {
+        if project(&input.payload)
+            .is_some_and(|payload| holds_or_report(program, &payload, input.at, diagnostics))
+        {
             diagnostics.emit(crate::error(
                 Category::Shape,
                 crate::codes::DELTA_UNSUPPORTED_SHAPE,
@@ -176,23 +224,20 @@ pub(crate) fn instance_deltas(
     }
 }
 
-/// Which generic input a struct stores, directly or through another struct.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Stored {
-    Parameter(Location),
-    PackMember(Location, usize),
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct StoredTypes {
     type_value: bool,
-    parameters: HashSet<Stored>,
+    parameters: HashSet<Location>,
+    indexed: bool,
+    keys: HashSet<Location>,
 }
 
 impl StoredTypes {
     fn include(&mut self, other: Self) {
         self.type_value |= other.type_value;
         self.parameters.extend(other.parameters);
+        self.indexed |= other.indexed;
+        self.keys.extend(other.keys);
     }
 
     fn of(ty: &Type, program: &Program, structs: &HashMap<(usize, usize), Self>) -> Self {
@@ -201,14 +246,13 @@ impl StoredTypes {
         match ty {
             Type::TypeValue => result.type_value = true,
             Type::Parameter { at, .. } => {
-                result.parameters.insert(Stored::Parameter(*at));
+                result.parameters.insert(*at);
             }
-            Type::PackMember { pack, key, .. } => {
-                if let ConstantValue::Int(index) = key.value
-                    && let Ok(index) = usize::try_from(index)
-                {
-                    result.parameters.insert(Stored::PackMember(*pack, index));
-                }
+            Type::PackMember { key, .. } => {
+                // Retain conditional storage instead of throwing away a key
+                // whose generic value is supplied by a later application.
+                result.indexed = true;
+                result.keys.extend(key_parameters(&key.value));
             }
             Type::Named {
                 module,
@@ -221,25 +265,26 @@ impl StoredTypes {
                     return result;
                 };
                 result.type_value = info.type_value;
+                result.indexed = info.indexed;
                 let Some(Detail::Struct(read)) = program.modules[*module].details.get(*declaration)
                 else {
                     return result;
                 };
-                for stored in &info.parameters {
-                    let at = match stored {
-                        Stored::Parameter(at) | Stored::PackMember(at, _) => at,
-                    };
+                for key in &info.keys {
+                    if let Some(slot) = read.generics.iter().position(|generic| generic.at == *key)
+                        && let Some(Argument::Constant(argument)) = arguments.get(slot)
+                    {
+                        result.keys.extend(key_parameters(&argument.value));
+                    }
+                }
+                for at in &info.parameters {
                     let Some(slot) = read.generics.iter().position(|p| p.at == *at) else {
                         continue;
                     };
-                    let range = match stored {
-                        Stored::PackMember(_, index) => slot + index..slot + index + 1,
-                        Stored::Parameter(_)
-                            if matches!(read.generics[slot].kind, GenericKind::Pack { .. }) =>
-                        {
-                            slot..arguments.len()
-                        }
-                        Stored::Parameter(_) => slot..slot + 1,
+                    let range = if matches!(read.generics[slot].kind, GenericKind::Pack { .. }) {
+                        slot..arguments.len()
+                    } else {
+                        slot..slot + 1
                     };
                     for argument in arguments.get(range).unwrap_or(&[]) {
                         if let Argument::Type(ty) = argument {
@@ -311,17 +356,165 @@ impl TypeStorage {
         }
         Self { structs }
     }
+
+    /// Check indexed dependencies at the application, retaining source key
+    /// expressions in the cached fields rather than growing them in a fixed point.
+    fn holds(&self, program: &Program, ty: &Type) -> Result<bool, TypeStorageLimit> {
+        let mut pending = VecDeque::from([ty.clone()]);
+        let mut seen = HashSet::new();
+        let mut unbound = HashSet::new();
+        let mut instances = 0;
+        while let Some(ty) = pending.pop_front() {
+            let summary = StoredTypes::of(&ty, program, &self.structs);
+            // This fact comes only from unconditional fields. Indexed
+            // members never turn an entire forwarded pack into stored data.
+            if summary.type_value {
+                return Ok(true);
+            }
+            if !summary.indexed {
+                continue;
+            }
+            match ty {
+                Type::Named {
+                    name,
+                    module,
+                    declaration,
+                    arguments,
+                    kind: NamedKind::Struct,
+                } => {
+                    let Detail::Struct(read) = &program.modules[module].details[declaration] else {
+                        continue;
+                    };
+                    // Only values that choose stored pack members distinguish
+                    // storage states. An unused identity tag cannot grow a cycle.
+                    let mut state = arguments.clone();
+                    for (generic, argument) in read.generics.iter().zip(&mut state) {
+                        if matches!(generic.kind, GenericKind::Value(_))
+                            && !self.structs[&(module, declaration)]
+                                .keys
+                                .contains(&generic.at)
+                        {
+                            *argument = Argument::Constant(crate::Constant {
+                                text: "0".to_string(),
+                                value: ConstantValue::Int(0),
+                            });
+                        }
+                    }
+                    // Reuse the existing GEN-13 depth and written-size
+                    // guard before computing or following another state.
+                    let key = crate::values::bounded_instance_key(
+                        (module, declaration),
+                        &state,
+                        &[],
+                        &[],
+                    )
+                    .ok_or(TypeStorageLimit)?;
+                    let state = Type::Named {
+                        name,
+                        module,
+                        declaration,
+                        arguments: state,
+                        kind: NamedKind::Struct,
+                    };
+                    if state.identity().is_some() {
+                        if !seen.insert(key) {
+                            continue;
+                        }
+                    } else if !unbound.insert((module, declaration)) {
+                        // GEN-7: unresolved generic applications are checked
+                        // again by the making instance with concrete arguments.
+                        continue;
+                    }
+                    instances += 1;
+                    if instances > crate::INSTANCES {
+                        return Err(TypeStorageLimit);
+                    }
+                    let map: Vec<_> = read
+                        .generics
+                        .iter()
+                        .take_while(|generic| !matches!(generic.kind, GenericKind::Pack { .. }))
+                        .map(|generic| generic.at)
+                        .zip(&arguments)
+                        .collect();
+                    let slot = |at| {
+                        read.generics.iter().position(|generic| {
+                            generic.at == at && matches!(generic.kind, GenericKind::Pack { .. })
+                        })
+                    };
+                    let pack = |at| -> Option<Vec<Type>> {
+                        arguments
+                            .get(slot(at)?..)?
+                            .iter()
+                            .map(|argument| match argument {
+                                Argument::Type(ty) => Some(ty.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    };
+                    let member = |at, _: &str, key: &crate::Constant| {
+                        let ConstantValue::Int(index) = key.value else {
+                            return None;
+                        };
+                        let index = slot(at)?.checked_add(usize::try_from(index).ok()?)?;
+                        match arguments.get(index)? {
+                            Argument::Type(ty) => Some(ty.clone()),
+                            _ => None,
+                        }
+                    };
+                    let weight = arguments
+                        .iter()
+                        .map(|argument| match argument {
+                            Argument::Type(ty) => crate::declared::weight(ty),
+                            _ => 1,
+                        })
+                        .sum::<usize>()
+                        .max(1);
+                    for field in &read.members {
+                        pending.push_back(
+                            crate::declared::substitute_storage(
+                                &field.ty, &map, &member, &pack, weight,
+                            )
+                            .ok_or(TypeStorageLimit)?,
+                        );
+                    }
+                }
+                Type::Tuple(types) => pending.extend(types),
+                Type::List { element, .. }
+                | Type::Set(element)
+                | Type::Nullable(element)
+                | Type::Atomic(element)
+                | Type::Delta(element)
+                | Type::Endpoint(element)
+                | Type::Trace { cell: element, .. }
+                | Type::RollingWindow { value: element, .. } => pending.push_back(*element),
+                Type::Dict { key, value } => {
+                    pending.push_back(*key);
+                    pending.push_back(*value);
+                }
+                Type::Result { value, error } => {
+                    pending.push_back(*value);
+                    pending.push_back(*error);
+                }
+                Type::Function(function) => pending.extend(function.types().cloned()),
+                _ => {}
+            }
+        }
+        Ok(false)
+    }
 }
 
 impl Program {
-    /// Whether an ordinary value of `ty` holds a Type (TYPE-18,
+    /// Whether an ordinary value of `ty` is known to hold a Type (TYPE-18,
     /// Proposed). The declared fields are complete before the first query;
     /// reuse their fixed point for every type and every emitted module.
-    pub fn holds_type_value(&self, ty: &Type) -> bool {
+    /// Unresolved generic keys are deferred to the making instance.
+    /// Returns an error if the existing generic-instance or type-size limit
+    /// prevents a decision. Callers must report or decline that case.
+    pub fn holds_type_value(&self, ty: &Type) -> Result<bool, TypeStorageLimit> {
         let storage = self
             .type_value_storage
             .get_or_init(|| TypeStorage::new(self));
-        StoredTypes::of(ty, self, &storage.structs).type_value
+        storage.holds(self, ty)
     }
 }
 

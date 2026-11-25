@@ -169,7 +169,42 @@ impl Program {
         parameter: &Parameter,
         diagnostics: &mut Diagnostics,
     ) -> DefaultExpr {
-        self.specialize_parameter_default(default, operator, generics, &[], parameter, diagnostics)
+        let packs = self.operator_default_packs(operator, generics);
+        self.specialize_parameter_default(
+            default,
+            operator,
+            generics,
+            &packs,
+            parameter,
+            diagnostics,
+        )
+    }
+
+    /// GEN-6/10: public operator packs are encoded as tuple arguments.
+    /// The inherited default uses those packs, even for a non-generic winner.
+    pub(crate) fn operator_default_packs(
+        &self,
+        operator: (usize, usize),
+        generics: &[Argument],
+    ) -> Vec<TypePackArgument> {
+        let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
+            return Vec::new();
+        };
+        signature
+            .generics
+            .iter()
+            .zip(generics)
+            .enumerate()
+            .filter_map(|(index, (generic, argument))| {
+                if !matches!(generic.kind, crate::GenericKind::Pack { .. }) {
+                    return None;
+                }
+                let Argument::Type(Type::Tuple(types)) = argument else {
+                    return None;
+                };
+                Some(TypePackArgument::positional(index, types.clone()))
+            })
+            .collect()
     }
 
     /// Places a default in its defining callable's scope and fits it

@@ -329,12 +329,23 @@ fn cached_storage_keeps_generic_only_type_fields() {
         !checked
             .program
             .holds_type_value(&named("Plain", Vec::new()))
+            .unwrap()
     );
-    assert!(checked.program.holds_type_value(&named("Box", meta())));
-    assert!(!checked.program.holds_type_value(&named(
-        "Box",
-        vec![hgl_analyser::Argument::Type(Type::Scalar(Scalar::I64))],
-    )));
+    assert!(
+        checked
+            .program
+            .holds_type_value(&named("Box", meta()))
+            .unwrap()
+    );
+    assert!(
+        !checked
+            .program
+            .holds_type_value(&named(
+                "Box",
+                vec![hgl_analyser::Argument::Type(Type::Scalar(Scalar::I64))],
+            ))
+            .unwrap()
+    );
 }
 
 /// TYPE-18: the query uses a var's declared type without requiring a value,
@@ -1028,4 +1039,200 @@ fn paired_type_slots_separate_value_lookup_diagnostics() {
             rejected.report
         );
     }
+}
+
+/// TYPE-16/18, GEN-17: generic keys are retained until a struct application
+/// selects a member. Forwarded packs and arithmetic keep the same selection.
+#[test]
+fn storage_queries_resolve_generic_pack_keys_at_the_application() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+struct Pick<const key: i64, ...Ts> { value: Ts[key] }
+struct Forward<const key: i64, ...Ts> { value: Pick<key, Ts> }
+struct Offset<const key: i64, ...Ts> { value: Pick<key + 1, Ts> }
+struct Empty<...Ts> { value: i64 }
+struct Recursive<const key: i64, ...Ts> { value: Ts[key]
+ next: atomic<list<Recursive<1, Ts>>> }
+const ZERO: i64 = 0
+struct Tagged<const tag: i64, ...Ts{1}> { value: Ts[ZERO]
+ next: atomic<list<Tagged<tag + 1, Ts>>> }
+"#,
+    )]);
+    assert_eq!(
+        checked.summary(),
+        Vec::<String>::new(),
+        "{}",
+        checked.report
+    );
+    let module = checked.program.module_index("m").unwrap();
+    let named = |name: &str, arguments| Type::Named {
+        name: name.to_string(),
+        module,
+        declaration: checked.program.modules[module]
+            .declarations
+            .iter()
+            .position(|decl| decl.name == name)
+            .unwrap(),
+        arguments,
+        kind: NamedKind::Struct,
+    };
+    let applied = |name: &str, key: i64, first, second| {
+        named(
+            name,
+            vec![
+                hgl_analyser::Argument::Constant(Constant {
+                    text: key.to_string(),
+                    value: ConstantValue::Int(key),
+                }),
+                hgl_analyser::Argument::Type(first),
+                hgl_analyser::Argument::Type(second),
+            ],
+        )
+    };
+    for (name, key, expected) in [
+        ("Pick", 0, false),
+        ("Pick", 1, true),
+        ("Forward", 0, false),
+        ("Forward", 1, true),
+        ("Offset", -1, false),
+        ("Offset", 0, true),
+        ("Recursive", 0, true),
+        ("Tagged", 0, false),
+    ] {
+        let ty = applied(name, key, Type::Scalar(Scalar::I64), Type::TypeValue);
+        assert_eq!(
+            checked.program.holds_type_value(&ty),
+            Ok(expected),
+            "{ty:?}"
+        );
+    }
+    let empty = named("Empty", vec![hgl_analyser::Argument::Type(Type::TypeValue)]);
+    assert_eq!(
+        checked
+            .program
+            .holds_type_value(&applied("Pick", 0, empty, Type::TypeValue)),
+        Ok(false)
+    );
+}
+
+/// TYPE-16/18, Proposed: a selected Type rejects as a delta operand;
+/// an unselected Type argument does not make the stored ordinary field Type.
+#[test]
+fn indexed_storage_rejects_only_the_type_containing_deltas() {
+    let definitions = "module m\nstruct Pick<const key: i64, ...Ts> { value: Ts[key] }\nstruct Forward<const key: i64, ...Ts> { value: Pick<key, Ts> }\n";
+    for ty in [
+        "Pick<0, Type>",
+        "Pick<1, i64, Type>",
+        "Forward<1, i64, Type>",
+    ] {
+        let checked = check(&[(
+            "m.hgl",
+            &format!("{definitions}\nconst fn bad(value: delta<{ty}>) {{}}\n"),
+        )]);
+        assert!(
+            checked
+                .findings
+                .iter()
+                .any(|finding| finding.code == "shape/delta.unsupported_shape"
+                    && finding.rule == "TYPE-16"),
+            "{ty}\n{}",
+            checked.report
+        );
+    }
+    let good = check(&[(
+        "m.hgl",
+        &format!("{definitions}\nconst fn good(value: delta<Forward<0, i64, Type>>) {{}}\n"),
+    )]);
+    assert_eq!(good.summary(), Vec::<String>::new(), "{}", good.report);
+}
+
+/// GEN-7/13: a generic value key must also trigger the existing making-
+/// instance delta walk, even when no type parameter appears in the operand.
+#[test]
+fn making_instances_check_generic_value_storage_keys() {
+    for key in [0, 1] {
+        let definitions = "module m\nstruct Pick<const key: i64, ...Ts> { value: Ts[key] }\n";
+        for source in [
+            format!(
+                "{definitions}const fn later<const key: i64>() {{ let value: delta<Pick<key, i64, Type>>? = null }}\nconst fn call() {{ later<{key}>() }}\n"
+            ),
+            format!(
+                "{definitions}struct Holder<const key: i64> {{ value: delta<Pick<key, i64, Type>> }}\nconst fn consume(value: Holder<{key}>) {{}}\n"
+            ),
+        ] {
+            let checked = check(&[("m.hgl", &source)]);
+            if key == 0 {
+                assert_eq!(
+                    checked.summary(),
+                    Vec::<String>::new(),
+                    "{}",
+                    checked.report
+                );
+            } else {
+                assert!(
+                    checked
+                        .findings
+                        .iter()
+                        .any(|finding| finding.code == "shape/delta.unsupported_shape"),
+                    "{}",
+                    checked.report
+                );
+            }
+        }
+    }
+}
+
+/// GEN-13: a changing storage application is bounded by the existing
+/// instance budget; reaching it is an error, not a false absence of Type.
+#[test]
+fn indexed_storage_reports_a_bound_instead_of_silently_dropping_a_dependency() {
+    let checked = check(&[(
+        "m.hgl",
+        "module m\nstruct Grow<const key: i64, ...Ts> { value: Ts[key]
+ next: atomic<list<Grow<key + 1, Ts>>> }\n",
+    )]);
+    assert_eq!(
+        checked.summary(),
+        Vec::<String>::new(),
+        "{}",
+        checked.report
+    );
+    let module = checked.program.module_index("m").unwrap();
+    let ty = Type::Named {
+        name: "Grow".to_string(),
+        module,
+        declaration: checked.program.modules[module]
+            .declarations
+            .iter()
+            .position(|decl| decl.name == "Grow")
+            .unwrap(),
+        arguments: vec![
+            hgl_analyser::Argument::Constant(Constant {
+                text: "1".to_string(),
+                value: ConstantValue::Int(1),
+            }),
+            hgl_analyser::Argument::Type(Type::TypeValue),
+            hgl_analyser::Argument::Type(Type::Scalar(Scalar::I64)),
+        ],
+        kind: NamedKind::Struct,
+    };
+    assert_eq!(
+        checked.program.holds_type_value(&ty),
+        Err(hgl_analyser::TypeStorageLimit)
+    );
+    let rejected = check(&[(
+        "m.hgl",
+        "module m\nstruct Grow<const key: i64, ...Ts> { value: Ts[key]\n next: atomic<list<Grow<key + 1, Ts>>> }\nconst fn slow(value: delta<Grow<1, Type, i64>>) {}\n",
+    )]);
+    assert!(
+        rejected
+            .findings
+            .iter()
+            .any(|finding| finding.code == "type/generic.instance_limit"
+                && finding.rule == "GEN-13"
+                && finding.message.contains("checking stored generic types")),
+        "{}",
+        rejected.report
+    );
 }

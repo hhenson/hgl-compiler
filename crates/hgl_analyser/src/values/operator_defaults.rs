@@ -333,6 +333,7 @@ fn check_inherited_defaults(
         .map(|generic| generic.at)
         .zip(generics)
         .collect();
+    let packs = program.operator_default_packs(*operator, operator_generics);
     for ((parameter, slot), default) in public
         .parameters
         .iter()
@@ -353,7 +354,7 @@ fn check_inherited_defaults(
         };
         checking.specialize(
             program,
-            (*operator, operator_generics, &[]),
+            (*operator, operator_generics, &packs),
             (default, &concrete),
             diagnostics,
         );
