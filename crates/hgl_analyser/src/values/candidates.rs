@@ -686,6 +686,24 @@ impl<'a> Typer<'a> {
                         .then_some(position)
                     })
                     .collect();
+                let valued_anonymous_parameters = given
+                    .iter()
+                    .zip(&bound)
+                    .filter_map(|(given, &place)| {
+                        let Place::Parameter(index) = place else {
+                            return None;
+                        };
+                        if !given.by_function
+                            || !matches!(given.ty(), Type::Function(function) if function.result.is_some())
+                        {
+                            return None;
+                        }
+                        let node = ungrouped(given.node.clone());
+                        (node.kind() == SyntaxKind::FnExpr
+                            && child(&node, SyntaxKind::ReturnType).is_none())
+                        .then_some(index)
+                    })
+                    .collect();
                 let chosen = Chosen {
                     module,
                     declaration,
@@ -695,6 +713,7 @@ impl<'a> Typer<'a> {
                     type_packs,
                     bound: bound.clone(),
                     callbacks,
+                    valued_anonymous_parameters,
                     ambiguous_reads: false,
                     nullable_result_fallback,
                     selecting: None,
@@ -3109,6 +3128,8 @@ pub(super) struct Chosen<'s> {
     bound: Vec<Place>,
     /// The concrete named pack of a static callback, when it has one.
     callbacks: Vec<(usize, hir::TypePackArgument)>,
+    /// Slots where the candidate's reading retains an unwritten callback result.
+    valued_anonymous_parameters: Vec<usize>,
     /// Equally preferred choices of which operands to read (ERR-15).
     pub(super) ambiguous_reads: bool,
     /// A nullable place supplied an unresolved bare success type for
@@ -3628,6 +3649,7 @@ struct RankingType<'a, 'candidate> {
     ty: &'a Type,
     written: Option<&'a Type>,
     candidate: &'a Chosen<'candidate>,
+    retains_anonymous_value: bool,
 }
 
 impl<'a> RankingType<'a, '_> {
@@ -3652,6 +3674,7 @@ impl<'a> RankingType<'a, '_> {
         Self {
             ty,
             written,
+            retains_anonymous_value: false,
             ..self
         }
     }
@@ -3700,6 +3723,7 @@ impl<'a> RankingType<'a, '_> {
         elements.iter().zip(written).map(move |(ty, written)| Self {
             ty,
             written,
+            retains_anonymous_value: false,
             ..self
         })
     }
@@ -3795,15 +3819,21 @@ fn specificity(left: RankingType<'_, '_>, right: RankingType<'_, '_>) -> Specifi
         (Type::Function(l), Type::Function(r))
             if l.value == r.value
                 && l.parameters.len() == r.parameters.len()
-                && (l.result.is_none() && r.result_admits_none
-                    || r.result.is_none() && l.result_admits_none) =>
+                && (l.result.is_none()
+                    && (r.result_admits_none || right.retains_anonymous_value)
+                    || r.result.is_none()
+                        && (l.result_admits_none || left.retains_anonymous_value)) =>
         {
-            // GEN-12: a written absence is more specific than a result
-            // that can bind to none. Keep the inputs' specificity too.
-            let result = if l.result.is_none() {
-                Specific::More
-            } else {
-                Specific::Less
+            // GEN-5 keeps the value of an anonymous body with no written
+            // result. GEN-12 otherwise prefers a written absence over a
+            // result that can bind to none. The inputs still count.
+            let result = match (
+                l.result.is_none(),
+                left.retains_anonymous_value,
+                right.retains_anonymous_value,
+            ) {
+                (false, true, _) | (true, _, false) => Specific::More,
+                _ => Specific::Less,
             };
             l.parameters
                 .iter()
@@ -3982,8 +4012,9 @@ fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
         .candidate_parameters(better.declared)
         .zip(public.candidate_parameters(worse.declared))
         .filter_map(|(better_index, worse_index)| {
-            let better_type = &better.declared.parameters[better_index?].ty;
-            let worse_type = &worse.declared.parameters[worse_index?].ty;
+            let (better_index, worse_index) = (better_index?, worse_index?);
+            let better_type = &better.declared.parameters[better_index].ty;
+            let worse_type = &worse.declared.parameters[worse_index].ty;
             let better_expanded = ranking_type(better, better_type);
             let worse_expanded = ranking_type(worse, worse_type);
             Some(specificity(
@@ -3991,11 +4022,17 @@ fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
                     ty: &better_expanded,
                     written: Some(better_type),
                     candidate: better,
+                    retains_anonymous_value: better
+                        .valued_anonymous_parameters
+                        .contains(&better_index),
                 },
                 RankingType {
                     ty: &worse_expanded,
                     written: Some(worse_type),
                     candidate: worse,
+                    retains_anonymous_value: worse
+                        .valued_anonymous_parameters
+                        .contains(&worse_index),
                 },
             ))
         })

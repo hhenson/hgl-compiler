@@ -47,6 +47,26 @@ nullable_value(const E& input, std::source_location where = std::source_location
     return endpoint_read<schema_of<E>>::delta(input).value;
 }
 
+/// ERR-12: project the payload of a connection the analyser has refined
+/// in a graph. The original port may lose its value as the branch changes.
+template <class Input, class Output>
+struct ProjectNullablePayload {
+    static constexpr auto name = "hgl.project_nullable_payload";
+
+    static void eval(hgraph::In<"value", Input, hgraph::InputValidity::Unchecked> input,
+                     hgraph::Out<Output> out) {
+        if (input.valid()) {
+            if (auto payload = nullable_value(input)) {
+                out.set(*std::move(payload));
+                return;
+            }
+        }
+        if (out.valid()) {
+            fn_invalidate(out);
+        }
+    }
+};
+
 /// The payload of the nullable endpoint `input` where a test against null
 /// has proved it holds a value (ERR-12: "a binding a test has proved is not
 /// null is read as its payload's type there"): the T. One that holds
