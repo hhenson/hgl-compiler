@@ -14,6 +14,172 @@ use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Stmt, ValueCategor
 /// No lines.
 const NONE: [&str; 0] = [];
 
+/// GEN-3, GEN-7 and GEN-17: a reflected member's stated type can
+/// authorize arithmetic. Every alternative must admit it.
+#[test]
+fn a_reflected_members_type_proves_arithmetic() {
+    let definitions = concat!(
+        "const key: str = \"item\"\n",
+        "const fn total<...Ps>(f: const fn(...{Ps}) -> i64, ",
+        "a: Ps[key], b: Ps[key]) -> Ps[key]\n",
+    );
+    for condition in [
+        "Ps[key] == i64",
+        "Ps[key] in {i64, f64}",
+        "each k in arg_keys(Ps) { Ps[k] == i64 }",
+    ] {
+        let checked = module(&format!("{definitions}    requires {condition} => a + b\n"));
+        assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+    }
+    for condition in [
+        "Ps[key] in {i64, bool}",
+        "Ps[key] != str",
+        "any k in arg_keys(Ps) { Ps[k] == i64 }",
+    ] {
+        let checked = module(&format!("{definitions}    requires {condition} => a + b\n"));
+        assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+        assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+    }
+    let symbolic = module(concat!(
+        "const fn total<const key: str, ...Ps>(f: const fn(...{Ps}) -> i64, ",
+        "a: Ps[key], b: Ps[key]) -> Ps[key]\n",
+        "    requires Ps[key] in {i64, f64} => a + b\n",
+    ));
+    assert_eq!(symbolic.summary(), NONE, "{}", symbolic.report);
+}
+
+/// GEN-7 and GEN-17: a member's equality and finite membership cooperate
+/// whether the finite types are stated for the member or for its type.
+#[test]
+fn reflected_member_conjuncts_prove_the_same_call_in_either_order() {
+    let definitions = concat!(
+        "const key: str = \"item\"\n",
+        "const fn subtract<T, ...Ps>(f: const fn(...{Ps}) -> i64, ",
+        "t: T, a: Ps[key]) -> Ps[key]\n",
+    );
+    for condition in [
+        "Ps[key] in {i64, f64}",
+        "Ps[key] in {i64, f64} && Ps[key] == T",
+        "Ps[key] == T && Ps[key] in {i64, f64}",
+        "T in {i64, f64} && Ps[key] == T",
+        "Ps[key] == T && T in {i64, f64}",
+    ] {
+        let checked = module(&format!("{definitions}    requires {condition} => a - a\n"));
+        assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+    }
+}
+
+/// GEN-7: a concrete reflected result must recheck its consumers, including
+/// a second operator and a local initialized with the first call.
+#[test]
+fn reflected_results_recheck_consumers_at_the_calls_that_make_them() {
+    for body in [
+        "=> a - a - \"x\"",
+        "=> (a + a) * \"x\"",
+        "{ let d = a - a\n    return d - \"x\"\n}",
+    ] {
+        let checked = module(&format!(
+            r#"const item_key: str = "item"
+const fn chain<...Ps>(f: const fn(...{{Ps}}) -> i64, a: Ps[item_key]) -> Ps[item_key]
+    requires Ps[item_key] in {{i64, f64}} {body}
+const fn num(item: i64) -> i64 => item
+test check_chain {{ assert chain(num, 3) == 0 }}
+"#
+        ));
+        assert_eq!(checked.findings.len(), 1, "{body}\n{}", checked.report);
+        assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+        assert!(
+            checked.report.contains("no `i64` and `str`")
+                && checked
+                    .report
+                    .contains("this call makes the instance `chain<[i64]>`"),
+            "{body}\n{}",
+            checked.report
+        );
+    }
+}
+
+/// GEN-7: diagnostics distinguish missing evidence, insufficient evidence,
+/// and reaching the analyser's limit while trying stated alternatives.
+#[test]
+fn reflected_member_proof_reports_its_failure_reason() {
+    let declaration = concat!(
+        "const key: str = \"item\"\n",
+        "const fn subtract<...Ps>(f: const fn(...{Ps}) -> i64, a: Ps[key]) -> Ps[key]\n",
+    );
+    let missing = module(&format!(
+        "{declaration}    requires Ps[key] != str => a - a\n"
+    ));
+    assert_eq!(missing.findings[0].code, "operator/operator.no_candidate");
+    assert!(
+        missing.report.contains("`requires Ps[k] in {i64, f64}`"),
+        "{}",
+        missing.report
+    );
+
+    let equality = module(&format!(
+        "{declaration}    requires Ps[key] == str => a - a\n"
+    ));
+    assert_eq!(equality.findings[0].code, "operator/operator.no_candidate");
+    assert!(
+        equality.report.contains(r#"`Ps["item"]` = `str`"#),
+        "{}",
+        equality.report
+    );
+    assert!(
+        !equality.report.contains("a membership authorises"),
+        "{}",
+        equality.report
+    );
+
+    let keys: Vec<_> = (0..8).map(|index| format!("k{index}")).collect();
+    let declarations = keys
+        .iter()
+        .map(|key| format!("const {key}: str = \"{key}\"\n"))
+        .collect::<String>();
+    let members: Vec<_> = keys.iter().map(|key| format!("Ps[{key}]")).collect();
+    let requirements = members
+        .iter()
+        .map(|member| format!("{member} in {{i64, f64, bool, str}}"))
+        .collect::<Vec<_>>()
+        .join(" && ");
+    let exhausted = module(&format!(
+        "{declarations}const fn subtract<...Ps>(f: const fn(...{{Ps}}) -> i64, \
+         a: tuple<{}>) -> i64 requires {requirements} => a - a\n",
+        members.join(", ")
+    ));
+    assert_eq!(exhausted.findings[0].code, "operator/operator.no_candidate");
+    assert!(
+        exhausted.report.contains(&format!(
+            "limit of {} combinations",
+            hgl_analyser::INSTANCES
+        )),
+        "{}",
+        exhausted.report
+    );
+}
+
+/// GEN-7 and GEN-17: two reflected keys need independent trial types.
+#[test]
+fn a_reflected_pack_keeps_distinct_memberships_for_its_keys() {
+    let checked = module(concat!(
+        "const left: str = \"left\"\n",
+        "const right: str = \"right\"\n",
+        "operator match_pair<T, U>(a: T, b: U) -> i64\n",
+        "impl const fn match_pair(a: i64, b: i64) -> i64 => a + b\n",
+        "impl const fn match_pair(a: f64, b: f64) -> i64 => 0\n",
+        "const fn broken<...Ps>(f: const fn(...{Ps}) -> i64, a: Ps[left], b: Ps[right]) -> i64\n",
+        "    requires Ps[left] in {i64, f64} && Ps[right] in {i64, f64} => match_pair(a, b)\n",
+    ));
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+    assert!(
+        checked.report.contains(r#"`Ps["left"]` = `i64`"#),
+        "{}",
+        checked.report
+    );
+}
+
 #[test]
 fn a_type_inequality_tests_the_resolved_argument() {
     // GEN-3: `T != f64` tests a known type as `!(T == f64)` and binds nothing.
