@@ -5489,7 +5489,7 @@ fn reserved_store_keys_fail_when_the_graph_is_built_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

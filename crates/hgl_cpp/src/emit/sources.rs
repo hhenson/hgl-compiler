@@ -97,7 +97,7 @@ impl Emitter<'_> {
         let end = declaration.syntax.text_range().end().into();
         // SOURCE-1: what the source's declarations and hooks add to its
         // node (`scheduling`): nothing for one that has none.
-        let store_keys = store::Keys::of(self, index, body);
+        let store_keys = store::Keys::of(self, index, signature, body);
         let Some(hooked) = self.source_hooks(signature, body, &store_keys) else {
             return;
         };
@@ -169,7 +169,9 @@ impl Emitter<'_> {
         }
         for slot in store_keys.slots() {
             let name = store::local(slot);
-            taken.push(format!("[[maybe_unused]] ::hgraph::Str {name}"));
+            taken.push(format!(
+                "[[maybe_unused]] ::std::optional<::hgraph::Str> {name}"
+            ));
             given.push(format!("kept_.{name}"));
         }
         let mut context = Context::new(Kind::Source, body.locals.len());

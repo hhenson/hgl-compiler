@@ -317,6 +317,19 @@ inline constexpr std::string_view run_output = "run.output";
 /// Validate a user store key where its value is fixed (CAP-6).
 str checked_store_key(str key, std::source_location where = std::source_location::current());
 
+/// Check a projected hook key at attachment. A failed read keeps the hook's
+/// own failure handling and control flow (ERR-5, ERR-12, ERR-15).
+template <typename Read>
+std::optional<str> prepare_store_key(Read read, std::source_location where) {
+    str key;
+    try {
+        key = read();
+    } catch (const Failure&) {
+        return std::nullopt;
+    }
+    return checked_store_key(std::move(key), where);
+}
+
 /// `GlobalState` (CAP-6), what `inject global_state` binds: the run's store,
 /// "a run-wide store of ordinary values under string keys", as hgraph's
 /// `GlobalStateView` gives it to a node's hook and, where a graph is built,

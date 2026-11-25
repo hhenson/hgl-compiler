@@ -3,10 +3,10 @@
 use std::cell::Cell;
 
 use hgl_analyser::hir::{
-    Argument, Body, Callee, Expr, ExprKind, Form, Node, Value, ValueCategory, walk_statement_nodes,
-    walk_statements,
+    Argument, Body, Callee, Expr, ExprKind, Form, Node, Raise, Value, ValueCategory,
+    walk_statement_nodes, walk_statements,
 };
-use hgl_analyser::{DeclarationKind, Detail, Program, Role, Signature, Type};
+use hgl_analyser::{DeclarationKind, Detail, Parameter, Program, Role, Signature, Type};
 use hgl_diagnostics::Location;
 use hgl_lower::calls::{LeftOut, left_out};
 use hgl_lower::instances::Instances;
@@ -21,18 +21,23 @@ use crate::runtime;
 #[derive(Default)]
 pub(super) struct Keys<'a> {
     values: Vec<BuildKey<'a>>,
-    unread: Option<Location>,
     pub(super) recorder: bool,
 }
 
 #[derive(PartialEq)]
-enum BuildKey<'a> {
-    Held(&'a Expr),
-    Forwarded(Box<Expr>),
+struct BuildKey<'a> {
+    /// The hook's own read when the checked value is held in its frame.
+    held_for_hook: Option<&'a Expr>,
+    projected: Box<Expr>,
 }
 
 impl<'a> Keys<'a> {
-    pub(super) fn of(emitter: &Emitter<'_>, declaration: usize, body: &'a Body) -> Self {
+    pub(super) fn of(
+        emitter: &Emitter<'_>,
+        declaration: usize,
+        signature: &Signature,
+        body: &'a Body,
+    ) -> Self {
         let program = emitter.program;
         let module = emitter.module;
         let recorder = program.core() == Some(module)
@@ -54,6 +59,7 @@ impl<'a> Keys<'a> {
             path: Vec::new(),
             remaining: Cell::new(1 << 16),
         };
+        let bindings = Bindings::Configuration(&signature.parameters);
         walk_statement_nodes(&body.statements, &mut |node| {
             let Node::Expression(Expr {
                 kind: ExprKind::Call {
@@ -66,20 +72,22 @@ impl<'a> Keys<'a> {
                 return;
             };
             if let Some(key) = program.store_key_argument(callee, arguments) {
-                if !matches!(key.kind, ExprKind::Literal(Value::Str(_))) {
-                    keys.add(BuildKey::Held(key));
+                if !matches!(key.kind, ExprKind::Literal(Value::Str(_)))
+                    && let Some(projected) = project(program, key, bindings, &trace.remaining)
+                {
+                    keys.add(BuildKey {
+                        held_for_hook: Some(key),
+                        projected: Box::new(projected),
+                    });
                 }
             } else {
                 let mut read = Vec::new();
-                match trace.call(callee, arguments, None, *at, &mut read) {
-                    Ok(()) => {
-                        for key in read {
-                            keys.add(BuildKey::Forwarded(Box::new(key)));
-                        }
-                    }
-                    Err(at) => {
-                        keys.unread.get_or_insert(at);
-                    }
+                trace.call(callee, arguments, bindings, *at, &mut read);
+                for key in read {
+                    keys.add(BuildKey {
+                        held_for_hook: None,
+                        projected: Box::new(key),
+                    });
                 }
             }
         });
@@ -95,10 +103,7 @@ impl<'a> Keys<'a> {
     pub(super) fn expressions(&self) -> Vec<Expr> {
         self.values
             .iter()
-            .filter_map(|key| match key {
-                BuildKey::Held(expression) => Some((*expression).clone()),
-                BuildKey::Forwarded(_) => None,
-            })
+            .filter_map(|key| key.held_for_hook.cloned())
             .collect()
     }
 
@@ -106,7 +111,7 @@ impl<'a> Keys<'a> {
         0..self
             .values
             .iter()
-            .filter(|key| matches!(key, BuildKey::Held(_)))
+            .filter(|key| key.held_for_hook.is_some())
             .count()
     }
 
@@ -116,7 +121,10 @@ impl<'a> Keys<'a> {
 
     pub(super) fn fields(&self) -> String {
         self.slots()
-            .map(|slot| format!("{INDENT}{INDENT}::hgraph::Str {}{{}};\n", local(slot)))
+            .map(|slot| {
+                let name = local(slot);
+                format!("{INDENT}{INDENT}::std::optional<::hgraph::Str> {name}{{}};\n")
+            })
             .collect()
     }
 
@@ -128,10 +136,6 @@ impl<'a> Keys<'a> {
         signature: &Signature,
         body: &Body,
     ) -> Option<String> {
-        if let Some(at) = self.unread {
-            emitter.unsupported(at, "a store key a hook passes through a value function without a fixed build-time expression");
-            return None;
-        }
         if self.values.is_empty() {
             return Some(String::new());
         }
@@ -155,24 +159,19 @@ impl<'a> Keys<'a> {
         let mut scope = Scope::cold(emitter.program, body);
         let mut slots = self.slots();
         for key in &self.values {
-            let (assignment, key) = match key {
-                BuildKey::Held(key) => (
-                    format!(
-                        "prepared_.{} = ",
-                        local(slots.next().expect("held key slot"))
-                    ),
-                    *key,
-                ),
-                BuildKey::Forwarded(key) => (String::new(), key.as_ref()),
-            };
-            let value = emitter.expression(&mut scope, key);
-            let checked = checked(&value);
-            let step = if assignment.is_empty() {
-                format!("{indent}static_cast<void>({checked});\n")
+            let value = emitter.expression(&mut scope, &key.projected);
+            let library = runtime::NAMESPACE;
+            let at = emitter.source_location(key.projected.at);
+            let checked = format!(
+                "::{library}::prepare_store_key([&]() -> ::hgraph::Str {{ return {value}; }}, {at})"
+            );
+            let step = if key.held_for_hook.is_some() {
+                let name = local(slots.next().expect("held key slot"));
+                format!("{indent}prepared_.{name} = {checked};\n")
             } else {
-                format!("{indent}{assignment}{checked};\n")
+                format!("{indent}static_cast<void>({checked});\n")
             };
-            checks.push_str(&emitter.debug_stamp(key.at, step));
+            checks.push_str(&emitter.debug_stamp(key.projected.at, step));
         }
         let (state, keep) = if self.holds_values() {
             (
@@ -195,14 +194,14 @@ struct ForwardedKeys<'a> {
     program: &'a Program,
     instances: &'a Instances,
     store: Type,
-    path: Vec<ForwardedCall>,
+    path: Vec<(usize, usize)>,
     remaining: Cell<usize>,
 }
 
-#[derive(PartialEq)]
-struct ForwardedCall {
-    declaration: (usize, usize),
-    fixed: Vec<Option<Expr>>,
+#[derive(Clone, Copy)]
+enum Bindings<'a> {
+    Configuration(&'a [Parameter]),
+    Given(&'a [Option<Expr>]),
 }
 
 impl ForwardedKeys<'_> {
@@ -210,17 +209,17 @@ impl ForwardedKeys<'_> {
         &mut self,
         callee: &Callee,
         arguments: &[Argument],
-        caller: Option<&[Option<Expr>]>,
+        caller: Bindings<'_>,
         at: Location,
         keys: &mut Vec<Expr>,
-    ) -> Result<(), Location> {
+    ) {
         let Some((module, declaration)) = callee.declaration() else {
-            return Ok(());
+            return;
         };
         let program = self.program;
         let unit = &program.modules[module];
         let Some(Detail::Callable(signature)) = unit.details.get(declaration) else {
-            return Ok(());
+            return;
         };
         let declared = &unit.declarations[declaration];
         if !matches!(
@@ -232,21 +231,22 @@ impl ForwardedKeys<'_> {
             .iter()
             .any(|parameter| parameter.ty == self.store)
         {
-            return Ok(());
+            return;
         }
-        spend(&self.remaining).ok_or(at)?;
-        if self.path.len() == 64 {
-            return Err(at);
+        let identity = (module, declaration);
+        if spend(&self.remaining).is_none()
+            || self.path.len() == 64
+            || self.path.contains(&identity)
+        {
+            return;
         }
         let instance = self.instances.find_call(program, callee, arguments);
         let (signature, body) = if let Some(instance) = instance {
             (&instance.signature, &instance.body)
         } else {
-            let body = unit
-                .bodies
-                .get(declaration)
-                .and_then(Option::as_ref)
-                .ok_or(at)?;
+            let Some(body) = unit.bodies.get(declaration).and_then(Option::as_ref) else {
+                return;
+            };
             (signature, body)
         };
         let fixed: Vec<_> = signature
@@ -262,12 +262,12 @@ impl ForwardedKeys<'_> {
                         == Some(slot)
                 });
                 if let Some(written) = written {
-                    return from_caller(program, &written.value, caller, &self.remaining);
+                    return project(program, &written.value, caller, &self.remaining);
                 }
                 let slot = instance.map_or(slot, |instance| instance.original_parameter(slot));
                 match left_out(program, callee, slot, parameter)? {
                     LeftOut::Default(default) => {
-                        from_caller(program, &default, Some(&[]), &self.remaining)
+                        project(program, &default, Bindings::Given(&[]), &self.remaining)
                     }
                     LeftOut::Null => Some(Expr {
                         kind: ExprKind::Literal(Value::Null),
@@ -278,23 +278,7 @@ impl ForwardedKeys<'_> {
                 }
             })
             .collect();
-        let call = ForwardedCall {
-            declaration: (module, declaration),
-            fixed,
-        };
-        if self.path.contains(&call) {
-            return Ok(());
-        }
-        if self
-            .path
-            .iter()
-            .any(|earlier| earlier.declaration == call.declaration)
-        {
-            return Err(at);
-        }
-        let fixed = call.fixed.clone();
-        self.path.push(call);
-        let mut result = Ok(());
+        self.path.push(identity);
         walk_statements(&body.statements, &mut |expression| {
             let ExprKind::Call {
                 callee, arguments, ..
@@ -302,47 +286,43 @@ impl ForwardedKeys<'_> {
             else {
                 return;
             };
-            if result.is_err() {
-                return;
-            }
-            result = if let Some(key) = program.store_key_argument(callee, arguments) {
-                match from_caller(program, key, Some(&fixed), &self.remaining) {
-                    Some(key) => {
-                        keys.push(key);
-                        Ok(())
-                    }
-                    None => Err(key.at),
+            let bindings = Bindings::Given(&fixed);
+            if let Some(key) = program.store_key_argument(callee, arguments) {
+                if let Some(key) = project(program, key, bindings, &self.remaining) {
+                    keys.push(key);
                 }
             } else {
-                self.call(callee, arguments, Some(&fixed), expression.at, keys)
-            };
+                self.call(callee, arguments, bindings, expression.at, keys);
+            }
         });
         self.path.pop();
-        result
     }
 }
 
 /// Express a helper's fixed value using its caller's bindings. Only fixed reads
 /// and Core's primitive operators may be repeated without running helper code.
-fn from_caller(
+fn project(
     program: &Program,
     value: &Expr,
-    fixed: Option<&[Option<Expr>]>,
+    bindings: Bindings<'_>,
     remaining: &Cell<usize>,
 ) -> Option<Expr> {
     spend(remaining)?;
-    let read = |value: &Expr| from_caller(program, value, fixed, remaining);
+    let read = |value: &Expr| project(program, value, bindings, remaining);
     let kind = match &value.kind {
         ExprKind::Local(slot) => {
-            return match fixed {
-                Some(fixed) => {
+            return match bindings {
+                Bindings::Given(fixed) => {
                     let value = fixed.get(*slot)?.as_ref()?;
                     value.walk(&mut |_| {
                         let _ = spend(remaining);
                     });
                     (remaining.get() != 0).then(|| value.clone())
                 }
-                None => Some(value.clone()),
+                Bindings::Configuration(parameters) => parameters
+                    .get(*slot)
+                    .filter(|parameter| parameter.constant)
+                    .map(|_| value.clone()),
             };
         }
         ExprKind::Literal(_)
@@ -358,6 +338,28 @@ fn from_caller(
             index: Box::new(read(index)?),
         },
         ExprKind::Widen(inner) => ExprKind::Widen(Box::new(read(inner)?)),
+        ExprKind::Raised { result, .. } => ExprKind::Raised {
+            result: Box::new(read(result)?),
+            raise: Raise::Build,
+        },
+        ExprKind::OrNull { result, reader } => ExprKind::OrNull {
+            result: Box::new(read(result)?),
+            reader: *reader,
+        },
+        ExprKind::NullRead { value, code, .. } => ExprKind::NullRead {
+            value: Box::new(read(value)?),
+            raise: Raise::Build,
+            code,
+        },
+        ExprKind::EnumFrom {
+            module,
+            declaration,
+            value,
+        } => ExprKind::EnumFrom {
+            module: *module,
+            declaration: *declaration,
+            value: Box::new(read(value)?),
+        },
         ExprKind::Unary { operator, operand } => ExprKind::Unary {
             operator: *operator,
             operand: Box::new(read(operand)?),

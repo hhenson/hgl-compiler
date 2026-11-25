@@ -75,3 +75,31 @@ test transitive_key_check_before_start {
     assert raises("store.reserved_key") { eval indirect(prefix: supply(prefix: "run"), divisor: 0) }
     eval indirect(prefix: supply(prefix: "user"), divisor: 1)
 }
+
+const fn read_nullable(store: GlobalState, const key: str?) {
+    put(store, key, 7)
+}
+const fn nullable_key(key: str) -> str? => key
+fn indirect_nullable(const divisor: i64, const key: str?) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { read_nullable(global_state, key) }
+}
+test nullable_forwarding_checks_the_payload {
+    assert raises("store.reserved_key") {
+        eval indirect_nullable(divisor: 0, key: nullable_key("run.output"))
+    }
+    eval indirect_nullable(divisor: 1, key: nullable_key("user.key"))
+}
+
+fn guard_nullable(enabled: bool, const key: str?) {
+    inject global_state
+    when {
+        if enabled { put(global_state, key, 7) }
+    }
+}
+test an_unread_nullable_key_keeps_its_guard {
+    eval guard_nullable(enabled: [false])
+    assert raises("value.null") { eval guard_nullable(enabled: [false, true]) }
+}

@@ -552,12 +552,14 @@ transpiler: partial
 - Reading an absent store key gives `value.missing_key`, the same code as a
   strict dictionary lookup (ERR-6).
 - Reading or writing a key whose stored type differs gives `store.key_type`.
-- A key computed at graph construction fails with `store.reserved_key` if it
-  is `"run.output"`. A node checks fixed hook keys when the SDK attaches it to
-  its graph, before any start hook. The run's own recording uses that key.
+- A key computed in composition fails with `store.reserved_key` if it is
+  `"run.output"`. A node checks direct and forwardable fixed hook keys when the
+  SDK attaches it to its graph, before any start hook. The run's own recording
+  uses that key.
 - Left: a temporal child graph using the surrounding store is declined (CRUN-7).
-- Left: a hook's store key is declined if the target cannot follow its fixed
-  expression through the value functions the hook calls.
+- Left: a key that depends on changing parameters of a recursive hook helper
+  is checked by the store operation in the hook. Attachment-time checking of
+  that case is still open.
 
 ## CAP-7
 
@@ -748,8 +750,8 @@ transpiler: partial
 
 - Adds recording to a result-bearing entry and retrieves the timestamped deltas after
   stop. Outputless entries have no recording.
-- A program's key computed as the graph is built fails with `store.reserved_key`
-  if it names the recording key (CAP-6).
+- A program's key computed in composition or resolved at node attachment
+  fails with `store.reserved_key` if it names the recording key (CAP-6).
 - Left: Unsupported record types follow CEVAL-4.
 
 runner: planned

@@ -432,20 +432,20 @@ impl Emitter<'_> {
                     .iter()
                     .position(|stored| stored == key)
             });
+            let value = self.expression(scope, &argument.value);
             let value = if let Some(slot) = stored {
                 let name = super::store::local(slot);
-                if self.kind() == Some(super::nodes::Kind::Source) {
+                let name = if self.kind() == Some(super::nodes::Kind::Source) {
                     name
                 } else {
                     format!("{}.ref().{name}", super::nodes::STATE)
-                }
+                };
+                let checked = super::store::checked(&value);
+                format!("({name} ? *{name} : {checked})")
+            } else if key.is_some() {
+                super::store::checked(&value)
             } else {
-                let value = self.expression(scope, &argument.value);
-                if key.is_some() {
-                    super::store::checked(&value)
-                } else {
-                    value
-                }
+                value
             };
             // TYPE-10: the ordinary unsized parameter takes the fixed
             // list's entries. Read the array once, in argument order.
@@ -498,7 +498,7 @@ impl Emitter<'_> {
             written.push((
                 index,
                 value,
-                key.is_some() && stored.is_none() || self.may_fail_here(&argument.value),
+                key.is_some() || self.may_fail_here(&argument.value),
                 held,
             ));
         }

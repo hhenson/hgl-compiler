@@ -452,7 +452,7 @@ impl Emitter<'_> {
         let placed_at = declaration.at;
         let end = declaration.syntax.text_range().end().into();
         let mut context = Context::new(Kind::Hook(Hook::When), body.locals.len());
-        let store_keys = super::store::Keys::of(self, index, body);
+        let store_keys = super::store::Keys::of(self, index, signature, body);
         context.store_keys = store_keys.expressions();
         context.run_recorder = store_keys.recorder;
         context.result = signature.result.clone();
