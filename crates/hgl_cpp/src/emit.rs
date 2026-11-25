@@ -60,6 +60,7 @@ mod keyed;
 mod lifecycle;
 mod lifting;
 mod lists;
+mod mapping;
 mod names;
 mod nodes;
 mod nullables;
