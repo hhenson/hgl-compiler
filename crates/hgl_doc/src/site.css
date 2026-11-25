@@ -60,6 +60,7 @@ figure[data-example] pre { margin-top: .25rem; }
 figure[data-example] figcaption { color: var(--muted); font-size: .9rem; }
 .signature { white-space: pre-wrap; overflow-wrap: anywhere; }
 .source, .comment { color: var(--muted); }
+.contents { padding: 0; }
 .keyword { color: var(--accent); font-weight: 700; }
 .string, .literal { color: var(--string); }
 table {

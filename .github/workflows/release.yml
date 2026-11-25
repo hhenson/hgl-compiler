@@ -376,6 +376,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc g++-15 cmake ninja-build
+      - name: Locate the Linux native release cache
+        id: caches
+        run: |
+          native_key=$(cargo run --locked --quiet -p hgl_build_tool -- native-key --target x86_64-unknown-linux-gnu)
+          echo "native-key=$native_key" >> "$GITHUB_OUTPUT"
+          echo "HGL_RELEASE_NATIVE_CACHE=$RUNNER_TEMP/hgl-release-native/$native_key" >> "$GITHUB_ENV"
+      - name: Cache the native SDK and libraries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.HGL_RELEASE_NATIVE_CACHE }}
+          key: hgl-linux-x86_64-native-${{ steps.caches.outputs.native-key }}
       - env:
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: scripts/package-release.sh target/release-bundles "$RELEASE_TAG"

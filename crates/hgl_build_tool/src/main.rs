@@ -54,8 +54,11 @@ enum Mode {
     },
     /// Print the workspace version.
     Version,
-    /// Hash the macOS release's native build recipe.
-    NativeKey,
+    /// Hash the release target's native build recipe and toolchain.
+    NativeKey {
+        #[arg(long, value_enum, default_value = "aarch64-apple-darwin")]
+        target: Target,
+    },
     /// Restore the native libraries and notices from a verified cache.
     CopyNative {
         source: PathBuf,
@@ -122,7 +125,7 @@ fn run(mode: Mode) -> Result<bool> {
             return core_gate::check(&hgl, &core, write_list);
         }
         Mode::Version => println!("{}", release::version()?),
-        Mode::NativeKey => println!("{}", release::native_key()?),
+        Mode::NativeKey { target } => println!("{}", release::native_key(target)?),
         Mode::CopyNative {
             source,
             destination,

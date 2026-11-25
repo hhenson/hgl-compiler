@@ -1,0 +1,4 @@
+module guide.api
+/** Choose a count. */
+export operator choose<T>(value: T) -> i64
+export operator measure<T>(value: T) -> i64
