@@ -1666,6 +1666,9 @@ its instant and what was published, written as HGL writes a value where
 it has a way to. What the program logs and hgraph prints goes to standard
 error, as the run goes.
 
+The target executable writes `debug_print` lines to its own stream.
+`hgl run` and `hgl test` read publications and test outcomes from separate records.
+
 `eval` is a simulation, and `run` is in real time (RUN-3). An interrupt
 of `hgl run`, or a request for it to end, is the host's stop of a run in
 real time: `hgl` takes it and passes it on to the run, which ends as it
@@ -2395,6 +2398,7 @@ fails where a public header brings it in.
 | `scalar.h` | Core's natives of numbers and the ordered types: checked `i64` arithmetic, `f64` and mixed arithmetic, every division of numbers under each zero policy, exact numeric equality with tolerances, order and `compare_`, the Boolean forms; core's `ZeroPolicy` and `CmpResult` | NUM-1 to NUM-12, OPS-2, OPS-3, OPS-5 |
 | `temporal.h` | Core's natives of durations and instants: a duration's arithmetic, rounded and checked; a `datetime`, `civil_datetime`, `date` or `zoned_datetime` moved by a duration, and the duration between two; `date + time`; zoned equality; a zone's literals, checked against the provider's catalogue and a `zoned_datetime`'s offset against its zone | OPS-1, OPS-2, OPS-10, NUM-12, LEX-12 |
 | `text.h` | Core's natives of `str`: concatenation and repetition | OPS-1 |
+| `value_text.h` | HGL value text for failures, application publications and traces. `value_form<T>` supplies text for additional types. | TYPE-5, TYPE-7, TYPE-16, CRUN-8, TST-5 |
 | `output.h` | `write` and `Stream`, with ordinary stream buffering and an explicit flush | OUT-1, OUT-2 |
 | `formatting.h` | Core's value formatter and native collection text. Only units that use them include the header. Lowering and emission use the analyser's checked pattern text and selected text conversions. Generated code supplies typed arguments, compiled fmt specifiers and checked chrono directives. | FMT-1 to FMT-5, FMT-7, FMT-9 |
 | `conversions.h` | Every `convert` of core's: those that cannot fail, and those that can under `invalid`; core's `Rounding` and `InvalidPolicy` | OPS-4, OPS-6 to OPS-8 |
@@ -2416,7 +2420,7 @@ fails where a public header brings it in.
 | `timing.h` | `ticked`, whether an input published or lost its value in the evaluation, by which a node with a timer tells its wakes apart; `Lent` and `Lending`, a capability lent to a source's body for one resumption | TIME-3, TIME-9, SOURCE-1, TIME-8 |
 | `generator.h` | `generator<T>`, the coroutine type of a source's body: `std::generator<T>`'s shape for a value type (a move-only view whose input iterator resumes the body to its next `co_yield`, and throws again what it lets out), which not every standard library has | SOURCE-1 |
 | `host.h` | What the entry unit of a test executable needs, and no hgraph header: registration and `main`, which holds a test to its time limit | TST-14, TST-15, TST-17 |
-| `traces.h` | Traces, dense and timed, of scalars, nullables, tuples and lists, each cell whole or a delta, a whole one published as its change from what the cells before it left, each position of a list or a tuple followed at any depth (`detail::Publisher`), a list of lists among them; their comparison and where two first differ; replay items and what a `const fn` is given; the text of a value | TST-4 to TST-7, TST-9, TST-16, CEVAL-2 |
+| `traces.h` | Traces, dense and timed, of scalars, nullables, tuples and lists, each cell whole or a delta, a whole one published as its change from what the cells before it left, each position of a list or a tuple followed at any depth (`detail::Publisher`), a list of lists among them; their comparison and where two first differ; replay items and what a `const fn` is given | TST-4 to TST-7, TST-9, TST-16, CEVAL-2 |
 | `testing.h` | The rest of the test host: `check`, `raises`, `expect_same`, a run in simulation or in real time, from no earlier than the earliest start to no later than the latest end (one with no end ends there), its recording, and the values its result held | TST-2 to TST-11, TST-17, CRUN-1 to CRUN-8, CEVAL-1 to CEVAL-6 |
 | `application.h` | The run of an application: `Store`, what it sets before its run statement; `run<T>`, the test host's run of its entry on a graph given that store, and its output as text, each publication's instant and value | UNIT-14, RUN-1 to RUN-4, CRUN-1 to CRUN-8 |
 | `application_host.h` | What an application's entry unit needs, and no hgraph header: `main`, which runs the run statement once, writes what became of it to a results file, and stops a run when its host asks: down standard input, or by an interrupt | RUN-3, CRUN-6 |

@@ -43,7 +43,7 @@
 #pragma once
 
 #include <hglrt/failure.h>
-#include <hglrt/traces.h>
+#include <hglrt/value_text.h>
 #include <hglrt/values.h>
 
 #include <hgraph/types/generated.h>
@@ -165,9 +165,9 @@ struct value_form<error> {
         return detail::combined(hash_of(value.code), hash_of(value.message));
     }
     static std::string text(const error& value) {
-        std::string text = "error(message: " + testing::text_of(value.message);
+        std::string text = "error(message: " + hglrt::text_of(value.message);
         if (value.code.has_value()) {
-            text += ", code: " + testing::text_of(*value.code);
+            text += ", code: " + hglrt::text_of(*value.code);
         }
         return text + ")";
     }
@@ -185,9 +185,9 @@ struct value_form<std::expected<V, E>> {
     }
     static std::string text(const std::expected<V, E>& value) {
         if (value.has_value()) {
-            return "ok(" + testing::text_of(*value) + ")";
+            return "ok(" + hglrt::text_of(*value) + ")";
         }
-        return "err(" + testing::text_of(value.error()) + ")";
+        return "err(" + hglrt::text_of(value.error()) + ")";
     }
 };
 
