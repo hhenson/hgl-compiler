@@ -76,6 +76,8 @@ inline constexpr std::string_view non_increasing_time = "yield.non_increasing_ti
 inline constexpr std::string_view non_positive_duration = "schedule.non_positive_duration";
 /// A run's configuration with both an `end` and a `length` (CRUN-2).
 inline constexpr std::string_view end_and_length = "run.end_and_length";
+/// A run starts too early or ends too late (CRUN-3).
+inline constexpr std::string_view run_bounds = "run.bounds";
 } // namespace codes
 
 /// The value `error(message: message, code: code)` (ERR-4): an error with no

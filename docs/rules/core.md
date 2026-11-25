@@ -657,11 +657,10 @@ runner: planned
 
 - A run of one entry with its `const` arguments under the configuration it is given: built, started, evaluated and stopped once
 
-transpiler: partial
+transpiler: done
 
-- Each emitted entry wires a fresh run for the simulation or real-time host.
-- Left: an empty time interval wires the entry but skips executor construction,
-  start and stop.
+- Each run builds a fresh graph and starts and stops it in simulation or real time,
+  including when the time interval contains no cycles.
 
 ## CRUN-2
 
@@ -677,11 +676,11 @@ runner: planned
 
 ## CRUN-3
 
-transpiler: partial
+transpiler: done
 
 - Uses the runtime's microsecond cycle resolution and sentinel bounds. Dense traces use
   the same smallest step.
-- Left: The out-of-range bounds failure lacks the `run.bounds` code.
+- An out-of-range start or end fails with `run.bounds` before graph construction.
 
 runner: planned
 
