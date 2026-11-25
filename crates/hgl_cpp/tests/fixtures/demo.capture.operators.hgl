@@ -1,0 +1,40 @@
+module demo.capture.operators
+
+# ERR-7: capture selects the candidate as an ordinary operator call does.
+operator choose(value: i64) -> i64
+impl fn choose(value: i64) -> i64 => value + 1
+
+fn captured_graph(value: i64) -> i64 {
+    let seen = capture(choose, value)
+    return seen.value
+}
+
+test captures_a_composition_candidate {
+    assert eval captured_graph(value: [3]) == [4]
+}
+
+const fn attempt(value: i64) -> result<i64, error> {
+    if value < 0 { return err(error(message: "negative input", code: "numeric.out_of_range")) }
+    return ok(value * 10)
+}
+
+operator scale(value: i64) -> i64
+impl fn scale(value: i64) -> i64 {
+    when { return attempt(value) }
+}
+
+fn captured_values(value: i64) -> i64 {
+    return capture(scale, value: value).value
+}
+
+fn captured_errors(value: i64) -> error {
+    return capture(scale, value: value).error
+}
+
+# ERR-7 and ERR-8: the failed evaluation has no value tick, and later
+# evaluations are still observed. The error appears on its own connection.
+test captures_values_and_errors_from_a_candidate_node {
+    assert eval captured_values(value: [2, -1, 3]) == [20, _, 30]
+    assert eval captured_errors(value: [2, -1]) ==
+        [_, error(message: "negative input", code: "numeric.out_of_range")]
+}

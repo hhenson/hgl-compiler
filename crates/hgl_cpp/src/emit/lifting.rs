@@ -23,7 +23,6 @@
 //!
 //! Native positional packs give each packed argument its own runtime
 //! slot (FN-8), including Boolean chains (OPS-5).
-//! A capture of an operator candidate is reported as unavailable.
 
 use hgl_analyser::hir::{
     Argument, Body, Callee, ErrorPart, Expr, ExprKind, Local, Raise, Stmt, ValueCategory,
@@ -745,6 +744,7 @@ impl Emitter<'_> {
         let temporal = matches!(
             program.modules[module].declarations[declaration].kind,
             DeclarationKind::Function(Phase::Temporal)
+                | DeclarationKind::Implementation(Phase::Temporal, _)
         );
         if !lifted && !temporal {
             return self.missing(value.at, "a `capture` of a call of this");
