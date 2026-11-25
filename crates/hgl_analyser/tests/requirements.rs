@@ -48,6 +48,87 @@ fn a_reflected_members_type_proves_arithmetic() {
     assert_eq!(symbolic.summary(), NONE, "{}", symbolic.report);
 }
 
+/// GEN-7 and GEN-17: a member's equality and finite membership cooperate
+/// whether the finite types are stated for the member or for its type.
+#[test]
+fn reflected_member_conjuncts_prove_the_same_call_in_either_order() {
+    let definitions = concat!(
+        "const key: str = \"item\"\n",
+        "const fn subtract<T, ...Ps>(f: const fn(...{Ps}) -> i64, ",
+        "t: T, a: Ps[key]) -> Ps[key]\n",
+    );
+    for condition in [
+        "Ps[key] in {i64, f64}",
+        "Ps[key] in {i64, f64} && Ps[key] == T",
+        "Ps[key] == T && Ps[key] in {i64, f64}",
+        "T in {i64, f64} && Ps[key] == T",
+        "Ps[key] == T && T in {i64, f64}",
+    ] {
+        let checked = module(&format!("{definitions}    requires {condition} => a - a\n"));
+        assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+    }
+}
+
+/// GEN-7: diagnostics distinguish missing evidence, insufficient evidence,
+/// and reaching the analyser's limit while trying stated alternatives.
+#[test]
+fn reflected_member_proof_reports_its_failure_reason() {
+    let declaration = concat!(
+        "const key: str = \"item\"\n",
+        "const fn subtract<...Ps>(f: const fn(...{Ps}) -> i64, a: Ps[key]) -> Ps[key]\n",
+    );
+    let missing = module(&format!(
+        "{declaration}    requires Ps[key] != str => a - a\n"
+    ));
+    assert_eq!(missing.findings[0].code, "operator/operator.no_candidate");
+    assert!(
+        missing.report.contains("`requires Ps[k] in {i64, f64}`"),
+        "{}",
+        missing.report
+    );
+
+    let equality = module(&format!(
+        "{declaration}    requires Ps[key] == str => a - a\n"
+    ));
+    assert_eq!(equality.findings[0].code, "operator/operator.no_candidate");
+    assert!(
+        equality.report.contains(r#"`Ps["item"]` = `str`"#),
+        "{}",
+        equality.report
+    );
+    assert!(
+        !equality.report.contains("a membership authorises"),
+        "{}",
+        equality.report
+    );
+
+    let keys: Vec<_> = (0..8).map(|index| format!("k{index}")).collect();
+    let declarations = keys
+        .iter()
+        .map(|key| format!("const {key}: str = \"{key}\"\n"))
+        .collect::<String>();
+    let members: Vec<_> = keys.iter().map(|key| format!("Ps[{key}]")).collect();
+    let requirements = members
+        .iter()
+        .map(|member| format!("{member} in {{i64, f64, bool, str}}"))
+        .collect::<Vec<_>>()
+        .join(" && ");
+    let exhausted = module(&format!(
+        "{declarations}const fn subtract<...Ps>(f: const fn(...{{Ps}}) -> i64, \
+         a: tuple<{}>) -> i64 requires {requirements} => a - a\n",
+        members.join(", ")
+    ));
+    assert_eq!(exhausted.findings[0].code, "operator/operator.no_candidate");
+    assert!(
+        exhausted.report.contains(&format!(
+            "limit of {} combinations",
+            hgl_analyser::INSTANCES
+        )),
+        "{}",
+        exhausted.report
+    );
+}
+
 /// GEN-7 and GEN-17: two reflected keys need independent trial types.
 #[test]
 fn a_reflected_pack_keeps_distinct_memberships_for_its_keys() {

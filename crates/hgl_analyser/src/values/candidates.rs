@@ -1737,22 +1737,6 @@ impl<'a> Typer<'a> {
         {
             return Settled::Elsewhere;
         }
-        // The memberships of the parameters the call names: each such
-        // parameter, as an argument's type, a constant it gives, or the
-        // output it asks for.
-        let memberships: Vec<(Location, Vec<Argument>)> = self
-            .memberships()
-            .into_iter()
-            .filter(|(parameter, _)| {
-                let one = [*parameter];
-                given.iter().any(|given| {
-                    mentions(given.ty(), &one)
-                        || self
-                            .read_constant(&given.node, None)
-                            .is_ok_and(|value| value.names_one_of(&one))
-                }) || wanted.place.is_some_and(|place| mentions(place, &one))
-            })
-            .collect();
         let evidence_types: Vec<_> = given
             .iter()
             .map(Given::ty)
@@ -1773,6 +1757,28 @@ impl<'a> Typer<'a> {
                 &|_| false,
             )
         });
+        let member_dependencies = if uses_member {
+            self.stated_member_dependencies(&evidence_types)
+        } else {
+            Vec::new()
+        };
+        // Ordinary memberships can constrain the call directly or through
+        // the stated type or key of one of its reflected members.
+        let memberships: Vec<(Location, Vec<Argument>)> = self
+            .memberships()
+            .into_iter()
+            .filter(|(parameter, _)| {
+                let one = [*parameter];
+                member_dependencies.contains(parameter)
+                    || given.iter().any(|given| {
+                        mentions(given.ty(), &one)
+                            || self
+                                .read_constant(&given.node, None)
+                                .is_ok_and(|value| value.names_one_of(&one))
+                    })
+                    || wanted.place.is_some_and(|place| mentions(place, &one))
+            })
+            .collect();
         let admits_without_membership =
             memberships.is_empty() && !untold && (provisional.is_some() || !uses_member);
         if admits_without_membership && (!generic_operands || provisional.is_none()) {
@@ -1813,10 +1819,26 @@ impl<'a> Typer<'a> {
         // The report where nothing the `requires` states settles it.
         let operator_name =
             &program.modules[operator.module].declarations[operator.declaration].name;
+        let unresolved = |typer: &Self| {
+            typer.no_one_candidate((operator_name, name), public, (given, wanted), (true, &[]))
+        };
         let unsettled = |typer: &Self| {
-            typer
-                .no_one_candidate((operator_name, name), public, (given, wanted), (true, &[]))
-                .with_note(super::operators::UNSETTLED)
+            let report = unresolved(typer).with_note(super::operators::UNSETTLED);
+            if uses_member {
+                report.with_note(
+                    "state a reflected member's type or finite alternatives, for example \
+                     `requires Ps[k] == i64` or `requires Ps[k] in {i64, f64}` (GEN-7, GEN-17)",
+                )
+            } else {
+                report
+            }
+        };
+        let proof_limit = |typer: &Self| {
+            unresolved(typer).with_note(format!(
+                "the analyser's limit of {} combinations of stated requirements was reached \
+                 while proving this call (GEN-7)",
+                crate::INSTANCES
+            ))
         };
         let constants = given.iter().all(|given| {
             !given.by_place
@@ -1829,8 +1851,11 @@ impl<'a> Typer<'a> {
         if memberships.is_empty() && uses_member {
             ordinary_trials.push(Vec::new());
         }
-        if !constants || ordinary_trials.is_empty() || ordinary_trials.len() > crate::INSTANCES {
+        if !constants || ordinary_trials.is_empty() {
             return Settled::Rejected(unsettled(self));
+        }
+        if ordinary_trials.len() > crate::INSTANCES {
+            return Settled::Rejected(proof_limit(self));
         }
         // Each combination of members, as an instance would have it.
         let before = std::mem::take(&mut self.instance);
@@ -1859,7 +1884,7 @@ impl<'a> Typer<'a> {
             }
             tried += member_trials.len();
             if tried > crate::INSTANCES {
-                failed = Some((Vec::new(), Vec::new(), unsettled(self)));
+                failed = Some((Vec::new(), Vec::new(), proof_limit(self)));
                 break;
             }
             self.instance = combination.clone();
@@ -1922,6 +1947,7 @@ impl<'a> Typer<'a> {
                     format!("`{parameter}` = `{member}`")
                 })
                 .collect();
+            let reflected = !pack_members.is_empty();
             members.extend(pack_members.into_iter().map(|((pack, key), ty)| {
                 let name = self
                     .signature
@@ -1938,6 +1964,13 @@ impl<'a> Typer<'a> {
             }));
             if members.is_empty() {
                 return Settled::Rejected(report);
+            }
+            if reflected {
+                return Settled::Rejected(report.with_note(format!(
+                    "for {}, which the declaration's `requires` admits: the body must \
+                     support the call under its stated requirements (GEN-7)",
+                    members.join(" and ")
+                )));
             }
             return Settled::Rejected(report.with_note(format!(
                 "for {}, which the declaration's `requires` admits: a membership authorises an \

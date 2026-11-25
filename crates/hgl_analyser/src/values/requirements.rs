@@ -989,6 +989,47 @@ impl<'a> Typer<'a> {
         })
     }
 
+    /// Ordinary parameters that supply a reflected member's stated type
+    /// or key. Their memberships also constrain a call using that member
+    /// (GEN-3, GEN-7, GEN-17).
+    pub(super) fn stated_member_dependencies(&self, types: &[&Type]) -> Vec<Location> {
+        let used: Vec<_> = self
+            .stated_pack_members()
+            .into_iter()
+            .filter(|member| {
+                types.iter().any(|ty| {
+                    ty.any_part(
+                        &|part| {
+                            let Type::PackMember { pack, key, .. } = part else {
+                                return false;
+                            };
+                            *pack == member.pack
+                                && match &member.key {
+                                    StatedPackKey::One(stated) => {
+                                        stated.same(&key.value) != Some(false)
+                                    }
+                                    StatedPackKey::Every(_) => true,
+                                }
+                        },
+                        &|_| false,
+                    )
+                })
+            })
+            .collect();
+        self.signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .filter(|at| {
+                let one = &[*at];
+                used.iter().any(|member| {
+                    mentions(&member.ty, one)
+                        || matches!(&member.key, StatedPackKey::One(key) if key.names_one_of(one))
+                })
+            })
+            .collect()
+    }
+
     /// The finite choices a body states for the reflected members a
     /// call uses. Keep the key as well as the pack (GEN-3, GEN-7, GEN-17).
     pub(super) fn stated_member_choices(
@@ -1052,21 +1093,31 @@ impl<'a> Typer<'a> {
                             StatedPackKey::One(_) => None,
                         }
                     });
-                    if let Some(ty) = equality {
-                        choices.push(((*pack, key), vec![ty]));
-                    } else if let Some((_, _, members)) =
-                        memberships.iter().find(|(at, stated, _)| {
-                            *at == *pack
-                                && stated.substituted(&constant_at).same(&key.value) == Some(true)
-                        })
+                    // An equality to an open type does not displace a
+                    // finite membership for this same pack key.
+                    let types = if equality
+                        .as_ref()
+                        .is_some_and(|ty| whole(ty) && !names_parameter(ty))
                     {
-                        choices.push((
-                            (*pack, key),
-                            members
-                                .iter()
-                                .map(|ty| substitute_within(ty, given))
-                                .collect(),
-                        ));
+                        equality.map(|ty| vec![ty])
+                    } else {
+                        memberships
+                            .iter()
+                            .find(|(at, stated, _)| {
+                                *at == *pack
+                                    && stated.substituted(&constant_at).same(&key.value)
+                                        == Some(true)
+                            })
+                            .map(|(_, _, members)| {
+                                members
+                                    .iter()
+                                    .map(|ty| substitute_within(ty, given))
+                                    .collect()
+                            })
+                            .or_else(|| equality.map(|ty| vec![ty]))
+                    };
+                    if let Some(types) = types {
+                        choices.push(((*pack, key), types));
                     }
                     false
                 },
