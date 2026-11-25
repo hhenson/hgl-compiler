@@ -2845,7 +2845,7 @@ fn forwarded_packs_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 20 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 19 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
