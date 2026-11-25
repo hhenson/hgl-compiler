@@ -52,3 +52,43 @@ test identity_and_keys {
     assert names[integer] == "integer"
     assert names[type(1.0)] == "real"
 }
+
+# TYPE-18: obtaining the declared type never reads an unassigned value.
+const fn declared_kind() -> Type {
+    var count: i64
+    let known = type(count)
+    count = 12
+    return known
+}
+fn graph_declared_kind(value: i64) -> i64 {
+    var count: i64
+    let known = type(count)
+    count = value
+    return count
+}
+test declared_types_without_values {
+    assert declared_kind() == type(1)
+    var count: i64
+    let known = type(count)
+    count = 12
+    assert convert<str>(known) == "i64"
+    assert type({ var nested: i64
+        nested }) == type(1)
+    assert eval graph_declared_kind(value: [1, 2]) == [1, 2]
+}
+
+# LEX-9: hard reserved Type remains a field, enum member and argument label.
+struct NamedMember { Type: i64 }
+enum NamedChoice { Type }
+test type_member_names {
+    let value = NamedMember(Type: 12)
+    assert value.Type == 12
+    assert NamedChoice.Type == NamedChoice.Type
+}
+
+# TYPE-18: the type of a descriptor is Type, including a nested query.
+test nested_descriptor_queries {
+    let t: Type = type(42)
+    assert type(t) == type(type(t))
+    assert convert<str>(type(t)) == "Type"
+}

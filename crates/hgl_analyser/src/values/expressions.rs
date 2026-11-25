@@ -131,6 +131,8 @@ impl<'a> Typer<'a> {
                 let aliases = self.aliases.clone();
                 let returns = (self.must_return, self.returning_tails.clone());
                 let lifecycle = (self.hook, self.initializing, self.caching);
+                let querying = self.type_query;
+                self.type_query = true;
                 self.hook = None;
                 self.initializing = false;
                 self.caching = false;
@@ -145,6 +147,7 @@ impl<'a> Typer<'a> {
                 self.aliases = aliases;
                 (self.must_return, self.returning_tails) = returns;
                 (self.hook, self.initializing, self.caching) = lifecycle;
+                self.type_query = querying;
                 self.constants.remember_type(at, ty.clone());
                 (
                     ExprKind::Literal(Value::Type(Box::new(ty))),
@@ -473,7 +476,8 @@ impl<'a> Typer<'a> {
     /// path reaching a read must assign it."
     pub(super) fn read_local(&mut self, local: LocalId, node: &SyntaxNode) -> Expr {
         let at = self.at(node);
-        if !self.assigned[local] {
+        // TYPE-18 obtains a declared type without evaluating the local.
+        if !self.type_query && !self.assigned[local] {
             self.diagnostics.emit(
                 error(
                     Category::Name,

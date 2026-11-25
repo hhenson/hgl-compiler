@@ -5,6 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_parser::HasSpan;
 
 use crate::{Argument, ConstantValue, Detail, GenericKind, NamedKind, Program, Type};
 
@@ -55,14 +56,77 @@ pub(crate) fn check_deltas(program: &Program, diagnostics: &mut Diagnostics) {
     }
 }
 
+/// Raw delta applications belonging to this declaration, including local types.
+fn declaration_deltas(
+    program: &Program,
+    (module, declaration): (usize, usize),
+) -> impl Iterator<Item = &crate::types::DeltaInput> {
+    let unit = &program.modules[module];
+    let declared = &unit.declarations[declaration];
+    let span = declared.syntax.span();
+    unit.delta_inputs.iter().filter(move |input| {
+        input.at.file == declared.at.file
+            && span.start <= input.at.span.start
+            && input.at.span.end <= span.end
+    })
+}
+
+/// Generic declarations whose retained delta operands need another check once
+/// their type parameters or pack members are known (GEN-7, TYPE-16/18 Proposed).
+/// Feed the existing bounded instance traversal rather than walking calls again.
+pub(crate) fn delta_declarations(program: &Program) -> Vec<(usize, usize)> {
+    let mut declarations = Vec::new();
+    for (module, unit) in program.modules.iter().enumerate() {
+        for declaration in 0..unit.declarations.len() {
+            if declaration_deltas(program, (module, declaration)).any(|input| {
+                input.payload.any_part(
+                    &|part| matches!(part, Type::Parameter { .. } | Type::PackMember { .. }),
+                    &|_| false,
+                )
+            }) {
+                declarations.push((module, declaration));
+            }
+        }
+    }
+    declarations
+}
+
+/// TYPE-16/18, Proposed: substitution cannot create a delta of a Type-containing
+/// value, even where normalization erased the Delta node at its declaration.
+/// `project` is the instance traversal's ordinary generic/pack substitution.
+pub(crate) fn instance_deltas(
+    program: &Program,
+    declaration: (usize, usize),
+    project: impl Fn(&Type) -> Option<Type>,
+    diagnostics: &mut Diagnostics,
+) {
+    for input in declaration_deltas(program, declaration) {
+        if program.holds_type_value(&input.payload) {
+            // The declaration already reported this concrete forbidden operand.
+            continue;
+        }
+        if project(&input.payload).is_some_and(|payload| program.holds_type_value(&payload)) {
+            diagnostics.emit(crate::error(
+                Category::Shape,
+                crate::codes::DELTA_UNSUPPORTED_SHAPE,
+                input.at,
+                "this instance gives a delta operand that holds a `Type`, which has no temporal form or delta".to_string(),
+                "TYPE-16",
+            ));
+            // ERR-9: one invalid type suffices to reject this instance.
+            break;
+        }
+    }
+}
+
 /// Which generic input a struct stores, directly or through another struct.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Stored {
     Parameter(Location),
     PackMember(Location, usize),
 }
 
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct StoredTypes {
     type_value: bool,
     parameters: HashSet<Stored>,
@@ -156,32 +220,27 @@ impl StoredTypes {
     }
 }
 
-impl Program {
-    /// Whether an ordinary value of `ty` holds a Type (TYPE-18,
-    /// Proposed). Struct storage dependencies reach a fixed point,
-    /// rather than expanding recursive generic applications.
-    pub fn holds_type_value(&self, ty: &Type) -> bool {
-        let direct = |ty: &Type| ty.any_part(&|part| *part == Type::TypeValue, &|_| false);
-        if !direct(ty)
-            && !self.modules.iter().any(|m| {
-                m.details.iter().any(
-                    |d| matches!(d, Detail::Struct(s) if s.members.iter().any(|m| direct(&m.ty))),
-                )
-            })
-        {
-            return false;
-        }
+/// One immutable summary of the struct fields resolved by the declaration pass.
+/// Compute even generic-only storage: `Box<Type>` can hold a Type although
+/// no declared field directly names Type (TYPE-18, Proposed).
+#[derive(Debug, Clone)]
+pub(crate) struct TypeStorage {
+    structs: HashMap<(usize, usize), StoredTypes>,
+}
+
+impl TypeStorage {
+    fn new(program: &Program) -> Self {
         let mut structs = HashMap::new();
         loop {
             let mut changed = false;
-            for (module, unit) in self.modules.iter().enumerate() {
+            for (module, unit) in program.modules.iter().enumerate() {
                 for (declaration, detail) in unit.details.iter().enumerate() {
                     let Detail::Struct(read) = detail else {
                         continue;
                     };
                     let mut next = StoredTypes::default();
                     for field in &read.members {
-                        next.include(StoredTypes::of(&field.ty, self, &structs));
+                        next.include(StoredTypes::of(&field.ty, program, &structs));
                     }
                     if structs.get(&(module, declaration)) != Some(&next) {
                         structs.insert((module, declaration), next);
@@ -193,7 +252,19 @@ impl Program {
                 break;
             }
         }
-        StoredTypes::of(ty, self, &structs).type_value
+        Self { structs }
+    }
+}
+
+impl Program {
+    /// Whether an ordinary value of `ty` holds a Type (TYPE-18,
+    /// Proposed). The declared fields are complete before the first query;
+    /// reuse their fixed point for every type and every emitted module.
+    pub fn holds_type_value(&self, ty: &Type) -> bool {
+        let storage = self
+            .type_value_storage
+            .get_or_init(|| TypeStorage::new(self));
+        StoredTypes::of(ty, self, &storage.structs).type_value
     }
 }
 

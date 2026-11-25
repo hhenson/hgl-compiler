@@ -3352,3 +3352,32 @@ fn type_queries_keep_the_requires_form_separate() {
     rejected(Entry::Statements, "let kind = type()");
     rejected(Entry::Statements, "let kind = type(1, 2)");
 }
+
+/// LEX-9, TYPE-18: Type is hard reserved in ordinary bindings, while the
+/// standard member/field/enum-member/argument-label positions still admit it.
+#[test]
+fn type_is_reserved_except_as_a_member_name() {
+    for text in [
+        "struct Type { count: i64 }",
+        "enum Type { member }",
+        "fn Type(value: i64) -> i64 => value",
+        "fn value(Type: i64) -> i64 => 1",
+        "const Type: i64 = 1",
+    ] {
+        let reports = rejected(Entry::Declarations, text);
+        if text.starts_with("struct Type") {
+            assert!(
+                reports.iter().any(|report| report.contains("found `Type`")),
+                "{text}: {reports:?}"
+            );
+        }
+    }
+    rejected(Entry::Statements, "let Type = 1");
+    rejected(Entry::Declarations, "fn bad(value: Type::Descriptor) {}");
+    declarations("struct Record { Type: Type }");
+    declarations("enum Choice { Type }");
+    statements("let field = value.Type\nlet selected = .Type\nRecord(Type: 12)");
+    statements("let t: Type = type(42)\nlet nested = type(type(t))");
+    // LEX-10: lowercase type remains an identifier outside its query form.
+    statements("let type = 1\nRecord(type: type)");
+}

@@ -301,3 +301,113 @@ const fn good() { let value = delta<list<i64>>() }
         checked.report
     );
 }
+
+/// TYPE-18, Proposed: storage through a generic field is recognized even
+/// after a negative query, without any field directly declared as Type.
+#[test]
+fn cached_storage_keeps_generic_only_type_fields() {
+    let checked = check(&[(
+        "m.hgl",
+        "module m\nstruct Plain { value: i64 }\n\
+         struct Box<T> { value: T }\n",
+    )]);
+    assert_eq!(checked.summary(), Vec::<String>::new());
+    let module = checked.program.module_index("m").unwrap();
+    let named = |name: &str, arguments| Type::Named {
+        name: name.to_string(),
+        module,
+        declaration: checked.program.modules[module]
+            .declarations
+            .iter()
+            .position(|declaration| declaration.name == name)
+            .unwrap(),
+        arguments,
+        kind: NamedKind::Struct,
+    };
+    let meta = || vec![hgl_analyser::Argument::Type(Type::TypeValue)];
+    assert!(
+        !checked
+            .program
+            .holds_type_value(&named("Plain", Vec::new()))
+    );
+    assert!(checked.program.holds_type_value(&named("Box", meta())));
+    assert!(!checked.program.holds_type_value(&named(
+        "Box",
+        vec![hgl_analyser::Argument::Type(Type::Scalar(Scalar::I64))],
+    )));
+}
+
+/// TYPE-18: the query uses a var's declared type without requiring a value,
+/// and leaves ordinary definite-assignment checks intact (EXPR-3).
+#[test]
+fn cold_type_queries_allow_declared_unassigned_locals() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn value_query() -> Type {
+    var count: i64
+    let known = type(count)
+    count = 1
+    return known
+}
+fn graph_query(value: i64) -> i64 {
+    var count: i64
+    let known = type(count)
+    count = value
+    return count
+}
+test nested_query {
+    let known = type({ var count: i64
+        count })
+    assert known == type(1)
+}
+"#,
+    )]);
+    assert_eq!(checked.summary(), Vec::<String>::new());
+    let rejected = check(&[(
+        "m.hgl",
+        "module m\ntest read { var count: i64\n let known = type(count)\n let value = count }\n",
+    )]);
+    assert_eq!(rejected.findings.len(), 1, "{}", rejected.report);
+    assert_eq!(rejected.findings[0].code, "name/binding.unassigned");
+}
+
+/// TYPE-16/18, Proposed, and GEN-7: saved delta operands are held to the
+/// prohibition after a making call or struct application supplies the type.
+#[test]
+fn generic_delta_operands_reject_type_containing_instances() {
+    let cases = [
+        "const fn keep<T>(value: delta<result<T, error>>) -> bool => true\n\
+         test bad { assert keep<Type>(ok(type(1))) }\n",
+        "fn temporal<T>(value: delta<atomic<T>>) -> bool => true\n\
+         fn graph() -> bool => temporal<Type>(type(1))\n",
+        "const fn keep<T>(value: delta<atomic<T>>) -> bool => true\n\
+         test bad { assert keep<Type>(type(1)) }\n",
+        "const fn keep<T>(value: delta<atomic<T>>) -> bool => true\n\
+         const fn forward<T>(value: T) -> bool => keep<T>(value)\n\
+         test bad { assert forward<Type>(type(1)) }\n",
+        "struct Holder<T> { value: delta<T>? }\n\
+         test bad { let held = Holder<Type>() }\n",
+        "struct Holder<T> { value: delta<T>? }\n\
+         const fn bad(value: Holder<Type>) {}\n",
+        "const fn local_delta<T>() -> i64 { let d: delta<T>? = null\n return 1 }\n\
+         test bad { assert local_delta<Type>() == 1 }\n",
+    ];
+    for source in cases {
+        let checked = check(&[("m.hgl", &format!("module m\n{source}"))]);
+        assert!(
+            checked.findings.iter().any(|finding| {
+                finding.code == "shape/delta.unsupported_shape" && finding.rule == "TYPE-16"
+            }),
+            "{source}\n{}",
+            checked.report
+        );
+    }
+    let ordinary = check(&[(
+        "m.hgl",
+        "module m\nconst fn keep<T>(value: delta<atomic<T>>) -> bool => true\n\
+         struct Holder<T> { value: delta<T>? }\n\
+         test good { assert keep<i64>(1)\n let held = Holder<i64>() }\n",
+    )]);
+    assert_eq!(ordinary.summary(), Vec::<String>::new());
+}

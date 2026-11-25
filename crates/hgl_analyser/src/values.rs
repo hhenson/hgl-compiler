@@ -781,6 +781,8 @@ struct Typer<'a> {
     /// are met, and is cut back to where it stood when a branch or a
     /// block ends.
     present: Vec<Fact>,
+    /// TYPE-18: a cold operand asks for declared types, never local values.
+    type_query: bool,
     /// The locals a capability has been bound to, each with the
     /// capability it is: `let bound = clock` (TIME-8: "Binding one to a
     /// `let` ... [is a use]"). The local is then the capability under
@@ -1022,6 +1024,7 @@ impl<'a> Typer<'a> {
             out: None,
             designating: None,
             present: Vec::new(),
+            type_query: false,
             aliases: HashMap::new(),
             bound_children: HashMap::new(),
             binding_child: None,

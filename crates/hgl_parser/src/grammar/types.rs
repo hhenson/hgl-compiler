@@ -47,7 +47,7 @@ impl Parser<'_> {
     }
 
     /// ```text
-    /// type_base = scalar_type | named_type | tuple_type | list_type | set_type
+    /// type_base = "Type" | scalar_type | named_type | tuple_type | list_type | set_type
     ///           | dict_type | rolling_window_type | "signal" | endpoint_type
     ///           | "atomic", "<", value_type, ">" | result_type | "error" | delta_type
     ///           | pack_member ;
@@ -75,6 +75,12 @@ impl Parser<'_> {
         }
         if let Some(node) = built_in(kind) {
             self.built_in_type(node);
+            return true;
+        }
+        // LEX-9/TYPE-18: the hard-reserved descriptor type uses the same
+        // syntax record as before, retaining GEN-2's arity diagnostic.
+        if kind == KwType {
+            self.named_type();
             return true;
         }
         if kind != Ident {
@@ -119,7 +125,12 @@ impl Parser<'_> {
     /// The cursor is on the identifier.
     pub(crate) fn named_type(&mut self) {
         self.start(NamedType);
-        self.name();
+        if self.at(KwType) {
+            // TYPE-18 names the built-in itself, never a qualified binding.
+            self.bump();
+        } else {
+            self.name();
+        }
         // GEN-14: in a type position, `<` after a name always opens
         // generic arguments.
         if self.at(Lt) && !self.nl() {

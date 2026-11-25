@@ -61,6 +61,7 @@ lexer: done
 parser: done
 
 - Any word of identifier form, reserved words included, as member name and argument label; `const` as modifier or name by position
+- `Type` is hard reserved in ordinary declaration and binding positions, and stays available as a field, enum member, dotted member and argument label (TYPE-18).
 
 ## LEX-10
 

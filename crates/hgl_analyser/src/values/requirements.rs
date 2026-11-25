@@ -2630,6 +2630,7 @@ pub(super) fn instances_hold(
         .chain(dependent_patterns.iter().copied())
         .chain(program.const_demands.keys().copied())
         .chain(program.generic_store_bodies.iter().copied())
+        .chain(crate::type_values::delta_declarations(program))
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -2788,6 +2789,27 @@ pub(super) fn instances_hold(
                 parent,
                 parents: &parents,
             };
+            let enclosing_packs = match &program.modules[made.callee.0].details[made.callee.1] {
+                Detail::Callable(signature) => &signature.generics[..],
+                Detail::Struct(read) => &read.generics[..],
+                _ => &[],
+            };
+            let enclosing_packs =
+                super::dependent_packs::PackTypes::new(enclosing_packs, &made.type_packs);
+            let mut delta_reports = Diagnostics::new();
+            crate::type_values::instance_deltas(
+                program,
+                made.callee,
+                |ty| enclosing_packs.project(ty, &map).ok(),
+                &mut delta_reports,
+            );
+            if delta_reports.has_errors() {
+                let paths = chain.paths(program, &root_calls);
+                for report in delta_reports.as_slice() {
+                    emit_instance_report(report.clone(), &paths, diagnostics);
+                }
+                continue;
+            }
             let recheck_endpoints = endpoint_reads.contains(&made.callee)
                 && matches!(
                     unit.details.get(made.callee.1),
@@ -2944,13 +2966,6 @@ pub(super) fn instances_hold(
                     at: call.at,
                 })
                 .collect();
-            let enclosing_packs = match &program.modules[made.callee.0].details[made.callee.1] {
-                Detail::Callable(signature) => &signature.generics[..],
-                Detail::Struct(read) => &read.generics[..],
-                _ => &[],
-            };
-            let enclosing_packs =
-                super::dependent_packs::PackTypes::new(enclosing_packs, &made.type_packs);
             for call in inner.iter().filter(|call| !replaced.contains(&call.at)) {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with

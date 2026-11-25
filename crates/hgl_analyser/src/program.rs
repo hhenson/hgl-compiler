@@ -19,6 +19,9 @@ use crate::types::{
 /// Every module found in the files analysed, in order of module path.
 #[derive(Debug, Clone, Default)]
 pub struct Program {
+    /// Storage dependencies after declared struct fields resolve (TYPE-18).
+    /// Later passes fill bodies, leaving this immutable summary reusable.
+    pub(crate) type_value_storage: std::sync::OnceLock<crate::type_values::TypeStorage>,
     /// The modules. A module's position here is how other records refer
     /// to it ([`Import::module`], [`OperatorRef::module`]).
     pub modules: Vec<Module>,

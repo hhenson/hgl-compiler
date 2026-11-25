@@ -180,6 +180,7 @@ define_token_kinds! {
         KwEndpoint => "endpoint",
         KwDelta => "delta",
         KwError => "error",
+        KwType => "Type",
     }
     // The alternatives of the PUNCTUATION production in source-text.md. Each
     // is one token, and the lexer takes the longest that matches (LEX-17).

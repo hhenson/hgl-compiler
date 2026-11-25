@@ -1010,9 +1010,7 @@ impl Resolver<'_> {
         // TYPE-18: the built-in type `Type` needs no declaration.
         if node.kind() == SyntaxKind::NamedType
             && child(node, SyntaxKind::QualifiedName).is_none()
-            && identifiers(node)
-                .next()
-                .is_some_and(|name| name.text() == "Type")
+            && has_token(node, SyntaxKind::KwType)
         {
             return None;
         }

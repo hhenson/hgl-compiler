@@ -6,7 +6,7 @@ use hgl_source::FileId;
 
 use crate::constant::{Fault, Scope, Typed};
 use crate::program::{Binding, Declaration, DeclarationKind, LocalKind};
-use crate::syntax::{child, name_token};
+use crate::syntax::{child, has_token, name_token};
 use crate::types::{Argument, Constant, ConstantValue, GenericKind, NamedKind, Type};
 use crate::{codes, error};
 
@@ -28,9 +28,7 @@ impl Reader<'_> {
     pub(super) fn named(&mut self, node: &SyntaxNode, position: Position) -> Type {
         // TYPE-18: `Type` is the language's type of a type, not a
         // declaration supplied by the program or by core.
-        if child(node, SyntaxKind::QualifiedName).is_none()
-            && name_token(node).is_some_and(|name| name.text() == "Type")
-        {
+        if child(node, SyntaxKind::QualifiedName).is_none() && has_token(node, SyntaxKind::KwType) {
             if let Some(list) = child(node, SyntaxKind::GenericArgs) {
                 // TYPE-18 gives Type no parameters. Still read supplied
                 // arguments so their own errors are not hidden (GEN-2).

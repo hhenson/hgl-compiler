@@ -1159,6 +1159,15 @@ mod tests {
     }
 
     #[test]
+    fn type_descriptor_name_is_hard_reserved() {
+        // LEX-9/10, TYPE-18: exact spelling only; lowercase type is contextual.
+        assert!(crate::TokenKind::keyword("Type").is_some());
+        for contextual in ["type", "Types", "TypeValue"] {
+            assert_eq!(crate::TokenKind::keyword(contextual), None);
+        }
+    }
+
+    #[test]
     fn non_ascii_letters_do_not_form_identifiers() {
         // LEX-1 admits ASCII letters only.
         let (codes, tokens) = rejected("caf\u{e9}");

@@ -267,7 +267,7 @@ transpiler: partial
 analyser: partial
 
 - `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window (of a window of a nullable V, `delta<V>`), a tuple of each position's delta under a `?`, and a type of its own for a nullable, a list, a set, a dictionary and a struct
-- Proposed: a `Type`, or a tuple, collection, nullable or struct that stores one, has no delta (`delta.unsupported_shape`, TYPE-18). Original delta operands are retained until fields resolve, including applications that atomic, result or window normalization erases. Ordinary struct layouts omit their auxiliary delta layout.
+- Proposed: a `Type`, or a tuple, collection, nullable or struct that stores one, has no delta (`delta.unsupported_shape`, TYPE-18). Original delta operands are retained until fields resolve, including applications that atomic, result or window normalization erases. Generic function and struct instances project those operands through the existing bounded GEN-7 traversal and reject forbidden substituted payloads. Ordinary struct layouts omit their auxiliary delta layout.
 - A `signal` has none (`delta.unsupported_shape`); a `ref` parameter's `delta_value` is not read (`ref.read`, FN-16)
 - Each delta that is a type of its own has its properties: a set's `added` and `removed`, a list's `updated`, `removed` and `size_modified`, a dictionary's `updated` and `removed`, a nullable's `value`, a struct's one for each field; none is assigned (`binding.immutable`)
 - It is constructed by them, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`)
@@ -306,7 +306,7 @@ parser: done
 
 analyser: partial
 
-- `Type` is an intrinsic ordinary type without generic parameters. A query retains the expression's checked type as a compiled constant, without its operand's calls, input payload reads or local flow effects. Generic instances project the queried type.
+- `Type` is an intrinsic ordinary type without generic parameters. A query retains the expression's checked type as a compiled constant, without its operand's calls, input payload reads or local flow effects. A declared but unassigned local supplies its type; a later ordinary read still requires assignment (EXPR-3). Generic instances project the queried type.
 - A cold operand retains the call-role rules of its source place (FN-3). A graph query of a temporal call retains its payload type and wires no call.
 - Type constants compare and form collection keys by canonical type identity (GEN-13), independently of their text. The type of a value annotated `any` is `any`.
 - Proposed: an explicit delta of Type or a value that stores one rejects with `shape/delta.unsupported_shape` (TYPE-16).
@@ -315,5 +315,5 @@ analyser: partial
 transpiler: partial
 
 - Emits ordinary Type values, equality, inequality, set elements and dictionary keys. Core's native conversion returns canonical diagnostic spelling (FMT-5). Queries in constants, parameter and field defaults, generic functions, node handlers and graph composition execute without evaluating the operand.
-- Ordinary structs holding Type retain their value layout and omit auxiliary delta layouts under the proposed TYPE-16 rule.
+- Ordinary structs holding Type retain their value layout and omit auxiliary delta layouts under the proposed TYPE-16 rule. Storage dependencies are computed once after fields resolve and reused across emitted modules.
 - Left: Type-valued generic struct arguments (#871), Type-containing connections, and queries of primitive type-call operands whose old checker stub leaves their type unknown (#874) decline cleanly with `target.unsupported` before native compilation.
