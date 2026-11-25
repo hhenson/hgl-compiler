@@ -233,7 +233,7 @@ transpiler: done
 
 analyser: done
 
-- Selects `join` for one list of strings or for the proposed positional-pack form. Each form takes `separator` by name under the FN-8 trial.
+- Selects `join` for one list of strings or for a positional pack of strings. Its `separator` configuration defaults to one space. A connection as the separator rejects (FN-18, EXPR-14).
 
 transpiler: done
 
@@ -540,7 +540,7 @@ analyser: partial
 - `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get` gives a `result<V, error>`, with V written by the caller or inferred from the place
 - The run's own key, `"run.output"`, written out as a key is rejected (`store.reserved_key`)
 - A key written out is used with one type in a program: a `put` or a `get` of another type than an earlier use is `store.key_type` (TIME-8)
-- Left: a key resolved from a `const` parameter can name `run.output` or bypass the source check for inconsistent types (#543).
+- Left: a key resolved from a `const` parameter can name `run.output` or bypass the source check for inconsistent types.
 
 transpiler: partial
 
@@ -551,6 +551,7 @@ transpiler: partial
 - Reading an absent store key gives `value.missing_key`, the same code as a
   strict dictionary lookup (ERR-6).
 - Left: a temporal child graph using the surrounding store is declined (CRUN-7).
+- Left: The execution catalogue lists `store.reserved_key`. #543 implements its checks.
 
 ## CAP-7
 
@@ -743,7 +744,7 @@ transpiler: partial
   stop. Outputless entries have no recording.
 - Left: Unsupported record types follow CEVAL-4. The reserved `run.output` check covers
   literal keys at source checking. Keys resolved at graph construction remain unchecked.
-- Left: The execution catalogue registers `store.reserved_key`. Its construction and operation checks follow #543.
+- Left: The execution catalogue lists `store.reserved_key`. #543 implements its checks.
 
 runner: planned
 
