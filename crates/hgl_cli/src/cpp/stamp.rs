@@ -18,11 +18,17 @@ const PREVIOUS: &str = ".hgl-previous-build.json";
 const VERSION: u32 = 2;
 
 /// A successful build for one input key, with its recorded artifacts.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub(super) struct Stamp {
     version: u32,
     key: String,
     artifacts: Vec<Artifact>,
+    /// Earlier or optional compiler-written files still verified in this
+    /// workspace (prior debug source copies, exported compilation databases,
+    /// and test or application result files). Unlike `artifacts`, deleting or
+    /// editing one never invalidates build reuse.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    retained_artifacts: Vec<Artifact>,
     /// A debugger's test selection does not cover the whole program.
     #[serde(default)]
     partial_tests: bool,
@@ -30,27 +36,57 @@ pub(super) struct Stamp {
     pub(super) program: Program,
 }
 
+#[derive(Serialize)]
+struct StampRef<'a> {
+    version: u32,
+    key: &'a str,
+    artifacts: &'a [Artifact],
+    #[serde(skip_serializing_if = "<[Artifact]>::is_empty")]
+    retained_artifacts: &'a [Artifact],
+    partial_tests: bool,
+    program: &'a Program,
+}
+
 /// The last successful build's digests. An invalidated stamp is kept
 /// only to verify incremental inputs and never permits direct reuse.
 pub(super) struct PreviousBuild {
     /// The artifact inventory from the last successful build.
     pub(super) stamp: Stamp,
+    /// The build before `stamp`, still present in `.hgl-previous-build.json`
+    /// after a replacement build succeeds.
+    earlier: Option<Stamp>,
     active: bool,
 }
 
 impl PreviousBuild {
     /// Finds the current stamp, or the previous one after a failed build.
     pub(super) fn read(workspace: &Workspace) -> Option<Self> {
+        let earlier = Stamp::read(workspace, PREVIOUS);
         if let Some(stamp) = Stamp::read(workspace, FILE) {
             return Some(Self {
                 stamp,
+                earlier,
                 active: true,
             });
         }
-        Stamp::read(workspace, PREVIOUS).map(|stamp| Self {
+        earlier.map(|stamp| Self {
             stamp,
+            earlier: None,
             active: false,
         })
+    }
+
+    /// All regular-file stamps present in the workspace, newest first.
+    pub(super) fn stamps(&self) -> impl Iterator<Item = &Stamp> {
+        std::iter::once(&self.stamp).chain(self.earlier.as_ref())
+    }
+
+    /// Checks an independently discovered workspace file against the newest
+    /// stamp entry recorded for `relative` across the workspace's stamps.
+    pub(super) fn matches_artifact(&self, directory: &Path, relative: &str) -> bool {
+        self.stamps()
+            .find_map(|stamp| stamp.recorded_artifact(relative))
+            .is_some_and(|artifact| artifact.matches(directory))
     }
 
     /// Only a current stamp vouches for an executable that can run now.
@@ -85,10 +121,44 @@ impl PreviousBuild {
 
     /// Atomically withdraws permission to run and keeps the digests. A
     /// later failure with no active stamp leaves those digests alone.
+    /// When an older `.hgl-previous-build.json` holds still-verified entries
+    /// absent from the active stamp (for example, a 0.2.9 debug build followed
+    /// by a 0.2.9 release build), persist them into the replacement previous
+    /// stamp with last-write precedence before withdrawing `.hgl-built.json`.
     pub(super) fn invalidate(workspace: &Workspace, previous: Option<&Self>) -> Result<(), String> {
         let path = workspace.directory.join(FILE);
-        if !previous.is_some_and(|build| build.active) {
+        let Some(build) = previous.filter(|build| build.active) else {
             return remove(&path);
+        };
+        if let Some(earlier) = &build.earlier {
+            let mut merged_retained = build.stamp.retained_artifacts.clone();
+            let mut seen: HashSet<&str> = build
+                .stamp
+                .retained_artifacts
+                .iter()
+                .chain(&build.stamp.artifacts)
+                .map(|artifact| artifact.path.as_str())
+                .collect();
+            let mut carried = false;
+            for artifact in earlier.retained_artifacts.iter().chain(&earlier.artifacts) {
+                if seen.insert(artifact.path.as_str()) && artifact.matches(&workspace.directory) {
+                    merged_retained.push(artifact.clone());
+                    carried = true;
+                }
+            }
+            if carried {
+                let json = serde_json::to_string(&StampRef {
+                    version: VERSION,
+                    key: &build.stamp.key,
+                    artifacts: &build.stamp.artifacts,
+                    retained_artifacts: &merged_retained,
+                    partial_tests: build.stamp.partial_tests,
+                    program: &build.stamp.program,
+                })
+                .map_err(|error| error.to_string())?;
+                write_if_changed(&workspace.directory.join(PREVIOUS), &json)?;
+                return remove(&path);
+            }
         }
         match fs::rename(&path, workspace.directory.join(PREVIOUS)) {
             Ok(()) => Ok(()),
@@ -132,9 +202,23 @@ impl Artifact {
 
 impl Stamp {
     fn read(workspace: &Workspace, name: &str) -> Option<Self> {
-        let bytes = fs::read(workspace.directory.join(name)).ok()?;
+        let path = workspace.directory.join(name);
+        if !fs::symlink_metadata(&path).ok()?.is_file() {
+            return None;
+        }
+        let bytes = fs::read(&path).ok()?;
         let stamp: Stamp = serde_json::from_slice(&bytes).ok()?;
         (stamp.version == VERSION).then_some(stamp)
+    }
+
+    fn recorded_artifact(&self, relative: &str) -> Option<&Artifact> {
+        // `retained_artifacts` records later writes onto an existing stamp
+        // (such as debug copies written during a failed upgrade), so it takes
+        // precedence over the older successful build's `artifacts`.
+        self.retained_artifacts
+            .iter()
+            .chain(&self.artifacts)
+            .find(|artifact| artifact.path == relative)
     }
 
     fn reusable(&self, workspace: &Workspace, key: &str, tests: Option<bool>) -> bool {
@@ -210,6 +294,7 @@ impl Stamp {
         program: &Program,
         partial_tests: bool,
         previous: Option<&Self>,
+        history: Option<&PreviousBuild>,
     ) -> Result<String, String> {
         // A partial build keeps earlier, still verified artifacts of the
         // same source snapshot. A different key gets a fresh inventory.
@@ -234,14 +319,105 @@ impl Stamp {
             })
             .collect::<Result<Vec<_>, String>>()?;
         retained.extend(artifacts);
-        serde_json::to_string(&serde_json::json!({
-            "version": VERSION,
-            "key": key,
-            "artifacts": retained,
-            "partial_tests": partial_tests,
-            "program": program,
-        }))
+
+        // Carry forward recorded provenance for still-unmodified artifacts and
+        // optional workspace files (retired objects, executables, debug copies,
+        // exported compilation databases, and recorded test or run results).
+        // Within each stamp, `retained_artifacts` holds later writes than
+        // `artifacts` and takes precedence for the same path.
+        let mut seen: HashSet<&str> = retained.iter().map(|a| a.path.as_str()).collect();
+        let mut retained_artifacts = Vec::new();
+        for stamp in history.into_iter().flat_map(PreviousBuild::stamps) {
+            for artifact in stamp.retained_artifacts.iter().chain(&stamp.artifacts) {
+                if seen.insert(artifact.path.as_str()) && artifact.matches(&workspace.directory) {
+                    retained_artifacts.push(artifact.clone());
+                }
+            }
+        }
+
+        serde_json::to_string(&StampRef {
+            version: VERSION,
+            key,
+            artifacts: &retained,
+            retained_artifacts: &retained_artifacts,
+            partial_tests,
+            program,
+        })
         .map_err(|error| error.to_string())
+    }
+
+    /// Records or updates optional files written by `hgl` in the active stamp.
+    /// Leaves `.hgl-built.json` untouched when every recorded digest matches.
+    pub(super) fn record_optional(workspace: &Workspace, paths: &[&str]) -> Result<(), String> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let Some(mut stamp) = Self::read(workspace, FILE) else {
+            return Ok(());
+        };
+        if !stamp.update_retained(workspace, paths) {
+            return Ok(());
+        }
+        let json = serde_json::to_string(&stamp).map_err(|error| error.to_string())?;
+        Self::save(workspace, &json)
+    }
+
+    /// Records optional files written before Ninja finishes (such as bundled
+    /// debug copies) in `.hgl-previous-build.json`, preserving any existing
+    /// incremental artifact inventory without authorising build reuse.
+    pub(super) fn record_previous_optional(
+        workspace: &Workspace,
+        paths: &[String],
+    ) -> Result<(), String> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let mut stamp = Self::read(workspace, PREVIOUS).unwrap_or(Stamp {
+            version: VERSION,
+            key: String::new(),
+            artifacts: Vec::new(),
+            retained_artifacts: Vec::new(),
+            partial_tests: false,
+            program: Program {
+                units: Vec::new(),
+                applications: Vec::new(),
+                tests: None,
+            },
+        });
+        let names: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let previous_path = workspace.directory.join(PREVIOUS);
+        if !stamp.update_retained(workspace, &names)
+            && fs::symlink_metadata(&previous_path).is_ok_and(|metadata| metadata.is_file())
+        {
+            return Ok(());
+        }
+        let json = serde_json::to_string(&stamp).map_err(|error| error.to_string())?;
+        write_if_changed(&previous_path, &json)
+    }
+
+    fn update_retained(&mut self, workspace: &Workspace, paths: &[&str]) -> bool {
+        let mut changed = false;
+        for &relative in paths {
+            let Some(digest) = Artifact::digest(&workspace.directory, relative) else {
+                continue;
+            };
+            let digest = digest.to_hex().to_string();
+            if self
+                .retained_artifacts
+                .iter()
+                .any(|artifact| artifact.path == relative && artifact.digest == digest)
+            {
+                continue;
+            }
+            self.retained_artifacts
+                .retain(|artifact| artifact.path != relative);
+            self.retained_artifacts.push(Artifact {
+                path: relative.to_string(),
+                digest,
+            });
+            changed = true;
+        }
+        changed
     }
 
     /// Publishes only a finished build, as one atomic rename.
