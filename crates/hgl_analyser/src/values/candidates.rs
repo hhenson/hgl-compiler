@@ -36,7 +36,7 @@ use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
 use crate::syntax::{child, name_token, tokens, ungrouped};
 use crate::types::{
     Argument, Constant, ConstantValue, Detail, FunctionType, GenericKind, GenericParameter, Pack,
-    Signature, Type,
+    Scalar, Signature, Type,
 };
 use crate::{codes, error};
 
@@ -775,23 +775,34 @@ impl<'a> Typer<'a> {
             .into_iter()
             .filter_map(|(reads, chosen)| (Some(reads.len()) == fewest).then_some(chosen))
             .collect::<Vec<_>>();
-        // GEN-5: "Select exactly one most-specific admitted candidate.
-        // Concrete types outrank variables; structurally constrained
-        // variables outrank unconstrained ones."
-        retain_preferred(&mut selected, |left, right| outranks(left, right, public));
-        // GEN-5: "Select exactly one most-specific admitted candidate.
-        // Concrete types outrank variables". A candidate not told to admit
-        // the call that one admitted candidate outranks is selected by
-        // nothing whatever its condition comes to; any other leaves which
-        // is selected not told. GEN-7: so a candidate that takes every
-        // generic argument is known where nothing else can outrank it.
+        // GEN-5: compare exact matches before declared specificity.
+        let exact =
+            |left: &Chosen<'_>, right: &Chosen<'_>| self.exact_match(left, right, given, widening);
+        retain_preferred(&mut selected, |left, right| {
+            exact(left, right) == Specific::More
+        });
+        retain_preferred(&mut selected, |left, right| {
+            exact(left, right) == Specific::Same && outranks(left, right, public)
+        });
+        // GEN-7: keep the generic body's provisional structural match
+        // when an exact candidate may win only after substitution.
+        let generic_operand = !possible.is_empty()
+            && given.iter().any(|given| {
+                self.signature
+                    .generics
+                    .iter()
+                    .any(|generic| mentions(given.ty(), &[generic.at]))
+            });
+        let settles = |left: &Chosen<'_>, right: &Chosen<'_>| match exact(left, right) {
+            Specific::More => true,
+            Specific::Same => outranks(left, right, public),
+            Specific::Less | Specific::Neither => generic_operand && outranks(left, right, public),
+        };
         untold |= possible.iter().any(|(reads, unknown)| {
             fewest.is_none_or(|fewest| {
                 *reads < fewest
                     || *reads == fewest
-                        && !selected
-                            .iter()
-                            .any(|admitted| outranks(admitted, unknown, public))
+                        && !selected.iter().any(|admitted| settles(admitted, unknown))
             })
         });
         if widening && selected.len() > 1 {
@@ -818,6 +829,7 @@ impl<'a> Typer<'a> {
                     role(chosen) != Some(preferred)
                         && selected.iter().any(|other| {
                             role(other) == Some(preferred)
+                                && exact(other, chosen) == Specific::Same
                                 && other
                                     .taken
                                     .parameters
@@ -837,14 +849,70 @@ impl<'a> Typer<'a> {
                 !outranked[position - 1]
             });
         }
-        // Compare the inferred inputs only among candidates still tied
-        // after structural specificity, literal widening and phase.
-        if !untold {
-            retain_preferred(&mut selected, |left, right| {
-                callback_input_specificity(left, right, given) == Specific::More
-            });
-        }
         (selected, untold)
+    }
+
+    /// GEN-5: the exact match wins where it takes an argument as it is
+    /// and the other candidate widens it. Opposite preferences across
+    /// arguments leave the candidates incomparable.
+    fn exact_match(
+        &self,
+        left: &Chosen,
+        right: &Chosen,
+        given: &[Given],
+        widening: bool,
+    ) -> Specific {
+        given.iter().zip(&left.bound).zip(&right.bound).fold(
+            Specific::Same,
+            |order, ((argument, &left_place), &right_place)| {
+                let left_type = parameter_type(&left.taken, &left.type_packs, left_place);
+                let right_type = parameter_type(&right.taken, &right.type_packs, right_place);
+                let preference = if argument.by_function {
+                    let left = (left, left_place, left_type);
+                    let right = (right, right_place, right_type);
+                    callback_match(left, right, given)
+                } else if let (Some(left), Some(right)) = (left_type, right_type) {
+                    let widens = |expected| self.argument_widening(argument, expected, widening);
+                    match (widens(left), widens(right)) {
+                        (Some(false), Some(true)) => Specific::More,
+                        (Some(true), Some(false)) => Specific::Less,
+                        _ => Specific::Same,
+                    }
+                } else {
+                    Specific::Same
+                };
+                order.and(preference)
+            },
+        )
+    }
+
+    /// GEN-5 distinguishes exact types from nullable, parent, and `any`
+    /// widenings. Nullable widening includes `delta<V>` to `delta<V?>`
+    /// (TYPE-16). Literal precision is settled before admission.
+    fn argument_widening(&self, argument: &Given, expected: &Type, widening: bool) -> Option<bool> {
+        let floated = Type::Scalar(Scalar::F64);
+        let actual = if widening
+            && argument.explicit.is_none()
+            && accepts_float(expected)
+            && is_integer_literal(&argument.value)
+        {
+            &floated
+        } else {
+            argument.ty()
+        };
+        if argument.by_place || !whole(actual) || !whole(expected) {
+            return None;
+        }
+        if agree(actual, expected) {
+            return Some(false);
+        }
+        (matches!(expected, Type::Scalar(Scalar::Any))
+            || matches!(expected, Type::Nullable(inner)
+                if !matches!(actual, Type::Nullable(_)) && self.admits(inner, actual))
+            || matches!(expected, Type::Delta(of)
+                if matches!(of.as_ref(), Type::Nullable(_)) && self.admits(expected, actual))
+            || self.widens(actual, expected))
+        .then_some(true)
     }
 
     /// GEN-5: "Among candidates that tie and differ only in which
@@ -3682,7 +3750,6 @@ struct RankingType<'a, 'candidate> {
     ty: &'a Type,
     written: Option<&'a Type>,
     candidate: &'a Chosen<'candidate>,
-    retains_anonymous_value: bool,
 }
 
 impl<'a> RankingType<'a, '_> {
@@ -3707,7 +3774,6 @@ impl<'a> RankingType<'a, '_> {
         Self {
             ty,
             written,
-            retains_anonymous_value: false,
             ..self
         }
     }
@@ -3756,7 +3822,6 @@ impl<'a> RankingType<'a, '_> {
         elements.iter().zip(written).map(move |(ty, written)| Self {
             ty,
             written,
-            retains_anonymous_value: false,
             ..self
         })
     }
@@ -3852,21 +3917,15 @@ fn specificity(left: RankingType<'_, '_>, right: RankingType<'_, '_>) -> Specifi
         (Type::Function(l), Type::Function(r))
             if l.value == r.value
                 && l.parameters.len() == r.parameters.len()
-                && (l.result.is_none()
-                    && (r.result_admits_none || right.retains_anonymous_value)
-                    || r.result.is_none()
-                        && (l.result_admits_none || left.retains_anonymous_value)) =>
+                && (l.result.is_none() && r.result_admits_none
+                    || r.result.is_none() && l.result_admits_none) =>
         {
-            // GEN-5 keeps the value of an anonymous body with no written
-            // result. GEN-12 otherwise prefers a written absence over a
-            // result that can bind to none. The inputs still count.
-            let result = match (
-                l.result.is_none(),
-                left.retains_anonymous_value,
-                right.retains_anonymous_value,
-            ) {
-                (false, true, _) | (true, _, false) => Specific::More,
-                _ => Specific::Less,
+            // GEN-12 prefers a written absence over a result that can
+            // bind to none. The inputs still count.
+            let result = if l.result.is_none() {
+                Specific::More
+            } else {
+                Specific::Less
             };
             l.parameters
                 .iter()
@@ -3904,83 +3963,69 @@ fn retain_preferred(selected: &mut Vec<Chosen>, outranks: impl Fn(&Chosen, &Chos
     });
 }
 
-/// GEN-5, FN-17: where the ordinary arguments match alike, compare the
-/// input types each candidate gives an inferred callback. A type inferred
-/// from another argument outranks a nullable widening of that type.
-fn callback_input_specificity(left: &Chosen, right: &Chosen, given: &[Given]) -> Specific {
-    let mut rank = Specific::Same;
-    for ((argument, &left_place), &right_place) in given.iter().zip(&left.bound).zip(&right.bound) {
-        let left_type = parameter_type(&left.taken, &left.type_packs, left_place);
-        let right_type = parameter_type(&right.taken, &right.type_packs, right_place);
-        if !argument.by_function {
-            if left_type != right_type {
-                return Specific::Neither;
-            }
-            continue;
-        }
-        let (
-            Some(Type::Function(left_type)),
-            Some(Type::Function(right_type)),
-            Some(left_index),
-            Some(right_index),
-        ) = (
-            left_type,
-            right_type,
-            left_place.parameter(),
-            right_place.parameter(),
-        )
-        else {
-            return Specific::Neither;
-        };
-        let (Type::Function(left_written), Type::Function(right_written)) = (
-            &left.declared.parameters[left_index].ty,
-            &right.declared.parameters[right_index].ty,
-        ) else {
-            return Specific::Neither;
-        };
-        // GEN-12 compares a written absence of the callback result with
-        // a result that may bind to none as part of structural specificity.
-        if left_written.result.is_none() != right_written.result.is_none() {
-            return Specific::Neither;
-        }
-        if left_type == right_type {
-            continue;
-        }
-        let callback_rank = |(plain, written, chosen): (&FunctionType, &FunctionType, &Chosen),
-                             (widened, widened_written, widened_chosen): (
-            &FunctionType,
-            &FunctionType,
-            &Chosen,
-        )| {
-            let arity = plain.ordinary_parameters().count();
-            arity == widened.ordinary_parameters().count()
+/// GEN-5 and FN-17: a candidate can take an inferred callback's inputs
+/// without widening and keep the value of its unwritten result.
+fn callback_match(
+    (left, left_place, left_type): (&Chosen, Place, Option<&Type>),
+    (right, right_place, right_type): (&Chosen, Place, Option<&Type>),
+    given: &[Given],
+) -> Specific {
+    let (
+        Some(Type::Function(left_type)),
+        Some(Type::Function(right_type)),
+        Some(left_index),
+        Some(right_index),
+    ) = (
+        left_type,
+        right_type,
+        left_place.parameter(),
+        right_place.parameter(),
+    )
+    else {
+        return Specific::Same;
+    };
+    let result = if right_type.result.is_none()
+        && left.valued_anonymous_parameters.contains(&left_index)
+    {
+        Specific::More
+    } else if left_type.result.is_none() && right.valued_anonymous_parameters.contains(&right_index)
+    {
+        Specific::Less
+    } else {
+        Specific::Same
+    };
+    let (Type::Function(left_written), Type::Function(right_written)) = (
+        &left.declared.parameters[left_index].ty,
+        &right.declared.parameters[right_index].ty,
+    ) else {
+        return result;
+    };
+    let fits_without_widening = |(plain, written, chosen): (
+        &FunctionType,
+        &FunctionType,
+        &Chosen,
+    ),
+                                 widened: &FunctionType| {
+        let arity = plain.ordinary_parameters().count();
+        arity == widened.ordinary_parameters().count()
                 && arity == written.ordinary_parameters().count()
-                && arity == widened_written.ordinary_parameters().count()
                 && plain
                     .ordinary_parameters()
                     .zip(widened.ordinary_parameters())
                     .zip(written.ordinary_parameters())
-                    .zip(widened_written.ordinary_parameters())
-                    .all(|(((plain, widened), written), widened_written)| {
+                    .all(|((plain, widened), written)| {
                         plain.ty() == widened.ty()
                             || matches!(widened.ty(), Type::Nullable(inner) if inner.as_ref() == plain.ty())
                                 && callback_input_from_arguments(chosen, given, written.ty())
-                                && matches!(widened_written.ty(), Type::Nullable(inner)
-                                    if callback_input_from_arguments(widened_chosen, given, inner))
                     })
-        };
-        let left_types = (left_type.as_ref(), left_written.as_ref(), left);
-        let right_types = (right_type.as_ref(), right_written.as_ref(), right);
-        let left_exact = callback_rank(left_types, right_types);
-        let right_exact = callback_rank(right_types, left_types);
-        rank = rank.and(match (left_exact, right_exact) {
-            (true, false) => Specific::More,
-            (false, true) => Specific::Less,
-            (true, true) => Specific::Same,
-            (false, false) => Specific::Neither,
-        });
-    }
-    rank
+    };
+    let left_exact = fits_without_widening((left_type, left_written, left), right_type);
+    let right_exact = fits_without_widening((right_type, right_written, right), left_type);
+    result.and(match (left_exact, right_exact) {
+        (true, false) => Specific::More,
+        (false, true) => Specific::Less,
+        _ => Specific::Same,
+    })
 }
 
 /// A callback input's type variable also occurs in an ordinary parameter
@@ -4055,17 +4100,11 @@ fn outranks(better: &Chosen, worse: &Chosen, public: &Signature) -> bool {
                     ty: &better_expanded,
                     written: Some(better_type),
                     candidate: better,
-                    retains_anonymous_value: better
-                        .valued_anonymous_parameters
-                        .contains(&better_index),
                 },
                 RankingType {
                     ty: &worse_expanded,
                     written: Some(worse_type),
                     candidate: worse,
-                    retains_anonymous_value: worse
-                        .valued_anonymous_parameters
-                        .contains(&worse_index),
                 },
             ))
         })
