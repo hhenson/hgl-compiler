@@ -378,3 +378,49 @@ test bare_callbacks_with_split_inputs {
     assert eval whole_forwarded(values: [[2, 3]]) == [[2, 3]]
     assert eval explicit_whole_list(enabled: [[true, false]], values: [[2, 3]]) == [[2, 3]]
 }
+
+# GEN-5, GEN-6 and FN-17: each candidate derives callback types from its
+# own alternatives. The mode selects the candidate before another
+# candidate's narrower pattern can determine the type of the bare name.
+operator choose_input<M, R, ...Ps, ...As>(
+    mode: M, f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+impl fn choose_input<R, ...Ps, ...As>(
+    mode: i64, f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k]} } => 1
+impl fn choose_input<R, ...Ps, ...As>(
+    mode: str, f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {list<Ps[k], 2>} } => 2
+
+fn choose_whole(items: list<i64, 2>) -> i64 => choose_input(7, identity, items)
+fn choose_split(items: list<i64, 2>) -> i64 => choose_input("split", identity, items)
+fn choose_generic<T>(items: list<T, 2>) -> i64 => choose_input(7, identity, items)
+
+test bare_callbacks_use_their_own_candidate_evidence {
+    assert eval choose_whole(items: [[2, 3]]) == [1]
+    assert eval choose_split(items: [[2, 3]]) == [2]
+    assert eval choose_generic<i64>(items: [[2, 3]]) == [1]
+}
+
+# GEN-2, GEN-3 and FN-17: written and ordinary-input bindings stay fixed
+# when the enclosing declaration's alternatives supply callback inputs.
+operator list_only<T>(items: T) -> i64
+impl fn list_only(items: list<i64, 2>) -> i64 => items[0]
+operator dict_only<T>(items: T) -> i64
+impl fn dict_only(items: dict<str, i64>) -> i64 => 3
+
+fn sized_callback<const N: i64, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], N>} } => 70
+fn keyed_callback<K, R, ...Ps, ...As>(mark: K, f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], dict<K, Ps[k]>} } => 72
+
+fn list_binding(items: list<i64, 2>) -> i64 => sized_callback<3>(list_only, items)
+fn dict_binding(items: dict<str, i64>) -> i64 => keyed_callback(3, dict_only, items)
+fn list_split(items: list<i64, 2>) -> i64 => sized_callback<2>(identity, items)
+fn dict_split(items: dict<str, i64>) -> i64 => keyed_callback("key", identity, items)
+
+test bare_callbacks_keep_known_outer_bindings {
+    assert eval list_binding(items: [[5, 6]]) == [70]
+    assert eval dict_binding(items: [["a": 8]]) == [72]
+    assert eval list_split(items: [[5, 6]]) == [70]
+    assert eval dict_split(items: [["a": 8]]) == [72]
+}

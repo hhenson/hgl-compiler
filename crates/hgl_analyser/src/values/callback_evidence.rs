@@ -10,7 +10,9 @@ use super::dependent_packs::dependent_slot;
 use super::fit::whole;
 use super::inference::{infer, type_pack};
 use super::requirements::{conjoined_terms, pack_view};
-use crate::declared::{same_type, substitute_with_members, substitute_with_packs, weight};
+use crate::declared::{
+    same_type, substitute_with_members, substitute_with_packs, substitute_within, weight,
+};
 use crate::syntax::{child, tokens};
 use crate::types::{Argument, ConstantValue, GenericKind, GenericParameter, Type};
 use crate::{Program, ReflectedPack};
@@ -20,12 +22,28 @@ use crate::{Program, ReflectedPack};
 pub(super) struct CallbackEvidence(Vec<Membership>);
 
 impl CallbackEvidence {
-    pub(super) fn from_callables<'a>(
+    /// Does any positive membership give a type to this callback?
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub(super) fn from_callables<'a, 'b>(
         program: &Program,
-        callables: impl IntoIterator<Item = Candidate<'a>>,
+        callables: impl IntoIterator<Item = (Candidate<'a>, &'b [(Location, &'b Argument)])>,
     ) -> Self {
         let mut evidence = Self::default();
-        for (module, declaration, signature) in callables {
+        for ((module, declaration, signature), bindings) in callables {
+            let fixed: Vec<_> = bindings
+                .iter()
+                .copied()
+                .filter(|(_, value)| match value {
+                    Argument::Type(ty) => whole(ty),
+                    Argument::Constant(constant) => {
+                        !matches!(constant.value, ConstantValue::Unknown)
+                    }
+                    Argument::NoResult => true,
+                })
+                .collect();
             let unit = &program.modules[module];
             let Some(slot) = dependent_slot(unit, signature) else {
                 continue;
@@ -55,7 +73,10 @@ impl CallbackEvidence {
             };
             let type_at = |node: &SyntaxNode| {
                 let at = Location::new(declared.at.file, node.span());
-                unit.written.iter().find(|ty| ty.at == at).map(|ty| &ty.ty)
+                unit.written
+                    .iter()
+                    .find(|ty| ty.at == at)
+                    .map(|ty| substitute_within(&ty.ty, &fixed))
             };
             let mut terms = Vec::new();
             conjoined_terms(
@@ -167,13 +188,13 @@ struct Membership {
 }
 
 impl Membership {
-    fn read<'a>(
+    fn read(
         relation: &SyntaxNode,
         bound: Option<Location>,
         source: &GenericParameter,
         target: &ReflectedPack,
         generics: &[GenericParameter],
-        type_at: &impl Fn(&SyntaxNode) -> Option<&'a Type>,
+        type_at: &impl Fn(&SyntaxNode) -> Option<Type>,
     ) -> Option<Self> {
         let mut operands = relation.children();
         let left = operands.next()?;
@@ -189,7 +210,7 @@ impl Membership {
         let Type::PackMember { pack, key, .. } = type_at(&left)? else {
             return None;
         };
-        if *pack != source.at
+        if pack != source.at
             || bound.is_some_and(
                 |bound| !matches!(key.value, ConstantValue::Parameter { at, .. } if at == bound),
             )
@@ -200,10 +221,10 @@ impl Membership {
         for alternative in right.children() {
             let ty = type_at(&alternative)?;
             let pattern = substitute_with_members(
-                ty,
+                &ty,
                 &[],
                 &|pack, _, member| {
-                    (pack == target.at && member == key).then(|| Type::Parameter {
+                    (pack == target.at && member == &key).then(|| Type::Parameter {
                         at: variable,
                         name: target.name.clone(),
                     })

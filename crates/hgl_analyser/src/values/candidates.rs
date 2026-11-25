@@ -9,6 +9,7 @@ use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
+use super::callback_evidence::CallbackEvidence;
 use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
 use super::dependent_packs::{
@@ -23,7 +24,9 @@ use super::inference::{
     bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
 };
 use super::lifting::preferred_call_role;
-use super::operators::{core_dictionary_fallback, dictionary_fallback_type, unreadable};
+use super::operators::{
+    ReflectedCall, Requested, core_dictionary_fallback, dictionary_fallback_type, unreadable,
+};
 use super::requirements::{Condition, holds};
 use super::{Candidate, Typer};
 use crate::constant::Fault;
@@ -74,8 +77,14 @@ struct Admissions<'s> {
 
 #[derive(Default)]
 struct FunctionTrials<'a> {
-    prepared: Vec<(Candidate<'a>, Vec<Given>)>,
+    prepared: Vec<FunctionTrial<'a>>,
     failed: Vec<Vec<Diagnostic>>,
+}
+
+struct FunctionTrial<'a> {
+    candidate: Candidate<'a>,
+    given: Vec<Given>,
+    request: Option<Requested>,
 }
 
 impl<'s> Admissions<'s> {
@@ -191,15 +200,27 @@ impl<'a> Typer<'a> {
             for &form in forms {
                 let admitted = if let Some(trials) = &function_trials {
                     let mut admitted = Admissions::default();
-                    for (candidate, given) in &trials.prepared {
-                        admitted.include(self.admitted_as(
+                    for trial in &trials.prepared {
+                        let reflected = trial.request.as_ref().map(|request| Wanted {
+                            place: request.place.as_ref().or(wanted.place),
+                            among: request.among.clone(),
+                            written: wanted.written,
+                            callback: None,
+                        });
+                        let mut next = self.admitted_as(
                             operator,
-                            std::slice::from_ref(candidate),
-                            given,
-                            wanted,
+                            std::slice::from_ref(&trial.candidate),
+                            &trial.given,
+                            reflected.as_ref().unwrap_or(wanted),
                             widening,
                             form,
-                        ));
+                        );
+                        if let Some(request) = &trial.request {
+                            for chosen in next.known.iter_mut().map(|(_, chosen)| chosen) {
+                                chosen.public_generics = Some(request.call_generics.clone());
+                            }
+                        }
+                        admitted.include(next);
                     }
                     admitted
                 } else {
@@ -343,13 +364,39 @@ impl<'a> Typer<'a> {
                 continue;
             };
             match self.candidate_functions(
-                (module, &unit.declarations[declaration], signature),
+                operator,
+                (module, declaration, signature),
                 (given, &slots),
                 wanted,
             ) {
-                Some(Ok(arguments)) => trials
-                    .prepared
-                    .push(((module, declaration, signature), arguments)),
+                Some(Ok(mut arguments)) => {
+                    let call = arguments
+                        .iter()
+                        .find_map(|argument| argument.dependent_callback.as_ref()?.call.clone());
+                    let request = match call {
+                        Some(call) => {
+                            let mark = self.mark();
+                            let before = self.diagnostics.len();
+                            let result =
+                                self.trial_reflected_call(operator, public, &call, &mut arguments);
+                            let diagnostics = self.diagnostics.as_slice()[before..].to_vec();
+                            self.take_back(mark, false);
+                            match result {
+                                Ok(request) => Some(request),
+                                Err(()) => {
+                                    trials.failed.push(diagnostics);
+                                    continue;
+                                }
+                            }
+                        }
+                        None => None,
+                    };
+                    trials.prepared.push(FunctionTrial {
+                        candidate: (module, declaration, signature),
+                        given: arguments,
+                        request,
+                    });
+                }
                 Some(Err(errors)) => trials.failed.push(errors),
                 None => {}
             }
@@ -713,6 +760,13 @@ impl<'a> Typer<'a> {
                     type_packs,
                     bound: bound.clone(),
                     callbacks,
+                    public_generics: None,
+                    dependent_callbacks: given
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, argument)| argument.dependent_callback.is_some())
+                        .map(|(index, argument)| (index, argument.value.clone()))
+                        .collect(),
                     valued_anonymous_parameters,
                     ambiguous_reads: false,
                     nullable_result_fallback,
@@ -999,9 +1053,12 @@ impl<'a> Typer<'a> {
             type_packs,
             bound,
             callbacks,
+            dependent_callbacks,
+            public_generics,
             mut selecting,
             ..
         } = chosen;
+        let operator_generics = public_generics.unwrap_or(operator_generics);
         let signature: &Signature = &taken;
         let program = self.program;
         let reported = self.diagnostics.len();
@@ -1143,7 +1200,12 @@ impl<'a> Typer<'a> {
                 let ty = parameter_type(signature, &type_packs, bound).unwrap_or(&Type::Unknown);
                 // FN-17: the trial read was taken back. The selected
                 // static argument now takes the candidate's template.
-                let mut input = if given.by_function
+                let mut input = if let Some((_, value)) = dependent_callbacks
+                    .iter()
+                    .find(|(index, _)| *index == position)
+                {
+                    value.clone()
+                } else if given.by_function
                     && let Type::Function(template) = ty
                     && (given.retried || !keeps_function_read(&given.value, template))
                 {
@@ -1625,10 +1687,13 @@ impl<'a> Typer<'a> {
     /// the known arguments, then try each static argument in its slot.
     fn candidate_functions(
         &mut self,
-        (module, candidate, signature): (usize, &Declaration, &Signature),
+        operator: OperatorRef,
+        (module, declaration, signature): Candidate<'_>,
         (given, bound): (&[Given], &[Place]),
         wanted: &Wanted,
     ) -> Option<Result<Vec<Given>, Vec<Diagnostic>>> {
+        let program = self.program;
+        let candidate = &program.modules[module].declarations[declaration];
         let functions = given
             .iter()
             .zip(bound)
@@ -1674,7 +1739,7 @@ impl<'a> Typer<'a> {
             let Type::Function(template) = substitute_within(&parameter.ty, &map) else {
                 return None;
             };
-            if keeps_function_read(&given.value, &template) {
+            if given.dependent_callback.is_none() && keeps_function_read(&given.value, &template) {
                 checking[position].value = given.value.clone();
                 continue;
             }
@@ -1683,8 +1748,44 @@ impl<'a> Typer<'a> {
             }
             let mark = self.mark();
             let reported = self.diagnostics.len();
-            let value =
-                self.operator_function_argument(&given.node, &template, &CallbackInputs::default());
+            let value = if let Some(reading) = &given.dependent_callback {
+                let unit = &program.modules[operator.module];
+                let Detail::Callable(public) = &unit.details[operator.declaration] else {
+                    return None;
+                };
+                let public_bindings: Vec<_> = reading
+                    .bindings
+                    .iter()
+                    .map(|(at, value)| (*at, value))
+                    .collect();
+                let evidence = CallbackEvidence::from_callables(
+                    program,
+                    [
+                        (
+                            (operator.module, operator.declaration, public),
+                            public_bindings.as_slice(),
+                        ),
+                        ((module, declaration, signature), map.as_slice()),
+                    ],
+                );
+                let supplied: Vec<_> = reading
+                    .supplied
+                    .iter()
+                    .map(|&index| (checking[index].key.name(), &checking[index].value))
+                    .collect();
+                let excluded: Vec<_> = reading.excluded.iter().map(String::as_str).collect();
+                self.operator_function_argument(
+                    &given.node,
+                    &reading.template,
+                    &CallbackInputs {
+                        supplied: Some(&supplied),
+                        excluded: &excluded,
+                        evidence: Some(&evidence),
+                    },
+                )
+            } else {
+                self.operator_function_argument(&given.node, &template, &CallbackInputs::default())
+            };
             let mut errors = self.diagnostics.as_slice()[reported..].to_vec();
             if !self.take_back(mark, false) {
                 let partial = in_instance(signature, &map);
@@ -1717,6 +1818,9 @@ impl<'a> Typer<'a> {
                 return Some(Err(errors));
             }
             infer(&parameter.ty, &value.ty, generics, &mut found);
+            if given.dependent_callback.is_some() {
+                checking[position].by_function = false;
+            }
             checking[position].value = value;
         }
         Some(Ok(checking))
@@ -2165,6 +2269,15 @@ impl<'a> Typer<'a> {
         }
         let built = values.is_some();
         let mut values = values.map(Vec::into_iter);
+        let instance: Vec<_> = self
+            .instance
+            .iter()
+            .map(|(at, value)| (*at, value))
+            .collect();
+        let argument_in_place = |value: &Argument| match crate::instance::placed(value, &instance) {
+            Argument::Type(ty) => Argument::Type(in_place(&ty)),
+            value => value,
+        };
         let mut given: Vec<Given> = selecting
             .arguments
             .iter()
@@ -2182,6 +2295,21 @@ impl<'a> Typer<'a> {
                         ..given.value.clone()
                     });
                 given.retried &= given.by_function;
+                if let Some(callback) = &mut given.dependent_callback {
+                    if let Type::Function(template) =
+                        in_place(&Type::Function(Box::new(callback.template.clone())))
+                    {
+                        callback.template = *template;
+                    }
+                    for (_, value) in &mut callback.bindings {
+                        *value = argument_in_place(value);
+                    }
+                    if let Some(call) = &mut callback.call {
+                        for value in call.found.iter_mut().flatten() {
+                            *value = argument_in_place(value);
+                        }
+                    }
+                }
                 given
             })
             .collect();
@@ -2781,6 +2909,9 @@ pub(super) struct Given {
     pub(super) by_place: bool,
     /// FN-17: read this static argument against the candidate's template.
     pub(super) by_function: bool,
+    /// FN-17: an operator candidate can derive a different reflected input
+    /// type for the same bare function name.
+    pub(super) dependent_callback: Option<Box<DependentCallback>>,
     /// Its value, read with nothing expected of it.
     pub(super) value: Expr,
     /// The type the call explicitly writes for this packed argument.
@@ -2789,6 +2920,21 @@ pub(super) struct Given {
     /// read again as the selected candidate's parameter: `value` is
     /// then not what stands.
     pub(super) retried: bool,
+}
+
+/// Context from the enclosing operator for an independent bare callback trial.
+#[derive(Debug, Clone)]
+pub(super) struct DependentCallback {
+    /// The public callback template, with the ordinary enclosing inputs resolved.
+    pub(super) template: FunctionType,
+    /// Positions of the arguments captured by the public dependent pack.
+    pub(super) supplied: Vec<usize>,
+    /// Callback parameters supplied by the enclosing operator (FN-8).
+    pub(super) excluded: Vec<String>,
+    /// Known bindings of the public operator's generics (GEN-2).
+    pub(super) bindings: Vec<(Location, Argument)>,
+    /// Source settings for checking the complete public call after the trial.
+    pub(super) call: Option<ReflectedCall>,
 }
 
 impl Given {
@@ -2815,6 +2961,7 @@ impl Given {
             node,
             by_place: false,
             by_function: false,
+            dependent_callback: None,
             value,
             explicit: None,
             retried: false,
@@ -3247,6 +3394,10 @@ pub(super) struct Chosen<'s> {
     bound: Vec<Place>,
     /// The concrete named pack of a static callback, when it has one.
     callbacks: Vec<(usize, hir::TypePackArgument)>,
+    /// The trial's bare callback reads. Only the admitted candidate supplies them.
+    dependent_callbacks: Vec<(usize, Expr)>,
+    /// Public defaults and generics as resolved with this candidate's callback.
+    public_generics: Option<Vec<Argument>>,
     /// Slots where the candidate's reading retains an unwritten callback result.
     valued_anonymous_parameters: Vec<usize>,
     /// Equally preferred choices of which operands to read (ERR-15).
@@ -3621,7 +3772,14 @@ fn candidate_bindings(
     // equality chooses its first binding. Unresolved non-pack arguments
     // remain placeholders during this projection.
     let owner = &typer.program.modules[module];
-    if reflects(owner, signature) {
+    // A preliminary static-argument trial has only the inputs that do
+    // not depend on the bare callback. Reflect its keys on the complete
+    // pass after the candidate has resolved it (FN-17, GEN-17).
+    let pending_callback = given.iter().any(|argument| {
+        argument.dependent_callback.is_some()
+            && !matches!(argument.value.kind, ExprKind::StaticCallable(_))
+    });
+    if reflects(owner, signature) && !pending_callback {
         let dependent = dependent_slot(owner, signature)
             .and_then(|slot| owner.dependent_packs.get(&signature.parameters[slot].at));
         let provisional: Vec<_> = generics

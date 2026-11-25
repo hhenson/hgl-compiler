@@ -435,7 +435,8 @@ impl Typer<'_> {
                 let parameter = &signature.parameters[slot];
                 (slot, &declared.dependent_packs[&parameter.at])
             });
-        let evidence = dependent.map(|_| CallbackEvidence::from_callables(program, [callable]));
+        let evidence =
+            dependent.map(|_| CallbackEvidence::from_callables(program, [(callable, map)]));
         let mut packs = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let Type::Function(template) = &parameter.ty else {

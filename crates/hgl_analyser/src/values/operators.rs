@@ -10,7 +10,9 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::callback_evidence::CallbackEvidence;
 use super::calls::arguments_of;
-use super::candidates::{Chosen, Given, Key, Settled, Wanted, bound, typed_by_place};
+use super::candidates::{
+    Chosen, DependentCallback, Given, Key, Settled, Wanted, bound, typed_by_place,
+};
 use super::constants::{constant_text, generic_default};
 use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
@@ -41,6 +43,17 @@ struct ReplayedCall<'a> {
     arguments: &'a [hir::Argument],
     contextual: &'a [bool],
     source_expected: Option<&'a Type>,
+}
+
+/// The source settings needed to check the public signature after a candidate
+/// has independently determined a bare callback's type (GEN-4, GEN-17).
+#[derive(Debug, Clone)]
+pub(super) struct ReflectedCall {
+    name: SyntaxToken,
+    list: SyntaxNode,
+    /// Generics known from the call before reading any candidate's callback.
+    pub(super) found: Vec<Option<Argument>>,
+    said: bool,
 }
 
 impl<'a> Typer<'a> {
@@ -397,18 +410,11 @@ impl<'a> Typer<'a> {
         let dependent = dependent_slot(unit, public);
         let dependent_pack =
             dependent.map(|index| &unit.dependent_packs[&public.parameters[index].at]);
-        let evidence = dependent.map(|_| {
-            CallbackEvidence::from_callables(
-                program,
-                std::iter::once((operator.module, operator.declaration, public))
-                    .chain(candidates.iter().copied()),
-            )
-        });
-        let signature = (
-            public,
-            &unit.declarations[operator.declaration],
-            dependent_pack.zip(evidence.as_ref()),
-        );
+        let candidate_evidence = dependent.is_some()
+            && candidates.iter().any(|&candidate| {
+                !CallbackEvidence::from_callables(program, [(candidate, &[][..])]).is_empty()
+            });
+        let signature = (operator, public, dependent_pack, candidate_evidence);
         let written =
             self.operator_arguments(name, list, (public, dependent), &options, pack.as_ref());
         let named_generics = self.diagnostics.len() == reported
@@ -554,6 +560,17 @@ impl<'a> Typer<'a> {
         // agree with (GEN-8).
         let said = generics.is_some() || named_generics;
         let written_generics = said.then(|| found.clone());
+        if let Some(callback) = given
+            .iter_mut()
+            .find_map(|argument| argument.dependent_callback.as_mut())
+        {
+            callback.call = Some(ReflectedCall {
+                name: name.clone(),
+                list: list.clone(),
+                found: found.clone(),
+                said,
+            });
+        }
 
         // Then its arguments, in the order the operator declares its
         // parameters (GEN-12), and its defaults: see
@@ -579,82 +596,19 @@ impl<'a> Typer<'a> {
             self.diagnostics.emit(unfit.diagnostic(public, at));
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
-        if reflects(&program.modules[operator.module], public) {
-            // GEN-6: candidate-only options do not supply a public slot.
-            // The candidate still receives them when the call is selected.
-            let public_entries =
-                given
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, argument)| match &argument.key {
-                        Key::Configuration(_) | Key::Brace(_) => {
-                            argument.key.public_parameter(public).is_some()
-                        }
-                        Key::Generic(_) => argument.key.generic_parameter(public).is_some(),
-                        _ => true,
-                    });
-            let Some(placements) = bound(
-                public,
-                public,
-                public_entries.clone().map(|(_, argument)| argument),
-                dependent,
-            ) else {
-                return (self.unselected(given, Form::Named), Type::Unknown);
-            };
-            let mut slots = vec![None; given.len()];
-            for ((index, _), place) in public_entries.zip(placements) {
-                slots[index] = place.parameter();
-            }
-            let reflected = operator_packs(
-                program,
-                (operator.module, public),
+        let deferred_callback = given
+            .iter()
+            .any(|argument| argument.dependent_callback.is_some());
+        if !deferred_callback && reflects(unit, public) {
+            match self.reflected_operator_call(
+                (operator, public, dependent),
+                (name, list),
                 &operator_generics,
-                &given,
-                &slots,
-            );
-            let resolved = match reflected {
-                Ok(resolved) => resolved,
-                Err(fault) => {
-                    self.operator_pack_fault((name, list), &given, &fault);
-                    return (self.unselected(given, Form::Named), Type::Unknown);
-                }
-            };
-            for (index, pack) in resolved.callbacks {
-                specialize_named_pack(&mut given[index].value, Some(pack));
-            }
-            let at = Location::new(self.file, name.span());
-            let packs = PackTypes::new(&public.generics, &resolved.packs);
-            let map: Vec<_> = public
-                .generics
-                .iter()
-                .map(|generic| generic.at)
-                .zip(&operator_generics)
-                .collect();
-            if let Some(missing) = packs.written_member_fault(unit, operator.declaration, &map) {
-                self.pack_member_fault(at, &missing);
-                return (self.unselected(given, Form::Named), Type::Unknown);
-            }
-            let before = self.diagnostics.len();
-            self.pack_requires_met(
-                at,
-                (operator.module, operator.declaration),
-                &operator_generics,
-                &resolved.packs,
-            );
-            if self.diagnostics.len() != before {
-                return (self.unselected(given, Form::Named), Type::Unknown);
-            }
-            if let Some(result) = &public.result
-                && result.any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false)
-            {
-                match packs.project(result, &map) {
-                    Ok(ty) if whole(&ty) => requested = Some(ty),
-                    Ok(_) => {}
-                    Err(missing) => {
-                        self.pack_member_fault(at, &missing);
-                        return (self.unselected(given, Form::Named), Type::Unknown);
-                    }
-                }
+                &mut given,
+            ) {
+                Ok(Some(projected)) => requested = Some(projected),
+                Ok(None) => {}
+                Err(()) => return (self.unselected(given, Form::Named), Type::Unknown),
             }
         }
         // Public constraints and pack checks above use the original
@@ -822,6 +776,122 @@ impl<'a> Typer<'a> {
             (Form::Named, at),
             unresolved,
         )
+    }
+
+    /// Read the public request and reflected keys using this trial's callback.
+    pub(super) fn trial_reflected_call(
+        &mut self,
+        operator: OperatorRef,
+        public: &Signature,
+        call: &ReflectedCall,
+        given: &mut [Given],
+    ) -> Result<Requested, ()> {
+        let mut request =
+            self.argument_output_requested(operator, public, call.found.clone(), given, call.said);
+        if let Some(unfit) = request.unfit.take() {
+            self.diagnostics
+                .emit(unfit.diagnostic(public, Location::new(self.file, call.name.span())));
+            return Err(());
+        }
+        let unit = &self.program.modules[operator.module];
+        let dependent = dependent_slot(unit, public);
+        if let Some(projected) = self.reflected_operator_call(
+            (operator, public, dependent),
+            (&call.name, &call.list),
+            &request.generics,
+            given,
+        )? {
+            request.place = Some(projected);
+        }
+        Ok(request)
+    }
+
+    /// Check the operator’s public reflected keys and conditions (GEN-4, GEN-17).
+    fn reflected_operator_call(
+        &mut self,
+        (operator, public, dependent): (OperatorRef, &Signature, Option<usize>),
+        (name, list): (&SyntaxToken, &SyntaxNode),
+        operator_generics: &[Argument],
+        given: &mut [Given],
+    ) -> Result<Option<Type>, ()> {
+        let program = self.program;
+        let unit = &program.modules[operator.module];
+        // GEN-6: candidate-only options do not supply a public slot.
+        // The candidate still receives them when the call is selected.
+        let public_entries = given
+            .iter()
+            .enumerate()
+            .filter(|(_, argument)| match &argument.key {
+                Key::Configuration(_) | Key::Brace(_) => {
+                    argument.key.public_parameter(public).is_some()
+                }
+                Key::Generic(_) => argument.key.generic_parameter(public).is_some(),
+                _ => true,
+            });
+        let Some(placements) = bound(
+            public,
+            public,
+            public_entries.clone().map(|(_, argument)| argument),
+            dependent,
+        ) else {
+            return Err(());
+        };
+        let mut slots = vec![None; given.len()];
+        for ((index, _), place) in public_entries.zip(placements) {
+            slots[index] = place.parameter();
+        }
+        let reflected = operator_packs(
+            program,
+            (operator.module, public),
+            operator_generics,
+            given,
+            &slots,
+        );
+        let resolved = match reflected {
+            Ok(resolved) => resolved,
+            Err(fault) => {
+                self.operator_pack_fault((name, list), given, &fault);
+                return Err(());
+            }
+        };
+        for (index, pack) in resolved.callbacks {
+            specialize_named_pack(&mut given[index].value, Some(pack));
+        }
+        let at = Location::new(self.file, name.span());
+        let packs = PackTypes::new(&public.generics, &resolved.packs);
+        let map: Vec<_> = public
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .zip(operator_generics)
+            .collect();
+        if let Some(missing) = packs.written_member_fault(unit, operator.declaration, &map) {
+            self.pack_member_fault(at, &missing);
+            return Err(());
+        }
+        let before = self.diagnostics.len();
+        self.pack_requires_met(
+            at,
+            (operator.module, operator.declaration),
+            operator_generics,
+            &resolved.packs,
+        );
+        if self.diagnostics.len() != before {
+            return Err(());
+        }
+        if let Some(result) = &public.result
+            && result.any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false)
+        {
+            match packs.project(result, &map) {
+                Ok(ty) if whole(&ty) => return Ok(Some(ty)),
+                Ok(_) => {}
+                Err(missing) => {
+                    self.pack_member_fault(at, &missing);
+                    return Err(());
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// A diagnostic trial runs the selected call's own checks first.
@@ -1013,10 +1083,11 @@ impl<'a> Typer<'a> {
     /// GEN-6 leaves its final function template to each candidate.
     fn read_operator_arguments(
         &mut self,
-        (public, declared, dependent): (
+        (operator, public, dependent, candidate_evidence): (
+            OperatorRef,
             &Signature,
-            &Declaration,
-            Option<(&DependentPack, &CallbackEvidence)>,
+            Option<&DependentPack>,
+            bool,
         ),
         written: impl IntoIterator<Item = (Key, SyntaxNode, Option<Expr>)>,
         context: Option<&[Option<Argument>]>,
@@ -1024,8 +1095,7 @@ impl<'a> Typer<'a> {
         replay: Option<ReplayedCall<'_>>,
         candidates: &[Candidate<'_>],
     ) -> Vec<Given> {
-        let evidence = dependent.map(|(_, evidence)| evidence);
-        let dependent = dependent.map(|(pack, _)| pack);
+        let declared = &self.program.modules[operator.module].declarations[operator.declaration];
         let resolved: Vec<_> = context
             .unwrap_or_default()
             .iter()
@@ -1047,36 +1117,54 @@ impl<'a> Typer<'a> {
             .map(|generic| generic.at)
             .zip(&resolved)
             .collect();
+        let evidence = dependent.map(|_| {
+            CallbackEvidence::from_callables(
+                self.program,
+                [(
+                    (operator.module, operator.declaration, public),
+                    map.as_slice(),
+                )],
+            )
+        });
         let fixed = public.positional_parameters().count();
         let written: Vec<_> = written.into_iter().collect();
         // For FN-17 selection the dependent arguments supply type
         // evidence even when written after the callback itself.
-        let mut dependent_values = Vec::new();
-        if context.is_some() && replay.is_none() && dependent.is_some() {
-            let positional_pack = public
-                .parameters
-                .iter()
-                .any(|p| p.pack == Some(Pack::Positional));
-            let mark = self.mark();
-            dependent_values.extend(written.iter().filter_map(|(key, node, ready)| {
+        let positional_pack = public
+            .parameters
+            .iter()
+            .any(|p| p.pack == Some(Pack::Positional));
+        let dependent_positions: Vec<_> = written
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (key, _, _))| {
                 let captured = match key {
                     Key::Position(position) => *position >= fixed && !positional_pack,
                     Key::ForwardedPosition(None) => !positional_pack,
                     Key::Name(_) => key.public_parameter(public).is_none(),
                     _ => false,
                 };
-                captured.then(|| match ready {
+                (dependent.is_some() && captured).then_some(index)
+            })
+            .collect();
+        let mut dependent_values = Vec::new();
+        if context.is_some() && replay.is_none() && dependent.is_some() {
+            let mark = self.mark();
+            dependent_values.extend(dependent_positions.iter().map(|&index| {
+                let (key, node, ready) = &written[index];
+                match ready {
                     Some(value) => Given {
                         key: key.clone(),
                         node: node.clone(),
                         value: value.clone(),
                         by_place: false,
                         by_function: false,
+                        dependent_callback: None,
                         explicit: None,
                         retried: false,
                     },
                     None => self.give(key.clone(), node.clone()),
-                })
+                }
             }));
             self.take_back(mark, false);
         }
@@ -1108,7 +1196,24 @@ impl<'a> Typer<'a> {
                 };
                 // A reflected pack needs its public reading to establish
                 // the arguments the operator admits (GEN-17).
-                let by_function = !candidates.is_empty()
+                let dependent_callback = (candidate_evidence
+                    && dependent_function
+                    && ready.is_none()
+                    && ungrouped(node.clone()).kind() == SyntaxKind::NameExpr
+                    && self.names_static_callback(&node))
+                .then(|| match substitute_within(public_type?, &map) {
+                    Type::Function(template) => Some(Box::new(DependentCallback {
+                        template: *template,
+                        supplied: dependent_positions.clone(),
+                        excluded: excluded.iter().map(|name| (*name).to_string()).collect(),
+                        call: None,
+                        bindings: map.iter().map(|(at, value)| (*at, (*value).clone())).collect(),
+                    })),
+                    _ => None,
+                })
+                .flatten();
+                let by_function = dependent_callback.is_some()
+                    || !candidates.is_empty()
                     && !dependent_function
                     && ready.is_none()
                     && (public_type.is_some_and(fixed_template)
@@ -1129,6 +1234,7 @@ impl<'a> Typer<'a> {
                         value: replayed.arguments[position].value.clone(),
                         by_place,
                         by_function,
+                        dependent_callback,
                         explicit: explicit.cloned(),
                         retried: by_place || by_function,
                     }
@@ -1139,10 +1245,12 @@ impl<'a> Typer<'a> {
                         value,
                         by_place: false,
                         by_function: false,
+                        dependent_callback: None,
                         explicit: None,
                         retried: false,
                     }
-                } else if context.is_some()
+                } else if dependent_callback.is_none()
+                    && context.is_some()
                     && let Some(pattern) = public_type
                     && let Type::Function(template) = substitute_within(pattern, &map)
                 {
@@ -1150,7 +1258,7 @@ impl<'a> Typer<'a> {
                         CallbackInputs {
                             supplied: Some(&supplied),
                             excluded: &excluded,
-                            evidence,
+                            evidence: evidence.as_ref(),
                         }
                     } else {
                         CallbackInputs::default()
@@ -1167,6 +1275,7 @@ impl<'a> Typer<'a> {
                         value,
                         by_place: false,
                         by_function,
+                        dependent_callback,
                         explicit: None,
                         retried: by_function,
                     }
@@ -1185,6 +1294,7 @@ impl<'a> Typer<'a> {
                         },
                         by_place: false,
                         by_function: true,
+                        dependent_callback,
                         explicit: None,
                         retried: true,
                     }
@@ -1197,6 +1307,7 @@ impl<'a> Typer<'a> {
                         value,
                         by_place: false,
                         by_function: false,
+                        dependent_callback: None,
                         explicit: Some(ty.clone()),
                         retried: false,
                     }
@@ -1496,6 +1607,7 @@ impl<'a> Typer<'a> {
             key,
             by_place,
             by_function: false,
+            dependent_callback: None,
             value,
             explicit: None,
             retried,
