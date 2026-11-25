@@ -53,6 +53,14 @@ impl PreviousBuild {
         })
     }
 
+    /// Checks an independently discovered workspace file against the last successful build.
+    pub(super) fn matches_artifact(&self, directory: &Path, relative: &str) -> bool {
+        self.stamp
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == relative && artifact.matches(directory))
+    }
+
     /// Only a current stamp vouches for an executable that can run now.
     pub(super) fn reusable(&self, workspace: &Workspace, key: &str, tests: Option<bool>) -> bool {
         self.active && self.stamp.reusable(workspace, key, tests)
