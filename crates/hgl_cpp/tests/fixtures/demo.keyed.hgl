@@ -1,28 +1,5 @@
 module demo.keyed
 
-fn constant_members() -> set<i64> {
-    let members: set<i64> = [2, 3]
-    return relay_members(members)
-}
-
-fn constant_empty_members() -> set<i64> => []
-
-fn constant_empty_book() -> dict<str, i64> => []
-
-fn constant_groups() -> dict<str, set<i64>> {
-    let groups: dict<str, set<i64>> = ["both": [2, 3], "none": []]
-    return groups
-}
-
-# FN-3: ordinary set and dictionary values become one publication in a
-# connection place, including an empty collection and nested values.
-test constant_keyed_collections_publish_on_graph_start {
-    assert eval constant_members() == [[2, 3]]
-    assert eval constant_empty_members() == [[]]
-    assert eval constant_empty_book() == [[]]
-    assert eval constant_groups() == [["both": [2, 3], "none": []]]
-}
-
 # The temporal form of a set and of a dictionary (TYPE-9): each published
 # whole and as a delta (TIME-7), read whole and by its delta (TIME-1,
 # END-3), `all_valid` of a dictionary (TIME-9), invalidation (END-4), a

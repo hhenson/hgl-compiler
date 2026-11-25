@@ -3932,7 +3932,12 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         "src/demo.keyed.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.keyed.hgl"),
     );
-    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let constants = write(
+        &root,
+        "src/demo.keyed_constants.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.keyed_constants.hgl"),
+    );
+    let output = hgl_in(&["test", &file, &constants, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert_eq!(
         output.status.code(),
