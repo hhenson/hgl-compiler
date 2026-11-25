@@ -105,9 +105,9 @@ runner: planned
 
 ## TST-7
 
-analyser: partial
+analyser: done
 
-- A timed trace's keys are all durations or all datetimes; constant duration keys strictly increase (`trace.key_order`); it has no `_` (`trace.placeholder`); an eval's traces and its expectation share dense or timed notation (`trace.style`), and separate timed traces can use absolute or relative keys
+- A timed trace's keys are all durations or all datetimes; constant duration and datetime keys strictly increase (`trace.key_order`), comparing datetime keys by their UTC instants on inputs and expectations; it has no `_` (`trace.placeholder`); an eval's traces and its expectation share dense or timed notation (`trace.style`), and separate timed traces can use absolute or relative keys
 
 runner: planned
 
