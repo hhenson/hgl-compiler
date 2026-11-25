@@ -418,9 +418,31 @@ fn dict_binding(items: dict<str, i64>) -> i64 => keyed_callback(3, dict_only, it
 fn list_split(items: list<i64, 2>) -> i64 => sized_callback<2>(identity, items)
 fn dict_split(items: dict<str, i64>) -> i64 => keyed_callback("key", identity, items)
 
+# GEN-3 and FN-17: the callback has a generic, but the list input is
+# already fixed by its declaration or by the receiving result type.
+fn fixed_list<const N: i64 = 0>(items: list<i64, 2>) -> i64 => N
+fn first_item<T>(items: list<T, 2>) -> T => items[0]
+fn sized_i64_callback<const N: i64, ...Ps, ...As>(f: fn(...{Ps}) -> i64, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], N>} } => 71
+
+fn fixed_list_binding(items: list<i64, 2>) -> i64 => sized_callback<2>(fixed_list, items)
+fn result_list_binding(items: list<i64, 2>) -> i64 => sized_i64_callback<2>(first_item, items)
+
+# The fixed input stays whole when another input of the same callback
+# still needs to learn its type from a split argument.
+fn fixed_and_inferred<T>(whole: list<i64, 2>, value: T) -> T => value
+fn mixed_callback<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+          && R == str => 73
+fn mixed_list_binding(items: list<i64, 2>, words: list<str, 2>) -> i64 =>
+    mixed_callback(fixed_and_inferred, whole: items, value: words)
+
 test bare_callbacks_keep_known_outer_bindings {
     assert eval list_binding(items: [[5, 6]]) == [70]
     assert eval dict_binding(items: [["a": 8]]) == [72]
     assert eval list_split(items: [[5, 6]]) == [70]
     assert eval dict_split(items: [["a": 8]]) == [72]
+    assert eval fixed_list_binding(items: [[5, 6]]) == [70]
+    assert eval result_list_binding(items: [[5, 6]]) == [71]
+    assert eval mixed_list_binding(items: [[5, 6]], words: [["a", "b"]]) == [73]
 }

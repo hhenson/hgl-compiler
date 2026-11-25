@@ -179,6 +179,22 @@ impl<'a> Typer<'a> {
             self.marked_function(node, signature);
             return None;
         }
+        // FN-17 resolves the callback's template before dependent
+        // arguments supply evidence (GEN-2, GEN-3). In particular, a
+        // concrete input stays fixed even in a generic function.
+        let unresolved = inputs
+            .evidence
+            .filter(|_| node.kind() == SyntaxKind::NameExpr)
+            .map(|_| {
+                let mut found = vec![None; signature.generics.len()];
+                infer_reference_template(signature, template, &mut found);
+                signature
+                    .generics
+                    .iter()
+                    .zip(found)
+                    .filter_map(|(generic, value)| value.is_none().then_some(generic.at))
+                    .collect::<Vec<_>>()
+            });
         let given = inputs
             .supplied
             .map(|_| {
@@ -187,10 +203,8 @@ impl<'a> Typer<'a> {
                     signature,
                     template,
                     node,
-                    &CallbackInputs {
-                        evidence: inputs.evidence.filter(|_| !signature.generics.is_empty()),
-                        ..*inputs
-                    },
+                    inputs,
+                    unresolved.as_deref(),
                 )
             })
             .transpose()
@@ -223,8 +237,11 @@ impl<'a> Typer<'a> {
         // member type another argument supplies to the same generic.
         if let Some((given, true)) = given
             && let Some(argument) = given.iter().find(|argument| {
-                callback_parameter(signature, &argument.key)
-                    .is_some_and(|slot| !self.admits(&taken.parameters[slot].ty, argument.ty()))
+                callback_parameter(signature, &argument.key).is_some_and(|slot| {
+                    unresolved.as_ref().is_some_and(|unresolved| {
+                        mentions(&signature.parameters[slot].ty, unresolved)
+                    }) && !self.admits(&taken.parameters[slot].ty, argument.ty())
+                })
             })
         {
             self.diagnostics.emit(error(
@@ -293,7 +310,7 @@ impl<'a> Typer<'a> {
         let at = self.at(node);
         let reflected = template.named_pack.is_some();
         let mut given = if reflected {
-            reflected_arguments(self, public, template, node, inputs)
+            reflected_arguments(self, public, template, node, inputs, None)
                 .ok()?
                 .0
         } else {
@@ -606,16 +623,7 @@ impl<'a> Typer<'a> {
         if faulty {
             return None;
         }
-        if let (Some(pattern), Some(actual)) = (&signature.result, &template.result) {
-            infer(pattern, actual, &signature.generics, &mut found);
-        }
-        let ordinary = signature
-            .parameters
-            .iter()
-            .filter(|input| !input.configuration);
-        for (pattern, actual) in ordinary.zip(template.ordinary_parameters()) {
-            infer(&pattern.ty, actual.ty(), &signature.generics, &mut found);
-        }
+        infer_reference_template(signature, template, &mut found);
         for given in given.unwrap_or_default() {
             if let Some(index) = callback_parameter(signature, &given.key) {
                 infer(
@@ -1330,12 +1338,31 @@ pub(super) struct CallbackInputs<'a> {
     pub(super) evidence: Option<&'a CallbackEvidence>,
 }
 
+/// Learn the bindings that precede dependent argument evidence (GEN-2, FN-17).
+fn infer_reference_template(
+    signature: &Signature,
+    template: &FunctionType,
+    found: &mut [Option<Argument>],
+) {
+    if let (Some(pattern), Some(actual)) = (&signature.result, &template.result) {
+        infer(pattern, actual, &signature.generics, found);
+    }
+    let ordinary = signature
+        .parameters
+        .iter()
+        .filter(|input| !input.configuration);
+    for (pattern, actual) in ordinary.zip(template.ordinary_parameters()) {
+        infer(&pattern.ty, actual.ty(), &signature.generics, found);
+    }
+}
+
 fn reflected_arguments(
     typer: &mut Typer<'_>,
     public: &Signature,
     template: &FunctionType,
     node: &SyntaxNode,
     inputs: &CallbackInputs<'_>,
+    unresolved: Option<&[Location]>,
 ) -> Result<(Vec<Given>, bool), ()> {
     let evidence = inputs
         .evidence
@@ -1381,7 +1408,11 @@ fn reflected_arguments(
                         .nth(before)
                         .is_some_and(|parameter| whole(parameter.ty()))
                 });
-                if settled {
+                let needs_evidence = unresolved.is_none_or(|unresolved| {
+                    callback_parameter(public, &key)
+                        .is_some_and(|slot| mentions(&public.parameters[slot].ty, unresolved))
+                });
+                if settled || !needs_evidence {
                     value.ty.clone()
                 } else {
                     evidence.resolve(name, position, &value.ty).map_err(|()| {
