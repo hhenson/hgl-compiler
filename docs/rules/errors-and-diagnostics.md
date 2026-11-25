@@ -115,8 +115,10 @@ transpiler: partial
   connections.
 - Captures calls with fixed packs or inferred heterogeneous packs, and emits
   direct reads of the capture's fields.
-- Left: Direct capture of temporal `keys` is declined. A capture of an HGL graph
-  returning those keys can fail during start (#897). Temporal schemas follow TYPE-9.
+- Left: Capturing an unsupported target or unemitted callable instance (for
+  example, direct capture of temporal `reduce` or `keys`) is declined with
+  `target.unsupported`. A capture of an HGL graph returning those keys can fail
+  during start (#897). Temporal schemas follow TYPE-9.
 
 ## ERR-8
 
@@ -124,8 +126,8 @@ transpiler: partial
 
 - The capture emits the original failure event and keeps the child live for later work.
   Start and stop failures escape; re-raising preserves the first provenance.
-- Left: The native key-set capture and its HGL wrapper are limited as under ERR-7
-  (#897). Publication forms follow TYPE-9.
+- Left: Capture support follows the unsupported callable, instance and key-set
+  limits listed under ERR-7 (#897). Publication forms follow TYPE-9.
 
 ## ERR-9
 
@@ -135,8 +137,9 @@ analyser: partial
 - A module constant whose evaluation fails is rejected where it is declared (`constant.failure`, UNIT-13), and nothing is reported of its uses
 - Known required-constant failures in parameter and field defaults use `constant.failure` (UNIT-8)
 - A generic value argument a generic body works out from its own parameters, `times<(M * 2)>`, whose evaluation fails, or that this compiler does not work out, with what an instance gives them is `generic.argument_constant` at the call that makes the instance, as the same argument written in place is, and the callee's `requires` is then not told ("Failure during argument evaluation precedes later admission checks"); one fault is reported once at each such call
-- Left: A module constant initialized by a failing `const fn` call can pass checking
-  because the constant reader does not evaluate the call (#240).
+- Left: A module constant, parameter default or struct-field default initialized
+  by a failing `const fn` call can pass checking because the constant reader does
+  not evaluate calls (#240).
 
 optimiser: planned
 
