@@ -238,6 +238,15 @@ result<T> get_dict_result(const dict<K, T>& store, const std::type_identity_t<K>
     return result<T>{std::in_place, found->second};
 }
 
+/// A dictionary's ERR-6 fallback read. The caller has evaluated the
+/// fallback even where the key is present. A held null is a value.
+template <class K, class T>
+T get_dict_K__T__K_T(const dict<K, T>& store, const std::type_identity_t<K>& key,
+                     const std::type_identity_t<T>& fallback) {
+    const auto found = store.find(key);
+    return found == store.end() ? fallback : found->second;
+}
+
 /// `delta<set<K>>` (TYPE-16): "with the properties `added` and `removed`, each
 /// a `set<K>`".
 template <class K>
