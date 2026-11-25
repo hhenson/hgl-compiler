@@ -518,7 +518,7 @@ impl<'a> Typer<'a> {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
         let dictionary_fallback =
-            match dictionary_get_fallback(program, operator, public, &candidates, &given) {
+            match self.dictionary_get_fallback(operator, public, &candidates, &given) {
                 Ok(DictionaryFallback::WrittenNull(index)) => {
                     given.remove(index);
                     false
@@ -1816,61 +1816,83 @@ pub(super) enum DictionaryFallback {
     Value,
 }
 
-/// The form of a dictionary read, or its known wrong fallback type.
-pub(super) fn dictionary_get_fallback(
-    program: &Program,
-    operator: OperatorRef,
-    public: &Signature,
-    candidates: &[Candidate<'_>],
-    given: &[Given],
-) -> Result<DictionaryFallback, Box<Diagnostic>> {
-    if program.modules[operator.module].declarations[operator.declaration].name != "get"
-        || program.core() != Some(operator.module)
-    {
-        return Ok(DictionaryFallback::Omitted);
+impl Typer<'_> {
+    /// The form of a dictionary read, or its known wrong fallback type.
+    pub(super) fn dictionary_get_fallback(
+        &self,
+        operator: OperatorRef,
+        public: &Signature,
+        candidates: &[Candidate<'_>],
+        given: &[Given],
+    ) -> Result<DictionaryFallback, Box<Diagnostic>> {
+        let program = self.program;
+        if program.modules[operator.module].declarations[operator.declaration].name != "get"
+            || program.core() != Some(operator.module)
+        {
+            return Ok(DictionaryFallback::Omitted);
+        }
+        let Some(&(_, _, signature)) =
+            candidates
+                .iter()
+                .find(|&&(module, declaration, signature)| {
+                    core_dictionary_fallback(
+                        program,
+                        module,
+                        &program.modules[module].declarations[declaration],
+                        signature,
+                    )
+                })
+        else {
+            return Ok(DictionaryFallback::Omitted);
+        };
+        let Some(places) = bound(signature, public, given, None) else {
+            return Ok(DictionaryFallback::Omitted);
+        };
+        let Some(store) = places.iter().position(|place| place.parameter() == Some(0)) else {
+            return Ok(DictionaryFallback::Omitted);
+        };
+        let store = &given[store];
+        let value_type = match store.ty() {
+            Type::Dict { value, .. } => Some(value.as_ref()),
+            // EXPR-9: these pairs take their types from the dictionary candidate.
+            _ if matches!(store.value.kind, ExprKind::Pairs(_)) => None,
+            // GEN-7: the operations of every stated member are callable here.
+            Type::Parameter { at, .. }
+                if self.memberships().iter().any(|(position, members)| {
+                    position == at
+                        && !members.is_empty()
+                        && members
+                            .iter()
+                            .all(|member| matches!(member, Argument::Type(Type::Dict { .. })))
+                }) =>
+            {
+                None
+            }
+            _ => return Ok(DictionaryFallback::Omitted),
+        };
+        let Some(fallback) = places.iter().position(|place| place.parameter() == Some(2)) else {
+            return Ok(DictionaryFallback::Omitted);
+        };
+        let argument = &given[fallback];
+        if written_null(&argument.node) {
+            return Ok(DictionaryFallback::WrittenNull(fallback));
+        }
+        if let Some(value) = value_type
+            && !dictionary_fallback_type(argument, value)
+        {
+            return Err(Box::new(error(
+                Category::Type,
+                codes::LOOKUP_DEFAULT_TYPE,
+                argument.value.at,
+                format!(
+                    "the fallback has type `{}` and the dictionary's value type is `{value}`",
+                    argument.ty()
+                ),
+                "ERR-6",
+            )));
+        }
+        Ok(DictionaryFallback::Value)
     }
-    let Some(&(_, _, signature)) = candidates
-        .iter()
-        .find(|&&(module, declaration, signature)| {
-            core_dictionary_fallback(
-                program,
-                module,
-                &program.modules[module].declarations[declaration],
-                signature,
-            )
-        })
-    else {
-        return Ok(DictionaryFallback::Omitted);
-    };
-    let Some(places) = bound(signature, public, given, None) else {
-        return Ok(DictionaryFallback::Omitted);
-    };
-    let Some(store) = places.iter().position(|place| place.parameter() == Some(0)) else {
-        return Ok(DictionaryFallback::Omitted);
-    };
-    let Type::Dict { value, .. } = given[store].ty() else {
-        return Ok(DictionaryFallback::Omitted);
-    };
-    let Some(fallback) = places.iter().position(|place| place.parameter() == Some(2)) else {
-        return Ok(DictionaryFallback::Omitted);
-    };
-    let argument = &given[fallback];
-    if written_null(&argument.node) {
-        return Ok(DictionaryFallback::WrittenNull(fallback));
-    }
-    if !dictionary_fallback_type(argument, value) {
-        return Err(Box::new(error(
-            Category::Type,
-            codes::LOOKUP_DEFAULT_TYPE,
-            argument.value.at,
-            format!(
-                "the fallback has type `{}` and the dictionary's value type is `{value}`",
-                argument.ty()
-            ),
-            "ERR-6",
-        )));
-    }
-    Ok(DictionaryFallback::Value)
 }
 
 /// ERR-6 requires the fallback's exact type. A literal can take its

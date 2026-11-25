@@ -23,9 +23,7 @@ use super::inference::{
     bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
 };
 use super::lifting::preferred_call_role;
-use super::operators::{
-    core_dictionary_fallback, dictionary_fallback_type, dictionary_get_fallback, unreadable,
-};
+use super::operators::{core_dictionary_fallback, dictionary_fallback_type, unreadable};
 use super::requirements::{Condition, holds};
 use super::{Candidate, Typer};
 use crate::constant::Fault;
@@ -2167,8 +2165,7 @@ impl<'a> Typer<'a> {
             }
             return AtInstance::Selected(Box::new(chosen), given);
         }
-        if let Err(report) = dictionary_get_fallback(program, operator, public, &candidates, &given)
-        {
+        if let Err(report) = self.dictionary_get_fallback(operator, public, &candidates, &given) {
             return AtInstance::Rejected(*report);
         }
         // Named as the operator is declared: a symbol stands for it.
