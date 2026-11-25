@@ -842,6 +842,135 @@ fn clean_prefers_latest_debug_copy_digest_after_failed_upgrade() {
     assert_eq!(fs::read(&carry_restored_core).unwrap(), old_bytes);
 }
 
+/// When a legacy 0.2.9 debug build followed by an ordinary release build left
+/// `debug-sources/core.hgl.source` recorded only in `.hgl-previous-build.json`,
+/// a failing or interrupted ordinary build of another program must persist that
+/// earlier verified inventory before withdrawing `.hgl-built.json`, so a later
+/// `--clean` still removes unmodified copies while keeping edited neighbours.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn failed_ordinary_build_after_legacy_debug_then_release_preserves_provenance() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("clean-legacy-failed-ordinary");
+    write(&root, "src/stamped.hgl", SOURCE);
+    write(
+        &root,
+        "other/keep.hgl",
+        "module other.keep\nexport const fn answer() -> i64 => 42\n",
+    );
+    let sources = argument(&root.join("src"));
+    let other_sources = argument(&root.join("other"));
+    let ninja = NinjaTrace::new(&root);
+
+    let setup_legacy_debug_then_release = |name: &str| -> (PathBuf, String) {
+        let ws = root.join(name);
+        let ws_arg = argument(&ws);
+        // Step 1: debug build writes and stamps debug copies.
+        success(
+            ninja
+                .hgl(&["build", &sources, "--debug", "--tests", "--out", &ws_arg])
+                .env("HGL_TEST_BUILD_WORKSPACE", &ws)
+                .output()
+                .unwrap(),
+        );
+        // Step 2: ordinary release build moves debug stamp to `.hgl-previous-build.json`.
+        success(
+            ninja
+                .hgl(&["build", &sources, "--out", &ws_arg])
+                .env("HGL_TEST_BUILD_WORKSPACE", &ws)
+                .output()
+                .unwrap(),
+        );
+        // Strip `retained_artifacts` from `.hgl-built.json` to model a 0.2.9
+        // release stamp where `debug-sources/*` lives ONLY in `.hgl-previous-build.json`.
+        let stamp_path = ws.join(".hgl-built.json");
+        let mut active: Value = serde_json::from_slice(&fs::read(&stamp_path).unwrap()).unwrap();
+        active.as_object_mut().unwrap().remove("retained_artifacts");
+        fs::write(&stamp_path, serde_json::to_string(&active).unwrap()).unwrap();
+
+        // Edited debug copy and handwritten neighbour controls.
+        fs::write(ws.join("debug-sources/calendar.hgl.source"), "edited copy").unwrap();
+        write(&ws, "debug-sources/notes.hgl.source", "handwritten");
+        assert!(ws.join("debug-sources/core.hgl.source").is_file());
+        (ws, ws_arg)
+    };
+
+    // 1. Failing ordinary build of another program while `obj/modules` is read-only.
+    let (ws_ro, ws_ro_arg) = setup_legacy_debug_then_release("readonly-fail");
+    let obj_modules = ws_ro.join("obj/modules");
+    fs::set_permissions(&obj_modules, fs::Permissions::from_mode(0o555)).unwrap();
+    let failed = ninja
+        .hgl(&["build", &other_sources, "--out", &ws_ro_arg])
+        .env("HGL_TEST_BUILD_WORKSPACE", &ws_ro)
+        .output()
+        .unwrap();
+    fs::set_permissions(&obj_modules, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!failed.status.success());
+    assert!(!ws_ro.join(".hgl-built.json").exists());
+    assert!(ws_ro.join(".hgl-previous-build.json").is_file());
+
+    success(
+        ninja
+            .hgl(&["build", &other_sources, "--clean", "--out", &ws_ro_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &ws_ro)
+            .output()
+            .unwrap(),
+    );
+    assert!(!ws_ro.join("debug-sources/core.hgl.source").exists());
+    assert_eq!(
+        fs::read_to_string(ws_ro.join("debug-sources/calendar.hgl.source")).unwrap(),
+        "edited copy"
+    );
+    assert_eq!(
+        fs::read_to_string(ws_ro.join("debug-sources/notes.hgl.source")).unwrap(),
+        "handwritten"
+    );
+
+    // 2. Interrupted ordinary build of another program withdraws `.hgl-built.json`
+    //    and still preserves the earlier verified `core.hgl.source` provenance.
+    let (ws_int, ws_int_arg) = setup_legacy_debug_then_release("interrupted-ordinary");
+    let calls = ninja.calls();
+    let building = ninja
+        .hgl(&["build", &other_sources, "--out", &ws_int_arg])
+        .env("HGL_TEST_BUILD_WORKSPACE", &ws_int)
+        .env("HGL_TEST_BUILD_DELAY", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    assert!(wait_until(|| ninja.calls() > calls));
+    assert!(
+        Command::new("kill")
+            .args(["-INT", &building.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let interrupted = building.wait_with_output().unwrap();
+    assert_eq!(interrupted.status.code(), Some(2));
+    assert!(!ws_int.join(".hgl-built.json").exists());
+    assert!(ws_int.join(".hgl-previous-build.json").is_file());
+
+    success(
+        ninja
+            .hgl(&["build", &other_sources, "--clean", "--out", &ws_int_arg])
+            .env("HGL_TEST_BUILD_WORKSPACE", &ws_int)
+            .output()
+            .unwrap(),
+    );
+    assert!(!ws_int.join("debug-sources/core.hgl.source").exists());
+    assert_eq!(
+        fs::read_to_string(ws_int.join("debug-sources/calendar.hgl.source")).unwrap(),
+        "edited copy"
+    );
+    assert_eq!(
+        fs::read_to_string(ws_int.join("debug-sources/notes.hgl.source")).unwrap(),
+        "handwritten"
+    );
+}
+
 /// The compilation database comes from the exact workspace Ninja rules,
 /// can be restored on a hit, and preserves a reader's complete snapshot.
 #[test]

@@ -500,6 +500,81 @@ mod tests {
         );
     }
 
+    /// Invalidating an active stamp must persist still-verified entries from
+    /// `.hgl-previous-build.json` before replacing it, preserving last-write
+    /// precedence and withdrawing `.hgl-built.json`.
+    #[test]
+    fn invalidate_persists_earlier_verified_inventory_with_last_write_precedence() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let workspace = Workspace::open(Some(root), &[], root, false).unwrap();
+        write_manifest(root);
+        fs::create_dir_all(root.join("obj/modules")).unwrap();
+        fs::create_dir_all(root.join("debug-sources")).unwrap();
+        fs::write(root.join("obj/modules/mod-demo.o"), b"release obj").unwrap();
+        fs::write(root.join("debug-sources/core.hgl.source"), b"debug core").unwrap();
+        fs::write(
+            root.join("debug-sources/calendar.hgl.source"),
+            b"edited calendar",
+        )
+        .unwrap();
+        fs::write(root.join("debug-sources/notes.hgl.source"), b"neighbour").unwrap();
+        // Restored old bytes at a path whose newer active stamp recorded a different digest.
+        fs::write(
+            root.join("debug-sources/mapping.hgl.source"),
+            b"old mapping",
+        )
+        .unwrap();
+
+        let earlier_stamp = serde_json::json!({
+            "version": 2,
+            "key": "debug",
+            "program": {"units": [], "applications": [], "tests": null},
+            "artifacts": [
+                {"path": "debug-sources/core.hgl.source", "digest": blake3::hash(b"debug core").to_hex().to_string()},
+                {"path": "debug-sources/calendar.hgl.source", "digest": blake3::hash(b"orig calendar").to_hex().to_string()},
+                {"path": "debug-sources/mapping.hgl.source", "digest": blake3::hash(b"old mapping").to_hex().to_string()}
+            ]
+        });
+        let active_stamp = serde_json::json!({
+            "version": 2,
+            "key": "release",
+            "program": {"units": [], "applications": [], "tests": null},
+            "artifacts": [
+                {"path": "obj/modules/mod-demo.o", "digest": blake3::hash(b"release obj").to_hex().to_string()},
+                {"path": "debug-sources/mapping.hgl.source", "digest": blake3::hash(b"new mapping").to_hex().to_string()}
+            ]
+        });
+        fs::write(
+            root.join(".hgl-previous-build.json"),
+            earlier_stamp.to_string(),
+        )
+        .unwrap();
+        fs::write(root.join(".hgl-built.json"), active_stamp.to_string()).unwrap();
+
+        let previous = PreviousBuild::read(&workspace).unwrap();
+        PreviousBuild::invalidate(&workspace, Some(&previous)).unwrap();
+        assert!(!root.join(".hgl-built.json").exists());
+        assert!(root.join(".hgl-previous-build.json").is_file());
+
+        let after = PreviousBuild::read(&workspace).unwrap();
+        clean(root, Some(&after)).unwrap();
+        assert!(!root.join("obj/modules/mod-demo.o").exists());
+        assert!(!root.join("debug-sources/core.hgl.source").exists());
+        assert_eq!(
+            fs::read(root.join("debug-sources/calendar.hgl.source")).unwrap(),
+            b"edited calendar"
+        );
+        assert_eq!(
+            fs::read(root.join("debug-sources/notes.hgl.source")).unwrap(),
+            b"neighbour"
+        );
+        assert_eq!(
+            fs::read(root.join("debug-sources/mapping.hgl.source")).unwrap(),
+            b"old mapping"
+        );
+    }
+
     /// Optional compilation databases and host-formatted result files are
     /// removed only when unchanged from a recorded stamp digest.
     #[test]

@@ -121,10 +121,44 @@ impl PreviousBuild {
 
     /// Atomically withdraws permission to run and keeps the digests. A
     /// later failure with no active stamp leaves those digests alone.
+    /// When an older `.hgl-previous-build.json` holds still-verified entries
+    /// absent from the active stamp (for example, a 0.2.9 debug build followed
+    /// by a 0.2.9 release build), persist them into the replacement previous
+    /// stamp with last-write precedence before withdrawing `.hgl-built.json`.
     pub(super) fn invalidate(workspace: &Workspace, previous: Option<&Self>) -> Result<(), String> {
         let path = workspace.directory.join(FILE);
-        if !previous.is_some_and(|build| build.active) {
+        let Some(build) = previous.filter(|build| build.active) else {
             return remove(&path);
+        };
+        if let Some(earlier) = &build.earlier {
+            let mut merged_retained = build.stamp.retained_artifacts.clone();
+            let mut seen: HashSet<&str> = build
+                .stamp
+                .retained_artifacts
+                .iter()
+                .chain(&build.stamp.artifacts)
+                .map(|artifact| artifact.path.as_str())
+                .collect();
+            let mut carried = false;
+            for artifact in earlier.retained_artifacts.iter().chain(&earlier.artifacts) {
+                if seen.insert(artifact.path.as_str()) && artifact.matches(&workspace.directory) {
+                    merged_retained.push(artifact.clone());
+                    carried = true;
+                }
+            }
+            if carried {
+                let json = serde_json::to_string(&StampRef {
+                    version: VERSION,
+                    key: &build.stamp.key,
+                    artifacts: &build.stamp.artifacts,
+                    retained_artifacts: &merged_retained,
+                    partial_tests: build.stamp.partial_tests,
+                    program: &build.stamp.program,
+                })
+                .map_err(|error| error.to_string())?;
+                write_if_changed(&workspace.directory.join(PREVIOUS), &json)?;
+                return remove(&path);
+            }
         }
         match fs::rename(&path, workspace.directory.join(PREVIOUS)) {
             Ok(()) => Ok(()),
