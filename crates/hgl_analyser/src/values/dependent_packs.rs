@@ -822,7 +822,6 @@ struct Ordinary<'a> {
     name: &'a str,
     required: bool,
     configuration: bool,
-    takes_position: bool,
     filled: bool,
 }
 
@@ -896,8 +895,6 @@ pub(super) fn bind<'a>(
     let mut positional = None;
     let mut named = None;
     let mut position = 0;
-    // FN-8 trial: a fixed input after the positional pack takes a name.
-    let mut before_positional_pack = true;
     for (index, input) in actual.parameters.iter().enumerate() {
         let name = input.name().ok_or(Fault::Deferred)?;
         let parameter = input.declared();
@@ -907,7 +904,6 @@ pub(super) fn bind<'a>(
         let excluded = without.contains(&name);
         match parameter.and_then(|parameter| parameter.pack) {
             Some(Pack::Positional) => {
-                before_positional_pack = false;
                 if !excluded && let Some(parameter) = parameter {
                     positional = Some((index, parameter));
                 }
@@ -932,7 +928,6 @@ pub(super) fn bind<'a>(
                         name,
                         required,
                         configuration,
-                        takes_position: before_positional_pack && !configuration,
                         filled: false,
                     });
                 }
@@ -979,7 +974,7 @@ pub(super) fn bind<'a>(
             }
             if let Some(slot) = ordinary
                 .iter_mut()
-                .find(|slot| !slot.filled && slot.takes_position)
+                .find(|slot| !slot.filled && !slot.configuration)
             {
                 slot.filled = true;
                 PackKey::Name(slot.name.to_string())

@@ -233,7 +233,7 @@ transpiler: done
 
 analyser: done
 
-- Selects `join` for one list of strings or for the proposed positional-pack form. Each form takes `separator` by name under the FN-8 trial.
+- Selects `join` for one list of strings or for a positional pack of strings. Its `separator` configuration defaults to one space. A connection as the separator rejects (FN-18, EXPR-14).
 
 transpiler: done
 
@@ -551,6 +551,7 @@ transpiler: partial
 - Reading an absent store key gives `value.missing_key`, the same code as a
   strict dictionary lookup (ERR-6).
 - Left: a temporal child graph using the surrounding store is declined (CRUN-7).
+- Left: The execution catalogue lists `store.reserved_key`. #543 implements its checks.
 
 ## CAP-7
 
@@ -743,6 +744,7 @@ transpiler: partial
   stop. Outputless entries have no recording.
 - Left: Unsupported record types follow CEVAL-4. The reserved `run.output` check covers
   literal keys at source checking. Keys resolved at graph construction remain unchecked.
+- Left: The execution catalogue lists `store.reserved_key`. #543 implements its checks.
 
 runner: planned
 

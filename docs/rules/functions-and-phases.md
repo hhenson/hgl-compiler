@@ -110,8 +110,7 @@ parser: done
 
 analyser: partial
 
-- Packs have no defaults and are not const. A named pack follows fixed parameters and names a type pack of its declaration.
-- Proposed trial: a fixed parameter after a positional pack takes an argument by name alone. The pack takes every position left by the fixed parameters before it (EXPR-2).
+- Packs have no defaults and are not const. A fixed parameter after either pack reports `pack.order`. A named pack names a type pack of its declaration.
 - Function and operator calls bind leftover positional and named arguments to their corresponding packs and check the known element type. The HIR keeps each argument's pack slot and position or source name.
 - A second positional pack or a second named pack in one declaration reports `pack.duplicate` at its parameter name. A declaration may have one of each kind.
 - A dependent call matches the supplied arguments to the selected callback, excluding the parameters named by `without`. A defaulted parameter is reflected and contributes no argument unless supplied.
@@ -295,9 +294,10 @@ analyser: partial
 
 - Reads a parameter pack entry by a constant name or position. The instance supplies the entry type. A missing key reports `pack.name` using its written spelling, with an instantiated generic parameter shown as the value supplied (GEN-17, UNIT-13).
 - In a hook, the entry follows ordinary input admission and lifecycle rules (TIME-1, TIME-4, TIME-5) and reads the whole payload of an atomic or the list held by a window (TYPE-9, TYPE-11).
-- A direct temporal entry is named by its constant key in `valid`, `modified` and `all_valid`. A guard on one entry admits that entry (TIME-4, TIME-9).
+- A direct temporal entry is named by its constant key in `valid`, `modified`, `all_valid` and `is_active`. A guard on one entry admits that entry (TIME-4, TIME-9).
 - A checked whole read from a window, an unsized list or a dictionary takes the result or nullable form of its place (ERR-14, ERR-15).
 - A child of a structural pack entry uses the ordinary child admission check. For a heterogeneous pack, the fitted entry supplies the child's shape (GEN-7, TIME-9). The declaration checks entry admission unless a guard on a child of that entry dominates the projection, in which case the fitted body checks the child's admission (TIME-1, TIME-4).
+- The instance resolves the key of a deferred `all_valid` guard before judging a read of an immediate child of the entry (GEN-7, TIME-1).
 - Keeps an entry read pending when its constant key needs an unrolled range pass (CTRL-16) or a module constant the compiler has not evaluated (UNIT-13). C++ declines the pending read.
 - Resolves spreads of parameter packs when the enclosing callable is instantiated. Written arguments bind first, then named entries, then positional entries fill the remaining parameter slots in order.
 - A `const` parameter written among a forwarding call's arguments is followed into the instance with the call's entries, and is an input of the instance only where its body reads it at compile time (FN-1, FMT-3). A forwarding body that comes back on its own path with other entries takes the parameter as read there (GEN-13). What a function parameter is given goes to a plain parameter of its template and is no compile-time read (FN-17). A conditional input past the 64 KiB text budget ends the analyser's walk; lowering treats it as before.
@@ -317,4 +317,4 @@ transpiler: partial
 - Lowers the concrete arguments of an inline computed spread. An anonymous body is specialized for the enclosing pack keys even when each pass supplies a value of the same type. The SDK cases also cover mixed entry types, named and positional keys, selected nested conditions, and written pack-member types.
 - Stores each computed entry once where its `let` runs. Bindings of an existing pack reuse the same entries. SDK cases cover all four forwarding examples, constructor fields, reuse, and a fixed graph loop that carries a connection binding.
 
-Left: C++ declines a spread whose pass condition does not supply a known constant `bool`. Direct pack-entry `is_active` and deferred-key guards are tracked in #784.
+Left: C++ declines a spread whose pass condition does not supply a known constant `bool`.

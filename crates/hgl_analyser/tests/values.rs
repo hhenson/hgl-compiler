@@ -5026,12 +5026,36 @@ fn temporal_pack_guards_do_not_admit_unselected_payloads() {
     }
 }
 
+/// GEN-7 and TIME-1: the actual key must admit the read in the instance.
+#[test]
+fn deferred_all_valid_does_not_admit_another_pack_entry() {
+    for handler in [
+        "when all_valid(items[K]) { return items[0][0] }",
+        "when valid([]) { if all_valid(items[K]) { return items[0][0] } }",
+    ] {
+        let checked = module(&format!(
+            "fn read<const K: i64>(items: ...list<i64, 2>) -> i64 {{\n\
+             {handler}\n\
+             }}\n\
+             fn wrong(first: list<i64, 2>, other: list<i64, 2>) -> i64 => read<1>(first, other)"
+        ));
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, "phase/payload.unguarded");
+        assert!(
+            checked.report.contains("read<1>(first, other)"),
+            "{}",
+            checked.report
+        );
+    }
+}
+
 /// TIME-5 and TIME-9: a packed input has the ordinary lifecycle and
 /// a scalar fails the same all-valid shape check as a direct input.
 #[test]
 fn temporal_pack_endpoints_keep_shape_and_lifecycle_checks() {
     let checked = module(
         r#"fn manage(items: ...i64) -> i64 {
+    start { let active = is_active(items[0]) }
     when all_valid(items[0]) { return 1 }
     stop {
         activate(items[0])
@@ -5047,12 +5071,31 @@ fn temporal_pack_endpoints_keep_shape_and_lifecycle_checks() {
     assert_eq!(
         codes,
         [
+            "phase/input.lifecycle",
             "phase/endpoint.argument",
             "phase/input.lifecycle",
             "phase/input.lifecycle",
         ],
         "{}",
         checked.report,
+    );
+}
+
+/// TIME-9 and GEN-7: a written type must still match the fitted endpoint.
+#[test]
+fn packed_activity_checks_its_written_endpoint_type() {
+    let checked = module(
+        r#"fn selected<...As>(items: ...As) -> bool {
+    when modified(items[0]) && valid([]) { return is_active<str>(items[0]) }
+}
+fn probe(input: i64) -> bool => selected(input)"#,
+    );
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/type.mismatch");
+    assert!(
+        checked.report.contains("selected(input)"),
+        "{}",
+        checked.report
     );
 }
 
