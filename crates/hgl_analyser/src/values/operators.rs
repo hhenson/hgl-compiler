@@ -14,7 +14,8 @@ use super::constants::{constant_text, generic_default};
 use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
 };
-use super::fit::{negated, open, whole};
+use super::expressions::written_null;
+use super::fit::{is_integer_literal, negated, open, whole};
 use super::function_arguments::CallbackInputs;
 use super::inference::{
     ExplicitGenerics, bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed,
@@ -24,7 +25,7 @@ use super::lifting::contextual_type_is_pending;
 use super::{Candidate, Typer};
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
-use crate::program::{Declaration, DependentPack, OperatorRef, Program, Role};
+use crate::program::{Declaration, DeclarationKind, DependentPack, OperatorRef, Program, Role};
 use crate::syntax::{has_token, name_token, ungrouped};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, NamedKind, Pack, Scalar,
@@ -515,6 +516,19 @@ impl<'a> Typer<'a> {
         if faulty || unknown {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
+        let dictionary_fallback =
+            match self.dictionary_get_fallback(operator, public, &candidates, &given) {
+                Ok(DictionaryFallback::WrittenNull(index)) => {
+                    given.remove(index);
+                    false
+                }
+                Ok(DictionaryFallback::Value) => true,
+                Ok(DictionaryFallback::Omitted) => false,
+                Err(report) => {
+                    self.diagnostics.emit(*report);
+                    return (self.unselected(given, Form::Named), Type::Unknown);
+                }
+            };
         // Core's OPS-6: "`convert<list<B>>(values)` is admitted too,
         // where `values` is a `list<A>` and the struct `A` inherits from
         // the abstract struct `B`; it yields the same elements." Core
@@ -543,6 +557,11 @@ impl<'a> Typer<'a> {
             call_generics,
             unfit,
         } = self.argument_output_requested(operator, public, found, &given, said);
+        // ERR-6: the fallback form gives the payload type a caller writes.
+        // A plain read still requests the whole result of that payload.
+        if dictionary_fallback && let Some(Type::Result { value, .. }) = requested {
+            requested = Some(*value);
+        }
         // GEN-13: a default the call takes is of its parameter's type
         // as the call resolves it: the `2` of
         // `operator choose<T, const fallback: T = 2>` is no `str`. One
@@ -1191,8 +1210,7 @@ impl<'a> Typer<'a> {
             .is_some_and(|(module, declarations)| {
                 declarations.iter().any(|&index| {
                     let kind = self.program.modules[module].declarations[index].kind;
-                    kind == crate::program::DeclarationKind::Operator
-                        || kind.binding_role().is_some()
+                    kind == DeclarationKind::Operator || kind.binding_role().is_some()
                 })
             })
     }
@@ -1821,6 +1839,128 @@ pub(super) fn public_inputs<'a>(public: &Signature, given: &'a [Given]) -> Vec<O
         }
     }
     inputs
+}
+
+/// The Core value candidate whose fallback must be supplied (ERR-6).
+pub(super) fn core_dictionary_fallback(
+    program: &Program,
+    module: usize,
+    candidate: &Declaration,
+    signature: &Signature,
+) -> bool {
+    let [store, _, fallback] = signature.parameters.as_slice() else {
+        return false;
+    };
+    candidate.name == "get"
+        && program.core() == Some(module)
+        && matches!(
+            candidate.kind,
+            DeclarationKind::Implementation(Role::Value, _)
+        )
+        && matches!(store.ty, Type::Dict { .. })
+        && fallback.name == "fallback"
+}
+
+/// How the call supplies the optional dictionary fallback (ERR-6).
+pub(super) enum DictionaryFallback {
+    /// The call is no dictionary fallback read, or it omits the fallback.
+    Omitted,
+    /// The written literal selects the plain read. This is its argument index.
+    WrittenNull(usize),
+    /// The call evaluates the fallback and gives the dictionary's value type.
+    Value,
+}
+
+impl Typer<'_> {
+    /// The form of a dictionary read, or its known wrong fallback type.
+    pub(super) fn dictionary_get_fallback(
+        &self,
+        operator: OperatorRef,
+        public: &Signature,
+        candidates: &[Candidate<'_>],
+        given: &[Given],
+    ) -> Result<DictionaryFallback, Box<Diagnostic>> {
+        let program = self.program;
+        if program.modules[operator.module].declarations[operator.declaration].name != "get"
+            || program.core() != Some(operator.module)
+        {
+            return Ok(DictionaryFallback::Omitted);
+        }
+        let Some(&(_, _, signature)) =
+            candidates
+                .iter()
+                .find(|&&(module, declaration, signature)| {
+                    core_dictionary_fallback(
+                        program,
+                        module,
+                        &program.modules[module].declarations[declaration],
+                        signature,
+                    )
+                })
+        else {
+            return Ok(DictionaryFallback::Omitted);
+        };
+        let Some(places) = bound(signature, public, given, None) else {
+            return Ok(DictionaryFallback::Omitted);
+        };
+        let Some(store) = places.iter().position(|place| place.parameter() == Some(0)) else {
+            return Ok(DictionaryFallback::Omitted);
+        };
+        let store = &given[store];
+        let value_type = match store.ty() {
+            Type::Dict { value, .. } => Some(value.as_ref()),
+            // EXPR-9: these pairs take their types from the dictionary candidate.
+            _ if matches!(store.value.kind, ExprKind::Pairs(_)) => None,
+            // GEN-7: the operations of every stated member are callable here.
+            Type::Parameter { at, .. }
+                if self.memberships().iter().any(|(position, members)| {
+                    position == at
+                        && !members.is_empty()
+                        && members
+                            .iter()
+                            .all(|member| matches!(member, Argument::Type(Type::Dict { .. })))
+                }) =>
+            {
+                None
+            }
+            _ => return Ok(DictionaryFallback::Omitted),
+        };
+        let Some(fallback) = places.iter().position(|place| place.parameter() == Some(2)) else {
+            return Ok(DictionaryFallback::Omitted);
+        };
+        let argument = &given[fallback];
+        if written_null(&argument.node) {
+            return Ok(DictionaryFallback::WrittenNull(fallback));
+        }
+        if let Some(value) = value_type
+            && !dictionary_fallback_type(argument, value)
+        {
+            return Err(Box::new(error(
+                Category::Type,
+                codes::LOOKUP_DEFAULT_TYPE,
+                argument.value.at,
+                format!(
+                    "the fallback has type `{}` and the dictionary's value type is `{value}`",
+                    argument.ty()
+                ),
+                "ERR-6",
+            )));
+        }
+        Ok(DictionaryFallback::Value)
+    }
+}
+
+/// ERR-6 requires the fallback's exact type. A literal can take its
+/// expected type under EXPR-5; an open generic is checked in its instance.
+pub(super) fn dictionary_fallback_type(argument: &Given, expected: &Type) -> bool {
+    let actual = argument.ty();
+    argument.by_place
+        || actual == expected
+        || !whole(expected)
+        || !whole(actual)
+        || names_parameter(expected)
+        || names_parameter(actual)
+        || (matches!(expected, Type::Scalar(Scalar::F64)) && is_integer_literal(&argument.value))
 }
 
 /// A literal's preliminary type is not a requested output (GEN-5).
