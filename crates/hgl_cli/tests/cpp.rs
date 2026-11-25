@@ -2653,9 +2653,8 @@ fn let_bound_packs_run_on_the_sdk() {
 }
 
 /// MAP-1, RED-1, RED-4 and RED-5: C++ reports the remaining native forms.
-/// A map of one split dictionary and a capture-free ordered fold are written.
-/// FN-14 permits the captured callback even though the engine cannot wire it
-/// in an ordered reduction.
+/// C++ writes a one-dictionary keyed map and growing ordered folds with
+/// and without callback captures.
 #[test]
 fn native_mapping_forms_decline_cpp_emission() {
     let root = scratch("native-mapping-forms");
@@ -2693,7 +2692,7 @@ export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values,
     let stderr = text(&emitted.stderr);
     assert_eq!(emitted.status.code(), Some(1), "{stderr}");
     assert!(
-        stderr.contains("an ordered reduction with a captured callback"),
+        !stderr.contains("reduce(fn(accumulated, member)"),
         "{stderr}"
     );
     assert!(
@@ -2704,7 +2703,7 @@ export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values,
     assert!(stderr.contains("map(sum_for_map, left, right)"), "{stderr}");
     assert_eq!(
         stderr.matches("error[build/target.unsupported]").count(),
-        6,
+        5,
         "{stderr}"
     );
 }
@@ -2805,6 +2804,29 @@ test nullable_accumulator_takes_a_plain_seed {
     );
     assert!(
         stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
+/// RED-5 and FN-14: ordered folds retain captured values and observe live
+/// captures, including when a member's callback stops and starts again.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn ordered_reduction_captures_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("ordered-reduction-captures");
+    let file = write(
+        &root,
+        "demo.ordered_reduce_captures.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.ordered_reduce_captures.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 6 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
