@@ -1,0 +1,182 @@
+module demo.keyed_cancellation
+
+fn dictionary_churn(step: i64) -> dict<i64, i64> {
+    inject out
+    when {
+        if step == 1 { return [5: 1] }
+        if step == 2 {
+            out = delta<dict<i64, i64>>(updated: [8: 1])
+            out = delta<dict<i64, i64>>(removed: [8])
+        }
+        if step == 3 {
+            out = delta<dict<i64, i64>>(updated: [5: 1, 8: 1])
+            return delta<dict<i64, i64>>(removed: [8])
+        }
+    }
+}
+
+fn dictionary_wake(book: dict<i64, i64>) -> bool {
+    when valid([]) { return valid(book) }
+}
+
+fn observe_dictionary(step: i64) -> bool => dictionary_wake(dictionary_churn(step))
+
+# TIME-7 and END-5: an absent key's addition and removal are silent.
+# An equal dictionary value still republishes and wakes a reader.
+test dictionary_cancellation_is_silent {
+    assert eval dictionary_churn(step: [1, 2, 3]) ==
+        [[5: 1], _, delta<dict<i64, i64>>(updated: [5: 1])]
+    assert eval observe_dictionary(step: [1, 2, 3]) == [true, _, true]
+}
+
+fn set_churn(step: i64) -> set<i64> {
+    inject out
+    when {
+        if step == 1 { return [5] }
+        if step == 2 {
+            out = delta<set<i64>>(added: [8])
+            out = delta<set<i64>>(removed: [8])
+        }
+        if step == 3 {
+            out = delta<set<i64>>(removed: [5])
+            out = delta<set<i64>>(added: [5])
+        }
+        if step == 4 { return delta<set<i64>>(added: [6]) }
+    }
+}
+
+fn set_wake(members: set<i64>) -> bool {
+    when valid([]) { return valid(members) }
+}
+
+fn observe_set(step: i64) -> bool => set_wake(set_churn(step))
+
+# TIME-7: a first empty publication is valid. Once valid, unchanged
+# membership stays silent in both orders.
+test set_cancellation_is_silent_after_validity {
+    assert eval set_churn(step: [2, 2]) == [[], _]
+    assert eval set_churn(step: [1, 2, 3, 4]) ==
+        [[5], _, _, delta<set<i64>>(added: [6])]
+    assert eval observe_set(step: [1, 2, 3, 4]) == [true, _, _, true]
+}
+
+fn nested_churn(step: i64) -> dict<i64, dict<i64, i64>> {
+    inject out
+    when {
+        if step == 1 { return [5: [1: 3]] }
+        if step == 2 {
+            out = delta<dict<i64, dict<i64, i64>>>(updated: [5: delta<dict<i64, i64>>(updated: [8: 2])])
+            out = delta<dict<i64, dict<i64, i64>>>(updated: [5: delta<dict<i64, i64>>(removed: [8])])
+        }
+        if step == 3 {
+            out = delta<dict<i64, dict<i64, i64>>>(updated: [5: delta<dict<i64, i64>>(updated: [1: 3, 8: 2])])
+            return delta<dict<i64, dict<i64, i64>>>(updated: [5: delta<dict<i64, i64>>(removed: [8])])
+        }
+    }
+}
+
+fn nested_wake(book: dict<i64, dict<i64, i64>>) -> bool {
+    when valid([]) { return valid(book) }
+}
+
+fn observe_nested(step: i64) -> bool => nested_wake(nested_churn(step))
+
+# TIME-7: cancellation inside an existing child leaves the parent still.
+test nested_dictionary_cancellation_is_silent {
+    assert eval nested_churn(step: [1, 2, 3]) == [
+        [5: [1: 3]], _,
+        delta<dict<i64, dict<i64, i64>>>(updated: [5: delta<dict<i64, i64>>(updated: [1: 3])]),
+    ]
+    assert eval observe_nested(step: [1, 2, 3]) == [true, _, true]
+}
+
+fn dictionary_observes_out(step: i64) -> dict<i64, i64> {
+    inject out
+    when {
+        out = delta<dict<i64, i64>>(updated: [8: step])
+        if valid(out) && modified(out) && last_modified(out) != null {
+            out = delta<dict<i64, i64>>(removed: [8])
+            return delta<dict<i64, i64>>(updated: [5: step])
+        }
+    }
+}
+
+fn set_observes_out(step: i64) -> set<i64> {
+    inject out
+    when {
+        out = delta<set<i64>>(added: [step])
+        if valid(out) && modified(out) && last_modified(out) != null {
+            out = delta<set<i64>>(removed: [step])
+            return delta<set<i64>>(added: [5])
+        }
+    }
+}
+
+# TIME-7 and END-1/2: between the writes, the node observes the new output.
+test output_observations_see_the_staged_write {
+    assert eval dictionary_observes_out(step: [2]) == [[5: 2]]
+    assert eval set_observes_out(step: [2]) == [[5]]
+}
+
+fn observes_all_valid(step: i64) -> dict<i64, i64> {
+    inject out
+    when {
+        if step == 1 { return [5: 1] }
+        out = delta<dict<i64, i64>>(updated: [8: step])
+        if all_valid(out) { out = delta<dict<i64, i64>>(removed: [8]) }
+    }
+}
+
+fn observes_delta(step: i64) -> dict<i64, i64> {
+    inject out
+    when {
+        if step == 1 { return [5: 1] }
+        let change = delta<dict<i64, i64>>(updated: [8: step])
+        out = change
+        if delta_value(out) == change { out = delta<dict<i64, i64>>(removed: [8]) }
+    }
+}
+
+# TIME-7: these observers still see the earlier write. Their otherwise
+# cancelling evaluation still ticks with an empty delta (#878).
+test direct_output_observers_keep_the_existing_delta {
+    assert eval observes_all_valid(step: [1, 2]) == [[5: 1], delta<dict<i64, i64>>()]
+    assert eval observes_delta(step: [1, 2]) == [[5: 1], delta<dict<i64, i64>>()]
+}
+
+fn nan_dictionary(step: i64) -> dict<f64, i64> {
+    inject out
+    when {
+        if step == 1 { return [5.0: 1] }
+        let key = 0.0 / 0.0
+        out = delta<dict<f64, i64>>(updated: [key: 1])
+        out = delta<dict<f64, i64>>(removed: [key])
+    }
+}
+
+fn nan_set(step: i64) -> set<f64> {
+    inject out
+    when {
+        if step == 1 { return [5.0] }
+        let key = 0.0 / 0.0
+        out = delta<set<f64>>(added: [key])
+        out = delta<set<f64>>(removed: [key])
+    }
+}
+
+fn nan_dictionary_wake(book: dict<f64, i64>) -> bool {
+    when valid([]) { return valid(book) }
+}
+
+fn nan_set_wake(members: set<f64>) -> bool {
+    when valid([]) { return valid(members) }
+}
+
+fn observe_nan_dictionary(step: i64) -> bool => nan_dictionary_wake(nan_dictionary(step))
+fn observe_nan_set(step: i64) -> bool => nan_set_wake(nan_set(step))
+
+# NUM-5: a NaN key is found by no lookup. The first write remains a tick.
+test unequal_keys_keep_the_existing_publication {
+    assert eval observe_nan_dictionary(step: [1, 2]) == [true, true]
+    assert eval observe_nan_set(step: [1, 2]) == [true, true]
+}
