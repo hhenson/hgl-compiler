@@ -122,6 +122,7 @@ pub(crate) fn assemble<'a>(
             defaults: Vec::new(),
             phases: Vec::new(),
             written: Vec::new(),
+            delta_inputs: Vec::new(),
             call_arguments: Vec::new(),
             scope: Default::default(),
             instantiations: Vec::new(),

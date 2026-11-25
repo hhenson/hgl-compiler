@@ -267,7 +267,7 @@ transpiler: partial
 analyser: partial
 
 - `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window (of a window of a nullable V, `delta<V>`), a tuple of each position's delta under a `?`, and a type of its own for a nullable, a list, a set, a dictionary and a struct
-- Proposed: a `Type`, or a tuple, collection, nullable or struct that stores one, has no delta (`delta.unsupported_shape`, TYPE-18). Ordinary struct layouts omit their auxiliary delta layout.
+- Proposed: a `Type`, or a tuple, collection, nullable or struct that stores one, has no delta (`delta.unsupported_shape`, TYPE-18). Original delta operands are retained until fields resolve, including applications that atomic, result or window normalization erases. Ordinary struct layouts omit their auxiliary delta layout.
 - A `signal` has none (`delta.unsupported_shape`); a `ref` parameter's `delta_value` is not read (`ref.read`, FN-16)
 - Each delta that is a type of its own has its properties: a set's `added` and `removed`, a list's `updated`, `removed` and `size_modified`, a dictionary's `updated` and `removed`, a nullable's `value`, a struct's one for each field; none is assigned (`binding.immutable`)
 - It is constructed by them, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`)

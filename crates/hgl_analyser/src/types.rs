@@ -882,6 +882,16 @@ pub struct WrittenType {
     pub ty: Type,
 }
 
+/// An explicit delta application and its operand before that application
+/// normalizes (TYPE-16/18). Its fields may be resolved only after reading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeltaInput {
+    /// The `delta<T>` application, excluding constructor arguments.
+    pub at: Location,
+    /// The operand T, before applying `Type::delta`.
+    pub payload: Type,
+}
+
 /// The generic arguments a call writes after its callee's name,
 /// `count<i64>(3)` (GEN-8).
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -6,7 +6,7 @@ use hgl_source::Span;
 
 use crate::program::{Binding, DeclarationKind, LocalKind};
 use crate::syntax::{child, name_token, tokens};
-use crate::types::{CallArguments, Type};
+use crate::types::{CallArguments, DeltaInput, Type};
 
 use super::declarations::{Kind, is_configuration_parameter};
 use super::{Id, Position, Reader, is_const, is_type, names_before_colon, parameters};
@@ -439,6 +439,12 @@ impl Reader<'_> {
             return;
         }
         let shape = self.inner(&list, Position::PLAIN);
+        // TYPE-16/18: retain the same operand evidence as a written
+        // delta type before normalizing the constructor's result type.
+        self.delta_inputs.push(DeltaInput {
+            at: self.at(span),
+            payload: shape.clone(),
+        });
         self.record(span, Type::delta(shape));
     }
 }

@@ -12,7 +12,9 @@ use hgl_source::FileId;
 
 use crate::declared::{names_one_of, substitute_within};
 use crate::hir::{Body, DefaultExpr, Run};
-use crate::types::{Argument, CallArguments, Detail, GenericKind, NamedKind, Type, WrittenType};
+use crate::types::{
+    Argument, CallArguments, DeltaInput, Detail, GenericKind, NamedKind, Type, WrittenType,
+};
 
 /// Every module found in the files analysed, in order of module path.
 #[derive(Debug, Clone, Default)]
@@ -203,6 +205,9 @@ pub struct Module {
     /// order and then source order. A type inside another is part of
     /// that one and not listed again.
     pub written: Vec<WrittenType>,
+    /// Delta operands retained before normalization, so TYPE-16/18 can
+    /// check their resolved storage after struct fields have been read.
+    pub(crate) delta_inputs: Vec<DeltaInput>,
     /// The generic arguments each call writes after its callee's name,
     /// `count<i64>(3)` (GEN-8), in the order the calls are read.
     pub call_arguments: Vec<CallArguments>,

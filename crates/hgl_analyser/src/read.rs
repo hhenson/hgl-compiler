@@ -33,7 +33,7 @@ use hgl_source::{FileId, Span};
 use crate::constant::Constants;
 use crate::program::{Binding, DependentPack, Module, OperatorRef, Program};
 use crate::syntax::{test_statements, tokens};
-use crate::types::{CallArguments, Detail, GenericParameter, Type, WrittenType};
+use crate::types::{CallArguments, DeltaInput, Detail, GenericParameter, Type, WrittenType};
 
 use self::declarations::{Evidence, Kinds, struct_kinds};
 
@@ -89,6 +89,7 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
         }
         let calls = std::mem::take(&mut reader.calls);
         let dependent_packs = std::mem::take(&mut reader.dependent_packs);
+        let delta_inputs = std::mem::take(&mut reader.delta_inputs);
         let mut written = reader.written;
 
         // File order, then source order.
@@ -103,6 +104,7 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
         module.details = details;
         module.dependent_packs = dependent_packs;
         module.written = written;
+        module.delta_inputs = delta_inputs;
         module.call_arguments = calls;
     }
 }
@@ -246,6 +248,8 @@ struct Reader<'a> {
     read: HashMap<u32, Type>,
     /// Every type read in the module so far.
     written: Vec<WrittenType>,
+    /// Original operands of explicit delta applications (TYPE-16/18).
+    delta_inputs: Vec<DeltaInput>,
     /// Which function and exclusions each dependent pack names (FN-8).
     dependent_packs: HashMap<Location, DependentPack>,
     /// The generic arguments of every call read in the module so far
@@ -297,6 +301,7 @@ impl<'a> Reader<'a> {
             unsettled_target: false,
             read: HashMap::new(),
             written: Vec::new(),
+            delta_inputs: Vec::new(),
             dependent_packs: HashMap::new(),
             calls: Vec::new(),
             everywhere: program

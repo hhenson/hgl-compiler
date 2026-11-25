@@ -104,6 +104,7 @@ fn a_type_containing_value_has_no_delta() {
 module m
 struct Descriptor { tag: Type }
 struct Box<T> { value: T }
+struct Plain { value: i64 }
 const fn scalar(value: delta<Type>) {}
 const fn structure(value: delta<Descriptor>) {}
 const fn generic(value: delta<Box<Type>>) {}
@@ -112,9 +113,21 @@ const fn bad_tuple(value: delta<tuple<i64, Type>>) {}
 const fn nullable(value: delta<Type?>) {}
 const fn bad_set(value: delta<set<Type>>) {}
 const fn dictionary(value: delta<dict<Type, i64>>) {}
+const fn atomic_meta(value: delta<atomic<Type>>) {}
+const fn result_meta(value: delta<result<Type, error>>) {}
+const fn window_meta(value: delta<rolling_window<Type, 2>>) {}
+const fn atomic_struct(value: delta<atomic<Descriptor>>) {}
+const fn result_struct(value: delta<result<Descriptor, error>>) {}
+const fn atomic_list(value: delta<atomic<list<Type>>>) {}
+const fn atomic_generic(value: delta<atomic<Box<Type>>>) {}
+const fn unrelated(value: tuple<Type, delta<i64>>) {}
+const fn ordinary_atomic(value: delta<atomic<i64>>) {}
+const fn ordinary_result(value: delta<result<i64, error>>) {}
+const fn ordinary_window(value: delta<rolling_window<i64, 2>>) {}
+const fn ordinary_struct(value: delta<atomic<Plain>>) {}
 "#,
     )]);
-    assert_eq!(checked.findings.len(), 8, "{}", checked.report);
+    assert_eq!(checked.findings.len(), 15, "{}", checked.report);
     assert!(
         checked
             .findings
@@ -259,4 +272,32 @@ test valid_tuple { let known = selected<type((1, true))>() }
     assert_eq!(checked.findings.len(), 1, "{}", checked.report);
     assert_eq!(checked.findings[0].code, "type/generic.argument_constant");
     assert!(checked.findings[0].message.contains("`K`"));
+}
+
+/// TYPE-16/18: constructor scans preserve the same original delta operand;
+/// a normal collection delta constructor remains admitted.
+#[test]
+fn a_normalized_type_containing_delta_constructor_is_reported() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"
+module m
+const fn bad() { let value = delta<atomic<Type>>() }
+const fn good() { let value = delta<list<i64>>() }
+"#,
+    )]);
+    assert!(
+        checked
+            .findings
+            .iter()
+            .any(|f| f.code == "shape/delta.unsupported_shape")
+    );
+    assert!(
+        checked
+            .findings
+            .iter()
+            .all(|f| f.at.starts_with("m.hgl:3:")),
+        "{}",
+        checked.report
+    );
 }

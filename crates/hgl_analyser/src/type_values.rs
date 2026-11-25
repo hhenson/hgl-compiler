@@ -13,19 +13,44 @@ use crate::{Argument, ConstantValue, Detail, GenericKind, NamedKind, Program, Ty
 /// before this check so declaration order does not affect it.
 pub(crate) fn check_deltas(program: &Program, diagnostics: &mut Diagnostics) {
     for module in &program.modules {
+        // TYPE-16/18: atomic, result and window normalization may have
+        // erased the Delta node. Check its saved operand after fields resolve.
+        let mut rejected: Vec<_> = module
+            .delta_inputs
+            .iter()
+            .filter(|input| program.holds_type_value(&input.payload))
+            .map(|input| input.at)
+            .collect();
         for written in &module.written {
             if written.ty.any_part(
                 &|part| matches!(part, Type::Delta(payload) if program.holds_type_value(payload)),
                 &|_| false,
-            ) {
-                diagnostics.emit(crate::error(
-                    Category::Shape,
-                    crate::codes::DELTA_UNSUPPORTED_SHAPE,
-                    written.at,
-                    "a value that holds a `Type` has no temporal form and no delta".to_string(),
-                    "TYPE-16",
-                ));
+            ) && !rejected.iter().any(|at| {
+                at.file == written.at.file
+                    && written.at.span.start <= at.span.start
+                    && at.span.end <= written.at.span.end
+            }) {
+                // Keep checking normalized types too, without reporting a
+                // containing type again for an explicit application above.
+                rejected.push(written.at);
             }
+        }
+        let files: HashMap<_, _> = module
+            .files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| (file.file, index))
+            .collect();
+        rejected.sort_by_key(|at| (files[&at.file], at.span.start, at.span.end));
+        rejected.dedup();
+        for at in rejected {
+            diagnostics.emit(crate::error(
+                Category::Shape,
+                crate::codes::DELTA_UNSUPPORTED_SHAPE,
+                at,
+                "a value that holds a `Type` has no temporal form and no delta".to_string(),
+                "TYPE-16",
+            ));
         }
     }
 }
