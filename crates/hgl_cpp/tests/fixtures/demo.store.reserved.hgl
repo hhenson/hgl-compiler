@@ -103,3 +103,22 @@ test an_unread_nullable_key_keeps_its_guard {
     eval guard_nullable(enabled: [false])
     assert raises("value.null") { eval guard_nullable(enabled: [false, true]) }
 }
+
+const fn recursive_put(store: GlobalState, remaining: i64, const key: str) {
+    if remaining == 0 { put(store, key, 7) }
+    else { recursive_put(store, remaining - 1, key + ".output") }
+}
+fn recursive_hook(const prefix: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { recursive_put(global_state, 1, prefix) }
+}
+test recursive_helper_uses_the_key_it_reaches {
+    eval recursive_hook(prefix: supply("user"), divisor: 1)
+    eval recursive_hook(prefix: supply("run.output"), divisor: 1)
+}
+test recursive_helper_checks_the_key_at_the_operation {
+    assert raises("store.reserved_key") { eval recursive_hook(prefix: supply("run"), divisor: 1) }
+    assert raises("numeric.division_by_zero") { eval recursive_hook(prefix: supply("run"), divisor: 0) }
+}

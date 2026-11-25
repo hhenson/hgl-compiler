@@ -556,10 +556,9 @@ transpiler: partial
   `"run.output"`. A node checks direct and forwardable fixed hook keys when the
   SDK attaches it to its graph, before any start hook. The run's own recording
   uses that key.
+- A key computed by a recursive value helper with changing arguments is
+  checked by the store operation where the helper uses it.
 - Left: a temporal child graph using the surrounding store is declined (CRUN-7).
-- Left: a key that depends on changing parameters of a recursive hook helper
-  is checked by the store operation in the hook. Attachment-time checking of
-  that case is still open.
 
 ## CAP-7
 

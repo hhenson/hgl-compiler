@@ -82,7 +82,7 @@ impl<'a> Keys<'a> {
                 }
             } else {
                 let mut read = Vec::new();
-                trace.call(callee, arguments, bindings, *at, &mut read);
+                let _ = trace.call(callee, arguments, bindings, *at, &mut read);
                 for key in read {
                     keys.add(BuildKey {
                         held_for_hook: None,
@@ -194,8 +194,13 @@ struct ForwardedKeys<'a> {
     program: &'a Program,
     instances: &'a Instances,
     store: Type,
-    path: Vec<(usize, usize)>,
+    path: Vec<ForwardedCall>,
     remaining: Cell<usize>,
+}
+
+struct ForwardedCall {
+    declaration: (usize, usize),
+    fixed: Vec<Option<Expr>>,
 }
 
 #[derive(Clone, Copy)]
@@ -212,14 +217,12 @@ impl ForwardedKeys<'_> {
         caller: Bindings<'_>,
         at: Location,
         keys: &mut Vec<Expr>,
-    ) {
-        let Some((module, declaration)) = callee.declaration() else {
-            return;
-        };
+    ) -> Option<usize> {
+        let (module, declaration) = callee.declaration()?;
         let program = self.program;
         let unit = &program.modules[module];
         let Some(Detail::Callable(signature)) = unit.details.get(declaration) else {
-            return;
+            return None;
         };
         let declared = &unit.declarations[declaration];
         if !matches!(
@@ -231,22 +234,17 @@ impl ForwardedKeys<'_> {
             .iter()
             .any(|parameter| parameter.ty == self.store)
         {
-            return;
+            return None;
         }
         let identity = (module, declaration);
-        if spend(&self.remaining).is_none()
-            || self.path.len() == 64
-            || self.path.contains(&identity)
-        {
-            return;
+        if spend(&self.remaining).is_none() || self.path.len() == 64 {
+            return None;
         }
         let instance = self.instances.find_call(program, callee, arguments);
         let (signature, body) = if let Some(instance) = instance {
             (&instance.signature, &instance.body)
         } else {
-            let Some(body) = unit.bodies.get(declaration).and_then(Option::as_ref) else {
-                return;
-            };
+            let body = unit.bodies.get(declaration).and_then(Option::as_ref)?;
             (signature, body)
         };
         let fixed: Vec<_> = signature
@@ -278,7 +276,20 @@ impl ForwardedKeys<'_> {
                 }
             })
             .collect();
-        self.path.push(identity);
+        if let Some(depth) = self
+            .path
+            .iter()
+            .position(|earlier| earlier.declaration == identity)
+        {
+            return (self.path[depth].fixed != fixed).then_some(depth);
+        }
+        let start = keys.len();
+        let depth = self.path.len();
+        self.path.push(ForwardedCall {
+            declaration: identity,
+            fixed: fixed.clone(),
+        });
+        let mut recursive: Option<usize> = None;
         walk_statements(&body.statements, &mut |expression| {
             let ExprKind::Call {
                 callee, arguments, ..
@@ -291,11 +302,18 @@ impl ForwardedKeys<'_> {
                 if let Some(key) = project(program, key, bindings, &self.remaining) {
                     keys.push(key);
                 }
-            } else {
-                self.call(callee, arguments, bindings, expression.at, keys);
+            } else if let Some(ancestor) =
+                self.call(callee, arguments, bindings, expression.at, keys)
+            {
+                recursive = Some(recursive.map_or(ancestor, |prior| prior.min(ancestor)));
             }
         });
         self.path.pop();
+        let ancestor = recursive?;
+        // This cycle chooses its key in the helper. It can change an
+        // argument before any store operation actually uses it.
+        keys.truncate(start);
+        (ancestor < depth).then_some(ancestor)
     }
 }
 

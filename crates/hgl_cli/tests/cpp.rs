@@ -5472,10 +5472,11 @@ test resolved_at_run {
     );
 }
 
-/// CAP-6 and CRUN-8 reject non-source keys before a node or source starts.
+/// CAP-6 and CRUN-8 check fixed hook keys before start and recursive keys
+/// at the store operation that uses them.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
-fn reserved_store_keys_fail_when_the_graph_is_built_on_the_sdk() {
+fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     if !sdk_named() {
         return;
     }
@@ -5489,7 +5490,7 @@ fn reserved_store_keys_fail_when_the_graph_is_built_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 10 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 12 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
