@@ -316,7 +316,11 @@ impl Workspace {
         let database = String::from_utf8(commands.stdout)
             .map_err(|error| format!("Ninja's compilation database is not UTF-8: {error}"))?;
         let path = self.directory.join("compile_commands.json");
-        write_if_changed(&path, &database)?;
+        if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_symlink()) {
+            write_text(&path, &database)?;
+        } else {
+            write_if_changed(&path, &database)?;
+        }
         Ok(path)
     }
 
