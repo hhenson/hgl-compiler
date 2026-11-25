@@ -10,3 +10,16 @@ test value_named_type {
     assert read(present) == 12
     assert absent == null
 }
+
+# GEN-14: a known callable type slot still denotes the descriptor.
+const fn same<T>(value: T) -> T => value
+operator identity<T>(value: T) -> T
+impl const fn identity<T>(value: T) -> T => value
+const fn count<const N: i64>() -> i64 => N
+const fn unsettled<N>() -> i64 => 1
+test callable_type_slots {
+    assert same<Type>(type(1)) == type(1)
+    assert identity<Type>(type(1)) == type(1)
+    assert count<Type>() == 2
+    assert unsettled<Type>() == 1
+}

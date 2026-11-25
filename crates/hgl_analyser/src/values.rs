@@ -49,7 +49,7 @@ use control::label;
 use endpoints::endpoint_argument;
 
 pub(crate) use candidates::{Selecting, select_in_instance};
-pub(crate) use constants::generic_default;
+pub(crate) use constants::{generic_default, reread_parameter_default};
 pub(crate) use lifting::record;
 
 // The bodies of anonymous functions and their direct calls (FN-7, FN-14).

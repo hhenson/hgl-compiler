@@ -144,3 +144,27 @@ test instance_selected_query {
     assert eval selected_graph(value: [true]) == ["list<i64, 2>"]
     assert eval selected_node(value: [1, 2]) == ["list<i64, 3>", "list<i64, 3>"]
 }
+
+# TYPE-18, UNIT-7: defaults and bodies see the same selected type.
+operator cold_sample<T, R>(x: T) -> R
+impl const fn cold_sample<T>(x: T) -> list<str, 2> {
+    assert false
+    return ["a", "b"]
+}
+impl const fn cold_sample(x: list<str>) -> tuple<bool, bool> {
+    assert false
+    return (true, false)
+}
+const fn cold_make<T>() -> list<T> {
+    assert false
+    return []
+}
+const fn original<T>(x: T, tag: Type = type(cold_sample(cold_make<T>()))) -> str => format("{}", tag)
+const fn body_control<T>(x: T) -> str => format("{}", type(cold_sample(cold_make<T>())))
+test concrete_query_defaults {
+    assert original(true) == "list<str, 2>"
+    assert original("one") == "tuple<bool, bool>"
+    assert body_control(true) == "list<str, 2>"
+    assert body_control("one") == "tuple<bool, bool>"
+    assert original("one", tag: type(1)) == "i64"
+}

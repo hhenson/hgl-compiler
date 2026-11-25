@@ -35,7 +35,7 @@ use crate::program::{Binding, DependentPack, Module, OperatorRef, Program};
 use crate::syntax::{test_statements, tokens};
 use crate::types::{CallArguments, DeltaInput, Detail, GenericParameter, Type, WrittenType};
 
-use self::declarations::{Evidence, Kinds, struct_kinds};
+use self::declarations::{Evidence, Kinds, declaration_kinds};
 
 mod applications;
 mod declarations;
@@ -50,8 +50,8 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
     // a constant written in a type may name one, `Tagged<Mode(1)>`.
     crate::declared::number_enums(program, diagnostics);
     // A generic argument is read for the parameter it is given to, so
-    // the kind of every struct's parameters is settled first (GEN-13).
-    let kinds = struct_kinds(program);
+    // declared struct and callable kinds are settled first (GEN-13/14).
+    let kinds = declaration_kinds(program);
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
         // The reader reads the whole program and so cannot change it.

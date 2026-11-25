@@ -402,7 +402,7 @@ impl Defaults {
 /// An omitted default can depend on generic arguments through its type
 /// or through a value read by the expression.
 fn dependent_default(parameter: &Parameter, default: &hir::DefaultExpr) -> bool {
-    names_parameter(&parameter.ty) || reads_generic_value(default)
+    names_parameter(&parameter.ty) || reads_generic_value(default) || default.has_type_query()
 }
 
 fn reads_generic_value(default: &hir::DefaultExpr) -> bool {

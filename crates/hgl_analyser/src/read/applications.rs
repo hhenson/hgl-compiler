@@ -486,7 +486,23 @@ impl Reader<'_> {
             } else {
                 None
             };
-            let want = parameter.map_or(Kind::Unknown, |(_, kind)| *kind);
+            let mut want = parameter.map_or(Kind::Unknown, |(_, kind)| *kind);
+            // GEN-14, TYPE-18: the contextual descriptor spelling follows
+            // a callable's declared slot too. Keep ordinary name lookup for
+            // value and undetermined slots, including a constant named Type.
+            if target.is_none()
+                && placed
+                && at_least > 0
+                && argument.kind() == SyntaxKind::NamedType
+                && argument.text().to_string().trim() == "Type"
+                && let Some(kinds) = values_of.and_then(|id| self.kinds.get(&id))
+            {
+                want = kinds
+                    .get(next)
+                    .or_else(|| kinds.last().filter(|kind| **kind == Kind::Pack))
+                    .copied()
+                    .unwrap_or(Kind::Unknown);
+            }
             // What a value given to this parameter is a value of
             // (EXPR-5), with what an earlier argument gave a type
             // parameter in place: the `T` of `S<T, const v: T>`.

@@ -766,3 +766,130 @@ fn recursive_calls_inside_type_queries_remain_cold() {
     )]);
     assert_eq!(checked.summary(), Vec::<String>::new());
 }
+
+/// GEN-14, TYPE-18: a callable's declared type/pack slot chooses the
+/// descriptor spelling even when the ordinary value Type is in scope.
+#[test]
+fn callable_type_slots_choose_the_descriptor_over_a_value_name() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const Type: i64 = 3
+const fn same<T>(value: T) -> T => value
+operator identity<T>(value: T) -> T
+impl const fn identity<T>(value: T) -> T => value
+const fn packed<...Ts>(value: tuple<Ts>) -> tuple<Ts> => value
+const fn count<const N: i64>() -> i64 => N
+const fn unsettled<N>() -> i64 => 1
+test obs {
+    assert same<Type>(type(1)) == type(1)
+    assert identity<Type>(type(1)) == type(1)
+    assert packed<Type, Type>((type(1), type(true)))[0] == type(1)
+    assert count<Type>() == 3
+    assert unsettled<Type>() == 1
+}
+"#,
+    )]);
+    assert_eq!(checked.summary(), Vec::<String>::new());
+}
+
+/// GEN-14: a known callable value slot cannot treat the descriptor as a
+/// value. A constant named Type is covered separately by the positive case.
+#[test]
+fn callable_value_slots_reject_an_unbound_descriptor() {
+    for declaration in [
+        "const fn count<const N: i64>() -> i64 => N",
+        "operator count<const N: i64>() -> i64\nimpl const fn count<const N: i64>() -> i64 => N",
+    ] {
+        let source = format!("module m\n{declaration}\ntest obs {{ assert count<Type>() == 1 }}\n");
+        let checked = check(&[("m.hgl", &source)]);
+        assert!(
+            checked
+                .findings
+                .iter()
+                .any(|finding| finding.code == "type/generic.argument_kind"
+                    && finding.rule == "GEN-14"),
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// TYPE-18, UNIT-7: an omitted default selects under the making call's
+/// generic arguments, with no operand call or formal parameter in its HIR.
+#[test]
+fn omitted_type_query_defaults_use_the_concrete_instance() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+operator sample<T, R>(x: T) -> R
+impl const fn sample<T>(x: T) -> list<str, 2> => ["a", "b"]
+impl const fn sample(x: list<str>) -> tuple<bool, bool> => (true, false)
+const fn make<T>() -> list<T> => []
+const fn original<T>(x: T, tag: Type = type(sample(make<T>()))) -> Type => tag
+"#,
+    )]);
+    assert_eq!(checked.summary(), Vec::<String>::new());
+    let module = checked.program.module("m").unwrap();
+    let declaration = module
+        .declarations
+        .iter()
+        .position(|decl| decl.name == "original")
+        .unwrap();
+    let hgl_analyser::Detail::Callable(signature) = &module.details[declaration] else {
+        panic!("original has a signature");
+    };
+    let default = module.defaults[declaration][1].as_ref().unwrap();
+    for (argument, expected) in [
+        (Scalar::Bool, "list<str, 2>"),
+        (Scalar::Str, "tuple<bool, bool>"),
+    ] {
+        let mut diagnostics = hgl_diagnostics::Diagnostics::new();
+        let specialized = checked.program.specialize_parameter_default(
+            default,
+            (
+                checked
+                    .program
+                    .modules
+                    .iter()
+                    .position(|unit| std::ptr::eq(unit, module))
+                    .unwrap(),
+                declaration,
+            ),
+            &[hgl_analyser::Argument::Type(Type::Scalar(argument))],
+            &signature.parameters[1],
+            &mut diagnostics,
+        );
+        assert!(!diagnostics.has_errors(), "{:?}", diagnostics.as_slice());
+        assert!(
+            matches!(&specialized.value.kind, ExprKind::Literal(Value::Type(ty)) if ty.canonical_spelling() == expected),
+            "{specialized:?}"
+        );
+        assert!(specialized.locals.is_empty());
+    }
+}
+
+/// TYPE-18 checks a cold default's operand after instance selection,
+/// just as it checks the same query in a function body (EXPR-7).
+#[test]
+fn omitted_type_query_defaults_keep_selected_operand_errors() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+operator items<T, R>(value: T) -> R
+impl const fn items<T>(value: T) -> list<i64> => [1]
+impl const fn items(value: list<str>) -> set<i64> => [2]
+const fn make<T>() -> list<T> => []
+const fn original<T>(value: T, tag: Type = type(items(make<T>())[0])) -> Type => tag
+const fn concrete() -> Type => original("one")
+"#,
+    )]);
+    assert!(
+        checked
+            .findings
+            .iter()
+            .any(|finding| finding.code == "type/type.mismatch" && finding.rule == "EXPR-7"),
+        "{}",
+        checked.report
+    );
+}

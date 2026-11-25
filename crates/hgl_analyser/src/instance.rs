@@ -174,7 +174,7 @@ impl Program {
 
     /// Places a default in its defining callable's scope and fits it
     /// against the selected parameter type (UNIT-7, UNIT-8).
-    pub(crate) fn specialize_parameter_default(
+    pub fn specialize_parameter_default(
         &self,
         default: &DefaultExpr,
         operator: (usize, usize),
@@ -224,7 +224,19 @@ impl Program {
         };
         // UNIT-7: a default has no formal parameters in scope. Run the
         // same membership-based selection here as in a specialized body.
-        let mut body = default.clone().into_body();
+        let mut body = if default.has_type_query() && !generics.is_empty() {
+            crate::values::reread_parameter_default(
+                self,
+                operator,
+                generics,
+                default,
+                &mut reports.borrow_mut(),
+            )
+            .unwrap_or_else(|| default.clone())
+        } else {
+            default.clone()
+        }
+        .into_body();
         self.place_body(&mut body, &instance, &[]);
         crate::values::record(self, &mut body, false);
         let mut default = DefaultExpr::from_body(body);

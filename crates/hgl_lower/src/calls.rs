@@ -444,6 +444,21 @@ pub fn left_out<'p>(
             .and_then(Option::as_ref)
     });
     if let Some(default) = default {
+        if default.has_type_query()
+            && !callee.generics().is_empty()
+            && let Some(owner) = callee.declaration()
+        {
+            let mut diagnostics = hgl_diagnostics::Diagnostics::new();
+            let default = program.specialize_parameter_default(
+                default,
+                owner,
+                callee.generics(),
+                parameter,
+                &mut diagnostics,
+            );
+            return (!diagnostics.has_errors())
+                .then(|| LeftOut::Default(DefaultValue::Specialized(Box::new(default))));
+        }
         Some(LeftOut::Default(DefaultValue::Declared(default)))
     } else if matches!(parameter.ty, Type::Nullable(_)) {
         Some(LeftOut::Null)

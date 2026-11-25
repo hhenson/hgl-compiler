@@ -75,6 +75,15 @@ pub struct DefaultExpr {
 }
 
 impl DefaultExpr {
+    /// TYPE-18: a cold query has become a descriptor literal. Its operand
+    /// must be read again when a generic default acquires concrete types.
+    pub fn has_type_query(&self) -> bool {
+        let mut found = false;
+        self.value
+            .walk(&mut |value| found |= matches!(value.kind, ExprKind::Literal(Value::Type(_))));
+        found
+    }
+
     /// Treat the expression as a body for specialization and analysis of its locals.
     pub fn into_body(self) -> Body {
         Body {
