@@ -549,7 +549,7 @@ analyser: partial
 - A known key is used with one type in a program. A `put` or a `get` of a
   different type than an earlier use is `store.key_type` (TIME-8).
 - Left: a helper outside the cycle that also formats its key is checked
-  in source for each key an instance of the cycle gives it.
+  in source for each key an instance of the cycle gives it (#877).
 
 transpiler: partial
 
