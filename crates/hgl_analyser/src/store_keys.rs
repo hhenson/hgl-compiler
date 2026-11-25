@@ -108,12 +108,31 @@ pub(crate) fn key_types(
 }
 
 impl Program {
+    /// Whether TIME-8 leaves this store key to a recursive operation.
+    pub fn store_key_at_execution(&self, key: &Expr) -> bool {
+        self.runtime_store_keys.contains(&key.at)
+    }
+
+    /// A key the source checker can fix without evaluating value code.
+    pub fn source_store_key(&self, key: &Expr) -> Option<String> {
+        crate::const_inputs::known_store_key(self, key)
+    }
+
     /// The key of a native CAP-6 operation, in its written argument order.
     pub fn store_key_argument<'a>(
         &self,
         callee: &Callee,
         arguments: &'a [CallArgument],
     ) -> Option<&'a Expr> {
+        self.store_arguments(callee, arguments).map(|(_, key)| key)
+    }
+
+    /// The borrowed store and its key at a native CAP-6 operation.
+    pub fn store_arguments<'a>(
+        &self,
+        callee: &Callee,
+        arguments: &'a [CallArgument],
+    ) -> Option<(&'a Expr, &'a Expr)> {
         let (module, declaration) = callee.declaration()?;
         if Some(module) != self.core() {
             return None;
@@ -126,17 +145,16 @@ impl Program {
             return None;
         };
         let store = self.capability_type("global_state")?;
-        if !signature
-            .parameters
-            .iter()
-            .any(|parameter| parameter.ty == store)
-        {
-            return None;
-        }
-        arguments.iter().find_map(|argument| {
-            let parameter = signature.parameters.get(argument.parameter?)?;
-            (parameter.constant && parameter.name == "key").then_some(&argument.value)
-        })
+        let argument_for = |matches: &dyn Fn(&crate::Parameter) -> bool| {
+            arguments.iter().find_map(|argument| {
+                let parameter = signature.parameters.get(argument.parameter?)?;
+                matches(parameter).then_some(&argument.value)
+            })
+        };
+        Some((
+            argument_for(&|parameter| parameter.ty == store)?,
+            argument_for(&|parameter| parameter.constant && parameter.name == "key")?,
+        ))
     }
 }
 

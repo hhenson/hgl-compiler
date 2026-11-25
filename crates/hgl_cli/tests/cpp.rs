@@ -5504,6 +5504,18 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
         return;
     }
     let root = scratch("reserved_store_keys");
+    let generic = write(
+        &root,
+        "demo.store.generic_keys.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.store.generic_keys.hgl"),
+    );
+    let output = hgl_in(&["test", &generic], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.contains("rejection cases: 4 passed, 0 failed\n"),
+        "{stdout}"
+    );
     let file = write(
         &root,
         "demo.store.reserved.hgl",
@@ -5513,7 +5525,7 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 14 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 20 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

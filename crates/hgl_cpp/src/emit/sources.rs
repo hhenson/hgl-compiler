@@ -167,15 +167,7 @@ impl Emitter<'_> {
             ));
             given.push(super::configuration::read(program, &parameter.ty, &name));
         }
-        for slot in store_keys.slots() {
-            let name = store::local(slot);
-            taken.push(format!(
-                "[[maybe_unused]] ::std::optional<::hgraph::Str> {name}"
-            ));
-            given.push(format!("kept_.{name}"));
-        }
         let mut context = Context::new(Kind::Source, body.locals.len());
-        context.store_keys = store_keys.expressions();
         context.result = Some(result.clone());
         let forms = ResultForms::of(self, result);
         context.result_forms = forms.clone();
@@ -234,12 +226,6 @@ impl Emitter<'_> {
         let Some(prepare) = store_keys.prepare(self, signature, body) else {
             return;
         };
-        let store_fields = store_keys.fields();
-        let initialize = if !store_keys.holds_values() {
-            format!("{INDENT}{INDENT}state_.set(state_type_{{}});\n")
-        } else {
-            String::new()
-        };
         let text = format!(
             "// {shown}\n\
              struct {IMPLEMENTATION}\n{{\n\
@@ -256,12 +242,12 @@ impl Emitter<'_> {
              {INDENT}// timing of its yields.\n\
              {INDENT}struct state_type_\n{INDENT}{{\n\
              {INDENT}{INDENT}::{library}::Source<{payload}> source_{{}};\n\
-             {kept}{store_fields}\
+             {kept}\
              {INDENT}{INDENT}::std::optional<body_type_> frame_{{}};\n\
              {INDENT}{INDENT}::std::optional<body_type_::iterator> at_{{}};\n\
              {INDENT}}};\n{prepare}\n\
              {INDENT}static void start({start})\n{INDENT}{{\n\
-             {initialize}\
+             {INDENT}{INDENT}state_.set(state_type_{{}});\n\
              {INDENT}{INDENT}state_type_& kept_ = state_.modify();\n\
              {start_before}\
              {INDENT}{INDENT}kept_.frame_.emplace(body_({given}));\n\

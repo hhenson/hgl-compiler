@@ -40,6 +40,7 @@
 #include <source_location>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace hglrt {
 
@@ -315,19 +316,27 @@ void schedule_Alarm_datetime(const Alarm& capability, datetime at);
 inline constexpr std::string_view run_output = "run.output";
 
 /// Validate a user store key where its value is fixed (CAP-6).
-str checked_store_key(str key, std::source_location where = std::source_location::current());
+void require_store_key(std::string_view key, std::source_location where);
+
+/// Keep the original value and its lifetime while checking the key.
+template <typename Key>
+decltype(auto) checked_store_key(
+    Key&& key, std::source_location where = std::source_location::current()) {
+    require_store_key(key, where);
+    return std::forward<Key>(key);
+}
 
 /// Check a projected hook key at attachment. A failed read keeps the hook's
 /// own failure handling and control flow (ERR-5, ERR-12, ERR-15).
 template <typename Read>
-std::optional<str> prepare_store_key(Read read, std::source_location where) {
+void prepare_store_key(Read read, std::source_location where) {
     str key;
     try {
         key = read();
     } catch (const Failure&) {
-        return std::nullopt;
+        return;
     }
-    return checked_store_key(std::move(key), where);
+    require_store_key(key, where);
 }
 
 /// `GlobalState` (CAP-6), what `inject global_state` binds: the run's store,
@@ -336,14 +345,31 @@ std::optional<str> prepare_store_key(Read read, std::source_location where) {
 /// to its wiring (FN-9). It has no property.
 class GlobalState {
   public:
-    explicit GlobalState(hgraph::GlobalStateView view) noexcept : view_(view) {}
+    explicit GlobalState(hgraph::GlobalStateView view, bool fixed_keys_checked = false) noexcept
+        : view_(view), fixed_keys_checked_(fixed_keys_checked) {}
 
     /// The hgraph view it is made from.
     [[nodiscard]] const hgraph::GlobalStateView& view() const noexcept { return view_; }
 
+    /// Whether the borrowing node's attachment checked its fixed keys.
+    [[nodiscard]] bool fixed_keys_checked() const noexcept { return fixed_keys_checked_; }
+
   private:
     hgraph::GlobalStateView view_;
+    bool fixed_keys_checked_;
 };
+
+/// Use a fixed key from a graph or hook, checking it if the caller has
+/// no attachment-time proof (CAP-6).
+template <typename Key>
+decltype(auto) use_fixed_store_key(
+    const GlobalState& store, Key&& key,
+    std::source_location where = std::source_location::current()) {
+    if (!store.fixed_keys_checked()) {
+        require_store_key(key, where);
+    }
+    return std::forward<Key>(key);
+}
 
 namespace detail {
 /// What the store holds for a value of `V` (CAP-6: "a run-wide store of

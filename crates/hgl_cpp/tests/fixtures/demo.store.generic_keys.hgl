@@ -1,0 +1,41 @@
+module demo.store.generic_keys
+fn output_key<const K: str>(value: i64) -> i64 {
+    inject clock, global_state
+    when { return value }
+    stop { put(global_state, K, [(clock.evaluation_time, 999)]) }
+}
+fn has_key<const K: str>(value: i64) -> i64 {
+    inject global_state
+    when { return value }
+    stop { let present = has(global_state, K) }
+}
+fn store_graph<const K: str>(value: i64) -> i64 {
+    inject global_state
+    put(global_state, K, 7)
+    return value
+}
+const fn write_with_key(store: GlobalState, const key: str) {
+    put(store, key, 7)
+}
+fn indirect_key<const K: str>(value: i64) -> i64 {
+    inject global_state
+    when { return value }
+    stop { write_with_key(global_state, K) }
+}
+
+test output_key_rejects {
+    # expect-error(injectable, "store.reserved_key")
+    eval output_key<"run.output">(value: [1])
+}
+test has_key_rejects {
+    # expect-error(injectable, "store.reserved_key")
+    eval has_key<"run.output">(value: [1])
+}
+test graph_key_rejects {
+    # expect-error(injectable, "store.reserved_key")
+    eval store_graph<"run.output">(value: [1])
+}
+test indirect_key_rejects {
+    # expect-error(injectable, "store.reserved_key")
+    eval indirect_key<"run.output">(value: [1])
+}

@@ -145,3 +145,120 @@ test indirect_cycle_uses_the_key_it_reaches {
 test indirect_cycle_checks_the_key_at_the_operation {
     assert raises("store.reserved_key") { eval mutual_hook(depth: 0, key: "run.output") }
 }
+
+# A growing graph key is evaluated by the builder (TIME-8, FN-9).
+fn grow(value: i64, const key: str, const depth: i64) -> i64 {
+    inject global_state
+    if depth == 0 {
+        put(global_state, key, 1)
+        return value
+    }
+    return grow(value, key + ".x", depth - 1)
+}
+fn last_key(value: i64, const key: str) -> i64 {
+    inject global_state
+    when { return value }
+    stop { put(global_state, key, 7) }
+}
+fn grow_node(value: i64, const key: str, const depth: i64) -> i64 {
+    if depth == 0 { return last_key(value, key) }
+    return grow_through(value, key + ".x", depth - 1)
+}
+fn grow_through(value: i64, const key: str, const depth: i64) -> i64 =>
+    grow_node(value, key, depth)
+
+test growing_graph_keys_resolve_during_wiring {
+    assert eval grow(value: [1], key: "user", depth: 3) == [1]
+    assert eval grow_node(value: [1], key: "run.output", depth: 3) == [1]
+}
+
+const fn recur_with_tag(store: GlobalState, depth: i64, const key: str, const tag: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { recur_with_tag(store, depth - 1, key, tag + ".x") }
+}
+fn fixed_key_in_cycle(const key: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { recur_with_tag(global_state, 1, key, "tag") }
+}
+test unchanged_key_is_checked_before_start {
+    assert raises("store.reserved_key") {
+        eval fixed_key_in_cycle(key: supply("run.output"), divisor: 0)
+    }
+    eval fixed_key_in_cycle(key: supply("user.key"), divisor: 1)
+}
+
+const fn recur_with_default(store: GlobalState, depth: i64, const key: str = "run.output") {
+    if depth == 0 { put(store, key, 7) }
+    else { recur_with_default(store, depth - 1) }
+}
+fn default_key_in_cycle(const depth: i64, const key: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { recur_with_default(global_state, depth, key) }
+}
+test recursive_default_is_checked_where_used {
+    eval default_key_in_cycle(depth: 0, key: supply("user.key"), divisor: 1)
+    assert raises("store.reserved_key") {
+        eval default_key_in_cycle(depth: 1, key: supply("user.key"), divisor: 1)
+    }
+    assert raises("numeric.division_by_zero") {
+        eval default_key_in_cycle(depth: 1, key: supply("user.key"), divisor: 0)
+    }
+}
+
+const fn rotate_key(store: GlobalState, depth: i64, const key: str, const next: str, const last: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { rotate_key(store, depth - 1, next, last, key) }
+}
+fn rotate_hook(const depth: i64, const key: str, const next: str, const last: str) {
+    inject global_state
+    when {}
+    stop { rotate_key(global_state, depth, key, next, last) }
+}
+test a_rotation_checks_the_key_its_operation_receives {
+    eval rotate_hook(depth: 2, key: "run.output", next: "user.next", last: "user.last")
+    assert raises("store.reserved_key") {
+        eval rotate_hook(depth: 3, key: "run.output", next: "user.next", last: "user.last")
+    }
+}
+
+const fn shift_key(store: GlobalState, depth: i64, swap: bool, const key: str, const next: str) {
+    if depth == 0 { put(store, key, 7) }
+    else if swap { shift_key(store, depth - 1, false, next, key) }
+    else { shift_key(store, depth - 1, false, key, "user.replacement") }
+}
+fn shift_hook(const depth: i64, const key: str, const next: str) {
+    inject global_state
+    when {}
+    stop { shift_key(global_state, depth, true, key, next) }
+}
+test a_swap_in_one_branch_checks_only_the_effective_key {
+    eval shift_hook(depth: 1, key: "run.output", next: "user.next")
+    assert raises("store.reserved_key") {
+        eval shift_hook(depth: 1, key: "user.key", next: "run.output")
+    }
+}
+
+const fn exchange_first(store: GlobalState, depth: i64, const key: str, const next: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { exchange_second(store, depth - 1, next, key) }
+}
+const fn exchange_second(store: GlobalState, depth: i64, const key: str, const next: str) {
+    if depth == 0 { put(store, key, 7) }
+    else { exchange_first(store, depth - 1, next, key) }
+}
+fn exchange_hook(const depth: i64, const key: str, const other: str) {
+    inject global_state
+    when {}
+    stop { exchange_first(global_state, depth, key, other) }
+}
+test an_exchange_through_a_second_helper_uses_its_own_key {
+    eval exchange_hook(depth: 1, key: "run.output", other: "user.other")
+    eval exchange_hook(depth: 1, key: supply("run.output"), other: "user.other")
+    assert raises("store.reserved_key") {
+        eval exchange_hook(depth: 2, key: supply("run.output"), other: "user.other")
+    }
+}

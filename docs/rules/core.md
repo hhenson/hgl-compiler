@@ -539,7 +539,8 @@ analyser: done
 
 - `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get` gives a `result<V, error>`, with V written by the caller or inferred from the place
 - A known `"run.output"` key is rejected (`store.reserved_key`), including where
-  a call resolves the `const` parameter supplying the key.
+  a call supplies a fixed `const` argument or generic value. An instance
+  rejection is reported at the making call (GEN-7).
 - A known key is used with one type in a program. A `put` or a `get` of a
   different type than an earlier use is `store.key_type` (TIME-8).
 
@@ -556,8 +557,9 @@ transpiler: partial
   `"run.output"`. A node checks direct and forwardable fixed hook keys when the
   SDK attaches it to its graph, before any start hook. The run's own recording
   uses that key.
-- A key computed in a recursive cycle of value helpers is checked by the
-  store operation where it is used, even where the first call gives a literal.
+- A key that can change between calls in a recursive cycle is checked at the
+  store operation. This includes a key computed in the cycle, exchanged with
+  another parameter, or supplied anew by a default (TIME-8).
 - Left: a temporal child graph using the surrounding store is declined (CRUN-7).
 
 ## CAP-7
@@ -743,14 +745,16 @@ transpiler: partial
 analyser: done
 
 - A known `"run.output"` key is rejected (`store.reserved_key`), including where
-  a call resolves the `const` parameter supplying the key (CAP-6).
+  a call supplies a fixed `const` argument or generic value (CAP-6).
 
 transpiler: partial
 
 - Adds recording to a result-bearing entry and retrieves the timestamped deltas after
   stop. Outputless entries have no recording.
 - A program's key computed in composition or resolved at node attachment
-  fails with `store.reserved_key` if it names the recording key (CAP-6).
+  fails with `store.reserved_key` if it names the recording key. A key that
+  can change in a recursive cycle fails when the store operation uses it
+  (CAP-6).
 - Left: Unsupported record types follow CEVAL-4.
 
 runner: planned

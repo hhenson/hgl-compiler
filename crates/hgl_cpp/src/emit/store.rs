@@ -1,6 +1,7 @@
 //! Fixes a node's store keys as the SDK attaches it to a graph (CAP-6, FN-1).
 
 use std::cell::Cell;
+use std::collections::HashSet;
 
 use hgl_analyser::hir::{
     Argument, Body, Callee, Expr, ExprKind, Form, Node, Raise, Value, ValueCategory,
@@ -17,34 +18,30 @@ use super::statements::Scope;
 use super::values::INDENT;
 use crate::runtime;
 
-/// Store keys computed at graph construction and kept for the node's hooks.
-#[derive(Default)]
-pub(super) struct Keys<'a> {
-    values: Vec<BuildKey<'a>>,
+/// Store keys checked when the SDK attaches a node.
+pub(super) struct Keys {
+    values: Vec<Expr>,
+    contains_fixed: bool,
+    complete: bool,
     pub(super) recorder: bool,
 }
 
-#[derive(PartialEq)]
-struct BuildKey<'a> {
-    /// The hook's own read when the checked value is held in its frame.
-    held_for_hook: Option<&'a Expr>,
-    projected: Box<Expr>,
-}
-
-impl<'a> Keys<'a> {
+impl Keys {
     pub(super) fn of(
         emitter: &Emitter<'_>,
         declaration: usize,
         signature: &Signature,
-        body: &'a Body,
+        body: &Body,
     ) -> Self {
         let program = emitter.program;
         let module = emitter.module;
         let recorder = program.core() == Some(module)
             && program.modules[module].declarations[declaration].name == "record";
         let mut keys = Self {
+            values: Vec::new(),
+            contains_fixed: false,
+            complete: true,
             recorder,
-            ..Self::default()
         };
         if recorder {
             return keys;
@@ -72,60 +69,38 @@ impl<'a> Keys<'a> {
                 return;
             };
             if let Some(key) = program.store_key_argument(callee, arguments) {
-                if !matches!(key.kind, ExprKind::Literal(Value::Str(_)))
-                    && let Some(projected) = project(program, key, bindings, &trace.remaining)
-                {
-                    keys.add(BuildKey {
-                        held_for_hook: Some(key),
-                        projected: Box::new(projected),
-                    });
-                }
+                keys.read(program, key, bindings, &trace.remaining);
             } else {
-                let mut read = Vec::new();
-                let _ = trace.call(callee, arguments, bindings, *at, &mut read);
-                for key in read {
-                    keys.add(BuildKey {
-                        held_for_hook: None,
-                        projected: Box::new(key),
-                    });
-                }
+                trace.call(callee, arguments, bindings, *at, &mut keys);
             }
         });
         keys
     }
 
-    fn add(&mut self, key: BuildKey<'a>) {
-        if !self.values.contains(&key) {
-            self.values.push(key);
+    fn read(
+        &mut self,
+        program: &Program,
+        key: &Expr,
+        bindings: Bindings<'_>,
+        remaining: &Cell<usize>,
+    ) {
+        if program.store_key_at_execution(key) || source_safe(program, key) {
+            return;
+        }
+        self.contains_fixed = true;
+        let Some(projected) = project(program, key, bindings, remaining) else {
+            self.complete = false;
+            return;
+        };
+        if !source_safe(program, &projected) {
+            self.values.push(projected);
         }
     }
 
-    pub(super) fn expressions(&self) -> Vec<Expr> {
-        self.values
-            .iter()
-            .filter_map(|key| key.held_for_hook.cloned())
-            .collect()
-    }
-
-    pub(super) fn slots(&self) -> std::ops::Range<usize> {
-        0..self
-            .values
-            .iter()
-            .filter(|key| key.held_for_hook.is_some())
-            .count()
-    }
-
-    pub(super) fn holds_values(&self) -> bool {
-        !self.slots().is_empty()
-    }
-
-    pub(super) fn fields(&self) -> String {
-        self.slots()
-            .map(|slot| {
-                let name = local(slot);
-                format!("{INDENT}{INDENT}::std::optional<::hgraph::Str> {name}{{}};\n")
-            })
-            .collect()
+    /// Marks the borrowed capability so fixed keys already checked at
+    /// attachment do not need checking in each hook invocation.
+    pub(super) fn prechecked(&self) -> bool {
+        self.contains_fixed && self.complete
     }
 
     /// The SDK invokes prepare once on first attachment, including for a
@@ -157,34 +132,21 @@ impl<'a> Keys<'a> {
             ));
         }
         let mut scope = Scope::cold(emitter.program, body);
-        let mut slots = self.slots();
+        let mut seen = HashSet::new();
         for key in &self.values {
-            let value = emitter.expression(&mut scope, &key.projected);
+            let value = emitter.expression(&mut scope, key);
+            if !seen.insert(value.clone()) {
+                continue;
+            }
             let library = runtime::NAMESPACE;
-            let at = emitter.source_location(key.projected.at);
-            let checked = format!(
-                "::{library}::prepare_store_key([&]() -> ::hgraph::Str {{ return {value}; }}, {at})"
+            let at = emitter.source_location(key.at);
+            let step = format!(
+                "{indent}::{library}::prepare_store_key([&]() -> ::hgraph::Str {{ return {value}; }}, {at});\n"
             );
-            let step = if key.held_for_hook.is_some() {
-                let name = local(slots.next().expect("held key slot"));
-                format!("{indent}prepared_.{name} = {checked};\n")
-            } else {
-                format!("{indent}static_cast<void>({checked});\n")
-            };
-            checks.push_str(&emitter.debug_stamp(key.projected.at, step));
+            checks.push_str(&emitter.debug_stamp(key.at, step));
         }
-        let (state, keep) = if self.holds_values() {
-            (
-                format!("{indent}state_type_ prepared_{{}};\n"),
-                format!(
-                    "{indent}node_.replace_state(::hgraph::Value{{::std::move(prepared_)}});\n"
-                ),
-            )
-        } else {
-            (String::new(), String::new())
-        };
         Some(format!(
-            "\n{INDENT}static void prepare([[maybe_unused]] const ::hgraph::NodeView& node_)\n{INDENT}{{\n{state}{checks}{keep}{INDENT}}}\n"
+            "\n{INDENT}static void prepare([[maybe_unused]] const ::hgraph::NodeView& node_)\n{INDENT}{{\n{checks}{INDENT}}}\n"
         ))
     }
 }
@@ -194,13 +156,8 @@ struct ForwardedKeys<'a> {
     program: &'a Program,
     instances: &'a Instances,
     store: Type,
-    path: Vec<ForwardedCall>,
+    path: Vec<(usize, usize)>,
     remaining: Cell<usize>,
-}
-
-struct ForwardedCall {
-    declaration: (usize, usize),
-    fixed: Vec<Option<Expr>>,
 }
 
 #[derive(Clone, Copy)]
@@ -216,13 +173,15 @@ impl ForwardedKeys<'_> {
         arguments: &[Argument],
         caller: Bindings<'_>,
         at: Location,
-        keys: &mut Vec<Expr>,
-    ) -> Option<usize> {
-        let (module, declaration) = callee.declaration()?;
+        keys: &mut Keys,
+    ) {
+        let Some((module, declaration)) = callee.declaration() else {
+            return;
+        };
         let program = self.program;
         let unit = &program.modules[module];
         let Some(Detail::Callable(signature)) = unit.details.get(declaration) else {
-            return None;
+            return;
         };
         let declared = &unit.declarations[declaration];
         if !matches!(
@@ -234,17 +193,26 @@ impl ForwardedKeys<'_> {
             .iter()
             .any(|parameter| parameter.ty == self.store)
         {
-            return None;
+            return;
         }
         let identity = (module, declaration);
+        // The source classification already says which keys can change
+        // on the way round. Follow the fixed ones once through the cycle.
+        if self.path.contains(&identity) {
+            return;
+        }
         if spend(&self.remaining).is_none() || self.path.len() == 64 {
-            return None;
+            keys.complete = false;
+            return;
         }
         let instance = self.instances.find_call(program, callee, arguments);
         let (signature, body) = if let Some(instance) = instance {
             (&instance.signature, &instance.body)
         } else {
-            let body = unit.bodies.get(declaration).and_then(Option::as_ref)?;
+            let Some(body) = unit.bodies.get(declaration).and_then(Option::as_ref) else {
+                keys.complete = false;
+                return;
+            };
             (signature, body)
         };
         let fixed: Vec<_> = signature
@@ -276,20 +244,7 @@ impl ForwardedKeys<'_> {
                 }
             })
             .collect();
-        if let Some(depth) = self
-            .path
-            .iter()
-            .position(|earlier| earlier.declaration == identity)
-        {
-            return (self.path[depth].fixed != fixed).then_some(depth);
-        }
-        let start = keys.len();
-        let depth = self.path.len();
-        self.path.push(ForwardedCall {
-            declaration: identity,
-            fixed: fixed.clone(),
-        });
-        let mut recursive: Option<usize> = None;
+        self.path.push(identity);
         walk_statements(&body.statements, &mut |expression| {
             let ExprKind::Call {
                 callee, arguments, ..
@@ -299,21 +254,12 @@ impl ForwardedKeys<'_> {
             };
             let bindings = Bindings::Given(&fixed);
             if let Some(key) = program.store_key_argument(callee, arguments) {
-                if let Some(key) = project(program, key, bindings, &self.remaining) {
-                    keys.push(key);
-                }
-            } else if let Some(ancestor) =
-                self.call(callee, arguments, bindings, expression.at, keys)
-            {
-                recursive = Some(recursive.map_or(ancestor, |prior| prior.min(ancestor)));
+                keys.read(program, key, bindings, &self.remaining);
+            } else {
+                self.call(callee, arguments, bindings, expression.at, keys);
             }
         });
         self.path.pop();
-        let ancestor = recursive?;
-        // This cycle chooses its key in the helper. It can change an
-        // argument before any store operation actually uses it.
-        keys.truncate(start);
-        (ancestor < depth).then_some(ancestor)
     }
 }
 
@@ -439,10 +385,24 @@ fn spend(remaining: &Cell<usize>) -> Option<()> {
     Some(())
 }
 
-pub(super) fn local(slot: usize) -> String {
-    names::temporary("store_key", slot)
+pub(super) fn source_safe(program: &Program, key: &Expr) -> bool {
+    program
+        .source_store_key(key)
+        .is_some_and(|key| key != "run.output")
 }
 
-pub(super) fn checked(value: &str) -> String {
-    format!("::{}::checked_store_key({value})", runtime::NAMESPACE)
+pub(super) fn proof_argument(name: &str, fixed_keys_checked: bool) -> &'static str {
+    if name == "global_state" && fixed_keys_checked {
+        ", true"
+    } else {
+        ""
+    }
+}
+
+pub(super) fn checked(value: &str, store: Option<&str>) -> String {
+    let library = runtime::NAMESPACE;
+    match store {
+        Some(store) => format!("::{library}::use_fixed_store_key({store}, {value})"),
+        None => format!("::{library}::checked_store_key({value})"),
+    }
 }

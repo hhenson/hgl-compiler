@@ -255,7 +255,8 @@ pub(super) fn report_instance_checks(
             continue;
         }
         for &root in from {
-            let here = super::requirements::instance_location(report, root, message);
+            let mut here = report.clone().with_related(report.primary, message);
+            here.primary = root;
             if !diagnostics.as_slice().contains(&here) {
                 diagnostics.emit(here);
             }

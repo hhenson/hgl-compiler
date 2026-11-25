@@ -406,6 +406,7 @@ impl Program {
             || generics.contains(&Argument::NoResult)
             || pending_forwards.is_some()
             || !inputs.constants.is_empty()
+            || self.generic_store_bodies.contains(&(module, declaration))
             || (!generics.is_empty()
                 && (crate::values::has_dependent_index(&body)
                     || crate::formatting::has_dependent_formatting(

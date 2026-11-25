@@ -24,6 +24,10 @@ pub struct Program {
     pub(crate) const_demands: crate::const_inputs::Demands,
     /// Store key sites that read a const binding changed in a recursive call.
     pub(crate) runtime_store_keys: HashSet<Location>,
+    /// Bodies that read a generic value to fix a run-store key.
+    pub(crate) generic_store_bodies: HashSet<(usize, usize)>,
+    /// Lexical lookup ranges reused across concrete checks of one body.
+    pub(crate) instance_sites: Vec<crate::values::InstanceSites>,
     /// Concrete selected calls already examined for an ordinary const slot.
     pub(crate) selected_const_demands: crate::const_inputs::SelectedDemands,
 }

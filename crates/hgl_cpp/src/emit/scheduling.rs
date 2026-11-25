@@ -459,7 +459,7 @@ impl Emitter<'_> {
         &mut self,
         signature: &Signature,
         body: &Body,
-        store_keys: &super::store::Keys<'_>,
+        store_keys: &super::store::Keys,
     ) -> Option<Hooked> {
         let mut states: Vec<(usize, Option<&Expr>)> = Vec::new();
         let mut injected: Vec<usize> = Vec::new();
@@ -541,8 +541,9 @@ impl Emitter<'_> {
             members.push_str(&format!("{two}::{library}::Lent<{made}> {member}{{}};\n"));
             let parameter = names::temporary("capability", local);
             eval_parameters.push(format!("{view} {parameter}"));
+            let proof = super::store::proof_argument(name, store_keys.prechecked());
             eval_before.push_str(&format!(
-                "{two}const ::{library}::Lending<{made}> {}{{kept_.{SLOT}->{member}, {made}{{{parameter}}}}};\n",
+                "{two}const ::{library}::Lending<{made}> {}{{kept_.{SLOT}->{member}, {made}{{{parameter}{proof}}}}};\n",
                 names::temporary("lent", local)
             ));
         }
@@ -579,15 +580,14 @@ impl Emitter<'_> {
             body,
             &injected,
             &reached,
-            Hook::Start,
-            false,
+            (Hook::Start, false),
+            store_keys.prechecked(),
             &mut start_parameters,
         )?;
         let mut start_before =
             format!("{two}kept_.{SLOT} = ::std::make_unique<slot_type_>();\n{kept_bound}{made}");
         let mut start_after = String::new();
         let mut context = Context::new(Kind::Hook(Hook::Start), body.locals.len());
-        context.store_keys = store_keys.expressions();
         for role in context.roles.iter_mut().take(signature.parameters.len()) {
             *role = Role::Config;
         }
@@ -608,8 +608,8 @@ impl Emitter<'_> {
                 body,
                 &injected,
                 statements,
-                Hook::Stop,
-                false,
+                (Hook::Stop, false),
+                store_keys.prechecked(),
                 &mut stop_parameters,
             )?;
             stop_after.push_str(&kept_bound);

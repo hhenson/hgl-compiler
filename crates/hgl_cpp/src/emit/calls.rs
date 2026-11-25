@@ -307,13 +307,15 @@ impl Emitter<'_> {
         let signature = native_pack
             .as_ref()
             .map_or(signature, |pack| &pack.signature);
-        let store_key = program.store_key_argument(callee, arguments).filter(|key| {
-            !matches!(key.kind, ExprKind::Literal(Value::Str(_)))
-                && !self
-                    .temporal
-                    .as_ref()
-                    .is_some_and(|context| context.run_recorder)
-        });
+        let store_key = program
+            .store_arguments(callee, arguments)
+            .filter(|(_, key)| {
+                !super::store::source_safe(program, key)
+                    && !self
+                        .temporal
+                        .as_ref()
+                        .is_some_and(|context| context.run_recorder)
+            });
         let assigns = signature.parameters.iter().any(|parameter| parameter.var);
         if assigns && !statement {
             return self.missing(at, "a call that assigns a place, inside an expression");
@@ -424,26 +426,12 @@ impl Emitter<'_> {
                 ));
                 continue;
             }
-            let key = store_key.filter(|key| std::ptr::eq(*key, &argument.value));
-            let stored = key.and_then(|key| {
-                self.temporal
-                    .as_ref()?
-                    .store_keys
-                    .iter()
-                    .position(|stored| stored == key)
-            });
+            let key = store_key.filter(|(_, key)| std::ptr::eq(*key, &argument.value));
             let value = self.expression(scope, &argument.value);
-            let value = if let Some(slot) = stored {
-                let name = super::store::local(slot);
-                let name = if self.kind() == Some(super::nodes::Kind::Source) {
-                    name
-                } else {
-                    format!("{}.ref().{name}", super::nodes::STATE)
-                };
-                let checked = super::store::checked(&value);
-                format!("({name} ? *{name} : {checked})")
-            } else if key.is_some() {
-                super::store::checked(&value)
+            let value = if let Some((store, key)) = key {
+                let fixed =
+                    (!program.store_key_at_execution(key)).then(|| self.expression(scope, store));
+                super::store::checked(&value, fixed.as_deref())
             } else {
                 value
             };

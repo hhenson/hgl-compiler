@@ -17,8 +17,8 @@ use crate::hir::{
     ValueCategory,
 };
 use crate::{
-    Argument as GenericArgument, Binding, ConstantValue, Detail, Program, Role, Scalar, Signature,
-    Type,
+    Argument as GenericArgument, Binding, ConstantValue, Detail, Phase, Program, Role, Scalar,
+    Signature, Type,
 };
 
 type Declaration = (usize, usize);
@@ -945,12 +945,14 @@ fn key_value(value: &Expr, output: &mut String) -> Result<(), ConstInputFault> {
 }
 
 /// Follow demand for a compile-time value back through its call arguments.
-pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
+pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>, HashSet<Declaration>) {
     let mut required = Demands::new();
     let mut uses: HashMap<Slot, Vec<(Slot, Demand)>> = HashMap::new();
     let mut pending = VecDeque::new();
     let mut candidates: HashMap<Declaration, Vec<Declaration>> = HashMap::new();
     let mut store_reads: HashMap<Location, Vec<Slot>> = HashMap::new();
+    let mut generic_reads = HashSet::new();
+    let mut generic_uses: HashMap<Slot, Vec<Declaration>> = HashMap::new();
     let mut store_calls = StoreCalls::default();
     let store = program.capability_type("global_state");
     let borrows_store = |signature: &Signature| {
@@ -960,6 +962,9 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
                 .iter()
                 .any(|parameter| &parameter.ty == store)
         })
+    };
+    let is_graph = |(module, declaration): Declaration| {
+        program.modules[module].phases.get(declaration) == Some(&Some(Phase::Graph))
     };
     for (module, unit) in program.modules.iter().enumerate() {
         for (declaration, declared) in unit.declarations.iter().enumerate() {
@@ -986,11 +991,11 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
                 .filter(|(_, parameter)| parameter.constant)
                 .map(|(position, parameter)| (parameter.at, position))
                 .collect();
-            let uses_store = borrows_store(signature);
-            if slots.is_empty() && !uses_store {
+            let caller = (module_index, declaration);
+            let uses_store = borrows_store(signature) || is_graph(caller);
+            if slots.is_empty() && !uses_store && signature.generics.is_empty() {
                 continue;
             }
-            let caller = (module_index, declaration);
             let mut read_compile_time_value = |value: &Expr, demand: Demand| {
                 if crate::values::fixed_expression(value, &|read| {
                     matches!(read.kind, ExprKind::Local(_))
@@ -998,6 +1003,9 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
                             .get(&(read.at.file, read.at.span.start))
                             .is_some_and(|at| slots.contains_key(at))
                 }) {
+                    if demand == Demand::StoreKey && names_generic_value(value) {
+                        generic_reads.insert(caller);
+                    }
                     slots_read(value, &bindings, &slots, |slot| {
                         pending.push_back(((caller, slot), demand));
                         if demand == Demand::StoreKey {
@@ -1076,7 +1084,7 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
                 if uses_store
                     && let Some(Detail::Callable(target)) =
                         program.modules[called.0].details.get(called.1)
-                    && borrows_store(target)
+                    && (borrows_store(target) || is_graph(called))
                 {
                     store_calls.record(caller, signature, called, target, arguments);
                 }
@@ -1092,6 +1100,12 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
                     let Some(position) = argument.parameter else {
                         continue;
                     };
+                    if !signature.generics.is_empty() && names_generic_value(&argument.value) {
+                        generic_uses
+                            .entry((called, position))
+                            .or_default()
+                            .push(caller);
+                    }
                     slots_read(&argument.value, &bindings, &slots, |slot| {
                         uses.entry((called, position))
                             .or_default()
@@ -1116,10 +1130,17 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
             }
         }
     }
-    let changed_in_recursion = store_calls.changed();
+    let observed_keys = store_reads.values().flatten().copied().collect();
+    let changed_in_recursion = store_calls.changed(&observed_keys);
     while let Some(((declaration, slot), demand)) = pending.pop_front() {
-        if demand == Demand::StoreKey && changed_in_recursion.contains(&(declaration, slot)) {
-            continue;
+        if demand == Demand::StoreKey {
+            let position = (declaration, slot);
+            if changed_in_recursion.contains(&position) {
+                continue;
+            }
+            if let Some(callers) = generic_uses.get(&position) {
+                generic_reads.extend(callers.iter().copied());
+            }
         }
         let slots = required.entry(declaration).or_default();
         if slots.get(&slot).is_some_and(|earlier| *earlier >= demand) {
@@ -1145,10 +1166,16 @@ pub(crate) fn demands(program: &Program) -> (Demands, HashSet<Location>) {
                 .then_some(at)
         })
         .collect();
-    (required, runtime_store_keys)
+    (required, runtime_store_keys, generic_reads)
 }
 
-/// Ordinary calls that can pass the run's store around a recursive cycle.
+fn names_generic_value(value: &Expr) -> bool {
+    let mut reads = false;
+    value.walk(&mut |value| reads |= matches!(value.kind, ExprKind::GenericValue { .. }));
+    reads
+}
+
+/// Calls that can pass configuration in a recursive graph or store helper.
 #[derive(Default)]
 struct StoreCalls {
     calls: HashSet<(Declaration, Declaration)>,
@@ -1199,7 +1226,7 @@ impl StoreCalls {
 
     /// A callee slot that a cycle computes may have another value each
     /// time around. Follow that value through the cycle's plain forwarding.
-    fn changed(self) -> HashSet<Slot> {
+    fn changed(self, observed: &HashSet<Slot>) -> HashSet<Slot> {
         let mut graph = DiGraph::<Declaration, ()>::new();
         let mut nodes = HashMap::new();
         for (caller, callee) in self.calls {
@@ -1219,6 +1246,7 @@ impl StoreCalls {
         }
         let mut changed = HashSet::new();
         let mut forwarded: HashMap<Slot, Vec<Slot>> = HashMap::new();
+        let mut received: HashMap<Slot, Vec<Slot>> = HashMap::new();
         for input in self.inputs {
             let Some(cycle) = cycles.get(&input.caller) else {
                 continue;
@@ -1227,12 +1255,19 @@ impl StoreCalls {
                 continue;
             }
             if let Some(local) = input.forwarded {
-                forwarded
-                    .entry((input.caller, local))
-                    .or_default()
-                    .push(input.callee);
+                let from = (input.caller, local);
+                forwarded.entry(from).or_default().push(input.callee);
+                received.entry(input.callee).or_default().push(from);
             } else {
                 changed.insert(input.callee);
+            }
+        }
+        let readers: HashSet<_> = observed.iter().map(|slot| slot.0).collect();
+        for &read in observed {
+            if !changed.contains(&read)
+                && cycle_passes_another_key(read, &received, observed, &readers)
+            {
+                changed.insert(read);
             }
         }
         let mut pending: Vec<_> = changed.iter().copied().collect();
@@ -1248,6 +1283,31 @@ impl StoreCalls {
         }
         changed
     }
+}
+
+/// Trace the inputs of a key around a cycle. A round trip can feed a
+/// different parameter back to this declaration. Another store-using
+/// helper on the way round can also read a different key.
+fn cycle_passes_another_key(
+    read: Slot,
+    received: &HashMap<Slot, Vec<Slot>>,
+    observed: &HashSet<Slot>,
+    readers: &HashSet<Declaration>,
+) -> bool {
+    let mut seen = HashSet::from([read]);
+    let mut waiting = vec![read];
+    while let Some(slot) = waiting.pop() {
+        for &source in received.get(&slot).into_iter().flatten() {
+            if !seen.insert(source) {
+                continue;
+            }
+            if source.0 == read.0 || (readers.contains(&source.0) && !observed.contains(&source)) {
+                return true;
+            }
+            waiting.push(source);
+        }
+    }
+    false
 }
 
 /// Whether a call of a function parameter gives this slot of its template

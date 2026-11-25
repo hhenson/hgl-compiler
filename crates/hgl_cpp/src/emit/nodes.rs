@@ -93,8 +93,6 @@ pub(super) struct Context {
     /// `modified([])` is written, where it is `true` read as a value
     /// (TIME-3, `scheduling`).
     pub(super) selected_empty: bool,
-    /// Keys in the order in which construction prepares their values.
-    pub(super) store_keys: Vec<Expr>,
     /// Core's private recorder can write the key reserved for the run's result.
     pub(super) run_recorder: bool,
 }
@@ -113,7 +111,6 @@ impl Context {
             signature: None,
             timer: None,
             selected_empty: false,
-            store_keys: Vec::new(),
             run_recorder: false,
         }
     }
@@ -453,7 +450,6 @@ impl Emitter<'_> {
         let end = declaration.syntax.text_range().end().into();
         let mut context = Context::new(Kind::Hook(Hook::When), body.locals.len());
         let store_keys = super::store::Keys::of(self, index, signature, body);
-        context.store_keys = store_keys.expressions();
         context.run_recorder = store_keys.recorder;
         context.result = signature.result.clone();
         // FN-16: a reference result publishes a designation. Its
@@ -656,14 +652,13 @@ impl Emitter<'_> {
             ));
         }
         members.push_str(&designated.members());
-        members.push_str(&store_keys.fields());
         if tracks_drops {
             let library = runtime::NAMESPACE;
             members.push_str(&format!(
                 "{indent}::{library}::DroppedWakes {DROPPED_WAKES}{{}};\n"
             ));
         }
-        let user_state = !states.is_empty() || designated.holds() || store_keys.holds_values();
+        let user_state = !states.is_empty() || designated.holds();
         let held = user_state || tracks_drops;
         let mut placed = Placed::of(program, self.module, index, instance);
         if let Some((number, _)) = readers {
@@ -699,9 +694,7 @@ impl Emitter<'_> {
             let mut written = String::new();
             if held {
                 hook.push(state_parameter.clone());
-                if !store_keys.holds_values() {
-                    written.push_str(&format!("{INDENT}{INDENT}{STATE}.set(state_type_{{}});\n"));
-                }
+                written.push_str(&format!("{INDENT}{INDENT}{STATE}.set(state_type_{{}});\n"));
             }
             written.push_str(&prologue(body, &states));
             // TIME-6: "Cache is reconstructible node-local value data,
@@ -720,9 +713,14 @@ impl Emitter<'_> {
                 })
                 .collect();
             let used: Vec<Stmt> = initialized.iter().chain(statements).cloned().collect();
-            let Some(made) =
-                self.capabilities(body, &injected, &used, Hook::Start, dated.start, &mut hook)
-            else {
+            let Some(made) = self.capabilities(
+                body,
+                &injected,
+                &used,
+                (Hook::Start, dated.start),
+                store_keys.prechecked(),
+                &mut hook,
+            ) else {
                 return;
             };
             written.push_str(&made);
@@ -775,8 +773,8 @@ impl Emitter<'_> {
             body,
             &injected,
             &all,
-            Hook::When,
-            dated.evaluation,
+            (Hook::When, dated.evaluation),
+            store_keys.prechecked(),
             &mut hook,
         ) else {
             return;
@@ -895,8 +893,8 @@ impl Emitter<'_> {
                 body,
                 &injected,
                 statements,
-                Hook::Stop,
-                dated.stop,
+                (Hook::Stop, dated.stop),
+                store_keys.prechecked(),
                 &mut hook,
             ) else {
                 return;
@@ -1023,8 +1021,8 @@ impl Emitter<'_> {
         body: &Body,
         injected: &[usize],
         statements: &[Stmt],
-        hook: Hook,
-        dated: bool,
+        (hook, dated): (Hook, bool),
+        fixed_keys_checked: bool,
         parameters: &mut Vec<String>,
     ) -> Option<String> {
         let mut written = String::new();
@@ -1039,8 +1037,9 @@ impl Emitter<'_> {
             };
             let parameter = names::temporary("capability", local);
             parameters.push(format!("{view} {parameter}"));
+            let proof = super::store::proof_argument(name, fixed_keys_checked);
             written.push_str(&format!(
-                "{INDENT}{INDENT}[[maybe_unused]] const {made} {}{{{parameter}{}}};\n",
+                "{INDENT}{INDENT}[[maybe_unused]] const {made} {}{{{parameter}{}{proof}}};\n",
                 identifier(name),
                 super::scheduling::made_in(name, hook, dated, parameters)
             ));
