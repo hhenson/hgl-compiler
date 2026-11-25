@@ -112,7 +112,7 @@ struct Branch {
 impl Branch {
     /// Separate a selected child's store operations from wiring (FN-9).
     /// A use outside the prefix leaves the whole branch unsupported.
-    fn store_start(&self, program: &Program, store: usize) -> Result<Option<StoreStart>, ()> {
+    fn store_start(&self, program: &Program, stores: &[usize]) -> Result<Option<StoreStart>, ()> {
         let (prefix, result, ordered) = match (&self.tail, self.statements.split_last()) {
             (Tail::Value(value), _) => (self.statements.as_slice(), Some(value.as_ref()), true),
             (
@@ -134,13 +134,18 @@ impl Branch {
         if let Some(value) = result {
             value.walk_nodes(&mut note);
         }
-        if !read.contains(&store) {
+        let stores: Vec<_> = stores
+            .iter()
+            .copied()
+            .filter(|store| read.contains(store))
+            .collect();
+        if stores.is_empty() {
             return Ok(None);
         }
         if !ordered {
             return Err(());
         }
-        StoreStart::of(program, store, prefix, result)
+        StoreStart::of(program, stores, prefix, result)
             .map(Some)
             .ok_or(())
     }
@@ -1392,16 +1397,16 @@ impl Emitter<'_> {
         let bound = self.control.bound.clone();
         let inputs = taken(locals, &bound, &[], read.clone(), &declared);
         let mut configured = self.configured(scope, &read, &declared, &bound);
-        let store = program.capability_type("global_state").and_then(|ty| {
-            configured
-                .iter()
-                .copied()
-                .find(|&local| locals[local].ty == ty)
-        });
+        let store_type = program.capability_type("global_state");
+        let stores: Vec<_> = configured
+            .iter()
+            .copied()
+            .filter(|&local| store_type.as_ref() == Some(&locals[local].ty))
+            .collect();
         let mut startups = vec![None; branches.len()];
-        if let Some(store) = store {
+        if !stores.is_empty() {
             for (branch, startup) in branches.iter().zip(&mut startups) {
-                let Ok(plan) = branch.store_start(program, store) else {
+                let Ok(plan) = branch.store_start(program, &stores) else {
                     self.unsupported(
                         at,
                         "a selected child's store when its reads determine wiring or its startup cannot be ordered",
@@ -1410,7 +1415,7 @@ impl Emitter<'_> {
                 };
                 *startup = plan;
             }
-            configured.retain(|&local| local != store);
+            configured.retain(|local| !stores.contains(local));
         }
         if self.reads_a_capability(scope, &configured, at) {
             return None;
@@ -1420,7 +1425,7 @@ impl Emitter<'_> {
                 Tail::Value(value) => vec![&**value],
                 _ => Vec::new(),
             };
-            let prefix = startup.map_or(0, |plan| plan.count);
+            let prefix = startup.as_ref().map_or(0, |plan| plan.count);
             if self.computes_while_built(&branch.statements[prefix..], &tails) {
                 return None;
             }
@@ -1480,7 +1485,7 @@ impl Emitter<'_> {
             let mut body = self.branch_body(
                 scope,
                 branch,
-                startup.map_or(0, |plan| plan.count),
+                startup.as_ref().map_or(0, |plan| plan.count),
                 &inputs,
                 &configured,
                 result,

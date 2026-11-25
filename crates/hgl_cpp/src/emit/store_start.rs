@@ -16,13 +16,13 @@ use super::statements::Scope;
 use super::values::INDENT;
 
 /// An ordinary prefix and its order relative to a directly wired user node.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct StoreStart {
     /// The number of branch statements executed by the start hook.
     pub(super) count: usize,
     /// Whether the branch's only user node returns the result port.
     pub(super) rank_result: bool,
-    store: usize,
+    stores: Vec<usize>,
 }
 
 impl StoreStart {
@@ -32,7 +32,7 @@ impl StoreStart {
     /// rank alone would not order all user startup hooks.
     pub(super) fn of(
         program: &Program,
-        store: usize,
+        stores: Vec<usize>,
         statements: &[Stmt],
         result: Option<&Expr>,
     ) -> Option<Self> {
@@ -49,7 +49,7 @@ impl StoreStart {
                         },
                     ..
                 }) if program.store_arguments(callee, arguments).is_some_and(
-                    |(arg, _)| matches!(arg.kind, ExprKind::Local(local) if local == store),
+                    |(arg, _)| matches!(arg.kind, ExprKind::Local(local) if stores.contains(&local)),
                 ) => {}
                 _ => return None,
             }
@@ -57,18 +57,23 @@ impl StoreStart {
         let mut declared = Vec::new();
         let mut read = Vec::new();
         let mut supported = true;
+        let mut uses_store = false;
         walk_statement_nodes(statements, &mut |node| {
             named_in(node, &mut read, &mut declared);
             supported &= match node {
-                Node::Expression(value) => !value.is_connection(),
+                Node::Expression(value) => {
+                    uses_store |=
+                        matches!(value.kind, ExprKind::Local(local) if stores.contains(&local));
+                    !value.is_connection()
+                }
                 Node::Statement(Stmt::Declare { value: Some(_), .. } | Stmt::Expr(_)) => true,
                 Node::Statement(_) => false,
             };
         });
-        if !supported || !super::nodes::uses(statements, store) {
+        if !supported || !uses_store {
             return None;
         }
-        declared.push(store);
+        declared.extend_from_slice(&stores);
         let rank_result = match result {
             Some(result) => Self::rank_result(program, result, &declared)?,
             None => false,
@@ -76,7 +81,7 @@ impl StoreStart {
         Some(Self {
             count: statements.len(),
             rank_result,
-            store,
+            stores,
         })
     }
 
@@ -118,7 +123,7 @@ impl StoreStart {
     /// A starter with a layout dependency has an inert output. Its
     /// outputless form is a sink so the SDK retains it independently.
     pub(super) fn emit(
-        self,
+        &self,
         emitter: &mut Emitter<'_>,
         scope: &Scope<'_>,
         statements: &[Stmt],
@@ -160,13 +165,17 @@ impl StoreStart {
             evaluation
                 .push("[[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Bool>> out".into());
         }
-        // The plan selected the store by its resolved type (TIME-8).
-        // The local's spelling only names the borrowed value in the hook.
+        // All these names borrow the same run store (CAP-6, TIME-8).
         let (view, capability) = super::endpoints::capability("global_state")?;
-        let parameter = names::temporary("store_view", self.store);
-        let store = identifier(&locals[self.store].name);
+        let (&first, aliases) = self.stores.split_first()?;
+        let parameter = names::temporary("store_view", first);
+        let store = identifier(&locals[first].name);
         parameters.push(format!("{view} {parameter}"));
         let mut body = format!("{INDENT}{INDENT}const {capability} {store}{{{parameter}}};\n");
+        for &local in aliases {
+            let alias = identifier(&locals[local].name);
+            body.push_str(&format!("{INDENT}{INDENT}const auto& {alias} = {store};\n"));
+        }
         let mut startup = Scope::cold(program, scope.body);
         emitter.in_context(&mut context, |emitter| {
             emitter.statements(&mut startup, statements, 2, &mut body);

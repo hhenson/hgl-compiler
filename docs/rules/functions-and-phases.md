@@ -138,6 +138,7 @@ transpiler: partial
 - Runs a selected branch's ordinary store prefix in source order before
   its directly wired scalar node starts, including on re-entry. Captured
   connections and write-only branches also admit the prefix.
+  Captured aliases in these prefixes share the run store.
 - Left: Store reads that determine child wiring, startup with multiple
   user nodes, and loops (#541). Other child capabilities are declined.
 

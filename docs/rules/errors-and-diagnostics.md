@@ -20,12 +20,15 @@ analyser: partial
 - `ok(value)` and `err(value)` take one value by position and no generic argument (`generic.argument_count`), and both types from the complete `result<T, E>` the place expects, a nullable one included; with none it is `result.context_type`
 - The payload is read as its side's type. This includes a named function argument whose result parameter type is completed by another argument in the graph instance (GEN-2, GEN-7). An inferred constructor field also keeps its scoped payload
   until an earlier field completes the result type.
-- Left: a result expected through a generic parameter still being inferred; equality
+- Another argument or a solvable equality can complete the expected result type
+  while a generic call is being inferred (GEN-2). An unconstrained generic call
+  can report `generic.unresolved` when no type completes the expected result.
 
 transpiler: done
 
 - Emits tagged successes and errors with one evaluated payload. A temporal result is one
   publication of that tagged value.
+- Equality compares the tag and active payload, including for temporal results (ERR-15).
 
 ## ERR-3
 
@@ -43,7 +46,10 @@ analyser: partial
 - A tag proof for a child held by an inferred `let` applies to that binding. The read still has the child admission and validity checks (ERR-14, TIME-1).
 - In a graph a test of a connection gives no fact. A deferred projection checks its
   saved lexical fact against the settled category of the result (GEN-7).
-- Left: a fact carried through a `switch` or a loop
+- A direct tag test in a `while` condition proves the tag in the body. A guard on a
+  loop's immutable iteration binding proves the tag for that binding.
+- Left: A `switch` on a direct tag test loses the fact in its matching case and on
+  paths that survive a terminating case (#894).
 
 ## ERR-4
 
@@ -57,8 +63,9 @@ transpiler: partial
 
 - Emits error construction, message and code reads, equality and nullable provenance.
   The runtime retains the first failure location on propagation.
-- Left: An error property outside the supported HIR forms is reported. Construction
-  provenance is tracked separately under CRUN-6.
+- Left: Direct reads such as `failure.message` and `failure.context.phase` on a connection
+  are declined in a graph. A lifted value helper can read the properties (#895).
+  Construction provenance is tracked under CRUN-6 (#816).
 
 ## ERR-5
 
@@ -71,9 +78,10 @@ transpiler: partial
 - C++ returns the original error from a fallible value function. In a `when`, `start`,
   `stop` or source body, at graph build, and in test or application statements, it
   raises the error at the HGL read.
-- Left: A propagation that needs statements in a loop condition, default or value-only
-  expression is reported. Ordinary fallible computation inside a wiring-time branch body
-  is also reported (CTRL-2). Unsupported placements identify the recorded raise phase.
+- Writes propagation in a `while` condition, an omitted callable default and a value
+  expression block, as well as in an ordinary graph-building branch.
+- Left: A fallible ordinary value in a child selected at runtime is declined
+  because the target would compute it when building the surrounding graph (CTRL-2, FN-9, #896).
 
 ## ERR-6
 
@@ -97,15 +105,20 @@ analyser: partial
 
 - `capture(callable, args...)` in a graph reads the call it names, from the same arguments less the name, as that call is read; in a value function or a hook, of what names no callable, and of a call that composes nothing it is `capture.phase`
 - Bound with `let`, `.value` is the call's output and `.error` an `error`, both connections; `.value` of an outputless call is `capture.output_field`
-- Left: a capture used other than through a `let` and its two connections is not judged
+- Checks a direct `.value` or `.error` read as well as projection from a `let` binding.
+- Left: Dropping the whole `capture` or binding it with `var` is unchecked.
 
 transpiler: partial
 
 - Wires an error boundary around a resolved temporal function, a temporal
   HGL operator candidate, or a lifted helper and exposes its value and error
   connections.
-- Left: A target with no supported call or recording form, an unavailable packed
-  instance and other capture reads are reported.
+- Captures calls with fixed packs or inferred heterogeneous packs, and emits
+  direct reads of the capture's fields.
+- Left: Capturing an unsupported target or unemitted callable instance (for
+  example, direct capture of temporal `reduce` or `keys`) is declined with
+  `target.unsupported`. A capture of an HGL graph returning those keys can fail
+  during start (#897). Temporal schemas follow TYPE-9.
 
 ## ERR-8
 
@@ -113,18 +126,23 @@ transpiler: partial
 
 - The capture emits the original failure event and keeps the child live for later work.
   Start and stop failures escape; re-raising preserves the first provenance.
-- Left: Capture support follows the callable and publication forms listed under ERR-7
-  and TYPE-9.
+- Left: Capture support follows the unsupported callable, instance and key-set
+  limits listed under ERR-7 (#897). Publication forms follow TYPE-9.
 
 ## ERR-9
 
 analyser: partial
 
 - A type that is not known is reported once, and nothing is reported of its uses
-- A module constant whose evaluation fails is rejected where it is declared (`constant.failure`, UNIT-13), and nothing is reported of its uses
+- A module constant whose failure the constant reader establishes is rejected where it is declared (`constant.failure`, UNIT-13), and nothing is reported of its uses
 - Known required-constant failures in parameter and field defaults use `constant.failure` (UNIT-8)
 - A generic value argument a generic body works out from its own parameters, `times<(M * 2)>`, whose evaluation fails, or that this compiler does not work out, with what an instance gives them is `generic.argument_constant` at the call that makes the instance, as the same argument written in place is, and the callee's `requires` is then not told ("Failure during argument evaluation precedes later admission checks"); one fault is reported once at each such call
-- Left: required failures the constant reader cannot establish, including calls it cannot evaluate (#240); generic value arguments retain `generic.argument_constant`
+- Left: Required-constant failures the constant reader cannot establish in module
+  constants, parameter defaults or struct-field defaults can pass checking and
+  fail at runtime — for example, user-defined `const fn` calls (unlike supported
+  enum constructors), indexing expressions such as `[8, 9][11]`, and blocks that
+  bind local values (#240); generic value arguments retain
+  `generic.argument_constant`.
 
 optimiser: planned
 
@@ -139,7 +157,8 @@ parser: done
 analyser: partial
 
 - `@suppress_warning("node.no_activation")` before a function acknowledges its dormant-node warning
-- Left: a string that is no warning's code; the warning `statement.no_effect`
+- Left: An unknown suppression string and a dropped expression with no call,
+  assignment or return both pass without a diagnostic (#898).
 
 ## ERR-11
 
@@ -193,9 +212,10 @@ transpiler: partial
 - Writes checked child, dictionary, unsized-list and window reads in the analysed
   value, result or nullable form. A dictionary omits wholly unset entries and a
   partial valid entry fails its whole read.
-- Left: Deltas and window reads outside the supported endpoint forms are
-  reported (END-9). List children and nested dictionary entries have the
-  EXPR-7 limits.
+- Left: Direct indexing of a window can emit an endpoint-child read that fails
+  C++ compilation. An explicitly bound list of retained values can be indexed
+  (#899). Window shape and remaining delta limits are under TYPE-11, END-3 and
+  END-9. List children and nested dictionary entries have the EXPR-7 limits.
 
 ## ERR-15
 
