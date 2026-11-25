@@ -42,3 +42,21 @@ test user_operator_prefers_members {
 test user_operator_uses_whole_list_when_result_requires_it {
     assert eval selected_whole(flags: [[true, false]], xs: [[3, 4]]) == [([3, 4], true)]
 }
+
+operator total<L, R, O>(left: L, right: R) -> O
+impl const fn total(left: bool, right: i64) -> i64 => right
+impl const fn total(left: bool, right: list<i64, 2>) -> list<i64, 2> => right
+
+fn mapped_operator_members(flags: list<bool, 2>, xs: list<i64, 2>) -> list<i64, 2> =>
+    map(total, flags, xs)
+fn mapped_operator_whole(flags: list<bool, 2>, xs: list<i64, 2>) -> list<list<i64, 2>, 2> =>
+    map(total, flags, xs)
+fn selected_operator_whole(flags: list<bool, 2>, xs: list<i64, 2>) -> tuple<list<i64, 2>, bool> =>
+    choose_arguments(total, flags, xs)
+
+test bare_operator_candidates_constrain_the_interpretation {
+    assert eval mapped_operator_members(flags: [[true, false]], xs: [[3, 4]]) == [[3, 4]]
+    assert eval mapped_operator_whole(flags: [[true, false]], xs: [[3, 4]]) ==
+        [[[3, 4], [3, 4]]]
+    assert eval selected_operator_whole(flags: [[true, false]], xs: [[3, 4]]) == [([3, 4], true)]
+}

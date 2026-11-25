@@ -1,4 +1,4 @@
-//! Type evidence a positive membership gives a bare callback (GEN-3, FN-17).
+//! Type evidence positive argument requirements give a bare callback (GEN-3, FN-17).
 //! Part of the analyser's typing pass for static function arguments.
 
 use hgl_diagnostics::Location;
@@ -20,14 +20,14 @@ use crate::{Program, ReflectedPack};
 /// Selection evidence only. The enclosing call still receives the original argument.
 #[derive(Default)]
 pub(super) struct CallbackEvidence {
-    memberships: Vec<Membership>,
+    arguments: Vec<ArgumentPatterns>,
     results: Vec<Type>,
 }
 
 impl CallbackEvidence {
-    /// Does any positive membership give a type to this callback?
+    /// Does any positive argument requirement give a type to this callback?
     pub(super) fn is_empty(&self) -> bool {
-        self.memberships.is_empty()
+        self.arguments.is_empty()
     }
 
     /// A known result that fits the open template and every declaration.
@@ -222,15 +222,15 @@ impl CallbackEvidence {
             let mut generics = signature.generics.clone();
             generics.push(variable);
             evidence
-                .memberships
+                .arguments
                 .extend(relations.iter().filter_map(|(relation, bound)| {
-                    Membership::read(relation, *bound, source, target, &generics, &type_at)
+                    ArgumentPatterns::read(relation, *bound, source, target, &generics, &type_at)
                 }));
         }
         evidence
     }
 
-    /// Alternatives that satisfy the positive memberships for one argument.
+    /// Alternatives that satisfy the positive requirements for one argument.
     pub(super) fn readings(
         &self,
         name: Option<&str>,
@@ -238,9 +238,9 @@ impl CallbackEvidence {
         actual: &Type,
     ) -> Vec<MemberReading<'_>> {
         let mut groups = self
-            .memberships
+            .arguments
             .iter()
-            .filter(|membership| membership.applies(name, position))
+            .filter(|rule| rule.applies(name, position))
             .peekable();
         if groups.peek().is_none() {
             return vec![MemberReading::unchanged(actual)];
@@ -249,22 +249,22 @@ impl CallbackEvidence {
             ty: None,
             patterns: Vec::new(),
         }];
-        for membership in groups {
-            let alternatives: Vec<_> = membership
+        for rule in groups {
+            let alternatives: Vec<_> = rule
                 .patterns
                 .iter()
                 .filter_map(|pattern| {
                     Some(FittedAlternative {
                         pattern,
-                        membership,
-                        bindings: membership.fit(pattern, actual)?,
+                        rule,
+                        bindings: rule.fit(pattern, actual)?,
                     })
                 })
                 .collect();
             let mut joined: Vec<MemberReading<'_>> = Vec::new();
             for reading in readings {
                 for alternative in &alternatives {
-                    let ty = selected_type(&alternative.bindings, membership.target);
+                    let ty = selected_type(&alternative.bindings, rule.target);
                     if reading
                         .ty
                         .as_ref()
@@ -314,7 +314,7 @@ impl CallbackEvidence {
 #[derive(Clone)]
 struct FittedAlternative<'a> {
     pattern: &'a Type,
-    membership: &'a Membership,
+    rule: &'a ArgumentPatterns,
     bindings: Vec<Option<Argument>>,
 }
 
@@ -327,7 +327,7 @@ pub(super) struct MemberReading<'a> {
 }
 
 impl MemberReading<'_> {
-    /// Keep the ordinary supplied type where no membership describes it.
+    /// Keep the ordinary supplied type where no rule describes it.
     pub(super) fn unchanged(actual: &Type) -> Self {
         Self {
             ty: Some(actual.clone()),
@@ -335,7 +335,7 @@ impl MemberReading<'_> {
         }
     }
 
-    /// Only a matching membership can constrain other choices in the trial.
+    /// Only a matching rule can constrain other choices in the trial.
     pub(super) fn evidence_type(&self) -> Option<&Type> {
         if self.patterns.is_empty() {
             return None;
@@ -357,8 +357,8 @@ impl MemberReading<'_> {
             .zip(&other.patterns)
             .fold(Specific::Same, |order, (one, two)| {
                 order.and(alternative_specificity(
-                    (one.pattern, &one.membership.generics, &one.bindings),
-                    (two.pattern, &two.membership.generics, &two.bindings),
+                    (one.pattern, &one.rule.generics, &one.bindings),
+                    (two.pattern, &two.rule.generics, &two.bindings),
                 ))
             })
     }
@@ -366,48 +366,62 @@ impl MemberReading<'_> {
 
 /// Choose a unique best compatible reading of the complete call (GEN-3).
 /// A trial never commits generic bindings to a later trial.
-pub(super) fn select_readings(
-    choices: &[Vec<MemberReading<'_>>],
-    compatible: impl Fn(&[Option<&Type>]) -> bool,
-) -> Result<Vec<Option<Type>>, ()> {
+pub(super) fn select_readings<'a>(
+    choices: &'a [Vec<MemberReading<'a>>],
+    mut compatible: impl FnMut(&[Option<&MemberReading<'a>>], bool) -> bool,
+) -> Result<Vec<Option<Type>>, ReadingFailure> {
     let variable: Vec<_> = choices
         .iter()
         .enumerate()
         .filter(|(_, options)| options.len() > 1)
         .map(|(position, options)| (position, options.as_slice()))
         .collect();
-    let mut evidence: Vec<_> = choices
+    let mut readings: Vec<_> = choices
         .iter()
         .map(|options| match options.as_slice() {
-            [only] => only.evidence_type(),
+            [only] => Some(only),
             _ => None,
         })
         .collect();
-    if !compatible(&evidence) {
-        return Err(());
+    if !compatible(&readings, false) {
+        return Err(ReadingFailure::NoMatch);
     }
     let mut best: Vec<Vec<usize>> = Vec::new();
     let mut trial = Vec::new();
-    if search_readings(&variable, &compatible, &mut evidence, &mut trial, &mut best) {
-        return Err(());
+    if search_readings(
+        &variable,
+        &mut compatible,
+        &mut readings,
+        &mut trial,
+        &mut best,
+    ) {
+        return Err(ReadingFailure::Ambiguous);
     }
-    let first = best.first().ok_or(())?;
+    let first = best.first().ok_or(ReadingFailure::NoMatch)?;
     if best
         .iter()
         .skip(1)
         .any(|other| distinct_bindings(&variable, first, other))
     {
-        return Err(());
+        return Err(ReadingFailure::Ambiguous);
     }
     let mut selected = choices
         .iter()
         .map(|options| options.first().map(|option| option.ty.clone()))
         .collect::<Option<Vec<_>>>()
-        .ok_or(())?;
+        .ok_or(ReadingFailure::NoMatch)?;
     for ((position, options), &index) in variable.into_iter().zip(first) {
         selected[position] = options[index].ty.clone();
     }
     Ok(selected)
+}
+
+/// Why the known types cannot choose a reading (GEN-3).
+pub(super) enum ReadingFailure {
+    /// No complete reading agreed with the known types.
+    NoMatch,
+    /// The best compatible readings give different bindings.
+    Ambiguous,
 }
 
 fn distinct_bindings(
@@ -423,8 +437,8 @@ fn distinct_bindings(
 
 fn search_readings<'a>(
     choices: &[(usize, &'a [MemberReading<'a>])],
-    compatible: &impl Fn(&[Option<&'a Type>]) -> bool,
-    evidence: &mut [Option<&'a Type>],
+    compatible: &mut impl FnMut(&[Option<&MemberReading<'a>>], bool) -> bool,
+    readings: &mut [Option<&'a MemberReading<'a>>],
     trial: &mut Vec<usize>,
     best: &mut Vec<Vec<usize>>,
 ) -> bool {
@@ -440,6 +454,7 @@ fn search_readings<'a>(
         if best
             .iter()
             .any(|other| compare(other, trial) == Specific::More)
+            || !compatible(readings, true)
         {
             return false;
         }
@@ -477,16 +492,16 @@ fn search_readings<'a>(
                         })
                     })
         });
-        evidence[position] = option.evidence_type();
+        readings[position] = Some(option);
         if !dominated
-            && compatible(evidence)
-            && search_readings(choices, compatible, evidence, trial, best)
+            && compatible(readings, false)
+            && search_readings(choices, compatible, readings, trial, best)
         {
             return true;
         }
         trial.pop();
     }
-    evidence[position] = None;
+    readings[position] = None;
     false
 }
 
@@ -497,14 +512,14 @@ fn selected_type(bindings: &[Option<Argument>], target: usize) -> Option<&Type> 
     }
 }
 
-struct Membership {
+struct ArgumentPatterns {
     key: Option<ConstantValue>,
     target: usize,
     generics: Vec<GenericParameter>,
     patterns: Vec<Type>,
 }
 
-impl Membership {
+impl ArgumentPatterns {
     fn read(
         relation: &SyntaxNode,
         bound: Option<Location>,
@@ -518,24 +533,33 @@ impl Membership {
         let right = operands.next()?;
         let target_index = generics.len().checked_sub(1)?;
         let variable = generics[target_index].at;
-        if right.kind() != SyntaxKind::ConstraintSet
-            || !tokens(relation)
+        let argument_key = |operand: &SyntaxNode| {
+            let Type::PackMember { pack, key, .. } = type_at(operand)? else {
+                return None;
+            };
+            (pack == source.at
+                && bound.is_none_or(
+                    |bound| matches!(key.value, ConstantValue::Parameter { at, .. } if at == bound),
+                ))
+            .then_some(key)
+        };
+        let (key, alternatives) = if has_token(relation, SyntaxKind::EqEq) {
+            // A positive equality supplies a single interpretation, in either order.
+            if let Some(key) = argument_key(&left) {
+                (key, vec![right])
+            } else {
+                (argument_key(&right)?, vec![left])
+            }
+        } else if right.kind() == SyntaxKind::ConstraintSet
+            && tokens(relation)
                 .any(|token| token.kind() == SyntaxKind::Ident && token.text() == "in")
         {
-            return None;
-        }
-        let Type::PackMember { pack, key, .. } = type_at(&left)? else {
+            (argument_key(&left)?, right.children().collect())
+        } else {
             return None;
         };
-        if pack != source.at
-            || bound.is_some_and(
-                |bound| !matches!(key.value, ConstantValue::Parameter { at, .. } if at == bound),
-            )
-        {
-            return None;
-        }
         let mut patterns = Vec::new();
-        for alternative in right.children() {
+        for alternative in alternatives {
             let ty = type_at(&alternative)?;
             let pattern = substitute_with_members(
                 &ty,

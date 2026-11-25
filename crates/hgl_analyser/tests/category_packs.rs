@@ -135,6 +135,82 @@ fn work(x: list<i64, 2>, y: tuple<i64, list<i64, 2>>) -> i64 => call(first, x, y
 }
 
 #[test]
+fn a_positive_sibling_equality_can_require_a_whole_argument() {
+    // GEN-3: the equality binds y to its whole list. Both callback
+    // parameters use T, so x must use its whole-list alternative too.
+    for equality in ["As[y_key] == Ps[y_key]", "Ps[y_key] == As[y_key]"] {
+        for operands in ["x, y", "y: y, x: x"] {
+            accepts(&format!(
+                r#"module m
+const x_key: str = "x"
+const y_key: str = "y"
+const fn first<T>(x: T, y: T) -> T => x
+fn keep<R, ...Ps, ...As>(f: fn(...{{Ps}}) -> R, args: ...{{As for f}}) -> i64
+    requires As[x_key] in {{Ps[x_key], list<Ps[x_key], 2>}} && {equality} => 3
+fn work(x: list<i64, 2>, y: list<i64, 2>) -> i64 => keep(first, {operands})
+"#,
+            ));
+        }
+    }
+}
+
+#[test]
+fn known_results_choose_compatible_bare_operator_candidates_in_either_order() {
+    // GEN-3 and FN-17: the public result O is independent of the input
+    // generics, but each candidate's signature ties the result to a reading.
+    let members = "impl const fn total(left: bool, right: i64) -> i64 => right";
+    let whole = "impl const fn total(left: bool, right: list<i64, 2>) -> list<i64, 2> => right";
+    for (first, second) in [(members, whole), (whole, members)] {
+        accepts(&format!(
+            r#"module m
+operator total<L, R, O>(left: L, right: R) -> O
+{first}
+{second}
+fn members(flags: list<bool, 2>, xs: list<i64, 2>) -> list<i64, 2> =>
+    map(total, flags, xs)
+fn copies(flags: list<bool, 2>, xs: list<i64, 2>) -> list<list<i64, 2>, 2> =>
+    map(total, flags, xs)
+fn keyed(flags: dict<str, bool>, xs: list<i64, 2>) -> dict<str, list<i64, 2>> =>
+    map(total, flags, xs)
+"#,
+        ));
+    }
+}
+
+#[test]
+fn a_nonbinding_reading_cannot_specialize_an_operator_candidate() {
+    // GEN-3: the preferred i64 pattern binds nothing. The fact that a
+    // candidate could take an i64 does not infer the missing type for it.
+    rejects(
+        r#"module m
+operator arbitrary<T>(value: T) -> str
+impl const fn arbitrary<T>(value: T) -> str => "chosen"
+fn select<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => 3
+fn no_type_evidence(value: i64) -> i64 => select(arbitrary, value)
+"#,
+        "type/generic.unresolved",
+    );
+}
+
+#[test]
+fn bare_operator_candidates_preserve_incomparable_readings() {
+    // GEN-3: both dictionary patterns fit and can select a candidate.
+    // Neither pattern rules out the other's selection.
+    rejects(
+        r#"module m
+operator count<T>(value: T) -> i64
+impl const fn count(value: i64) -> i64 => 1
+impl const fn count(value: str) -> i64 => 2
+fn select<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {dict<Ps[k], str>, dict<i64, Ps[k]>} } => 3
+fn ambiguous(items: dict<i64, str>) -> i64 => select(count, items)
+"#,
+        "type/generic.unresolved",
+    );
+}
+
+#[test]
 fn negative_and_disjoined_memberships_supply_no_bare_callback_evidence() {
     // GEN-3: a test of argument types can hold without binding a type.
     let source = r#"module m

@@ -3,9 +3,8 @@
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::Typer;
 use super::arguments::{Slot, Takes};
-use super::callback_evidence::{CallbackEvidence, MemberReading, select_readings};
+use super::callback_evidence::{CallbackEvidence, MemberReading, ReadingFailure, select_readings};
 use super::candidates::{
     CallbackOption, CallbackOptionSource, CallbackRequest, Given, Key, Wanted, in_instance,
 };
@@ -16,6 +15,7 @@ use super::forwarded_packs::spread_operands;
 use super::inference::{
     ExplicitGenerics, infer, mentions, pack_bounds, tuple_pack_bindings, type_pack, unsaid,
 };
+use super::{Candidate, Typer};
 use crate::declared::{agree, names_parameter, same_type, substitute_within};
 use crate::hir::{
     AnonymousFunction, AnonymousSpecialization, Callee, Expr, ExprKind, Form, LocalId, Node, Stmt,
@@ -316,7 +316,16 @@ impl<'a> Typer<'a> {
             .map(|_| ReferenceShape::new(signature, template));
         let given = inputs
             .supplied
-            .map(|_| reflected_arguments(self, signature, template, node, inputs, known.as_ref()))
+            .map(|_| {
+                reflected_arguments(
+                    self,
+                    signature,
+                    template,
+                    node,
+                    inputs,
+                    ReflectedTarget::Declared(known.as_ref()),
+                )
+            })
             .transpose()
             .ok()?;
         let constrained = inputs.expected_result(node, template).map(|result| {
@@ -427,10 +436,27 @@ impl<'a> Typer<'a> {
         }
         let at = self.at(node);
         let reflected = template.named_pack.is_some();
+        let candidates: Vec<_> = self.with_callback_role(template, |typer, _| {
+            typer
+                .value_candidates(operator)
+                .into_iter()
+                .filter(|(_, _, signature)| {
+                    plain_inputs(signature, template)
+                        && missing_callback_configuration(signature, Some(public)).is_none()
+                })
+                .collect()
+        });
         let mut given = if reflected {
-            reflected_arguments(self, public, template, node, inputs, None)
-                .ok()?
-                .0
+            reflected_arguments(
+                self,
+                public,
+                template,
+                node,
+                inputs,
+                ReflectedTarget::Operator(operator, &candidates),
+            )
+            .ok()?
+            .0
         } else {
             Vec::new()
         };
@@ -492,16 +518,6 @@ impl<'a> Typer<'a> {
                 }
             }
         }
-        let graph = std::mem::replace(&mut self.graph, !template.value);
-        let value_code = std::mem::replace(&mut self.value_code, false);
-        let candidates: Vec<_> = self
-            .value_candidates(operator)
-            .into_iter()
-            .filter(|(_, _, signature)| {
-                plain_inputs(signature, template)
-                    && missing_callback_configuration(signature, Some(public)).is_none()
-            })
-            .collect();
         let mut requested_values = Vec::new();
         if let Some(explicit) = &explicit
             && let Detail::Callable(public) =
@@ -549,10 +565,9 @@ impl<'a> Typer<'a> {
                 });
             }
         }
+        let result_shapes: Vec<_> = inputs.known_result_shapes(node, template).collect();
         let wanted = Wanted {
-            place: inputs
-                .expected_result(node, template)
-                .or(request.result.as_ref()),
+            place: inputs.requested_result(node, request, &result_shapes),
             among: explicit
                 .as_ref()
                 .and_then(|operator| operator.among.clone()),
@@ -561,17 +576,12 @@ impl<'a> Typer<'a> {
                 reference: request.reference,
                 values: &requested_values,
                 reflected: reflected.then_some(inputs.excluded),
+                result_shapes: &result_shapes,
             }),
         };
-        let role = if template.value {
-            Role::Value
-        } else {
-            Role::Temporal
-        };
-        let (mut matches, unknown) =
-            self.admitted_for_callback(operator, &candidates, &given, &wanted, role);
-        self.graph = graph;
-        self.value_code = value_code;
+        let (mut matches, unknown) = self.with_callback_role(template, |typer, role| {
+            typer.admitted_for_callback(operator, &candidates, &given, &wanted, role)
+        });
         if !unknown
             && matches.len() == 1
             && let Some(chosen) = matches.pop()
@@ -659,6 +669,25 @@ impl<'a> Typer<'a> {
             "FN-17",
         ));
         None
+    }
+
+    /// Use the receiving template's phase for both a trial and its final reading.
+    fn with_callback_role<T>(
+        &mut self,
+        template: &FunctionType,
+        read: impl FnOnce(&mut Self, Role) -> T,
+    ) -> T {
+        let graph = std::mem::replace(&mut self.graph, !template.value);
+        let value_code = std::mem::replace(&mut self.value_code, false);
+        let role = if template.value {
+            Role::Value
+        } else {
+            Role::Temporal
+        };
+        let result = read(self, role);
+        self.graph = graph;
+        self.value_code = value_code;
+        result
     }
 
     /// Resolve the public signature of an explicit operator reference
@@ -1456,7 +1485,7 @@ pub(super) struct CallbackInputs<'a> {
     pub(super) supplied: Option<&'a [(Option<&'a str>, &'a Expr)]>,
     /// Parameters the enclosing declaration will give the callback (FN-8).
     pub(super) excluded: &'a [&'a str],
-    /// The enclosing declaration's positive memberships of a supplied argument type.
+    /// Positive memberships or equalities that constrain supplied argument types.
     pub(super) evidence: Option<&'a CallbackEvidence>,
     /// Known parts of the callback result required by other static arguments.
     pub(super) result_shapes: &'a [Type],
@@ -1469,6 +1498,41 @@ impl CallbackInputs<'_> {
             return None;
         }
         self.evidence?.expected_result(template.result.as_ref()?)
+    }
+
+    /// An enclosing bare-callback trial can contribute several partial result shapes.
+    fn known_result_shapes<'s>(
+        &'s self,
+        node: &SyntaxNode,
+        template: &'s FunctionType,
+    ) -> impl Iterator<Item = &'s Type> {
+        let bare = node.kind() == SyntaxKind::NameExpr;
+        self.result_shapes
+            .iter()
+            .chain(template.result.iter().filter(|ty| !open(ty) && !whole(ty)))
+            .chain(
+                self.evidence
+                    .map_or(&[][..], CallbackEvidence::result_shapes),
+            )
+            .filter(move |_| bare)
+    }
+
+    /// A known result can specialize the callback before its candidates are ranked.
+    fn requested_result<'s>(
+        &'s self,
+        node: &SyntaxNode,
+        template: &'s FunctionType,
+        shapes: &[&'s Type],
+    ) -> Option<&'s Type> {
+        let result = template.result.as_ref()?;
+        self.expected_result(node, template)
+            .or_else(|| {
+                shapes
+                    .iter()
+                    .copied()
+                    .find(|ty| !whole(result) && whole(ty))
+            })
+            .or(Some(result))
     }
 }
 
@@ -1548,21 +1612,31 @@ impl ReferenceShape {
     }
 }
 
-fn reflected_arguments(
-    typer: &mut Typer<'_>,
+/// What the complete reading must fit after its arguments are reflected.
+#[derive(Clone, Copy)]
+enum ReflectedTarget<'a, 's> {
+    Declared(Option<&'s ReferenceShape>),
+    Operator(OperatorRef, &'s [Candidate<'a>]),
+}
+
+fn reflected_arguments<'a>(
+    typer: &mut Typer<'a>,
     public: &Signature,
     template: &FunctionType,
     node: &SyntaxNode,
     inputs: &CallbackInputs<'_>,
-    declared_shape: Option<&ReferenceShape>,
+    target: ReflectedTarget<'a, '_>,
 ) -> Result<(Vec<Given>, bool), ()> {
     let evidence = inputs
         .evidence
         .filter(|_| node.kind() == SyntaxKind::NameExpr);
-    let operator_shape = (declared_shape.is_none() && evidence.is_some())
+    let declared_shape = match target {
+        ReflectedTarget::Declared(shape) => shape,
+        ReflectedTarget::Operator(..) => None,
+    };
+    let operator_shape = (matches!(target, ReflectedTarget::Operator(..)) && evidence.is_some())
         .then(|| ReferenceShape::new(public, template));
     let shape = declared_shape.or(operator_shape.as_ref());
-    let declared_result = template.result.iter().filter(|ty| !open(ty) && !whole(ty));
     let fixed = public.positional_parameters().count();
     let mut remaining = public
         .positional_parameters()
@@ -1591,11 +1665,7 @@ fn reflected_arguments(
         .iter()
         .map(|(key, _)| callback_parameter(public, key).map(|slot| &public.parameters[slot].ty))
         .collect();
-    let result_shapes = inputs
-        .result_shapes
-        .iter()
-        .chain(declared_result)
-        .chain(evidence.map_or(&[][..], CallbackEvidence::result_shapes));
+    let result_shapes: Vec<_> = inputs.known_result_shapes(node, template).collect();
     let choices: Vec<_> = supplied
         .iter()
         .zip(&parameters)
@@ -1641,7 +1711,7 @@ fn reflected_arguments(
                             typer,
                             public,
                             std::iter::once((parameter, actual)),
-                            result_shapes.clone(),
+                            result_shapes.iter().copied(),
                         )
                     })
                 });
@@ -1652,15 +1722,91 @@ fn reflected_arguments(
             readings
         })
         .collect();
-    let readings = select_readings(&choices, |trial| {
-        let arguments = parameters
-            .iter()
-            .zip(trial)
-            .filter_map(|(parameter, actual)| Some(((*parameter)?, (*actual)?)));
-        arguments.clone().next().is_none()
-            || shape.is_none_or(|shape| shape.fits(typer, public, arguments, result_shapes.clone()))
-    })
-    .map_err(|()| {
+    let operator_trial = match target {
+        ReflectedTarget::Operator(operator, candidates)
+            if choices.iter().any(|choices| choices.len() > 1) =>
+        {
+            Some((operator, candidates))
+        }
+        _ => None,
+    };
+    let at = typer.at(node);
+    let mut select = |check_operator| {
+        select_readings(&choices, |trial, complete| {
+            let arguments = parameters
+                .iter()
+                .zip(trial)
+                .filter_map(|(parameter, reading)| {
+                    Some(((*parameter)?, (*reading)?.evidence_type()?))
+                });
+            if arguments.clone().next().is_some()
+                && shape.is_some_and(|shape| {
+                    !shape.fits(typer, public, arguments, result_shapes.iter().copied())
+                })
+            {
+                return false;
+            }
+            let Some((operator, candidates)) = operator_trial.filter(|_| check_operator) else {
+                return true;
+            };
+            if !typer.may_reread() {
+                return false;
+            }
+            if !complete {
+                return true;
+            }
+            let (mut given, _) = reflected_operands(
+                public,
+                template,
+                node,
+                at,
+                &supplied,
+                trial
+                    .iter()
+                    .map(|reading| reading.and_then(|reading| reading.ty.as_ref())),
+            );
+            let wanted = Wanted {
+                place: inputs.requested_result(node, template, &result_shapes),
+                among: None,
+                written: false,
+                callback: Some(CallbackRequest {
+                    reference: template.reference,
+                    values: &[],
+                    reflected: Some(inputs.excluded),
+                    result_shapes: &result_shapes,
+                }),
+            };
+            let mark = typer.mark();
+            let possible = typer.with_callback_role(template, |typer, role| {
+                let (admitted, unknown) =
+                    typer.admitted_for_callback(operator, candidates, &given, &wanted, role);
+                if unknown || !admitted.is_empty() {
+                    return true;
+                }
+                if given.iter().all(|argument| argument.type_evidence) {
+                    return false;
+                }
+                // An original argument can demonstrate that a candidate
+                // could fit. A nonbinding reading still contributes no type
+                // to the final selection (GEN-3).
+                for argument in &mut given {
+                    argument.type_evidence = true;
+                }
+                let (admitted, unknown) =
+                    typer.admitted_for_callback(operator, candidates, &given, &wanted, role);
+                unknown || !admitted.is_empty()
+            });
+            typer.take_back(mark, false);
+            possible
+        })
+    };
+    let readings = match select(true) {
+        // The ordinary operator reference check reports a failed
+        // candidate selection using the best structural reading.
+        Err(ReadingFailure::NoMatch) if operator_trial.is_some() => select(false),
+        result => result,
+    }
+    .map_err(|_| {
         typer.diagnostics.emit(error(
             Category::Type,
             codes::GENERIC_UNRESOLVED,
@@ -1669,16 +1815,35 @@ fn reflected_arguments(
             "GEN-3",
         ));
     })?;
+    Ok(reflected_operands(
+        public,
+        template,
+        node,
+        at,
+        &supplied,
+        readings.iter().map(Option::as_ref),
+    ))
+}
+
+/// Turn a chosen reading into the synthetic arguments used to check its callback.
+fn reflected_operands<'t>(
+    public: &Signature,
+    template: &FunctionType,
+    node: &SyntaxNode,
+    at: Location,
+    supplied: &[(Key, &Expr)],
+    readings: impl IntoIterator<Item = Option<&'t Type>>,
+) -> (Vec<Given>, bool) {
     let mut projected = false;
     let mut given: Vec<_> = supplied
-        .into_iter()
+        .iter()
         .zip(readings)
         .map(|((key, value), ty)| {
             let type_evidence = ty.is_some();
-            let ty = ty.unwrap_or_else(|| value.ty.clone());
-            projected |= !type_evidence || ty != value.ty;
-            let mut argument = callback_operand(0, node, value.at, ty);
-            argument.key = key;
+            let ty = ty.unwrap_or(&value.ty);
+            projected |= !type_evidence || *ty != value.ty;
+            let mut argument = callback_operand(0, node, value.at, ty.clone());
+            argument.key = key.clone();
             argument.type_evidence = type_evidence;
             argument
         })
@@ -1692,15 +1857,10 @@ fn reflected_arguments(
                 .iter()
                 .all(|given| given.key.public_parameter(public) != Some(slot))
         {
-            given.push(callback_operand(
-                index,
-                node,
-                typer.at(node),
-                input.ty().clone(),
-            ));
+            given.push(callback_operand(index, node, at, input.ty().clone()));
         }
     }
-    Ok((given, projected))
+    (given, projected)
 }
 
 fn callback_operand(position: usize, node: &SyntaxNode, at: Location, ty: Type) -> Given {

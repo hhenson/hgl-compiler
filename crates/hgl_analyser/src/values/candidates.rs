@@ -3124,6 +3124,8 @@ pub(super) struct CallbackRequest<'w> {
     pub(super) values: &'w [CallbackOption<'w>],
     /// A reflected callback can leave these parameters for its caller (FN-8).
     pub(super) reflected: Option<&'w [&'w str]>,
+    /// Result shapes that the enclosing call independently established (GEN-3).
+    pub(super) result_shapes: &'w [&'w Type],
 }
 
 /// ERR-6 requires a supplied fallback with the dictionary's exact value
@@ -3230,7 +3232,10 @@ impl CallbackRequest<'_> {
                                 && agree(given.ty(), &signature.parameters[index].ty))
                     }))
             && match (result, &signature.result) {
-                (Some(expected), Some(actual)) => agree(expected, actual),
+                (Some(expected), Some(actual)) => {
+                    agree(expected, actual)
+                        && self.result_shapes.iter().all(|shape| agree(shape, actual))
+                }
                 (None, None) => true,
                 _ => false,
             }
