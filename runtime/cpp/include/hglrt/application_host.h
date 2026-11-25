@@ -47,7 +47,7 @@ namespace hglrt::application {
 
 /// One publication of a run's output (core's CRUN-8), as the host writes it:
 /// its instant, in UTC, `1970-01-01T00:00:01.000001Z`, and what was
-/// published, as the language writes a value (traces.h, `text_of`).
+/// published, as the language writes a value (value_text.h, `text_of`).
 struct Publication {
     std::string at;
     std::string value;

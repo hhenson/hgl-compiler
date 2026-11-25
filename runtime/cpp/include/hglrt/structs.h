@@ -25,6 +25,7 @@
 #include <hglrt/failure.h>
 #include <hglrt/nullables.h>
 #include <hglrt/traces.h>
+#include <hglrt/value_text.h>
 #include <hglrt/values.h>
 
 #include <hgraph/types/generated.h>
@@ -590,7 +591,7 @@ namespace hglrt {
 /// The text of a value of an atomic struct is the struct's.
 template <class S>
 struct value_form<atomic_trace<S>> {
-    static std::string text(const atomic_trace<S>& value) { return testing::text_of(value.value); }
+    static std::string text(const atomic_trace<S>& value) { return hglrt::text_of(value.value); }
 };
 
 /// The name of a struct and of its delta, the compiler's `type_named`, and
@@ -626,10 +627,10 @@ struct value_form<T> {
                             return;
                         }
                         parts += (parts.empty() ? "" : ", ") + std::string{type_named<T>::fields[I]} + ": " +
-                                 testing::text_of(*field);
+                                 hglrt::text_of(*field);
                     } else {
                         parts += (parts.empty() ? "" : ", ") + std::string{type_named<T>::fields[I]} + ": " +
-                                 testing::text_of(field);
+                                 hglrt::text_of(field);
                     }
                 }(),
                 ...);
