@@ -710,18 +710,31 @@ fn a_store_read_that_drives_branch_wiring_is_reported() {
                 "    }\n",
                 "    return value\n",
                 "}\n",
+                "\n",
+                "fn stored_with_alias(open: bool, value: i64) -> i64 {\n",
+                "    inject global_state\n",
+                "    let alias = global_state\n",
+                "    if open {\n",
+                "        let scale: i64 = get(global_state, \"scale\")\n",
+                "        put(alias, \"last\", scale)\n",
+                "        return value * scale\n",
+                "    }\n",
+                "    return value\n",
+                "}\n",
             ),
         )],
         &hgl_cpp::runtime::provides,
     );
-    assert!(
-        emitted.reported.contains(
-            &"m.hgl:5:5 the cpp target does not write a selected child's store when its reads determine wiring or its startup cannot be ordered yet"
-                .to_string()
-        ),
-        "{:?}",
-        emitted.reported
-    );
+    let reason = "the cpp target does not write a selected child's store when its reads determine wiring or its startup cannot be ordered yet";
+    for line in [5, 15] {
+        assert!(
+            emitted
+                .reported
+                .contains(&format!("m.hgl:{line}:5 {reason}")),
+            "{:?}",
+            emitted.reported
+        );
+    }
 }
 
 /// The activity of a node's inputs (TIME-9, END-5) and the temporal form

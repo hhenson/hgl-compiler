@@ -580,8 +580,8 @@ transpiler: partial
   is built, and a node's keys its configuration fixes, its own and those it
   hands helpers, when the SDK attaches it, before any start hook. A key
   that can differ between the calls of a cycle is left to the operation.
-- A selected branch may use the surrounding store during its startup
-  prefix (FN-9, CRUN-7).
+- A selected branch may use the surrounding store and its captured aliases
+  during its startup prefix (FN-9, CRUN-7).
 - Left: store-dependent child wiring and startup outside the supported
   branch form (#541).
 
