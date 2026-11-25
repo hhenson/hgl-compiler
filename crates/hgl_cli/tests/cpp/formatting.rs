@@ -1,4 +1,4 @@
-//! Run the first Core formatting slice through the ordinary C++ SDK driver.
+//! Run Core formatting and output through the ordinary C++ SDK driver.
 
 use std::fmt::Write;
 use std::fs;
@@ -432,13 +432,27 @@ fn core_format_and_write_run_on_the_sdk() {
             "{stdout}"
         );
     }
-    let executable = kept.join("bin").join(format!(
-        "test-demo-formatting{}",
-        std::env::consts::EXE_SUFFIX
-    ));
     let results = root.join("results");
+    let output = run_test_case(&kept, &results, "demo.formatting", "stream_bytes");
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    assert_eq!(output.stdout, b"abcd\n\0eftick 7\n");
+    assert_eq!(output.stderr, b"ijkl\nhandler\n");
+    let recorded = fs::read_to_string(results).unwrap();
+    assert_eq!(
+        recorded.lines().collect::<Vec<_>>(),
+        ["start 0", "passed 0"]
+    );
+}
+
+/// Run one case directly so its process streams and result file can
+/// be checked independently.
+fn run_test_case(kept: &Path, results: &Path, module: &str, case: &str) -> std::process::Output {
+    let name = module.replace('.', "-");
+    let executable = kept
+        .join("bin")
+        .join(format!("test-{name}{}", std::env::consts::EXE_SUFFIX));
     let mut run = Command::new(executable);
-    run.arg(&results).arg("demo.formatting::stream_bytes");
+    run.arg(results).arg(format!("{module}::{case}"));
     if cfg!(windows) {
         let sdk = std::env::var_os("HGL_HGRAPH_SDK").unwrap();
         let deps = std::env::var_os("HGL_HGRAPH_DEPS").unwrap();
@@ -453,15 +467,75 @@ fn core_format_and_write_run_on_the_sdk() {
                 .unwrap(),
         );
     }
-    let output = run.output().unwrap();
-    assert!(output.status.success(), "{}", text(&output.stderr));
-    assert_eq!(output.stdout, b"abcd\n\0eftick 7\n");
-    assert_eq!(output.stderr, b"ijkl\nhandler\n");
-    let recorded = fs::read_to_string(results).unwrap();
-    assert_eq!(
-        recorded.lines().collect::<Vec<_>>(),
-        ["start 0", "passed 0"]
+    run.output().unwrap()
+}
+
+/// DBG-1, DBG-3 and DBG-9: the HGL candidate forwards both packs and
+/// writes the lines where calls execute, outside the host's records.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn value_debug_print_runs_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("value-debug-print");
+    let file = write(
+        &root,
+        "diagnostics.hgl",
+        include_str!("../../../../spec/hgl_core/tests/core_conformance/diagnostics.hgl"),
     );
+    let kept = root.join("build");
+    let report = hgl_in(
+        &["test", &file, "--target", "cpp", "--keep", &argument(&kept)],
+        &[],
+        &[],
+    );
+    let stdout = text(&report.stdout);
+    assert!(report.status.success(), "{stdout}{}", text(&report.stderr));
+    assert_eq!(
+        stdout.lines().last(),
+        Some("executable cases: 3 passed, 0 failed, 0 not run"),
+        "{stdout}"
+    );
+
+    let results = root.join("results");
+    for (case, expected) in [
+        (
+            "debug_print_writes_value_lines",
+            "ready\nquote 100.00 / 102.00\nscore: 07\n",
+        ),
+        (
+            "debug_print_writes_in_a_handler",
+            "tick 1 is 10\ncount 1\ntick 2 is 40\ncount 2\n",
+        ),
+        (
+            "debug_print_uses_explicit_marks_and_wall_time",
+            "*7\n7\nwall ",
+        ),
+    ] {
+        let output = run_test_case(&kept, &results, "core_conformance", case);
+        assert!(output.status.success(), "{case}: {}", text(&output.stderr));
+        assert!(output.stderr.is_empty(), "{case}: {}", text(&output.stderr));
+        let printed = text(&output.stdout);
+        if case == "debug_print_uses_explicit_marks_and_wall_time" {
+            let year = printed
+                .strip_prefix(expected)
+                .and_then(|text| text.strip_suffix('\n'))
+                .unwrap_or_else(|| panic!("{case}: {printed:?}"));
+            assert!(
+                year.len() == 4 && year.bytes().all(|byte| byte.is_ascii_digit()),
+                "{case}: {printed:?}"
+            );
+        } else {
+            assert_eq!(printed, expected, "{case}");
+        }
+        let recorded = fs::read_to_string(&results).unwrap();
+        assert_eq!(
+            recorded.lines().collect::<Vec<_>>(),
+            ["start 0", "passed 0"],
+            "{case}"
+        );
+    }
 }
 
 /// FN-14, FN-17 and FMT-3: specialized callbacks carry the const inputs

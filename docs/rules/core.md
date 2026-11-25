@@ -1031,9 +1031,11 @@ transpiler: partial
 
 ## DBG-1
 
-transpiler: planned
+transpiler: partial
 
-- #434.
+- Core's value candidate writes and flushes one line to the program's standard output
+  where it is executed. Its output stays separate from publications and test outcomes.
+- Left: the HGL graph candidate (#434).
 
 ## DBG-2
 
@@ -1043,9 +1045,14 @@ transpiler: planned
 
 ## DBG-3
 
-transpiler: planned
+analyser: done
 
-- #434.
+- The value candidate forwards the pattern and both packs through the FMT-9 checks.
+  An explicit `Marked<T>` retains the mark exception.
+
+transpiler: done
+
+- Value functions and handlers execute Core's line write at the call.
 
 ## DBG-4
 
@@ -1079,6 +1086,7 @@ transpiler: planned
 
 ## DBG-9
 
-transpiler: planned
+transpiler: partial
 
-- #434.
+- The bundled HGL value candidate calls `format` and `write` with flushing.
+- Left: the HGL graph candidate and its options (#434).
