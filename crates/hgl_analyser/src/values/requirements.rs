@@ -2766,7 +2766,10 @@ pub(super) fn instances_hold(
                 // report a second reading of its resultless instance.
                 continue;
             }
+            // GEN-17: rechecking a reflected result's consumers needs the
+            // actual members of the pack supplied by the making call.
             let inputs = crate::InstanceInputs {
+                type_packs: &made.type_packs,
                 constants,
                 test_candidates: made.test_candidates,
                 ..crate::InstanceInputs::default()

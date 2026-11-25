@@ -69,6 +69,36 @@ fn reflected_member_conjuncts_prove_the_same_call_in_either_order() {
     }
 }
 
+/// GEN-7: a concrete reflected result must recheck its consumers, including
+/// a second operator and a local initialized with the first call.
+#[test]
+fn reflected_results_recheck_consumers_at_the_calls_that_make_them() {
+    for body in [
+        "=> a - a - \"x\"",
+        "=> (a + a) * \"x\"",
+        "{ let d = a - a\n    return d - \"x\"\n}",
+    ] {
+        let checked = module(&format!(
+            r#"const item_key: str = "item"
+const fn chain<...Ps>(f: const fn(...{{Ps}}) -> i64, a: Ps[item_key]) -> Ps[item_key]
+    requires Ps[item_key] in {{i64, f64}} {body}
+const fn num(item: i64) -> i64 => item
+test check_chain {{ assert chain(num, 3) == 0 }}
+"#
+        ));
+        assert_eq!(checked.findings.len(), 1, "{body}\n{}", checked.report);
+        assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+        assert!(
+            checked.report.contains("no `i64` and `str`")
+                && checked
+                    .report
+                    .contains("this call makes the instance `chain<[i64]>`"),
+            "{body}\n{}",
+            checked.report
+        );
+    }
+}
+
 /// GEN-7: diagnostics distinguish missing evidence, insufficient evidence,
 /// and reaching the analyser's limit while trying stated alternatives.
 #[test]

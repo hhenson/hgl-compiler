@@ -88,6 +88,15 @@ const fn add_parameter_bound<T, ...Ps>(
     f: const fn(...{Ps}) -> i64, t: T, a: Ps[item_key]
 ) -> Ps[item_key] requires T in {i64, f64} && Ps[item_key] == T => a + a
 
+const fn chained_arithmetic<...Ps>(f: const fn(...{Ps}) -> i64, a: Ps[item_key]) -> Ps[item_key]
+    requires Ps[item_key] in {i64, f64} => (a + a) * a
+
+const fn arithmetic_via_local<...Ps>(f: const fn(...{Ps}) -> i64, a: Ps[item_key]) -> Ps[item_key]
+    requires Ps[item_key] in {i64, f64} {
+    let difference = a - a
+    return difference - a
+}
+
 test reflected_member_arithmetic {
     assert add_integer(num, 2, 3) == 5
     assert add_number<"item">(num, 3, 4) == 7
@@ -96,6 +105,10 @@ test reflected_member_arithmetic {
     assert add_member_bound(real_item, 0.0, 1.5) == 3.0
     assert add_parameter_bound(num, 0, 4) == 8
     assert add_parameter_bound(real_item, 0.0, 2.5) == 5.0
+    assert chained_arithmetic(num, 3) == 18
+    assert chained_arithmetic(real_item, 1.5) == 4.5
+    assert arithmetic_via_local(num, 5) == -5
+    assert arithmetic_via_local(real_item, 2.5) == -2.5
 }
 
 fn operator_graph<...Ps>(f: const fn(...{Ps}) -> i64, item: Ps[item_key]) -> Ps[item_key] =>
