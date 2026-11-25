@@ -311,6 +311,12 @@ void schedule_Alarm_datetime(const Alarm& capability, datetime at);
 
 // ---- The global store (CAP-6) ------------------------------------------------
 
+/// The run's recording key (CRUN-8).
+inline constexpr std::string_view run_output = "run.output";
+
+/// Validate a user store key where its value is fixed (CAP-6).
+str checked_store_key(str key, std::source_location where = std::source_location::current());
+
 /// `GlobalState` (CAP-6), what `inject global_state` binds: the run's store,
 /// "a run-wide store of ordinary values under string keys", as hgraph's
 /// `GlobalStateView` gives it to a node's hook and, where a graph is built,

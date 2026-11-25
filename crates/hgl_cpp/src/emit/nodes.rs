@@ -93,6 +93,10 @@ pub(super) struct Context {
     /// `modified([])` is written, where it is `true` read as a value
     /// (TIME-3, `scheduling`).
     pub(super) selected_empty: bool,
+    /// Keys in the order in which construction prepares their values.
+    pub(super) store_keys: Vec<Expr>,
+    /// Core's private recorder can write the key reserved for the run's result.
+    pub(super) run_recorder: bool,
 }
 
 impl Context {
@@ -109,6 +113,8 @@ impl Context {
             signature: None,
             timer: None,
             selected_empty: false,
+            store_keys: Vec::new(),
+            run_recorder: false,
         }
     }
 }
@@ -446,6 +452,9 @@ impl Emitter<'_> {
         let placed_at = declaration.at;
         let end = declaration.syntax.text_range().end().into();
         let mut context = Context::new(Kind::Hook(Hook::When), body.locals.len());
+        let store_keys = super::store::Keys::of(self, index, body);
+        context.store_keys = store_keys.expressions();
+        context.run_recorder = store_keys.recorder;
         context.result = signature.result.clone();
         // FN-16: a reference result publishes a designation. Its
         // contextual result form is read from the designated endpoint.
@@ -647,13 +656,14 @@ impl Emitter<'_> {
             ));
         }
         members.push_str(&designated.members());
+        members.push_str(&store_keys.fields());
         if tracks_drops {
             let library = runtime::NAMESPACE;
             members.push_str(&format!(
                 "{indent}::{library}::DroppedWakes {DROPPED_WAKES}{{}};\n"
             ));
         }
-        let user_state = !states.is_empty() || designated.holds();
+        let user_state = !states.is_empty() || designated.holds() || store_keys.holds_values();
         let held = user_state || tracks_drops;
         let mut placed = Placed::of(program, self.module, index, instance);
         if let Some((number, _)) = readers {
@@ -670,6 +680,10 @@ impl Emitter<'_> {
                 "\n{INDENT}// The node's `state` and `cache` (TIME-6).\n{INDENT}struct state_type_\n{INDENT}{{\n{members}{INDENT}}};\n"
             ));
         }
+        let Some(prepare) = store_keys.prepare(self, signature, body) else {
+            return;
+        };
+        text.push_str(&prepare);
         let configs: Vec<String> = parameters
             .iter()
             .zip(&signature.parameters)
@@ -685,7 +699,9 @@ impl Emitter<'_> {
             let mut written = String::new();
             if held {
                 hook.push(state_parameter.clone());
-                written.push_str(&format!("{INDENT}{INDENT}{STATE}.set(state_type_{{}});\n"));
+                if !store_keys.holds_values() {
+                    written.push_str(&format!("{INDENT}{INDENT}{STATE}.set(state_type_{{}});\n"));
+                }
             }
             written.push_str(&prologue(body, &states));
             // TIME-6: "Cache is reconstructible node-local value data,

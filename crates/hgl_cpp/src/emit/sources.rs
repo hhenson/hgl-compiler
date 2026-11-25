@@ -25,6 +25,7 @@ use super::nodes::{
     nested, registration,
 };
 use super::statements::Scope;
+use super::store;
 use super::values::INDENT;
 use crate::runtime;
 
@@ -96,7 +97,8 @@ impl Emitter<'_> {
         let end = declaration.syntax.text_range().end().into();
         // SOURCE-1: what the source's declarations and hooks add to its
         // node (`scheduling`): nothing for one that has none.
-        let Some(hooked) = self.source_hooks(signature, body) else {
+        let store_keys = store::Keys::of(self, index, body);
+        let Some(hooked) = self.source_hooks(signature, body, &store_keys) else {
             return;
         };
         let result = signature
@@ -165,7 +167,13 @@ impl Emitter<'_> {
             ));
             given.push(super::configuration::read(program, &parameter.ty, &name));
         }
+        for slot in store_keys.slots() {
+            let name = store::local(slot);
+            taken.push(format!("[[maybe_unused]] ::hgraph::Str {name}"));
+            given.push(format!("kept_.{name}"));
+        }
         let mut context = Context::new(Kind::Source, body.locals.len());
+        context.store_keys = store_keys.expressions();
         context.result = Some(result.clone());
         let forms = ResultForms::of(self, result);
         context.result_forms = forms.clone();
@@ -221,6 +229,15 @@ impl Emitter<'_> {
         let mut stop = vec![state.clone()];
         stop.extend(hooked.stop_parameters.iter().cloned());
         let closing = self.debug_end(at, end, format!("{INDENT}}}\n"));
+        let Some(prepare) = store_keys.prepare(self, signature, body) else {
+            return;
+        };
+        let store_fields = store_keys.fields();
+        let initialize = if !store_keys.holds_values() {
+            format!("{INDENT}{INDENT}state_.set(state_type_{{}});\n")
+        } else {
+            String::new()
+        };
         let text = format!(
             "// {shown}\n\
              struct {IMPLEMENTATION}\n{{\n\
@@ -237,12 +254,12 @@ impl Emitter<'_> {
              {INDENT}// timing of its yields.\n\
              {INDENT}struct state_type_\n{INDENT}{{\n\
              {INDENT}{INDENT}::{library}::Source<{payload}> source_{{}};\n\
-             {kept}\
+             {kept}{store_fields}\
              {INDENT}{INDENT}::std::optional<body_type_> frame_{{}};\n\
              {INDENT}{INDENT}::std::optional<body_type_::iterator> at_{{}};\n\
-             {INDENT}}};\n\n\
+             {INDENT}}};\n{prepare}\n\
              {INDENT}static void start({start})\n{INDENT}{{\n\
-             {INDENT}{INDENT}state_.set(state_type_{{}});\n\
+             {initialize}\
              {INDENT}{INDENT}state_type_& kept_ = state_.modify();\n\
              {start_before}\
              {INDENT}{INDENT}kept_.frame_.emplace(body_({given}));\n\

@@ -202,6 +202,13 @@ void schedule_Alarm_datetime(const Alarm& capability, datetime at) {
 
 // ---- The global store ----------------------------------------------------------
 
+str checked_store_key(str key, std::source_location where) {
+    if (key == run_output) {
+        fail(codes::store_reserved_key, "the key 'run.output' is the run's own", where);
+    }
+    return key;
+}
+
 bool has_GlobalState_str(const GlobalState& store, std::string_view key) {
     return store.view().contains(key);
 }

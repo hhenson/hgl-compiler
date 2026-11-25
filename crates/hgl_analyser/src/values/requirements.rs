@@ -3244,6 +3244,19 @@ impl InstanceChain<'_> {
     }
 }
 
+/// Use the making call as the primary location except where the catalogue
+/// places the rejection at the key that call resolves (TIME-8).
+pub(super) fn instance_location(report: &Diagnostic, root: Location, reason: &str) -> Diagnostic {
+    if report.code == Code::Catalogued(codes::STORE_RESERVED_KEY) {
+        return report
+            .clone()
+            .with_related(root, "this call fixes the key's value");
+    }
+    let mut located = report.clone().with_related(report.primary, reason);
+    located.primary = root;
+    located
+}
+
 /// Report the instance's rejection once at each outer making call.
 /// Keep the failing body location and the intermediate calls beside it.
 pub(super) fn emit_instance_report(
@@ -3260,10 +3273,7 @@ pub(super) fn emit_instance_report(
     let mut groups: Vec<_> = groups.into_iter().collect();
     groups.sort_by_key(|(at, _)| (at.file, at.span.start, at.span.end));
     for (at, paths) in groups {
-        let mut here = report
-            .clone()
-            .with_related(report.primary, "the instance's body rejects here");
-        here.primary = at;
+        let mut here = instance_location(&report, at, "the instance's body rejects here");
         for call in paths.into_iter().flatten() {
             let message = format!("this call makes the instance `{}`", call.instance);
             if call.at == at {

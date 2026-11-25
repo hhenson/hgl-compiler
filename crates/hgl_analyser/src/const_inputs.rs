@@ -99,9 +99,9 @@ pub(crate) fn known_text(program: &Program, expression: &Expr) -> Option<String>
     if let ExprKind::Literal(Value::Str(text)) = &expression.kind {
         return Some(text.clone());
     }
-    let read = Reader::new(program)
-        .read(expression, INPUT_DEPTH, &[])
-        .ok()?;
+    let mut reader = Reader::new(program);
+    reader.read_string_helpers = false;
+    let read = reader.read(expression, INPUT_DEPTH, &[]).ok()?;
     match read.kind {
         ExprKind::Literal(Value::Str(text)) => Some(text),
         _ => None,
@@ -182,6 +182,9 @@ impl Program {
             {
                 continue;
             }
+            // CAP-6: a value function call that computes a key belongs to
+            // graph construction, even when another check could read it.
+            reader.read_string_helpers = demand != Demand::StoreKey;
             let text_before = reader.text_left;
             let input = (|| {
                 let parameter = signature.parameters.get(slot).ok_or(Unread)?;
@@ -504,6 +507,7 @@ struct Reader<'a> {
     steps_left: usize,
     text_left: usize,
     reading: Vec<(Declaration, Option<usize>)>,
+    read_string_helpers: bool,
 }
 
 /// Read a fixed projection for a check that needs its value (FN-1).
@@ -526,6 +530,7 @@ impl<'a> Reader<'a> {
             steps_left: INPUT_BUDGET,
             text_left: INPUT_BUDGET,
             reading: Vec::new(),
+            read_string_helpers: true,
         }
     }
 
@@ -610,7 +615,10 @@ impl<'a> Reader<'a> {
                 arguments,
                 form: Form::Named,
                 ..
-            } if arguments.is_empty() && expression.ty == Type::Scalar(Scalar::Str) => {
+            } if self.read_string_helpers
+                && arguments.is_empty()
+                && expression.ty == Type::Scalar(Scalar::Str) =>
+            {
                 // Match the existing format reader's single-return string
                 // helpers. A general compile-time call is tracked separately.
                 let (module, declaration) = callee.declaration().ok_or(Unread)?;
@@ -1046,7 +1054,7 @@ pub(crate) fn demands(program: &Program) -> Demands {
                 {
                     read_compile_time_value(&pattern.value, Demand::Always);
                 }
-                if let Some(key) = crate::store_keys::key_argument(program, callee, arguments) {
+                if let Some(key) = program.store_key_argument(callee, arguments) {
                     read_compile_time_value(key, Demand::StoreKey);
                 }
                 for argument in arguments {

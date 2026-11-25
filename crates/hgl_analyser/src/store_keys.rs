@@ -107,35 +107,37 @@ pub(crate) fn key_types(
     }
 }
 
-/// The key of a native CAP-6 operation, in its written argument order.
-pub(crate) fn key_argument<'a>(
-    program: &Program,
-    callee: &Callee,
-    arguments: &'a [CallArgument],
-) -> Option<&'a Expr> {
-    let (module, declaration) = callee.declaration()?;
-    if Some(module) != program.core() {
-        return None;
+impl Program {
+    /// The key of a native CAP-6 operation, in its written argument order.
+    pub fn store_key_argument<'a>(
+        &self,
+        callee: &Callee,
+        arguments: &'a [CallArgument],
+    ) -> Option<&'a Expr> {
+        let (module, declaration) = callee.declaration()?;
+        if Some(module) != self.core() {
+            return None;
+        }
+        let unit = &self.modules[module];
+        if !store_operation(&unit.declarations[declaration].name) {
+            return None;
+        }
+        let crate::types::Detail::Callable(signature) = unit.details.get(declaration)? else {
+            return None;
+        };
+        let store = self.capability_type("global_state")?;
+        if !signature
+            .parameters
+            .iter()
+            .any(|parameter| parameter.ty == store)
+        {
+            return None;
+        }
+        arguments.iter().find_map(|argument| {
+            let parameter = signature.parameters.get(argument.parameter?)?;
+            (parameter.constant && parameter.name == "key").then_some(&argument.value)
+        })
     }
-    let unit = &program.modules[module];
-    if !store_operation(&unit.declarations[declaration].name) {
-        return None;
-    }
-    let crate::types::Detail::Callable(signature) = unit.details.get(declaration)? else {
-        return None;
-    };
-    let store = program.capability_type("global_state")?;
-    if !signature
-        .parameters
-        .iter()
-        .any(|parameter| parameter.ty == store)
-    {
-        return None;
-    }
-    arguments.iter().find_map(|argument| {
-        let parameter = signature.parameters.get(argument.parameter?)?;
-        (parameter.constant && parameter.name == "key").then_some(&argument.value)
-    })
 }
 
 /// The key of a Core store call whose candidate awaits concrete types.
@@ -177,7 +179,7 @@ fn key_use(program: &Program, expression: &Expr, made_at: Option<Location>) -> O
     else {
         return None;
     };
-    let key = key_argument(program, callee, arguments)?;
+    let key = program.store_key_argument(callee, arguments)?;
     // `V`: the candidate's one generic parameter, as the call gives it.
     let ty = match callee {
         Callee::Function { generics, .. } | Callee::Candidate { generics, .. } => {

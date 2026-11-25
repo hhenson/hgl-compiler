@@ -307,6 +307,13 @@ impl Emitter<'_> {
         let signature = native_pack
             .as_ref()
             .map_or(signature, |pack| &pack.signature);
+        let store_key = program.store_key_argument(callee, arguments).filter(|key| {
+            !matches!(key.kind, ExprKind::Literal(Value::Str(_)))
+                && !self
+                    .temporal
+                    .as_ref()
+                    .is_some_and(|context| context.run_recorder)
+        });
         let assigns = signature.parameters.iter().any(|parameter| parameter.var);
         if assigns && !statement {
             return self.missing(at, "a call that assigns a place, inside an expression");
@@ -417,7 +424,29 @@ impl Emitter<'_> {
                 ));
                 continue;
             }
-            let value = self.expression(scope, &argument.value);
+            let key = store_key.filter(|key| std::ptr::eq(*key, &argument.value));
+            let stored = key.and_then(|key| {
+                self.temporal
+                    .as_ref()?
+                    .store_keys
+                    .iter()
+                    .position(|stored| stored == key)
+            });
+            let value = if let Some(slot) = stored {
+                let name = super::store::local(slot);
+                if self.kind() == Some(super::nodes::Kind::Source) {
+                    name
+                } else {
+                    format!("{}.ref().{name}", super::nodes::STATE)
+                }
+            } else {
+                let value = self.expression(scope, &argument.value);
+                if key.is_some() {
+                    super::store::checked(&value)
+                } else {
+                    value
+                }
+            };
             // TYPE-10: the ordinary unsized parameter takes the fixed
             // list's entries. Read the array once, in argument order.
             if let (
@@ -466,7 +495,12 @@ impl Emitter<'_> {
             } else {
                 (value, Held::Value(ty))
             };
-            written.push((index, value, self.may_fail_here(&argument.value), held));
+            written.push((
+                index,
+                value,
+                key.is_some() && stored.is_none() || self.may_fail_here(&argument.value),
+                held,
+            ));
         }
         let mut defaulted: Vec<(usize, String, bool, Held)> = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {

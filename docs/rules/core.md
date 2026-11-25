@@ -535,14 +535,13 @@ transpiler: done
 
 ## CAP-6
 
-analyser: partial
+analyser: done
 
 - `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get` gives a `result<V, error>`, with V written by the caller or inferred from the place
 - A known `"run.output"` key is rejected (`store.reserved_key`), including where
   a call resolves the `const` parameter supplying the key.
 - A known key is used with one type in a program. A `put` or a `get` of a
   different type than an earlier use is `store.key_type` (TIME-8).
-- Left: a key whose value is known only to the target can name `run.output`.
 
 transpiler: partial
 
@@ -553,7 +552,12 @@ transpiler: partial
 - Reading an absent store key gives `value.missing_key`, the same code as a
   strict dictionary lookup (ERR-6).
 - Reading or writing a key whose stored type differs gives `store.key_type`.
+- A key computed at graph construction fails with `store.reserved_key` if it
+  is `"run.output"`. A node checks fixed hook keys when the SDK attaches it to
+  its graph, before any start hook. The run's own recording uses that key.
 - Left: a temporal child graph using the surrounding store is declined (CRUN-7).
+- Left: a hook's store key is declined if the target cannot follow its fixed
+  expression through the value functions the hook calls.
 
 ## CAP-7
 
@@ -735,18 +739,18 @@ transpiler: partial
 
 ## CRUN-8
 
-analyser: partial
+analyser: done
 
 - A known `"run.output"` key is rejected (`store.reserved_key`), including where
   a call resolves the `const` parameter supplying the key (CAP-6).
-- Left: a key whose value is known only to the target can name `run.output`.
 
 transpiler: partial
 
 - Adds recording to a result-bearing entry and retrieves the timestamped deltas after
   stop. Outputless entries have no recording.
-- Left: Unsupported record types follow CEVAL-4. A key whose value is known only
-  at graph construction is unchecked against `run.output`.
+- A program's key computed as the graph is built fails with `store.reserved_key`
+  if it names the recording key (CAP-6).
+- Left: Unsupported record types follow CEVAL-4.
 
 runner: planned
 

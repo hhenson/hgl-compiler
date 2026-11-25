@@ -1,0 +1,77 @@
+module demo.store.reserved
+const fn computed(prefix: str) -> str => prefix + ".output"
+fn write_key(const key: str) {
+    inject global_state
+    put(global_state, key, 7)
+}
+fn read_key(const key: str) {
+    inject global_state
+    let held: i64 = get(global_state, key)
+}
+fn has_key(const key: str) {
+    inject global_state
+    let present = has(global_state, key)
+}
+fn hook_key(const key: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { put(global_state, key, 7) }
+}
+fn source_key(const key: str, const divisor: i64) -> i64 {
+    inject global_state
+    start { let checked = 1 // divisor }
+    {
+        let present = has(global_state, key)
+        yield 0us: if present { 1 } else { 2 }
+    }
+}
+test composition_put_check {
+    assert raises("store.reserved_key") { eval write_key(key: computed(prefix: "run")) }
+    eval write_key(key: computed(prefix: "user"))
+}
+test composition_get_check {
+    assert raises("store.reserved_key") { eval read_key(key: computed(prefix: "run")) }
+    assert raises("value.missing_key") { eval read_key(key: computed(prefix: "user")) }
+}
+test composition_has_check {
+    assert raises("store.reserved_key") { eval has_key(key: computed(prefix: "run")) }
+    eval has_key(key: computed(prefix: "user"))
+}
+test hook_check_before_start {
+    assert raises("store.reserved_key") { eval hook_key(key: computed(prefix: "run"), divisor: 0) }
+    eval hook_key(key: computed(prefix: "user"), divisor: 1)
+}
+test source_check_before_start {
+    assert raises("store.reserved_key") { eval source_key(key: computed(prefix: "run"), divisor: 0) }
+    assert eval source_key(key: computed(prefix: "user"), divisor: 1) == [2]
+}
+fn selected(enabled: bool, const key: str, const divisor: i64) {
+    if enabled { hook_key(key: key, divisor: divisor) }
+}
+test no_forbidden_key_in_unselected_child {
+    eval selected(enabled: [false], key: computed(prefix: "run"), divisor: 0)
+}
+test chosen_child_checks_before_start {
+    assert raises("store.reserved_key") {
+        eval selected(enabled: [false, true], key: computed(prefix: "run"), divisor: 0)
+    }
+}
+
+const fn supply(prefix: str) -> str => prefix
+const fn inner(store: GlobalState, const prefix: str) {
+    put(store, prefix + ".output", 7)
+}
+const fn outer(store: GlobalState, const name: str) {
+    inner(store, name)
+}
+fn indirect(const prefix: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { outer(global_state, prefix) }
+}
+test transitive_key_check_before_start {
+    assert raises("store.reserved_key") { eval indirect(prefix: supply(prefix: "run"), divisor: 0) }
+    eval indirect(prefix: supply(prefix: "user"), divisor: 1)
+}

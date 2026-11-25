@@ -70,6 +70,7 @@ mod scalars;
 mod scheduling;
 mod sources;
 mod statements;
+mod store;
 mod structs;
 mod tests;
 mod types;

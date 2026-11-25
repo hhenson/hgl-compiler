@@ -455,7 +455,12 @@ impl Emitter<'_> {
     /// `cache`, a `state`, a `start`, or a `stop` has its declarations,
     /// then `start`, then one block that holds every `yield`, then
     /// `stop`". `None` where one is not written yet, which is reported.
-    pub(super) fn source_hooks(&mut self, signature: &Signature, body: &Body) -> Option<Hooked> {
+    pub(super) fn source_hooks(
+        &mut self,
+        signature: &Signature,
+        body: &Body,
+        store_keys: &super::store::Keys<'_>,
+    ) -> Option<Hooked> {
         let mut states: Vec<(usize, Option<&Expr>)> = Vec::new();
         let mut injected: Vec<usize> = Vec::new();
         let mut start: Option<&[Stmt]> = None;
@@ -582,6 +587,7 @@ impl Emitter<'_> {
             format!("{two}kept_.{SLOT} = ::std::make_unique<slot_type_>();\n{kept_bound}{made}");
         let mut start_after = String::new();
         let mut context = Context::new(Kind::Hook(Hook::Start), body.locals.len());
+        context.store_keys = store_keys.expressions();
         for role in context.roles.iter_mut().take(signature.parameters.len()) {
             *role = Role::Config;
         }
