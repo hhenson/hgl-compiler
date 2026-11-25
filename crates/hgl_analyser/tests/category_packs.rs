@@ -103,6 +103,27 @@ fn pass_whole(items: list<i64, 2>) -> i64 => whole(keep, items)
 }
 
 #[test]
+fn a_more_specific_nonbinding_alternative_does_not_supply_a_callback_type() {
+    // GEN-3: the winning i64 alternative binds nothing. The receiving
+    // result may still determine identity's input type (GEN-2, FN-17).
+    let declarations = r#"module m
+fn identity<T>(value: T) -> T => value
+fn fixed<const N: i64 = 0>(value: i64) -> i64 => N
+fn select<R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => 3
+fn select_i64<...Ps, ...As>(f: fn(...{Ps}) -> i64, args: ...{As for f}) -> i64
+    requires each k in arg_keys(As) { As[k] in {Ps[k], i64} } => 3
+fn result_known(value: i64) -> i64 => select_i64(identity, value)
+fn input_known(value: i64) -> i64 => select(fixed, value)
+"#;
+    accepts(declarations);
+    rejects(
+        &format!("{declarations}fn missing(value: i64) -> i64 => select(identity, value)"),
+        "type/generic.unresolved",
+    );
+}
+
+#[test]
 fn bare_callback_trials_keep_the_public_operator_diagnostic() {
     // GEN-3 and GEN-4: a public condition belongs to the operator, even
     // when more than one callback trial independently fails it.

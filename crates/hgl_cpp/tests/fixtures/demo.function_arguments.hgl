@@ -422,11 +422,15 @@ fn dict_split(items: dict<str, i64>) -> i64 => keyed_callback("key", identity, i
 # already fixed by its declaration or by the receiving result type.
 fn fixed_list<const N: i64 = 0>(items: list<i64, 2>) -> i64 => N
 fn first_item<T>(items: list<T, 2>) -> T => items[0]
+operator fixed_whole_operator(items: list<i64, 2>) -> i64
+impl fn fixed_whole_operator(items: list<i64, 2>) -> i64 => items[0]
 fn sized_i64_callback<const N: i64, ...Ps, ...As>(f: fn(...{Ps}) -> i64, args: ...{As for f}) -> i64
     requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], N>} } => 71
 
 fn fixed_list_binding(items: list<i64, 2>) -> i64 => sized_callback<2>(fixed_list, items)
 fn result_list_binding(items: list<i64, 2>) -> i64 => sized_i64_callback<2>(first_item, items)
+fn operator_list_binding(items: list<i64, 2>) -> i64 =>
+    sized_callback<2>(fixed_whole_operator, items)
 
 # The fixed input stays whole when another input of the same callback
 # still needs to learn its type from a split argument.
@@ -460,6 +464,7 @@ test bare_callbacks_keep_known_outer_bindings {
     assert eval dict_split(items: [["a": 8]]) == [72]
     assert eval fixed_list_binding(items: [[5, 6]]) == [70]
     assert eval result_list_binding(items: [[5, 6]]) == [71]
+    assert eval operator_list_binding(items: [[5, 6]]) == [70]
     assert eval mixed_list_binding(items: [[5, 6]], words: [["a", "b"]]) == [73]
     assert eval callback_order(value: [4]) == [1]
     assert eval map_with_whole_table(values: [[1, 2]], table: [[10, 20]]) == [[21, 22]]

@@ -14,7 +14,7 @@ use super::dependent_packs::PackTypes;
 use super::fit::{accepts_float, is_integer_literal, open, whole};
 use super::forwarded_packs::spread_operands;
 use super::inference::{ExplicitGenerics, infer, mentions, pack_bounds, type_pack};
-use crate::declared::{agree, names_parameter, substitute_within};
+use crate::declared::{agree, names_parameter, same_type, substitute_within};
 use crate::hir::{
     AnonymousFunction, AnonymousSpecialization, Callee, Expr, ExprKind, Form, LocalId, Node, Stmt,
     TypePackArgument, ValueCategory, walk_statement_nodes,
@@ -1412,7 +1412,13 @@ fn reflected_arguments(
                     callback_parameter(public, &key)
                         .is_some_and(|slot| mentions(&public.parameters[slot].ty, unresolved))
                 });
-                if settled || !needs_evidence {
+                // FN-17: a bare operator already declares a whole
+                // input when its public parameter has this exact type.
+                let whole_operator_input = unresolved.is_none()
+                    && slot.is_some_and(|slot| {
+                        same_type(&public.parameters[slot].ty, &value.ty) == Some(true)
+                    });
+                if settled || !needs_evidence || whole_operator_input {
                     value.ty.clone()
                 } else {
                     evidence.resolve(name, position, &value.ty).map_err(|()| {
