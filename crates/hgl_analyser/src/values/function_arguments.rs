@@ -1741,6 +1741,9 @@ fn reflected_arguments<'a>(
     let at = typer.at(node);
     let mut select = |check_operator| {
         select_readings(&choices, |trial, complete| {
+            if evidence.is_some_and(|evidence| !evidence.equalities_hold(typer.program, trial)) {
+                return false;
+            }
             let arguments = parameters
                 .iter()
                 .zip(trial)

@@ -177,6 +177,37 @@ fn receiver<K, R, ...Ps, ...As>(f: fn(...{Ps}) -> R, args: ...{As for f}) -> i64
 }
 
 #[test]
+fn enclosing_key_equalities_can_require_a_whole_dictionary() {
+    // GEN-3: a forces K = str and the positive equality makes J the
+    // same key type. Both call orders must keep b's dictionary whole.
+    let shared = r#"module m
+const left: str = "a"
+const right: str = "b"
+const fn sample<T>(a: i64, b: T) -> i64 => a
+"#;
+    for (generics, equality) in [("K, J", "K == J"), ("K, J, Q", "Q == J && K == Q")] {
+        let signature = format!(
+            "choose<{generics}, R, ...Ps, ...As>(f: fn(...{{Ps}}) -> R, args: ...{{As for f}}) -> i64"
+        );
+        let requirements = format!(
+            "requires {equality} && As[left] == dict<K, Ps[left]> && As[right] in {{Ps[right], dict<J, Ps[right]>}}"
+        );
+        for declaration in [
+            format!("fn {signature}\n    {requirements} => 1"),
+            format!("operator {signature}\nimpl fn {signature}\n    {requirements} => 1"),
+        ] {
+            accepts(&format!(
+                r#"{shared}{declaration}
+fn control(x: dict<str, i64>, y: dict<i64, i64>) -> i64 => choose(sample<dict<i64, i64>>, x, y)
+fn infer(x: dict<str, i64>, y: dict<i64, i64>) -> i64 => choose(sample, x, y)
+fn reverse(x: dict<str, i64>, y: dict<i64, i64>) -> i64 => choose(sample, b: y, a: x)
+"#,
+            ));
+        }
+    }
+}
+
+#[test]
 fn distinct_shared_keys_can_leave_the_best_readings_ambiguous() {
     // GEN-3: one dictionary can split, but the call leaves open which
     // one. Each choice fits its own K and disagrees on the split input.

@@ -11,7 +11,8 @@ use super::fit::{open, whole};
 use super::inference::{infer, mentions, type_pack, unsaid};
 use super::requirements::{conjoined_terms, pack_view};
 use crate::declared::{
-    same_type, substitute_with_members, substitute_with_packs, substitute_within, weight,
+    names_parameter, same_type, substitute_with_members, substitute_with_packs, substitute_within,
+    weight,
 };
 use crate::syntax::{child, has_token, tokens};
 use crate::types::{Argument, ConstantValue, GenericKind, GenericParameter, Type};
@@ -22,6 +23,7 @@ use crate::{Program, ReflectedPack};
 pub(super) struct CallbackEvidence {
     arguments: Vec<ArgumentPatterns>,
     results: Vec<Type>,
+    equalities: Vec<EnclosingEqualities>,
 }
 
 impl CallbackEvidence {
@@ -46,6 +48,25 @@ impl CallbackEvidence {
     /// Result types and partial shapes stated by the receiver or candidate.
     pub(super) fn result_shapes(&self) -> &[Type] {
         &self.results
+    }
+
+    /// A complete or partial reading cannot contradict an enclosing equality (GEN-3).
+    pub(super) fn equalities_hold(
+        &self,
+        program: &Program,
+        readings: &[Option<&MemberReading<'_>>],
+    ) -> bool {
+        if self.equalities.is_empty() {
+            return true;
+        }
+        let bindings: Vec<_> = readings
+            .iter()
+            .flatten()
+            .flat_map(|reading| reading.shared_bindings())
+            .collect();
+        self.equalities
+            .iter()
+            .all(|scope| scope.agrees(program, &bindings))
     }
 
     /// Read the receiver's evidence and, in an operator trial, its candidate's.
@@ -128,14 +149,14 @@ impl CallbackEvidence {
                     evidence.results.push(result);
                 }
             };
+            let own: Vec<_> = signature
+                .generics
+                .iter()
+                .map(|generic| generic.at)
+                .collect();
             if let Some(written) = &template.result {
                 let before = substitute_within(written, &fixed);
                 let result = substitute_within(written, &solved);
-                let own: Vec<_> = signature
-                    .generics
-                    .iter()
-                    .map(|generic| generic.at)
-                    .collect();
                 if result != before || !mentions(written, &own) {
                     record(substitute_within(written, &partial));
                 }
@@ -162,21 +183,32 @@ impl CallbackEvidence {
                 &mut terms,
             );
             let mut relations = Vec::new();
+            let mut equalities = Vec::new();
             for term in terms {
                 if term.kind() == SyntaxKind::ConstraintRelation {
-                    if let Some(result) = &template.result
-                        && has_token(&term, SyntaxKind::EqEq)
-                    {
+                    if has_token(&term, SyntaxKind::EqEq) {
                         let mut sides = term.children();
                         if let (Some(left), Some(right)) = (
                             sides.next().and_then(|side| written_at(&side)),
                             sides.next().and_then(|side| written_at(&side)),
                         ) {
-                            if left == result {
+                            if template.result.as_ref() == Some(left) {
                                 record(substitute_within(right, &partial));
                             }
-                            if right == result {
+                            if template.result.as_ref() == Some(right) {
                                 record(substitute_within(left, &partial));
+                            }
+                            let left = substitute_within(left, &solved);
+                            let right = substitute_within(right, &solved);
+                            if (mentions(&left, &own) || mentions(&right, &own))
+                                && [&left, &right].iter().all(|ty| {
+                                    !ty.any_part(
+                                        &|part| matches!(part, Type::PackMember { .. }),
+                                        &|_| false,
+                                    )
+                                })
+                            {
+                                equalities.push((left, right));
                             }
                         }
                     }
@@ -226,6 +258,15 @@ impl CallbackEvidence {
                 .extend(relations.iter().filter_map(|(relation, bound)| {
                     ArgumentPatterns::read(relation, *bound, source, target, &generics, &type_at)
                 }));
+            if !equalities.is_empty() {
+                evidence.equalities.push(EnclosingEqualities {
+                    module,
+                    declaration,
+                    generics: signature.generics.clone(),
+                    found,
+                    equalities,
+                });
+            }
         }
         evidence
     }
@@ -308,6 +349,52 @@ impl CallbackEvidence {
         let mut ordered: Vec<_> = precedence.into_iter().zip(readings).collect();
         ordered.sort_by_key(|(preceding, _)| *preceding);
         ordered.into_iter().map(|(_, reading)| reading).collect()
+    }
+}
+
+struct EnclosingEqualities {
+    module: usize,
+    declaration: usize,
+    generics: Vec<GenericParameter>,
+    found: Vec<Option<Argument>>,
+    equalities: Vec<(Type, Type)>,
+}
+
+impl EnclosingEqualities {
+    fn agrees(&self, program: &Program, bindings: &[(Location, &Argument)]) -> bool {
+        let mut found = self.found.clone();
+        let mut learned = false;
+        for (generic, slot) in self.generics.iter().zip(&mut found) {
+            for (_, value) in bindings.iter().filter(|(at, _)| *at == generic.at) {
+                if let Some(before) = slot {
+                    if same_argument(before, value) == Some(false) {
+                        return false;
+                    }
+                } else {
+                    *slot = Some((*value).clone());
+                    learned = true;
+                }
+            }
+        }
+        if !learned {
+            return true;
+        }
+        let unit = &program.modules[self.module];
+        let declaration = &unit.declarations[self.declaration];
+        super::quantifiers::bind(unit, declaration, &self.generics, &[], &mut found);
+        let map: Vec<_> = self
+            .generics
+            .iter()
+            .zip(&found)
+            .filter_map(|(generic, value)| Some((generic.at, value.as_ref()?)))
+            .collect();
+        self.equalities.iter().all(|(left, right)| {
+            let left = substitute_within(left, &map);
+            let right = substitute_within(right, &map);
+            names_parameter(&left)
+                || names_parameter(&right)
+                || same_type(&left, &right) != Some(false)
+        })
     }
 }
 
