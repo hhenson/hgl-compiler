@@ -64,6 +64,7 @@ add_library(hglrt SHARED
     src/tenors.cpp
     src/testing.cpp
     src/text.cpp
+    src/value_text.cpp
 )
 add_library(hglrt::hglrt ALIAS hglrt)
 target_include_directories(hglrt PUBLIC

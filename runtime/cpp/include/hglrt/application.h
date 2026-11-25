@@ -28,7 +28,7 @@
 
 #include <hglrt/application_host.h>
 #include <hglrt/testing.h>
-#include <hglrt/traces.h>
+#include <hglrt/value_text.h>
 #include <hglrt/values.h>
 
 #include <hgraph/runtime/global_state.h>
@@ -69,7 +69,7 @@ Output run(Store& store, const testing::Entry& entry, const testing::Bounds& bou
     const testing::Run ran = testing::run(detail::seeded(store, entry), bounds, mode);
     std::vector<Publication> published;
     for (const auto& [at, value] : testing::recording<T>(ran).entries) {
-        published.push_back(Publication{detail::instant_text(at), testing::text_of(value)});
+        published.push_back(Publication{detail::instant_text(at), hglrt::text_of(value)});
     }
     return published;
 }
