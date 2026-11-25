@@ -87,6 +87,21 @@ fn mixed(x: list<list<i64, 2>, 2>, y: list<i64, 2>) -> list<list<i64, 2>, 2> =>
 }
 
 #[test]
+fn bare_map_keeps_member_inference_under_a_nested_result_place() {
+    // MAP-2 and FN-17. The place checks the map's result after bare
+    // member inference. A written callback type can take the list whole.
+    let source = r#"module m
+const fn second<T>(flag: bool, value: T) -> T => value
+fn mapped(flags: list<bool, 2>, x: list<i64, 2>) -> list<list<i64, 2>, 2> =>
+"#;
+    rejects(
+        &format!("{source}    map(second, flags, x)"),
+        "operator/operator.no_candidate",
+    );
+    accepts(&format!("{source}    map(second<list<i64, 2>>, flags, x)"));
+}
+
+#[test]
 fn negative_and_disjoined_memberships_supply_no_bare_callback_evidence() {
     // GEN-3: a test of argument types can hold without binding a type.
     let source = r#"module m

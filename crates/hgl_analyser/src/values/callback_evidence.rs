@@ -7,15 +7,14 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use super::Candidate;
 use super::candidates::alternative_outranks;
 use super::dependent_packs::dependent_slot;
-use super::fit::whole;
-use super::inference::{infer, mentions, type_pack};
+use super::fit::{open, whole};
+use super::inference::{infer, mentions, type_pack, unsaid};
 use super::requirements::{conjoined_terms, pack_view};
 use crate::declared::{
     same_type, substitute_with_members, substitute_with_packs, substitute_within, weight,
 };
-use crate::program::{Declaration, Module};
-use crate::syntax::{child, tokens};
-use crate::types::{Argument, ConstantValue, GenericKind, GenericParameter, Signature, Type};
+use crate::syntax::{child, has_token, tokens};
+use crate::types::{Argument, ConstantValue, GenericKind, GenericParameter, Type};
 use crate::{Program, ReflectedPack};
 
 /// Selection evidence only. The enclosing call still receives the original argument.
@@ -33,14 +32,20 @@ impl CallbackEvidence {
 
     /// A known result that fits the open template and every declaration.
     pub(super) fn expected_result(&self, current: &Type) -> Option<&Type> {
-        let (result, rest) = self.results.split_first()?;
+        let result = self.results.iter().find(|result| whole(result))?;
         (!self.is_empty()
             && !whole(current)
             && same_type(current, result) != Some(false)
-            && rest
+            && self
+                .results
                 .iter()
-                .all(|other| same_type(result, other) == Some(true)))
+                .all(|other| same_type(result, other) != Some(false)))
         .then_some(result)
+    }
+
+    /// Result types and partial shapes stated by the receiver or candidate.
+    pub(super) fn result_shapes(&self) -> &[Type] {
+        &self.results
     }
 
     /// Read the receiver's evidence and, in an operator trial, its candidate's.
@@ -83,13 +88,57 @@ impl CallbackEvidence {
                 continue;
             };
             let declared = &unit.declarations[declaration];
-            if let Some(result) = template
-                .result
-                .as_ref()
-                .and_then(|result| required_result(unit, declared, signature, result, &fixed))
-                && !evidence.results.contains(&result)
-            {
-                evidence.results.push(result);
+            let mut found: Vec<_> = signature
+                .generics
+                .iter()
+                .map(|generic| {
+                    fixed
+                        .iter()
+                        .find_map(|(at, value)| (*at == generic.at).then(|| (*value).clone()))
+                })
+                .collect();
+            super::quantifiers::bind(unit, declared, &signature.generics, &[], &mut found);
+            let solved: Vec<_> = signature
+                .generics
+                .iter()
+                .zip(&found)
+                .filter_map(|(generic, value)| Some((generic.at, value.as_ref()?)))
+                .collect();
+            let unknown_type = Argument::Type(Type::Unknown);
+            let unknown_value = Argument::Constant(unsaid());
+            let partial: Vec<_> = signature
+                .generics
+                .iter()
+                .zip(&found)
+                .map(|(generic, value)| {
+                    let unknown = if matches!(generic.kind, GenericKind::Value(_)) {
+                        &unknown_value
+                    } else {
+                        &unknown_type
+                    };
+                    (generic.at, value.as_ref().unwrap_or(unknown))
+                })
+                .collect();
+            let written_at = |node: &SyntaxNode| {
+                let at = Location::new(declared.at.file, node.span());
+                unit.written.iter().find(|ty| ty.at == at).map(|ty| &ty.ty)
+            };
+            let mut record = |result: Type| {
+                if !open(&result) && !evidence.results.contains(&result) {
+                    evidence.results.push(result);
+                }
+            };
+            if let Some(written) = &template.result {
+                let before = substitute_within(written, &fixed);
+                let result = substitute_within(written, &solved);
+                let own: Vec<_> = signature
+                    .generics
+                    .iter()
+                    .map(|generic| generic.at)
+                    .collect();
+                if result != before || !mentions(written, &own) {
+                    record(substitute_within(written, &partial));
+                }
             }
             let Some(target) = &template.named_pack else {
                 continue;
@@ -99,13 +148,8 @@ impl CallbackEvidence {
             else {
                 continue;
             };
-            let type_at = |node: &SyntaxNode| {
-                let at = Location::new(declared.at.file, node.span());
-                unit.written
-                    .iter()
-                    .find(|ty| ty.at == at)
-                    .map(|ty| substitute_within(&ty.ty, &fixed))
-            };
+            let type_at =
+                |node: &SyntaxNode| written_at(node).map(|ty| substitute_within(ty, &solved));
             let mut terms = Vec::new();
             conjoined_terms(
                 &condition,
@@ -120,6 +164,22 @@ impl CallbackEvidence {
             let mut relations = Vec::new();
             for term in terms {
                 if term.kind() == SyntaxKind::ConstraintRelation {
+                    if let Some(result) = &template.result
+                        && has_token(&term, SyntaxKind::EqEq)
+                    {
+                        let mut sides = term.children();
+                        if let (Some(left), Some(right)) = (
+                            sides.next().and_then(|side| written_at(&side)),
+                            sides.next().and_then(|side| written_at(&side)),
+                        ) {
+                            if left == result {
+                                record(substitute_within(right, &partial));
+                            }
+                            if right == result {
+                                record(substitute_within(left, &partial));
+                            }
+                        }
+                    }
                     relations.push((term, None));
                     continue;
                 }
@@ -254,46 +314,6 @@ impl CallbackEvidence {
             .or_else(|| (!nonbinding).then_some(actual))
             .cloned())
     }
-}
-
-/// A positive equality can give a callback result independently of the
-/// surrounding result's provisional binding (GEN-3, FN-17).
-fn required_result(
-    unit: &Module,
-    declaration: &Declaration,
-    signature: &Signature,
-    written: &Type,
-    fixed: &[(Location, &Argument)],
-) -> Option<Type> {
-    let own: Vec<_> = signature
-        .generics
-        .iter()
-        .map(|generic| generic.at)
-        .collect();
-    if !mentions(written, &own) {
-        return whole(written).then(|| written.clone());
-    }
-    let mut found: Vec<_> = own
-        .iter()
-        .map(|&at| {
-            // Trial the equality without a provisional guess for the type
-            // it must prove. Other generics can supply known data to it.
-            if mentions(written, &[at]) {
-                return None;
-            }
-            fixed
-                .iter()
-                .find_map(|(key, value)| (*key == at).then(|| (*value).clone()))
-        })
-        .collect();
-    super::quantifiers::bind(unit, declaration, &signature.generics, &[], &mut found);
-    let solved: Vec<_> = own
-        .iter()
-        .zip(&found)
-        .filter_map(|(&at, value)| Some((at, value.as_ref()?)))
-        .collect();
-    let result = substitute_within(written, &solved);
-    (whole(&result) && !mentions(&result, &own)).then_some(result)
 }
 
 fn selected_type(bindings: &[Option<Argument>], target: usize) -> Option<&Type> {

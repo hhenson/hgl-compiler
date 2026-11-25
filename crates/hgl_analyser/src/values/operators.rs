@@ -411,9 +411,11 @@ impl<'a> Typer<'a> {
         let dependent_pack =
             dependent.map(|index| &unit.dependent_packs[&public.parameters[index].at]);
         let candidate_evidence = dependent.is_some()
-            && candidates.iter().any(|&candidate| {
-                !CallbackEvidence::from_callables(program, [(candidate, &[][..])]).is_empty()
-            });
+            && std::iter::once((operator.module, operator.declaration, public))
+                .chain(candidates.iter().copied())
+                .any(|candidate| {
+                    !CallbackEvidence::from_callables(program, [(candidate, &[][..])]).is_empty()
+                });
         let signature = (operator, public, dependent_pack, candidate_evidence);
         let written =
             self.operator_arguments(name, list, (public, dependent), &options, pack.as_ref());

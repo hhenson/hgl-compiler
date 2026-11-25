@@ -1711,6 +1711,21 @@ impl<'a> Typer<'a> {
             .zip(bound)
             .enumerate()
             .filter(|(_, (given, _))| given.by_function);
+        // A caller can give a candidate's direct callback result its type.
+        // Where the result wraps a bare callback type, first infer that
+        // member from the dependent inputs, then check the enclosing place.
+        let wrapped_result = signature.result.as_ref().and_then(|result| {
+            functions.clone().find_map(|(_, (argument, slot))| {
+                argument.dependent_callback.as_ref()?;
+                let Type::Function(template) = &signature.parameters[slot.parameter()?].ty else {
+                    return None;
+                };
+                let callback = template.result.as_ref()?;
+                let index = bare_parameter(callback, &signature.generics)?;
+                (callback != result && mentions(result, &[signature.generics[index].at]))
+                    .then_some(index)
+            })
+        });
         // A function already known contributes its types in declaration
         // order, before any later argument can decide them (GEN-2).
         // An unresolved callback contributes only what the probe knows.
@@ -1719,7 +1734,7 @@ impl<'a> Typer<'a> {
             signature,
             (module, candidate),
             (given, bound),
-            wanted,
+            (wanted, wrapped_result),
             (&|earlier, later| self.widens(earlier, later), None),
             &mut |_| unreachable!("whole argument inference does not choose result reads"),
         )?;
@@ -1754,7 +1769,7 @@ impl<'a> Typer<'a> {
                     (generic.at, value.as_ref().unwrap_or(unknown))
                 })
                 .collect();
-            let Type::Function(template) = substitute_within(&parameter.ty, &map) else {
+            let Type::Function(mut template) = substitute_within(&parameter.ty, &map) else {
                 return None;
             };
             if given.dependent_callback.is_none() && keeps_function_read(&given.value, &template) {
@@ -1803,9 +1818,12 @@ impl<'a> Typer<'a> {
                         Some((&signature.parameters[slot.parameter()?].ty, &argument.node))
                     }),
                 );
+                if template.result.as_ref() == Some(&Type::Unknown) {
+                    template.result.clone_from(&reading.template.result);
+                }
                 self.operator_function_argument(
                     &given.node,
-                    &reading.template,
+                    &template,
                     &CallbackInputs {
                         supplied: Some(&supplied),
                         excluded: &excluded,
@@ -3514,7 +3532,7 @@ fn instance<'s>(
         signature,
         (module, declaration),
         (given, bound),
-        wanted,
+        (wanted, None),
         (widens, converting),
         choose,
     )?;
@@ -3619,7 +3637,7 @@ fn candidate_bindings(
     signature: &Signature,
     (module, declaration): (usize, &Declaration),
     (given, bound): (&[Given], &[Place]),
-    wanted: &Wanted,
+    (wanted, wrapped_result): (&Wanted, Option<usize>),
     (widens, converting): (
         &dyn Fn(&Type, &Type) -> bool,
         Option<(
@@ -3687,6 +3705,7 @@ fn candidate_bindings(
     // inputs". The `V` of core's `get<V>(store: GlobalState, const key:
     // str) -> V` is the `i64?` that `get<i64?>(global_state, key)`
     // writes (core's CAP-6).
+    let supplied = wrapped_result.map(|index| (index, found[index].clone()));
     let result_fallback =
         signature
             .result
@@ -3695,6 +3714,9 @@ fn candidate_bindings(
             .and_then(|(result, place)| {
                 infer_from_place(result, place, wanted.written, generics, &mut found)
             });
+    if let Some((index, value)) = supplied {
+        found[index] = value;
+    }
     // The generic parameters an argument decided: what the call writes,
     // or its place expects, is not widened (GEN-2).
     let mut by_argument = vec![false; generics.len()];

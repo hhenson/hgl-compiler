@@ -1559,7 +1559,7 @@ fn reflected_arguments(
     let operator_shape = (declared_shape.is_none() && evidence.is_some())
         .then(|| ReferenceShape::new(public, template));
     let shape = declared_shape.or(operator_shape.as_ref());
-    let required_result = inputs.expected_result(node, template);
+    let declared_result = template.result.iter().filter(|ty| !open(ty) && !whole(ty));
     let fixed = public.positional_parameters().count();
     let mut remaining = public
         .positional_parameters()
@@ -1623,7 +1623,11 @@ fn reflected_arguments(
                                     typer,
                                     public,
                                     (parameter, resolved),
-                                    inputs.result_shapes.iter().chain(required_result),
+                                    inputs
+                                        .result_shapes
+                                        .iter()
+                                        .chain(declared_result.clone())
+                                        .chain(evidence.result_shapes()),
                                 )
                             })
                         })
