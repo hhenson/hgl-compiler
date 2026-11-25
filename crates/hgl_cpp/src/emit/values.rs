@@ -62,6 +62,13 @@ impl Emitter<'_> {
             if let Some(at) = instance.pack_use {
                 self.unsupported(at, "a read of a pack as a whole");
             } else {
+                let routes = super::store::Routes::of(
+                    program,
+                    (self.module, index),
+                    &instance.signature,
+                    Some(instance),
+                );
+                let outer = self.routes.replace(routes);
                 self.function(
                     index,
                     Some(&instance.suffix),
@@ -69,6 +76,7 @@ impl Emitter<'_> {
                     &instance.body,
                     &described,
                 );
+                self.routes = outer;
             }
             let piece = self.close();
             self.instanced.push((index, instance.suffix.clone(), piece));
@@ -82,7 +90,11 @@ impl Emitter<'_> {
             signature,
             kind_of(declaration.kind)
         );
+        // TIME-8: a value function's store comes with its caller's route.
+        let routes = super::store::Routes::of(program, (self.module, index), signature, None);
+        let outer = self.routes.replace(routes);
         self.function(index, None, signature, body, &described);
+        self.routes = outer;
     }
 
     /// Writes into the piece the function `index` of the module, or its

@@ -331,6 +331,15 @@ impl Emitter<'_> {
                 |instance| instance.parameter(argument),
             )
         };
+        // TIME-8: the callee's keys that vary on this call's route.
+        let store_route = super::store::CallRoute::of(
+            program,
+            callee,
+            concrete,
+            signature,
+            arguments,
+            self.routes.as_ref(),
+        );
         let given_places: Vec<usize> = runtime_arguments(arguments)
             .filter(|(_, argument)| {
                 parameter_for(argument)
@@ -429,9 +438,21 @@ impl Emitter<'_> {
             let key = store_key.filter(|(_, key)| std::ptr::eq(*key, &argument.value));
             let value = self.expression(scope, &argument.value);
             let value = if let Some((store, key)) = key {
-                let fixed =
-                    (!program.store_key_at_execution(key)).then(|| self.expression(scope, store));
-                super::store::checked(&value, fixed.as_deref())
+                // TIME-8: a key that can differ between the calls of a
+                // cycle is checked here, as the call is evaluated; one
+                // fixed on this route was checked at attachment.
+                let check = if program.store_key_at_execution(key) {
+                    super::store::KeyCheck::Always
+                } else {
+                    self.routes
+                        .as_ref()
+                        .map_or(super::store::KeyCheck::Unless(0), |routes| routes.key(key))
+                };
+                let store = match check {
+                    super::store::KeyCheck::Always => None,
+                    super::store::KeyCheck::Unless(_) => Some(self.expression(scope, store)),
+                };
+                super::store::checked(&value, store.as_deref(), check)
             } else {
                 value
             };
@@ -565,7 +586,10 @@ impl Emitter<'_> {
                 DeclarationKind::NativeCandidate(..)
             )
         });
-        let joined = |given: Vec<String>| {
+        let joined = |mut given: Vec<String>| {
+            if let Some(route) = &store_route {
+                route.forward(&mut given);
+            }
             let argument = |(slot, parameter): (usize, &hgl_analyser::Parameter)| {
                 (!matches!(parameter.ty, Type::Function(_))).then(|| given[slot].as_str())
             };

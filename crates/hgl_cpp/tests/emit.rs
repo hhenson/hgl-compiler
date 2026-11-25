@@ -1330,6 +1330,82 @@ fn every_ordinary_value_is_put_in_the_store() {
     }
 }
 
+/// TIME-8: "Where a function calls itself ... and the key can differ
+/// between the calls on the way round ... the call that uses it fails ...
+/// as it is evaluated", and "a key handed round unchanged is as fixed as in
+/// a function that does not call itself" (CAP-6). Fixedness is per route:
+/// a helper given a key its cycle changes checks it at its operation on
+/// that route only, and attachment checks only the node's fixed keys.
+#[test]
+fn a_key_a_cycle_changes_is_checked_on_its_route_only() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            r#"module m
+const fn save(store: GlobalState, const key: str) { put(store, key, 7) }
+const fn middle(store: GlobalState, const name: str) { save(store, name) }
+const fn recur(store: GlobalState, depth: i64, const key: str) {
+    if depth == 0 { middle(store, key) }
+    else { recur(store, depth - 1, key + ".output") }
+}
+fn both(const key: str, const fixed: str) {
+    inject global_state
+    when {}
+    stop {
+        save(global_state, fixed)
+        middle(global_state, fixed)
+        recur(global_state, 1, key)
+    }
+}
+"#,
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let module = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/mod-m.cpp")
+        .unwrap()
+        .text;
+    let piece = |name: &str| {
+        let start = module.find(name).unwrap_or_else(|| panic!("{name}"));
+        &module[start..start + module[start..].find("\n}\n").unwrap()]
+    };
+    // The helper checks its key where a route says it varies: its second
+    // parameter, bit 1 << 1.
+    assert!(
+        piece("void save(").contains("::hglrt::use_fixed_store_key(store, key, 0x2ull)"),
+        "{module}"
+    );
+    // The cycle hands its changed key on with that bit set; a helper in
+    // between passes on the bit of its own route.
+    assert!(
+        piece("void recur(").contains("middle(store.routed(0x2ull), key)"),
+        "{module}"
+    );
+    assert!(
+        piece("void middle(")
+            .contains("save(store.routed((store.varies(0x2ull) ? 0x2ull : 0ull)), name)"),
+        "{module}"
+    );
+    // The node's own calls set no bit, and attachment checks only the key
+    // that is fixed on every route.
+    let node = &module[module.find("namespace n_::both").unwrap()..];
+    assert!(node.contains("save(global_state, fixed.value())"), "{node}");
+    assert!(
+        node.contains("middle(global_state, fixed.value())"),
+        "{node}"
+    );
+    assert!(
+        node.contains("recur(global_state, 1, key.value())"),
+        "{node}"
+    );
+    assert_eq!(node.matches("prepare_store_key(").count(), 1, "{node}");
+    assert!(node.contains("{ return fixed; }"), "{node}");
+}
+
 /// Where the driver gives the files' names, each statement written outside
 /// a test, a constant's value and a handler's condition are preceded by
 /// the `#line` of their HGL file and line, so that a failure raised there
