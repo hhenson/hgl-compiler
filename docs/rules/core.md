@@ -847,10 +847,14 @@ transpiler: planned
 
 ## RED-5
 
-transpiler: partial
+transpiler: done
 
-- Ordered folds wait for their required zero and visit positions in order. The growing-list target wires a capture-free callback and starts a returning member's callback with fresh state. A change of list length publishes the result again even if its value stays the same. An omitted zero rejects during candidate selection.
-- Left: callbacks that capture values or connections (FN-14, [hgraph#1914](https://github.com/hhenson/hgraph/issues/1914)).
+- Ordered folds wait for their required zero and visit positions in order.
+  An omitted zero rejects during candidate selection.
+- A growing-list callback retains captured values and reads captured connections
+  (FN-14). A captured connection's tick re-evaluates the fold, and a returning
+  member starts its callback with fresh state. A change of list length
+  publishes the result again even if its value stays the same.
 
 ## RED-6
 
