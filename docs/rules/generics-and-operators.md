@@ -168,6 +168,7 @@ analyser: partial
 
 - A call's generic arguments, all or the first of them, for a value function and for the output requested of an operator's candidates; a call that leaves a parameter unresolved rejected
 - When a written generic argument fixes an ordinary public input type, the call checks the argument in that type before trying candidates. A mismatch is reported at the argument (`type.mismatch`, EXPR-5 or FN-17). Candidate-only options and inferred arguments still take part in the normal candidate selection.
+- A checked child used in a result input, directly or as a component of a compound argument, keeps its fixed list extent when the public pattern omits it (ERR-14, TYPE-10).
 - A generic value parameter given by name or after the callee's name, and one a type gives, read as a value of the parameter's type (EXPR-5, `type.mismatch`): a literal, an enum member however it is written (TYPE-7), a constant, a generic value parameter in scope, and a constant expression of those, of numbers, durations, tenors, strings, bools, lists and tuples (`constant`); one that is no compile-time constant, and one whose value this compiler does not work out, is `generic.argument_constant`
 - An operator's generics are resolved from what the call writes, then its place, then its arguments, then a default, and the output so requested is matched as far as it is known
 - A known `set<str>` supplies a generic value from a declaration default, a call's configuration, or a named constant (FN-8). Its members give it one canonical identity in any written order (UNIT-13).

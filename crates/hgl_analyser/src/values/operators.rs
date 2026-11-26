@@ -19,9 +19,7 @@ use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
 };
 use super::expressions::written_null;
-use super::fit::{
-    checked_child_result, fitted_input_pattern, is_integer_literal, negated, open, whole,
-};
+use super::fit::{fitted_input_pattern, is_integer_literal, negated, open, whole};
 use super::function_arguments::CallbackInputs;
 use super::inference::{
     ExplicitGenerics, bare_parameter, defaulted_argument, infer, infer_from_place, mentions,
@@ -1929,19 +1927,7 @@ impl<'a> Typer<'a> {
                 // as a list. The candidate still decides whether it can
                 // take that connection (FN-12).
                 if !self.lifted_window(&ty, true, &value, Takes::Parameters) {
-                    // ERR-14: a result slot can take a checked child whole.
-                    // Match that form with its concrete list extents before
-                    // fitting. Candidate selection still reads its own form.
-                    let checked = if matches!(&ty, Type::Result { error, .. } if **error == Type::Error)
-                    {
-                        checked_child_result(&value)
-                            .and_then(|result| fitted_input_pattern(&result.ty, &ty))
-                    } else {
-                        None
-                    };
-                    let ty = checked
-                        .or_else(|| fitted_input_pattern(&value.ty, &ty))
-                        .unwrap_or(ty);
+                    let ty = fitted_input_pattern(&value, &ty).unwrap_or(ty);
                     let place = format!("the parameter `{}`", parameter.name);
                     self.fit_input(value, &ty, &place);
                 }

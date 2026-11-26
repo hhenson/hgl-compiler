@@ -31,7 +31,7 @@ pub(super) enum ExpressionFit {
 }
 
 impl ExpressionFit {
-    pub(super) fn input_type(self, supplied: &Type, expected: &Type) -> Option<Type> {
+    pub(super) fn input_type(self, supplied: &Expr, expected: &Type) -> Option<Type> {
         match self {
             Self::Value => None,
             Self::InputPattern => fitted_input_pattern(supplied, expected),
@@ -875,7 +875,7 @@ impl<'a> Typer<'a> {
         place: &str,
         fit: ExpressionFit,
     ) -> Expr {
-        let pattern_type = fit.input_type(&value.ty, expected);
+        let pattern_type = fit.input_type(&value, expected);
         self.fit(value, pattern_type.as_ref().unwrap_or(expected), place)
     }
 

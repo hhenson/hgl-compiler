@@ -245,6 +245,49 @@ fn written_operator_inputs_keep_checked_child_result_extents() {
     );
 }
 
+/// ERR-14 and TYPE-10 also apply to a checked child inside a compound
+/// operand where GEN-8 fixes the element type of a public result pattern.
+#[test]
+fn written_operator_inputs_keep_compound_checked_child_results() {
+    let checked = module(concat!(
+        "operator pair<T>(v: tuple<i64, result<list<T>, error>>) -> i64\n",
+        "impl const fn pair(v: tuple<i64, result<list<i64, 3>, error>>) -> i64 => 1\n",
+        "operator sequence<T>(v: list<result<list<T>, error>>) -> i64\n",
+        "impl const fn sequence(v: list<result<list<i64, 3>, error>, 2>) -> i64 => 2\n",
+        "fn good(rows: list<list<i64, 3>, 2>, index: i64) -> i64 {\n",
+        "    when {\n",
+        "        let row = rows[index]\n",
+        "        let explicit = pair<i64>((3, rows[index]))\n",
+        "        let inferred = pair((3, rows[index]))\n",
+        "        let alias = pair<i64>((3, row))\n",
+        "        let entries = sequence<i64>([rows[index], row])\n",
+        "        return explicit + inferred + alias + entries\n",
+        "    }\n",
+        "}\n",
+        "fn wrong_type(rows: list<list<i64, 3>, 2>, index: i64) -> i64 {\n",
+        "    when { return pair<str>((3, rows[index])) }\n",
+        "}\n",
+        "fn wrong_size(rows: list<list<i64, 2>, 2>, index: i64) -> i64 {\n",
+        "    when { return pair<i64>((3, rows[index])) }\n",
+        "}\n",
+        "const fn unwrapped(row: list<i64, 3>) -> i64 => pair<i64>((3, row))\n",
+    ));
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "type/type.mismatch",
+            "operator/operator.no_candidate",
+            "type/type.mismatch",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 /// EXPR-17 and TYPE-10: when an operator supplies a public pattern,
 /// the comprehension fits each entry without losing its fixed extent.
 #[test]

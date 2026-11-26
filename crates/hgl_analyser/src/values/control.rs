@@ -314,7 +314,7 @@ impl<'a> Typer<'a> {
                         // A branch of a graph's `if` or `switch` gives
                         // its connection across a reference as the
                         // place it stands in does (TIME-10).
-                        let pattern_type = fit.input_type(&value.ty, expected);
+                        let pattern_type = fit.input_type(&value, expected);
                         let value = self.fit_input(
                             value,
                             pattern_type.as_ref().unwrap_or(expected),
@@ -1013,7 +1013,7 @@ impl<'a> Typer<'a> {
         self.unrolled_range_bindings.truncate(range_scope);
         let value = match element {
             Some(element) => {
-                let pattern_type = fit.input_type(&value.ty, element);
+                let pattern_type = fit.input_type(&value, element);
                 self.fit_input(
                     value,
                     pattern_type.as_ref().unwrap_or(element),
