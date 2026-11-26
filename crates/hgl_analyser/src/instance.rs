@@ -230,7 +230,7 @@ impl Program {
         let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
             return default.clone();
         };
-        let type_packs = if default.has_type_query() {
+        let type_packs = if default.needs_type_specialization() {
             type_packs
         } else {
             &[]
@@ -276,7 +276,7 @@ impl Program {
         };
         // UNIT-7: a default has no formal parameters in scope. Run the
         // same membership-based selection here as in a specialized body.
-        let mut body = if default.has_type_query() && !generics.is_empty() {
+        let mut body = if default.needs_type_specialization() && !generics.is_empty() {
             crate::values::reread_parameter_default(
                 self,
                 operator,

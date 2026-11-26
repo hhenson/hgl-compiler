@@ -402,3 +402,24 @@ test layout_in_callback_only {
     assert callback_label(2) == 17
     assert callback_label("text") == 17
 }
+
+# UNIT-8, TYPE-18: only an omitted argument uses the selected default. Its
+# generic producer must be instantiated even when no ordinary body calls it.
+const BASE_LABEL: Type = type(cold_sample(cold_make<i64>()))
+struct DefaultSource<T> {
+    item: T?
+    label: Tagged<type(cold_sample(cold_make<T>()))>
+}
+const fn make_default_source<T>() -> DefaultSource<T> =>
+    DefaultSource<T>(label: Tagged<type(cold_sample(cold_make<T>()))>(value: 17))
+const fn default_label<T>(x: T, label: Tagged<BASE_LABEL> = make_default_source<T>().label) -> i64 =>
+    label.value
+const fn forwarded_label<T>(x: T) -> i64 => default_label(x)
+const fn dependent_place<T>(x: T, label: Tagged<type(cold_sample(cold_make<T>()))> = Tagged<BASE_LABEL>(value: 19)) -> i64 =>
+    label.value
+test ordinary_default_field_fit {
+    assert forwarded_label(2) == 17
+    assert default_label("s", Tagged<BASE_LABEL>(value: 23)) == 23
+    assert dependent_place(2) == 19
+    assert dependent_place("s", Tagged<type((true, false))>(value: 29)) == 29
+}

@@ -1546,3 +1546,52 @@ test fits {{
         }
     }
 }
+
+/// UNIT-8, TYPE-18: when a generic call omits a parameter, either the
+/// supplied default or its receiving type can depend on a selected field tag.
+#[test]
+fn omitted_defaults_fit_the_concrete_field_identity_on_both_sides() {
+    let definitions = r#"module m
+const INTEGER: Type = type(1)
+const fn rows<T>() -> list<T> => []
+operator pick<A,R>(value: A) -> R
+impl const fn pick<A>(value: A) -> i64 => 1
+impl const fn pick(value: list<str>) -> bool => true
+struct Stamp<const Kind: Type> { id: i64 }
+struct Frame<T> { item: T?
+    tag: Stamp<type(pick(rows<T>()))> }
+const fn make<T>() -> Frame<T> => Frame<T>(tag: Stamp<type(pick(rows<T>()))>(id: 17))
+const fn read<T>(x: T, v: Stamp<INTEGER> = make<T>().tag) -> i64 => v.id
+const fn place<T>(x: T, v: Stamp<type(pick(rows<T>()))> = Stamp<INTEGER>(id: 17)) -> i64 => v.id
+const fn forward<T>(x: T) -> i64 => read(x)
+const fn fixed(stamp: Stamp<INTEGER>) -> i64 => stamp.id
+const fn invoke(f: const fn(i64) -> i64) -> i64 => f(1)
+const fn nested<T>(x: T, v: i64 = invoke(fn(n: i64) => fixed(make<T>().tag))) -> i64 => v
+"#;
+    for (call, valid) in [
+        ("forward(2)", true),
+        (r#"forward("s")"#, false),
+        ("nested(2)", true),
+        (r#"nested("s")"#, false),
+        (r#"nested("s", 17)"#, true),
+        ("place(2)", true),
+        (r#"place("s")"#, false),
+        (r#"read("s", Stamp<INTEGER>(id: 17))"#, true),
+        (r#"place("s", Stamp<type(true)>(id: 17))"#, true),
+        (r#"read("s", make<str>().tag)"#, false),
+    ] {
+        let source = format!("{definitions}\ntest use_it {{ assert {call} == 17 }}\n");
+        let checked = check(&[("m.hgl", &source)]);
+        if valid {
+            assert_eq!(
+                checked.summary(),
+                Vec::<String>::new(),
+                "{call}\n{}",
+                checked.report
+            );
+        } else {
+            assert_eq!(checked.findings.len(), 1, "{call}\n{}", checked.report);
+            assert_eq!(checked.findings[0].code, "type/type.mismatch");
+        }
+    }
+}

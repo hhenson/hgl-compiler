@@ -1203,16 +1203,14 @@ impl Instances {
                 depths,
             });
         }
-        // The declaration's open default was already visited. Here it may
-        // ask for a concrete instance once the operator's arguments are placed.
-        if let Callee::Candidate {
-            operator_generics, ..
-        } = callee
-            && !operator_generics.is_empty()
+        // A taken default can introduce concrete calls and layouts that
+        // do not exist in the declaration's open expression (UNIT-8).
+        if !generics.is_empty()
+            || matches!(callee, Callee::Candidate { operator_generics, .. } if !operator_generics.is_empty())
         {
             for (index, parameter) in signature.parameters.iter().enumerate() {
                 let key = (*module, *declaration, index);
-                if !parameter.configuration
+                if !(parameter.has_default || parameter.configuration)
                     || arguments
                         .iter()
                         .any(|argument| argument.parameter == Some(index))

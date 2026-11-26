@@ -4933,7 +4933,7 @@ pub(super) struct Condition<'c> {
 
 /// A concrete application names no type or value parameter and uses
 /// only known constant values, including those nested inside its types.
-fn resolved_default_argument(argument: &Argument) -> bool {
+pub(super) fn resolved_default_argument(argument: &Argument) -> bool {
     fn known(value: &ConstantValue) -> bool {
         match value {
             ConstantValue::Member(member) => member.of.is_some(),
