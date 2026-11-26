@@ -3196,6 +3196,45 @@ impl Key {
             }
         }
     }
+
+    /// A braced entry prefers a configuration parameter of this candidate
+    /// (EXPR-10). Otherwise a public name maps to its candidate slot, and
+    /// a candidate-only option uses its own name (GEN-6).
+    pub(super) fn named_candidate_parameter(
+        &self,
+        signature: &Signature,
+        public: &Signature,
+        mapping: &[usize],
+    ) -> Option<usize> {
+        let name = match self {
+            Self::Name(name) | Self::Brace(name) | Self::Configuration(name) => name,
+            _ => return None,
+        };
+        if matches!(self, Self::Configuration(_))
+            && let Some(index) = signature
+                .parameters
+                .iter()
+                .position(|parameter| parameter.configuration && parameter.name == *name)
+        {
+            return Some(index);
+        }
+        let matches = |parameter: &crate::types::Parameter| {
+            !parameter.configuration && parameter.pack.is_none() && parameter.name == *name
+        };
+        public
+            .parameters
+            .iter()
+            .position(matches)
+            .map(|index| mapping[index])
+            .or_else(|| {
+                signature
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .find(|(index, option)| !mapping.contains(index) && matches(option))
+                    .map(|(index, _)| index)
+            })
+    }
 }
 
 /// Whether a candidate admits a call.
@@ -3504,24 +3543,6 @@ pub(super) fn bound<'g>(
         .positional_parameters()
         .map(|(index, _)| index)
         .collect();
-    let ordinary_named = |name: &str| {
-        let matches = |parameter: &crate::types::Parameter| {
-            !parameter.configuration && parameter.pack.is_none() && parameter.name == name
-        };
-        public
-            .parameters
-            .iter()
-            .position(matches)
-            .map(|index| mapping[index])
-            .or_else(|| {
-                signature
-                    .parameters
-                    .iter()
-                    .enumerate()
-                    .find(|(index, option)| !mapping.contains(index) && matches(option))
-                    .map(|(index, _)| index)
-            })
-    };
     let given = given.into_iter();
     let mut places = Vec::with_capacity(given.size_hint().0);
     for given in given {
@@ -3542,16 +3563,11 @@ pub(super) fn bound<'g>(
                     Place::Pack(index, captured[index])
                 }
             }
-            Key::Configuration(name) => {
-                // EXPR-10: another candidate may declare configuration
-                // of this name. This one may instead take an ordinary input.
-                let index = signature
-                    .parameters
-                    .iter()
-                    .position(|parameter| parameter.configuration && parameter.name == *name)
-                    .or_else(|| ordinary_named(name))?;
-                Place::Parameter(index)
-            }
+            Key::Configuration(_) => Place::Parameter(
+                given
+                    .key
+                    .named_candidate_parameter(signature, public, &mapping)?,
+            ),
             Key::Generic(_) => {
                 if let Some(index) = given.key.generic_parameter(signature) {
                     Place::Generic(index)
@@ -3561,8 +3577,11 @@ pub(super) fn bound<'g>(
                     return None;
                 }
             }
-            Key::Name(name) | Key::Brace(name) => {
-                if let Some(index) = ordinary_named(name) {
+            Key::Name(_) | Key::Brace(_) => {
+                if let Some(index) = given
+                    .key
+                    .named_candidate_parameter(signature, public, &mapping)
+                {
                     Place::Parameter(index)
                 } else {
                     let index = named_pack?;

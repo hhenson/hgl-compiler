@@ -1359,12 +1359,17 @@ impl<'a> Typer<'a> {
                         return false;
                     }
                     candidates.iter().filter_map(|&(_, _, candidate)| {
-                        // GEN-6: a named option can exist only in the
-                        // candidate. Its own slot supplies the FN-17 template.
+                        // GEN-6: each candidate supplies the FN-17 template
+                        // for its own options, including after the public
+                        // positional slots and in a braced entry another
+                        // candidate treats as configuration (EXPR-10).
                         let index = match public_slot {
                             Some(slot) => public.candidate_parameters(candidate).nth(slot).flatten(),
-                            None if key.name().is_some() => key.public_parameter(candidate),
-                            None => None,
+                            None if matches!(key, Key::Position(_)) => key.public_parameter(candidate),
+                            None => {
+                                let mapping = public.candidate_parameters(candidate).collect::<Option<Vec<_>>>()?;
+                                key.named_candidate_parameter(candidate, public, &mapping)
+                            }
                         }?;
                         Some(&candidate.parameters[index].ty)
                     }).any(|ty| {
