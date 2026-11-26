@@ -2344,6 +2344,43 @@ fn a_capability_is_made_before_the_initializers_that_read_it() {
     assert!(made < read, "{start}");
 }
 
+/// FMT-9: a graph format call samples the injected clock only when requested.
+#[test]
+fn graph_format_reads_the_clock_once_for_repeated_places() {
+    for (pattern, expected, reads) in [
+        ("{clock}", "7", 0),
+        (
+            "{clock} {engine_time:%S.6} {engine_time:%S.6}",
+            "7 00.000001 00.000001",
+            1,
+        ),
+    ] {
+        let source = r#"module quote
+fn describe(value: i64) -> str => format{require_valid: false}("PATTERN", clock: value)
+test renders { assert eval describe(value: [7]) == ["EXPECTED"] }"#
+            .replace("PATTERN", pattern)
+            .replace("EXPECTED", expected);
+        let emitted = emit_with(&[("quote.hgl", &source)], &hgl_cpp::runtime::provides);
+        assert_eq!(emitted.blocked("renders"), None);
+        let unit = emitted
+            .output
+            .files
+            .iter()
+            .find(|file| file.path == "modules/mod-core.cpp")
+            .expect("the graph format node");
+        let render = unit
+            .text
+            .lines()
+            .find(|line| line.contains("format_text_") && line.contains("out_.set("))
+            .expect("the graph format return expression");
+        assert_eq!(
+            render.matches(".evaluation_time()").count(),
+            reads,
+            "{pattern}"
+        );
+    }
+}
+
 /// TST-5, CEVAL-1: a temporal input given a stored eval trace is wired
 /// to the replay of its recording.
 #[test]

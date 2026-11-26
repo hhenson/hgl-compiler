@@ -72,7 +72,7 @@ impl Typer<'_> {
         let Some(parts) = self.checked_places(&pattern.value, &text) else {
             return;
         };
-        let cycle_time = renderer.cycle_time_argument(arguments);
+        let clock = renderer.clock_argument(arguments);
         let mut used = vec![false; arguments.len()];
         let mut conversions = vec![None; arguments.len()];
         let mut next_position = 0;
@@ -83,10 +83,7 @@ impl Typer<'_> {
             };
             // TST-3 temporarily reads an eval's target as composition,
             // but its trace cells and const operands remain value code.
-            if place.name == "engine_time"
-                && cycle_time.is_none()
-                && (!self.graph || self.value_code)
-            {
+            if place.name == "engine_time" && clock.is_none() && (!self.graph || self.value_code) {
                 missing = true;
                 self.format_fault(
                     &pattern.value,

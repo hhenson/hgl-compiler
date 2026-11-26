@@ -84,11 +84,11 @@ impl Emitter<'_> {
         let output = temporary("format_text", self.temporary());
         let _ = write!(statements, "::hglrt::str {output}; ");
         let mut wall_time = None;
-        // The graph format node passes its cycle time as ordinary data.
+        // The graph format node passes its injected Clock (CAP-3).
         // A lifted public format call has an output endpoint for that cycle.
         let cycle_time = renderer
-            .cycle_time_argument(arguments)
-            .map(|index| held[index].clone())
+            .clock_argument(arguments)
+            .map(|index| format!("{}.evaluation_time()", held[index]))
             .or_else(|| {
                 (self.kind() == Some(Kind::Lifted)).then(|| format!("{OUT}.evaluation_time()"))
             });

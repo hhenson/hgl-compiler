@@ -321,14 +321,14 @@ fn digits(text: &str) -> Option<&str> {
 pub struct Renderer<'a> {
     /// Signature used to locate the pattern, value packs and options.
     pub signature: &'a Signature,
-    /// The private graph entry takes its evaluation time as ordinary data.
-    cycle_time_slot: Option<usize>,
+    /// The private graph entry takes the graph node’s injected Clock (CAP-3).
+    clock_slot: Option<usize>,
 }
 
 impl Renderer<'_> {
     /// Index of the clock supplied by HGL, independent of named argument order.
-    pub fn cycle_time_argument(&self, arguments: &[Argument]) -> Option<usize> {
-        let slot = self.cycle_time_slot?;
+    pub fn clock_argument(&self, arguments: &[Argument]) -> Option<usize> {
+        let slot = self.clock_slot?;
         arguments
             .iter()
             .position(|argument| argument.parameter == Some(slot) && argument.pack.is_none())
@@ -347,34 +347,33 @@ pub fn renderer<'a>(program: &'a Program, callee: &Callee) -> Option<Renderer<'a
     let Detail::Callable(signature) = &owner.details[declaration] else {
         return None;
     };
-    let cycle_time_slot = match (declared.name.as_str(), declared.kind) {
+    let clock_slot = match (declared.name.as_str(), declared.kind) {
         ("format", DeclarationKind::NativeCandidate(Role::Value, _)) => None,
-        ("render_graph_values", DeclarationKind::NativeFunction(Role::Value))
+        ("_format", DeclarationKind::NativeFunction(Role::Value))
             if !declared.exported
                 && !declared.test_only
                 && owner.files[declared.file].part.as_deref() == Some("formatting") =>
         {
-            Some(signature.parameters.iter().position(|p| {
-                p.name == "engine_time"
-                    && p.pack.is_none()
-                    && p.ty == Type::Scalar(Scalar::Datetime)
-            })?)
+            let clock = program.capability_type("clock")?;
+            Some(
+                signature
+                    .parameters
+                    .iter()
+                    .position(|p| p.pack.is_none() && p.ty == clock)?,
+            )
         }
         _ => return None,
     };
     Some(Renderer {
         signature,
-        cycle_time_slot,
+        clock_slot,
     })
 }
 
 /// The signature of Core's public native value candidate, when selected.
 pub fn value_signature<'a>(program: &'a Program, callee: &Callee) -> Option<&'a Signature> {
     let renderer = renderer(program, callee)?;
-    renderer
-        .cycle_time_slot
-        .is_none()
-        .then_some(renderer.signature)
+    renderer.clock_slot.is_none().then_some(renderer.signature)
 }
 
 /// An argument supplied to the requested declaration slot, excluding packs.

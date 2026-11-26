@@ -1042,13 +1042,13 @@ analyser: partial
 - Value calls admit `{wall_time}` and reject `{engine_time}` with `format.argument`. A marked place accepts `Marked<T>`.
 - A native call from a graph admits `{engine_time}` as a reserved datetime place; it consumes no supplied argument and uses datetime's checked specifiers.
 - Trace cells and const arguments supplied to an eval remain value code and reject `{engine_time}` (TST-3).
-- Core's private rendering call takes the graph node's evaluation time as an explicit datetime. The same checker validates the constant pattern for both rendering paths.
+- Core's private rendering call takes the graph node's injected `Clock`. The same checker validates the constant pattern for both rendering paths.
 
 transpiler: partial
 
 - `{wall_time}` reads the process clock. A marked place writes the configured tick prefix when its argument ticked.
 - A lifted native format call reads `{engine_time}` from its node's output endpoint, once per call, with the checked pattern retained through lifting.
-- The prototype renders the explicit evaluation time and scalar tick marks with the existing value formatter. Graph-start ticks and trigger-only publication remain open (#434).
+- The private formatter reads the supplied clock's evaluation time once when the pattern requests it, and renders scalar tick marks with the existing value formatter. Graph-start ticks and trigger-only publication remain open (#434).
 
 ## DBG-1
 

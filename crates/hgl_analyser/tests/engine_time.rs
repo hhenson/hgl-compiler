@@ -93,13 +93,12 @@ fn only_cores_private_declaration_receives_the_renderer_clock() {
     let checked = common::check(&[(
         "m.hgl",
         r#"module m part formatting
-native const fn render_graph_values(const fmt_str: str, engine_time: datetime) -> str
-const fn local() -> str => render_graph_values("{", @2026-01-01T00:00:00Z)"#,
+native const fn _format(const fmt_str: str, clock: Clock) -> str
+const fn local(clock: Clock) -> str => _format("{", clock)"#,
     )]);
     assert!(checked.findings.is_empty(), "{}", checked.report);
 
-    let checked =
-        module(r#"const fn external() -> str => render_graph_values("{}", @2026-01-01T00:00:00Z)"#);
+    let checked = module(r#"const fn external(clock: Clock) -> str => _format("{}", clock)"#);
     assert_eq!(checked.findings.len(), 1, "{}", checked.report);
     assert_eq!(checked.findings[0].code, "name/name.unknown");
 }
