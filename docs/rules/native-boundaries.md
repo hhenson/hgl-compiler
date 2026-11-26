@@ -20,7 +20,8 @@ analyser: partial
 
 - An implementation completes one declaration of its name and role; duplicates rejected
 - A native implementation's known parameter and result types, parameter forms and order, `var` and `ref` marks, and generic kinds match one declaration of its name and role. For a native candidate, other candidates of that operator are alternatives.
-- Left: equivalence of written constraints and unresolved type arguments, reflected pack types, and provider selection (#517)
+- A finite membership of a generic type parameter must admit the same types in the declaration and its implementation part. The parameter matches by position and membership order is irrelevant (GEN-3, GEN-8).
+- Left: general equivalence of written constraints, unresolved type arguments, reflected pack types, and provider selection (#517).
 
 ## NATIVE-3
 

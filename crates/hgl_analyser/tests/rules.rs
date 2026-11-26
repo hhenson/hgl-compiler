@@ -1191,6 +1191,46 @@ fn native_parts_keep_accepted_spellings_of_a_signature() {
     assert_eq!(checked.summary(), [] as [&str; 0]);
 }
 
+/// NATIVE-2 compares finite type memberships for both functions and candidates.
+/// A rename or reorder keeps the contract, but a changed set or slot does not.
+#[test]
+fn native_parts_match_finite_type_constraints() {
+    let checked = check(&[
+        (
+            "interface.hgl",
+            concat!(
+                "module m\n",
+                "native const fn wider<T>(value: T) -> T requires T in {i64}\n",
+                "native const fn narrower<T>(value: T) -> T requires T in {i64, f64}\n",
+                "native const fn slot<T, U>(a: T, b: U) -> T requires T in {i64}\n",
+                "native const fn reordered<T>(value: T) -> T requires T in {i64, f64}\n",
+                "operator pick<T>(value: T) -> T\n",
+                "native impl const fn pick<T>(value: T) -> T requires T in {i64}\n",
+            ),
+        ),
+        (
+            "provider.hgl",
+            concat!(
+                "module m part provider\n",
+                "native const fn wider<U>(value: U) -> U requires U in {i64, f64} {}\n",
+                "native const fn narrower<U>(value: U) -> U requires U in {i64} {}\n",
+                "native const fn slot<A, B>(a: A, b: B) -> A requires B in {i64} {}\n",
+                "native const fn reordered<U>(value: U) -> U requires U in {f64, i64} {}\n",
+                "native impl const fn pick<U>(value: U) -> U requires U in {f64} {}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "provider.hgl:2:17 name/native.missing_declaration NATIVE-2",
+            "provider.hgl:3:17 name/native.missing_declaration NATIVE-2",
+            "provider.hgl:4:17 name/native.missing_declaration NATIVE-2",
+            "provider.hgl:6:22 name/native.missing_declaration NATIVE-2",
+        ]
+    );
+}
+
 /// NATIVE-2 compares known callback types. A symbolic size belongs to
 /// the signature that declares it and leaves that comparison deferred.
 #[test]

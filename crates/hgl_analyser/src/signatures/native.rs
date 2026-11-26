@@ -2,9 +2,11 @@
 //! Declaration collection has already checked name and role.
 
 use hgl_diagnostics::{Category, Diagnostics};
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
-use crate::declared::{same_type, substitute_within};
-use crate::program::{DeclarationKind, Program};
+use crate::declared::{names_parameter, same_type, substitute_within};
+use crate::program::{Declaration, DeclarationKind, Module, Program};
+use crate::syntax::{child, tokens};
 use crate::types::{Argument, Detail, GenericKind, Signature, Type};
 use crate::{codes, error};
 
@@ -48,7 +50,11 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) {
                 let (true, Detail::Callable(contract)) = (completes, detail) else {
                     continue;
                 };
-                let Some(reason) = difference(contract, written) else {
+                let reason = difference(contract, written).or_else(|| {
+                    finite_constraints_differ(module, (public, contract), (part, written))
+                        .then(|| "this declaration admits different types in its constraint".into())
+                });
+                let Some(reason) = reason else {
                     mismatch = None;
                     break;
                 };
@@ -74,8 +80,7 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) {
 }
 
 /// A known difference between the implementation and a public signature.
-/// Constraints still need their own equivalence check. Defaults belong to the
-/// public declaration and are outside this comparison.
+/// Defaults belong to the public declaration and are outside this comparison.
 fn difference(contract: &Signature, written: &Signature) -> Option<String> {
     if contract.generics.len() != written.generics.len() {
         return Some("this declaration takes a different number of generic parameters".into());
@@ -188,4 +193,75 @@ fn difference(contract: &Signature, written: &Signature) -> Option<String> {
         (Some(public), None) => Some(format!("this declaration returns `{public}`")),
         _ => None,
     }
+}
+
+/// NATIVE-2: compare finite type memberships by generic parameter position
+/// (GEN-8) and the types each set admits (GEN-3).
+fn finite_constraints_differ(
+    module: &Module,
+    public: (&Declaration, &Signature),
+    part: (&Declaration, &Signature),
+) -> bool {
+    let Some((public_slot, public_types)) = finite_membership(module, public) else {
+        return false;
+    };
+    let Some((part_slot, part_types)) = finite_membership(module, part) else {
+        return false;
+    };
+    let excludes_a_type = |a: &[&Type], b: &[&Type]| {
+        a.iter()
+            .any(|ty| b.iter().all(|other| same_type(ty, other) == Some(false)))
+    };
+    public_slot != part_slot
+        || excludes_a_type(&public_types, &part_types)
+        || excludes_a_type(&part_types, &public_types)
+}
+
+/// Read the simplest finite constraint: one generic type parameter in a
+/// set of concrete types. Other constraint shapes stay with the general
+/// equivalence check.
+fn finite_membership<'a>(
+    module: &'a Module,
+    (declaration, signature): (&Declaration, &Signature),
+) -> Option<(usize, Vec<&'a Type>)> {
+    let requires = child(&declaration.syntax, SyntaxKind::RequiresClause)?;
+    let relation = requires.children().next()?;
+    if relation.kind() != SyntaxKind::ConstraintRelation
+        || !tokens(&relation).any(|token| token.text() == "in")
+    {
+        return None;
+    }
+    let file = module.files[declaration.file].file;
+    let written_at = |node: &SyntaxNode| {
+        let start = node.span().start;
+        module
+            .written
+            .iter()
+            .find(|written| written.at.file == file && written.at.span.start == start)
+            .map(|written| &written.ty)
+    };
+    let mut operands = relation.children();
+    let Type::Parameter { at, .. } = written_at(&operands.next()?)? else {
+        return None;
+    };
+    let slot = signature
+        .generics
+        .iter()
+        .position(|generic| generic.at == *at)?;
+    let set = operands.next()?;
+    if set.kind() != SyntaxKind::ConstraintSet {
+        return None;
+    }
+    let types = set
+        .children()
+        .map(|member| {
+            let ty = written_at(&member)?;
+            (!names_parameter(ty)
+                && !ty.any_part(&|part| matches!(part, Type::Unknown), &|c| {
+                    c.value.key().is_none()
+                }))
+            .then_some(ty)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!types.is_empty()).then_some((slot, types))
 }
