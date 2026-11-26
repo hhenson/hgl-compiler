@@ -17,7 +17,7 @@ use super::children::ChildOrigin;
 use super::constants::generic_default;
 use super::dependent_packs::{PackTypes, dependent_slot};
 use super::evals::{trace_input_type, trace_pack_type};
-use super::expressions::holds_block;
+use super::expressions::has_ordered_block;
 use super::fit::{not_null, open, whole};
 use super::forwarded_packs::spread_operands;
 use super::inference::{
@@ -962,7 +962,7 @@ impl<'a> Typer<'a> {
         if self
             .call_entries(list)
             .iter()
-            .any(|(_, _, node)| holds_block(node))
+            .any(|(_, _, node)| has_ordered_block(node))
         {
             return None;
         }
@@ -2814,6 +2814,11 @@ mod tests {
             "fn ap<T>(f: fn(T) -> T, x: T) -> T => f(x)\n",
             "fn later(n: i64) -> i64 { when { return n + 10 } }\n",
         );
+        let pair_tr = concat!(
+            "const fn ap<T,R>(f: const fn(T) -> R, x: T) -> R => f(x)\n",
+            "fn ap<T,R>(f: fn(T) -> R, x: T) -> R => f(x)\n",
+            "fn later(n: i64) -> i64 { when { return n + 10 } }\n",
+        );
         let nonpair_r = concat!(
             "fn ap<R>(f: fn(i64) -> R, x: i64) -> R => f(x)\n",
             "fn later(n: i64) -> i64 { when { return n + 10 } }\n",
@@ -2825,12 +2830,20 @@ mod tests {
             let pure = (0..depth).fold("1".to_string(), |acc, i| {
                 format!("ap(fn(n{i}) => n{i} + {acc}, 1)")
             });
+            let blocked = (0..depth).fold("1".to_string(), |inner, i| {
+                format!("ap(fn(n{i}) => later(n{i}) + {inner}, {{ 1 }})")
+            });
+            let blocked_first = (0..depth).fold("1".to_string(), |inner, i| {
+                format!("ap(x: {{ 1 }}, f: fn(n{i}) => n{i} + {inner})")
+            });
             for (name, header, expr, max_probes, max_reads) in [
                 ("pair_r", pair_r, &later, depth, 2 * depth),
                 ("pair_t", pair_t, &later, depth, 2 * depth),
                 ("pure_pair_r", pair_r, &pure, depth, 3 * depth),
                 ("pure_pair_t", pair_t, &pure, depth, 3 * depth),
                 ("nonpair_r", nonpair_r, &later, 0, depth),
+                ("later_block", pair_tr, &blocked, depth, 2 * depth),
+                ("earlier_block", pair_tr, &blocked_first, depth, 3 * depth),
             ] {
                 let body = format!("{header}fn g(tick: i64) -> i64 => tick + {expr}\n");
                 let (diagnostics, _, probes, reads) = check_with_read_counts(&body);

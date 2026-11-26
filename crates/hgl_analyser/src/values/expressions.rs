@@ -1289,6 +1289,23 @@ pub(super) fn holds_block(node: &SyntaxNode) -> bool {
         .any(|part| part.kind() == SyntaxKind::Block)
 }
 
+/// CTRL-10: a block consisting only of literal reads has no locals,
+/// assignment, return or captures to replay. Other block arguments keep
+/// their source-ordered reading when a call is probed or inferred.
+pub(super) fn has_ordered_block(node: &SyntaxNode) -> bool {
+    node.descendants()
+        .filter(|part| part.kind() == SyntaxKind::Block)
+        .any(|block| {
+            block.children().any(|stmt| {
+                stmt.kind() != SyntaxKind::ExprStmt
+                    || !stmt
+                        .children()
+                        .next()
+                        .is_some_and(|expr| ungrouped(expr).kind() == SyntaxKind::Literal)
+            })
+        })
+}
+
 /// True for the literal `null`, in parentheses or not.
 pub(super) fn written_null(node: &SyntaxNode) -> bool {
     let node = &ungrouped(node.clone());

@@ -211,3 +211,19 @@ test nested_callbacks_across_lexical_environments {
     assert eval generic_nested(tick: [1]) == [142]
     assert eval value_callback_pair_capture(tick: [1, 5]) == [12, 60]
 }
+
+# GEN-2, FN-17: an unfinished callback input does not discard its
+# independent result or its other, explicitly typed input.
+const fn result_first<T, R>(f: const fn(T) -> R, sample: R, x: T) -> R => f(x)
+const fn annotated_first<T, U>(f: const fn(T, U) -> i64, sample: T, x: U) -> i64 => f(sample, x)
+const fn shared_type<T>(f: const fn(T) -> T, x: T) -> i64 => 8
+test callback_evidence_in_declared_order {
+    let value = result_first(x: 9, sample: 4, f: fn(n) => 3.5)
+    assert value == 3.5
+    assert annotated_first(fn(p: f64, q) => q, 4, 9) == 9
+    assert shared_type(fn(n) => 3.5, 2) == 8
+}
+# expect-error(type, "type.mismatch")
+const fn wrong_sample() -> bool => result_first(fn(n) => 4, 3.5, 9) == 4
+# expect-error(type, "type.mismatch")
+const fn wrong_shared() -> i64 => shared_type(fn(n) => 2, 3.5)

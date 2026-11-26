@@ -12,7 +12,7 @@ use super::constants::{constant_text, generic_default};
 use super::control::value_of_branch;
 use super::dependent_packs::{PackTypes, dependent_slot};
 use super::evals::{publications, trace_input_type, trace_pack_type};
-use super::expressions::{holds_block, takes_its_type, written_null};
+use super::expressions::{has_ordered_block, takes_its_type, written_null};
 use super::fit::{not_null, open, whole};
 use super::forms::Taken;
 use super::{Fact, Typer};
@@ -26,6 +26,13 @@ use crate::types::{
     Parameter, Signature, Type,
 };
 use crate::{Program, codes, error};
+
+/// Whether FN-17 needs a later input to complete the callback's template.
+enum CallbackOrder {
+    Read,
+    Defer,
+    Shared { index: usize, input: SyntaxNode },
+}
 
 impl<'a> Typer<'a> {
     /// FN-17 and GEN-2: the type of the function given can complete its
@@ -112,25 +119,25 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// True when `node` is an anonymous function whose unwritten parameter
-    /// depends on an unresolved generic that a later non-function argument
-    /// can supply first (FN-17, GEN-2).
-    fn defer_unannotated_callback(
+    /// FN-17 and GEN-2: a later argument may supply an unwritten input.
+    /// An annotation or a result competing with later evidence must still
+    /// be considered at the callback's declared position.
+    fn callback_order(
         &mut self,
         node: &SyntaxNode,
         pattern: &Type,
         (generics, found): (&[GenericParameter], &[Option<Argument>]),
         (later_positions, assigned, patterns): (&[usize], &[Assigned], &[&Type]),
-    ) -> bool {
+    ) -> CallbackOrder {
         let fn_node = ungrouped(node.clone());
         if fn_node.kind() != SyntaxKind::FnExpr {
-            return false;
+            return CallbackOrder::Read;
         }
         let Type::Function(fn_pattern) = pattern else {
-            return false;
+            return CallbackOrder::Read;
         };
         if fn_pattern.named_pack.is_some() {
-            return false;
+            return CallbackOrder::Read;
         }
         let unfound: Vec<Location> = generics
             .iter()
@@ -141,29 +148,134 @@ impl<'a> Typer<'a> {
         let mark = self.mark();
         let params = self.anonymous_parameters(&fn_node);
         self.take_back(mark, false);
-        let needed: Vec<Location> = params
+        if params.iter().any(|(_, written)| written.is_some()) {
+            return CallbackOrder::Read;
+        }
+        let needed: Vec<_> = unfound
             .iter()
-            .enumerate()
-            .filter(|(_, (_, written))| written.is_none())
-            .filter_map(|(i, _)| fn_pattern.parameters.get(i))
-            .flat_map(|param| {
-                unfound
+            .copied()
+            .filter(|at| {
+                fn_pattern
+                    .parameters
                     .iter()
-                    .copied()
-                    .filter(|&at| mentions(param.ty(), &[at]))
+                    .any(|param| mentions(param.ty(), &[*at]))
             })
             .collect();
         if needed.is_empty() {
-            return false;
+            return CallbackOrder::Read;
         }
-        later_positions.iter().any(|&later| {
-            let entry = &assigned[later];
-            entry.slot.is_some_and(|slot| {
-                !matches!(patterns[slot], Type::Function(_))
-                    && !takes_its_type(&entry.value)
-                    && mentions(patterns[slot], &needed)
+        let mut supplied = later_positions
+            .iter()
+            .filter_map(|&position| Some((patterns[assigned[position].slot?], position)));
+        let Some((input_pattern, position)) = supplied.clone().find(|(pattern, position)| {
+            !matches!(pattern, Type::Function(_))
+                && !takes_its_type(&assigned[*position].value)
+                && mentions(pattern, &needed)
+        }) else {
+            return CallbackOrder::Read;
+        };
+        let Some(result) = &fn_pattern.result else {
+            return CallbackOrder::Defer;
+        };
+        let result_generics: Vec<_> = unfound
+            .into_iter()
+            .filter(|at| mentions(result, &[*at]))
+            .collect();
+        // Written generic value arguments can supply their parameter's type
+        // before the deferred callback is read.
+        if generics.iter().any(|generic| {
+            matches!(&generic.kind, GenericKind::Value(ty) if mentions(ty, &result_generics))
+        }) {
+            return CallbackOrder::Read;
+        }
+        let Some((_, first_competitor)) =
+            supplied.find(|(pattern, _)| mentions(pattern, &result_generics))
+        else {
+            return CallbackOrder::Defer;
+        };
+        let input = &assigned[position];
+        if position == first_competitor
+            && result == input_pattern
+            && input.forwarded.is_none()
+            && input.pack.is_none()
+            && let Some(index) = bare_parameter(input_pattern, generics)
+            && !generics
+                .iter()
+                .enumerate()
+                .any(|(other, generic)| other != index && mentions(pattern, &[generic.at]))
+        {
+            return CallbackOrder::Shared {
+                index,
+                input: input.value.clone(),
+            };
+        }
+        CallbackOrder::Read
+    }
+
+    /// For `fn(T) -> T`, a later argument can supply the input type, but
+    /// cannot preempt the callback's own result. Read the result without an
+    /// expected type. Keep the reading only when both pieces of evidence
+    /// agree; otherwise the normal declaration-order inference decides.
+    fn shared_callback_input(
+        &mut self,
+        node: &SyntaxNode,
+        pattern: &Type,
+        generics: &[GenericParameter],
+        found: &[Option<Argument>],
+        index: usize,
+        input: &SyntaxNode,
+    ) -> Option<(Argument, Expr)> {
+        // Looking ahead must not recursively type another call or change
+        // flow state before its written position.
+        let atom = ungrouped(input.clone());
+        if !matches!(atom.kind(), SyntaxKind::Literal | SyntaxKind::NameExpr)
+            && !(atom.kind() == SyntaxKind::Block && !has_ordered_block(&atom))
+        {
+            return None;
+        }
+        if !self.may_reread() {
+            return None;
+        }
+        let mark = self.mark();
+        let value = self.expression(input, None);
+        if !self.take_back(mark, false) || !matches!(value.ty, Type::Scalar(_)) {
+            return None;
+        }
+        let hint = Argument::Type(value.ty.clone());
+        let unknown = Argument::Type(Type::Unknown);
+        let map: Vec<_> = generics
+            .iter()
+            .zip(found)
+            .enumerate()
+            .map(|(position, (generic, bound))| {
+                (
+                    generic.at,
+                    if position == index {
+                        &hint
+                    } else {
+                        bound.as_ref().unwrap_or(&unknown)
+                    },
+                )
             })
-        })
+            .collect();
+        let Type::Function(mut template) = substitute_within(pattern, &map) else {
+            return None;
+        };
+        if !template.parameters.iter().all(|input| whole(input.ty())) {
+            return None;
+        }
+        template.result = Some(Type::Unknown);
+        let mark = self.mark();
+        let reported = self.diagnostics.len();
+        let callback = self.function_argument(node, &template);
+        if self.diagnostics.len() == reported
+            && matches!(&callback.ty, Type::Function(actual) if actual.result.as_ref() == Some(&value.ty))
+        {
+            Some((hint, callback))
+        } else {
+            self.take_back(mark, false);
+            None
+        }
     }
 
     /// What a partly resolved parameter learns from an argument. Keep
@@ -866,8 +978,13 @@ impl<'a> Typer<'a> {
         // what another reads (CTRL-10), so with one such a reading is
         // tried and taken back, and every argument is then read where
         // it is written.
-        let block_ordered = assigned.iter().any(|argument| holds_block(&argument.value));
-        let ordered = block_ordered;
+        let first_block = assigned
+            .iter()
+            .position(|argument| has_ordered_block(&argument.value))
+            .unwrap_or(assigned.len());
+        // A callback written before any such block has its final capture
+        // scope already, even when a later argument must be replayed.
+        let ordered = first_block != assigned.len();
         // GEN-12: a call's parameters say what a generic is "in declared
         // parameter order". A struct's fields have no order of their
         // own (TYPE-5: named, "in any order"), so the first written
@@ -932,22 +1049,36 @@ impl<'a> Typer<'a> {
                 .map(|(generic, _)| generic.at)
                 .collect();
             if let Type::Function(_) = pattern {
-                if mentions(pattern, &unfound)
-                    && !self.defer_unannotated_callback(
-                        node,
-                        pattern,
-                        (generics, &found),
-                        (&order[step + 1..], &assigned, patterns),
-                    )
-                    && let Some(value) = self.infer_function_argument(
-                        node,
-                        pattern,
-                        generics,
-                        &mut found,
-                        !ordered,
-                        &by_argument,
-                    )
-                {
+                if !mentions(pattern, &unfound) {
+                    continue;
+                }
+                match self.callback_order(
+                    node,
+                    pattern,
+                    (generics, &found),
+                    (&order[step + 1..], &assigned, patterns),
+                ) {
+                    CallbackOrder::Defer => continue,
+                    CallbackOrder::Shared { index, input }
+                        if position <= first_block
+                            && let Some((hint, callback)) = self.shared_callback_input(
+                                node, pattern, generics, &found, index, &input,
+                            ) =>
+                    {
+                        found[index] = Some(hint);
+                        values[position] = Some(callback);
+                        continue;
+                    }
+                    _ => {}
+                }
+                if let Some(value) = self.infer_function_argument(
+                    node,
+                    pattern,
+                    generics,
+                    &mut found,
+                    position <= first_block,
+                    &by_argument,
+                ) {
                     values[position] = Some(value);
                 }
                 continue;
@@ -1122,7 +1253,7 @@ impl<'a> Typer<'a> {
                     pattern,
                     generics,
                     &mut found,
-                    !block_ordered,
+                    position <= first_block,
                     &[],
                 )
             {
