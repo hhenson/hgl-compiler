@@ -45,6 +45,15 @@ struct ReplayedCall<'a> {
     source_expected: Option<&'a Type>,
 }
 
+/// Whether a named operator can select its candidate with the current inputs.
+enum OperatorRead<'a> {
+    Source,
+    /// FN-19: read the written arguments while a computed spread awaits its keys.
+    BeforeSpread,
+    /// GEN-7: a graph operand has acquired its instance type.
+    Replay(ReplayedCall<'a>),
+}
+
 /// The source settings needed to check the public signature after a candidate
 /// has independently determined a bare callback's type (GEN-4, GEN-17).
 #[derive(Debug, Clone)]
@@ -345,10 +354,28 @@ impl<'a> Typer<'a> {
             Detail::Callable(signature) => signature.result.as_ref(),
             _ => None,
         };
-        if let Some(call) = self.defer_pack_call(list, result, expected) {
+        if let Some(call) = self.defer_pack_call_with(list, result, expected, |typer| {
+            typer
+                .call_operator_with(
+                    name,
+                    list,
+                    operator,
+                    expected,
+                    generics,
+                    OperatorRead::BeforeSpread,
+                )
+                .0
+        }) {
             return call;
         }
-        self.call_operator_with(name, list, operator, expected, generics, None)
+        self.call_operator_with(
+            name,
+            list,
+            operator,
+            expected,
+            generics,
+            OperatorRead::Source,
+        )
     }
 
     /// Read the named call, reusing settled argument readings in an instance.
@@ -359,8 +386,13 @@ impl<'a> Typer<'a> {
         operator: OperatorRef,
         expected: Option<&Type>,
         generics: Option<&CallArguments>,
-        replay: Option<ReplayedCall<'_>>,
+        reading: OperatorRead<'_>,
     ) -> (ExprKind, Type) {
+        let before_spread = matches!(reading, OperatorRead::BeforeSpread);
+        let replay = match reading {
+            OperatorRead::Replay(call) => Some(call),
+            _ => None,
+        };
         let program = self.program;
         let Some(Detail::Callable(public)) = program.modules[operator.module]
             .details
@@ -418,8 +450,14 @@ impl<'a> Typer<'a> {
                         .is_empty()
                 });
         let signature = (operator, public, dependent_pack, candidate_evidence);
-        let written =
-            self.operator_arguments(name, list, (public, dependent), &options, pack.as_ref());
+        let written = self.operator_arguments(
+            name,
+            list,
+            (public, dependent),
+            &options,
+            pack.as_ref(),
+            before_spread,
+        );
         let named_generics = self.diagnostics.len() == reported
             && self.operator_generic_arguments(
                 public,
@@ -483,6 +521,11 @@ impl<'a> Typer<'a> {
             replay,
             &candidates,
         );
+        // FN-19: the operator supplies context for written arguments. Its
+        // candidate is selected once the spread supplies the remaining slots.
+        if before_spread {
+            return (self.unselected(given, Form::Named), Type::Unknown);
+        }
         self.constants_given(&given, public);
         if self.diagnostics.len() == reported {
             self.missing_configuration(
@@ -1109,7 +1152,7 @@ impl<'a> Typer<'a> {
             deferred.identity,
             expected.as_ref(),
             written.as_ref(),
-            Some(ReplayedCall {
+            OperatorRead::Replay(ReplayedCall {
                 arguments,
                 contextual: &deferred.contextual,
                 source_expected: deferred.expected.as_ref(),
@@ -1776,6 +1819,7 @@ impl<'a> Typer<'a> {
         (public, dependent): (&Signature, Option<usize>),
         options: &OperatorOptions<'_>,
         written_pack: Option<&hir::TypePackArgument>,
+        before_spread: bool,
     ) -> Vec<(Key, SyntaxNode, Option<Expr>)> {
         let mut named_seen = false;
         let mut position = 0;
@@ -1789,7 +1833,11 @@ impl<'a> Typer<'a> {
             .any(|parameter| parameter.pack == Some(Pack::Named));
         let mut positional = Vec::new();
         let mut named = Vec::new();
-        let spreads = self.forwarded_arguments(list);
+        let spreads = if before_spread {
+            Vec::new()
+        } else {
+            self.forwarded_arguments(list)
+        };
         let explicit = self
             .call_entries(list)
             .into_iter()
@@ -1931,6 +1979,10 @@ impl<'a> Typer<'a> {
                 continue;
             }
             arguments.push((key, value, forwarded.map(|(_, value)| value)));
+        }
+        // The complete pack determines its cardinality (FN-8, FN-19).
+        if before_spread {
+            return arguments;
         }
         for (index, parameter) in public.parameters.iter().enumerate() {
             let combined: Vec<_>;
