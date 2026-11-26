@@ -1310,7 +1310,7 @@ pub enum Callee {
     Anonymous(Box<AnonymousFunction>),
     /// A named operator awaiting an argument type before selection (GEN-7).
     DeferredOperator(Box<DeferredOperator>),
-    /// A call waiting for the entries of its pack arguments (FN-19).
+    /// A call whose arguments or body wait for concrete pack inputs (FN-19, CTRL-16).
     DeferredPackCall,
     /// A deferred operator call whose candidates are all value functions.
     DeferredValue,

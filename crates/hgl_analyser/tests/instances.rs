@@ -1524,6 +1524,33 @@ const fn bad() -> i64 => pick()",
     }
 }
 
+/// A direct anonymous call checks its chosen pack arm at the making call (FN-7, CTRL-16).
+#[test]
+fn direct_anonymous_calls_recheck_the_chosen_pack_arm() {
+    let branch = r#"if Key in arg_keys(Ps) { "wrong" } else { 0 }"#;
+    let direct = format!("(fn() -> i64 => {branch})()");
+    let nested = format!("(fn() -> i64 => {direct})()");
+    for body in [direct, nested] {
+        let source = format!(
+            "const Key: i64 = 0
+const fn pick<...Ps>(items: ...Ps) -> i64 =>
+    {body}
+const fn skips() -> i64 => pick()"
+        );
+        let skipped = module(&source);
+        assert!(skipped.findings.is_empty(), "{}", skipped.report);
+
+        let selected = module(&format!("{source}\nconst fn selects() -> i64 => pick(7)"));
+        assert_eq!(selected.findings.len(), 1, "{}", selected.report);
+        assert_eq!(
+            selected.findings[0].code, "type/type.mismatch",
+            "{}",
+            selected.report
+        );
+        assert_eq!(selected.findings[0].at, "m.hgl:6:30", "{}", selected.report);
+    }
+}
+
 /// A callback role trial leaves a selected arm's written pack lookup checked (FN-4, CTRL-16).
 #[test]
 fn callback_role_trials_keep_selected_pack_member_errors() {

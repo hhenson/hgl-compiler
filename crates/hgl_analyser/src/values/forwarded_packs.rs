@@ -1012,8 +1012,13 @@ pub(super) fn spread_operands(list: &SyntaxNode) -> impl Iterator<Item = SyntaxN
 
 /// Whether a body needs its concrete pack inputs for a spread or entry read.
 pub(crate) fn has_forwarded_calls(body: &crate::hir::Body) -> bool {
+    statements_need_pack_inputs(&body.statements)
+}
+
+/// Whether checking these statements needs the instance's pack inputs.
+pub(super) fn statements_need_pack_inputs(statements: &[crate::hir::Stmt]) -> bool {
     let mut pending = false;
-    walk_nested_calls(&body.statements, &mut |value| {
+    walk_nested_calls(statements, &mut |value| {
         pending |= needs_pack_inputs(value);
     });
     pending
