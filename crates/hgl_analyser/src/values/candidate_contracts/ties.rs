@@ -37,6 +37,15 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics, tests: boo
         }
     }
 
+    // TST-1: a test-only candidate can prove another operator's
+    // requirement even when the operator being checked is all production.
+    let test_scopes: Vec<_> = program
+        .modules
+        .iter()
+        .filter(|_| tests)
+        .filter_map(|module| TestCandidateScope::of(program, module))
+        .collect();
+
     for ((module, declaration), candidates) in operators {
         if candidates.len() < 2 {
             continue;
@@ -59,16 +68,9 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics, tests: boo
             continue;
         }
 
-        // TST-1: production candidates share a view. Each test module
-        // adds its own candidates, independent of all other test modules.
-        let scopes: BTreeSet<_> =
-            std::iter::once(None)
-                .chain(candidates.iter().filter_map(|&candidate| {
-                    declared(candidate).test_owner.map(|_| Some(candidate.0))
-                }))
-                .collect();
         let mut ties = BTreeMap::new();
-        for scope in scopes {
+        for test_scope in std::iter::once(None).chain(test_scopes.iter().copied().map(Some)) {
+            let scope = test_scope.map(TestCandidateScope::module);
             let visible: Vec<_> = candidates
                 .iter()
                 .copied()
@@ -77,8 +79,6 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics, tests: boo
                 })
                 .collect();
             if visible.len() >= 2 {
-                let test_scope = scope
-                    .and_then(|module| TestCandidateScope::of(program, &program.modules[module]));
                 witness_ties(
                     program,
                     OperatorRef {
@@ -187,10 +187,9 @@ fn witness_ties<'a>(
                     continue;
                 };
                 let maximum = left.2.parameters.len().min(right.2.parameters.len());
+                // Admission checks whether omitted slots can take
+                // defaults declared on either the candidate or its operator.
                 for arity in 0..=maximum {
-                    if !can_omit(left.2, arity) || !can_omit(right.2, arity) {
-                        continue;
-                    }
                     for fallback in [Scalar::I64, Scalar::F64, Scalar::Bool, Scalar::Str] {
                         let Some(types) = witness_types(left.2, right.2, arity, fallback) else {
                             break;
@@ -218,12 +217,6 @@ fn positional_shape(signature: &Signature) -> bool {
             && !parameter.var
             && !parameter.reference
     })
-}
-
-fn can_omit(signature: &Signature, arity: usize) -> bool {
-    signature.parameters[arity..]
-        .iter()
-        .all(|parameter| parameter.has_default || matches!(parameter.ty, Type::Nullable(_)))
 }
 
 /// A witness asks for a result both declarations can be seen to provide.

@@ -177,3 +177,36 @@ fn assert_ambiguous(checked: &Checked) {
         checked.report
     );
 }
+
+/// TST-1: a test view can supply requirement evidence even when all
+/// candidates of the operator being checked are production declarations.
+#[test]
+fn test_only_requirement_candidates_supply_a_view_for_production_candidates() {
+    let definitions = concat!(
+        "operator helper<T>(value: T) -> i64\n",
+        "operator choose<A, B>(a: A, b: B) -> i64\n",
+        "impl const fn choose<T>(a: i64, b: T) -> i64 requires helper(T) -> i64 => 1\n",
+        "impl const fn choose<T>(a: T, b: i64) -> i64 requires helper(T) -> i64 => 2\n",
+    );
+    let checked = module(definitions);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+    let checked = module(&format!(
+        "{definitions}test local {{\n\
+         impl const fn helper(value: i64) -> i64 => value\n\
+         assert choose(1, 1) == 1\n}}\n"
+    ));
+    assert_ambiguous(&checked);
+}
+
+/// GEN-6 and UNIT-8: ordinary omitted-argument admission uses the
+/// operator's default even when candidates declare none of their own.
+#[test]
+fn an_inherited_public_default_is_a_tie_witness() {
+    let checked = module(concat!(
+        "operator choose<T>(x: T = 1) -> i64\n",
+        "impl const fn choose(x: i64) -> i64 => 1\n",
+        "impl const fn choose(x: f64) -> i64 => 2\n",
+        "const fn use_pair() -> i64 => choose()\n",
+    ));
+    assert_ambiguous(&checked);
+}
