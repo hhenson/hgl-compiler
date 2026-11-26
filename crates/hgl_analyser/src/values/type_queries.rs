@@ -213,31 +213,31 @@ fn query_type_with_bindings(
                         && super::inference::mentions(&parameter.ty, &[generic.at])
                 })
         });
-        let bindings = visible
-            .map(|g| {
-                let arg = if matches!(g.kind, GenericKind::Value(_)) {
-                    Argument::Constant(Constant {
-                        text: g.name.clone(),
-                        value: ConstantValue::Parameter {
-                            name: g.name.clone(),
-                            at: g.at,
-                        },
-                    })
-                } else {
-                    Argument::Type(Type::Parameter {
-                        name: g.name.clone(),
-                        at: g.at,
-                    })
-                };
-                (g.at, arg)
-            })
-            .collect();
-        QueryType::InstanceDependent(bindings)
+        QueryType::InstanceDependent(visible.map(query_binding).collect())
     } else if has_unknown || type_has_deferred_query(&ty) {
         QueryType::Unresolved
     } else {
         QueryType::Resolved(ty)
     }
+}
+
+/// Capture a generic parameter until a cold operand selects its concrete result.
+pub(super) fn query_binding(g: &crate::GenericParameter) -> (Location, Argument) {
+    let arg = if matches!(g.kind, GenericKind::Value(_)) {
+        Argument::Constant(Constant {
+            text: g.name.clone(),
+            value: ConstantValue::Parameter {
+                name: g.name.clone(),
+                at: g.at,
+            },
+        })
+    } else {
+        Argument::Type(Type::Parameter {
+            name: g.name.clone(),
+            at: g.at,
+        })
+    };
+    (g.at, arg)
 }
 
 /// Resolves declaration-level `ConstantValue::DeferredTypeQuery` entries left

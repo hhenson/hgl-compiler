@@ -269,6 +269,7 @@ impl<'a> Typer<'a> {
         let returns = (self.must_return, self.returning_tails.clone());
         let lifecycle = (self.hook, self.initializing, self.caching);
         let querying = self.type_query;
+        let enclosing_selection = std::mem::take(&mut self.nested_query_selects);
         self.type_query = true;
         self.hook = None;
         self.initializing = false;
@@ -282,9 +283,8 @@ impl<'a> Typer<'a> {
             .any(|report| report.severity == hgl_diagnostics::Severity::Error);
         // The outer descriptor can contain this query as a nominal argument.
         // Retain its need for selection without adding its calls to runtime HIR.
-        if querying && self.selecting.borrow().len() > mark.selecting {
-            self.nested_query_selects = true;
-        }
+        let selects = self.nested_query_selects || self.selecting.borrow().len() > mark.selecting;
+        self.nested_query_selects = enclosing_selection || (querying && selects);
         // TYPE-18 evaluates nothing of the operand. Its local
         // effects and deferred calls do not belong to the body.
         self.restore_read(mark, false);
@@ -296,6 +296,22 @@ impl<'a> Typer<'a> {
         let has_unknown = ty.any_part(&|part| matches!(part, Type::Unknown), &|_| false);
         let result = if new_errors {
             crate::constant::QueryType::Reported
+        } else if !querying
+            && selects
+            && self.instance.is_empty()
+            && self.pack_inputs.is_none()
+            && !self.signature.generics.is_empty()
+        {
+            // GEN-7, TYPE-18: an open generic body's provisional operator
+            // result cannot settle a Type-valued argument or its requirements.
+            // Reread the cold operand with the concrete body and its locals.
+            crate::constant::QueryType::InstanceDependent(
+                self.signature
+                    .generics
+                    .iter()
+                    .map(super::type_queries::query_binding)
+                    .collect(),
+            )
         } else if has_unknown {
             if self.diagnostics.has_errors() {
                 crate::constant::QueryType::Reported

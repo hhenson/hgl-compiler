@@ -1723,3 +1723,40 @@ struct Route<T, const N: i64> {
         }
     }
 }
+
+#[test]
+fn a_body_checks_descriptor_requirements_with_its_selected_cold_result() {
+    let definitions = r#"module m
+struct Tag<const N: i64> { n: i64 }
+struct Stamp<const K: Type> { n: i64 }
+operator read<A, R>(value: A) -> R
+impl const fn read<A>(value: A) -> i64 => 1
+impl const fn read(value: Tag<7>) -> bool => true
+const REQUIRED: Type = type(Stamp<type(true)>(n: 0))
+struct Only<const K: Type> requires K == REQUIRED { n: i64? }
+const fn place<const N: i64>(arg: Tag<N>) -> i64 {
+    let alias = arg
+    let checked = Only<type(Stamp<type(read(alias))>(n: 0))>()
+    return 1
+}
+"#;
+    for (call, valid) in [
+        ("", true),
+        ("test fits { assert place<7>(Tag<7>(n: 9)) == 1 }", true),
+        ("test fails { assert place<3>(Tag<3>(n: 9)) == 1 }", false),
+    ] {
+        let source = format!("{definitions}{call}\n");
+        let checked = check(&[("m.hgl", &source)]);
+        if valid {
+            assert!(checked.findings.is_empty(), "{}", checked.report);
+        } else {
+            assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+            assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+            assert!(
+                checked
+                    .report
+                    .contains("this call makes the instance `place<3>`")
+            );
+        }
+    }
+}
