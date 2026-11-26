@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use hgl_analyser::{
     Argument as GenericArgument, ConstantValue, Detail, GenericKind, GenericParameter, NamedKind,
-    Program, Type, substitute_within,
+    Program, Type,
 };
 use hgl_diagnostics::Location;
 use hgl_lower::types::inherited;
@@ -53,7 +53,7 @@ pub(in crate::emit) fn struct_type(
     program: &Program,
     (module, declaration): (usize, usize),
     arguments: &[GenericArgument],
-    queries: Option<&[Type]>,
+    queries: Option<&[ConstantValue]>,
 ) -> Option<String> {
     let name = names::declared_type(
         &program.modules[module].declarations[declaration],
@@ -73,7 +73,7 @@ pub(super) fn struct_delta_type(
     program: &Program,
     (module, declaration): (usize, usize),
     arguments: &[GenericArgument],
-    queries: Option<&[Type]>,
+    queries: Option<&[ConstantValue]>,
 ) -> Option<String> {
     let declared = &program.modules[module].declarations[declaration];
     if program
@@ -106,7 +106,7 @@ fn template_arguments(
     program: &Program,
     struct_of: (usize, usize),
     arguments: &[GenericArgument],
-    queries: Option<&[Type]>,
+    queries: Option<&[ConstantValue]>,
 ) -> Option<String> {
     let Some(Detail::Struct(read)) = program.modules[struct_of.0].details.get(struct_of.1) else {
         return None;
@@ -138,7 +138,7 @@ fn template_arguments(
     let mut written = written?;
     let bindings: Vec<_> = read.generics.iter().map(|p| p.at).zip(arguments).collect();
     for reflected in layout_queries(program, struct_of) {
-        let applied = substitute_within(&reflected, &bindings);
+        let applied = program.specialize_query(&reflected, &bindings);
         written.push(type_tag(&applied, queries)?);
     }
     Some(format!("<{}>", written.join(", ")))
@@ -337,7 +337,7 @@ fn walk_types(ty: &Type, visit: &mut dyn FnMut(&Type)) {
 fn constant_argument(
     program: &Program,
     value: &ConstantValue,
-    queries: Option<&[Type]>,
+    queries: Option<&[ConstantValue]>,
 ) -> Option<String> {
     match value {
         ConstantValue::Int(number) => Some(integer_literal(*number)),
@@ -351,7 +351,9 @@ fn constant_argument(
                 identifier(&member.name)
             ))
         }
-        ConstantValue::Type(ty) => type_tag(ty, queries),
+        ConstantValue::Type(_) | ConstantValue::InstanceTypeQuery { .. } => {
+            type_tag(value, queries)
+        }
         ConstantValue::Parameter { name, .. } if queries.is_some() => {
             Some(names::template_parameter(name))
         }
@@ -361,15 +363,19 @@ fn constant_argument(
 
 /// TYPE-18: concrete applications use the analyser's canonical identity. A
 /// generic layout forwards that same tag as an extra C++ template argument.
-fn type_tag(ty: &Type, queries: Option<&[Type]>) -> Option<String> {
-    if let Some(identity) = ty.identity() {
+fn type_tag(value: &ConstantValue, queries: Option<&[ConstantValue]>) -> Option<String> {
+    if let ConstantValue::Type(ty) = value
+        && let Some(identity) = ty.identity()
+    {
         return Some(format!(
             "::{}::type_tag{{{}}}",
             runtime::NAMESPACE,
             names::string(&identity)
         ));
     }
-    let index = queries?.iter().position(|query| query == ty)?;
+    let index = queries?
+        .iter()
+        .position(|query| query.same(value) == Some(true))?;
     Some(query_parameter(index))
 }
 
@@ -380,9 +386,13 @@ fn query_parameter(index: usize) -> String {
 /// The reflected identities a struct's fields and parents need from its
 /// instantiator, expressed in the struct's own generic parameters. A field
 /// of another generic struct forwards the identities that layout requires.
-fn layout_queries(program: &Program, root: (usize, usize)) -> Vec<Type> {
+fn layout_queries(program: &Program, root: (usize, usize)) -> Vec<ConstantValue> {
     type Decl = (usize, usize);
-    fn collect(program: &Program, decl: Decl, memo: &mut HashMap<Decl, Vec<Type>>) -> Vec<Type> {
+    fn collect(
+        program: &Program,
+        decl: Decl,
+        memo: &mut HashMap<Decl, Vec<ConstantValue>>,
+    ) -> Vec<ConstantValue> {
         if let Some(known) = memo.get(&decl) {
             return known.clone();
         }
@@ -395,8 +405,12 @@ fn layout_queries(program: &Program, root: (usize, usize)) -> Vec<Type> {
         // Recursive stored layouts are diagnosed separately.
         memo.insert(decl, Vec::new());
         let mut queries = Vec::new();
-        let mut record = |query: Type| {
-            if query.identity().is_none() && !queries.contains(&query) {
+        let mut record = |query: ConstantValue| {
+            if query.key().is_none()
+                && !queries
+                    .iter()
+                    .any(|existing: &ConstantValue| existing.same(&query) == Some(true))
+            {
                 queries.push(query);
             }
         };
@@ -419,9 +433,12 @@ fn layout_queries(program: &Program, root: (usize, usize)) -> Vec<Type> {
                 };
                 for argument in arguments {
                     if let GenericArgument::Constant(constant) = argument
-                        && let ConstantValue::Type(inner) = &constant.value
+                        && matches!(
+                            constant.value,
+                            ConstantValue::Type(_) | ConstantValue::InstanceTypeQuery { .. }
+                        )
                     {
-                        record((**inner).clone());
+                        record(constant.value.clone());
                     }
                 }
                 let child = (*module, *declaration);
@@ -436,7 +453,7 @@ fn layout_queries(program: &Program, root: (usize, usize)) -> Vec<Type> {
                         .zip(arguments)
                         .collect();
                     for query in nested {
-                        record(substitute_within(&query, &map));
+                        record(program.specialize_query(&query, &map));
                     }
                 }
             });
@@ -664,7 +681,7 @@ fn ancestors(program: &Program, (module, declaration): (usize, usize)) -> Vec<Ty
 fn template_head(
     program: &Program,
     generics: &[GenericParameter],
-    queries: &[Type],
+    queries: &[ConstantValue],
 ) -> Option<(String, Vec<String>)> {
     if generics.is_empty() {
         return Some((String::new(), Vec::new()));

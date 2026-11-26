@@ -68,6 +68,7 @@ pub struct InstanceInputs<'a> {
 /// The enclosing declaration and the arguments common to its body and
 /// any anonymous bodies written inside it.
 struct InstanceArguments<'a> {
+    program: &'a Program,
     declaration: (usize, usize),
     generics: &'a [Argument],
     types: &'a Map<'a>,
@@ -87,7 +88,8 @@ impl InstanceArguments<'_> {
             &|part| matches!(part, Type::Parameter { .. } | Type::PackMember { .. }),
             &|constant| constant.value.key().is_none(),
         ) {
-            self.packs.project(ty, self.types).unwrap_or(Type::Unknown)
+            self.program
+                .resolve_instance_type(self.packs.project(ty, self.types).unwrap_or(Type::Unknown))
         } else {
             // A reread can already supply a concrete type. Substitution's
             // growth bound applies only when there is something to place.
@@ -259,6 +261,7 @@ impl Program {
         };
         let packs = PackTypes::new(&signature.generics, type_packs);
         let instance = InstanceArguments {
+            program: self,
             declaration: operator,
             generics,
             types: &types,
@@ -419,7 +422,9 @@ impl Program {
             .zip(generics)
             .collect();
         let packs = PackTypes::new(&signature.generics, inputs.type_packs);
-        let project = |ty: &Type| packs.project(ty, &map).unwrap_or(Type::Unknown);
+        let project = |ty: &Type| {
+            self.resolve_instance_type(packs.project(ty, &map).unwrap_or(Type::Unknown))
+        };
         let mut taken = Signature {
             generics: Vec::new(),
             parameters: signature
@@ -440,6 +445,7 @@ impl Program {
             .pack_inputs
             .filter(|_| crate::values::has_forwarded_calls(&body));
         let arguments = InstanceArguments {
+            program: self,
             declaration: (module, declaration),
             generics,
             types: &map,

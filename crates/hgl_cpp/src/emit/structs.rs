@@ -37,7 +37,7 @@
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Hook, Stmt, Value};
 use hgl_analyser::{
-    Argument, DeclarationKind, Detail, GenericKind, NamedKind, Program, Scalar, Type,
+    Argument, ConstantValue, DeclarationKind, Detail, GenericKind, NamedKind, Program, Scalar, Type,
 };
 use hgl_lower::types::{fields_of, fixed_list_size, inherited};
 
@@ -687,7 +687,7 @@ impl Emitter<'_> {
         delta: &str,
         specialized: &str,
         parameters: &[String],
-        queries: &[Type],
+        queries: &[ConstantValue],
     ) -> String {
         let program = self.program;
         let declared = &program.modules[self.module];

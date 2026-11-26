@@ -99,6 +99,8 @@ pub(crate) enum QueryType {
     Resolved(Type),
     /// Checking the operand emitted a diagnostic (ERR-9).
     Reported,
+    /// The ordinary reader deferred selecting an operator until instantiation.
+    InstanceDependent,
     /// Checking the operand emitted no error, yet produced no resolved type.
     Unresolved,
 }
@@ -636,7 +638,9 @@ fn value(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Ty
                         Some(Type::TypeValue),
                     )),
                     QueryType::Reported => Err(Fault::Reported),
-                    QueryType::Unresolved => Ok(Typed::unevaluated(Some(Type::TypeValue))),
+                    QueryType::Unresolved | QueryType::InstanceDependent => {
+                        Ok(Typed::unevaluated(Some(Type::TypeValue)))
+                    }
                 };
             }
             if scope.constants.defer_type_queries {
@@ -651,7 +655,9 @@ fn value(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Ty
                     Some(Type::TypeValue),
                 )),
                 QueryType::Reported => Err(Fault::Reported),
-                QueryType::Unresolved => Ok(Typed::unevaluated(Some(Type::TypeValue))),
+                QueryType::Unresolved | QueryType::InstanceDependent => {
+                    Ok(Typed::unevaluated(Some(Type::TypeValue)))
+                }
             }
         }
         // EXPR-1: "Parentheses select grouping": `(2.0)` is `2.0`.
@@ -2490,6 +2496,15 @@ pub(crate) fn type_has_deferred_query(ty: &Type) -> bool {
     })
 }
 
+/// Whether a type still carries the operand of an instance-dependent query.
+pub(crate) fn type_has_instance_query(ty: &Type) -> bool {
+    ty.any_part(&|_| false, &|c| match &c.value {
+        ConstantValue::InstanceTypeQuery { .. } => true,
+        ConstantValue::Type(ty) => type_has_instance_query(ty),
+        _ => false,
+    })
+}
+
 /// False for a constant expression whose value this compiler does not
 /// work out, or one that holds such: `@2024-01-31 + 1M`. A generic
 /// value parameter is valued where the declaration is called, and an
@@ -2636,6 +2651,14 @@ impl ConstantValue {
         match (self, other) {
             (V::Unevaluated | V::Unknown | V::DeferredTypeQuery(_), _)
             | (_, V::Unevaluated | V::Unknown | V::DeferredTypeQuery(_)) => None,
+            (
+                V::InstanceTypeQuery { at, bindings },
+                V::InstanceTypeQuery {
+                    at: other,
+                    bindings: args,
+                },
+            ) => (at == other && bindings == args).then_some(true),
+            (V::InstanceTypeQuery { .. }, _) | (_, V::InstanceTypeQuery { .. }) => None,
             (V::Parameter { at, .. }, V::Parameter { at: other, .. }) => {
                 (at == other).then_some(true)
             }
@@ -2864,6 +2887,7 @@ impl ConstantValue {
             | V::Unary(..)
             | V::Binary(..)
             | V::RangeLength(..)
+            | V::InstanceTypeQuery { .. }
             | V::DeferredTypeQuery(_)
             | V::Unevaluated
             | V::Unknown => return None,
@@ -2983,6 +3007,13 @@ impl ConstantValue {
         match self {
             ConstantValue::Parameter { at, .. } => own.contains(at),
             ConstantValue::Type(ty) => crate::declared::names_one_of(ty, own),
+            ConstantValue::InstanceTypeQuery { bindings, .. } => {
+                bindings.iter().any(|(_, arg)| match arg {
+                    Argument::Type(ty) => crate::declared::names_one_of(ty, own),
+                    Argument::Constant(c) => c.value.names_one_of(own),
+                    Argument::NoResult => false,
+                })
+            }
             ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
                 operand.names_one_of(own)
             }

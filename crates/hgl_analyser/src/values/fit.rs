@@ -252,6 +252,17 @@ impl<'a> Typer<'a> {
         if open(expected) || open(ty) || agree(expected, ty) {
             return true;
         }
+        // A delayed declaration query has no identity until this body is
+        // checked at its making call. Keep checking the known parts here.
+        if !self.signature.generics.is_empty()
+            && self.instance.is_empty()
+            && self.pack_inputs.is_none()
+            && (crate::constant::type_has_instance_query(expected)
+                || crate::constant::type_has_instance_query(ty))
+            && crate::declared::same_type(expected, ty) != Some(false)
+        {
+            return true;
+        }
         match expected {
             Type::Nullable(inner) => self.admits(inner, ty),
             Type::Named { .. } => self.inherits(ty, expected),

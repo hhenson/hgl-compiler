@@ -50,6 +50,17 @@ pub(crate) fn query_type_into(
     query: &SyntaxNode,
     sink: Option<&mut Diagnostics>,
 ) -> QueryType {
+    query_type_with_bindings(program, file, query, &[], false, sink)
+}
+
+fn query_type_with_bindings(
+    program: &Program,
+    file: FileId,
+    query: &SyntaxNode,
+    instance: &[(Location, Argument)],
+    declaration_pass: bool,
+    sink: Option<&mut Diagnostics>,
+) -> QueryType {
     let Some(module) = program
         .modules
         .iter()
@@ -93,7 +104,33 @@ pub(crate) fn query_type_into(
         }
         _ => &empty,
     };
-    let (bindings, written, calls) = tables(module);
+    let (bindings, mut written, mut calls) = tables(module);
+    let map: Vec<_> = instance.iter().map(|(at, arg)| (*at, arg)).collect();
+    let contains = |position: &(FileId, u32)| {
+        position.0 == file && query.span().start <= position.1 && position.1 < query.span().end
+    };
+    let projected_types: Vec<_> = written
+        .iter()
+        .filter(|(at, _)| !map.is_empty() && contains(at))
+        .map(|(&at, ty)| (at, program.specialize_type(ty, &map)))
+        .collect();
+    for (at, ty) in &projected_types {
+        written.insert(*at, ty);
+    }
+    let projected_calls: Vec<_> = calls
+        .iter()
+        .filter(|(at, _)| !map.is_empty() && contains(at))
+        .map(|(&at, call)| {
+            let mut call = (**call).clone();
+            for (_, arg) in &mut call.arguments {
+                *arg = crate::instance::placed(arg, &map);
+            }
+            (at, call)
+        })
+        .collect();
+    for (at, call) in &projected_calls {
+        calls.insert(*at, call);
+    }
     let selecting = RefCell::new(Vec::new());
     let mut discard = Diagnostics::new();
     let diagnostics = sink.unwrap_or(&mut discard);
@@ -114,10 +151,11 @@ pub(crate) fn query_type_into(
         },
         diagnostics,
     );
+    typer.instance = instance.to_vec();
     for parameter in &signature.parameters {
         let ty = match parameter.pack {
             Some(_) => Type::Unknown,
-            None => parameter.ty.clone(),
+            None => program.specialize_type(&parameter.ty, &map),
         };
         let kind = if parameter.var {
             LocalKind::Var
@@ -137,6 +175,14 @@ pub(crate) fn query_type_into(
     let has_unknown = ty.any_part(&|part| matches!(part, Type::Unknown), &|_| false);
     if new_errors {
         QueryType::Reported
+    // A selected generic fallback can already have a definite result, yet
+    // a more-specific overload can replace it when the instance is made.
+    } else if declaration_pass
+        && !signature.generics.is_empty()
+        && !type_has_deferred_query(&ty)
+        && !selecting.borrow().is_empty()
+    {
+        QueryType::InstanceDependent
     } else if has_unknown || type_has_deferred_query(&ty) {
         QueryType::Unresolved
     } else {
@@ -167,6 +213,7 @@ pub(crate) fn resolve_declared_type_queries(
     loop {
         let mut pass = QueryPass::default();
         let (updates, struct_changed) = resolve_pass(program, None, &mut pass);
+        program.has_dependent_type_queries |= pass.instance_dependent;
         if !pass.resolved || updates.is_empty() {
             break;
         }
@@ -177,8 +224,9 @@ pub(crate) fn resolve_declared_type_queries(
         }
     }
     if has_any_declared_deferred(program) {
-        let (updates, struct_changed) =
-            resolve_pass(program, Some(diagnostics), &mut QueryPass::default());
+        let mut pass = QueryPass::default();
+        let (updates, struct_changed) = resolve_pass(program, Some(diagnostics), &mut pass);
+        program.has_dependent_type_queries |= pass.instance_dependent;
         if !updates.is_empty() {
             apply_updates(program, updates);
             if struct_changed {
@@ -299,6 +347,7 @@ fn is_declaration_level(program: &Program, module_index: usize, at: Location) ->
 /// a query with a known value counts as progress through declaration dependencies.
 #[derive(Default)]
 struct QueryPass {
+    instance_dependent: bool,
     resolved: bool,
     diagnosed: HashSet<Location>,
 }
@@ -793,20 +842,24 @@ fn evaluate_deferred_declared(
     };
     let should_report = final_pass && pass.diagnosed.insert(expr_at);
     let constants = Constants::default();
+    let mut depends_on_instance = false;
     let mut queries = Vec::new();
     outermost_type_queries(&node, &mut queries);
     for query in &queries {
         let query_at = Location::new(expr_at.file, query.span());
-        let result = query_type_into(
+        let result = query_type_with_bindings(
             program,
             expr_at.file,
             query,
+            &[],
+            true,
             if should_report {
                 sink.as_deref_mut()
             } else {
                 None
             },
         );
+        depends_on_instance |= matches!(result, QueryType::InstanceDependent);
         constants.remember_type(query_at, result);
     }
     let generics = match declaration.and_then(|decl| module.details.get(decl)) {
@@ -834,10 +887,43 @@ fn evaluate_deferred_declared(
         constants: &constants,
     };
     let read = crate::constant::read(&node, expected, &scope);
+    let operand = crate::syntax::ungrouped(node);
     match read {
         Ok(value) if crate::constant::worked_out(&value) && !has_deferred_type_query(&value) => {
             pass.resolved = true;
             value
+        }
+        Ok(_)
+            if depends_on_instance
+                && operand.kind() == SyntaxKind::TypeOfExpr
+                && !generics.is_empty() =>
+        {
+            pass.instance_dependent = true;
+            pass.resolved = true;
+            let bindings = generics
+                .iter()
+                .map(|g| {
+                    let arg = if matches!(g.kind, GenericKind::Value(_)) {
+                        Argument::Constant(Constant {
+                            text: g.name.clone(),
+                            value: ConstantValue::Parameter {
+                                name: g.name.clone(),
+                                at: g.at,
+                            },
+                        })
+                    } else {
+                        Argument::Type(Type::Parameter {
+                            name: g.name.clone(),
+                            at: g.at,
+                        })
+                    };
+                    (g.at, arg)
+                })
+                .collect();
+            ConstantValue::InstanceTypeQuery {
+                at: Location::new(expr_at.file, operand.span()),
+                bindings,
+            }
         }
         _ if !final_pass => ConstantValue::DeferredTypeQuery(expr_at),
         Ok(_) => {
@@ -910,4 +996,37 @@ pub(crate) fn find_node(
         return Some((module, Some(index), node));
     }
     None
+}
+
+impl Program {
+    pub(crate) fn instance_query_type(
+        &self,
+        at: Location,
+        bindings: &[(Location, Argument)],
+    ) -> Option<Type> {
+        if bindings.iter().any(|(_, arg)| match arg {
+            Argument::Type(ty) => ty.identity().is_none(),
+            Argument::Constant(c) => c.value.key().is_none(),
+            Argument::NoResult => false,
+        }) {
+            return None;
+        }
+        // A declaration cycle cannot acquire an identity by reading itself.
+        thread_local! {
+            static READING: RefCell<Vec<Location>> = const { RefCell::new(Vec::new()) };
+        }
+        READING.with(|reading| {
+            if reading.borrow().contains(&at) {
+                return None;
+            }
+            let (_, _, query) = find_node(self, at)?;
+            reading.borrow_mut().push(at);
+            let answer = query_type_with_bindings(self, at.file, &query, bindings, false, None);
+            reading.borrow_mut().pop();
+            match answer {
+                QueryType::Resolved(ty) => Some(ty),
+                _ => None,
+            }
+        })
+    }
 }

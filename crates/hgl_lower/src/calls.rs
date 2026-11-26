@@ -11,7 +11,7 @@ use hgl_analyser::hir::{
 };
 use hgl_analyser::{
     Argument as GenericArgument, ConstantValue, DeclarationKind, Detail, FieldRef, GenericKind,
-    Parameter, Program, Role, Type, substitute_within,
+    Parameter, Program, Role, Type,
 };
 use hgl_diagnostics::Location;
 
@@ -569,7 +569,7 @@ fn field_arguments(
         pending.extend(
             read.parents
                 .iter()
-                .map(|parent| substitute_within(parent, &bindings)),
+                .map(|parent| program.specialize_type(parent, &bindings)),
         );
         applications.push(arguments);
     }

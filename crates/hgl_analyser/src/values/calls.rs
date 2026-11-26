@@ -1555,7 +1555,9 @@ impl<'a> Typer<'a> {
         let pack_types = PackTypes::new(generics, &type_packs);
         let ty = bind_result(signature.result.as_ref(), &map).map_or(Type::Unknown, |result| {
             placed(
-                pack_types.project(result, &map).unwrap_or(Type::Unknown),
+                self.program.resolve_instance_type(
+                    pack_types.project(result, &map).unwrap_or(Type::Unknown),
+                ),
                 &own,
             )
         });
@@ -1973,7 +1975,9 @@ impl<'a> Typer<'a> {
         }
         call.ty = bind_result(signature.result.as_ref(), &map).map_or(Type::Unknown, |result| {
             placed(
-                pack_types.project(result, &map).unwrap_or(Type::Unknown),
+                self.program.resolve_instance_type(
+                    pack_types.project(result, &map).unwrap_or(Type::Unknown),
+                ),
                 &own,
             )
         });

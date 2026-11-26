@@ -1434,3 +1434,58 @@ fn indexed_storage_reports_a_bound_instead_of_silently_dropping_a_dependency() {
         rejected.report
     );
 }
+
+/// GEN-7 and TYPE-18: overload selection can determine a Type argument in
+/// a generic declaration after its caller supplies the type arguments.
+#[test]
+fn generic_signature_and_fields_use_the_selected_operand_type() {
+    let declarations = r#"
+module m
+struct Tag<const K: Type> { n: i64 }
+const fn values<T>() -> list<T> => []
+operator probe<I, O>(input: I) -> O
+impl const fn probe(input: list<i64>) -> bool => true
+impl const fn probe(input: list<str>) -> str => ""
+abstract struct Parent<T> requires T in {i64, str} {
+    value: T
+    tag: Tag<type(probe(values<T>()))>
+}
+struct Child<T> : Parent<T> {}
+const fn make<T>(x: T) -> Tag<(type(probe(values<T>())))> requires T in {i64, str} =>
+    Tag<type(probe(values<T>()))>(n: 7)
+const fn take<T>(x: T, tag: Tag<type(probe(values<T>()))>) -> i64
+    requires T in {i64, str} => tag.n
+"#;
+    let source = format!(
+        "{declarations}
+test identities {{
+    let a: Tag<type(true)> = make(3)
+    let b: Tag<type(\"\")> = make(\"s\")
+    let child = Child<i64>(value: 4, tag: a)
+    assert take(3, child.tag) + take(\"s\", b) == 14
+}}"
+    );
+    let good = check(&[("m.hgl", &source)]);
+    assert!(good.findings.is_empty(), "{}", good.report);
+    let source = source.replace("take(3, child.tag)", "take(3, b)");
+    let bad = check(&[("m.hgl", &source)]);
+    assert_eq!(bad.findings.len(), 1, "{}", bad.report);
+    assert_eq!(bad.findings[0].code, "type/type.mismatch");
+}
+
+/// A declaration cycle that happens to pass a generic argument cannot supply
+/// a Type identity. Only an operator waiting for selection is deferred.
+#[test]
+fn generic_declaration_cycles_are_not_deferred_to_a_making_call() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"
+module m
+struct Tag<const K: Type> { value: i64 }
+const fn cyclic<T>() -> Tag<type(cyclic<T>())> =>
+    Tag<type(cyclic<T>())>(value: 2)
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/generic.argument_constant");
+}

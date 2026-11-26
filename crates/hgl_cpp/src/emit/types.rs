@@ -44,7 +44,7 @@ pub(super) fn cpp_type(program: &Program, ty: &Type) -> Option<String> {
 pub(super) fn cpp_type_in(
     program: &Program,
     ty: &Type,
-    queries: Option<&[Type]>,
+    queries: Option<&[ConstantValue]>,
 ) -> Option<String> {
     Some(match ty {
         Type::TypeValue => "::hglrt::type_value".to_string(),

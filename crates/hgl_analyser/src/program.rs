@@ -19,6 +19,8 @@ use crate::types::{
 /// Every module found in the files analysed, in order of module path.
 #[derive(Debug, Clone, Default)]
 pub struct Program {
+    /// A declaration contains an overload-dependent static type query (TYPE-18).
+    pub(crate) has_dependent_type_queries: bool,
     /// Storage dependencies after declared struct fields resolve (TYPE-18).
     /// Later passes fill bodies, leaving this immutable summary reusable.
     pub(crate) type_value_storage: std::sync::OnceLock<crate::type_values::TypeStorage>,

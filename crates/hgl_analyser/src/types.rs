@@ -627,6 +627,14 @@ impl Eq for Constant {}
 pub enum ConstantValue {
     /// A type's identity, fixed at compilation (TYPE-18, GEN-13).
     Type(Box<Type>),
+    /// A cold declaration query whose operand selects its result only after
+    /// generic arguments are known (TYPE-18, GEN-7).
+    InstanceTypeQuery {
+        /// Location of the lexical type query.
+        at: Location,
+        /// Type and value arguments in that declaration's environment.
+        bindings: Vec<(Location, Argument)>,
+    },
     /// An `i64`.
     Int(i64),
     /// An `f64`. Never a NaN: a constant that comes to one is

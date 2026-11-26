@@ -9,7 +9,6 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::Typer;
 use super::fit::{nullable, open};
 use super::inference::{fixed, placed};
-use crate::declared::substitute_within;
 use crate::hir::{self, Expr, ExprKind};
 use crate::program::Program;
 use crate::syntax::{child, ungrouped};
@@ -99,7 +98,7 @@ impl Program {
                     read.members
                         .iter()
                         .map(|member| {
-                            let ty = placed(substitute_within(&member.ty, &map), &own);
+                            let ty = placed(self.specialize_type(&member.ty, &map), &own);
                             // A field whose type is not known has a
                             // delta that is not known either.
                             let delta = if open(&ty) {

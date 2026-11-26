@@ -1167,7 +1167,7 @@ impl<'a> Typer<'a> {
                         self.pack_member_fault(self.at(node), &missing);
                         Type::Unknown
                     });
-                    placed(ty, &own)
+                    placed(self.program.resolve_instance_type(ty), &own)
                 };
                 let written_type = written_pack
                     .filter(|(generic, _)| slots[index].type_pack == Some(*generic))

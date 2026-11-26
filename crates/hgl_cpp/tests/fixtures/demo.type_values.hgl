@@ -285,3 +285,49 @@ test reflected_field_layout {
     assert nested.frame.tag.value == 12
     assert type(direct.tag) != type(nested.frame.tag)
 }
+
+# GEN-7, TYPE-18: each concrete input selects the result used in the
+# field, parent and callable signatures. The selected body stays cold.
+operator label_kind<A, R>(value: A) -> R
+impl const fn label_kind(value: list<i64>) -> bool {
+    assert false
+    return true
+}
+impl const fn label_kind(value: list<str>) -> str {
+    assert false
+    return "label"
+}
+abstract struct Labelled<T> requires T in {i64, str} {
+    item: T
+    label: Tagged<type(label_kind(empty_items<T>()))>
+}
+struct LabelledItem<T> : Labelled<T> {}
+const fn make_label<T>(item: T, n: i64) -> Tagged<type(label_kind(empty_items<T>()))>
+    requires T in {i64, str} => Tagged<type(label_kind(empty_items<T>()))>(value: n)
+const fn read_label<T>(item: T, label: Tagged<type(label_kind(empty_items<T>()))>) -> i64
+    requires T in {i64, str} => label.value
+test instance_selected_field_layout {
+    let number = LabelledItem<i64>(item: 4, label: make_label(4, 11))
+    let text = LabelledItem<str>(item: "a", label: make_label("a", 13))
+    let parent: Labelled<i64> = number
+    assert read_label(4, parent.label) == 11
+    assert read_label("a", text.label) == 13
+    assert type(parent.label) == type(Tagged<type(true)>(value: 0))
+    assert type(text.label) == type(Tagged<type("")>(value: 0))
+}
+# expect-error(type, "type.mismatch")
+const fn crossed_labels() -> i64 => read_label("a", make_label(4, 11))
+
+# The open application admits a generic candidate. A more specific
+# candidate supplies the layout identity when the argument becomes str.
+struct RankedLabel<T> {
+    item: T
+    label: Tagged<type(cold_sample(cold_make<T>()))>
+}
+test specific_candidate_field_layout {
+    let base = RankedLabel<i64>(item: 1, label: Tagged<type(cold_sample(cold_make<i64>()))>(value: 3))
+    let specific = RankedLabel<str>(item: "a", label: Tagged<type((true, false))>(value: 5))
+    assert base.label.value == 3
+    assert specific.label.value == 5
+    assert type(base.label) != type(specific.label)
+}

@@ -24,7 +24,7 @@
 //! are not written yet.
 
 use hgl_analyser::hir::Expr;
-use hgl_analyser::{Detail, NamedKind, Program, Type};
+use hgl_analyser::{ConstantValue, Detail, NamedKind, Program, Type};
 
 use super::Emitter;
 use super::calls::changes;
@@ -48,7 +48,7 @@ mod layouts;
 pub(super) fn composite_type(
     program: &Program,
     ty: &Type,
-    queries: Option<&[Type]>,
+    queries: Option<&[ConstantValue]>,
 ) -> Option<String> {
     Some(match ty {
         // TYPE-14: "A set's element and a dictionary's key are never
@@ -77,7 +77,7 @@ pub(super) fn composite_type(
 /// struct's the struct's delta.
 /// "In a generic declaration it stays as written until T is known": in a
 /// generic struct, `hglrt::delta_t` of the parameter.
-fn delta_type(program: &Program, of: &Type, queries: Option<&[Type]>) -> Option<String> {
+fn delta_type(program: &Program, of: &Type, queries: Option<&[ConstantValue]>) -> Option<String> {
     Some(match of {
         Type::Set(element) => format!(
             "::{}::set_delta<{}>",
