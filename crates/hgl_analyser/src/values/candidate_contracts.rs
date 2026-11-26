@@ -161,7 +161,8 @@ pub(crate) fn check_candidate_contracts(
     ties::check(program, diagnostics, tests);
 }
 
-/// GEN-6: taking a public parameter preserves its written modifier.
+/// GEN-6 and FN-15: a candidate preserves const. Only the candidate
+/// can mark a parameter var, so a public var has its own declaration error.
 fn missing_modifier<'a>(
     public: &'a Signature,
     candidate: &'a Signature,
@@ -174,8 +175,6 @@ fn missing_modifier<'a>(
             let given = &candidate.parameters[slot?];
             let mode = if parameter.constant && !given.constant {
                 "`const` modifier"
-            } else if parameter.var && !given.var {
-                "`var` modifier"
             } else if matches!(
                 (&parameter.ty, &given.ty),
                 (Type::Function(expected), Type::Function(given)) if expected.value && !given.value

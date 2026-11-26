@@ -190,6 +190,22 @@ fn a_candidate_keeps_the_operators_parameter_modifiers() {
     );
 }
 
+/// FN-15: an operator cannot declare var. That syntax has one
+/// declaration error before any candidate configuration is considered.
+#[test]
+fn a_public_var_is_reported_only_on_the_operator() {
+    let checked = module(concat!(
+        "operator store_value(var target: i64, value: i64)\n",
+        "impl const fn store_value(target: i64, value: i64) {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:22 function-kind/parameter.var FN-15"],
+        "{}",
+        checked.report
+    );
+}
+
 /// GEN-6: a condition on an option does not restore a missing const
 /// modifier. The value and native candidates reject where declared.
 #[test]
