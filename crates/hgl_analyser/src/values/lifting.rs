@@ -314,7 +314,7 @@ fn category_with_functions(
         | ExprKind::PackEntry { pack: local, .. } => {
             locals.get(*local).map_or(Value, |local| local.category)
         }
-        ExprKind::DeferredPackRead => Unsettled,
+        ExprKind::DeferredPackRead | ExprKind::DeferredPackCondition => Unsettled,
         // EXPR-16: a range has ordinary bounds. Its loop variable does
         // not become a connection even when a bound was reported.
         ExprKind::Range { .. } => Value,
