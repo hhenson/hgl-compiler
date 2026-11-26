@@ -41,7 +41,7 @@ mod callbacks;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use hgl_diagnostics::{Category, Code, Diagnostics};
+use hgl_diagnostics::{Category, Code, Diagnostics, Location};
 use hgl_parser::HasSpan;
 use hgl_source::{FileId, Span};
 use petgraph::algo::kosaraju_scc;
@@ -51,6 +51,7 @@ use petgraph::visit::NodeFiltered;
 use crate::hir::{Callee, Expr, ExprKind, walk_statements};
 use crate::program::{Binding, DeclarationKind, Program, Role};
 use crate::read::{default_of, parameters};
+use crate::syntax::pack_key_branches;
 use crate::types::{Detail, Type};
 use crate::values::{ForwardingInstance, has_forwarded_calls};
 use crate::{codes, error};
@@ -166,6 +167,7 @@ struct PackBodies {
     instances: HashMap<Declared, Vec<ForwardingInstance>>,
     waiting: VecDeque<(Declared, usize)>,
     bound: HashMap<Declared, Vec<Vec<Part>>>,
+    guarded_constants: HashMap<(Declared, Location), Vec<Part>>,
 }
 
 impl PackBodies {
@@ -212,8 +214,17 @@ impl PackBodies {
             // Keep the declaration's folded constant references, and use
             // the checked body for edges that depend on the pack shape.
             let mut reads = vec![Part::Body(declaration)];
-            if let Some(body) = self.instances[&declaration][index].body(program) {
-                walk_statements(&body.statements, &mut |visited| {
+            if let Some(instance) = self.instances[&declaration][index].body(program) {
+                for branch in instance.selected_pack_branches {
+                    reads.extend(
+                        self.guarded_constants
+                            .get(&(declaration, branch))
+                            .into_iter()
+                            .flatten()
+                            .copied(),
+                    );
+                }
+                walk_statements(&instance.body.statements, &mut |visited| {
                     reads_of(program, visited, callbacks, self, &mut reads);
                 });
             }
@@ -374,7 +385,11 @@ fn read_parameter_defaults(
 /// A name read as a value is in the typed program already. This adds
 /// the ones the typed program has folded to their values: a size, and a
 /// generic value argument (GEN-8).
-fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
+fn named_constants(
+    program: &Program,
+    index: usize,
+    packs: &mut PackBodies,
+) -> Vec<(Part, Vec<Part>)> {
     let module = &program.modules[index];
     // Within each file, order source ranges separately for ordinary
     // declarations and example-local declarations. An example's code
@@ -438,6 +453,7 @@ fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
     };
 
     let mut found = Vec::new();
+    let mut branches = HashMap::<usize, Vec<Span>>::new();
     for used in &module.uses {
         let Binding::Declarations {
             module: bound,
@@ -457,6 +473,30 @@ fn named_constants(program: &Program, index: usize) -> Vec<(Part, Vec<Part>)> {
             continue;
         }
         if let Some(part) = owner(used.at.file, used.at.span.start, used.documentation_example) {
+            if let Part::Body(declaration @ (_, position)) = part
+                && packs.forwarding.contains(&declaration)
+            {
+                let arms = branches.entry(position).or_insert_with(|| {
+                    pack_key_branches(&module.declarations[position].syntax)
+                        .map(|arm| arm.span())
+                        .collect()
+                });
+                let at = used.at;
+                let arm = arms
+                    .iter()
+                    .filter(|span| span.start <= at.span.start && at.span.end <= span.end)
+                    .min_by_key(|span| span.end - span.start);
+                if let Some(arm) = arm {
+                    // Folded uses retain the dependency only in the
+                    // concrete body whose pack selects this arm (CTRL-16).
+                    packs
+                        .guarded_constants
+                        .entry((declaration, Location::new(at.file, *arm)))
+                        .or_default()
+                        .extend(constants);
+                    continue;
+                }
+            }
             found.push((part, constants));
         }
     }
@@ -535,7 +575,7 @@ fn parts_of(
 
     // A constant named where the typed program keeps only its value: in
     // a type, as a size or a generic value argument.
-    parts.extend(named_constants(program, index));
+    parts.extend(named_constants(program, index, packs));
 }
 
 /// The cycles of `program`.

@@ -18,8 +18,8 @@ use crate::hir::{
 };
 use crate::program::{Binding, LocalKind};
 use crate::syntax::{
-    child, has_token, is_arg_keys_call, name_token, pack_key_branches, pack_member_names, tokens,
-    ungrouped,
+    child, has_token, is_arg_keys_call, is_pack_key_if, name_token, pack_key_branches,
+    pack_member_names, tokens, ungrouped,
 };
 use crate::types::{Argument, Constant, ConstantValue, GenericKind, Pack, Parameter, Scalar, Type};
 use crate::{codes, error};
@@ -100,6 +100,15 @@ pub(super) enum BoundPack {
 impl<'a> Typer<'a> {
     /// A concrete membership condition selects this arm's source reports.
     pub(super) fn report_pack_branch(&mut self, branch: &SyntaxNode) {
+        if let Some(selected) = self.selected_pack_branches {
+            selected
+                .borrow_mut()
+                .extend(branch.ancestors().filter_map(|arm| {
+                    let parent = arm.parent()?;
+                    (is_pack_key_if(&parent) && parent.children().skip(1).any(|child| child == arm))
+                        .then(|| self.at(&arm))
+                }));
+        }
         if let Some(reports) = self.program.pack_branch_reports.get(&self.at(branch)) {
             for report in reports {
                 self.diagnostics.emit(report.clone());
@@ -1374,14 +1383,18 @@ impl ForwardingInstance {
     }
 
     /// The checked body with this caller's pack keys bound to arguments.
-    pub(crate) fn body(&self, program: &crate::Program) -> Option<crate::hir::Body> {
-        let (_, body) = program.instance_with_inputs(
+    pub(crate) fn body(
+        &self,
+        program: &crate::Program,
+    ) -> Option<crate::instance::CheckedInstance> {
+        program.checked_instance(
             self.declaration,
             &self.generics,
             &self.requirements,
             self.inputs(),
-        )?;
-        Some(body)
+            &std::cell::RefCell::new(Diagnostics::new()),
+            &mut Diagnostics::new(),
+        )
     }
 
     fn inputs(&self) -> crate::InstanceInputs<'_> {

@@ -44,6 +44,10 @@ const fn assigned<...Ps>(items: ...Ps) -> i64 {
     return answer
 }
 
+const acyclic: i64 = cycle_pick(7)
+const fn cycle_pick<...Ps>(items: ...Ps) -> i64 =>
+    if first_key in arg_keys(Ps) { items[first_key] } else { acyclic }
+
 test constant_keys_choose_graph_and_node_branches {
     assert eval graph_present(tick: [3, 7]) == [8, 12]
     assert eval graph_absent(tick: [3, 7]) == [23, 27]
@@ -70,4 +74,8 @@ test only_the_selected_iteration_entry_is_checked {
 test only_the_selected_branch_assigns {
     assert assigned(2) == 3
     assert assigned() == 8
+}
+
+test an_untaken_branch_contributes_no_constant_cycle {
+    assert acyclic == 7
 }

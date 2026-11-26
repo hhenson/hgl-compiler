@@ -107,6 +107,8 @@ pub(crate) struct CheckedInstance {
     pub(crate) body: Body,
     /// The instance read the body from its syntax with concrete types.
     pub(crate) reread_body: bool,
+    /// Pack-key branches selected by this body for folded dependencies (CTRL-16).
+    pub(crate) selected_pack_branches: Vec<Location>,
     /// Checks made when a selected result differs from the admitting result.
     pub(crate) result_uses: Option<ResultUseChecks>,
 }
@@ -462,6 +464,7 @@ impl Program {
         let recheck_endpoints =
             crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
         let mut reread_body = false;
+        let mut selected_pack_branches = Vec::new();
         let reread_inputs = InstanceInputs {
             functions: &functions,
             pack_inputs: pending_forwards,
@@ -487,7 +490,7 @@ impl Program {
                         (module, declaration),
                         &body,
                     ))))
-            && let Some(reread) = crate::values::reread_instance_body(
+            && let Some((reread, branches)) = crate::values::reread_instance_body(
                 self,
                 (module, declaration),
                 (&taken, &map),
@@ -497,6 +500,7 @@ impl Program {
             )
         {
             body = reread;
+            selected_pack_branches = branches;
             reread_body = true;
         }
         let recheck = graph
@@ -514,7 +518,7 @@ impl Program {
             // result. Read its uses with the selected type in place,
             // including inferred locals and the calls that consume them.
             let mut reports = Diagnostics::new();
-            if let Some(reread) = crate::values::reread_instance_body(
+            if let Some((reread, branches)) = crate::values::reread_instance_body(
                 self,
                 (module, declaration),
                 (&taken, &map),
@@ -524,6 +528,7 @@ impl Program {
             ) {
                 diagnostics.borrow_mut().truncate(before);
                 body = reread;
+                selected_pack_branches = branches;
                 reread_body = true;
                 destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
                 self.place_body(&mut body, &arguments, &functions);
@@ -552,6 +557,7 @@ impl Program {
             signature: taken,
             body,
             reread_body,
+            selected_pack_branches,
             result_uses,
         })
     }

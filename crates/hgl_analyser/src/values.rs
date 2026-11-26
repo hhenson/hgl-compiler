@@ -559,7 +559,7 @@ pub(crate) fn reread_instance_body(
     inputs: crate::InstanceInputs<'_>,
     project: &dyn Fn(&Type) -> Type,
     diagnostics: &mut Diagnostics,
-) -> Option<hir::Body> {
+) -> Option<(hir::Body, Vec<Location>)> {
     let owner = &program.modules[module];
     let declared = &owner.declarations[declaration];
     let fallback;
@@ -699,7 +699,10 @@ pub(crate) fn reread_instance_body(
         types: &pack_types,
     });
     typer.pack_functions = inputs.functions.to_vec();
-    typer.body_at_phase(owner.phases[declaration])
+    let selected = RefCell::new(Vec::new());
+    typer.selected_pack_branches = Some(&selected);
+    let body = typer.body_at_phase(owner.phases[declaration])?;
+    Some((body, selected.into_inner()))
 }
 
 /// GEN-1: a written argument needs a type unless it takes a whole result.
@@ -807,6 +810,8 @@ struct Typer<'a> {
     absent_type_uses: Option<&'a HashMap<(FileId, u32), Location>>,
     /// Written pack lookups reported only when their guard selects them (CTRL-16).
     guarded_pack_faults: Option<&'a GuardedPackFaults>,
+    /// The committed pack branches a concrete body actually read (CTRL-16).
+    selected_pack_branches: Option<&'a RefCell<Vec<Location>>>,
     /// The generic arguments each call writes, by where its callee
     /// starts (GEN-8).
     calls: &'a HashMap<(FileId, u32), &'a CallArguments>,
@@ -1121,6 +1126,7 @@ impl<'a> Typer<'a> {
             written: tables.written,
             absent_type_uses: None,
             guarded_pack_faults: None,
+            selected_pack_branches: None,
             calls: tables.calls,
             locals: Vec::new(),
             pair_phases: None,
@@ -1341,6 +1347,9 @@ impl<'a> Typer<'a> {
             nested_query_selects: self.nested_query_selects,
             deferred_type_fit: self.deferred_type_fit.is_some_and(Cell::get),
             unsettled_callback_pair: self.unsettled_callback_pair,
+            selected_pack_branches: self
+                .selected_pack_branches
+                .map_or(0, |selected| selected.borrow().len()),
             resolved_written: self
                 .resolved_written
                 .map_or(0, |target| target.borrow().len()),
@@ -1360,6 +1369,9 @@ impl<'a> Typer<'a> {
     fn take_back(&mut self, mark: Mark, keep_flow: bool) -> bool {
         self.nested_query_selects = mark.nested_query_selects;
         self.unsettled_callback_pair = mark.unsettled_callback_pair;
+        if let Some(selected) = self.selected_pack_branches {
+            selected.borrow_mut().truncate(mark.selected_pack_branches);
+        }
         if let Some(deferred) = self.deferred_type_fit {
             deferred.set(mark.deferred_type_fit);
         }
@@ -1535,6 +1547,8 @@ struct Mark {
     /// Whether a fit was deferred before this tentative reading.
     deferred_type_fit: bool,
     unsettled_callback_pair: bool,
+    /// Number of selected pack branches before a tentative read (CTRL-16).
+    selected_pack_branches: usize,
     /// How many body-level resolved written types have been recorded.
     resolved_written: usize,
     /// Whether the active role probe already observed a temporal pair call.
