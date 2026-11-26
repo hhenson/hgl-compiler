@@ -365,6 +365,76 @@ fn only_linked_named_members_constrain_an_ordinary_trial() {
     assert_eq!(unrelated.summary(), NONE, "{}", unrelated.report);
 }
 
+/// GEN-3, GEN-7 and GEN-17: a key known to be present witnesses the
+/// universal for that pack. An ordinary argument can use the resulting
+/// intersection even when the call does not itself take a pack member.
+#[test]
+fn a_present_key_witnesses_ordinary_finite_requirements() {
+    let declarations = concat!(
+        "const bid: str = \"bid\"\nconst zero: i64 = 0\n",
+        "const fn need<X>(x: X) -> X requires X == f64 => x\n",
+        "operator pick<X>(x: X) -> X\nimpl const fn pick(x: f64) -> f64 => x\n",
+        "const fn prove<T, ...Ps, ...Qs, const K: str>(p: const fn(...{Ps}) -> i64, ",
+        "q: const fn(...{Qs}) -> i64, x: T) -> T\n",
+    );
+    let each = "each k in arg_keys(Ps) { Ps[k] == T && Ps[k] in {str, f64} }";
+    let split =
+        "each a in arg_keys(Ps) { Ps[a] in {str, f64} } && each b in arg_keys(Ps) { T == Ps[b] }";
+    for (condition, accepted) in [
+        (format!("bid in arg_keys(Ps) && {each}"), true),
+        (format!("{split} && (K) in arg_keys(Ps)"), true),
+        (format!("{each} && zero in arg_keys(Ps)"), true),
+        (each.to_owned(), false),
+        (format!("bid in arg_keys(Qs) && {each}"), false),
+        (
+            format!("(bid in arg_keys(Ps) || T == i64) && {each}"),
+            false,
+        ),
+        (
+            "bid in arg_keys(Ps) && each k in arg_keys(Ps) { Ps[k] == T && Ps[k] in {i64, f64} }"
+                .to_owned(),
+            false,
+        ),
+    ] {
+        for (call, code) in [
+            ("need<T>(x)", "constraint/requires.unmet"),
+            ("pick(x)", "operator/operator.no_candidate"),
+        ] {
+            let checked = module(&format!(
+                "{declarations} requires T in {{i64, f64}} && {condition} => {call}\n"
+            ));
+            if accepted {
+                assert_eq!(checked.summary(), NONE, "{}", checked.report);
+            } else {
+                assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+                assert_eq!(checked.findings[0].code, code, "{}", checked.report);
+            }
+        }
+    }
+}
+
+/// GEN-17: a universal's bound key denotes the particular witness, also
+/// in the constant argument of a nominal member type.
+#[test]
+fn a_present_keys_nominal_type_uses_its_own_key() {
+    for (key, accepted) in [("bid", true), ("ask", false)] {
+        let checked = module(&format!(
+            "const bid: str = \"bid\"\nconst ask: str = \"ask\"\n\
+             struct Tag<const Name: str> {{ value: i64 }}\n\
+             const fn need<X>(x: X) -> X requires X == Tag<bid> => x\n\
+             const fn relay<T, ...Ps>(p: const fn(...{{Ps}}) -> i64, x: T) -> T\n\
+             requires T in {{Tag<bid>, Tag<ask>}} && {key} in arg_keys(Ps) &&\n\
+             each k in arg_keys(Ps) {{ Ps[k] == T && Ps[k] == Tag<k> }} => need<T>(x)\n"
+        ));
+        if accepted {
+            assert_eq!(checked.summary(), NONE, "{}", checked.report);
+        } else {
+            assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+            assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+        }
+    }
+}
+
 /// GEN-3, GEN-7 and GEN-17: a contradiction in an equality class does
 /// not change what an ordinary argument or an independent pack key proves.
 #[test]

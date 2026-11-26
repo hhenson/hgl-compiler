@@ -4,10 +4,11 @@
 
 use super::{
     MemberChoices, StatedMemberTypes, StatedPackKey, StatedPackMember, conjoined_relations,
+    pack_view,
 };
-use crate::declared::same_type;
-use crate::syntax::{child, has_token};
-use crate::types::{Argument, Constant, Type};
+use crate::declared::{same_type, substitute_within};
+use crate::syntax::{child, has_token, tokens, ungrouped};
+use crate::types::{Argument, Constant, GenericKind, Scalar, Type};
 use crate::values::Typer;
 use crate::values::candidates::combinations;
 use crate::values::fit::whole;
@@ -32,6 +33,7 @@ impl Typer<'_> {
             .collect();
         let mut relations = Vec::new();
         conjoined_relations(&condition, &mut relations);
+        let mut present = Vec::new();
         for relation in relations {
             if let Some((at, choices)) = self.stated_membership(&relation, &own) {
                 domains.restrict(FiniteSlot::Parameter(at), choices);
@@ -41,6 +43,12 @@ impl Typer<'_> {
             let (Some(left), Some(right)) = (operands.next(), operands.next()) else {
                 continue;
             };
+            if tokens(&relation).any(|token| token.text() == "in")
+                && let Some(member) = self.present_member(&left, &right)
+            {
+                present.push(member);
+                continue;
+            }
             let written =
                 |node: &SyntaxNode| self.written.get(&(self.file, node.span().start)).copied();
             if has_token(&relation, SyntaxKind::EqEq) {
@@ -71,7 +79,70 @@ impl Typer<'_> {
                 );
             }
         }
+        if !present.is_empty() {
+            self.apply_present_member_bounds(&mut domains, &present, &own);
+        }
         domains
+    }
+
+    /// A positive named key in arg_keys(Ps) guarantees that Ps[key] exists
+    /// (GEN-17). The universal on its own also admits an empty pack.
+    fn present_member(
+        &self,
+        left: &SyntaxNode,
+        right: &SyntaxNode,
+    ) -> Option<(Location, Constant)> {
+        let (view, name) = pack_view(right.clone())?;
+        let left = ungrouped(left.clone());
+        if view.text() != "arg_keys"
+            || !matches!(left.kind(), SyntaxKind::NamedType | SyntaxKind::NameExpr)
+        {
+            return None;
+        }
+        let pack = self.signature.generics.iter().find(|slot| {
+            slot.name == name.text() && matches!(slot.kind, GenericKind::Pack { .. })
+        })?;
+        let key = self.typed_in(self.file, &left, None).ok()?;
+        if !matches!(key.ty(), Some(Type::Scalar(Scalar::I64 | Scalar::Str))) {
+            return None;
+        }
+        Some((
+            pack.at,
+            Constant {
+                text: left.text().to_string(),
+                value: key.value,
+            },
+        ))
+    }
+
+    fn apply_present_member_bounds(
+        &self,
+        domains: &mut FiniteDomains,
+        present: &[(Location, Constant)],
+        own: &[Location],
+    ) {
+        for member in self.stated_pack_members() {
+            let StatedPackKey::Every(bound) = member.key else {
+                continue;
+            };
+            for (_, key) in present.iter().filter(|(pack, _)| *pack == member.pack) {
+                let slot = FiniteSlot::Member(member.pack, key.clone());
+                if let StatedMemberTypes::Equal(Type::Parameter { at, .. }) = &member.types {
+                    domains.join(slot, FiniteSlot::Parameter(*at));
+                } else {
+                    let given = Argument::Constant(key.clone());
+                    let types: Vec<_> = member
+                        .types
+                        .values()
+                        .iter()
+                        .map(|ty| substitute_within(ty, &[(bound, &given)]))
+                        .collect();
+                    if types.iter().all(|ty| whole(ty) && !mentions(ty, own)) {
+                        domains.restrict(slot, types.into_iter().map(Argument::Type).collect());
+                    }
+                }
+            }
+        }
     }
 }
 
