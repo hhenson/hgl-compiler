@@ -18,7 +18,7 @@ use super::{Tables, Typer, tables};
 use crate::constant::{Fault, Scope, Typed};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{Body, Callee, DefaultExpr, Expr, ExprKind, Value, walk_statements_mut};
-use crate::program::{Declaration, Program, Role};
+use crate::program::{Declaration, DeclarationKind, Program, Role};
 use crate::read::{default_of, parameters};
 use crate::syntax::{child, name_token, tokens};
 use crate::types::{
@@ -110,12 +110,26 @@ impl<'a> Typer<'a> {
                 // value declaration or a `const` parameter.
                 let invalid_shape = shaped(&parameter.ty)
                     && (parameter.constant || self.declaration.kind.role() == Some(Role::Value));
-                let expected = if invalid_shape {
+                // TYPE-12 permits a native value parameter to borrow an
+                // endpoint. UNIT-7/8 still hold its cold default to that
+                // place: keep the endpoint expectation so the existing
+                // TIME-9 reader checks the binding, even for an unknown T.
+                let borrowed_endpoint = matches!(parameter.ty, Type::Endpoint(_))
+                    && matches!(
+                        self.declaration.kind,
+                        DeclarationKind::NativeFunction(Role::Value)
+                            | DeclarationKind::NativeImplementation(Role::Value)
+                            | DeclarationKind::NativeCandidate(Role::Value, _)
+                            | DeclarationKind::NativeCandidateImplementation(Role::Value)
+                    );
+                let expected = if borrowed_endpoint {
+                    &parameter.ty
+                } else if invalid_shape {
                     &Type::Unknown
                 } else {
                     parameter_default_type(&parameter.ty, written_null(&written))
                 };
-                let expected = if names_parameter(expected) {
+                let expected = if !borrowed_endpoint && names_parameter(expected) {
                     &Type::Unknown
                 } else {
                     expected
