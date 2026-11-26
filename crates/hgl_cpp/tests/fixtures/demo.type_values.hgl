@@ -386,3 +386,19 @@ test instance_selected_grandparent {
 }
 # expect-error(type, "type.mismatch")
 const fn crossed_label_base(label: TextLabel) -> i64 => bool_label_id(label)
+
+# FN-14, GEN-2, TYPE-18: these applications occur only in a specialized
+# callback body. The enclosing functions expose neither concrete layout.
+struct CallbackLabel<T> {
+    item: T
+    tag: Tagged<type(cold_sample(cold_make<T>()))>
+}
+const fn call_once<T>(op: const fn(T) -> i64, item: T) -> i64 => op(item)
+const fn callback_label<T>(item: T) -> i64 => call_once(fn(value: T) => {
+    let local = CallbackLabel<T>(item: value, tag: Tagged<type(cold_sample(cold_make<T>()))>(value: 17))
+    local.tag.value
+}, item)
+test layout_in_callback_only {
+    assert callback_label(2) == 17
+    assert callback_label("text") == 17
+}

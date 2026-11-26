@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use hgl_diagnostics::Location;
 
 use crate::declared::substitute_within;
-use crate::hir::{Body, DefaultExpr, Expr, ExprKind, Value, walk_statements};
+use crate::hir::{Body, Callee, DefaultExpr, Expr, ExprKind, Value, walk_statements};
 use crate::{Argument, ConstantValue, Detail, NamedKind, Program, Signature, Type};
 
 type QueryKey = (Location, Vec<(Location, String)>);
@@ -179,6 +179,14 @@ impl LayoutApplications<'_> {
             ExprKind::Literal(Value::Type(ty)) => return self.ty(ty),
             _ => return,
         };
+        // A callable owns its anonymous body outside the ordinary expression
+        // walk. Its layout can first become concrete in the enclosing instance.
+        if let Callee::Anonymous(function) = callee {
+            for ty in function.template.types() {
+                self.ty(ty);
+            }
+            self.body(&function.body);
+        }
         for argument in callee.generics() {
             match argument {
                 Argument::Type(ty) => self.ty(ty),
