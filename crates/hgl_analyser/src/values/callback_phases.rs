@@ -30,10 +30,6 @@ impl Typer<'_> {
                     .then_some((parameter.at, slot))
             })
             .collect();
-        let scopes: Vec<_> = original
-            .iter()
-            .map(|report| self.report_scope(report.primary))
-            .collect();
         let mut possible = vec![true; original.len()];
         let mut pending = vec![(vec![None; self.signature.parameters.len()], None)];
         let mut deps = HashMap::new();
@@ -62,6 +58,15 @@ impl Typer<'_> {
                     unresolved = Some(report.clone());
                     continue;
                 }
+                // A fixed bad operand and a provisional consumer can be in
+                // one expression. Match diagnostics at their own source
+                // site; use the enclosing statement only for dependencies.
+                for (keep, original) in possible.iter_mut().zip(original) {
+                    *keep &= reports
+                        .as_slice()
+                        .iter()
+                        .any(|r| r.primary == original.primary && r.code == original.code);
+                }
                 reports
                     .as_slice()
                     .iter()
@@ -69,9 +74,6 @@ impl Typer<'_> {
                     .map(|r| self.report_scope(r.primary))
                     .collect::<Vec<_>>()
             };
-            for (keep, scope) in possible.iter_mut().zip(&scopes) {
-                *keep &= failures.contains(scope);
-            }
             let mut smallest = None;
             for scope in &failures {
                 let used = deps

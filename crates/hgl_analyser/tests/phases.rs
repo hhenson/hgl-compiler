@@ -750,10 +750,11 @@ fn independent(f: const fn(i64) -> i64, t: i64) -> i64 {
     let unrelated: bool = 17
     return t + amount
 }
+fn bad_operand(f: const fn(i64) -> i64, t: i64) -> i64 => t + pick(f("wrong"))
 "#,
     )]);
-    assert_eq!(checked.findings.len(), 2, "{}", checked.report);
-    for line in [8, 12] {
+    assert_eq!(checked.findings.len(), 3, "{}", checked.report);
+    for line in [8, 12, 15] {
         assert!(
             checked
                 .findings
