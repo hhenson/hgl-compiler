@@ -48,7 +48,7 @@ const PAIR_SCOPE_CACHE_LIMIT: usize = 16;
 pub(super) struct PairPhases {
     scope: Location,
     call: SyntaxNode,
-    categories: HashMap<Location, Vec<(PairScope, ValueCategory)>>,
+    categories: HashMap<Location, Vec<(PairScope, ValueCategory, bool)>>,
     probe_types: HashMap<Location, Vec<(PairScope, Option<Type>, Type)>>,
     local_reads: OnceCell<HashMap<Location, Vec<u32>>>,
 }
@@ -568,14 +568,16 @@ impl<'a> Typer<'a> {
                 if root {
                     self.pair_phases = PairPhases::at(self, list);
                 }
-                let selected = match preferred_call_role(
-                    true,
-                    [self.pair_operands(name, list, module, (value, temporal))],
-                ) {
+                let (operands, all_fn_args_probed) =
+                    self.pair_operands(name, list, module, (value, temporal));
+                let selected = match preferred_call_role(true, [operands]) {
                     Role::Value => value,
                     Role::Temporal => temporal,
                 };
-                let result = if self.probing_pair_role > 0 && !self.evaluating {
+                let result = if self.probing_pair_role > 0
+                    && !self.evaluating
+                    && (selected == temporal || all_fn_args_probed)
+                {
                     self.probe_selected_pair(
                         name,
                         list,
@@ -592,15 +594,15 @@ impl<'a> Typer<'a> {
                 }
                 return result;
             }
-            (false, Some(value), Some(_)) if self.probing_pair_role > 0 && !self.evaluating => {
-                return self.probe_selected_pair(
-                    name,
-                    list,
-                    (module, value),
-                    false,
-                    expected,
-                    generics,
-                );
+            (false, Some(value), Some(_))
+                if self.probing_pair_role > 0
+                    && !self.evaluating
+                    && self.value_pair_probe_shape(list, (module, value)) == Some(false) =>
+            {
+                if let Some(ty) = self.cached_probe_type(list, expected) {
+                    return self.pair_probe_call((module, value), Some(ty));
+                }
+                Some(value)
             }
             (true, None, temporal) => temporal,
             (_, value, _) => value,
@@ -880,32 +882,10 @@ impl<'a> Typer<'a> {
         if concrete_result {
             return self.pair_probe_call((module, selected), None);
         }
-        let at = self.at(list);
-        let call_node = list.parent();
-        let call_at = call_node.as_ref().map_or(at, |call| self.at(call));
-        let cached_ty = self
-            .pair_phases
-            .as_ref()
-            .filter(|phases| phases.contains(at))
-            .and_then(|phases| {
-                phases.probe_types.get(&at)?.iter().find_map(
-                    |(scope, cached_expected, cached_ty)| {
-                        (cached_expected.as_ref() == expected
-                            && scope.matches(
-                                self,
-                                phases,
-                                call_at,
-                                call_node.as_ref().unwrap_or(list),
-                                ValueCategory::Value,
-                                true,
-                            ))
-                        .then(|| cached_ty.clone())
-                    },
-                )
-            });
-        if let Some(ty) = cached_ty {
+        if let Some(ty) = self.cached_probe_type(list, expected) {
             return self.pair_probe_call((module, selected), Some(ty));
         }
+        let at = self.at(list);
         let scope = self
             .pair_phases
             .as_ref()
@@ -928,6 +908,35 @@ impl<'a> Typer<'a> {
             }
         }
         (kind, ty)
+    }
+
+    /// Look up a generic value pair's cached result type from an earlier
+    /// graph-mode probe in the same `PairPhases`. Only entries previously
+    /// verified as `ValueCategory::Value` with matching referenced locals
+    /// match, so connection captures inside value callbacks are preserved.
+    fn cached_probe_type(&self, list: &SyntaxNode, expected: Option<&Type>) -> Option<Type> {
+        let at = self.at(list);
+        let call_node = list.parent();
+        let call_at = call_node.as_ref().map_or(at, |call| self.at(call));
+        self.pair_phases
+            .as_ref()
+            .filter(|phases| phases.contains(at))
+            .and_then(|phases| {
+                phases.probe_types.get(&at)?.iter().find_map(
+                    |(scope, cached_expected, cached_ty)| {
+                        (cached_expected.as_ref() == expected
+                            && scope.matches(
+                                self,
+                                phases,
+                                call_at,
+                                call_node.as_ref().unwrap_or(list),
+                                ValueCategory::Value,
+                                true,
+                            ))
+                        .then(|| cached_ty.clone())
+                    },
+                )
+            })
     }
 
     /// Returns `Some(true)` when a value-selected pair can short-circuit
@@ -1008,13 +1017,16 @@ impl<'a> Typer<'a> {
 
     /// Read the category of the supplied arguments before choosing a
     /// role. Omitted arguments are filled only by the selected signature.
+    /// Also reports whether every written anonymous callback argument was
+    /// probed with a role template (so short-circuiting a value selection
+    /// cannot skip captures inside an unprobed `const fn` callback).
     fn pair_operands(
         &mut self,
         name: &SyntaxToken,
         list: &SyntaxNode,
         module: usize,
         (value, temporal): (usize, usize),
-    ) -> ValueCategory {
+    ) -> (ValueCategory, bool) {
         let at = self.at(list);
         let call_node = list.parent();
         let call_at = call_node.as_ref().map_or(at, |call| self.at(call));
@@ -1024,18 +1036,19 @@ impl<'a> Typer<'a> {
             .filter(|phases| phases.contains(at));
         if let Some(phases) = cache
             && let Some(entries) = phases.categories.get(&at)
-            && let Some((_, category)) = entries.iter().find(|(scope, category)| {
-                scope.matches(
-                    self,
-                    phases,
-                    call_at,
-                    call_node.as_ref().unwrap_or(list),
-                    *category,
-                    false,
-                )
-            })
+            && let Some((_, category, all_fn_args_probed)) =
+                entries.iter().find(|(scope, category, _)| {
+                    scope.matches(
+                        self,
+                        phases,
+                        call_at,
+                        call_node.as_ref().unwrap_or(list),
+                        *category,
+                        false,
+                    )
+                })
         {
-            return *category;
+            return (*category, *all_fn_args_probed);
         }
         #[cfg(test)]
         tests::PHASE_PROBES.with(|count| count.set(count.get() + 1));
@@ -1045,6 +1058,7 @@ impl<'a> Typer<'a> {
         let must_return = self.must_return;
         let returning_tails = self.returning_tails.clone();
         let callbacks = self.pair_callback_templates(name, list, module, (value, temporal));
+        let mut all_fn_args_probed = true;
         let mut category = if self.pack_inputs.is_none() && spread_operands(list).next().is_some() {
             ValueCategory::Unsettled
         } else {
@@ -1065,6 +1079,9 @@ impl<'a> Typer<'a> {
             let operand = if let Some(&(value, temporal)) = callbacks.get(&self.at(&node)) {
                 self.pair_callback_category(&node, value, temporal)
             } else {
+                if ungrouped(node.clone()).kind() == SyntaxKind::FnExpr {
+                    all_fn_args_probed = false;
+                }
                 let outer_saw_temporal = std::mem::replace(&mut self.probe_saw_temporal, false);
                 let value = self.expression(&node, None);
                 self.probe_saw_temporal = outer_saw_temporal;
@@ -1088,12 +1105,12 @@ impl<'a> Typer<'a> {
         {
             let entries = phases.categories.entry(at).or_default();
             if entries.len() < PAIR_SCOPE_CACHE_LIMIT {
-                entries.push((scope, category));
+                entries.push((scope, category, all_fn_args_probed));
             } else if let Some(last) = entries.last_mut() {
-                *last = (scope, category);
+                *last = (scope, category, all_fn_args_probed);
             }
         }
-        category
+        (category, all_fn_args_probed)
     }
 
     /// GEN-6 and FN-17: find the written arguments that take callable
@@ -2846,6 +2863,31 @@ mod tests {
             "fn g(tick: i64) -> i64 {\n",
             "    let value: i64 = tag({ let unused = ap(fn(n) => later(n), 1)\n 5 })\n",
             "    return tick + value\n",
+            "}\n",
+        ));
+        assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");
+    }
+
+    /// FN-4 and FN-17: probing an outer pair callback that enters a value
+    /// callback calling an inner pair with a captured connection preserves the
+    /// connection capture so the outer pair selects its temporal overload.
+    #[test]
+    fn value_callback_pair_preserves_captured_connection() {
+        let (diagnostics, _, _, _) = check_with_read_counts(concat!(
+            "const fn doubled(x: i64) -> i64 => x * 2\n",
+            "fn doubled(x: i64) -> i64 => x * 3\n",
+            "const fn gdoubled<T>(x: T) -> T => x\n",
+            "fn gdoubled<T>(x: T) -> T => x\n",
+            "const fn pair_const_cb(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 2\n",
+            "fn pair_const_cb(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 3\n",
+            "const fn apply_value(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+            "const fn choose(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+            "fn choose(f: fn(i64) -> i64, x: i64) -> str => \"temporal\"\n",
+            "fn g(tick: i64) -> str {\n",
+            "    let a: str = choose(fn(n) => apply_value(fn(k) => doubled(tick), n), 1)\n",
+            "    let b: str = choose(fn(n) => apply_value(fn(k) => gdoubled(tick), n), 1)\n",
+            "    let c: str = choose(fn(n) => pair_const_cb(fn(k) => tick, n), 1)\n",
+            "    return a\n",
             "}\n",
         ));
         assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");

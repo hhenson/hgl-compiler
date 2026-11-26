@@ -200,6 +200,8 @@ fn branch_let_nested(tick: i64) -> i64 =>
     }, 1)
 fn generic_nested(tick: i64) -> i64 =>
     tick + generic_apply(fn(n1) => later(n1) + generic_apply(fn(n0) => later(n0) + 1, 1), 1)
+fn value_callback_pair_capture(tick: i64) -> i64 =>
+    apply(fn(n) => apply_value(fn(k) => doubled(tick), n), 1)
 
 test nested_callbacks_across_lexical_environments {
     assert eval chained_nested(tick: [1, 2]) == [334, 335]
@@ -207,4 +209,5 @@ test nested_callbacks_across_lexical_environments {
     assert eval pure_nested(tick: [1, 5]) == [23, 27]
     assert eval branch_let_nested(tick: [1]) == [145]
     assert eval generic_nested(tick: [1]) == [142]
+    assert eval value_callback_pair_capture(tick: [1, 5]) == [12, 60]
 }
