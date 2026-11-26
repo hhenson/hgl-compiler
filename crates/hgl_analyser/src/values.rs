@@ -720,6 +720,12 @@ struct Typer<'a> {
     locals: Vec<Local>,
     /// Operand categories learned while probing one pair's arguments.
     pair_phases: Option<calls::PairPhases>,
+    /// Nesting depth of `anonymous_pair_category` role probes; lets nested
+    /// pair calls skip redundant committed reads during a tentative probe (FN-4).
+    probing_pair_role: u32,
+    /// Set during a tentative role probe when a short-circuited inner pair
+    /// selected its temporal definition; rolled back with [`Mark`].
+    probe_saw_temporal: bool,
     /// Call results unavailable when reading a body for independent calls.
     unsettled_results: Option<&'a HashSet<Location>>,
     /// The local each declaration is, by where its name is declared.
@@ -1009,6 +1015,8 @@ impl<'a> Typer<'a> {
             calls: tables.calls,
             locals: Vec::new(),
             pair_phases: None,
+            probing_pair_role: 0,
+            probe_saw_temporal: false,
             unsettled_results: None,
             declared: HashMap::new(),
             assigned: Vec::new(),
@@ -1183,6 +1191,7 @@ impl<'a> Typer<'a> {
             unsure: self.unsure,
             present: self.present.len(),
             selecting: self.selecting.borrow().len(),
+            probe_saw_temporal: self.probe_saw_temporal,
         }
     }
 
@@ -1240,6 +1249,7 @@ impl<'a> Typer<'a> {
             self.assigned = mark.assigned;
             self.returned = mark.returned;
             self.unsure = mark.unsure;
+            self.probe_saw_temporal = mark.probe_saw_temporal;
         }
     }
 
@@ -1345,6 +1355,8 @@ struct Mark {
     present: usize,
     /// How many calls are put to be selected for each instance.
     selecting: usize,
+    /// Whether the active role probe already observed a temporal pair call.
+    probe_saw_temporal: bool,
 }
 
 /// A value candidate of an operator: the positions of its module and of

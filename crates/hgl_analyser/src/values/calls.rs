@@ -17,6 +17,7 @@ use super::children::ChildOrigin;
 use super::constants::generic_default;
 use super::dependent_packs::{PackTypes, dependent_slot};
 use super::evals::{trace_input_type, trace_pack_type};
+use super::expressions::holds_block;
 use super::fit::{not_null, open, whole};
 use super::forwarded_packs::spread_operands;
 use super::inference::{
@@ -39,13 +40,17 @@ use crate::types::{
 };
 use crate::{codes, error};
 
+/// Maximum cached scope variants per pair call site.
+const PAIR_SCOPE_CACHE_LIMIT: usize = 16;
+
 /// One pair call, including its tentative and committed readings.
 /// Descendant probes can reuse categories in the same lexical scope.
 pub(super) struct PairPhases {
     scope: Location,
     call: SyntaxNode,
-    categories: HashMap<Location, (PairScope, ValueCategory)>,
-    formal_reads: OnceCell<HashMap<Location, Vec<u32>>>,
+    categories: HashMap<Location, Vec<(PairScope, ValueCategory)>>,
+    probe_types: HashMap<Location, Vec<(PairScope, Option<Type>, Type)>>,
+    local_reads: OnceCell<HashMap<Location, Vec<u32>>>,
 }
 
 impl PairPhases {
@@ -57,7 +62,8 @@ impl PairPhases {
             scope: typer.at(&call),
             call,
             categories: HashMap::new(),
-            formal_reads: OnceCell::new(),
+            probe_types: HashMap::new(),
+            local_reads: OnceCell::new(),
         })
     }
 
@@ -67,10 +73,10 @@ impl PairPhases {
             && at.span.end <= self.scope.span.end
     }
 
-    /// Find written uses of parameters declared in this call. Those
-    /// are anonymous formals whose category may differ between a role
-    /// probe and a committed read. Include nested captures and braces.
-    fn index_formal_reads(&self, typer: &Typer<'_>) -> HashMap<Location, Vec<u32>> {
+    /// Find written uses of locals declared in this call (parameters,
+    /// `let`, and `var` bindings whose category or assignment state may
+    /// differ between a role probe and a committed read).
+    fn index_local_reads(&self, typer: &Typer<'_>) -> HashMap<Location, Vec<u32>> {
         let mut reads = HashMap::<Location, Vec<u32>>::new();
         for token in self
             .call
@@ -78,10 +84,7 @@ impl PairPhases {
             .filter_map(|part| part.into_token())
         {
             let start = token.span().start;
-            if let Some(Binding::Local {
-                at,
-                kind: LocalKind::Parameter,
-            }) = typer.bindings.get(&(typer.file, start))
+            if let Some(Binding::Local { at, .. }) = typer.bindings.get(&(typer.file, start))
                 && self.contains(*at)
             {
                 reads.entry(*at).or_default().push(start);
@@ -90,12 +93,13 @@ impl PairPhases {
         reads
     }
 
-    fn ignores_formal_category(&self, typer: &Typer<'_>, local: &Local, call: Location) -> bool {
-        local.kind == LocalKind::Parameter
-            && self.contains(local.at)
+    /// True when `local` is declared inside this pair root and has no
+    /// resolved reference anywhere inside `call`.
+    fn local_unread_in(&self, typer: &Typer<'_>, local: &Local, call: Location) -> bool {
+        self.contains(local.at)
             && self
-                .formal_reads
-                .get_or_init(|| self.index_formal_reads(typer))
+                .local_reads
+                .get_or_init(|| self.index_local_reads(typer))
                 .get(&local.at)
                 .is_none_or(|reads| {
                     let first = reads.partition_point(|&start| start < call.span.start);
@@ -120,16 +124,13 @@ struct PairScope {
     naming: Option<Location>,
     binding_child: Option<Location>,
     designating: Option<Location>,
-    temporal: Option<LocalId>,
     dynamic: Option<LocalId>,
     range_bindings: Vec<LocalId>,
     generic_bindings: Vec<(Location, Argument)>,
     instance: Vec<(Location, Argument)>,
     evaluation: PairEvaluation,
     returned: bool,
-    must_return: bool,
-    unsure: bool,
-    projected_formals: bool,
+    projected_locals: bool,
 }
 
 /// Reading a callback, a pack pass, or an eval can change the context of
@@ -159,6 +160,19 @@ impl PairEvaluation {
             requiring: typer.requiring,
         }
     }
+
+    fn matches(&self, other: &Self, ignore_value_mode: bool) -> bool {
+        if ignore_value_mode {
+            self.testing == other.testing
+                && self.evaluating == other.evaluating
+                && self.integration == other.integration
+                && self.generating == other.generating
+                && self.valued == other.valued
+                && self.requiring == other.requiring
+        } else {
+            self == other
+        }
+    }
 }
 
 impl PairScope {
@@ -176,32 +190,63 @@ impl PairScope {
             naming: typer.naming,
             binding_child: typer.binding_child,
             designating: typer.designating,
-            temporal: typer.temporal,
             dynamic: typer.dynamic,
             range_bindings: typer.unrolled_range_bindings.clone(),
             generic_bindings: typer.bound.clone(),
             instance: typer.instance.clone(),
             evaluation: PairEvaluation::of(typer),
             returned: typer.returned,
-            must_return: typer.must_return,
-            unsure: typer.unsure,
-            projected_formals: Self::can_project_formals(typer),
+            projected_locals: Self::can_project_locals(typer),
         }
     }
 
-    // Forwarded entries and endpoint aliases can introduce reads
+    // Forwarded entries, hooks, and endpoint aliases can introduce reads
     // that the resolver did not record in the call's written subtree.
-    fn can_project_formals(typer: &Typer<'_>) -> bool {
+    fn can_project_locals(typer: &Typer<'_>) -> bool {
         typer.pack_inputs.is_none()
             && typer.pack_passes.is_empty()
             && typer.pack_functions.is_empty()
             && typer.aliases.is_empty()
             && typer.bound_children.is_empty()
             && typer.captures.is_empty()
+            && typer.hook.is_none()
     }
 
-    fn matches(&self, typer: &Typer<'_>, phases: &PairPhases, call: Location) -> bool {
-        let project_formals = self.projected_formals && Self::can_project_formals(typer);
+    fn matches(
+        &self,
+        typer: &Typer<'_>,
+        phases: &PairPhases,
+        call: Location,
+        call_node: &SyntaxNode,
+        cached: ValueCategory,
+        ignore_value_mode: bool,
+    ) -> bool {
+        let project_locals = self.projected_locals && Self::can_project_locals(typer);
+        let ignored_fact = |fact: &Fact| {
+            project_locals
+                && fact_local(fact)
+                    .and_then(|local| typer.locals.get(local))
+                    .is_some_and(|local| phases.local_unread_in(typer, local, call))
+        };
+        let dynamic_matches = self.dynamic == typer.dynamic
+            || (project_locals
+                && [self.dynamic, typer.dynamic]
+                    .into_iter()
+                    .flatten()
+                    .all(|outside| {
+                        typer.locals.iter().take(outside).all(|local| {
+                            local.kind != LocalKind::Var
+                                || phases.local_unread_in(typer, local, call)
+                        })
+                    }));
+        let anonymous_matches = match (&self.anonymous, &typer.anonymous) {
+            (None, None) => true,
+            (Some(probed), Some(current)) => {
+                probed == current
+                    || (probed.first_local == current.first_local && !has_direct_return(call_node))
+            }
+            _ => false,
+        };
         self.locals.len() == typer.locals.len()
             && self
                 .locals
@@ -209,36 +254,74 @@ impl PairScope {
                 .zip(&typer.locals)
                 .all(|(probed, current)| {
                     probed == current
-                        || (project_formals
+                        || (project_locals
                             && probed.at == current.at
                             && probed.kind == current.kind
                             && probed.name == current.name
-                            && probed.ty == current.ty
-                            && probed.category != ValueCategory::Unsettled
-                            && current.category != ValueCategory::Unsettled
-                            && phases.ignores_formal_category(typer, current, call))
+                            && (phases.local_unread_in(typer, current, call)
+                                || (cached == ValueCategory::Connection
+                                    && phases.contains(current.at)
+                                    && probed.ty == current.ty
+                                    && probed.category == ValueCategory::Value
+                                    && current.category == ValueCategory::Connection)))
                 })
-            && self.assigned == typer.assigned
-            && self.facts == typer.present
+            && self.assigned.iter().zip(&typer.assigned).enumerate().all(
+                |(index, (probed, current))| {
+                    probed == current
+                        || (project_locals
+                            && phases.local_unread_in(typer, &typer.locals[index], call))
+                },
+            )
+            && self
+                .facts
+                .iter()
+                .filter(|fact| !ignored_fact(fact))
+                .eq(typer.present.iter().filter(|fact| !ignored_fact(fact)))
             && self.aliases == typer.aliases
             && self.children == typer.bound_children
             && self.captures == typer.captures
-            && self.anonymous == typer.anonymous
+            && anonymous_matches
             && self.hook == typer.hook
             && self.callable == typer.callable
             && self.naming == typer.naming
             && self.binding_child == typer.binding_child
             && self.designating == typer.designating
-            && self.temporal == typer.temporal
-            && self.dynamic == typer.dynamic
+            && dynamic_matches
             && self.range_bindings == typer.unrolled_range_bindings
             && self.generic_bindings == typer.bound
             && self.instance == typer.instance
-            && self.evaluation == PairEvaluation::of(typer)
+            && self
+                .evaluation
+                .matches(&PairEvaluation::of(typer), ignore_value_mode)
             && self.returned == typer.returned
-            && self.must_return == typer.must_return
-            && self.unsure == typer.unsure
     }
+}
+
+/// The local a presence/admission fact refers to, when it names one.
+fn fact_local(fact: &Fact) -> Option<LocalId> {
+    match *fact {
+        Fact::Present(local) | Fact::Valid(local) | Fact::Success(local) | Fact::Failure(local) => {
+            Some(local)
+        }
+        Fact::AllValid(_)
+        | Fact::ChildValid(_)
+        | Fact::DeferredChildGuard { .. }
+        | Fact::DeferredPackGuard { .. } => None,
+    }
+}
+
+/// True when `node` contains a `return` statement targeting an enclosing
+/// function (not nested inside an inner anonymous function).
+fn has_direct_return(node: &SyntaxNode) -> bool {
+    let mut stack: Vec<SyntaxNode> = node.children().collect();
+    while let Some(child) = stack.pop() {
+        match child.kind() {
+            SyntaxKind::ReturnStmt => return true,
+            SyntaxKind::FnExpr => continue,
+            _ => stack.extend(child.children()),
+        }
+    }
+    false
 }
 
 impl<'a> Typer<'a> {
@@ -492,11 +575,32 @@ impl<'a> Typer<'a> {
                     Role::Value => value,
                     Role::Temporal => temporal,
                 };
-                let result = self.call_function(name, list, (module, selected), expected, generics);
+                let result = if self.probing_pair_role > 0 && !self.evaluating {
+                    self.probe_selected_pair(
+                        name,
+                        list,
+                        (module, selected),
+                        selected == temporal,
+                        expected,
+                        generics,
+                    )
+                } else {
+                    self.call_function(name, list, (module, selected), expected, generics)
+                };
                 if root {
                     self.pair_phases = None;
                 }
                 return result;
+            }
+            (false, Some(value), Some(_)) if self.probing_pair_role > 0 && !self.evaluating => {
+                return self.probe_selected_pair(
+                    name,
+                    list,
+                    (module, value),
+                    false,
+                    expected,
+                    generics,
+                );
             }
             (true, None, temporal) => temporal,
             (_, value, _) => value,
@@ -750,6 +854,158 @@ impl<'a> Typer<'a> {
             .collect()
     }
 
+    /// During a tentative role probe, an inner pair call whose role is
+    /// already decided avoids redundant nested committed reads (FN-4):
+    /// - A temporal selection already proves the enclosing callback calls a
+    ///   temporal declaration (`Role::Temporal`).
+    /// - A value selection with no spreads, `var` parameters, or block
+    ///   arguments returns its concrete result directly, or caches its
+    ///   inferred generic result type across probes in the same `PairPhases`.
+    fn probe_selected_pair(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        (module, selected): (usize, usize),
+        is_temporal: bool,
+        expected: Option<&Type>,
+        generics: Option<&CallArguments>,
+    ) -> (ExprKind, Type) {
+        if is_temporal {
+            self.probe_saw_temporal = true;
+            return self.pair_probe_call((module, selected), None);
+        }
+        let Some(concrete_result) = self.value_pair_probe_shape(list, (module, selected)) else {
+            return self.call_function(name, list, (module, selected), expected, generics);
+        };
+        if concrete_result {
+            return self.pair_probe_call((module, selected), None);
+        }
+        let at = self.at(list);
+        let call_node = list.parent();
+        let call_at = call_node.as_ref().map_or(at, |call| self.at(call));
+        let cached_ty = self
+            .pair_phases
+            .as_ref()
+            .filter(|phases| phases.contains(at))
+            .and_then(|phases| {
+                phases.probe_types.get(&at)?.iter().find_map(
+                    |(scope, cached_expected, cached_ty)| {
+                        (cached_expected.as_ref() == expected
+                            && scope.matches(
+                                self,
+                                phases,
+                                call_at,
+                                call_node.as_ref().unwrap_or(list),
+                                ValueCategory::Value,
+                                true,
+                            ))
+                        .then(|| cached_ty.clone())
+                    },
+                )
+            });
+        if let Some(ty) = cached_ty {
+            return self.pair_probe_call((module, selected), Some(ty));
+        }
+        let scope = self
+            .pair_phases
+            .as_ref()
+            .filter(|phases| phases.contains(at))
+            .map(|_| PairScope::of(self));
+        let reported = self.diagnostics.len();
+        let (kind, ty) = self.call_function(name, list, (module, selected), expected, generics);
+        if !self.spent
+            && self.diagnostics.len() == reported
+            && whole(&ty)
+            && let Some(scope) = scope
+            && let Some(phases) = &mut self.pair_phases
+        {
+            let entries = phases.probe_types.entry(at).or_default();
+            let entry = (scope, expected.cloned(), ty.clone());
+            if entries.len() < PAIR_SCOPE_CACHE_LIMIT {
+                entries.push(entry);
+            } else if let Some(last) = entries.last_mut() {
+                *last = entry;
+            }
+        }
+        (kind, ty)
+    }
+
+    /// Returns `Some(true)` when a value-selected pair can short-circuit
+    /// immediately with its concrete declared result, `Some(false)` when its
+    /// generic result can be cached by `PairPhases::probe_types`, and `None`
+    /// when spreads, `var` parameters, or block arguments prevent skipping.
+    fn value_pair_probe_shape(
+        &self,
+        list: &SyntaxNode,
+        (module, declaration): (usize, usize),
+    ) -> Option<bool> {
+        if spread_operands(list).next().is_some() {
+            return None;
+        }
+        let Some(Detail::Callable(signature)) =
+            self.program.modules[module].details.get(declaration)
+        else {
+            return None;
+        };
+        if signature.parameters.iter().any(|parameter| parameter.var) {
+            return None;
+        }
+        if self
+            .call_entries(list)
+            .iter()
+            .any(|(_, _, node)| holds_block(node))
+        {
+            return None;
+        }
+        Some(
+            signature
+                .result
+                .as_ref()
+                .is_none_or(|ty| !names_parameter(ty)),
+        )
+    }
+
+    /// Lightweight call result returned during a discarded role probe once
+    /// an inner pair's role is decided (FN-4).
+    fn pair_probe_call(
+        &self,
+        (module, declaration): (usize, usize),
+        override_ty: Option<Type>,
+    ) -> (ExprKind, Type) {
+        let ty = override_ty.unwrap_or_else(|| {
+            match self.program.modules[module].details.get(declaration) {
+                Some(Detail::Callable(signature)) => signature
+                    .result
+                    .as_ref()
+                    .filter(|ty| !names_parameter(ty))
+                    .cloned()
+                    .unwrap_or(Type::Unknown),
+                _ => Type::Unknown,
+            }
+        });
+        let callee = Callee::Function {
+            module,
+            declaration,
+            generics: Vec::new(),
+            type_packs: Vec::new(),
+            requirements: Vec::new(),
+            defer_pack_members: false,
+            contextual: Vec::new(),
+            test_candidates: self.test_candidates,
+        };
+        (
+            ExprKind::Call {
+                callee,
+                arguments: Vec::new(),
+                form: Form::Named,
+                text: None,
+                braced: Vec::new(),
+                lifted: false,
+            },
+            ty,
+        )
+    }
+
     /// Read the category of the supplied arguments before choosing a
     /// role. Omitted arguments are filled only by the selected signature.
     fn pair_operands(
@@ -760,17 +1016,24 @@ impl<'a> Typer<'a> {
         (value, temporal): (usize, usize),
     ) -> ValueCategory {
         let at = self.at(list);
+        let call_node = list.parent();
+        let call_at = call_node.as_ref().map_or(at, |call| self.at(call));
         let cache = self
             .pair_phases
             .as_ref()
             .filter(|phases| phases.contains(at));
         if let Some(phases) = cache
-            && let Some((scope, category)) = phases.categories.get(&at)
-            && scope.matches(
-                self,
-                phases,
-                list.parent().map_or(at, |call| self.at(&call)),
-            )
+            && let Some(entries) = phases.categories.get(&at)
+            && let Some((_, category)) = entries.iter().find(|(scope, category)| {
+                scope.matches(
+                    self,
+                    phases,
+                    call_at,
+                    call_node.as_ref().unwrap_or(list),
+                    *category,
+                    false,
+                )
+            })
         {
             return *category;
         }
@@ -790,6 +1053,7 @@ impl<'a> Typer<'a> {
                 .map(|argument| self.category(&argument.value))
                 .fold(ValueCategory::Value, join_categories)
         };
+        self.probing_pair_role += 1;
         for (_, _, node) in self.call_entries(list) {
             if category == ValueCategory::Connection {
                 break;
@@ -801,11 +1065,14 @@ impl<'a> Typer<'a> {
             let operand = if let Some(&(value, temporal)) = callbacks.get(&self.at(&node)) {
                 self.pair_callback_category(&node, value, temporal)
             } else {
+                let outer_saw_temporal = std::mem::replace(&mut self.probe_saw_temporal, false);
                 let value = self.expression(&node, None);
+                self.probe_saw_temporal = outer_saw_temporal;
                 self.category(&value)
             };
             category = join_categories(category, operand);
         }
+        self.probing_pair_role -= 1;
         self.take_back(mark, false);
         for (local, category) in self.locals.iter_mut().zip(categories) {
             local.category = category;
@@ -819,7 +1086,12 @@ impl<'a> Typer<'a> {
             && let Some(scope) = scope
             && let Some(phases) = &mut self.pair_phases
         {
-            phases.categories.insert(at, (scope, category));
+            let entries = phases.categories.entry(at).or_default();
+            if entries.len() < PAIR_SCOPE_CACHE_LIMIT {
+                entries.push((scope, category));
+            } else if let Some(last) = entries.last_mut() {
+                *last = (scope, category);
+            }
         }
         category
     }
@@ -2188,6 +2460,11 @@ pub(super) fn removes(program: &Program, (module, declaration): (usize, usize)) 
 }
 
 #[cfg(test)]
+pub(super) fn count_anonymous_read() {
+    tests::ANONYMOUS_READS.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(test)]
 mod tests {
     use std::cell::Cell;
 
@@ -2200,6 +2477,7 @@ mod tests {
     thread_local! {
         pub(super) static PHASE_PROBES: Cell<usize> = const { Cell::new(0) };
         pub(super) static PHASE_ROOTS: Cell<usize> = const { Cell::new(0) };
+        pub(super) static ANONYMOUS_READS: Cell<usize> = const { Cell::new(0) };
     }
 
     fn check_with_phase_count(body: &str) -> (Diagnostics, usize, usize) {
@@ -2222,8 +2500,65 @@ mod tests {
         );
         PHASE_PROBES.set(0);
         PHASE_ROOTS.set(0);
+        ANONYMOUS_READS.set(0);
         analyse(&[ParsedFile::new(file, tree.syntax())], &mut diagnostics);
         (diagnostics, PHASE_ROOTS.get(), PHASE_PROBES.get())
+    }
+
+    fn check_with_read_counts(body: &str) -> (Diagnostics, usize, usize, usize) {
+        let source = format!("module m\n{body}");
+        let limits = Limits {
+            nesting: 512,
+            tree_depth: 1024,
+        };
+        std::thread::Builder::new()
+            .stack_size(crate::stack_size(limits))
+            .spawn(move || {
+                let mut sources = SourceMap::new();
+                let mut diagnostics = Diagnostics::new();
+                let mut trees = Vec::new();
+                for (name, text) in crate::CORE_FILES {
+                    let file = sources.add(name, text).unwrap();
+                    let tokens = hgl_lexer::lex(&sources, file, &mut diagnostics);
+                    let tree = parse(
+                        &sources,
+                        file,
+                        &tokens,
+                        Entry::SourceFile,
+                        limits,
+                        &mut diagnostics,
+                    );
+                    trees.push((file, tree));
+                }
+                let file = sources.add("m.hgl", &source).unwrap();
+                let tokens = hgl_lexer::lex(&sources, file, &mut diagnostics);
+                let tree = parse(
+                    &sources,
+                    file,
+                    &tokens,
+                    Entry::SourceFile,
+                    limits,
+                    &mut diagnostics,
+                );
+                trees.push((file, tree));
+                let parsed: Vec<_> = trees
+                    .iter()
+                    .map(|(file, tree)| ParsedFile::new(*file, tree.syntax()))
+                    .collect();
+                PHASE_PROBES.set(0);
+                PHASE_ROOTS.set(0);
+                ANONYMOUS_READS.set(0);
+                analyse(&parsed, &mut diagnostics);
+                (
+                    diagnostics,
+                    PHASE_ROOTS.get(),
+                    PHASE_PROBES.get(),
+                    ANONYMOUS_READS.get(),
+                )
+            })
+            .unwrap()
+            .join()
+            .unwrap()
     }
 
     /// FN-4: phase probes can cross a computed spread without probing
@@ -2290,5 +2625,249 @@ mod tests {
             hgl_diagnostics::Code::Catalogued(crate::codes::TYPE_MISMATCH),
         );
         assert_eq!((roots, probes), (1, 3));
+    }
+
+    /// FN-4: deeply nested anonymous callbacks given to pairs are probed
+    /// and read a bounded number of times per level at depths 16 and 32,
+    /// including temporal calls, connection captures, pure callbacks,
+    /// mixed forms, and scalar-wrapped temporal callbacks.
+    #[test]
+    fn nested_pair_callbacks_keep_bounded_reads_at_depth_16_and_32() {
+        let pair_header = concat!(
+            "const fn ap(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 2\n",
+            "fn ap(f: fn(i64) -> i64, x: i64) -> i64 => f(x) * 3\n",
+            "fn later(n: i64) -> i64 { when { return n + 10 } }\n",
+        );
+        for depth in [16usize, 32] {
+            let later = (0..depth).fold("1".to_string(), |acc, i| {
+                format!("ap(fn(n{i}) => later(n{i}) + {acc}, 1)")
+            });
+            let capture = (0..depth).fold("1".to_string(), |acc, i| {
+                format!("ap(fn(n{i}) => n{i} + tick + {acc}, 1)")
+            });
+            let pure = (0..depth).fold("1".to_string(), |acc, i| {
+                format!("ap(fn(n{i}) => n{i} + {acc}, 1)")
+            });
+            let mixed = (0..depth).fold("1".to_string(), |acc, i| match i % 3 {
+                0 => format!("ap(fn(n{i}) => later(n{i}) + {acc}, 1)"),
+                1 => format!("ap(fn(n{i}) => n{i} + tick + {acc}, 1)"),
+                _ => format!("ap(fn(n{i}) => n{i} + {acc}, 1)"),
+            });
+            for (name, expr) in [
+                ("later", later),
+                ("capture", capture),
+                ("pure", pure),
+                ("mixed", mixed),
+            ] {
+                let body = format!("{pair_header}fn g(tick: i64) -> i64 => tick + {expr}\n");
+                let (diagnostics, roots, probes, reads) = check_with_read_counts(&body);
+                assert!(
+                    diagnostics.as_slice().is_empty(),
+                    "{name} d={depth}: {diagnostics:?}"
+                );
+                assert_eq!(roots, 1, "{name} d={depth}");
+                assert_eq!(probes, depth, "{name} d={depth}: probes={probes}");
+                assert_eq!(reads, 2 * depth, "{name} d={depth}: reads={reads}");
+            }
+
+            let wrapped = (1..depth).fold("ap(fn(n0) => later(n0), 1)".to_string(), |acc, i| {
+                format!("ap(fn(n{i}) => n{i} + 1, {acc})")
+            });
+            let body = format!("{pair_header}fn g(tick: i64) -> i64 => tick + {wrapped}\n");
+            let (diagnostics, roots, probes, reads) = check_with_read_counts(&body);
+            assert!(
+                diagnostics.as_slice().is_empty(),
+                "wrapped d={depth}: {diagnostics:?}"
+            );
+            assert_eq!(roots, 1, "wrapped d={depth}");
+            assert_eq!(probes, depth, "wrapped d={depth}: probes={probes}");
+            assert_eq!(reads, 2 * depth, "wrapped d={depth}: reads={reads}");
+        }
+    }
+
+    /// FN-4 and FN-14: nested pair callbacks across distinct lexical
+    /// environments (chained outer formals, all outer formals captured at
+    /// the leaf, top-down capture cascades, unread `let`/`var` bindings
+    /// from formals, runtime `if`/`switch` branches, and nullable guards)
+    /// keep bounded probe and body-read counts at depths 16 and 32.
+    #[test]
+    fn nested_pair_callbacks_across_lexical_environments_keep_bounded_reads() {
+        let pair_header = concat!(
+            "const fn ap(f: const fn(i64) -> i64, x: i64) -> i64 => f(x) * 2\n",
+            "fn ap(f: fn(i64) -> i64, x: i64) -> i64 => f(x) * 3\n",
+            "fn later(n: i64) -> i64 { when { return n + 10 } }\n",
+        );
+        let null_header = concat!(
+            "const fn ap(f: const fn(i64?) -> i64, x: i64?) -> i64 => f(x) * 2\n",
+            "fn ap(f: fn(i64?) -> i64, x: i64?) -> i64 => f(x) * 3\n",
+            "fn later(n: i64) -> i64 { when { return n + 10 } }\n",
+        );
+        for depth in [16usize, 32] {
+            let formal_chain =
+                (1..depth).fold("ap(fn(n0) => later(n0) + n1, 1)".to_string(), |acc, i| {
+                    if i == depth - 1 {
+                        format!("ap(fn(n{i}) => {acc}, 1)")
+                    } else {
+                        format!("ap(fn(n{i}) => n{} + {acc}, 1)", i + 1)
+                    }
+                });
+            let sum_all = (0..depth)
+                .map(|i| format!("n{i}"))
+                .collect::<Vec<_>>()
+                .join(" + ");
+            let all_at_leaf = (1..depth).fold(
+                format!("ap(fn(n0) => {sum_all} + later(n0), 1)"),
+                |acc, i| format!("ap(fn(n{i}) => {acc}, 1)"),
+            );
+            let top_down_inner = (1..depth - 1)
+                .fold(format!("ap(fn(n0) => {sum_all}, 1)"), |acc, i| {
+                    format!("ap(fn(n{i}) => {acc}, 1)")
+                });
+            let top_down = format!("ap(fn(n{}) => {top_down_inner} + tick, 1)", depth - 1);
+            let let_unused = (0..depth).fold("1".to_string(), |acc, i| {
+                format!("ap(fn(n{i}) => {{ let v{i} = n{i} + 1\n later(v{i}) + {acc} }}, 1)")
+            });
+            let var_unused = (0..depth).fold("1".to_string(), |acc, i| {
+                format!("ap(fn(n{i}) => {{ var v{i} = n{i} + 1\n later(v{i}) + {acc} }}, 1)")
+            });
+            let if_branch = (0..depth).fold("1".to_string(), |acc, i| {
+                format!("ap(fn(n{i}) => if n{i} > 0 {{ later(n{i}) + {acc} }} else {{ 0 }}, 1)")
+            });
+            let switch_branch = (0..depth).fold("1".to_string(), |acc, i| {
+                format!(
+                    "ap(fn(n{i}) => {{ switch n{i} {{\n case 0: return 0\n default: return later(n{i}) + {acc}\n }} }}, 1)"
+                )
+            });
+            let nullable_guard = (0..depth).fold("1".to_string(), |acc, i| {
+                format!("ap(fn(n{i}) => if n{i} != null {{ later(n{i}) + {acc} }} else {{ 0 }}, 1)")
+            });
+
+            for (name, header, expr, max_probes, max_reads) in [
+                ("formal_chain", pair_header, formal_chain, depth, 2 * depth),
+                ("all_at_leaf", pair_header, all_at_leaf, depth, 2 * depth),
+                ("top_down", pair_header, top_down, 2 * depth, 3 * depth),
+                ("let_unused", pair_header, let_unused, depth, 2 * depth),
+                ("var_unused", pair_header, var_unused, depth, 2 * depth),
+                ("if_branch", pair_header, if_branch, depth, 2 * depth),
+                (
+                    "switch_branch",
+                    pair_header,
+                    switch_branch,
+                    depth,
+                    2 * depth,
+                ),
+                (
+                    "nullable_guard",
+                    null_header,
+                    nullable_guard,
+                    depth,
+                    2 * depth,
+                ),
+            ] {
+                let body = format!("{header}fn g(tick: i64) -> i64 => tick + {expr}\n");
+                let (diagnostics, roots, probes, reads) = check_with_read_counts(&body);
+                assert!(
+                    diagnostics.as_slice().is_empty(),
+                    "{name} d={depth}: {diagnostics:?}"
+                );
+                assert_eq!(roots, 1, "{name} d={depth}");
+                assert!(
+                    probes <= max_probes,
+                    "{name} d={depth}: probes={probes} > {max_probes}"
+                );
+                assert!(
+                    reads <= max_reads,
+                    "{name} d={depth}: reads={reads} > {max_reads}"
+                );
+            }
+        }
+    }
+
+    /// FN-4 and FN-17: generic pair and non-pair callbacks with inferred
+    /// parameter or result types keep bounded reads at depths 16 and 32.
+    #[test]
+    fn nested_generic_callbacks_keep_bounded_reads() {
+        let pair_r = concat!(
+            "const fn ap<R>(f: const fn(i64) -> R, x: i64) -> R => f(x)\n",
+            "fn ap<R>(f: fn(i64) -> R, x: i64) -> R => f(x)\n",
+            "fn later(n: i64) -> i64 { when { return n + 10 } }\n",
+        );
+        let pair_t = concat!(
+            "const fn ap<T>(f: const fn(T) -> T, x: T) -> T => f(x)\n",
+            "fn ap<T>(f: fn(T) -> T, x: T) -> T => f(x)\n",
+            "fn later(n: i64) -> i64 { when { return n + 10 } }\n",
+        );
+        let nonpair_r = concat!(
+            "fn ap<R>(f: fn(i64) -> R, x: i64) -> R => f(x)\n",
+            "fn later(n: i64) -> i64 { when { return n + 10 } }\n",
+        );
+        for depth in [16usize, 32] {
+            let later = (0..depth).fold("1".to_string(), |acc, i| {
+                format!("ap(fn(n{i}) => later(n{i}) + {acc}, 1)")
+            });
+            let pure = (0..depth).fold("1".to_string(), |acc, i| {
+                format!("ap(fn(n{i}) => n{i} + {acc}, 1)")
+            });
+            for (name, header, expr, max_probes, max_reads) in [
+                ("pair_r", pair_r, &later, depth, 2 * depth),
+                ("pair_t", pair_t, &later, depth, 2 * depth),
+                ("pure_pair_r", pair_r, &pure, depth, 3 * depth),
+                ("pure_pair_t", pair_t, &pure, depth, 3 * depth),
+                ("nonpair_r", nonpair_r, &later, 0, depth),
+            ] {
+                let body = format!("{header}fn g(tick: i64) -> i64 => tick + {expr}\n");
+                let (diagnostics, _, probes, reads) = check_with_read_counts(&body);
+                assert!(
+                    diagnostics.as_slice().is_empty(),
+                    "{name} d={depth}: {diagnostics:?}"
+                );
+                assert!(
+                    probes <= max_probes,
+                    "{name} d={depth}: probes={probes} > {max_probes}"
+                );
+                assert!(
+                    reads <= max_reads,
+                    "{name} d={depth}: reads={reads} > {max_reads}"
+                );
+            }
+        }
+    }
+
+    /// FN-4: a non-callback block operand that discards a temporal pair call
+    /// and yields an ordinary tail value still selects the outer value overload.
+    #[test]
+    fn pair_operand_block_discarding_temporal_pair_stays_value() {
+        let (diagnostics, _, _, _) = check_with_read_counts(concat!(
+            "fn later(n: i64) -> i64 { when { return n + 10 } }\n",
+            "const fn tag(x: i64) -> i64 => x + 10\n",
+            "fn tag(x: i64) -> str => \"temporal\"\n",
+            "const fn ap(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+            "fn ap(f: fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+            "fn g(tick: i64) -> i64 {\n",
+            "    let value: i64 = tag({ let unused = ap(fn(n) => later(n), 1)\n 5 })\n",
+            "    return tick + value\n",
+            "}\n",
+        ));
+        assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");
+    }
+
+    /// FN-4: a lexical local whose type changes between an outer callback's
+    /// probe and committed read still invalidates the inner pair's memo.
+    #[test]
+    fn phased_pairs_invalidate_when_lexical_local_type_changes() {
+        let (diagnostics, roots, probes) = check_with_phase_count(
+            "const fn pick(value: i64) -> i64 => value
+             fn pick(value: i64) -> str => \"s\"
+             const fn quote(price: const fn(i64) -> i64, quantity: i64) -> i64 => price(quantity)
+             fn quote(price: fn(i64) -> i64, quantity: i64) -> i64 => price(quantity)
+             const fn accept(x: i64) -> i64 => x
+             fn accept(x: str) -> i64 => 1
+             fn receipt(rate: i64) -> i64 =>
+                 quote(fn(quantity) => { let v = pick(quantity)\n rate + accept(v) }, 2)",
+        );
+        assert!(diagnostics.as_slice().is_empty(), "{diagnostics:?}");
+        // `pick(quantity)` and `accept(v)` each re-probe once when `quantity`
+        // flips from `Value` (probe) to `Connection` (commit, changing `v: i64 -> str`).
+        assert_eq!((roots, probes), (1, 5));
     }
 }

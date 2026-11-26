@@ -30,13 +30,18 @@ use crate::{Program, codes, error};
 impl<'a> Typer<'a> {
     /// FN-17 and GEN-2: the type of the function given can complete its
     /// receiving template, including a result the template leaves open.
+    /// When `allow_reuse` is true and a clean anonymous callback's inferred
+    /// signature already matches the resolved template, keep its typed HIR
+    /// so the final argument pass does not reread the callback body.
     fn infer_function_argument(
         &mut self,
         node: &SyntaxNode,
         pattern: &Type,
         generics: &[GenericParameter],
         found: &mut [Option<Argument>],
-    ) {
+        allow_reuse: bool,
+        widenable_by_later: &[bool],
+    ) -> Option<Expr> {
         let unknown = Argument::Type(Type::Unknown);
         let map: Vec<_> = generics
             .iter()
@@ -44,12 +49,121 @@ impl<'a> Typer<'a> {
             .map(|(generic, value)| (generic.at, value.as_ref().unwrap_or(&unknown)))
             .collect();
         let Type::Function(template) = substitute_within(pattern, &map) else {
-            return;
+            return None;
         };
+        let reported = self.diagnostics.len();
         let mark = self.mark();
+        let fn_node = ungrouped(node.clone());
+        let can_reuse =
+            allow_reuse
+                && fn_node.kind() == SyntaxKind::FnExpr
+                && template.named_pack.is_none()
+                && !generics.iter().any(|g| {
+                    matches!(g.kind, GenericKind::Pack { .. }) && mentions(pattern, &[g.at])
+                })
+                && !generics
+                    .iter()
+                    .zip(found.iter())
+                    .enumerate()
+                    .any(|(i, (generic, value))| {
+                        widenable_by_later.get(i).copied().unwrap_or(false)
+                            && matches!(value, Some(Argument::Type(Type::Named { .. })))
+                            && mentions(pattern, &[generic.at])
+                    })
+                && self.anonymous_parameters(&fn_node).iter().enumerate().all(
+                    |(i, (_, written))| {
+                        written.as_ref().is_some_and(whole)
+                            || template.parameters.get(i).is_some_and(|p| whole(p.ty()))
+                    },
+                );
         let actual = self.function_argument(node, &template);
-        self.take_back(mark, false);
         infer(pattern, &actual.ty, generics, found);
+        let reusable = can_reuse
+            && self.diagnostics.len() == reported
+            && matches!(actual.kind, hir::ExprKind::StaticCallable(_))
+            && whole(&actual.ty)
+            && {
+                let resolved_map: Vec<_> = generics
+                    .iter()
+                    .zip(found.iter())
+                    .map(|(generic, value)| (generic.at, value.as_ref().unwrap_or(&unknown)))
+                    .collect();
+                match (substitute_within(pattern, &resolved_map), &actual.ty) {
+                    (Type::Function(expected_fn), Type::Function(actual_fn)) => {
+                        expected_fn.value == actual_fn.value
+                            && expected_fn.named_pack == actual_fn.named_pack
+                            && expected_fn.reference == actual_fn.reference
+                            && expected_fn.result == actual_fn.result
+                            && expected_fn.parameters.len() == actual_fn.parameters.len()
+                            && expected_fn
+                                .parameters
+                                .iter()
+                                .zip(&actual_fn.parameters)
+                                .all(|(expected, actual)| expected.ty() == actual.ty())
+                    }
+                    _ => false,
+                }
+            };
+        if reusable {
+            Some(actual)
+        } else {
+            self.take_back(mark, false);
+            None
+        }
+    }
+
+    /// True when `node` is an anonymous function whose unwritten parameter
+    /// depends on an unresolved generic that a later non-function argument
+    /// can supply first (FN-17, GEN-2).
+    fn defer_unannotated_callback(
+        &mut self,
+        node: &SyntaxNode,
+        pattern: &Type,
+        (generics, found): (&[GenericParameter], &[Option<Argument>]),
+        (later_positions, assigned, patterns): (&[usize], &[Assigned], &[&Type]),
+    ) -> bool {
+        let fn_node = ungrouped(node.clone());
+        if fn_node.kind() != SyntaxKind::FnExpr {
+            return false;
+        }
+        let Type::Function(fn_pattern) = pattern else {
+            return false;
+        };
+        if fn_pattern.named_pack.is_some() {
+            return false;
+        }
+        let unfound: Vec<Location> = generics
+            .iter()
+            .zip(found)
+            .filter(|(_, value)| value.is_none())
+            .map(|(generic, _)| generic.at)
+            .collect();
+        let mark = self.mark();
+        let params = self.anonymous_parameters(&fn_node);
+        self.take_back(mark, false);
+        let needed: Vec<Location> = params
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, written))| written.is_none())
+            .filter_map(|(i, _)| fn_pattern.parameters.get(i))
+            .flat_map(|param| {
+                unfound
+                    .iter()
+                    .copied()
+                    .filter(|&at| mentions(param.ty(), &[at]))
+            })
+            .collect();
+        if needed.is_empty() {
+            return false;
+        }
+        later_positions.iter().any(|&later| {
+            let entry = &assigned[later];
+            entry.slot.is_some_and(|slot| {
+                !matches!(patterns[slot], Type::Function(_))
+                    && !takes_its_type(&entry.value)
+                    && mentions(patterns[slot], &needed)
+            })
+        })
     }
 
     /// What a partly resolved parameter learns from an argument. Keep
@@ -752,7 +866,8 @@ impl<'a> Typer<'a> {
         // what another reads (CTRL-10), so with one such a reading is
         // tried and taken back, and every argument is then read where
         // it is written.
-        let ordered = assigned.iter().any(|argument| holds_block(&argument.value));
+        let block_ordered = assigned.iter().any(|argument| holds_block(&argument.value));
+        let ordered = block_ordered;
         // GEN-12: a call's parameters say what a generic is "in declared
         // parameter order". A struct's fields have no order of their
         // own (TYPE-5: named, "in any order"), so the first written
@@ -799,7 +914,7 @@ impl<'a> Typer<'a> {
         }
         let mut late = std::collections::HashSet::new();
         let mut tuple_evidence = Vec::new();
-        for &position in &order {
+        for (step, &position) in order.iter().enumerate() {
             let Assigned {
                 slot, value: node, ..
             } = &assigned[position];
@@ -810,16 +925,33 @@ impl<'a> Typer<'a> {
                 continue;
             }
             let pattern = patterns[index];
-            if let Type::Function(_) = pattern {
-                self.infer_function_argument(node, pattern, generics, &mut found);
-                continue;
-            }
             let unfound: Vec<Location> = generics
                 .iter()
                 .zip(&found)
                 .filter(|(_, found)| found.is_none())
                 .map(|(generic, _)| generic.at)
                 .collect();
+            if let Type::Function(_) = pattern {
+                if mentions(pattern, &unfound)
+                    && !self.defer_unannotated_callback(
+                        node,
+                        pattern,
+                        (generics, &found),
+                        (&order[step + 1..], &assigned, patterns),
+                    )
+                    && let Some(value) = self.infer_function_argument(
+                        node,
+                        pattern,
+                        generics,
+                        &mut found,
+                        !ordered,
+                        &by_argument,
+                    )
+                {
+                    values[position] = Some(value);
+                }
+                continue;
+            }
             // GEN-2: "One later argument changes what an earlier
             // argument decided: an abstract struct that the type
             // decided inherits from widens the parameter to that
@@ -978,14 +1110,23 @@ impl<'a> Typer<'a> {
             };
             let pattern = patterns[index];
             if entry.forwarded.is_none()
+                && values[position].is_none()
                 && matches!(pattern, Type::Function(template) if template.named_pack.is_none())
                 && generics
                     .iter()
                     .zip(&found)
                     .any(|(generic, value)| value.is_none() && mentions(pattern, &[generic.at]))
                 && self.may_reread()
+                && let Some(value) = self.infer_function_argument(
+                    &entry.value,
+                    pattern,
+                    generics,
+                    &mut found,
+                    !block_ordered,
+                    &[],
+                )
             {
-                self.infer_function_argument(&entry.value, pattern, generics, &mut found);
+                values[position] = Some(value);
             }
         }
         // A nullable place supplies no final bare success type (GEN-2).

@@ -182,3 +182,29 @@ test nested_callbacks_preserve_capture_categories {
     assert eval ordinary_quantity(rate: [1, 5]) == [9, 13]
     assert eval graph_quantity(rate: [1, 5]) == [13, 17]
 }
+
+fn chained_nested(tick: i64) -> i64 =>
+    tick + apply(fn(n2) => apply(fn(n1) => n2 + apply(fn(n0) => n1 + later(n0), 1), 1), 1)
+fn top_down_nested(tick: i64) -> i64 =>
+    apply(fn(n2) => apply(fn(n1) => n2 + apply(fn(n0) => n1 + n0, 1), 1) + tick, 1)
+fn pure_nested(tick: i64) -> i64 =>
+    tick + apply(fn(n2) => n2 + apply(fn(n1) => n1 + apply(fn(n0) => n0 + 1, 1), 1), 1)
+fn branch_let_nested(tick: i64) -> i64 =>
+    tick + apply(fn(n1) {
+        let v = n1 + 1
+        if v > 0 {
+            return later(v) + apply(fn(n0) => later(n0) + 1, 1)
+        } else {
+            return 0
+        }
+    }, 1)
+fn generic_nested(tick: i64) -> i64 =>
+    tick + generic_apply(fn(n1) => later(n1) + generic_apply(fn(n0) => later(n0) + 1, 1), 1)
+
+test nested_callbacks_across_lexical_environments {
+    assert eval chained_nested(tick: [1, 2]) == [334, 335]
+    assert eval top_down_nested(tick: [1, 5]) == [66, 78]
+    assert eval pure_nested(tick: [1, 5]) == [23, 27]
+    assert eval branch_let_nested(tick: [1]) == [145]
+    assert eval generic_nested(tick: [1]) == [142]
+}
