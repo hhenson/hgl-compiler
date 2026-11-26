@@ -5918,7 +5918,7 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
         "demo.store.reserved_routes.hgl",
         include_str!("../../hgl_cpp/tests/fixtures/demo.store.reserved_routes.hgl"),
     );
-    let output = hgl_in(&["test", &routes], &[], &[]);
+    let output = hgl_in(&["test", &routes, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
