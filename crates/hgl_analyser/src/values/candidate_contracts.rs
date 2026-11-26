@@ -25,8 +25,14 @@ use crate::{codes, error};
 use super::inference::{infer, pack_bounds, type_pack};
 use super::requirements::declared_requirement;
 
-/// Report contradictions that follow from the candidate's declared types.
-pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Diagnostics) {
+mod ties;
+
+/// Report contradictions and ties that follow from the candidates' declarations.
+pub(crate) fn check_candidate_contracts(
+    program: &Program,
+    diagnostics: &mut Diagnostics,
+    tests: bool,
+) {
     let uses: HashMap<_, _> = program
         .modules
         .iter()
@@ -139,6 +145,7 @@ pub(crate) fn check_candidate_contracts(program: &Program, diagnostics: &mut Dia
             }
         }
     }
+    ties::check(program, diagnostics, tests);
 }
 
 /// GEN-6: a candidate declares the operator's result, when this
