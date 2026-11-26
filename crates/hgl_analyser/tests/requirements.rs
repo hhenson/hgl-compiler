@@ -418,19 +418,77 @@ fn a_present_key_witnesses_ordinary_finite_requirements() {
 #[test]
 fn a_present_keys_nominal_type_uses_its_own_key() {
     for (key, accepted) in [("bid", true), ("ask", false)] {
+        let application = if accepted {
+            "const fn shape(bid: Tag<bid>) -> i64 => bid.value\n\
+             test concrete { assert relay(shape, Tag<bid>(value: 7)).value == 7 }\n"
+        } else {
+            ""
+        };
         let checked = module(&format!(
             "const bid: str = \"bid\"\nconst ask: str = \"ask\"\n\
              struct Tag<const Name: str> {{ value: i64 }}\n\
              const fn need<X>(x: X) -> X requires X == Tag<bid> => x\n\
              const fn relay<T, ...Ps>(p: const fn(...{{Ps}}) -> i64, x: T) -> T\n\
              requires T in {{Tag<bid>, Tag<ask>}} && {key} in arg_keys(Ps) &&\n\
-             each k in arg_keys(Ps) {{ Ps[k] == T && Ps[k] == Tag<k> }} => need<T>(x)\n"
+             each k in arg_keys(Ps) {{ Ps[k] == T && Ps[k] == Tag<k> }} => need<T>(x)\n{application}"
         ));
         if accepted {
             assert_eq!(checked.summary(), NONE, "{}", checked.report);
         } else {
             assert_eq!(checked.findings.len(), 1, "{}", checked.report);
             assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+        }
+    }
+}
+
+/// GEN-3, GEN-10 and GEN-17: each concrete callback key supplies the
+/// constant in a nominal type compared in that pass.
+#[test]
+fn concrete_reflected_keys_bind_written_nominal_arguments() {
+    let schemas = concat!(
+        "const bid: str = \"bid\"\nconst ask: str = \"ask\"\n",
+        "struct Field<const K: str> { value: i64 }\n",
+        "const fn both(bid: Field<bid>, ask: Field<ask>) -> i64 => 1\n",
+        "const fn swapped(bid: Field<ask>, ask: Field<bid>) -> i64 => 2\n",
+        "const fn one(bid: Field<bid>, ask: Field<bid>) -> i64 => 3\n",
+        "const fn empty() -> i64 => 4\n",
+    );
+    let each = "each k in arg_keys(Ps) { Ps[k] == Field<k> }";
+    let any = "any k in arg_keys(Ps) { Ps[k] == Field<k> }";
+    for (condition, schema, accepted) in [
+        (each, "both", true),
+        ("each k in arg_keys(Ps) { Field<k> == Ps[k] }", "both", true),
+        (
+            "each k in arg_keys(Ps) { Ps[k] in {Field<k>} }",
+            "both",
+            true,
+        ),
+        (each, "one", false),
+        (any, "one", true),
+        (any, "swapped", false),
+        (each, "empty", true),
+        (any, "empty", false),
+    ] {
+        let checked = module(&format!(
+            "{schemas}const fn inspect<...Ps>(f: const fn(...{{Ps}}) -> i64) -> i64\n\
+             requires {condition} => 7\n\
+             test observed {{ assert inspect({schema}) == 7 }}\n"
+        ));
+        if accepted {
+            assert_eq!(
+                checked.summary(),
+                NONE,
+                "{condition} / {schema}\n{}",
+                checked.report
+            );
+        } else {
+            assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+            assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+            assert!(
+                !checked.report.contains("not known to hold"),
+                "{}",
+                checked.report
+            );
         }
     }
 }

@@ -308,7 +308,7 @@ parser: partial
 analyser: partial
 
 - Reflects the selected callback's fixed suffix and its supplied positional and named pack entries. A dependent pack keeps the callback parameter keys and the types written at the call.
-- Evaluates `each` over `arg_keys`, constant key membership, and keyed type projection. Candidate requirements can compare bare pack members. A missing member of a known pack reports `pack.name`.
+- Evaluates `each` over `arg_keys`, constant key membership, and keyed type projection. At a concrete call, equality and membership inside `each` or `any` use the current key in a written type's value arguments, including `Field<k>` (GEN-3, GEN-10). Candidate requirements can compare bare pack members. A missing member of a known pack reports `pack.name`.
 - In a pack comprehension, `arg_keys` names a declared type pack and the iteration name is a compile-time key. In a concrete inline spread, a membership condition tests that pass's key against the resolved type pack and gives a constant `bool` (GEN-7).
 - A generic call that receives another function parameter checks its pack requirements when the caller supplies the reflected types. The receiver's fixed positions determine which original inputs its pack reflects.
 - An operator callback reflects the public declaration's parameter names and the selected candidate's types (FN-17).
