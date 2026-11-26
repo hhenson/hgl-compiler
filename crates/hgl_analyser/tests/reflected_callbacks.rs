@@ -79,6 +79,38 @@ impl const fn choice<...Ps>(cb: const fn(...{{Ps}}) -> i64, tag: i64) -> i64 => 
     }
 }
 
+/// Check cardinality after reading the anonymous callback, and retain
+/// its own result and annotation diagnostics (FN-17, GEN-17).
+#[test]
+fn a_candidate_checks_the_anonymous_callbacks_reflected_bounds_after_reading_it() {
+    for (count, callback, code) in [
+        ("1", r#"fn(n: i64) => "bad""#, "type/type.mismatch"),
+        ("1", "fn(n) => n + 3", "type/generic.unresolved"),
+        ("2", "fn(n: i64) => n + 3", "operator/operator.no_candidate"),
+        (
+            "1",
+            "fn(n: i64, k: i64) => n + k",
+            "operator/operator.no_candidate",
+        ),
+    ] {
+        let checked = module(&format!(
+            "operator judge<F,M>(cb: F, mark: M) -> i64
+impl const fn judge<...Ps{{{count}}}>(cb: const fn(...{{Ps}}) -> i64, mark: i64) -> i64 => 70
+test t {{ assert judge({callback}, 0) == 70 }}",
+        ));
+        assert_eq!(
+            checked
+                .findings
+                .iter()
+                .map(|finding| finding.code.as_str())
+                .collect::<Vec<_>>(),
+            [code],
+            "{}",
+            checked.report,
+        );
+    }
+}
+
 /// The static argument after FN-17 matching, independently of what
 /// the enclosing call resolves from the argument's reflected slots.
 fn callback<'a>(checked: &'a Checked, caller: &str) -> (&'a Callee, &'a FunctionType) {

@@ -3176,6 +3176,13 @@ operator reflected<F,T>(cb: F, tag: T) -> i64
 impl const fn reflected<...Ps>(cb: const fn(...{Ps}) -> i64, tag: i64) -> i64 => tag
 const fn through_reflected(x: i64) -> i64 => reflected(fn(n: i64) => n + 2, x)
 
+operator one<F,M>(cb: F, mark: M) -> i64
+impl const fn one<...Ps{1}>(cb: const fn(...{Ps}) -> i64, mark: i64) -> i64 => 70
+operator two<F,M>(cb: F, mark: M) -> i64
+impl const fn two<...Ps{2}>(cb: const fn(...{Ps}) -> i64, mark: i64) -> i64 => 80
+operator at_least_one<F,M>(cb: F, mark: M) -> i64
+impl const fn at_least_one<...Ps{1:*}>(cb: const fn(...{Ps}) -> i64, mark: i64) -> i64 => 90
+
 test reads_result_from_candidate {
     assert eval entry(x: [1, 2]) == [3, 4]
 }
@@ -3187,13 +3194,19 @@ test reads_grouped_input_from_candidate {
 test reads_written_inputs_at_a_reflected_template {
     assert through_reflected(7) == 7
 }
+
+test bounded_reflection_uses_the_anonymous_parameters {
+    assert one(fn(n: i64) => n + 3, 0) == 70
+    assert two(fn(n: i64, k: i64) => n + k, 0) == 80
+    assert at_least_one(fn(n: i64, k: i64) => n + k, 0) == 90
+}
 "#,
     );
     let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
