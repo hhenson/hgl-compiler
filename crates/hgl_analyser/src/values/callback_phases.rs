@@ -123,7 +123,11 @@ impl Typer<'_> {
         // Keep unrelated source errors on their declarations. When different
         // choices fail at different uses and no whole reading works, retain
         // the original explanation of the incompatible body.
-        if possible.contains(&true) {
+        if original
+            .iter()
+            .zip(&possible)
+            .any(|(report, keep)| *keep && report.severity == Severity::Error)
+        {
             let retained: Vec<_> = original
                 .iter()
                 .zip(possible)
@@ -193,10 +197,12 @@ impl Typer<'_> {
     }
 
     /// Which formal captures can affect a statement, including initializers
-    /// through local aliases. A mutable binding can be assigned elsewhere.
+    /// through local definitions. Each use of a mutable binding can pass
+    /// it to a writing callee or assign it in its enclosing statement.
     fn capture_slots(&self, scope: &SyntaxNode, callbacks: &[(Location, usize)]) -> Vec<usize> {
         let mut slots = Vec::new();
         let mut seen = HashSet::new();
+        let mut variables = HashSet::new();
         let mut pending = vec![scope.clone()];
         while let Some(node) = pending.pop() {
             if !seen.insert(node.span()) {
@@ -215,10 +221,16 @@ impl Typer<'_> {
                     if !slots.contains(slot) {
                         slots.push(*slot);
                     }
-                } else if *kind == LocalKind::Let {
+                } else if matches!(kind, LocalKind::Let | LocalKind::Var | LocalKind::Iteration) {
                     pending.push(self.report_scope(*at));
-                } else if matches!(kind, LocalKind::Var | LocalKind::Iteration) {
-                    return callbacks.iter().map(|(_, slot)| *slot).collect();
+                    if *kind == LocalKind::Var && variables.insert(*at) {
+                        for usage in &self.module.uses {
+                            if matches!(usage.binding, Binding::Local { at: target, .. } if target == *at)
+                            {
+                                pending.push(self.report_scope(usage.at));
+                            }
+                        }
+                    }
                 }
             }
         }

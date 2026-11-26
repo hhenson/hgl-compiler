@@ -788,3 +788,32 @@ fn live_binding(t: i64) -> i64 => receive(fn(n) => n + t, t)
     );
     assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
 }
+
+/// FN-4/17: independent callback slots do not consume a mutable local's
+/// reading allowance or replace its invariant source error.
+#[test]
+fn an_unrelated_mutable_local_keeps_its_type_error() {
+    let callbacks = (0..32)
+        .map(|i| format!("f{i}: const fn(i64) -> i64"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        r#"module independent
+const fn pick(x: i64) -> i64 => x
+fn pick(x: str) -> i64 => 99
+fn subject({callbacks}, tick: i64) -> bool {{
+    let ordinary = pick(f0(1))
+    var fixed = 17
+    return fixed
+}}
+"#
+    );
+    let checked = check(&[("independent.hgl", &source)]);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/type.mismatch");
+    assert!(
+        checked.findings[0].at.starts_with("independent.hgl:7:"),
+        "{}",
+        checked.report
+    );
+}
