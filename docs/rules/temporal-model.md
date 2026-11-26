@@ -190,9 +190,9 @@ analyser: partial
 - In a guard it sets neither subscription nor validity
 - An `endpoint<T>` result or state member rejects with `endpoint.position` (TYPE-12).
 - Left: An operator call through an ordinary public parameter does not match
-  the native candidate's borrowed endpoint parameter. The analyser accepts a
-  plain value default for a borrowed endpoint and accepts `scheduled()` in
-  state initializers and inline callbacks in a node with a scheduler.
+  the native candidate's borrowed endpoint parameter. The analyser accepts
+  `scheduled()` in state initializers and inline callbacks in a node with a
+  scheduler.
 
 transpiler: partial
 
