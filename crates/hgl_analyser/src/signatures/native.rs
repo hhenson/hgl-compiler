@@ -2,9 +2,11 @@
 //! Declaration collection has already checked name and role.
 
 use hgl_diagnostics::{Category, Diagnostics};
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
-use crate::declared::{same_type, substitute_within};
-use crate::program::{DeclarationKind, Program};
+use crate::declared::{names_parameter, same_type, substitute_within};
+use crate::program::{Declaration, DeclarationKind, Module, Program};
+use crate::syntax::{child, tokens};
 use crate::types::{Argument, Detail, GenericKind, Signature, Type};
 use crate::{codes, error};
 
@@ -48,7 +50,12 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) {
                 let (true, Detail::Callable(contract)) = (completes, detail) else {
                     continue;
                 };
-                let Some(reason) = difference(contract, written) else {
+                let reason = difference(contract, written).or_else(|| {
+                    finite_constraints_differ(module, (public, contract), (part, written)).then(
+                        || "this declaration and its implementation admit different types".into(),
+                    )
+                });
+                let Some(reason) = reason else {
                     mismatch = None;
                     break;
                 };
@@ -74,8 +81,7 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics) {
 }
 
 /// A known difference between the implementation and a public signature.
-/// Constraints still need their own equivalence check. Defaults belong to the
-/// public declaration and are outside this comparison.
+/// Defaults belong to the public declaration and are outside this comparison.
 fn difference(contract: &Signature, written: &Signature) -> Option<String> {
     if contract.generics.len() != written.generics.len() {
         return Some("this declaration takes a different number of generic parameters".into());
@@ -105,26 +111,7 @@ fn difference(contract: &Signature, written: &Signature) -> Option<String> {
         .map(|(at, argument)| (*at, argument))
         .collect();
     let types_differ = |public: &Type, part: &Type| {
-        let dependent = |ty: &Type| {
-            ty.any_part(
-                &|ty| match ty {
-                    Type::PackMember { .. } => true,
-                    // `same_type` uses structural equality for callbacks.
-                    // It cannot compare symbolic values bound in different
-                    // declarations, so defer those template comparisons.
-                    Type::Function(template) => {
-                        template.named_pack.is_some()
-                            || template.types().any(|ty| {
-                                ty.any_part(&|ty| matches!(ty, Type::Unknown), &|constant| {
-                                    constant.value.key().is_none()
-                                })
-                            })
-                    }
-                    _ => false,
-                },
-                &|_| false,
-            )
-        };
+        let dependent = |ty: &Type| ty.any_part(&dependent_signature_part, &|_| false);
         if dependent(public) || dependent(part) {
             return false;
         }
@@ -187,5 +174,140 @@ fn difference(contract: &Signature, written: &Signature) -> Option<String> {
         (None, Some(_)) => Some("this declaration has no result".into()),
         (Some(public), None) => Some(format!("this declaration returns `{public}`")),
         _ => None,
+    }
+}
+
+/// Structural callback equality cannot compare symbolic parts bound in
+/// different declarations. Leave them for the general NATIVE-2 check.
+fn dependent_signature_part(ty: &Type) -> bool {
+    match ty {
+        Type::PackMember { .. } => true,
+        Type::Function(template) => {
+            template.named_pack.is_some()
+                || template.types().any(|ty| {
+                    ty.any_part(&|ty| matches!(ty, Type::Unknown), &|constant| {
+                        constant.value.key().is_none()
+                    })
+                })
+        }
+        _ => false,
+    }
+}
+
+/// NATIVE-2: compare finite type memberships by generic parameter position
+/// (GEN-8) and the types each set admits (GEN-3).
+fn finite_constraints_differ(
+    module: &Module,
+    public: (&Declaration, &Signature),
+    part: (&Declaration, &Signature),
+) -> bool {
+    let public_requires = child(&public.0.syntax, SyntaxKind::RequiresClause);
+    let part_requires = child(&part.0.syntax, SyntaxKind::RequiresClause);
+    let public_bound = public_requires
+        .as_ref()
+        .and_then(|requires| finite_membership(module, public, requires));
+    let part_bound = part_requires
+        .as_ref()
+        .and_then(|requires| finite_membership(module, part, requires));
+    let excludes_a_type = |a: &[&Type], b: &[&Type]| {
+        a.iter()
+            .any(|ty| b.iter().all(|other| same_type(ty, other) == Some(false)))
+    };
+    match (public_bound, part_bound) {
+        (Some((public_slot, public_types)), Some((part_slot, part_types))) => {
+            public_slot != part_slot
+                || excludes_a_type(&public_types, &part_types)
+                || excludes_a_type(&part_types, &public_types)
+        }
+        (Some(_), None) => part_requires.is_none(),
+        (None, Some(_)) => public_requires.is_none(),
+        (None, None) => false,
+    }
+}
+
+/// Read the simplest finite constraint: one generic type parameter in a
+/// set of concrete types. Other constraint shapes stay with the general
+/// equivalence check.
+fn finite_membership<'a>(
+    module: &'a Module,
+    (declaration, signature): (&Declaration, &Signature),
+    requires: &SyntaxNode,
+) -> Option<(usize, Vec<&'a Type>)> {
+    let relation = requires.children().next()?;
+    if relation.kind() != SyntaxKind::ConstraintRelation
+        || !tokens(&relation).any(|token| token.text() == "in")
+    {
+        return None;
+    }
+    let file = module.files[declaration.file].file;
+    let written_at = |node: &SyntaxNode| {
+        let start = node.span().start;
+        module
+            .written
+            .iter()
+            .find(|written| written.at.file == file && written.at.span.start == start)
+            .map(|written| &written.ty)
+    };
+    let mut operands = relation.children();
+    let Type::Parameter { at, .. } = written_at(&operands.next()?)? else {
+        return None;
+    };
+    let slot = signature
+        .generics
+        .iter()
+        .position(|generic| generic.at == *at)?;
+    let set = operands.next()?;
+    if set.kind() != SyntaxKind::ConstraintSet {
+        return None;
+    }
+    let types = set
+        .children()
+        .map(|member| {
+            let ty = written_at(&member)?;
+            concrete_constraint_member(ty).then_some(ty)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!types.is_empty()).then_some((slot, types))
+}
+
+/// A member whose identity can be compared before specialization.
+fn concrete_constraint_member(ty: &Type) -> bool {
+    !names_parameter(ty)
+        && !ty.any_part(
+            &|part| matches!(part, Type::Unknown) || dependent_signature_part(part),
+            &|constant| constant.value.key().is_none(),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use hgl_diagnostics::Location;
+    use hgl_source::{SourceMap, Span};
+
+    use super::concrete_constraint_member;
+    use crate::types::{FunctionType, ReflectedPack, Scalar, Type};
+
+    /// NATIVE-2 does not compare unresolved GEN-17 packs as concrete members.
+    #[test]
+    fn reflected_callback_members_need_specialization() {
+        let mut template = FunctionType {
+            value: true,
+            parameters: Vec::new(),
+            named_pack: None,
+            result: Some(Type::Scalar(Scalar::I64)),
+            result_admits_none: false,
+            reference: false,
+        };
+        assert!(concrete_constraint_member(&Type::Function(Box::new(
+            template.clone()
+        ))));
+        let file = SourceMap::new().add("part.hgl", "Ps").unwrap();
+        template.named_pack = Some(ReflectedPack {
+            at: Location::new(file, Span::new(0, 2)),
+            name: "Ps".into(),
+            bounds: (0, None),
+        });
+        let reflected = Type::Tuple(vec![Type::Function(Box::new(template))]);
+        assert!(!concrete_constraint_member(&reflected));
     }
 }

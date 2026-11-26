@@ -75,6 +75,27 @@ pub struct DefaultExpr {
 }
 
 impl DefaultExpr {
+    /// UNIT-8 and EXPR-5: reread an aggregate literal when a selected
+    /// parameter supplies a concrete context different from its provisional
+    /// type. Scalar literals already fit their selected place directly.
+    /// Cold Type queries also need their existing instance-specific read.
+    pub fn needs_contextual_specialization(&self, expected: &Type) -> bool {
+        self.needs_type_specialization()
+            || matches!(
+                self.value.kind,
+                ExprKind::Sequence(_) | ExprKind::Tuple(_) | ExprKind::Pairs(_)
+            ) && self.value.ty != *expected
+                && !expected.any_part(
+                    &|ty| {
+                        matches!(
+                            ty,
+                            Type::Parameter { .. } | Type::PackMember { .. } | Type::Unknown
+                        )
+                    },
+                    &|_| false,
+                )
+    }
+
     /// TYPE-18: a default can use a cold query directly, or read a field or
     /// call result whose type contains an instance-dependent query. Both
     /// need the defining scope and the arguments of the call that omitted it.
@@ -774,7 +795,7 @@ pub enum ExprKind {
         /// How the call is written.
         form: Form,
         /// The checked pattern and selected conversions for a native
-        /// formatter or collection conversion (FMT-3, FMT-5).
+        /// formatter (FMT-3, FMT-5).
         text: Option<Box<TextCall>>,
         /// Values explicitly supplied in braces (EXPR-10), by source
         /// location, for the instance's wiring-time check (EXPR-14).
@@ -1644,13 +1665,12 @@ pub struct Cell {
     pub value: Option<Expr>,
 }
 
-/// Analysed text work carried by a formatting or collection call.
+/// Analysed text work carried by a native formatting call.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextCall {
-    /// The compile-time pattern of `format`; a collection has none.
-    pub pattern: Option<String>,
-    /// Selected FMT-5 conversions, indexed by arguments for `format`
-    /// or by members for a collection conversion.
+    /// The compile-time pattern of `format`.
+    pub pattern: String,
+    /// Selected FMT-5 conversions, indexed by arguments for `format`.
     pub conversions: Box<[Option<Expr>]>,
 }
 
