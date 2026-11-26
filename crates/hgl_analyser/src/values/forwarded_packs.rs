@@ -2,7 +2,10 @@
 //! (FN-19). Argument placement uses each entry's key and reads the input
 //! slot that holds it.
 
-use hgl_diagnostics::{Category, Location};
+use std::collections::{HashMap, HashSet};
+
+use hgl_diagnostics::{Category, Code, Diagnostics, Location};
+use hgl_parser::ast::AstNode;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::Typer;
@@ -15,15 +18,77 @@ use crate::hir::{
 };
 use crate::program::{Binding, LocalKind};
 use crate::syntax::{
-    child, has_token, is_arg_keys_call, name_token, pack_member_names, tokens, ungrouped,
+    child, has_token, is_arg_keys_call, is_pack_key_if, name_token, pack_key_branches,
+    pack_member_names, tokens, ungrouped,
 };
 use crate::types::{Argument, Constant, ConstantValue, GenericKind, Pack, Parameter, Scalar, Type};
 use crate::{codes, error};
+
+/// Binding and written-type passes still record source information for
+/// both arms. Keep their diagnostics with the innermost CTRL-16 arm.
+pub(crate) fn defer_pack_branch_reports(
+    program: &mut crate::Program,
+    diagnostics: &mut Diagnostics,
+    start: usize,
+) {
+    if diagnostics.len() == start {
+        return;
+    }
+    let files: HashSet<_> = diagnostics.as_slice()[start..]
+        .iter()
+        .map(|report| report.primary.file)
+        .collect();
+    let mut branches = HashMap::<_, Vec<_>>::new();
+    for file in program
+        .modules
+        .iter()
+        .flat_map(|module| &module.files)
+        .filter(|file| files.contains(&file.file))
+    {
+        let found: Vec<_> = pack_key_branches(file.syntax.syntax())
+            .map(|branch| branch.span())
+            .collect();
+        if !found.is_empty() {
+            branches.insert(file.file, found);
+        }
+    }
+    if branches.is_empty() {
+        return;
+    }
+    let reports = diagnostics.as_slice()[start..].to_vec();
+    diagnostics.truncate(start);
+    for report in reports {
+        // UNIT-7 excludes formal bindings from every written default
+        // arm, even where CTRL-16 defers the arm's type checks.
+        if report.code == Code::Catalogued(codes::DEFAULT_FORMAL_ARGUMENT) {
+            diagnostics.emit(report);
+            continue;
+        }
+        let at = report.primary;
+        let branch = branches.get(&at.file).and_then(|branches| {
+            branches
+                .iter()
+                .filter(|span| span.start <= at.span.start && at.span.end <= span.end)
+                .min_by_key(|span| span.end - span.start)
+        });
+        if let Some(branch) = branch {
+            program
+                .pack_branch_reports
+                .entry(Location::new(at.file, *branch))
+                .or_default()
+                .push(report);
+        } else {
+            diagnostics.emit(report);
+        }
+    }
+}
 
 /// A concrete entry supplied by one spread in the original call.
 pub(super) struct ForwardedArgument {
     /// The source pack key before binding to the destination.
     pub(super) key: PackKey,
+    /// The node's temporal input pack when forwarding its entries wholesale.
+    pub(super) input: Option<LocalId>,
     /// Where the spread's pack expression is written.
     pub(super) source: SyntaxNode,
     /// The typed read of the entry in the enclosing instance.
@@ -41,6 +106,24 @@ pub(super) enum BoundPack {
 }
 
 impl<'a> Typer<'a> {
+    /// A concrete membership condition selects this arm's source reports.
+    pub(super) fn report_pack_branch(&mut self, branch: &SyntaxNode) {
+        if let Some(selected) = self.selected_pack_branches {
+            selected
+                .borrow_mut()
+                .extend(branch.ancestors().filter_map(|arm| {
+                    let parent = arm.parent()?;
+                    (is_pack_key_if(&parent) && parent.children().skip(1).any(|child| child == arm))
+                        .then(|| self.at(&arm))
+                }));
+        }
+        if let Some(reports) = self.program.pack_branch_reports.get(&self.at(branch)) {
+            for report in reports {
+                self.diagnostics.emit(report.clone());
+            }
+        }
+    }
+
     /// A form that does not implement pack forwarding must not discard
     /// the spread and emit a call using only its written arguments.
     pub(super) fn unread_pack_call(&mut self, list: &SyntaxNode) -> Option<(ExprKind, Type)> {
@@ -503,39 +586,67 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// `key in arg_keys(Ps)` is a compile-time bool with its pack still
-    /// symbolic in this pass (GEN-17).
+    /// A membership test uses only compile-time keys (GEN-17, CTRL-16).
     pub(super) fn pack_key_membership(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
+        let boolean = Type::Scalar(Scalar::Bool);
         let mut operands = node.children();
-        if let Some(key) = operands.next().and_then(|node| name_token(&node))
-            && let Some(binding) = self.bindings.get(&(self.file, key.span().start))
-            && !matches!(
-                binding,
-                Binding::Local {
-                    kind: LocalKind::PackIterationKey,
-                    ..
-                }
-            )
-        {
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::TYPE_MISMATCH,
-                Location::new(self.file, key.span()),
-                format!("`{}` is not a pack key", key.text()),
-                "GEN-17",
-            ));
-        }
-        if let Some(pack) = operands.next().and_then(|node| name_token(&node)) {
-            self.check_key_pack(&pack);
-        }
-        (ExprKind::Unread, Type::Scalar(Scalar::Bool))
+        let (Some(key), Some(pack)) = (
+            operands.next(),
+            operands.next().and_then(|pack| name_token(&pack)),
+        ) else {
+            return (ExprKind::Unread, boolean);
+        };
+        // A pass supplies its key's type along with its value. Type
+        // parameters and pack objects do not denote compile-time keys.
+        let is_pass_key = name_token(&key)
+            .and_then(|name| self.binding_at(self.file, name.span().start))
+            .is_some_and(|binding| {
+                matches!(
+                    binding,
+                    Binding::Local {
+                        kind: LocalKind::PackKey | LocalKind::PackIterationKey,
+                        ..
+                    }
+                )
+            });
+        let key_valid = match self.typed_in(self.file, &key, None) {
+            Ok(read)
+                if read.ty().map_or(is_pass_key, |ty| {
+                    matches!(ty, Type::Unknown | Type::Scalar(Scalar::I64 | Scalar::Str))
+                }) =>
+            {
+                true
+            }
+            Err(Fault::Reported | Fault::Failed) => false,
+            _ => {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    self.at(&key),
+                    "a pack membership key needs an `i64` index or a `str` name known at compile time".to_string(),
+                    "CTRL-16",
+                ));
+                false
+            }
+        };
+        let pack_valid = self.check_key_pack(&pack);
+        let kind = if key_valid && pack_valid {
+            self.read_pack_condition(node, None)
+                .map_or(ExprKind::DeferredPackCondition, |selected| {
+                    ExprKind::Literal(crate::hir::Value::Bool(selected))
+                })
+        } else {
+            ExprKind::Unread
+        };
+        (kind, boolean)
     }
 
-    fn check_key_pack(&mut self, name: &SyntaxToken) {
+    fn check_key_pack(&mut self, name: &SyntaxToken) -> bool {
         let Some(binding) = self.bindings.get(&(self.file, name.span().start)) else {
-            return;
+            return false;
         };
-        if !self.is_type_pack(binding) {
+        let valid = self.is_type_pack(binding);
+        if !valid {
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::TYPE_MISMATCH,
@@ -547,6 +658,7 @@ impl<'a> Typer<'a> {
                 "GEN-17",
             ));
         }
+        valid
     }
 
     fn is_type_pack(&self, binding: &Binding) -> bool {
@@ -641,6 +753,7 @@ impl<'a> Typer<'a> {
                 let at = self.at(&source);
                 forwarded.extend(entries.iter().map(|(key, entry)| ForwardedArgument {
                     key: key.clone(),
+                    input: None,
                     source: source.clone(),
                     value: Expr {
                         kind: ExprKind::Local(*entry),
@@ -652,6 +765,7 @@ impl<'a> Typer<'a> {
                 continue;
             }
             let category = self.locals[local].category;
+            let temporal = (self.hook.is_some() && self.is_temporal_input(local)).then_some(local);
             for input in inputs
                 .values
                 .iter()
@@ -669,6 +783,7 @@ impl<'a> Typer<'a> {
                 };
                 forwarded.push(ForwardedArgument {
                     key,
+                    input: temporal,
                     source: source.clone(),
                     value,
                 });
@@ -703,8 +818,14 @@ impl<'a> Typer<'a> {
                     self.bound.push((key_binding, argument));
                     self.pack_passes
                         .push((name.text().to_string(), key.clone()));
+                    self.report_pack_branch(&source);
                     let value = self.expression(&source, None);
-                    forwarded.push(ForwardedArgument { key, source, value });
+                    forwarded.push(ForwardedArgument {
+                        key,
+                        input: None,
+                        source,
+                        value,
+                    });
                     self.pack_passes.pop();
                     self.bound.truncate(before);
                 }
@@ -907,8 +1028,13 @@ pub(super) fn spread_operands(list: &SyntaxNode) -> impl Iterator<Item = SyntaxN
 
 /// Whether a body needs its concrete pack inputs for a spread or entry read.
 pub(crate) fn has_forwarded_calls(body: &crate::hir::Body) -> bool {
+    statements_need_pack_inputs(&body.statements)
+}
+
+/// Whether checking these statements needs the instance's pack inputs.
+pub(super) fn statements_need_pack_inputs(statements: &[crate::hir::Stmt]) -> bool {
     let mut pending = false;
-    walk_nested_calls(&body.statements, &mut |value| {
+    walk_nested_calls(statements, &mut |value| {
         pending |= needs_pack_inputs(value);
     });
     pending
@@ -921,6 +1047,7 @@ fn needs_pack_inputs(value: &Expr) -> bool {
             callee: Callee::DeferredPackCall,
             ..
         } | ExprKind::DeferredPackRead
+            | ExprKind::DeferredPackCondition
     )
 }
 
@@ -1147,7 +1274,9 @@ impl crate::Program {
                     },
                     &|constant| constant.value.key().is_none(),
                 );
-                let ty = if unresolved {
+                let ty = if matches!(declared.ty, Type::Endpoint(_)) {
+                    argument.value.ty.clone()
+                } else if unresolved {
                     argument
                         .value
                         .ty
@@ -1290,14 +1419,18 @@ impl ForwardingInstance {
     }
 
     /// The checked body with this caller's pack keys bound to arguments.
-    pub(crate) fn body(&self, program: &crate::Program) -> Option<crate::hir::Body> {
-        let (_, body) = program.instance_with_inputs(
+    pub(crate) fn body(
+        &self,
+        program: &crate::Program,
+    ) -> Option<crate::instance::CheckedInstance> {
+        program.checked_instance(
             self.declaration,
             &self.generics,
             &self.requirements,
             self.inputs(),
-        )?;
-        Some(body)
+            &std::cell::RefCell::new(Diagnostics::new()),
+            &mut Diagnostics::new(),
+        )
     }
 
     fn inputs(&self) -> crate::InstanceInputs<'_> {
@@ -1401,7 +1534,6 @@ pub(super) fn check_instances(
         MakingCall, MakingPath, bounded_instance_key, emit_instance_report, past_pack_growth_limit,
         past_the_limit,
     };
-    use hgl_diagnostics::Code;
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let mut forwarding = program.callback_phase_bodies.clone();
@@ -1648,6 +1780,23 @@ pub(super) fn check_instances(
                             ),
                             Some(here.clone()),
                         );
+                        let mut default_reports = hgl_diagnostics::Diagnostics::new();
+                        super::operator_defaults::check_forwarded_default(
+                            program,
+                            value,
+                            discovered,
+                            &mut default_reports,
+                        );
+                        if !default_reports.as_slice().is_empty() {
+                            let path: Vec<_> = via.calls().cloned().collect();
+                            for report in default_reports.as_slice() {
+                                emit_instance_report(
+                                    report.clone(),
+                                    std::slice::from_ref(&path),
+                                    diagnostics,
+                                );
+                            }
+                        }
                         super::requirements::made_forwarded_callee(
                             callee,
                             child.constants.clone(),

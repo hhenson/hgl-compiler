@@ -126,6 +126,7 @@ analyser: partial
 - An option given a generic value parameter of the enclosing function, `step(v, mode: M)` in `go<const M: Mode>`, admits a candidate where the function's `requires` binds the parameter, `requires M == .slow` (GEN-3); where it states nothing of it, a default of it included, no candidate is known to admit the call, which is `operator.no_candidate` where the function is declared (GEN-7)
 - A fixed parameter in an operator pack's place reports the proposed `impl.pack` code at the candidate parameter name. A pack with cardinality one is accepted. Bare Boolean requirements await #367.
 - A candidate's own result or callback result can be absent when the operator permits a result-only generic to bind to none (GEN-1). A candidate whose result disagrees with its operator reports `impl.result` at the result type or at the candidate's name when it has no result.
+- A fixed public result rejects a candidate that adds null or failure. A candidate may guarantee the value of a nullable or fallible result. A complete fallible place takes that value as a success. An independent output parameter can bind to the candidate's own result.
 - The types and values bound by a candidate's declared parameters can show that the operator's `requires` does not hold. The candidate's name then reports `impl.requires`.
 - Left: other checks of a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidate selection
 
@@ -202,7 +203,7 @@ analyser: partial
 - Guaranteed indexed tuple members retain their pack's universal category facts only where the effective minimum guarantees that key. Exact tuple-pack occurrences inside parameter containers also prove a positive minimum. Tuple equations are retained inside lists, dictionary values, nullable types and nested tuples without changing argument reading.
 - Left: key-preserving universal finite-membership and named-call inheritance for indexed members (#723). The direct reflected-member operator proof uses separate alternatives per key (GEN-7).
 - Left: positive existential constraints do not yet prove a nonempty pack for tuple indexing (#724).
-- Left: named operator requirements bound by a quantifier.
+- A named operator requirement under `each` or `any` checks the value candidates for the current concrete type or key, including nested written types (GEN-16). The candidate's return value does not determine the verdict.
 - An ordinary value context rejects the borrowed view from `schemas(pack)`.
 
 transpiler: partial

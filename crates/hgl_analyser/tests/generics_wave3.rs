@@ -130,10 +130,10 @@ fn instance_called_by(checked: &Checked, caller: &Body) -> Body {
 #[test]
 fn an_instance_reads_the_selected_result_in_its_source_place() {
     let checked = module(
-        r#"operator find<T>(value: T) -> i64
+        r#"operator find<T>(value: T) -> i64?
 impl const fn find<T>(value: T) -> i64 => 5
 impl const fn find(value: i64) -> i64? => null
-operator check<T>(value: T) -> i64
+operator check<T>(value: T) -> result<i64, error>
 impl const fn check<T>(value: T) -> i64 => 5
 impl const fn check(value: i64) -> result<i64, error> => err(error(message: "checked"))
 operator parse<T>(value: T) -> result<i64, error>

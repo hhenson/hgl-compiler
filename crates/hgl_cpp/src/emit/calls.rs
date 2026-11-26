@@ -101,23 +101,22 @@ impl Emitter<'_> {
         self.missing(at, otherwise)
     }
 
-    /// Respect expression order when an apparent local read is a
-    /// contextual connection read in the consuming handler (EXPR-2).
+    /// A handler's contextual input or output payload is a checked read,
+    /// even when the HIR represents it as a local (TIME-7, EXPR-2).
     pub(super) fn may_fail_here(&self, value: &Expr) -> bool {
         if may_fail(value) {
             return true;
         }
-        let mut reads_connection = false;
-        if self
-            .temporal
-            .as_ref()
-            .is_some_and(|context| !context.input_reads.is_empty())
-        {
+        let mut checked_read = false;
+        if self.temporal.is_some() {
             value.walk(&mut |expression| {
-                reads_connection |= matches!(expression.kind, ExprKind::Local(local) if self.input_reader(local).is_some());
+                if let ExprKind::Local(local) = expression.kind {
+                    checked_read |= self.role(local) == super::nodes::Role::Out
+                        || self.input_reader(local).is_some();
+                }
             });
         }
-        reads_connection
+        checked_read
     }
 
     /// A call of `callee` with `arguments` as C++ (FN-5, NATIVE-7);
@@ -250,11 +249,21 @@ impl Emitter<'_> {
                 if Some(module) != program.core() || !(self.provides)(&name) {
                     return self.missing(at, &format!("the native function `{}`", declared.name));
                 }
-                let Some(templated) = self.templated(&names::native(&name), &[], generics, at)
-                else {
-                    return "0".to_string();
+                let name = names::native(&name);
+                // TIME-9: the adapter deduces its view types from the borrows.
+                let name = if declared_signature
+                    .parameters
+                    .iter()
+                    .any(|p| matches!(p.ty, Type::Endpoint(_)))
+                {
+                    name
+                } else {
+                    let Some(name) = self.templated(&name, &[], generics, at) else {
+                        return "0".to_string();
+                    };
+                    name
                 };
-                (templated, declared_signature)
+                (name, declared_signature)
             }
             _ => return self.missing(at, "a call of a temporal function"),
         };
@@ -360,6 +369,21 @@ impl Emitter<'_> {
             };
             let parameter = &signature.parameters[index];
             if let Type::Endpoint(payload) = &parameter.ty {
+                if callee.declaration().is_some_and(|(module, declaration)| {
+                    matches!(
+                        program.modules[module].declarations[declaration].kind,
+                        DeclarationKind::NativeFunction(_)
+                    )
+                }) {
+                    let view = self.expression(scope, &argument.value);
+                    written.push((
+                        index,
+                        view,
+                        self.may_fail_here(&argument.value),
+                        Held::Value("auto".to_string()),
+                    ));
+                    continue;
+                }
                 // A hidden FN-14 capture passes the selector itself,
                 // without checking its position or reading its payload (ERR-14).
                 let value = match argument.value.kind {

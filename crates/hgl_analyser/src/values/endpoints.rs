@@ -242,7 +242,7 @@ impl<'a> Typer<'a> {
             )
         {
             let reported = self.diagnostics.len();
-            if let Some(found) = self.read_child_endpoint(only, true) {
+            if let Some(found) = self.read_child_endpoint(only, true, false) {
                 return self.child_operation(operation, at, only, found, reported);
             }
         }
@@ -683,7 +683,7 @@ impl<'a> Typer<'a> {
         // `parts[i]`", in a hook.
         let reported = self.diagnostics.len();
         if self.hook.is_some()
-            && let Some(found) = self.read_child_endpoint(&named, defer_child)
+            && let Some(found) = self.read_child_endpoint(&named, defer_child, true)
         {
             if let Some(child) = found {
                 self.child_in_start(at, &child);
@@ -740,6 +740,33 @@ impl<'a> Typer<'a> {
             ty: Type::Endpoint(Box::new(self.locals[local].ty.clone())),
             at,
             category: ValueCategory::Unsettled,
+        }
+    }
+
+    /// FN-19, TIME-9: forwarding a node input pack to a borrowed slot
+    /// takes its concrete entry’s endpoint without reading the payload.
+    pub(super) fn borrow_forwarded_entry(&mut self, entry: Expr, input: Option<LocalId>) -> Expr {
+        let at = entry.at;
+        if input.is_some() {
+            return Expr {
+                ty: Type::Endpoint(Box::new(entry.ty.clone())),
+                kind: ExprKind::ChildEndpointOf(Box::new(entry)),
+                at,
+                category: ValueCategory::Unsettled,
+            };
+        }
+        self.diagnostics.emit(error(
+            Category::Phase,
+            codes::ENDPOINT_ARGUMENT,
+            at,
+            "this forwarded value has no node input endpoint to borrow".to_string(),
+            "TIME-9",
+        ));
+        Expr {
+            kind: ExprKind::Unread,
+            ty: Type::Unknown,
+            category: ValueCategory::Unsettled,
+            at,
         }
     }
 

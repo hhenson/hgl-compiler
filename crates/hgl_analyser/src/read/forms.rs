@@ -177,7 +177,14 @@ impl Reader<'_> {
             SyntaxKind::RollingWindowType => self.rolling_window(node, position),
             SyntaxKind::EndpointType => {
                 self.endpoint(node);
-                Type::Endpoint(Box::new(self.inner(node, Position::PLAIN)))
+                // FN-8: only a direct pack parameter can bind a sequence
+                // of payload types through this borrow.
+                let payload = if position.pack {
+                    Position::PACK
+                } else {
+                    Position::PLAIN
+                };
+                Type::Endpoint(Box::new(self.inner(node, payload)))
             }
             SyntaxKind::AtomicType => {
                 self.ordinary(node, position, false);
@@ -324,8 +331,15 @@ impl Reader<'_> {
     /// function, and of nothing else." FN-1 has that parameter the
     /// exception to a value function's ordinary value types.
     fn endpoint(&mut self, node: &SyntaxNode) {
-        let parameter = node
-            .parent()
+        let parent = node.parent();
+        let parameter = parent
+            .and_then(|parent| {
+                if parent.kind() == SyntaxKind::PackType {
+                    parent.parent()
+                } else {
+                    Some(parent)
+                }
+            })
             .filter(|parent| parent.kind() == SyntaxKind::Param);
         let native = parameter
             .as_ref()

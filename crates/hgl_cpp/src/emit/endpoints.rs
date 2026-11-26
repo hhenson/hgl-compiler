@@ -24,12 +24,11 @@
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Local, Stmt, Value};
 use hgl_analyser::{DeclarationKind, Detail, NamedKind, Program, Type};
-use hgl_lower::calls::runtime_arguments;
 
 use super::Emitter;
 use super::forms::Family;
 use super::names::{identifier, temporary};
-use super::nodes::{Kind, Role};
+use super::nodes::{Kind, OUT, Role};
 use super::statements::Scope;
 use super::values::INDENT;
 use crate::runtime;
@@ -278,6 +277,12 @@ impl Family for Endpoints {
                         _ => read,
                     })
                 }
+                // TIME-7: scalar writes update the output view used by the hook.
+                Role::Out if matches!(locals[*local].ty, Type::Scalar(_)) => {
+                    scope.read = true;
+                    scope.acted = true;
+                    Some(format!("::{lib}::checked_whole({OUT})"))
+                }
                 Role::Out => Some(emitter.missing(value.at, "a read of `out`")),
                 Role::Plain | Role::Connection => None,
             },
@@ -334,61 +339,6 @@ impl Family for Endpoints {
                 let base = emitter.expression(scope, base);
                 scope.acted = true;
                 Some(format!("({base}).{property}()"))
-            }
-            // TIME-9: a native that takes an `endpoint<T>` is given the
-            // view itself, and is a template over the view's type: it is
-            // called with no template argument.
-            ExprKind::Call {
-                callee, arguments, ..
-            } => {
-                let (module, declaration) = callee.declaration()?;
-                let program = emitter.program;
-                let declared = &program.modules[module].declarations[declaration];
-                if !matches!(declared.kind, DeclarationKind::NativeFunction(_)) {
-                    return None;
-                }
-                let Some(Detail::Callable(signature)) =
-                    program.modules[module].details.get(declaration)
-                else {
-                    return None;
-                };
-                if !signature
-                    .parameters
-                    .iter()
-                    .any(|parameter| matches!(parameter.ty, Type::Endpoint(_)))
-                {
-                    return None;
-                }
-                let name = super::names::native_function(&declared.name);
-                if Some(module) != program.core() || !(emitter.provides)(&name) {
-                    return Some(emitter.missing(
-                        value.at,
-                        &format!("the native function `{}`", declared.name),
-                    ));
-                }
-                let mut given = vec![String::new(); signature.parameters.len()];
-                for (_, argument) in runtime_arguments(arguments) {
-                    let Some(index) = argument.parameter.filter(|&index| index < given.len())
-                    else {
-                        return Some(emitter.missing(argument.value.at, "this argument"));
-                    };
-                    given[index] = emitter.expression(scope, &argument.value);
-                }
-                let given: Vec<_> = given
-                    .into_iter()
-                    .zip(&signature.parameters)
-                    .filter(|(_, parameter)| !matches!(parameter.ty, Type::Function(_)))
-                    .map(|(argument, _)| argument)
-                    .collect();
-                if given.iter().any(String::is_empty) {
-                    return Some(emitter.missing(value.at, "a call that leaves out an endpoint"));
-                }
-                scope.acted = true;
-                Some(format!(
-                    "::{}::{name}({})",
-                    runtime::NAMESPACE,
-                    given.join(", ")
-                ))
             }
             _ => None,
         }

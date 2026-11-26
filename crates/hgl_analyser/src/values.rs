@@ -47,10 +47,11 @@ use crate::program::{
 use crate::types::{Argument, CallArguments, Detail, Scalar, Signature, Type};
 use anonymous::Anonymous;
 use control::label;
+use dependent_packs::MemberFault;
 use endpoints::endpoint_argument;
 
 pub(crate) use candidates::{Selecting, select_in_instance};
-pub(crate) use constants::{generic_default, reread_parameter_default};
+pub(crate) use constants::{ParameterDefaultRead, generic_default, reread_parameter_default};
 pub(crate) use lifting::record;
 
 // The bodies of anonymous functions and their direct calls (FN-7, FN-14).
@@ -94,7 +95,9 @@ mod format_calls;
 // The form a result takes from its place, and a `T?` read where a T is expected (ERR-12, ERR-15).
 mod forms;
 mod forwarded_packs;
-pub(crate) use forwarded_packs::{ForwardingInstance, has_forwarded_calls};
+pub(crate) use forwarded_packs::{
+    ForwardingInstance, defer_pack_branch_reports, has_forwarded_calls,
+};
 mod function_arguments;
 // Fits destinations whose graph values become known only in an instance (GEN-7).
 mod graph_instance;
@@ -520,6 +523,7 @@ pub(crate) struct InstanceSites {
 }
 
 type Site = ((FileId, u32), usize);
+type GuardedPackFaults = HashMap<(FileId, u32), (Location, MemberFault)>;
 
 impl InstanceSites {
     fn new(module: &Module) -> Self {
@@ -558,7 +562,7 @@ pub(crate) fn reread_instance_body(
     inputs: crate::InstanceInputs<'_>,
     project: &dyn Fn(&Type) -> Type,
     diagnostics: &mut Diagnostics,
-) -> Option<hir::Body> {
+) -> Option<(hir::Body, Vec<Location>)> {
     let owner = &program.modules[module];
     let declared = &owner.declarations[declaration];
     let fallback;
@@ -583,6 +587,33 @@ pub(crate) fn reread_instance_body(
                 &|_| false,
             )
     };
+    let reading = Signature {
+        generics: match &owner.details[declaration] {
+            Detail::Callable(declared) => candidates::in_instance(declared, map).generics,
+            _ => Vec::new(),
+        },
+        ..signature.clone()
+    };
+    let pack_types = PackTypes::new(&reading.generics, inputs.type_packs);
+    let branches: Vec<_> = if inputs.type_packs.is_empty() {
+        Vec::new()
+    } else {
+        crate::syntax::pack_key_branches(&declared.syntax)
+            .map(|branch| branch.span())
+            .collect()
+    };
+    let mut guarded_pack_faults = HashMap::new();
+    let mut project_written = |key, at: Location, ty: &Type| {
+        if branches
+            .iter()
+            .any(|branch| branch.start <= at.span.start && at.span.end <= branch.end)
+            && let Err(fault) = pack_types.project(ty, map)
+        {
+            guarded_pack_faults.entry(key).or_insert((at, fault));
+            return Type::Unknown;
+        }
+        project(ty)
+    };
     let mut absent_type_uses = HashMap::new();
     let projected: Vec<_> = sites_in(&sites.written, declared)
         .iter()
@@ -591,7 +622,7 @@ pub(crate) fn reread_instance_body(
             if needs_absent_type(&written.ty) {
                 absent_type_uses.insert(key, written.at);
             }
-            (key, project(&written.ty))
+            (key, project_written(key, written.at, &written.ty))
         })
         .collect();
     let written = projected.iter().map(|(at, ty)| (*at, ty)).collect();
@@ -614,7 +645,7 @@ pub(crate) fn reread_instance_body(
                             if needs_absent_type(ty) {
                                 absent_type_uses.entry(at_key).or_insert(*at);
                             }
-                            Argument::Type(project(ty))
+                            Argument::Type(project_written(at_key, *at, ty))
                         }
                         crate::Argument::Constant(_) => crate::instance::placed(argument, map),
                         crate::Argument::NoResult => crate::Argument::NoResult,
@@ -636,14 +667,6 @@ pub(crate) fn reread_instance_body(
         .map(|(at, call)| (*at, call))
         .collect();
     let selecting = RefCell::new(Vec::new());
-    let reading = Signature {
-        generics: match &owner.details[declaration] {
-            Detail::Callable(declared) => candidates::in_instance(declared, map).generics,
-            _ => Vec::new(),
-        },
-        ..signature.clone()
-    };
-    let pack_types = PackTypes::new(&reading.generics, inputs.type_packs);
     let found = Tables {
         bindings: &bindings,
         written: &written,
@@ -660,6 +683,7 @@ pub(crate) fn reread_instance_body(
         inputs.test_candidates,
     );
     typer.absent_type_uses = Some(&absent_type_uses);
+    typer.guarded_pack_faults = Some(&guarded_pack_faults);
     typer.instance = map
         .iter()
         .map(|(at, argument)| (*at, (*argument).clone()))
@@ -679,7 +703,9 @@ pub(crate) fn reread_instance_body(
         types: &pack_types,
     });
     typer.pack_functions = inputs.functions.to_vec();
-    if owner.phases[declaration] == Some(Phase::Graph)
+    let selected = RefCell::new(Vec::new());
+    typer.selected_pack_branches = Some(&selected);
+    let body = if owner.phases[declaration] == Some(Phase::Graph)
         && program
             .callback_phase_bodies
             .contains(&(module, declaration))
@@ -693,7 +719,8 @@ pub(crate) fn reread_instance_body(
         body
     } else {
         typer.body_at_phase(owner.phases[declaration])
-    }
+    }?;
+    Some((body, selected.into_inner()))
 }
 
 /// GEN-1: a written argument needs a type unless it takes a whole result.
@@ -799,6 +826,10 @@ struct Typer<'a> {
     written: &'a HashMap<(FileId, u32), &'a Type>,
     /// Locations where the instance has no type for a written generic.
     absent_type_uses: Option<&'a HashMap<(FileId, u32), Location>>,
+    /// Written pack lookups reported only when their guard selects them (CTRL-16).
+    guarded_pack_faults: Option<&'a GuardedPackFaults>,
+    /// The committed pack branches a concrete body actually read (CTRL-16).
+    selected_pack_branches: Option<&'a RefCell<Vec<Location>>>,
     /// The generic arguments each call writes, by where its callee
     /// starts (GEN-8).
     calls: &'a HashMap<(FileId, u32), &'a CallArguments>,
@@ -988,6 +1019,8 @@ struct Typer<'a> {
     const_inputs: Vec<(Location, Expr)>,
     /// Concrete value and type pack entries of the enclosing instance.
     pack_inputs: Option<PackInputs<'a>>,
+    /// UNIT-8 reads dependency edges from both arms of a parameter default.
+    lexical_default_dependencies: bool,
     /// Compile-time callbacks available to forwarded calls.
     pack_functions: Vec<(usize, hir::Callee)>,
     /// Active computed-pack passes, from the outermost to the current one.
@@ -1114,6 +1147,8 @@ impl<'a> Typer<'a> {
             bindings: tables.bindings,
             written: tables.written,
             absent_type_uses: None,
+            guarded_pack_faults: None,
+            selected_pack_branches: None,
             calls: tables.calls,
             locals: Vec::new(),
             pair_phases: None,
@@ -1176,6 +1211,7 @@ impl<'a> Typer<'a> {
             instance: Vec::new(),
             const_inputs: Vec::new(),
             pack_inputs: None,
+            lexical_default_dependencies: false,
             pack_functions: Vec::new(),
             pack_passes: Vec::new(),
             bound_packs: HashMap::new(),
@@ -1226,6 +1262,12 @@ impl<'a> Typer<'a> {
     /// Check a written use when the body reads it, including in the
     /// selected branch of a concrete pack condition (GEN-1, CTRL-16).
     fn check_written_type(&mut self, start: u32) {
+        if let Some((at, fault)) = self
+            .guarded_pack_faults
+            .and_then(|uses| uses.get(&(self.file, start)))
+        {
+            self.pack_member_fault(*at, fault);
+        }
         if let Some(at) = self
             .absent_type_uses
             .and_then(|uses| uses.get(&(self.file, start)))
@@ -1329,6 +1371,9 @@ impl<'a> Typer<'a> {
             nested_query_selects: self.nested_query_selects,
             deferred_type_fit: self.deferred_type_fit.is_some_and(Cell::get),
             unsettled_callback_pair: self.unsettled_callback_pair,
+            selected_pack_branches: self
+                .selected_pack_branches
+                .map_or(0, |selected| selected.borrow().len()),
             resolved_written: self
                 .resolved_written
                 .map_or(0, |target| target.borrow().len()),
@@ -1348,6 +1393,9 @@ impl<'a> Typer<'a> {
     fn take_back(&mut self, mark: Mark, keep_flow: bool) -> bool {
         self.nested_query_selects = mark.nested_query_selects;
         self.unsettled_callback_pair = mark.unsettled_callback_pair;
+        if let Some(selected) = self.selected_pack_branches {
+            selected.borrow_mut().truncate(mark.selected_pack_branches);
+        }
         if let Some(deferred) = self.deferred_type_fit {
             deferred.set(mark.deferred_type_fit);
         }
@@ -1523,6 +1571,8 @@ struct Mark {
     /// Whether a fit was deferred before this tentative reading.
     deferred_type_fit: bool,
     unsettled_callback_pair: bool,
+    /// Number of selected pack branches before a tentative read (CTRL-16).
+    selected_pack_branches: usize,
     /// How many body-level resolved written types have been recorded.
     resolved_written: usize,
     /// Whether the active role probe already observed a temporal pair call.

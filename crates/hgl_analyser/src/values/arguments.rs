@@ -461,13 +461,18 @@ impl<'a> Typer<'a> {
         let written = entries
             .into_iter()
             .map(|(brace, name, value)| (brace, name, value, None));
-        let expanded = spreads
-            .into_iter()
-            .map(|entry| (false, None, entry.source, Some((entry.key, entry.value))));
+        let expanded = spreads.into_iter().map(|entry| {
+            (
+                false,
+                None,
+                entry.source,
+                Some((entry.key, entry.value, entry.input)),
+            )
+        });
         for (brace, name, value, forwarded) in written.chain(expanded) {
             let at = self.at(&value);
             let name_text = name.as_ref().map(SyntaxToken::text).or(match &forwarded {
-                Some((hir::PackKey::Name(name), _)) => Some(name.as_str()),
+                Some((hir::PackKey::Name(name), ..)) => Some(name.as_str()),
                 _ => None,
             });
             let slot = match name_text {
@@ -598,6 +603,26 @@ impl<'a> Typer<'a> {
                     });
                     capture_key(&mut pack_locations[index], kind, name_text, site)
                 })
+            });
+            let forwarded = forwarded.map(|(key, entry, input)| {
+                let borrowed =
+                    slot.is_some_and(|index| matches!(slots[index].ty, Type::Endpoint(_)));
+                let entry = if borrowed {
+                    self.borrow_forwarded_entry(entry, input)
+                } else {
+                    if let Some(input) = input {
+                        // FN-19: an ordinary slot reads its matched payload.
+                        self.pack_input_read(
+                            input,
+                            Some(key.clone()),
+                            &value,
+                            super::children::read_whole_all_valid(&entry.ty),
+                        );
+                        self.signal_read(input, entry.at, Some((&entry.ty, &value)));
+                    }
+                    entry
+                };
+                (key, entry)
             });
             arguments.push(Assigned {
                 slot,

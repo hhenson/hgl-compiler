@@ -1172,8 +1172,8 @@ fn references_are_written() {
 }
 
 /// FN-16: a designation the target does not write yet is reported, a
-/// child of a `ref` parameter; a list designated whole, and one by a
-/// position, are written.
+/// child of a `ref` parameter; a list designated whole, one by a
+/// position, and an ordinary input's struct field are written.
 #[test]
 fn a_designation_not_written_yet_is_reported() {
     let emitted = emit_with(
@@ -1182,8 +1182,14 @@ fn a_designation_not_written_yet_is_reported() {
             concat!(
                 "module m\n",
                 "\n",
+                "struct Pair { left: i64\n right: i64 }\n",
+                "\n",
                 "fn route(idx: i64, ref items: list<i64, 3>) -> ref i64 {\n",
                 "    when modified(idx) { return items[idx] }\n",
+                "}\n",
+                "\n",
+                "fn ref_field(ref pair: Pair) -> ref i64 {\n",
+                "    when valid([]) { return pair.left }\n",
                 "}\n",
                 "\n",
                 "fn both(idx: i64, items: list<i64, 3>) -> ref list<i64, 3> {\n",
@@ -1199,8 +1205,58 @@ fn a_designation_not_written_yet_is_reported() {
     );
     assert_eq!(
         emitted.reported,
-        ["m.hgl:4:33 the cpp target does not write a designation of this child yet"]
+        [
+            "m.hgl:7:33 the cpp target does not write a designation of this child yet",
+            "m.hgl:11:29 the cpp target does not write a designation of this child yet",
+        ]
     );
+}
+
+/// FN-16, TIME-10: an ordinary struct input's field, nested field, or
+/// multiple fields designated by a `ref` result follow `hglrt::field_port`.
+#[test]
+fn struct_field_reference_designations_are_written() {
+    let emitted = emit_with(
+        &[(
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "struct Pair { left: i64\n right: i64 }\n",
+                "struct Outer { inner: Pair\n note: i64? }\n",
+                "fn pick(flag: bool, input: Pair) -> ref i64 {\n",
+                "    when valid(flag) {\n",
+                "        if flag { return input.left }\n",
+                "        return input.right\n",
+                "    }\n",
+                "}\n",
+                "fn deep(input: Outer) -> ref i64 {\n",
+                "    when valid([]) { return input.inner.right }\n",
+                "}\n",
+                "fn opt(input: Outer) -> ref i64? {\n",
+                "    when valid([]) { return input.note }\n",
+                "}\n",
+            ),
+        )],
+        &hgl_cpp::runtime::provides,
+    );
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let unit = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/mod-m.cpp")
+        .unwrap()
+        .text;
+    for written in [
+        "::hgraph::In<\"designated:input.0\", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_01_f0_",
+        "::hgraph::In<\"designated:input.1\", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_01_f1_",
+        "::hglrt::field_port<0>(input), ::hglrt::field_port<1>(input)",
+        "::hgraph::In<\"designated:input.0.1\", ::hgraph::REF<::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> designated_00_f0_1_",
+        "::hglrt::field_port<1>(::hglrt::field_port<0>(input))",
+        "::hgraph::In<\"designated:input.1\", ::hgraph::REF<::hgraph::TS<::hgraph::Optional<::hgraph::Int>>>, ::hgraph::InputValidity::Unchecked> designated_00_f1_",
+    ] {
+        assert!(unit.contains(written), "{written} in\n{unit}");
+    }
 }
 
 /// The run's store where a graph is built (FN-9) and where an application
@@ -3714,4 +3770,46 @@ fn type_queries_of_untyped_primitive_calls_decline_cleanly() {
             "{operand}: {blocked}"
         );
     }
+}
+
+/// FN-8, FN-19, TIME-9: each native pack entry receives its own
+/// endpoint view, in binding order, even when the node admits invalid inputs.
+#[test]
+fn native_endpoint_packs_expand_to_views() {
+    let made = emit_with(
+        &[
+            (
+                "inspect.hgl",
+                r#"module core part inspection
+export native const fn inspect_views<...As, ...Ks>(
+    const label: str, args: ...endpoint<As>, kwargs: ...{endpoint<Ks>}) -> i64"#,
+            ),
+            (
+                "quote.hgl",
+                r#"module quote
+fn pass<...As, ...Ks>(args: ...As, kwargs: ...{Ks}) -> i64 {
+    when valid([]) { return inspect_views("quote", ...args, ...kwargs) }
+}
+fn quote(px: i64, bid: str) -> i64 => pass(px, 7.0, side: bid)
+test views { assert eval quote(px: [7], bid: ["bid"]) == [1] }"#,
+            ),
+        ],
+        &|name| name == "fn_inspect_views" || hgl_cpp::runtime::provides(name),
+    );
+    assert_eq!(made.blocked("views"), None, "{:?}", made.reported);
+    let unit = made
+        .output
+        .files
+        .iter()
+        .find(|f| f.path == "modules/mod-quote.cpp")
+        .unwrap();
+    let call = unit
+        .text
+        .lines()
+        .find(|line| line.contains("::hglrt::fn_inspect_views("))
+        .unwrap();
+    for name in ["pack_0_0", "pack_0_1", "pack_1_0_side"] {
+        assert!(call.contains(name), "{call}");
+    }
+    assert!(!call.contains("checked_value"), "{call}");
 }

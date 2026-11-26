@@ -215,6 +215,76 @@ fn an_endpoint_parameter_takes_an_input_by_its_name() {
     assert_eq!(arguments[0].value.ty.to_string(), "endpoint<i64>");
 }
 
+/// UNIT-8 and TIME-9: the default's place needs a borrowed endpoint,
+/// which an ordinary literal cannot supply, even when the call omits it.
+#[test]
+fn a_native_endpoint_default_is_checked_as_an_endpoint() {
+    let checked = module(concat!(
+        "native const fn observe(input: endpoint<i64> = 1) -> bool\n",
+        "fn use_it(input: i64) -> bool {\n",
+        "    when { return observe() }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:48 phase/endpoint.argument TIME-9"],
+        "{}",
+        checked.report
+    );
+}
+
+/// UNIT-7, UNIT-8 and TIME-9: a cold default has no node input to
+/// borrow. Null, named values and a generic payload do not provide one.
+#[test]
+fn cold_endpoint_defaults_cannot_supply_an_ordinary_value() {
+    for source in [
+        "native const fn observe(input: endpoint<i64> = null) -> bool\n",
+        "const ordinary: i64 = 1\nnative const fn observe(input: endpoint<i64> = ordinary) -> bool\n",
+        "native const fn observe<T>(input: endpoint<T> = 1) -> bool\n",
+        "operator observe<T>(input: T) -> bool\nnative impl const fn observe(input: endpoint<i64> = 1) -> bool\n",
+    ] {
+        let checked = module(source);
+        assert_eq!(checked.findings.len(), 1, "{source}\n{}", checked.report);
+        assert_eq!(
+            checked.findings[0].code, "phase/endpoint.argument",
+            "{source}\n{}",
+            checked.report
+        );
+        assert_eq!(checked.findings[0].rule, "TIME-9");
+    }
+}
+
+/// TIME-9 and UNIT-8: an explicitly supplied endpoint is still borrowed,
+/// while an ordinary parameter beside it can use its own cold default.
+#[test]
+fn supplied_native_endpoints_keep_their_borrowed_binding() {
+    let checked = module(concat!(
+        "native const fn observe(input: endpoint<i64>, fallback: i64 = 1) -> bool\n",
+        "fn use_it(input: i64) -> bool {\n",
+        "    when valid([]) {\n",
+        "        let actual = observe(input)\n",
+        "        return actual\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let node = body(&checked, "use_it");
+    let Some(Stmt::Hook { body, .. }) = node.statements.first() else {
+        panic!("`use_it` has a `when`");
+    };
+    let Some(Stmt::Declare {
+        value: Some(value), ..
+    }) = body.first()
+    else {
+        panic!("the hook starts with the call result");
+    };
+    let ExprKind::Call { arguments, .. } = &value.kind else {
+        panic!("`observe(input)` is a call");
+    };
+    assert!(matches!(arguments[0].value.kind, ExprKind::EndpointOf(0)));
+    assert_eq!(arguments[0].value.ty.to_string(), "endpoint<i64>");
+}
+
 /// TIME-9: a node can change the activity of a direct temporal input.
 /// Its output and a computed payload have no input subscription to change.
 #[test]
@@ -333,4 +403,72 @@ fn all_valid_takes_a_collection_and_guards_it() {
         checked.summary(),
         ["m.hgl:17:39 phase/endpoint.argument TIME-9"]
     );
+}
+
+/// FN-8, FN-19, TIME-9: a borrowed pack reflects the input payloads;
+/// each receiving formal decides whether the hook reads or borrows.
+#[test]
+fn native_packs_borrow_temporal_entries_and_reflect_their_payloads() {
+    let source = r#"
+native const fn inspect<...As, ...Ks>(
+    const tag: str, args: ...endpoint<As>, kwargs: ...{endpoint<Ks>}
+) -> i64
+    requires each k in arg_keys(As) { As[k] == i64 }
+          && each k in arg_keys(Ks) { Ks[k] == str }
+fn pass<...As, ...Ks>(args: ...As, kwargs: ...{Ks}) -> i64 {
+    when valid([]) { return inspect("quote", ...args, ...kwargs) }
+}
+fn both(a: i64, b: str) -> i64 {
+    when valid([]) { return inspect("quote", a, bid: b) }
+}
+fn wired(a: i64) -> i64 => pass(a, label: "bid")
+fn empty(a: i64) -> i64 => pass()
+"#;
+    let checked = module(source);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+    let wrong = module(&source.replace("bid: b", "bid: a"));
+    assert_eq!(wrong.findings.len(), 1, "{}", wrong.report);
+    assert_eq!(wrong.findings[0].code, "constraint/requires.unmet");
+}
+
+#[test]
+fn an_ordinary_value_cannot_supply_a_borrowed_pack_and_a_value_pack_still_reads() {
+    for (declarations, error) in [
+        (
+            r#"native const fn inspect<...As>(args: ...endpoint<As>) -> i64
+fn read(tick: i64) -> i64 { when { return inspect(3) } }"#,
+            "phase/endpoint.argument",
+        ),
+        (
+            r#"native const fn inspect<...As>(args: ...endpoint<As>) -> i64
+const fn pass<...As>(args: ...As) -> i64 => inspect(...args)
+const fn call() -> i64 => pass(3)"#,
+            "phase/endpoint.argument",
+        ),
+        (
+            r#"native const fn inspect<...Ks>(payload: i64, args: ...{endpoint<Ks>}) -> i64
+fn pass<...As>(args: ...As) -> i64 { when valid([]) { return inspect(...args) } }
+fn call(a: i64) -> i64 => pass(a)"#,
+            "phase/payload.unguarded",
+        ),
+        (
+            r#"native const fn inspect(args: ...endpoint<str>) -> i64
+fn read(tick: i64) -> i64 { when valid([]) { return inspect(tick) } }"#,
+            "type/type.mismatch",
+        ),
+        (
+            r#"native const fn inspect<...As>(args: ...endpoint<As>) -> i64
+fn read<...As>(args: ...As) -> i64 { when { return inspect(...{for k in arg_keys(As): args[k]}) } }
+fn call(a: i64) -> i64 => read(a)"#,
+            "phase/endpoint.argument",
+        ),
+        (
+            "const fn read<...As>(args: ...endpoint<As>) -> i64 => 1",
+            "type/endpoint.position",
+        ),
+    ] {
+        let checked = module(declarations);
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, error, "{}", checked.report);
+    }
 }
