@@ -43,13 +43,19 @@ use crate::{codes, error};
 /// Maximum cached scope variants per pair call site.
 const PAIR_SCOPE_CACHE_LIMIT: usize = 16;
 
+/// Per call site, each lexical scope and expected type has its own result.
+type PairResults<T> = HashMap<Location, Vec<(PairScope, Option<Type>, T)>>;
+
 /// One pair call, including its tentative and committed readings.
 /// Descendant probes can reuse categories in the same lexical scope.
 pub(super) struct PairPhases {
     scope: Location,
     call: SyntaxNode,
     categories: HashMap<Location, Vec<(PairScope, ValueCategory, bool)>>,
-    probe_types: HashMap<Location, Vec<(PairScope, Option<Type>, Type)>>,
+    probe_types: PairResults<Type>,
+    /// The value signature's inferred result when checking a callback-dependent
+    /// pair. A discarded reading has no flow or bindings to replay.
+    independent_value_results: PairResults<Option<Type>>,
     local_reads: OnceCell<HashMap<Location, Vec<u32>>>,
 }
 
@@ -63,6 +69,7 @@ impl PairPhases {
             call,
             categories: HashMap::new(),
             probe_types: HashMap::new(),
+            independent_value_results: HashMap::new(),
             local_reads: OnceCell::new(),
         })
     }
@@ -570,20 +577,20 @@ impl<'a> Typer<'a> {
                 }
                 let (operands, all_fn_args_probed) =
                     self.pair_operands(name, list, module, (value, temporal));
-                if operands == ValueCategory::Unsettled
+                let open_callback_role = operands == ValueCategory::Unsettled
                     && self
                         .signature
                         .parameters
                         .iter()
-                        .any(|parameter| matches!(&parameter.ty, Type::Function(f) if f.value))
-                {
-                    self.unsettled_callback_pair = true;
-                }
+                        .any(|parameter| matches!(&parameter.ty, Type::Function(f) if f.value));
+                self.unsettled_callback_pair |= open_callback_role;
                 let selected = match preferred_call_role(true, [operands]) {
                     Role::Value => value,
                     Role::Temporal => temporal,
                 };
-                let result = if self.probing_pair_role > 0
+                let call = if open_callback_role && self.unsettled_results.is_some() {
+                    self.independent_pair(name, list, (module, value, temporal), expected, generics)
+                } else if self.probing_pair_role > 0
                     && !self.evaluating
                     && (selected == temporal || all_fn_args_probed)
                 {
@@ -601,7 +608,7 @@ impl<'a> Typer<'a> {
                 if root {
                     self.pair_phases = None;
                 }
-                return result;
+                return call;
             }
             (false, Some(value), Some(_))
                 if self.probing_pair_role > 0
@@ -1317,6 +1324,86 @@ impl<'a> Typer<'a> {
             })
             .collect();
         (unread_call_kind(arguments), Type::Unknown)
+    }
+
+    /// FN-4/17: an open callback selects neither role yet. Retain the call's
+    /// operands for instance discovery, and the result if both signatures
+    /// give it. A concrete binding rereads the selected body normally.
+    fn independent_pair(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        (module, value, temporal): (usize, usize, usize),
+        expected: Option<&Type>,
+        generics: Option<&CallArguments>,
+    ) -> (ExprKind, Type) {
+        if self.probing_pair_role > 0 {
+            return (unread_call_kind(Vec::new()), Type::Unknown);
+        }
+        let other = self.independent_value_result(name, list, (module, value), expected, generics);
+        let (mut kind, ty) = self.call_function(name, list, (module, temporal), expected, generics);
+        if let ExprKind::Call { callee, .. } = &mut kind {
+            *callee = Callee::Unread;
+        }
+        let common = other
+            .filter(|result| result == &ty)
+            .unwrap_or(Type::Unknown);
+        (kind, common)
+    }
+
+    /// Read a generic value result in its own signature and lexical context.
+    /// This discarded reading cannot change the state used by the other role.
+    fn independent_value_result(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        (module, declaration): (usize, usize),
+        expected: Option<&Type>,
+        generics: Option<&CallArguments>,
+    ) -> Option<Type> {
+        let Detail::Callable(signature) = &self.program.modules[module].details[declaration] else {
+            return None;
+        };
+        let result = signature.result.as_ref()?;
+        if !names_parameter(result) {
+            return Some(result.clone());
+        }
+        let site = self.at(list);
+        let call = list.parent().unwrap_or_else(|| list.clone());
+        if let Some(phases) = &self.pair_phases
+            && let Some(results) = phases.independent_value_results.get(&site)
+            && let Some((_, _, ty)) = results.iter().find(|(scope, place, _)| {
+                place.as_ref() == expected
+                    && scope.matches(
+                        self,
+                        phases,
+                        self.at(&call),
+                        &call,
+                        ValueCategory::Unsettled,
+                        false,
+                    )
+            })
+        {
+            return ty.clone();
+        }
+        let scope = PairScope::of(self);
+        let mark = self.mark();
+        let locals = self.locals.clone();
+        let must_return = self.must_return;
+        let tails = self.returning_tails.clone();
+        let (_, result) = self.call_function(name, list, (module, declaration), expected, generics);
+        let clean = self.take_back(mark, false);
+        self.locals = locals;
+        self.must_return = must_return;
+        self.returning_tails = tails;
+        let result = clean.then_some(result);
+        if let Some(phases) = &mut self.pair_phases {
+            let entries = phases.independent_value_results.entry(site).or_default();
+            if entries.len() < PAIR_SCOPE_CACHE_LIMIT {
+                entries.push((scope, expected.cloned(), result.clone()));
+            }
+        }
+        result
     }
 
     /// A call of the value function `declaration` of `module`.

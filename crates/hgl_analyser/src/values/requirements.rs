@@ -2890,7 +2890,15 @@ pub(super) fn instances_hold(
             let mut made = Vec::new();
             let mut forwarding = false;
             if let Some(Some(body)) = module.bodies.get(position) {
-                made_in(program, body, &mut made);
+                // FN-4/17: reaching the graph with a concrete callback
+                // discovers the pair and consumers of its result. Its
+                // provisional source role cannot supply either root.
+                let roots = if program.callback_phase_bodies.contains(&(index, position)) {
+                    source.body((index, position)).unwrap_or(body)
+                } else {
+                    body
+                };
+                made_in(program, roots, &mut made);
                 forwarding = super::has_forwarded_calls(body);
             }
             let body_calls = made.len();
@@ -4452,7 +4460,8 @@ pub(super) fn independent_source_bodies(program: &Program) -> IndependentSourceB
         program
             .modules
             .iter()
-            .map(|module| {
+            .enumerate()
+            .map(|(index, module)| {
                 module
                     .bodies
                     .iter()
@@ -4471,7 +4480,9 @@ pub(super) fn independent_source_bodies(program: &Program) -> IndependentSourceB
                                 unsettled.insert(value.at);
                             }
                         });
-                        if unsettled.is_empty() {
+                        if unsettled.is_empty()
+                            && !program.callback_phase_bodies.contains(&(index, position))
+                        {
                             return None;
                         }
                         super::independent_source_body(program, module, position, &unsettled)
