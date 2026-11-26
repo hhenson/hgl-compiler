@@ -160,6 +160,87 @@ fn an_omitted_default_keeps_the_path_through_another_default() {
     }
 }
 
+/// UNIT-8 and GEN-7: only an actual omission makes a default's helper.
+#[test]
+fn a_default_helper_uses_the_call_that_omits_the_default() {
+    let definitions = concat!(
+        "const fn choose<T>(fallback: T = 1) -> T => fallback\n",
+        "const fn helper<T>() -> T => choose<T>()\n",
+        "const fn with_default<T>(fallback: T = helper<T>()) -> T => fallback\n",
+        "const fn wraps<T>() -> T => with_default<T>()\n",
+        "const fn good() -> i64 => wraps<i64>()\n",
+        "const fn supplied() -> str => with_default<str>(\"given\")\n",
+    );
+    let accepted = module(definitions);
+    assert!(accepted.findings.is_empty(), "{}", accepted.report);
+    let checked = module(&format!(
+        "{definitions}\n\
+         const fn direct() -> str => with_default<str>()\n\
+         const fn forwarded() -> str => wraps<str>()\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:29 type/type.mismatch EXPR-5",
+            "m.hgl:10:32 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        checked.report
+    );
+    for label in [
+        "the omitted default is checked here",
+        "this call makes the instance `choose<str>`",
+        "this call makes the instance `helper<str>`",
+        "this call makes the instance `with_default<str>`",
+        "this call makes the instance `wraps<str>`",
+    ] {
+        assert!(checked.report.contains(label), "{}", checked.report);
+    }
+}
+
+/// The helper can depend on a generic even if the default's type is fixed.
+#[test]
+fn a_fixed_default_type_still_checks_the_generic_helper_at_omission() {
+    let definitions = concat!(
+        "const fn choose<T>(fallback: T = 1) -> T => fallback\n",
+        "const fn helper<T>() -> i64 {\n",
+        "    let selected = choose<T>()\n",
+        "    return 7\n",
+        "}\n",
+        "const fn with_default<T>(fallback: i64 = helper<T>()) -> i64 => fallback\n",
+        "const fn good() -> i64 => with_default<i64>()\n",
+        "const fn supplied() -> i64 => with_default<str>(8)\n",
+    );
+    let accepted = module(definitions);
+    assert!(accepted.findings.is_empty(), "{}", accepted.report);
+    let checked = module(&format!(
+        "{definitions}\nconst fn wrong() -> i64 => with_default<str>()\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:11:28 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report
+    );
+}
+
+/// The argument evaluator still reports a live computed generic failure.
+#[test]
+fn an_omitted_default_keeps_the_helper_constant_failure() {
+    let checked = module(concat!(
+        "const fn one<const N: i64>() -> i64 => N\n",
+        "const fn read<const N: i64>(fallback: i64 = one<(1 // N)>()) -> i64 => fallback\n",
+        "const fn wrong() -> i64 => read<0>()\n",
+        "const fn good() -> i64 => read<1>()\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:28 type/generic.argument_constant GEN-8"],
+        "{}",
+        checked.report
+    );
+}
+
 /// CTRL-16 and UNIT-8: only an omitted default reads the selected pack arm.
 /// Report a rejected arm at the call that supplies its keys (GEN-7).
 #[test]
