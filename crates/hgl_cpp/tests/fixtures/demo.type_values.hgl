@@ -213,3 +213,48 @@ test inherited_named_query_defaults {
     assert named_inspect{tag: type(true)}(named_callback) == "bool"
     assert named_inspect{tag: type(1)}(other_callback) == "i64"
 }
+
+# TYPE-18, GEN-13: late Type-valued generic arguments (locals, same-module
+# calls/constructors, module constants) and Type-valued generic structs.
+struct LocalQuote { value: i64 }
+struct Tagged<const Kind: Type> { value: i64 }
+struct WrappedTagged<const Kind: Type> { inner: Tagged<Kind> }
+const fn one_i64() -> i64 => 1
+const TAG_FROM_FN: Type = type(one_i64())
+const TAG_FROM_STRUCT: Type = type(LocalQuote(value: 1))
+const fn pick_kind<const Kind: Type>() -> Type => Kind
+const fn wrap_kind<T>(x: T) -> Type => pick_kind<type(x)>()
+const fn wrap_tagged<T>(x: T) -> i64 {
+    let t = Tagged<type(x)>(value: 19)
+    return t.value
+}
+const fn tagged_from_fn() -> Tagged<type(one_i64())> => Tagged<type(one_i64())>(value: 11)
+test late_type_generic_arguments {
+    let x = 1
+    let local: i64 = 2
+    var unassigned: i64
+    assert pick_kind<type(x)>() == type(1)
+    assert pick_kind<type(local)>() == type(1)
+    assert pick_kind<type(unassigned)>() == type(1)
+    assert pick_kind<type(one_i64())>() == type(1)
+    assert pick_kind<type(LocalQuote(value: 1))>() == TAG_FROM_STRUCT
+    assert pick_kind<TAG_FROM_FN>() == type(1)
+    assert pick_kind(Kind: type(x)) == type(1)
+    assert wrap_kind(x) == type(1)
+    assert wrap_kind(1.0) == type(1.0)
+    assert wrap_tagged(x) == 19
+    assert wrap_tagged(1.0) == 19
+    let first: Tagged<type(1)> = Tagged<type(x)>(value: 7)
+    let second: Tagged<type(one_i64())> = tagged_from_fn()
+    let missing: Tagged<type(x)>? = null
+    let wrapped = WrappedTagged<type(x)>(inner: first)
+    assert first.value == 7
+    assert second.value == 11
+    assert missing == null
+    assert wrapped.inner.value == 7
+    assert type(first) == type(second)
+    assert type(first) != type(Tagged<type(1.0)>(value: 7))
+    assert convert<str>(type(first)) == "Tagged<i64>"
+    unassigned = 5
+    assert unassigned == 5
+}

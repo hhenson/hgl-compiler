@@ -445,7 +445,7 @@ impl<'a> Typer<'a> {
             .find(|part| is_type(part.kind()))
             .and_then(|part| {
                 let ty = self.written_type_at(part.span().start)?;
-                Some(self.project_pack_pass_type(ty, self.at(&part)))
+                Some(self.project_pack_pass_type(&ty, self.at(&part)))
             });
         // The first value: the child that is no type.
         let binds_child = annotation.is_none() && kind == LocalKind::Let && self.reads_children();

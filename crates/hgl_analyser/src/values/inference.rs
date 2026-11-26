@@ -166,6 +166,7 @@ impl<'a> Typer<'a> {
                 GenericKind::Value(ty) if !names_parameter(ty) => Some(ty),
                 _ => None,
             };
+            self.remember_type_queries_in(&value);
             let read = self.read_constant(&value, expected);
             if let Some(why) = Self::not_constant(&read) {
                 self.diagnostics.emit(error(
@@ -407,7 +408,10 @@ impl<'a> Typer<'a> {
             let types = types
                 .iter()
                 .map(|(at, argument)| match argument {
-                    Argument::Type(ty) => self.project_pack_pass_type(ty, *at),
+                    Argument::Type(ty) => {
+                        let ty = self.resolve_deferred_in_type(*at, ty);
+                        self.project_pack_pass_type(&ty, *at)
+                    }
                     Argument::NoResult => {
                         faulty = true;
                         self.diagnostics.emit(super::absent_type_argument(*at));
@@ -615,34 +619,70 @@ impl<'a> Typer<'a> {
                 // A parameter whose kind its signature does not settle
                 // is what the call gives it (GEN-13).
                 _ => {
-                    // GEN-8: "The value a call gives a generic value
-                    // parameter is a compile-time constant ... Any other
-                    // rejects." What it comes to has been read with the
-                    // types (`read`); one not valued is read again here
-                    // for what it is.
-                    if let Argument::Constant(Constant {
-                        value: ConstantValue::Unevaluated,
-                        ..
-                    }) = argument
-                        && let Some(node) = self.node_at(*at)
-                        && let Some(why) = Self::not_constant(&self.read_constant(&node, None))
+                    // GEN-8, TYPE-18: resolve any `type(...)` constant deferred
+                    // from `read` now that locals and signatures are in scope.
+                    if let Argument::Constant(constant) = argument
+                        && crate::constant::has_deferred_type_query(&constant.value)
                     {
-                        self.diagnostics.emit(error(
-                            Category::Type,
-                            codes::GENERIC_ARGUMENT_CONSTANT,
+                        let unknown = Argument::Type(Type::Unknown);
+                        let expected = match &generic.kind {
+                            GenericKind::Value(pattern) => {
+                                let map: Vec<_> = generics
+                                    .iter()
+                                    .zip(&found)
+                                    .map(|(generic, arg)| {
+                                        (generic.at, arg.as_ref().unwrap_or(&unknown))
+                                    })
+                                    .collect();
+                                let substituted = substitute_within(pattern, &map);
+                                whole(&substituted).then_some(substituted)
+                            }
+                            _ => None,
+                        };
+                        let place = format!("the generic parameter `{}`", generic.name);
+                        let value = self.resolve_deferred_value(
                             *at,
-                            format!(
-                                "`{}` is a generic value parameter, and this is no \
-                                 compile-time constant: {why}",
-                                generic.name
-                            ),
-                            "GEN-8",
-                        ));
+                            &constant.value,
+                            expected.as_ref(),
+                            Some(&place),
+                        );
+                        found[position] = Some(Argument::Constant(Constant {
+                            text: constant.text.clone(),
+                            value,
+                        }));
+                    } else {
+                        // GEN-8: "The value a call gives a generic value
+                        // parameter is a compile-time constant ... Any other
+                        // rejects." What it comes to has been read with the
+                        // types (`read`); one not valued is read again here
+                        // for what it is.
+                        if let Argument::Constant(Constant {
+                            value: ConstantValue::Unevaluated,
+                            ..
+                        }) = argument
+                            && let Some(node) = self.node_at(*at)
+                            && let Some(why) = Self::not_constant(&self.read_constant(&node, None))
+                        {
+                            self.diagnostics.emit(error(
+                                Category::Type,
+                                codes::GENERIC_ARGUMENT_CONSTANT,
+                                *at,
+                                format!(
+                                    "`{}` is a generic value parameter, and this is no \
+                                     compile-time constant: {why}",
+                                    generic.name
+                                ),
+                                "GEN-8",
+                            ));
+                        }
+                        found[position] = Some(match argument {
+                            Argument::Type(ty) => {
+                                let ty = self.resolve_deferred_in_type(*at, ty);
+                                Argument::Type(self.project_pack_pass_type(&ty, *at))
+                            }
+                            Argument::Constant(_) | Argument::NoResult => argument.clone(),
+                        });
                     }
-                    found[position] = Some(match argument {
-                        Argument::Type(ty) => Argument::Type(self.project_pack_pass_type(ty, *at)),
-                        Argument::Constant(_) | Argument::NoResult => argument.clone(),
-                    });
                     None
                 }
             };

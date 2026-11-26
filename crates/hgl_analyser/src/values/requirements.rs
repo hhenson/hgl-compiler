@@ -63,8 +63,31 @@ impl<'a> Typer<'a> {
             }
             // Each argument is held as the value it is (`crate::constant`),
             // however the type writes it, or as the default it takes.
+            // Body-level applications whose `type(...)` arguments are still
+            // deferred are checked once `written_type_at` resolves them.
             for (struct_, arguments) in &found {
+                if arguments.iter().any(|argument| match argument {
+                    Argument::Type(ty) => crate::constant::type_has_deferred_query(ty),
+                    Argument::Constant(constant) => {
+                        crate::constant::has_deferred_type_query(&constant.value)
+                    }
+                    Argument::NoResult => false,
+                }) {
+                    continue;
+                }
                 self.requires_met(written.at, *struct_, arguments);
+            }
+        }
+    }
+
+    /// GEN-3: checks `requires` on struct applications inside `ty` whose
+    /// deferred `type(...)` arguments have just resolved in a body (TYPE-18).
+    pub(super) fn check_resolved_struct_applications(&mut self, at: Location, ty: &Type) {
+        let mut found = Vec::new();
+        struct_applications(ty, &mut found);
+        for (struct_, arguments) in &found {
+            if required(self.program, *struct_).is_some() {
+                self.requires_met(at, *struct_, arguments);
             }
         }
     }

@@ -195,13 +195,6 @@ impl Emitter<'_> {
     pub(super) fn written_type(&mut self, ty: &Type, at: Location) -> Option<String> {
         let written = self.named_type(ty);
         if written.is_none() {
-            if let Type::Named { name, arguments, .. } = ty
-                && arguments.iter().any(|argument| matches!(argument,
-                    hgl_analyser::Argument::Constant(value) if matches!(value.value, ConstantValue::Type(_))))
-            {
-                self.unsupported(at, &format!("a Type-valued generic argument of `{name}`"));
-                return None;
-            }
             self.unsupported(at, &format!("the type `{ty}`"));
         }
         written

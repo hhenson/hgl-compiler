@@ -136,24 +136,139 @@ const fn ordinary_struct(value: delta<atomic<Plain>>) {}
     );
 }
 
-/// GEN-8, TYPE-18: resolving the type of an inferred local as a generic
-/// value argument is deferred to #871; it rejects cleanly in this slice.
+/// GEN-8, GEN-13, TYPE-18: local bindings, same-module calls and constructors,
+/// written struct type applications, and module Type constants derived from
+/// them are accepted as Type-valued generic arguments without evaluating the
+/// operand or mutating local flow.
 #[test]
-fn a_local_type_as_a_generic_value_argument_is_reported() {
+fn late_type_queries_work_as_generic_value_arguments() {
+    let checked = check(&[
+        (
+            "defs.hgl",
+            r#"
+module defs
+export struct Quote { value: i64 }
+export const fn one() -> i64 => 1
+export const FROM_FN: Type = type(one())
+export const FROM_STRUCT: Type = type(Quote(value: 1))
+"#,
+        ),
+        (
+            "m.hgl",
+            r#"
+module m
+use defs::{FROM_FN, FROM_STRUCT}
+
+struct Quote { value: i64 }
+struct Tagged<const Kind: Type> { value: i64 }
+struct Defaulted<const Kind: Type = type(one())> { value: i64 }
+const INT_KIND: Type = type(1)
+struct OnlyInt<const Kind: Type>
+    requires Kind == INT_KIND
+{
+    value: i64
+}
+
+const fn one() -> i64 => 1
+const LOCAL_FROM_FN: Type = type(one())
+const LOCAL_FROM_STRUCT: Type = type(Quote(value: 1))
+const fn selected<const Kind: Type>() -> Type => Kind
+const fn wrap<T>(x: T) -> Type => selected<type(x)>()
+const fn returns_tagged() -> Tagged<type(one())> => Tagged<type(one())>(value: 7)
+const fn returns_defaulted() -> Defaulted => Defaulted(value: 9)
+const fn uses_imported() -> Tagged<FROM_FN> => Tagged<type(1)>(value: 3)
+
+test late_queries {
+    let x = 1
+    let local: i64 = 1
+    var unassigned: i64
+    let a = selected<type(x)>()
+    let b = selected<type(local)>()
+    let c = selected<type(unassigned)>()
+    let d = selected<type(one())>()
+    let e = selected<type(Quote(value: 1))>()
+    let f = selected<LOCAL_FROM_FN>()
+    let g = selected<LOCAL_FROM_STRUCT>()
+    let h = selected<FROM_FN>()
+    let i = selected<FROM_STRUCT>()
+    let j = selected(Kind: type(x))
+    let k: Tagged<type(x)> = Tagged<type(1)>(value: 7)
+    let l: Tagged<type(one())>? = null
+    let m = Tagged<type(x)>(value: 7)
+    let n: Tagged<type(local)> = m
+    let o = OnlyInt<type(x)>(value: 1)
+    let p = wrap(x)
+    let q = returns_tagged()
+    let r = returns_defaulted()
+    let s = uses_imported()
+    unassigned = 2
+    assert unassigned == 2
+}
+"#,
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        Vec::<String>::new(),
+        "{}",
+        checked.report
+    );
+}
+
+/// TYPE-18, GEN-13: distinct Type arguments on a generic struct remain
+/// distinct types, and struct `requires` clauses are enforced once deferred
+/// queries resolve.
+#[test]
+fn late_type_valued_struct_arguments_enforce_identity_and_requires() {
     let checked = check(&[(
         "m.hgl",
         r#"
 module m
-const fn selected<const Kind: Type>() -> Type => Kind
-test local_type {
+struct Tagged<const Kind: Type> { value: i64 }
+const INT_KIND: Type = type(1)
+struct OnlyInt<const Kind: Type>
+    requires Kind == INT_KIND
+{
+    value: i64
+}
+const fn one() -> i64 => 1
+const fn mismatch_and_requires() {
     let x = 1
-    let given = selected<type(x)>()
+    let y = 1.0
+    let wrong: Tagged<type(y)> = Tagged<type(x)>(value: 7)
+    let unmet = OnlyInt<type(y)>(value: 7)
+    let ok_val: Tagged<type(one())> = Tagged<type(x)>(value: 7)
+}
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 2, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/type.mismatch");
+    assert_eq!(checked.findings[1].code, "constraint/requires.unmet");
+}
+
+/// TYPE-18, EXPR-3: a cold `type(u)` generic argument never assigns or reads
+/// an unassigned local; a later ordinary read still rejects.
+#[test]
+fn late_type_query_generic_argument_preserves_unassigned_flow() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"
+module m
+struct Tagged<const Kind: Type> { value: i64 }
+const fn selected<const Kind: Type>() -> Type => Kind
+const fn still_unassigned() -> i64 {
+    var u: i64
+    let a = selected<type(u)>()
+    let b = Tagged<type({
+        u = 1
+        u
+    })>(value: 7)
+    return u
 }
 "#,
     )]);
     assert_eq!(checked.findings.len(), 1, "{}", checked.report);
-    assert_eq!(checked.findings[0].code, "type/generic.argument_constant");
-    assert!(checked.findings[0].message.contains("Kind"));
+    assert_eq!(checked.findings[0].code, "name/binding.unassigned");
 }
 
 /// TYPE-18 and GEN-2: Type is a builtin value type with no parameters.
@@ -256,22 +371,33 @@ fn kind() -> bool => type(temporal(1)) == type(1)
     assert!(found_payload);
 }
 
-/// TYPE-18 and GEN-8: the early query probe cannot turn an ill-typed
-/// tuple into a Type constant merely because its outer tuple type is known.
+/// TYPE-18 and GEN-8: ill-typed operands inside `type(...)` generic arguments
+/// preserve their operand diagnostics instead of collapsing into
+/// `generic.argument_constant`, in calls, structs, and signatures.
 #[test]
-fn an_ill_typed_early_query_is_not_a_type_constant() {
+fn ill_typed_generic_type_queries_preserve_operand_diagnostics() {
     let checked = check(&[(
         "m.hgl",
         r#"
 module m
+struct Tagged<const Kind: Type> { value: i64 }
 const fn selected<const K: Type>() -> Type => K
-const fn wrong_operand() -> Type => selected<type((1, 1 + true))>()
+const fn wrong_tuple() -> Type => selected<type((1, 1 + true))>()
+const fn wrong_call() -> Type => selected<type(1 + true)>()
+const fn wrong_named() -> Type => selected(K: type(1 + true))
+const fn wrong_struct() -> Tagged<type(1 + true)> => Tagged<type(1 + true)>(value: 7)
 test valid_tuple { let known = selected<type((1, true))>() }
 "#,
     )]);
-    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
-    assert_eq!(checked.findings[0].code, "type/generic.argument_constant");
-    assert!(checked.findings[0].message.contains("`K`"));
+    assert_eq!(checked.findings.len(), 5, "{}", checked.report);
+    assert!(
+        checked
+            .findings
+            .iter()
+            .all(|finding| finding.code == "operator/operator.no_candidate"),
+        "{}",
+        checked.report
+    );
 }
 
 /// TYPE-16/18: constructor scans preserve the same original delta operand;

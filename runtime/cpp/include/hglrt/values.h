@@ -85,6 +85,21 @@ struct type_value {
     }
 };
 
+/// Structural non-type template argument carrying a compiled `Type` identity
+/// for generic structs parameterized by `const Kind: Type` (TYPE-18, GEN-13).
+template <std::size_t N>
+struct type_tag {
+    char identity[N]{};
+
+    constexpr type_tag(const char (&text)[N]) noexcept {
+        for (std::size_t index = 0; index < N; ++index) {
+            identity[index] = text[index];
+        }
+    }
+
+    friend constexpr bool operator==(const type_tag&, const type_tag&) = default;
+};
+
 /// `list<T>` (TYPE-4): a `std::vector<T>` with a hash, so that hgraph can
 /// hold it as configuration (see the head of this file). It is a vector in
 /// every other way, and a function that takes a `std::vector<T>` takes it.

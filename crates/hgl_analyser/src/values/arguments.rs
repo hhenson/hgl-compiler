@@ -61,7 +61,7 @@ impl<'a> Typer<'a> {
         }
         // The type the `read` pass gave `Name<arguments>`.
         let written = self.written_type_at(start);
-        match written {
+        match written.as_deref() {
             Some(Type::Named {
                 module,
                 declaration,

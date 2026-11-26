@@ -176,11 +176,11 @@ impl<'a> Typer<'a> {
         };
         // The delta is recorded where the constructor starts.
         let written = self.written_type_at(node.span().start);
-        let properties = match written {
+        let properties = match written.as_deref() {
             Some(Type::Delta(of)) => self.program.delta_properties(of),
             _ => None,
         };
-        if let Some(ty) = written
+        if let Some(ty) = written.as_deref()
             && !matches!(ty, Type::Delta(_))
             && !open(ty)
         {
@@ -191,7 +191,7 @@ impl<'a> Typer<'a> {
         let (Some(ty), Some(properties)) = (written, properties) else {
             return self.unread_call(&list);
         };
-        let ty = ty.clone();
+        let ty = ty.into_owned();
         let mut given = vec![false; properties.len()];
         let mut arguments = Vec::new();
         // Each property given, with its value as written and its type,

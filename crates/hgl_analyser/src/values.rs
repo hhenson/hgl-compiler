@@ -32,6 +32,7 @@
 //! not known is reported once, where
 //! it was found, and never again where it is used (ERR-9).
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
@@ -127,7 +128,7 @@ mod statements;
 // `-`, `!` and the operators with two operands, as calls of core's (NUM-1, EXPR-6).
 mod symbols;
 mod type_queries;
-pub(crate) use type_queries::query_type;
+pub(crate) use type_queries::{query_type, resolve_declared_type_queries};
 
 /// Walk calls and constructions in a body, including static references
 /// and the independently scoped bodies of anonymous functions.
@@ -162,6 +163,7 @@ pub(crate) fn check(
         let module = &program.modules[index];
         let (bindings, written, calls) = tables(module);
         let selecting = RefCell::new(Vec::new());
+        let resolved_written = RefCell::new(Vec::new());
         let found = Tables {
             bindings: &bindings,
             written: &written,
@@ -177,6 +179,7 @@ pub(crate) fn check(
                     return None;
                 };
                 Typer::new(program, module, declaration, &empty, found, diagnostics)
+                    .record_resolved_written(&resolved_written)
                     .constant(ty)
                     .map(|constant| {
                         let mut body = constant.into_body();
@@ -185,12 +188,14 @@ pub(crate) fn check(
                     })
             })
             .collect();
+        apply_resolved_written(&mut program.modules[index], resolved_written.into_inner());
         program.modules[index].constants = constants;
     }
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
         let (bindings, written, calls) = tables(module);
         let selecting = RefCell::new(Vec::new());
+        let resolved_written = RefCell::new(Vec::new());
         let found = Tables {
             bindings: &bindings,
             written: &written,
@@ -211,7 +216,14 @@ pub(crate) fn check(
                     DeclarationKind::Function(Role::Value)
                     | DeclarationKind::Implementation(Role::Value, _),
                     Some(Detail::Callable(signature)),
-                ) => Typer::new(program, module, declaration, signature, found, diagnostics).body(),
+                ) => {
+                    let mut typer =
+                        Typer::new(program, module, declaration, signature, found, diagnostics);
+                    if signature.generics.is_empty() {
+                        typer = typer.record_resolved_written(&resolved_written);
+                    }
+                    typer.body()
+                }
                 // FN-2: a node, whose hooks are read as value code
                 // (FN-3: "In a hook a temporal parameter is a value of
                 // its declared type, read as in a value function"). A
@@ -222,8 +234,11 @@ pub(crate) fn check(
                     | DeclarationKind::Implementation(Role::Temporal, _),
                     Some(Detail::Callable(signature)),
                 ) if module.phases.get(position) == Some(&Some(Phase::Node)) => {
-                    let typer =
+                    let mut typer =
                         Typer::new(program, module, declaration, signature, found, diagnostics);
+                    if signature.generics.is_empty() {
+                        typer = typer.record_resolved_written(&resolved_written);
+                    }
                     if crate::phases::is_source(declaration) {
                         typer.source()
                     } else {
@@ -236,9 +251,12 @@ pub(crate) fn check(
                     | DeclarationKind::Implementation(Role::Temporal, _),
                     Some(Detail::Callable(signature)),
                 ) if module.phases.get(position) == Some(&Some(Phase::Graph)) => {
-                    let (body, pending) =
-                        Typer::new(program, module, declaration, signature, found, diagnostics)
-                            .graph();
+                    let mut typer =
+                        Typer::new(program, module, declaration, signature, found, diagnostics);
+                    if signature.generics.is_empty() {
+                        typer = typer.record_resolved_written(&resolved_written);
+                    }
+                    let (body, pending) = typer.graph();
                     check_return = pending;
                     body
                 }
@@ -284,6 +302,7 @@ pub(crate) fn check(
                 Declaration::stand_in(&test.name, test.at, test.file, &test.syntax, true);
             stand_in.test_owner = Some(owner);
             let body = Typer::new(program, module, &stand_in, &empty, found, diagnostics)
+                .record_resolved_written(&resolved_written)
                 .test(test.integration);
             test_bodies.push(body);
         }
@@ -293,13 +312,16 @@ pub(crate) fn check(
         let mut store_body = module.store.first().and_then(|first| {
             let stand_in =
                 Declaration::stand_in("store", first.at, first.file, &first.syntax, false);
-            Typer::new(program, module, &stand_in, &empty, found, diagnostics).store(&module.store)
+            Typer::new(program, module, &stand_in, &empty, found, diagnostics)
+                .record_resolved_written(&resolved_written)
+                .store(&module.store)
         });
         // RUN-1, RUN-6: an application's run statement reads the
         // run configuration injected in the statements before it.
         let mut run_body = module.run.as_ref().and_then(|run| {
             let stand_in = Declaration::stand_in("run", run.at, run.file, &run.syntax, false);
             Typer::new(program, module, &stand_in, &empty, found, diagnostics)
+                .record_resolved_written(&resolved_written)
                 .run_statement(store_body.as_ref())
         });
         // UNIT-8: "Defaults remain required-constant/cold expressions
@@ -318,8 +340,12 @@ pub(crate) fn check(
                         .iter()
                         .any(|parameter| parameter.has_default) =>
                 {
-                    Typer::new(program, module, declaration, signature, found, diagnostics)
-                        .defaults()
+                    let mut typer =
+                        Typer::new(program, module, declaration, signature, found, diagnostics);
+                    if signature.generics.is_empty() {
+                        typer = typer.record_resolved_written(&resolved_written);
+                    }
+                    typer.defaults()
                 }
                 Some(Detail::Callable(signature)) => vec![None; signature.parameters.len()],
                 // TYPE-4: a field's default is read as a value of the
@@ -329,8 +355,12 @@ pub(crate) fn check(
                     // default may name of it is its generic parameters
                     // (UNIT-7: "with its generic environment").
                     let signature = Signature::of_struct(read);
-                    Typer::new(program, module, declaration, &signature, found, diagnostics)
-                        .field_defaults(read)
+                    let mut typer =
+                        Typer::new(program, module, declaration, &signature, found, diagnostics);
+                    if signature.generics.is_empty() {
+                        typer = typer.record_resolved_written(&resolved_written);
+                    }
+                    typer.field_defaults(read)
                 }
                 Some(Detail::Struct(read)) => vec![None; read.fields.len()],
                 _ => Vec::new(),
@@ -369,6 +399,7 @@ pub(crate) fn check(
                 *slot = Some(hir::DefaultExpr::from_body(body));
             }
         }
+        apply_resolved_written(&mut program.modules[index], resolved_written.into_inner());
         program.modules[index].bodies = bodies;
         program.modules[index].test_bodies = test_bodies;
         program.modules[index].run_body = run_body;
@@ -407,6 +438,28 @@ pub(crate) fn check(
     // type gives the struct's lists and windows.
     sizes::applied_sizes(program, diagnostics);
     store_keys
+}
+
+/// Non-generic body written types whose deferred `type(...)` arguments
+/// resolved during body typing, indexed by `(FileId, start_offset)`.
+type ResolvedWritten = Vec<((FileId, u32), Type)>;
+
+/// Applies body-level resolved `type(...)` annotations back to `module.written`
+/// for non-generic declarations, tests, constants, and defaults so later passes
+/// such as `sizes::applied_sizes` see concrete constant arguments (TYPE-18).
+fn apply_resolved_written(module: &mut Module, resolved: ResolvedWritten) {
+    if resolved.is_empty() {
+        return;
+    }
+    let mut latest: HashMap<(FileId, u32), Type> = HashMap::new();
+    for (key, ty) in resolved {
+        latest.insert(key, ty);
+    }
+    for entry in &mut module.written {
+        if let Some(ty) = latest.get(&(entry.at.file, entry.at.span.start)) {
+            entry.ty = ty.clone();
+        }
+    }
 }
 
 /// What the earlier passes found of `module`, by where each is written:
@@ -869,6 +922,12 @@ struct Typer<'a> {
     /// The values of the module constants this function's constants
     /// have named (UNIT-13): a constant named twice is read once.
     constants: crate::constant::Constants,
+    /// Log of `type(...)` cache insertions in `constants`, with their previous
+    /// value, so speculative rollbacks (`take_back`) restore the cache cleanly.
+    type_query_locations: Vec<(Location, Option<crate::constant::QueryType>)>,
+    /// Non-generic written types whose deferred `type(...)` arguments resolved
+    /// during body typing, written back to `Module::written` afterwards.
+    resolved_written: Option<&'a RefCell<ResolvedWritten>>,
     /// See [`Tables::selecting`].
     selecting: &'a RefCell<Vec<Selecting>>,
     /// What each generic parameter of the declaration being read stands
@@ -1055,6 +1114,8 @@ impl<'a> Typer<'a> {
                 .then(|| crate::TestCandidateScope::of(program, module))
                 .flatten(),
             constants: Default::default(),
+            type_query_locations: Vec::new(),
+            resolved_written: None,
             selecting: tables.selecting,
             instance: Vec::new(),
             const_inputs: Vec::new(),
@@ -1067,11 +1128,36 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// Records resolved non-generic body written types so `Module::written`
+    /// is updated after typing the module.
+    fn record_resolved_written(mut self, target: &'a RefCell<ResolvedWritten>) -> Self {
+        self.resolved_written = Some(target);
+        self
+    }
+
     /// A type annotation or an explicitly typed constructor in a body.
-    fn written_type_at(&mut self, start: u32) -> Option<&'a Type> {
+    fn written_type_at(&mut self, start: u32) -> Option<Cow<'a, Type>> {
         let written = self.written.get(&(self.file, start)).copied()?;
         self.check_written_type(start);
-        Some(written)
+        if !crate::constant::type_has_deferred_query(written) {
+            return Some(Cow::Borrowed(written));
+        }
+        let at = self
+            .module
+            .written
+            .iter()
+            .find(|entry| entry.at.file == self.file && entry.at.span.start == start)
+            .map_or_else(
+                || Location::new(self.file, hgl_source::Span::new(start, start)),
+                |entry| entry.at,
+            );
+        let resolved = self.resolve_deferred_in_type(at, written);
+        if let Some(target) = self.resolved_written {
+            target
+                .borrow_mut()
+                .push(((self.file, start), resolved.clone()));
+        }
+        Some(Cow::Owned(resolved))
     }
 
     /// The explicit generic arguments of a call or callable reference.
@@ -1183,6 +1269,10 @@ impl<'a> Typer<'a> {
             unsure: self.unsure,
             present: self.present.len(),
             selecting: self.selecting.borrow().len(),
+            type_queries: self.type_query_locations.len(),
+            resolved_written: self
+                .resolved_written
+                .map_or(0, |target| target.borrow().len()),
         }
     }
 
@@ -1209,6 +1299,19 @@ impl<'a> Typer<'a> {
         self.diagnostics.truncate(mark.diagnostics);
         for diagnostic in spent {
             self.diagnostics.emit(diagnostic);
+        }
+        while self.type_query_locations.len() > mark.type_queries {
+            if let Some((at, previous)) = self.type_query_locations.pop() {
+                match previous {
+                    Some(old) => {
+                        self.constants.remember_type(at, old);
+                    }
+                    None => self.constants.remove_type(at),
+                }
+            }
+        }
+        if let Some(target) = self.resolved_written {
+            target.borrow_mut().truncate(mark.resolved_written);
         }
         self.restore_read(mark, keep_flow);
         clean
@@ -1345,6 +1448,10 @@ struct Mark {
     present: usize,
     /// How many calls are put to be selected for each instance.
     selecting: usize,
+    /// How many `type(...)` cache insertions have been logged.
+    type_queries: usize,
+    /// How many body-level resolved written types have been recorded.
+    resolved_written: usize,
 }
 
 /// A value candidate of an operator: the positions of its module and of

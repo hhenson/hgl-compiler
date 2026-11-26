@@ -84,6 +84,56 @@ pub(crate) fn number_enums(program: &mut Program, diagnostics: &mut Diagnostics)
 
 /// Checks every struct of the program.
 pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
+    let ids = populate_structs(program, diagnostics, true);
+    // TYPE-18, GEN-13: now that every module's declaration details and
+    // initial struct members are in place, resolve declaration-level
+    // deferred `type(...)` arguments before field-conflict, recursion,
+    // delta, and signature checks consume them.
+    if crate::values::resolve_declared_type_queries(program, diagnostics) {
+        let mut silent = Diagnostics::new();
+        populate_structs(program, &mut silent, false);
+    }
+    let mut structs = build_structs(program, diagnostics, false);
+    for &id in &ids {
+        structs.fields(id);
+    }
+    structs.recursion(&ids);
+    crate::type_values::check_deltas(program, diagnostics);
+}
+
+/// Recomputes struct members after a fixed-point pass resolves a
+/// declaration-level `type(...)` argument inside a struct parent or field.
+pub(crate) fn refresh_members(program: &mut Program) {
+    let mut silent = Diagnostics::new();
+    populate_structs(program, &mut silent, false);
+}
+
+fn populate_structs(
+    program: &mut Program,
+    diagnostics: &mut Diagnostics,
+    check_parents: bool,
+) -> Vec<Id> {
+    let mut structs = build_structs(program, diagnostics, check_parents);
+    let ids = structs.ids();
+    if check_parents {
+        structs.inheritance_cycles(&ids);
+    }
+    // What each struct has, for the passes that read constructors and
+    // member accesses.
+    let members: Vec<(Id, Vec<Member>)> = ids.iter().map(|&id| (id, structs.members(id))).collect();
+    for ((module, declaration), members) in members {
+        if let Detail::Struct(read) = &mut program.modules[module].details[declaration] {
+            read.members = members;
+        }
+    }
+    ids
+}
+
+fn build_structs<'a>(
+    program: &'a Program,
+    diagnostics: &'a mut Diagnostics,
+    emit_parent_errors: bool,
+) -> Structs<'a> {
     let mut structs = Structs {
         program,
         diagnostics,
@@ -105,6 +155,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             .collect();
         structs.packs.extend(packs);
     }
+    let before = structs.diagnostics.len();
     for &id in &ids {
         let parents = structs.parents_of(id);
         for parent in &parents {
@@ -116,21 +167,11 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         }
         structs.parents.insert(id, parents);
     }
-    structs.inheritance_cycles(&ids);
+    if !emit_parent_errors {
+        structs.diagnostics.truncate(before);
+    }
     structs.fields = structs.collect_fields(&ids);
-    for &id in &ids {
-        structs.fields(id);
-    }
-    structs.recursion(&ids);
-    // What each struct has, for the passes that read constructors and
-    // member accesses.
-    let members: Vec<(Id, Vec<Member>)> = ids.iter().map(|&id| (id, structs.members(id))).collect();
-    for ((module, declaration), members) in members {
-        if let Detail::Struct(read) = &mut program.modules[module].details[declaration] {
-            read.members = members;
-        }
-    }
-    crate::type_values::check_deltas(program, diagnostics);
+    structs
 }
 
 // ---- Enums (TYPE-7) ----

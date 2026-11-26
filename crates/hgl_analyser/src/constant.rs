@@ -92,12 +92,26 @@ pub(crate) struct Scope<'s> {
     pub(crate) constants: &'s Constants,
 }
 
+/// The static result of checking a cold `type(e)` query (TYPE-18).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum QueryType {
+    /// The operand checked cleanly with this type.
+    Resolved(Type),
+    /// Checking the operand emitted a diagnostic (ERR-9).
+    Reported,
+    /// Checking the operand emitted no error, yet produced no resolved type.
+    Unresolved,
+}
+
 /// What following the constants of modules keeps (UNIT-13: "The
 /// constant has that one value wherever it is read").
 #[derive(Default)]
 pub(crate) struct Constants {
+    /// True during `read`, before declaration details, struct fields and
+    /// body locals exist: `type(e)` queries defer to a later pass (TYPE-18).
+    defer_type_queries: bool,
     /// Types already checked in the enclosing lexical reading (TYPE-18).
-    types: RefCell<HashMap<Location, Type>>,
+    types: RefCell<HashMap<Location, QueryType>>,
     /// The constants being worked out, so that one whose value depends
     /// on itself, which is reported as that (`constant.cycle`), ends
     /// here.
@@ -108,9 +122,29 @@ pub(crate) struct Constants {
 }
 
 impl Constants {
-    /// Keep a type query's checked operand type without its value or effects.
-    pub(crate) fn remember_type(&self, at: Location, ty: Type) {
-        self.types.borrow_mut().insert(at, ty);
+    /// A cache for the early `read` pass that defers `type(e)` queries until
+    /// signatures, struct fields, and body locals are available (TYPE-18).
+    pub(crate) fn deferred() -> Self {
+        Self {
+            defer_type_queries: true,
+            ..Self::default()
+        }
+    }
+
+    /// Keep a type query's checked operand type without its value or effects,
+    /// returning any earlier entry so speculative rollbacks restore it.
+    pub(crate) fn remember_type(&self, at: Location, ty: QueryType) -> Option<QueryType> {
+        self.types.borrow_mut().insert(at, ty)
+    }
+
+    /// Remove a speculative type query entry after rolling back a trial read.
+    pub(crate) fn remove_type(&self, at: Location) {
+        self.types.borrow_mut().remove(&at);
+    }
+
+    /// Look up a type query already checked in this reading.
+    pub(crate) fn remembered_type(&self, at: Location) -> Option<QueryType> {
+        self.types.borrow().get(&at).cloned()
     }
 }
 
@@ -595,14 +629,29 @@ fn value(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Ty
         SyntaxKind::Literal => literal_constant(node, expected),
         SyntaxKind::TypeOfExpr => {
             let at = Location::new(scope.file, node.span());
-            let known = scope.constants.types.borrow().get(&at).cloned();
-            let ty = known.or_else(|| crate::values::query_type(scope.program, scope.file, node));
-            match ty {
-                Some(ty) if ty != Type::Unknown => Ok(Typed::of(
+            if let Some(known) = scope.constants.remembered_type(at) {
+                return match known {
+                    QueryType::Resolved(ty) => Ok(Typed::of(
+                        ConstantValue::Type(Box::new(ty)),
+                        Some(Type::TypeValue),
+                    )),
+                    QueryType::Reported => Err(Fault::Reported),
+                    QueryType::Unresolved => Ok(Typed::unevaluated(Some(Type::TypeValue))),
+                };
+            }
+            if scope.constants.defer_type_queries {
+                return Ok(Typed::of(
+                    ConstantValue::DeferredTypeQuery(at),
+                    Some(Type::TypeValue),
+                ));
+            }
+            match crate::values::query_type(scope.program, scope.file, node) {
+                QueryType::Resolved(ty) => Ok(Typed::of(
                     ConstantValue::Type(Box::new(ty)),
                     Some(Type::TypeValue),
                 )),
-                _ => Ok(Typed::unevaluated(Some(Type::TypeValue))),
+                QueryType::Reported => Err(Fault::Reported),
+                QueryType::Unresolved => Ok(Typed::unevaluated(Some(Type::TypeValue))),
             }
         }
         // EXPR-1: "Parentheses select grouping": `(2.0)` is `2.0`.
@@ -1128,6 +1177,13 @@ pub(crate) fn written_type<'s>(
                 return None;
             }
             let name = name_token(node)?;
+            // TYPE-18: `Type` is the intrinsic descriptor type in type
+            // positions such as `const Kind: Type` and `const K: Type = ...`.
+            if crate::syntax::child(node, SyntaxKind::QualifiedName).is_none()
+                && name.text() == "Type"
+            {
+                return Some(Type::TypeValue);
+            }
             match binding(file, name.span().start)? {
                 Binding::Local {
                     at,
@@ -1533,6 +1589,12 @@ fn unary(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Ty
     if nullable(&read) {
         return Ok(Typed::unevaluated(None));
     }
+    if operator == UnaryOperator::Not && has_deferred_type_query(&read.value) {
+        return Ok(Typed::of(
+            ConstantValue::DeferredTypeQuery(Location::new(scope.file, node.span())),
+            read.ty,
+        ));
+    }
     let value = negated_or_not(operator, &read.value);
     // NUM-2: the negation of the least `i64` is no `i64`; OPS-10 and
     // TEN-2 say the same of a duration and a tenor counts.
@@ -1728,6 +1790,19 @@ fn joined(
         {
             return Ok(Typed::unevaluated(boolean));
         }
+        if has_deferred_type_query(&left.value) || has_deferred_type_query(&right.value) {
+            return Ok(Typed::of(
+                ConstantValue::DeferredTypeQuery(Location::new(scope.file, node.span())),
+                boolean,
+            ));
+        }
+    } else if matches!(operator, BinaryOperator::And | BinaryOperator::Or)
+        && (has_deferred_type_query(&left.value) || has_deferred_type_query(&right.value))
+    {
+        return Ok(Typed::of(
+            ConstantValue::DeferredTypeQuery(Location::new(scope.file, node.span())),
+            Some(boolean),
+        ));
     }
     // An integer literal beside an `f64` in arithmetic is taken as the
     // `f64` it is nearest: core's mixed candidates make it one (NUM-1,
@@ -2389,6 +2464,32 @@ fn scaled_tenor(tenor: Tenor, factor: i64) -> Option<Tenor> {
     })
 }
 
+/// True when `value` contains a `type(...)` query deferred from `read`
+/// until declaration details, struct fields, and body locals exist (TYPE-18).
+pub(crate) fn has_deferred_type_query(value: &ConstantValue) -> bool {
+    match value {
+        ConstantValue::DeferredTypeQuery(_) => true,
+        ConstantValue::Type(ty) => type_has_deferred_query(ty),
+        ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
+            has_deferred_type_query(operand)
+        }
+        ConstantValue::Binary(_, left, right) | ConstantValue::RangeLength(left, right) => {
+            has_deferred_type_query(left) || has_deferred_type_query(right)
+        }
+        ConstantValue::List(values) | ConstantValue::Tuple(values) => {
+            values.iter().any(has_deferred_type_query)
+        }
+        _ => false,
+    }
+}
+
+/// True when `ty` contains any deferred `type(...)` constant argument (TYPE-18).
+pub(crate) fn type_has_deferred_query(ty: &Type) -> bool {
+    ty.any_part(&|_| false, &|constant| {
+        has_deferred_type_query(&constant.value)
+    })
+}
+
 /// False for a constant expression whose value this compiler does not
 /// work out, or one that holds such: `@2024-01-31 + 1M`. A generic
 /// value parameter is valued where the declaration is called, and an
@@ -2398,7 +2499,8 @@ fn scaled_tenor(tenor: Tenor, factor: i64) -> Option<Tenor> {
 /// what is wrong with its expression is reported where it is declared.
 pub(crate) fn worked_out(value: &ConstantValue) -> bool {
     match value {
-        ConstantValue::Unevaluated => false,
+        ConstantValue::Unevaluated | ConstantValue::DeferredTypeQuery(_) => false,
+        ConstantValue::Type(ty) => !type_has_deferred_query(ty),
         ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
             worked_out(operand)
         }
@@ -2532,7 +2634,8 @@ impl ConstantValue {
         // they are then one value whatever the parameters are.
         let alike = |same: Option<bool>| (same == Some(true)).then_some(true);
         match (self, other) {
-            (V::Unevaluated | V::Unknown, _) | (_, V::Unevaluated | V::Unknown) => None,
+            (V::Unevaluated | V::Unknown | V::DeferredTypeQuery(_), _)
+            | (_, V::Unevaluated | V::Unknown | V::DeferredTypeQuery(_)) => None,
             (V::Parameter { at, .. }, V::Parameter { at: other, .. }) => {
                 (at == other).then_some(true)
             }
@@ -2751,6 +2854,7 @@ impl ConstantValue {
             | V::Unary(..)
             | V::Binary(..)
             | V::RangeLength(..)
+            | V::DeferredTypeQuery(_)
             | V::Unevaluated
             | V::Unknown => return None,
         })
@@ -2868,6 +2972,7 @@ impl ConstantValue {
     pub(crate) fn names_one_of(&self, own: &[Location]) -> bool {
         match self {
             ConstantValue::Parameter { at, .. } => own.contains(at),
+            ConstantValue::Type(ty) => crate::declared::names_one_of(ty, own),
             ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
                 operand.names_one_of(own)
             }

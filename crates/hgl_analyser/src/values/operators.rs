@@ -1908,6 +1908,7 @@ impl<'a> Typer<'a> {
                 GenericKind::Value(ty) if !names_parameter(ty) => Some(ty),
                 _ => None,
             };
+            self.remember_type_queries_in(node);
             let read = self.read_constant(node, expected);
             if let (Some(ty @ Type::Set(element)), Err(fault)) = (expected, &read)
                 && **element == Type::Scalar(Scalar::Str)

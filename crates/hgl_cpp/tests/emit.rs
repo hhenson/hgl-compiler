@@ -3565,23 +3565,75 @@ fn callable_size_limit_checks_wide_growth_before_copying() {
     assert_eq!(emitted.blocked("independent"), None);
 }
 
-/// TYPE-18: Type-valued generic struct arguments wait for #871 and
-/// decline by name before any invalid C++ reaches a compiler.
+/// TYPE-18, GEN-13: Type-valued generic struct arguments emit as structural
+/// `hglrt::type_tag` template arguments carrying canonical type identity,
+/// keeping identical types unified and distinct cross-module types separate.
 #[test]
-fn a_type_valued_generic_struct_argument_declines_cleanly() {
-    let emitted = emit(&[(
-        "m.hgl",
-        r#"
-module m
-struct Tagged<const Kind: Type> { value: i64 }
-test tag { let value = Tagged<type(1)>(value: 7) }
+fn type_valued_generic_struct_arguments_emit_with_canonical_identity() {
+    let emitted = emit(&[
+        (
+            "a.hgl",
+            r#"
+module a
+export struct Quote { value: i64 }
 "#,
-    )]);
-    let blocked = emitted.blocked("tag").expect("the form is not emitted");
+        ),
+        (
+            "b.hgl",
+            r#"
+module b
+export struct Quote { value: i64 }
+"#,
+        ),
+        (
+            "m.hgl",
+            r#"
+module m
+use a as left
+use b as right
+
+struct Tagged<const Kind: Type> { value: i64 }
+struct Wrapped<const Kind: Type> { inner: Tagged<Kind> }
+const fn one() -> i64 => 1
+
+test tag {
+    let x = 1
+    let a = Tagged<type(1)>(value: 7)
+    let b: Tagged<type(x)> = a
+    let c: Tagged<type(one())>? = null
+    let d = Wrapped<type(x)>(inner: b)
+    let q1 = Tagged<type(left::Quote(value: 1))>(value: 1)
+    let q2 = Tagged<type(right::Quote(value: 1))>(value: 2)
+}
+"#,
+        ),
+    ]);
+    assert_eq!(emitted.blocked("tag"), None);
+    let types = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/type-m.h")
+        .expect("module types header")
+        .text;
     assert!(
-        blocked.contains("Type-valued generic argument of `Tagged`"),
-        "{blocked}"
+        types.contains("template <auto Kind_p_>\nstruct Tagged"),
+        "{types}"
     );
+    assert!(
+        types.contains("template <auto Kind_p_>\nstruct Wrapped"),
+        "{types}"
+    );
+    let body = &emitted
+        .output
+        .files
+        .iter()
+        .find(|file| file.path == "modules/mod-m.cpp")
+        .expect("module implementation")
+        .text;
+    assert!(body.contains("::hglrt::type_tag{\"i64\"}"), "{body}");
+    // Cross-module same-named structs emit distinct declaration identities.
+    assert!(body.contains("::hglrt::type_tag{\"declaration("), "{body}");
 }
 
 /// TYPE-18, Proposed: source connection checking awaits its diagnostic,

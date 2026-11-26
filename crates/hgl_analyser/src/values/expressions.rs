@@ -124,31 +124,7 @@ impl<'a> Typer<'a> {
         let (kind, ty) = match node.kind() {
             SyntaxKind::Literal => self.literal(node, expected),
             SyntaxKind::TypeOfExpr => {
-                let mark = self.mark();
-                // A cold block may assign an existing local, including
-                // its graph category or capability alias (TYPE-18).
-                let locals = self.locals.clone();
-                let aliases = self.aliases.clone();
-                let returns = (self.must_return, self.returning_tails.clone());
-                let lifecycle = (self.hook, self.initializing, self.caching);
-                let querying = self.type_query;
-                self.type_query = true;
-                self.hook = None;
-                self.initializing = false;
-                self.caching = false;
-                let ty = node
-                    .children()
-                    .next()
-                    .map_or(Type::Unknown, |operand| self.expression(&operand, None).ty);
-                // TYPE-18 evaluates nothing of the operand. Its local
-                // effects and deferred calls do not belong to the body.
-                self.restore_read(mark, false);
-                self.locals = locals;
-                self.aliases = aliases;
-                (self.must_return, self.returning_tails) = returns;
-                (self.hook, self.initializing, self.caching) = lifecycle;
-                self.type_query = querying;
-                self.constants.remember_type(at, ty.clone());
+                let (ty, _) = self.type_query_operand(node);
                 (
                     ExprKind::Literal(Value::Type(Box::new(ty))),
                     Type::TypeValue,
@@ -267,6 +243,84 @@ impl<'a> Typer<'a> {
             return self.child_read(node, value);
         }
         value
+    }
+
+    /// TYPE-18: check a cold `type(e)` operand without runtime effects,
+    /// preserving operand diagnostics while discarding local mutations.
+    pub(super) fn type_query_operand(
+        &mut self,
+        query: &SyntaxNode,
+    ) -> (Type, crate::constant::QueryType) {
+        let at = self.at(query);
+        if let Some(known) = self.constants.remembered_type(at) {
+            let ty = match &known {
+                crate::constant::QueryType::Resolved(resolved) => resolved.clone(),
+                crate::constant::QueryType::Reported | crate::constant::QueryType::Unresolved => {
+                    Type::Unknown
+                }
+            };
+            return (ty, known);
+        }
+        let mark = self.mark();
+        // A cold block may assign an existing local, including
+        // its graph category or capability alias (TYPE-18).
+        let locals = self.locals.clone();
+        let aliases = self.aliases.clone();
+        let returns = (self.must_return, self.returning_tails.clone());
+        let lifecycle = (self.hook, self.initializing, self.caching);
+        let querying = self.type_query;
+        self.type_query = true;
+        self.hook = None;
+        self.initializing = false;
+        self.caching = false;
+        let ty = query
+            .children()
+            .next()
+            .map_or(Type::Unknown, |operand| self.expression(&operand, None).ty);
+        let new_errors = self.diagnostics.as_slice()[mark.diagnostics..]
+            .iter()
+            .any(|report| report.severity == hgl_diagnostics::Severity::Error);
+        // TYPE-18 evaluates nothing of the operand. Its local
+        // effects and deferred calls do not belong to the body.
+        self.restore_read(mark, false);
+        self.locals = locals;
+        self.aliases = aliases;
+        (self.must_return, self.returning_tails) = returns;
+        (self.hook, self.initializing, self.caching) = lifecycle;
+        self.type_query = querying;
+        let has_unknown = ty.any_part(&|part| matches!(part, Type::Unknown), &|_| false);
+        let result = if new_errors {
+            crate::constant::QueryType::Reported
+        } else if has_unknown {
+            if self.diagnostics.has_errors() {
+                crate::constant::QueryType::Reported
+            } else {
+                crate::constant::QueryType::Unresolved
+            }
+        } else if crate::constant::type_has_deferred_query(&ty) {
+            crate::constant::QueryType::Unresolved
+        } else {
+            crate::constant::QueryType::Resolved(ty.clone())
+        };
+        let previous = self.constants.remember_type(at, result.clone());
+        self.type_query_locations.push((at, previous));
+        let value_ty = match &result {
+            crate::constant::QueryType::Resolved(resolved) => resolved.clone(),
+            crate::constant::QueryType::Reported | crate::constant::QueryType::Unresolved => {
+                Type::Unknown
+            }
+        };
+        (value_ty, result)
+    }
+
+    /// Pre-evaluates every outermost `type(...)` query inside `node` in the
+    /// current lexical scope so `read_constant` reads their checked types.
+    pub(super) fn remember_type_queries_in(&mut self, node: &SyntaxNode) {
+        let mut queries = Vec::new();
+        super::type_queries::outermost_type_queries(node, &mut queries);
+        for query in &queries {
+            self.type_query_operand(query);
+        }
     }
 
     /// What a form this pass does not read assigns is not followed, so

@@ -65,9 +65,8 @@ impl Typer<'_> {
     /// The type written on an anonymous parameter or result (FN-7).
     pub(super) fn anonymous_type(&mut self, annotation: &SyntaxNode) -> Option<Type> {
         let written = annotation.children().find(|part| is_type(part.kind()))?;
-        let ty = self
-            .written_type_at(written.span().start)
-            .unwrap_or(&Type::Unknown);
+        let resolved = self.written_type_at(written.span().start);
+        let ty = resolved.as_deref().unwrap_or(&Type::Unknown);
         let ty = self.project_pack_pass_type(ty, self.at(&written));
         if self.instance.is_empty() {
             return Some(ty);

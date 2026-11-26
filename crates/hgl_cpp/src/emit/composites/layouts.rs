@@ -326,8 +326,8 @@ fn walk_types(ty: &Type, visit: &mut dyn FnMut(&Type)) {
 /// A constant generic argument of a struct (GEN-8) as a C++ template
 /// argument: an integer, a `bool`, an enum's member, an `f64` (C++ tells
 /// `-0.0` from `0.0` as a template argument, as TYPE-3 does an argument
-/// by its value, UNIT-13), or a generic value parameter of the struct
-/// being declared. `None` for any other.
+/// by its value, UNIT-13), a compiled `Type` identity (TYPE-18), or a
+/// generic value parameter of the struct being declared. `None` for any other.
 fn constant_argument(program: &Program, value: &ConstantValue, generic: bool) -> Option<String> {
     match value {
         ConstantValue::Int(number) => Some(integer_literal(*number)),
@@ -341,6 +341,13 @@ fn constant_argument(program: &Program, value: &ConstantValue, generic: bool) ->
                 identifier(&member.name)
             ))
         }
+        ConstantValue::Type(ty) => ty.identity().map(|identity| {
+            format!(
+                "::{}::type_tag{{{}}}",
+                runtime::NAMESPACE,
+                names::string(&identity)
+            )
+        }),
         ConstantValue::Parameter { name, .. } if generic => Some(names::template_parameter(name)),
         _ => None,
     }
@@ -467,6 +474,12 @@ fn substituted(ty: &Type, generics: &[GenericParameter], arguments: &[GenericArg
                             Some(given @ GenericArgument::Constant(_)) => given.clone(),
                             _ => argument.clone(),
                         },
+                        ConstantValue::Type(inner) => {
+                            GenericArgument::Constant(hgl_analyser::Constant {
+                                text: constant.text.clone(),
+                                value: ConstantValue::Type(again(inner)),
+                            })
+                        }
                         _ => argument.clone(),
                     },
                 })
@@ -568,8 +581,9 @@ fn template_head(
         let parameter = match &generic.kind {
             GenericKind::Plain | GenericKind::Type => format!("class {name}"),
             // A value written with no type is a size, or has its kind once
-            // resolved (GEN-13): the template takes it as it comes.
-            GenericKind::Value(Type::Unknown) => format!("auto {name}"),
+            // resolved (GEN-13): the template takes it as it comes. A `Type`
+            // parameter receives a structural `hglrt::type_tag<N>` (TYPE-18).
+            GenericKind::Value(Type::Unknown | Type::TypeValue) => format!("auto {name}"),
             GenericKind::Value(
                 ty @ Type::Scalar(
                     hgl_analyser::Scalar::I64
