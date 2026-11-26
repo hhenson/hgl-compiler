@@ -11,6 +11,7 @@ const fn first<...Ps>(items: ...Ps) -> i64 =>
     if first_key in arg_keys(Ps) { hold<Ps[first_key]>(items[first_key]) } else { 17 }
 const fn by_key<const Key: i64 = 0, ...Ps>(items: ...Ps) -> i64 =>
     if Key in arg_keys(Ps) { hold<Ps[Key]>(items[Key]) } else { 23 }
+const fn has_key<const Key: i64, ...Ps>(items: ...Ps) -> bool => Key in arg_keys(Ps)
 
 fn graph<...Ps>(tick: i64, items: ...Ps) -> i64 =>
     if first_key in arg_keys(Ps) { items[first_key] } else { tick + 20 }
@@ -37,6 +38,8 @@ const fn identity(value: i64) -> i64 => value
 const fn inside_pass<...Ps>(items: ...Ps) -> i64 =>
     identity(...{for current in arg_keys(Ps):
         if first_key in arg_keys(Ps) { items[first_key] } else { not_bound() }})
+const fn member_in_pass<...Ps>(items: ...Ps) -> bool =>
+    hold<bool>(...{for current in arg_keys(Ps): current in arg_keys(Ps)})
 
 const fn assigned<...Ps>(items: ...Ps) -> i64 {
     var answer: i64
@@ -60,6 +63,8 @@ test constant_keys_choose_value_and_type_entries {
     assert first() == 17
     assert by_key<1>(3, 6) == 6
     assert by_key<1>(3) == 23
+    assert has_key<1>(3, 6)
+    assert !has_key<1>(3)
 }
 
 test a_named_pack_uses_its_supplied_keys {
@@ -69,6 +74,7 @@ test a_named_pack_uses_its_supplied_keys {
 
 test only_the_selected_iteration_entry_is_checked {
     assert inside_pass(9) == 9
+    assert member_in_pass(9)
 }
 
 test only_the_selected_branch_assigns {

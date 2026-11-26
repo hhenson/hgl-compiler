@@ -588,9 +588,22 @@ impl<'a> Typer<'a> {
         ) else {
             return (ExprKind::Unread, boolean);
         };
+        // A pass supplies its key's type along with its value. Type
+        // parameters and pack objects do not denote compile-time keys.
+        let is_pass_key = name_token(&key)
+            .and_then(|name| self.binding_at(self.file, name.span().start))
+            .is_some_and(|binding| {
+                matches!(
+                    binding,
+                    Binding::Local {
+                        kind: LocalKind::PackKey | LocalKind::PackIterationKey,
+                        ..
+                    }
+                )
+            });
         let key_valid = match self.typed_in(self.file, &key, None) {
             Ok(read)
-                if read.ty().is_none_or(|ty| {
+                if read.ty().map_or(is_pass_key, |ty| {
                     matches!(ty, Type::Unknown | Type::Scalar(Scalar::I64 | Scalar::Str))
                 }) =>
             {
@@ -602,7 +615,7 @@ impl<'a> Typer<'a> {
                     Category::Type,
                     codes::TYPE_MISMATCH,
                     self.at(&key),
-                    "a pack membership key must be a module constant or a generic value parameter of type `i64` or `str`".to_string(),
+                    "a pack membership key needs an `i64` index or a `str` name known at compile time".to_string(),
                     "CTRL-16",
                 ));
                 false

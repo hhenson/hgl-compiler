@@ -1469,6 +1469,39 @@ fn ordinary_parameters_are_not_pack_membership_keys() {
     }
 }
 
+/// CTRL-16: only values can supply keys, even for an unused declaration.
+#[test]
+fn type_parameters_and_pack_objects_are_not_pack_membership_keys() {
+    for (generics, key, call) in [
+        ("<T, ...Ps>", "T", "pick<i64>(7)"),
+        ("<...Ps>", "Ps", "pick(7)"),
+        ("<...Ps>", "items", "pick(7)"),
+    ] {
+        let membership = format!("{key} in arg_keys(Ps)");
+        let conditional = format!("if {membership} {{ true }} else {{ false }}");
+        for (body, column) in [(&conditional, 8), (&membership, 5)] {
+            for used in [
+                String::new(),
+                format!("\nconst fn invoke() -> bool => {call}"),
+            ] {
+                let checked = module(&format!(
+                    "const fn pick{generics}(items: ...Ps) -> bool =>\n    {body}{used}"
+                ));
+                assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+                let finding = &checked.findings[0];
+                assert_eq!(finding.code, "type/type.mismatch", "{}", checked.report);
+                assert_eq!(finding.rule, "CTRL-16", "{}", checked.report);
+                assert_eq!(
+                    finding.at,
+                    format!("m.hgl:3:{column}"),
+                    "{}",
+                    checked.report
+                );
+            }
+        }
+    }
+}
+
 /// Only an instance that selects the branch reports its errors (CTRL-16).
 #[test]
 fn a_chosen_pack_branch_reports_its_own_error_at_the_making_call() {
