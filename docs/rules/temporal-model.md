@@ -121,6 +121,7 @@ analyser: partial
 
 transpiler: partial
 
+- A scalar `out` read in a `when` sees the latest write in the evaluation or the retained value. A read in `stop` sees the last published value.
 - Publishes returns, whole `out` assignments and supported struct or tuple child writes.
   Whole-output invalidation notifies readers of supported collections. A source
   yields whole values or deltas. A window result exposes its latest

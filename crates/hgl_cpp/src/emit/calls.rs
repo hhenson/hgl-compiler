@@ -101,23 +101,22 @@ impl Emitter<'_> {
         self.missing(at, otherwise)
     }
 
-    /// Respect expression order when an apparent local read is a
-    /// contextual connection read in the consuming handler (EXPR-2).
+    /// A handler's contextual input or output payload is a checked read,
+    /// even when the HIR represents it as a local (TIME-7, EXPR-2).
     pub(super) fn may_fail_here(&self, value: &Expr) -> bool {
         if may_fail(value) {
             return true;
         }
-        let mut reads_connection = false;
-        if self
-            .temporal
-            .as_ref()
-            .is_some_and(|context| !context.input_reads.is_empty())
-        {
+        let mut checked_read = false;
+        if self.temporal.is_some() {
             value.walk(&mut |expression| {
-                reads_connection |= matches!(expression.kind, ExprKind::Local(local) if self.input_reader(local).is_some());
+                if let ExprKind::Local(local) = expression.kind {
+                    checked_read |= self.role(local) == super::nodes::Role::Out
+                        || self.input_reader(local).is_some();
+                }
             });
         }
-        reads_connection
+        checked_read
     }
 
     /// A call of `callee` with `arguments` as C++ (FN-5, NATIVE-7);
