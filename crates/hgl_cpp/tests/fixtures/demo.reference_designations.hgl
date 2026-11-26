@@ -87,3 +87,108 @@ test a_timer_can_designate_an_ordinary_input {
     assert eval through_scheduler(input: [7, _, 9, _, 9]) == [_, 7, 9, _, 9]
     assert eval through_alarm(input: [7, _, 9, _, 9]) == [_, 7, 9, _, 9]
 }
+
+# FN-16, TIME-10: a `ref` result can designate a field of an ordinary struct
+# input, including nested fields, optional fields, switching between fields,
+# timer wakes, and following an upstream `ref` struct rebinding.
+struct Pair {
+    left: i64
+    right: i64
+}
+
+struct Outer {
+    inner: Pair
+    note: i64?
+}
+
+fn pick_left(input: Pair) -> ref i64 {
+    when valid([]) { return input.left }
+}
+
+fn observe_left(input: Pair) -> i64 => pick_left(input)
+
+fn choose_field(flag: bool, input: Pair) -> ref i64 {
+    inject out
+    when modified(flag) {
+        if flag {
+            out = input.left
+        } else {
+            out = input.right
+        }
+    }
+}
+
+fn observe_chosen_field(flag: bool, input: Pair) -> i64 =>
+    receive(choose_field(flag, input))
+
+fn pick_deep(input: Outer) -> ref i64 {
+    when valid([]) { return input.inner.right }
+}
+
+fn observe_deep(input: Outer) -> i64 => pick_deep(input)
+
+fn pick_opt(input: Outer) -> ref i64? {
+    when valid([]) { return input.note }
+}
+
+fn receive_opt(input: i64?) -> i64? {
+    when { return input }
+}
+
+fn observe_opt(input: Outer) -> i64? => receive_opt(pick_opt(input))
+
+fn scheduled_field(input: Pair) -> ref i64 {
+    inject scheduler
+    start { schedule(scheduler, 1us) }
+    when scheduled() { return input.left }
+}
+
+fn observe_scheduled_field(input: Pair) -> i64 => receive(scheduled_field(input))
+
+fn choose_pair(flag: bool, first: Pair, second: Pair) -> ref Pair {
+    when modified(flag) {
+        if flag { return first }
+        return second
+    }
+}
+
+fn pick_rebound_left(flag: bool, first: Pair, second: Pair) -> i64 =>
+    receive(pick_left(choose_pair(flag, first, second)))
+
+test a_struct_field_can_be_designated {
+    assert eval observe_left(input: [Pair(left: 1, right: 2), delta<Pair>(left: 3)]) == [1, 3]
+    assert eval observe_left(
+        input: [Pair(left: 1, right: 2), delta<Pair>(right: 99), delta<Pair>(left: 3)],
+    ) == [1, _, 3]
+    assert eval observe_chosen_field(
+        flag: [true, _, false, _, true],
+        input: [
+            Pair(left: 10, right: 20),
+            delta<Pair>(left: 11),
+            _,
+            delta<Pair>(right: 22),
+            _,
+        ],
+    ) == [10, 11, 20, 22, 11]
+    assert eval observe_deep(
+        input: [
+            Outer(inner: Pair(left: 1, right: 5), note: null),
+            delta<Outer>(inner: delta<Pair>(right: 8)),
+        ],
+    ) == [5, 8]
+    assert eval observe_opt(
+        input: [
+            Outer(inner: Pair(left: 1, right: 2), note: null),
+            delta<Outer>(note: 42),
+            delta<Outer>(note: delta<i64?>(value: null)),
+        ],
+    ) == [null, 42, null]
+    assert eval observe_scheduled_field(
+        input: [Pair(left: 7, right: 1), _, delta<Pair>(left: 9)],
+    ) == [_, 7, 9]
+    assert eval pick_rebound_left(
+        flag: [true, _, false, _],
+        first: [Pair(left: 1, right: 2), delta<Pair>(left: 3), _, _],
+        second: [Pair(left: 10, right: 20), _, _, delta<Pair>(left: 30)],
+    ) == [1, 3, 10, 30]
+}

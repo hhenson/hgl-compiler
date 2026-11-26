@@ -212,6 +212,7 @@ analyser: done
 transpiler: partial
 
 - Uses hgraph reference ports to follow endpoint rebinding without re-evaluating the
-  designating node. Supports sampled, whole-input, fixed-list child and dictionary entry designations.
-- Left: A reference designation of a struct field is reported. Other unsupported
-  targets and output combinations are listed under FN-16.
+  designating node. Supports sampled, whole-input, fixed-list child, dictionary entry,
+  and ordinary struct field path designations.
+- Left: Other unsupported child targets (such as children of a `ref` parameter or tuple
+  positions) and output combinations are listed under FN-16.
