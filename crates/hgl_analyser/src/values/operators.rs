@@ -1876,8 +1876,10 @@ impl<'a> Typer<'a> {
                 }
             } else {
                 let value = self.argument_read(argument.clone(), &ty);
-                let place = format!("the parameter `{}`", parameter.name);
-                self.fit_input(value, &ty, &place);
+                if !self.fixed_list_value_fits(&value, &ty) {
+                    let place = format!("the parameter `{}`", parameter.name);
+                    self.fit_input(value, &ty, &place);
+                }
             }
             rejected.extend(
                 self.diagnostics.as_slice()[mark.diagnostics..]

@@ -82,6 +82,20 @@ fn a_written_generic_checks_a_contextual_argument() {
     assert_eq!(checked.summary(), ["m.hgl:5:37 type/type.mismatch EXPR-5"]);
 }
 
+/// TYPE-10: a public unsized list takes a fixed list of the same
+/// element type after GEN-8 binds the generic it names.
+#[test]
+fn a_written_list_element_type_keeps_fixed_list_admission() {
+    let checked = module(concat!(
+        "operator pick<T>(items: list<T>) -> i64\n",
+        "impl const fn pick(items: list<i64, 2>) -> i64 => 1\n",
+        "impl const fn pick(items: list<str, 2>) -> i64 => 2\n",
+        "const fn good(items: list<i64, 2>) -> i64 => pick<i64>(items)\n",
+        "const fn bad(items: list<str, 2>) -> i64 => pick<i64>(items)\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:6:55 type/type.mismatch EXPR-5"]);
+}
+
 /// The message of each finding, in order.
 fn messages(checked: &Checked) -> Vec<&str> {
     checked

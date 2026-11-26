@@ -842,12 +842,7 @@ impl<'a> Typer<'a> {
         // an unsized value parameter takes its entries in order.
         let fixed_list_value = takes == Takes::Parameters
             && slot.listed
-            && !self.composes(&value)
-            && matches!(
-                (&slot.ty, value.ty.omission_removed()),
-                (Type::List { element, size: None }, Type::List { element: actual, size: Some(size) })
-                    if !matches!(size.value, ConstantValue::Unbounded) && agree(element, actual)
-            );
+            && self.fixed_list_value_fits(&value, &slot.ty);
         if lifted || fixed_list_value || (!traced && holds_trace(&value.ty)) {
             value
         } else {
@@ -858,6 +853,17 @@ impl<'a> Typer<'a> {
                 self.fit(value, &slot.ty, &place)
             }
         }
+    }
+
+    /// TYPE-10: an ordinary fixed list fits an unsized parameter with
+    /// matching elements while retaining its size.
+    pub(super) fn fixed_list_value_fits(&self, value: &Expr, expected: &Type) -> bool {
+        !self.composes(value)
+            && matches!(
+                (expected, value.ty.omission_removed()),
+                (Type::List { element, size: None }, Type::List { element: actual, size: Some(size) })
+                    if !matches!(size.value, ConstantValue::Unbounded) && agree(element, actual)
+            )
     }
 
     /// Reports a trace given to a field, or to a parameter of a
