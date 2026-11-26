@@ -12,7 +12,8 @@ use super::arguments::Takes;
 use super::callback_evidence::CallbackEvidence;
 use super::calls::arguments_of;
 use super::candidates::{
-    Chosen, DependentCallback, Given, Key, Settled, Wanted, bound, typed_by_place,
+    Chosen, DependentCallback, Given, Key, Settled, Wanted, bound, contains_sequence,
+    typed_by_place,
 };
 use super::constants::{constant_text, generic_default};
 use super::dependent_packs::{
@@ -555,6 +556,46 @@ impl<'a> Typer<'a> {
             replay,
             &candidates,
         );
+        // EXPR-9: a known public collection selects which reading of the
+        // literal the candidate can take. Keep the ordinary contextual
+        // operand: the candidate's fixed input sizes still apply (TYPE-10).
+        let public_bindings: Vec<_> = public
+            .generics
+            .iter()
+            .zip(&explicit)
+            .filter_map(|(generic, supplied)| Some((generic.at, supplied.as_ref()?)))
+            .collect();
+        for argument in &mut given {
+            if !argument.by_place
+                || argument.explicit.is_some()
+                || !contains_sequence(&argument.node)
+            {
+                continue;
+            }
+            let Some(slot) = argument.key.public_parameter(public) else {
+                continue;
+            };
+            let parameter = &public.parameters[slot];
+            if parameter.pack.is_some() {
+                continue;
+            }
+            let pattern = substitute_within(&parameter.ty, &public_bindings);
+            if matches!(
+                super::fit::not_null(Some(&pattern)),
+                Some(
+                    Type::List { .. }
+                        | Type::Set(_)
+                        | Type::Tuple(_)
+                        | Type::Dict { .. }
+                        | Type::Result { .. }
+                )
+            ) && whole(&pattern)
+                && !names_parameter(&pattern)
+            {
+                argument.explicit =
+                    Some(fitted_input_pattern(&argument.value, &pattern).unwrap_or(pattern));
+            }
+        }
         // FN-19: the operator supplies context for written arguments. Its
         // candidate is selected once the spread supplies the remaining slots.
         if before_spread {

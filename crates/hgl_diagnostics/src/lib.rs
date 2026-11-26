@@ -253,12 +253,41 @@ impl Diagnostic {
 #[derive(Debug, Clone, Default)]
 pub struct Diagnostics {
     items: Vec<Diagnostic>,
+    pending_warnings: Vec<Diagnostic>,
 }
 
 impl Diagnostics {
     /// Creates an empty sink.
     pub fn new() -> Diagnostics {
         Diagnostics::default()
+    }
+
+    /// Keep a successful choice's warning separate from the errors that
+    /// decide whether a speculative reading fits. Publish it after checking.
+    pub fn defer_warning(&mut self, warning: Diagnostic) {
+        debug_assert_eq!(warning.severity, Severity::Warning);
+        if !self
+            .pending_warnings
+            .iter()
+            .any(|previous| previous.primary == warning.primary && previous.code == warning.code)
+        {
+            self.pending_warnings.push(warning);
+        }
+    }
+
+    /// The point to restore if this speculative reading is discarded.
+    pub fn warning_mark(&self) -> usize {
+        self.pending_warnings.len()
+    }
+
+    /// Discard warnings from an uncommitted reading.
+    pub fn restore_warnings(&mut self, mark: usize) {
+        self.pending_warnings.truncate(mark);
+    }
+
+    /// Publish warnings belonging to committed readings.
+    pub fn publish_warnings(&mut self) {
+        self.items.append(&mut self.pending_warnings);
     }
 
     /// Appends a diagnostic.

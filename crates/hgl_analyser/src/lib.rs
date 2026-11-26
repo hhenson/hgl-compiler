@@ -579,6 +579,8 @@ pub mod codes {
 
     /// GEN-6: a call can match two declared candidates equally.
     pub const OPERATOR_CANDIDATES_TIE: &str = "operator.candidates_tie";
+    /// A sequence literal admits list and set readings at an operator call (GEN-5).
+    pub const OPERATOR_SEQUENCE_READING: &str = "operator.sequence_reading";
 
     /// A parameter that may not be omitted follows one that may
     /// (UNIT-8).
@@ -739,6 +741,7 @@ fn analyse_with_test_candidates(
     // TIME-8: "a use of another type in one program rejects", asked of
     // every typed body of the program at once.
     store_keys::key_types(&program, store_key_uses, diagnostics);
+    diagnostics.publish_warnings();
     program
 }
 

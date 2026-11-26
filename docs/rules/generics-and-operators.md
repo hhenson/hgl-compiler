@@ -91,6 +91,8 @@ transpiler: done
 
 analyser: partial
 
+- When list and set candidates admit the same inline sequence, select among the list candidates. A fixed list takes the literal's written extent. A failed extent or requirement can leave only the set reading. After ERR-15 chooses the fewest result payload reads, compare all ambiguous literal positions together. Crossed surviving readings and a tie within one reading are ambiguous.
+
 - In a value function, a call of an operator, by name or by the symbol that stands for it, selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened, which the candidates' types settle before their conditions, and candidates that tie in which literals they widen give way to the one that widens every one; no candidate and a tie rejected
 - A generic candidate is admitted with its parameters resolved from the call, and the most specific admitted one is selected (GEN-12). A fallible candidate can meet a T or `T?` place. The selected candidate determines the result before its form is taken (ERR-15).
 - A fixed-length tuple pattern outranks a tuple pattern with a pack that admits it. The comparison also applies inside nested and nullable tuple types.

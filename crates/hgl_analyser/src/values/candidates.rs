@@ -5,6 +5,12 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+mod sequence_readings;
+pub(super) use sequence_readings::contains_sequence;
+
+/// The selected candidates, unsettled evidence and any callback diagnostics.
+type Selection<'a> = ((Vec<Chosen<'a>>, bool), Vec<Diagnostic>);
+
 use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
@@ -163,7 +169,7 @@ impl<'a> Typer<'a> {
         given: &[Given],
         wanted: &Wanted,
         pending_default: Option<&ReflectedCall>,
-    ) -> ((Vec<Chosen<'a>>, bool), Vec<Diagnostic>) {
+    ) -> Selection<'a> {
         self.admit_candidates(operator, candidates, given, wanted, None, pending_default)
     }
 
@@ -175,7 +181,39 @@ impl<'a> Typer<'a> {
         wanted: &Wanted,
         template_role: Option<Role>,
         pending_default: Option<&ReflectedCall>,
-    ) -> ((Vec<Chosen<'a>>, bool), Vec<Diagnostic>) {
+    ) -> Selection<'a> {
+        if sequence_readings::may_compete(candidates, given, wanted)
+            && let Some(selection) = self.sequence_candidates(
+                operator,
+                candidates,
+                given,
+                wanted,
+                template_role,
+                pending_default,
+            )
+        {
+            return selection;
+        }
+        self.admit_reading(
+            operator,
+            candidates,
+            given,
+            wanted,
+            template_role,
+            pending_default,
+        )
+    }
+
+    /// Ordinary admission and ranking within one reading (GEN-5).
+    fn admit_reading(
+        &mut self,
+        operator: OperatorRef,
+        candidates: &[Candidate<'a>],
+        given: &[Given],
+        wanted: &Wanted,
+        template_role: Option<Role>,
+        pending_default: Option<&ReflectedCall>,
+    ) -> Selection<'a> {
         let has_checked_children = given.iter().any(Given::reads_child);
         let has_results = given
             .iter()
@@ -840,6 +878,8 @@ impl<'a> Typer<'a> {
                         .filter(|(_, argument)| argument.dependent_callback.is_some())
                         .map(|(index, argument)| (index, argument.value.clone()))
                         .collect(),
+                    result_reads: reads.len(),
+                    sequence_warnings: Vec::new(),
                     valued_anonymous_parameters,
                     ambiguous_reads: false,
                     nullable_result_fallback,
@@ -1017,6 +1057,14 @@ impl<'a> Typer<'a> {
     /// widenings. Nullable widening includes `delta<V>` to `delta<V?>`
     /// (TYPE-16). Literal precision is settled before admission.
     fn argument_widening(&self, argument: &Given, expected: &Type, widening: bool) -> Option<bool> {
+        // GEN-5: when both lists admit a sequence with a written extent,
+        // the fixed form takes that extent exactly. The growing form widens it.
+        if argument.by_place
+            && let Some(Type::List { size, .. }) = not_null(Some(expected))
+            && matches!(argument.value.kind, ExprKind::Sequence(_))
+        {
+            return Some(size.is_none());
+        }
         let floated = Type::Scalar(Scalar::F64);
         let actual = if widening
             && argument.explicit.is_none()
@@ -1130,11 +1178,15 @@ impl<'a> Typer<'a> {
             public_generics,
             public_type_packs,
             mut selecting,
+            sequence_warnings,
             success,
             ..
         } = chosen;
         let operator_generics = public_generics.unwrap_or(operator_generics);
         let signature: &Signature = &taken;
+        for warning in sequence_warnings {
+            self.diagnostics.defer_warning(warning);
+        }
         let program = self.program;
         let reported = self.diagnostics.len();
         // GEN-5: in a test's or an application's value code "a temporal
@@ -1742,7 +1794,13 @@ impl<'a> Typer<'a> {
                 matches_template(template, actual)
             }
             (Type::Function(_), _) | (_, Type::Function(_)) => false,
-            _ if given.by_place => self.fits_place(&given.node, ty, widening),
+            _ if given.by_place => {
+                given
+                    .explicit
+                    .as_ref()
+                    .is_none_or(|public| sequence_readings::compatible(given, public, ty))
+                    && self.fits_place(&given.node, ty, widening)
+            }
             _ => {
                 self.admits(ty, given.ty())
                     || converting
@@ -3085,7 +3143,8 @@ pub(super) struct Given {
     pub(super) dependent_callback: Option<Box<DependentCallback>>,
     /// Its value, read with nothing expected of it.
     pub(super) value: Expr,
-    /// The type the call explicitly writes for this packed argument.
+    /// An explicitly typed packed input or a known public collection
+    /// pattern that constrains the reading of a contextual operand.
     pub(super) explicit: Option<Type>,
     /// True when that reading has been taken back, the argument being
     /// read again as the selected candidate's parameter: `value` is
@@ -3123,13 +3182,17 @@ impl Given {
     /// The type the candidate sees. For example an explicit `i64?`
     /// stays nullable even when its argument is an `i64` value.
     pub(super) fn ty(&self) -> &Type {
-        self.explicit.as_ref().unwrap_or(&self.value.ty)
+        if self.by_place {
+            &self.value.ty
+        } else {
+            self.explicit.as_ref().unwrap_or(&self.value.ty)
+        }
     }
 
     /// An argument that contributes a type when resolving a bare callback.
     pub(super) fn inference_type(&self) -> &Type {
         if self.type_evidence {
-            self.ty()
+            self.explicit.as_ref().unwrap_or(self.ty())
         } else {
             &Type::Unknown
         }
@@ -3658,6 +3721,10 @@ pub(super) struct Chosen<'s> {
     public_generics: Option<Vec<Argument>>,
     /// The public reflection's keys and prefix from that same callback trial.
     public_type_packs: Vec<hir::TypePackArgument>,
+    /// Number of result operands this arrangement takes as payloads (ERR-15).
+    result_reads: usize,
+    /// List readings that took precedence over a viable set (GEN-5, WRITE-7).
+    sequence_warnings: Vec<Diagnostic>,
     /// Slots where the candidate's reading retains an unwritten callback result.
     valued_anonymous_parameters: Vec<usize>,
     /// Equally preferred choices of which operands to read (ERR-15).
@@ -4001,7 +4068,30 @@ fn candidate_bindings(
                 tuple_inputs.push((&parameter.ty, actual));
             }
             let before: Vec<bool> = found.iter().map(Option::is_some).collect();
-            infer(&parameter.ty, actual, generics, &mut found);
+            // GEN-2, TYPE-10: a fixed-list candidate can infer its extent
+            // from the number of entries in the written sequence.
+            let fixed;
+            let input = if given.by_place
+                && matches!(parameter.ty, Type::List { size: Some(_), .. })
+                && let ExprKind::Sequence(entries) = &given.value.kind
+                && let Type::List {
+                    element,
+                    size: None,
+                } = actual
+            {
+                let len = i64::try_from(entries.len()).ok()?;
+                fixed = Type::list(
+                    element.as_ref().clone(),
+                    Some(Constant {
+                        text: len.to_string(),
+                        value: ConstantValue::Int(len),
+                    }),
+                );
+                &fixed
+            } else {
+                actual
+            };
+            infer(&parameter.ty, input, generics, &mut found);
             for (generic, was) in before.into_iter().enumerate() {
                 by_argument[generic] |= !was && found[generic].is_some();
             }
