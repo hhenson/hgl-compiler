@@ -208,6 +208,43 @@ fn written_operator_inputs_keep_extents_inside_result_tags() {
     );
 }
 
+/// ERR-14, TYPE-10 and GEN-8: a result input can read a temporal child
+/// whole and retain the fixed extent of its list payload.
+#[test]
+fn written_operator_inputs_keep_checked_child_result_extents() {
+    let checked = module(concat!(
+        "operator pick<T>(row: result<list<T>, error>) -> i64\n",
+        "impl const fn pick(row: result<list<i64, 2>, error>) -> i64 => 1\n",
+        "fn direct(rows: list<list<i64, 2>, 2>, index: i64) -> i64 {\n",
+        "    when { return pick<i64>(rows[index]) }\n",
+        "}\n",
+        "fn aliased(rows: list<list<i64, 2>, 2>, index: i64) -> i64 {\n",
+        "    when {\n",
+        "        let row = rows[index]\n",
+        "        return pick<i64>(row)\n",
+        "    }\n",
+        "}\n",
+        "fn annotated(rows: list<list<i64, 2>, 2>, index: i64) -> i64 {\n",
+        "    when {\n",
+        "        let row: result<list<i64, 2>, error> = rows[index]\n",
+        "        return pick<i64>(row)\n",
+        "    }\n",
+        "}\n",
+        "fn inferred(rows: list<list<i64, 2>, 2>, index: i64) -> i64 {\n",
+        "    when { return pick(rows[index]) }\n",
+        "}\n",
+        "fn wrong(rows: list<list<i64, 2>, 2>, index: i64) -> i64 {\n",
+        "    when { return pick<str>(rows[index]) }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:23:29 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report,
+    );
+}
+
 /// EXPR-17 and TYPE-10: when an operator supplies a public pattern,
 /// the comprehension fits each entry without losing its fixed extent.
 #[test]
