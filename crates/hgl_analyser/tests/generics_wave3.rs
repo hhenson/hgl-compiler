@@ -760,7 +760,11 @@ fn a_candidate_that_outranks_every_one_not_told_is_known() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:9:39 operator/operator.no_candidate GEN-5"],
+        [
+            "m.hgl:7:15 warning/operator.candidates_tie GEN-6",
+            "m.hgl:8:15 warning/operator.candidates_tie GEN-6",
+            "m.hgl:9:39 operator/operator.no_candidate GEN-5",
+        ],
         "{}",
         checked.report
     );

@@ -65,6 +65,13 @@ pub(super) struct ReflectedCall {
     said: bool,
 }
 
+/// How the output request uses the inferred public bindings.
+enum OutputInputs {
+    Inferred,
+    Value(Vec<Option<Argument>>),
+    DeclarationWitness,
+}
+
 impl<'a> Typer<'a> {
     /// The output a call of `operator` requests of its candidates
     /// (GEN-5), from what is known of the operator's generic parameters
@@ -90,7 +97,14 @@ impl<'a> Typer<'a> {
         supplied: &[Option<&Type>],
         said: bool,
     ) -> Requested {
-        self.request_output(operator, public, found, supplied, said, None)
+        self.request_output(
+            operator,
+            public,
+            found,
+            supplied,
+            said,
+            OutputInputs::Inferred,
+        )
     }
 
     /// GEN-5, GEN-6, GEN-8: literal-aware calls keep generic value options
@@ -137,13 +151,34 @@ impl<'a> Typer<'a> {
                 self.infer_operator_inputs(public, &mut requested, &fixed);
                 requested
             });
-        let mut request = self.request_output(operator, public, found, &supplied, said, requested);
+        let inputs = requested.map_or(OutputInputs::Inferred, OutputInputs::Value);
+        let mut request = self.request_output(operator, public, found, &supplied, said, inputs);
         if !own.is_empty() {
             // UNIT-8: retain generic configuration-default metadata. GEN-7
             // changes the requested result here, not those defaults.
             request.call_generics = request.generics.clone();
         }
         request
+    }
+
+    /// A GEN-6 declaration witness needs every public binding, including
+    /// generic defaults, to decide whether the public condition holds.
+    pub(super) fn public_witness_arguments(
+        &self,
+        operator: OperatorRef,
+        public: &Signature,
+        found: Vec<Option<Argument>>,
+        supplied: &[Option<&Type>],
+    ) -> Option<Vec<Argument>> {
+        let request = self.request_output(
+            operator,
+            public,
+            found,
+            supplied,
+            false,
+            OutputInputs::DeclarationWitness,
+        );
+        request.unfit.is_none().then_some(request.generics)
     }
 
     fn request_output(
@@ -153,15 +188,19 @@ impl<'a> Typer<'a> {
         mut found: Vec<Option<Argument>>,
         supplied: &[Option<&Type>],
         said: bool,
-        requested_types: Option<Vec<Option<Argument>>>,
+        inputs: OutputInputs,
     ) -> Requested {
         let program = self.program;
         // GEN-5, GEN-6, GEN-8: a generic value default is a request for
         // that value, not for every input-derived type. Public checks below
         // still use every argument. Written types and the expected place
         // constrain a value call's result independently of input spelling.
-        let value_call = requested_types.is_some();
-        let requested_types = requested_types.unwrap_or_else(|| found.clone());
+        let value_call = matches!(inputs, OutputInputs::Value(_));
+        let witness = matches!(inputs, OutputInputs::DeclarationWitness);
+        let requested_types = match inputs {
+            OutputInputs::Value(types) => types,
+            _ => found.clone(),
+        };
         self.infer_operator_inputs(public, &mut found, supplied);
         let operator_declaration =
             &program.modules[operator.module].declarations[operator.declaration];
@@ -266,25 +305,20 @@ impl<'a> Typer<'a> {
         // requirements". Where its requirement says what its result may
         // be, a candidate's result is one of those.
         let among = self.result_among(operator, public, &map, &own_generics);
+        let keeps_call_arguments = public
+            .parameters
+            .iter()
+            .any(|parameter| parameter.configuration)
+            || reflects(&program.modules[operator.module], public);
         Requested {
             place,
             among,
-            generics: if public
-                .parameters
-                .iter()
-                .any(|parameter| parameter.configuration)
-                || reflects(&program.modules[operator.module], public)
-            {
+            generics: if witness || keeps_call_arguments {
                 explicit
             } else {
                 Vec::new()
             },
-            call_generics: if public
-                .parameters
-                .iter()
-                .any(|parameter| parameter.configuration)
-                || reflects(&program.modules[operator.module], public)
-            {
+            call_generics: if keeps_call_arguments {
                 output_arguments
             } else {
                 Vec::new()
