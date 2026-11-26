@@ -1096,6 +1096,9 @@ pub(super) fn check_generic_default_names(
             continue;
         }
         let mut typer = Typer::bare(program, module, declaration, signature, found, diagnostics);
+        // UNIT-7 applies to names in either branch of a cold default,
+        // including a GEN-10 pack-key guard whose instance is still open.
+        typer.lexical_default_dependencies = true;
         let mark = typer.mark();
         let before = typer.diagnostics.len();
         typer.expression(&default, Some(expected));

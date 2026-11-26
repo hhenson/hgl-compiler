@@ -1269,6 +1269,9 @@ const fn direct<const Kind:Type=type(pick<Key>(row))>(Key:i64)->Type=>Kind
 struct Callback<const Kind:Type=type(call(pick<Key>))> {{ Key:i64 }}
 const fn wrong<const N:i64=choose_count<size>(7)>(size:i64)->i64=>N
 struct Wrong<const Kind:Type=type(use_int(choose_count<size>))> {{ size:i64 }}
+const first:i64=0
+const fn guarded<...Ts, const N:i64=if first in arg_keys(Ts) {{ choose_count<size>(7) }} else {{ 2 }}>(size:i64, xs:...Ts)->i64=>N
+const fn guarded_type<...Ts, const K:Type=if first in arg_keys(Ts) {{ type(pick<Key>(row)) }} else {{ type(row) }}>(Key:i64, xs:...Ts)->Type=>K
 "#
         );
         let checked = check(&[("m.hgl", &source)]);
@@ -1278,7 +1281,7 @@ struct Wrong<const Kind:Type=type(use_int(choose_count<size>))> {{ size:i64 }}
             .map(|report| report.code.as_str())
             .collect();
         assert_eq!(
-            codes, ["name/default.formal_argument"; 2],
+            codes, ["name/default.formal_argument"; 3],
             "{source}\n{}",
             checked.report
         );
