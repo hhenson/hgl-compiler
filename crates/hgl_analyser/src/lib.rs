@@ -781,7 +781,7 @@ fn warning(
 /// `include_str!` puts a file's text in the compiler when the compiler
 /// is built, so the module is the one at the `spec/hgl_core` pin. A
 /// test fails when the pin adds a file this list does not have.
-pub const CORE_FILES: [(&str, &str); 13] = [
+pub const CORE_FILES: [(&str, &str); 14] = [
     (
         "<core>/core/calendar.hgl",
         include_str!("../../../spec/hgl_core/hgl/core/calendar.hgl"),
@@ -789,6 +789,11 @@ pub const CORE_FILES: [(&str, &str); 13] = [
     (
         "<core>/core/core.hgl",
         include_str!("../../../spec/hgl_core/hgl/core/core.hgl"),
+    ),
+    // FMT-5, TYPE-16/18: collection delta text is written in Core HGL.
+    (
+        "<core>/core/delta_text.hgl",
+        include_str!("../../../spec/hgl_core/hgl/core/delta_text.hgl"),
     ),
     // DBG-3, DBG-9: the HGL value candidate uses ordinary const-argument
     // checking and forwards both packs to the format candidate.
