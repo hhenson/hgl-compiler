@@ -17,17 +17,18 @@
 //! | `return price` of an input that is no `ref` parameter | the input is given to the node again, as a `REF` input it is active on (`designated_00_`); the node keeps which it designates in its state (`designates_`), publishes what that `REF` holds, and, where it ticks while the result designates it, publishes it again and runs no handler for that wake |
 //! | `return items[idx]` of a position of a fixed list that is no `ref` parameter | each position given to the node again, `::hglrt::element_port(items, 0)`, as a `REF` input it follows as it follows an input (`designated_01_0_`); the index checked (`::hglrt::designated_position`), and the position it names published (`::hglrt::designation_of`) |
 //! | `return book[key]` of an ordinary dictionary input | a structural view of the input and the selected key in node state (`::hglrt::designate_key`); membership and binding changes refresh the designation (FN-16) |
+//! | `return pair.left` of a field of an ordinary struct input | the designated field port, `::hglrt::field_port<0>(pair)`, given as a `REF` input the node follows (`designated_01_f0_`) |
 //! | `out = ...` of a `ref` result | as the `return`, and the evaluation goes on |
 //! | `invalidate(out)` of a `ref` result that follows an input | the result follows none, then is invalidated |
 //! | `prices[key]` of a dictionary connection in a graph (EXPR-7), the key a connection or a value | a node of its own, `selected_00_`, written in the graph's struct as a lifted call's is, whose `REF` result designates the entry the key names (`::hglrt::select_entry`, hgraph's own form of an entry by key: the dictionary observed for its membership), given as a connection of the entry |
 //!
 //! Not written yet, and reported: a designation of any other child, of a
-//! `ref` parameter's (`xs[i]`), of a field, of a growing list's position;
-//! an input designated whole and by a position in one node; and a `ref`
-//! result of a source.
+//! `ref` parameter's (`xs[i]`, `pair.left`), of a tuple position, of a growing
+//! list's position; an input designated whole and by a position in one node;
+//! and a `ref` result of a source.
 
 use hgl_analyser::hir::{Body, EndpointOperation, Expr, ExprKind, Hook, Local, Stmt};
-use hgl_analyser::{ConstantValue, Signature, Type};
+use hgl_analyser::{ConstantValue, Program, Signature, Type};
 use hgl_diagnostics::Location;
 use hgl_lower::nodes::{
     Designated, Handler, designated, designates, designations, is_out, is_reference,
@@ -161,8 +162,9 @@ pub(super) fn admission(handler: &mut Handler, locals: &[Local], signature: &Sig
 
 /// What a node follows of an input that is no `ref` parameter, which its
 /// `ref` result designates (FN-16): the input whole, a fixed list position,
-/// or the entry of a dictionary selected by a key held in node state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// the entry of a dictionary selected by a key held in node state, or a
+/// struct field path.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Place {
     /// The input, by its place among the body's locals.
     local: usize,
@@ -171,26 +173,41 @@ struct Place {
 }
 
 /// A follower's view of its input (FN-16).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Projection {
     Whole,
     Position(i64),
     Key,
+    Field(Vec<usize>),
 }
 
 impl Place {
     /// The C++ name of the `REF` input the node follows it through: of
-    /// the target's own form (`names::temporary`), the position after the
-    /// input's place, `designated_01_0_`, and no `__` in it, which C++
-    /// keeps for itself.
-    fn follower(self) -> String {
+    /// the target's own form (`names::temporary`), the projection after the
+    /// input's place, `designated_01_0_` or `designated_01_f0_`, and no `__`
+    /// in it, which C++ keeps for itself.
+    fn follower(&self) -> String {
         let input = names::temporary("designated", self.local);
-        match self.projection {
+        match &self.projection {
             Projection::Whole => input,
             Projection::Position(position) => format!("{input}{position}_"),
             Projection::Key => format!("{input}key_"),
+            Projection::Field(path) => {
+                let fields: Vec<String> = path.iter().map(usize::to_string).collect();
+                format!("{input}f{}_", fields.join("_"))
+            }
         }
     }
+}
+
+/// The field's HGL type along a struct field path `path` starting from `root`.
+fn field_path_type(program: &Program, root: &Type, path: &[usize]) -> Option<Type> {
+    let mut ty = root.clone();
+    for &member in path {
+        let fields = hgl_lower::types::fields_of(program, &ty)?;
+        ty = fields.get(member)?.1.clone();
+    }
+    Some(ty)
 }
 
 /// The size of `ty`, where it is a fixed list of a positive size.
@@ -236,6 +253,10 @@ fn followed(signature: &Signature, body: &Body) -> Vec<Place> {
             Designated::Key => vec![Place {
                 local,
                 projection: Projection::Key,
+            }],
+            Designated::Field(path) => vec![Place {
+                local,
+                projection: Projection::Field(path),
             }],
         };
         for place in places {
@@ -339,13 +360,13 @@ impl Emitter<'_> {
             return Some(Designations::default());
         }
         let found = designations(&body.locals, Some(signature), &body.statements);
-        for &(local, how, at) in &found {
-            // The list's own form first, so that a list not written yet is
+        for (local, how, at) in &found {
+            // The container's own form first, so that one not written yet is
             // reported as that.
-            if how != Designated::Whole {
-                self.temporal_schema(&body.locals[local].ty, at)?;
+            if *how != Designated::Whole {
+                self.temporal_schema(&body.locals[*local].ty, *at)?;
             }
-            if found.iter().any(|&(other, again, _)| {
+            if found.iter().any(|(other, again, _)| {
                 other == local
                     && matches!(
                         (how, again),
@@ -354,7 +375,7 @@ impl Emitter<'_> {
                     )
             }) {
                 self.unsupported(
-                    at,
+                    *at,
                     "an input designated whole and by a position in one node",
                 );
                 return None;
@@ -364,7 +385,7 @@ impl Emitter<'_> {
         let mut following = Vec::new();
         for place in followed {
             let declared = &body.locals[place.local];
-            let (schema, label) = match (place.projection, &declared.ty) {
+            let (schema, label) = match (&place.projection, &declared.ty) {
                 (Projection::Whole, ty) => (
                     self.endpoint_schema(ty, true, declared.at)?,
                     format!("designated:{}", declared.name),
@@ -377,6 +398,17 @@ impl Emitter<'_> {
                     self.temporal_schema(&declared.ty, declared.at)?,
                     format!("designated:{}[key]", declared.name),
                 ),
+                (Projection::Field(path), ty) => {
+                    let Some(field) = field_path_type(self.program, ty, path) else {
+                        self.unsupported(declared.at, "a designation of this child");
+                        return None;
+                    };
+                    let suffix: Vec<String> = path.iter().map(usize::to_string).collect();
+                    (
+                        self.endpoint_schema(&field, true, declared.at)?,
+                        format!("designated:{}.{}", declared.name, suffix.join(".")),
+                    )
+                }
                 _ => unreachable!("a designation projects its input's form"),
             };
             // A label no HGL name is: hgraph names the node's inputs by
@@ -492,11 +524,14 @@ impl Emitter<'_> {
             .into_iter()
             .map(|place| {
                 let port = identifier(&body.locals[place.local].name);
-                match place.projection {
+                match &place.projection {
                     Projection::Whole | Projection::Key => port,
                     Projection::Position(position) => {
                         format!("::{}::element_port({port}, {position})", runtime::NAMESPACE)
                     }
+                    Projection::Field(path) => path.iter().fold(port, |acc, &member| {
+                        format!("::{}::field_port<{member}>({acc})", runtime::NAMESPACE)
+                    }),
                 }
             })
             .collect()
@@ -636,7 +671,7 @@ impl Emitter<'_> {
                     local,
                     projection: Projection::Whole,
                 };
-                let Some(place) = following.iter().position(|&followed| followed == whole) else {
+                let Some(place) = following.iter().position(|followed| followed == &whole) else {
                     self.unsupported(value.at, "this designation");
                     return None;
                 };
@@ -663,7 +698,7 @@ impl Emitter<'_> {
                     local,
                     projection: Projection::Position(0),
                 };
-                let Some(base) = following.iter().position(|&followed| followed == first) else {
+                let Some(base) = following.iter().position(|followed| followed == &first) else {
                     self.unsupported(value.at, "this designation");
                     return None;
                 };
@@ -698,12 +733,26 @@ impl Emitter<'_> {
                     local,
                     projection: Projection::Key,
                 };
-                let place = following.iter().position(|&item| item == endpoint)?;
+                let place = following.iter().position(|item| item == &endpoint)?;
                 let view = endpoint.follower();
                 let key = self.expression(scope, index);
                 Some(format!(
                     "{indent}::{namespace}::designate_key({view}, {key}, {STATE}.modify().{view}, {OUT});\n\
                      {indent}{DESIGNATES} = {place};\n"
+                ))
+            }
+            Some((local, Designated::Field(path))) => {
+                let field = Place {
+                    local,
+                    projection: Projection::Field(path),
+                };
+                let Some(place) = following.iter().position(|followed| followed == &field) else {
+                    self.unsupported(value.at, "this designation");
+                    return None;
+                };
+                Some(format!(
+                    "{indent}{DESIGNATES} = {place};\n{}",
+                    published(&field.follower())
                 ))
             }
             None => {

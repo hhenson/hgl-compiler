@@ -6,7 +6,7 @@
 //! designation with these (TIME-3, TIME-4, TIME-9, FN-16).
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Header, Local, Stmt};
-use hgl_analyser::{LocalKind, Signature, Type};
+use hgl_analyser::{LocalKind, NamedKind, Signature, Type};
 use hgl_diagnostics::Location;
 
 use crate::types::fixed_list_size;
@@ -214,9 +214,9 @@ pub fn designates(value: &Expr) -> bool {
 }
 
 /// How a node designates a temporal input (FN-16: "A parameter that is
-/// not `ref` may be designated too"): whole, or by a position of it, a
-/// fixed list, or by a dictionary key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// not `ref` may be designated too"): whole, by a position of a fixed list,
+/// by a dictionary key, or by a struct field path.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Designated {
     /// `return value`
     Whole,
@@ -224,6 +224,9 @@ pub enum Designated {
     Position,
     /// `return dictionary[key]`.
     Key,
+    /// `return pair.left` or `return outer.inner.left`, of an ordinary struct
+    /// input (field indices from outermost to innermost).
+    Field(Vec<usize>),
 }
 
 /// What `value`, a designation (`designates`), designates of a temporal
@@ -256,6 +259,34 @@ pub fn designated(
                 }
                 _ => None,
             },
+            ExprKind::Field { .. } => {
+                let mut path = Vec::new();
+                let mut current = child.as_ref();
+                while let ExprKind::Field { base, member } = &current.kind {
+                    if !matches!(
+                        base.ty,
+                        Type::Named {
+                            kind: NamedKind::Struct,
+                            ..
+                        }
+                    ) {
+                        return None;
+                    }
+                    path.push(*member);
+                    current = base.as_ref();
+                }
+                match current.kind {
+                    ExprKind::Local(local)
+                        if !path.is_empty()
+                            && is_input(locals, signature, local)
+                            && !is_reference(locals, signature, local) =>
+                    {
+                        path.reverse();
+                        Some((local, Designated::Field(path)))
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         },
         _ => None,
