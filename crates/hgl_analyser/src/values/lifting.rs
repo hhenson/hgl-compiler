@@ -67,7 +67,7 @@ impl<'a> Typer<'a> {
     /// What a value read in a graph is (FN-3), as [`category`] says,
     /// with the locals read so far.
     pub(super) fn category(&self, value: &Expr) -> ValueCategory {
-        category(self.program, &self.locals, value)
+        category_with_functions(self.program, &self.locals, value, &self.pack_functions)
     }
 
     /// FN-3: "Where a constant is required ... a `const` parameter's
@@ -293,8 +293,17 @@ fn gives_a_value(value: &Expr) -> bool {
 /// as it reads ([`Typer::category`]), and [`record`] writes its answer
 /// on each expression for the stages after the analyser.
 pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> ValueCategory {
+    category_with_functions(program, locals, value, &[])
+}
+
+fn category_with_functions(
+    program: &Program,
+    locals: &[Local],
+    value: &Expr,
+    functions: &[(usize, Callee)],
+) -> ValueCategory {
     use ValueCategory::{Connection, Unsettled, Value};
-    let category = |value: &Expr| category(program, locals, value);
+    let category = |value: &Expr| category_with_functions(program, locals, value, functions);
     let join = join_categories;
     let all = |values: &mut dyn Iterator<Item = &Expr>| values.map(category).fold(Value, join);
     match &value.kind {
@@ -335,6 +344,19 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
             callee, arguments, ..
         } => {
             let given = all(&mut arguments.iter().map(|argument| &argument.value));
+            // FN-17: the binding of a value formal supplies the actual
+            // callback's role and its captures for the FN-6 category below.
+            let callee = match callee {
+                Callee::Parameter {
+                    parameter,
+                    temporal: false,
+                    ..
+                } => functions
+                    .iter()
+                    .find(|(slot, _)| slot == parameter)
+                    .map_or(callee, |(_, target)| target),
+                _ => callee,
+            };
             match callee {
                 Callee::Function {
                     module,
@@ -368,9 +390,8 @@ pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> Val
                     .map(|&local| locals[local].category)
                     .fold(given, join),
                 Callee::Parameter { temporal: true, .. } => Connection,
-                // A callback may capture a connection. A call awaiting
-                // instance selection may choose a temporal candidate
-                // (GEN-7), even with only ordinary arguments.
+                // An unbound callback may capture a connection. An operation
+                // awaiting instance selection may choose a temporal candidate.
                 Callee::Parameter { .. }
                 | Callee::Required { .. }
                 | Callee::DeferredOperator(_)
