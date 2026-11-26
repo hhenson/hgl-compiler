@@ -568,7 +568,7 @@ fn parts_of(
                         // CTRL-16 omits unchecked arms from the default's
                         // HIR. UNIT-8 still counts their written calls, so
                         // recover edges without publishing trial reports.
-                        let lexical = if default.has_deferred_pack_condition() {
+                        let lexical = if default.needs_pack_specialization() {
                             reread_parameter_default(
                                 program,
                                 declared,

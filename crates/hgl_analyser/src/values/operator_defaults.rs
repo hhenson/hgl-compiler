@@ -397,7 +397,7 @@ impl Defaults {
         (default, parameter, at): (&hir::DefaultExpr, &Parameter, Location),
         diagnostics: &mut Diagnostics,
     ) {
-        let pack_condition = default.has_deferred_pack_condition();
+        let pack_condition = default.needs_pack_specialization();
         if self.pack_conditions_only && !pack_condition {
             return;
         }
@@ -475,7 +475,7 @@ fn dependent_default(parameter: &Parameter, default: &hir::DefaultExpr) -> bool 
         || crate::constant::type_has_instance_query(&parameter.ty)
         || reads_generic_value(default)
         || default.needs_type_specialization()
-        || default.has_deferred_pack_condition()
+        || default.needs_pack_specialization()
 }
 
 fn reads_generic_value(default: &hir::DefaultExpr) -> bool {

@@ -143,6 +143,35 @@ fn an_omitted_default_checks_the_pack_arm_at_the_making_call() {
     );
 }
 
+/// CTRL-16 and UNIT-8: a directly invoked anonymous function waits for
+/// the omitted default's concrete pack keys, even when another call wraps it.
+#[test]
+fn an_omitted_default_checks_pack_guards_inside_direct_calls() {
+    let defaults = concat!(
+        "const Key: i64 = 0\n",
+        "const fn good<...Ps>(value: i64 = (fn() -> i64 => if Key in arg_keys(Ps) { \"wrong\" } else { 7 })(), items: ...Ps) -> i64 => value\n",
+        "const fn bad<...Ps>(value: i64 = (fn() -> i64 => (fn() -> i64 => if Key in arg_keys(Ps) { 7 } else { \"wrong\" })())(), items: ...Ps) -> i64 => value\n",
+    );
+    let accepted = module(&format!(
+        "{defaults}\
+         const fn chosen() -> i64 => good()\n\
+         const fn supplied() -> i64 => bad(23)\n"
+    ));
+    assert!(accepted.summary().is_empty(), "{}", accepted.report);
+    let rejected = module(&format!("{defaults}const fn rejected() -> i64 => bad()\n"));
+    assert_eq!(
+        rejected.summary(),
+        ["m.hgl:5:31 type/type.mismatch EXPR-5"],
+        "{}",
+        rejected.report
+    );
+    assert!(
+        rejected
+            .report
+            .contains("in the selected arm of the default")
+    );
+}
+
 /// UNIT-8: the omitted default's dependency cycle reads even an arm
 /// absent in every making instance. A call giving the argument is safe.
 #[test]
