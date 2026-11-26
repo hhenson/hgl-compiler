@@ -1524,6 +1524,32 @@ const fn bad() -> i64 => pick()",
     }
 }
 
+/// A callback role trial leaves a selected arm's written pack lookup checked (FN-4, CTRL-16).
+#[test]
+fn callback_role_trials_keep_selected_pack_member_errors() {
+    let checked = module(
+        "const First: i64 = 0
+const Second: i64 = 1
+const fn ident<T>(value: T) -> T => value
+const fn calculate(input: i64) -> i64 => input + 2
+fn calculate(input: str) -> i64 => 17
+fn project<...Ps>(read: const fn(i64) -> i64, tick: i64, items: ...Ps) -> i64 {
+    let score = calculate(read(1))
+    if First in arg_keys(Ps) {
+        return tick + score + ident<Ps[Second]>(7)
+    } else { return tick + score }
+}
+fn relay(read: const fn(i64) -> i64, tick: i64) -> i64 => project(read, tick, tick + 1)",
+    );
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(
+        checked.findings[0].code, "type/pack.name",
+        "{}",
+        checked.report
+    );
+    assert_eq!(checked.findings[0].at, "m.hgl:13:59", "{}", checked.report);
+}
+
 /// Deferring a membership test does not establish a later assignment
 /// in an instance whose selected branch has no assignment (CTRL-11/16).
 #[test]
