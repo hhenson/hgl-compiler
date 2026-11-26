@@ -214,6 +214,7 @@ pub(crate) fn check(
         let mut graph_return_checks = Vec::with_capacity(module.declarations.len());
         let mut deferred_type_fits = Vec::new();
         let mut callback_phase_bodies = Vec::new();
+        let mut deferred_list_sizes = Vec::new();
         for (position, declaration) in module.declarations.iter().enumerate() {
             let mut check_return = None;
             let deferred_fit = Cell::new(false);
@@ -272,6 +273,9 @@ pub(crate) fn check(
                     if typer.unsettled_callback_pair {
                         callback_phase_bodies.push((index, position));
                         typer.check_open_pair_reports(found, reported);
+                    }
+                    if typer.unsettled_list_size {
+                        deferred_list_sizes.push((index, position));
                     }
                     check_return = pending;
                     body
@@ -428,6 +432,7 @@ pub(crate) fn check(
         program.modules[index].graph_return_checks = graph_return_checks;
         program.deferred_type_fits.extend(deferred_type_fits);
         program.callback_phase_bodies.extend(callback_phase_bodies);
+        program.deferred_list_sizes.extend(deferred_list_sizes);
     }
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
@@ -839,6 +844,8 @@ struct Typer<'a> {
     pair_phases: Option<calls::PairPhases>,
     /// An open callback can change a committed named-pair selection (FN-4).
     unsettled_callback_pair: bool,
+    /// A local size needs the concrete graph body to decide its category.
+    unsettled_list_size: bool,
     /// Hypothetical capture categories used only to check an open graph declaration.
     callback_captures: Vec<ValueCategory>,
     /// Nesting depth of `anonymous_pair_category` role probes; lets nested
@@ -1153,6 +1160,7 @@ impl<'a> Typer<'a> {
             locals: Vec::new(),
             pair_phases: None,
             unsettled_callback_pair: false,
+            unsettled_list_size: false,
             callback_captures: Vec::new(),
             probing_pair_role: 0,
             probe_saw_temporal: false,
@@ -1371,6 +1379,7 @@ impl<'a> Typer<'a> {
             nested_query_selects: self.nested_query_selects,
             deferred_type_fit: self.deferred_type_fit.is_some_and(Cell::get),
             unsettled_callback_pair: self.unsettled_callback_pair,
+            unsettled_list_size: self.unsettled_list_size,
             selected_pack_branches: self
                 .selected_pack_branches
                 .map_or(0, |selected| selected.borrow().len()),
@@ -1393,6 +1402,7 @@ impl<'a> Typer<'a> {
     fn take_back(&mut self, mark: Mark, keep_flow: bool) -> bool {
         self.nested_query_selects = mark.nested_query_selects;
         self.unsettled_callback_pair = mark.unsettled_callback_pair;
+        self.unsettled_list_size = mark.unsettled_list_size;
         if let Some(selected) = self.selected_pack_branches {
             selected.borrow_mut().truncate(mark.selected_pack_branches);
         }
@@ -1571,6 +1581,7 @@ struct Mark {
     /// Whether a fit was deferred before this tentative reading.
     deferred_type_fit: bool,
     unsettled_callback_pair: bool,
+    unsettled_list_size: bool,
     /// Number of selected pack branches before a tentative read (CTRL-16).
     selected_pack_branches: usize,
     /// How many body-level resolved written types have been recorded.

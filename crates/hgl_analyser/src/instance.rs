@@ -479,6 +479,8 @@ impl Program {
         if (inputs.test_candidates.is_some()
             || recheck_endpoints
             || (!functions.is_empty() && self.callback_phase_bodies.contains(&(module, declaration)))
+            // TYPE-10: an annotation extent awaits a concrete category.
+            || self.deferred_list_sizes.contains(&(module, declaration))
             || generics.contains(&Argument::NoResult)
             || pending_forwards.is_some()
             || !inputs.constants.is_empty()

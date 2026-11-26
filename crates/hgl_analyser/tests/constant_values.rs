@@ -885,6 +885,48 @@ fn a_graph_locals_list_size_cannot_be_a_connection() {
     );
 }
 
+/// TYPE-10 and FN-17: a static callback can still capture a connection.
+/// Report the instance that supplies the live callback and keep the
+/// capture-free and ordinary named callbacks admissible.
+#[test]
+fn a_local_list_size_rechecks_static_callback_captures() {
+    expect(
+        concat!(
+            "const fn count(x: i64) -> i64 => x + 1\n",
+            "fn relay(f: const fn(i64) -> i64, input: i64) -> i64 {\n",
+            "    var held: tuple<str, list<i64, f(2)>>\n",
+            "    return input\n",
+            "}\n",
+            "fn forwarded(f: const fn(i64) -> i64, n: i64) -> i64 => relay(f, n)\n",
+            "fn captured(n: i64) -> i64 => forwarded(fn(x) => x + n, n)\n",
+            "fn direct(n: i64) -> i64 => relay(fn(x) => x + n, n)\n",
+            "fn named(n: i64) -> i64 => relay(count, n)\n",
+            "fn capture_free(n: i64) -> i64 => relay(fn(x) => x + 1, n)\n",
+        ),
+        &["8 list.size", "9 list.size"],
+    );
+}
+
+/// TYPE-10 and GEN-7: the same extent can take its category from the
+/// operator candidate chosen for the concretely supplied type.
+#[test]
+fn a_local_list_size_rechecks_the_selected_operator_category() {
+    expect(
+        concat!(
+            "operator length_of<T>(x: T) -> i64\n",
+            "impl const fn length_of(x: i64) -> i64 => 2\n",
+            "impl fn length_of(x: str) -> i64 { when modified(x) { return 3 } }\n",
+            "fn relay<T>(const x: T, n: i64) -> i64 requires T in {i64, str} {\n",
+            "    var held: list<i64, length_of(x)>\n",
+            "    return n\n",
+            "}\n",
+            "fn dynamic(n: i64) -> i64 => relay(\"q\", n)\n",
+            "fn ordinary(n: i64) -> i64 => relay(1, n)\n",
+        ),
+        &["9 list.size"],
+    );
+}
+
 /// A constant's type may name a constant, as a list's size: the one
 /// reader follows it with the constants it is following, so that one
 /// whose type names itself is `constant.cycle` and ends (UNIT-13). A

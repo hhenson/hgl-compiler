@@ -60,6 +60,10 @@ impl Typer<'_> {
             let value = self.expression(&size, Some(&count));
             let category = self.category(&value);
             self.take_back(mark, false);
+            // An instance can give this extent a concrete callback or operator.
+            if category == ValueCategory::Unsettled {
+                self.unsettled_list_size = true;
+            }
             if category == ValueCategory::Connection {
                 self.diagnostics.emit(error(
                     Category::Type,
