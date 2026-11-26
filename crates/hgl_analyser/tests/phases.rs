@@ -705,3 +705,27 @@ fn a_missing_raises_argument_is_reported_once() {
         );
     }
 }
+
+/// FN-4/17: a callback binding settles the role before the selected
+/// definition checks its input. Only the caller with ordinary inputs fails.
+#[test]
+fn bound_callback_results_check_the_selected_pair_signature() {
+    let checked = check(&[(
+        "pair.hgl",
+        r#"module pair
+const fn phase(x: str) -> i64 => 2
+fn phase(x: i64) -> i64 => 3
+const fn inc(n: i64) -> i64 => n + 1
+fn receive(f: const fn(i64) -> i64, tick: i64) -> i64 => tick + phase(f(1))
+fn live(tick: i64) -> i64 => receive(fn(n) => n + tick, tick)
+fn scalar(tick: i64) -> i64 => receive(inc, tick)
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/type.mismatch");
+    assert!(
+        checked.findings[0].at.starts_with("pair.hgl:7:"),
+        "{}",
+        checked.report
+    );
+}

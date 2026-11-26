@@ -570,6 +570,15 @@ impl<'a> Typer<'a> {
                 }
                 let (operands, all_fn_args_probed) =
                     self.pair_operands(name, list, module, (value, temporal));
+                if operands == ValueCategory::Unsettled
+                    && self
+                        .signature
+                        .parameters
+                        .iter()
+                        .any(|parameter| matches!(&parameter.ty, Type::Function(f) if f.value))
+                {
+                    self.unsettled_callback_pair = true;
+                }
                 let selected = match preferred_call_role(true, [operands]) {
                     Role::Value => value,
                     Role::Temporal => temporal,

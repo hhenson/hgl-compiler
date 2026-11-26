@@ -1199,11 +1199,12 @@ impl ForwardingInstance {
                 .iter()
                 .all(|parameter| parameter.pack.is_none())
             && instance.constants.values.is_empty()
+            && instance.functions.is_empty()
             && instance.test_candidates.is_none()
         {
             // Concrete bodies supply their own forwarding roots. A call
             // of one does not make those same instances a second time,
-            // unless it supplies const inputs or a test candidate scope.
+            // unless it binds a callback, const inputs or a test candidate scope.
             return None;
         }
         Some(instance)
@@ -1403,7 +1404,7 @@ pub(super) fn check_instances(
     use hgl_diagnostics::Code;
     use std::collections::{HashMap, HashSet, VecDeque};
 
-    let mut forwarding = HashSet::new();
+    let mut forwarding = program.callback_phase_bodies.clone();
     let mut callers = HashMap::<_, Vec<_>>::new();
     // GEN-5 and GEN-7: a call whose candidate each instance selects may
     // select one that forwards; each candidate of its operator is called.
