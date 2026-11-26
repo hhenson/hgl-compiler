@@ -555,12 +555,25 @@ impl<'a> Typer<'a> {
                                 }
                                 None => (None, None),
                             };
-                            let value = self.resolve_deferred_value(
-                                at,
-                                &constant.value,
-                                expected.as_ref(),
-                                place.as_deref(),
-                            );
+                            let value = if let ConstantValue::DeferredDefaultQuery(default) =
+                                constant.value
+                            {
+                                super::type_queries::applied_default(
+                                    self.program,
+                                    default,
+                                    (generics, &resolved_args),
+                                    expected.as_ref(),
+                                    place.as_deref(),
+                                    self.diagnostics,
+                                )
+                            } else {
+                                self.resolve_deferred_value(
+                                    at,
+                                    &constant.value,
+                                    expected.as_ref(),
+                                    place.as_deref(),
+                                )
+                            };
                             Argument::Constant(Constant {
                                 text: constant.text.clone(),
                                 value,

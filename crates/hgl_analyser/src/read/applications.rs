@@ -957,7 +957,7 @@ impl Reader<'_> {
             // written (`signatures`), and says nothing more (ERR-9).
             let value = match read {
                 Ok(value) if crate::constant::has_deferred_type_query(&value) => {
-                    ConstantValue::DeferredTypeQuery(Location::new(file, default.span()))
+                    ConstantValue::DeferredDefaultQuery(Location::new(file, default.span()))
                 }
                 Ok(value) => value,
                 Err(Fault::NotConstant) => ConstantValue::Unevaluated,

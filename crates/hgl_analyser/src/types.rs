@@ -718,6 +718,9 @@ pub enum ConstantValue {
     /// analysis completes, or replaced with [`ConstantValue::Unknown`] once
     /// its operand diagnostic is reported.
     DeferredTypeQuery(Location),
+    /// A deferred query supplied by a bare struct application. Its lexical
+    /// environment uses the defaults already applied to preceding parameters.
+    DeferredDefaultQuery(Location),
     /// Not valued: a constant whose value this compiler does not work
     /// out (an operation that overflows, a date moved by a tenor), or
     /// what is no constant at all. It is equal to nothing and unequal to

@@ -2471,7 +2471,7 @@ fn scaled_tenor(tenor: Tenor, factor: i64) -> Option<Tenor> {
 /// until declaration details, struct fields, and body locals exist (TYPE-18).
 pub(crate) fn has_deferred_type_query(value: &ConstantValue) -> bool {
     match value {
-        ConstantValue::DeferredTypeQuery(_) => true,
+        ConstantValue::DeferredTypeQuery(_) | ConstantValue::DeferredDefaultQuery(_) => true,
         ConstantValue::Type(ty) => type_has_deferred_query(ty),
         ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
             has_deferred_type_query(operand)
@@ -2511,7 +2511,9 @@ pub(crate) fn type_has_instance_query(ty: &Type) -> bool {
 /// what is wrong with its expression is reported where it is declared.
 pub(crate) fn worked_out(value: &ConstantValue) -> bool {
     match value {
-        ConstantValue::Unevaluated | ConstantValue::DeferredTypeQuery(_) => false,
+        ConstantValue::Unevaluated
+        | ConstantValue::DeferredTypeQuery(_)
+        | ConstantValue::DeferredDefaultQuery(_) => false,
         ConstantValue::Type(ty) => !type_has_deferred_query(ty),
         ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
             worked_out(operand)
@@ -2646,8 +2648,14 @@ impl ConstantValue {
         // they are then one value whatever the parameters are.
         let alike = |same: Option<bool>| (same == Some(true)).then_some(true);
         match (self, other) {
-            (V::Unevaluated | V::Unknown | V::DeferredTypeQuery(_), _)
-            | (_, V::Unevaluated | V::Unknown | V::DeferredTypeQuery(_)) => None,
+            (
+                V::Unevaluated | V::Unknown | V::DeferredTypeQuery(_) | V::DeferredDefaultQuery(_),
+                _,
+            )
+            | (
+                _,
+                V::Unevaluated | V::Unknown | V::DeferredTypeQuery(_) | V::DeferredDefaultQuery(_),
+            ) => None,
             (
                 V::InstanceTypeQuery { at, bindings },
                 V::InstanceTypeQuery {
@@ -2886,6 +2894,7 @@ impl ConstantValue {
             | V::RangeLength(..)
             | V::InstanceTypeQuery { .. }
             | V::DeferredTypeQuery(_)
+            | V::DeferredDefaultQuery(_)
             | V::Unevaluated
             | V::Unknown => return None,
         })

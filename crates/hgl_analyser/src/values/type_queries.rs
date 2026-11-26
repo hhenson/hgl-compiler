@@ -694,15 +694,29 @@ fn resolve_type_declared(
                             }
                             None => (None, None),
                         };
-                        let value = resolve_constant_declared(
-                            program,
-                            everywhere,
-                            &constant.value,
-                            expected.as_ref(),
-                            place.as_deref(),
-                            sink.as_deref_mut(),
-                            pass,
-                        );
+                        let value = if let ConstantValue::DeferredDefaultQuery(at) = constant.value
+                        {
+                            let instance = application_arguments(generics, &resolved_args);
+                            evaluate_deferred_declared(
+                                program,
+                                everywhere,
+                                (at, Some(&instance)),
+                                expected.as_ref(),
+                                place.as_deref(),
+                                sink.as_deref_mut(),
+                                pass,
+                            )
+                        } else {
+                            resolve_constant_declared(
+                                program,
+                                everywhere,
+                                &constant.value,
+                                expected.as_ref(),
+                                place.as_deref(),
+                                sink.as_deref_mut(),
+                                pass,
+                            )
+                        };
                         Argument::Constant(Constant {
                             text: constant.text.clone(),
                             value,
@@ -855,9 +869,15 @@ fn resolve_constant_declared(
     pass: &mut QueryPass,
 ) -> ConstantValue {
     match value {
-        ConstantValue::DeferredTypeQuery(expr_at) => {
-            evaluate_deferred_declared(program, everywhere, *expr_at, expected, place, sink, pass)
-        }
+        ConstantValue::DeferredTypeQuery(expr_at) => evaluate_deferred_declared(
+            program,
+            everywhere,
+            (*expr_at, None),
+            expected,
+            place,
+            sink,
+            pass,
+        ),
         ConstantValue::Type(inner) if type_has_deferred_query(inner) => {
             ConstantValue::Type(Box::new(resolve_type_declared(
                 program, everywhere, inner, sink, pass,
@@ -867,21 +887,70 @@ fn resolve_constant_declared(
     }
 }
 
+fn application_arguments(
+    generics: &[crate::GenericParameter],
+    arguments: &[Argument],
+) -> Vec<(Location, Argument)> {
+    generics
+        .iter()
+        .map(|g| g.at)
+        .zip(arguments.iter().cloned())
+        .collect()
+}
+
+/// A bare struct type in a body reads its defaults in their owner's scope,
+/// with earlier applied values, just as a field or signature does.
+pub(super) fn applied_default(
+    program: &Program,
+    at: Location,
+    parameters: (&[crate::GenericParameter], &[Argument]),
+    expected: Option<&Type>,
+    place: Option<&str>,
+    diagnostics: &mut Diagnostics,
+) -> ConstantValue {
+    let instance = application_arguments(parameters.0, parameters.1);
+    let everywhere = program
+        .modules
+        .iter()
+        .flat_map(|module| &module.uses)
+        .map(|used| ((used.at.file, used.at.span.start), &used.binding))
+        .collect();
+    evaluate_deferred_declared(
+        program,
+        &everywhere,
+        (at, Some(&instance)),
+        expected,
+        place,
+        Some(diagnostics),
+        &mut QueryPass::default(),
+    )
+}
+
 fn evaluate_deferred_declared(
     program: &Program,
     everywhere: &HashMap<(FileId, u32), &Binding>,
-    expr_at: Location,
+    (expr_at, instance): (Location, Option<&[(Location, Argument)]>),
     expected: Option<&Type>,
     place: Option<&str>,
     mut sink: Option<&mut Diagnostics>,
     pass: &mut QueryPass,
 ) -> ConstantValue {
     let final_pass = sink.is_some();
+    let pending = if instance.is_some() {
+        ConstantValue::DeferredDefaultQuery(expr_at)
+    } else {
+        ConstantValue::DeferredTypeQuery(expr_at)
+    };
+    let arguments: Vec<_> = instance
+        .unwrap_or_default()
+        .iter()
+        .map(|(at, arg)| (*at, arg))
+        .collect();
     let Some((module, declaration, node)) = find_node(program, expr_at) else {
         return if final_pass {
             ConstantValue::Unknown
         } else {
-            ConstantValue::DeferredTypeQuery(expr_at)
+            pending
         };
     };
     let should_report = final_pass && pass.diagnosed.insert(expr_at);
@@ -895,8 +964,8 @@ fn evaluate_deferred_declared(
             program,
             expr_at.file,
             query,
-            &[],
-            true,
+            instance.unwrap_or_default(),
+            instance.is_none(),
             if should_report {
                 sink.as_deref_mut()
             } else {
@@ -926,7 +995,7 @@ fn evaluate_deferred_declared(
         file: expr_at.file,
         binding: &binding,
         parameter: &parameter,
-        arguments: &[],
+        arguments: &arguments,
         type_packs: &[],
         constants: &constants,
     };
@@ -937,7 +1006,7 @@ fn evaluate_deferred_declared(
             pass.resolved = true;
             value
         }
-        _ if !final_pass => ConstantValue::DeferredTypeQuery(expr_at),
+        _ if !final_pass => pending,
         Ok(_) => {
             if should_report && let (Some(sink), Some(place)) = (sink, place) {
                 sink.emit(error(

@@ -351,3 +351,19 @@ test default_selected_in_instance {
     assert type(selected) == type(DefaultLabel<str, type((true, false))>(item: "text"))
     assert type(selected) != type(DefaultLabel<str, type(1)>(item: "text"))
 }
+
+# GEN-2/8, TYPE-18: the bare type uses each preceding default when reading
+# the next cold query, in a formal, a field or a local annotation.
+struct Counted<const N: i64> { n: i64 }
+struct DefaultFrame<const N: i64 = 2, const Kind: Type = type(Counted<N>(n: 0)),
+                    const Marker: Type = type(Tagged<Kind>(value: 0))> { n: i64 }
+struct DefaultEnvelope { frame: DefaultFrame }
+const fn frame_kind(f: DefaultFrame) -> Type => type(f)
+test bare_dependent_type_defaults {
+    let exact = DefaultFrame<2, type(Counted<2>(n: 0)), type(Tagged<type(Counted<2>(n: 0))>(value: 0))>(n: 7)
+    let bare: DefaultFrame = exact
+    assert frame_kind(exact) == type(bare)
+    assert type(DefaultEnvelope(frame: exact).frame) == type(bare)
+}
+# expect-error(type, "type.mismatch")
+const fn wrong_default_frame(f: DefaultFrame<2, type(Counted<3>(n: 0)), type(true)>) -> Type => frame_kind(f)
