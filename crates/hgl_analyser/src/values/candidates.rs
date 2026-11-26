@@ -2017,11 +2017,7 @@ impl<'a> Typer<'a> {
                 &|_| false,
             )
         });
-        let member_dependencies = if uses_member {
-            self.stated_member_dependencies(&evidence_types)
-        } else {
-            Vec::new()
-        };
+        let member_dependencies = self.stated_member_dependencies(&evidence_types);
         // Ordinary memberships can constrain the call directly or through
         // the stated type or key of one of its reflected members.
         let memberships: Vec<(Location, Vec<Argument>)> = self

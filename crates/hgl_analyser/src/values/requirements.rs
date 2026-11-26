@@ -911,6 +911,14 @@ impl<'a> Typer<'a> {
     /// Positive equality and membership constrain a GEN-17 member's
     /// type. An `each` over the same pack's keys constrains every member.
     fn stated_pack_members(&self) -> Vec<StatedPackMember> {
+        if !self
+            .signature
+            .generics
+            .iter()
+            .any(|slot| matches!(slot.kind, GenericKind::Pack { .. }))
+        {
+            return Vec::new();
+        }
         let Some(condition) = child(&self.declaration.syntax, SyntaxKind::RequiresClause)
             .and_then(|clause| clause.children().next())
         else {
@@ -1007,26 +1015,29 @@ impl<'a> Typer<'a> {
     /// or key. Their memberships also constrain a call using that member
     /// (GEN-3, GEN-7, GEN-17).
     pub(super) fn stated_member_dependencies(&self, types: &[&Type]) -> Vec<Location> {
-        let used: Vec<_> = self
-            .stated_pack_members()
-            .into_iter()
+        let bounds = self.stated_pack_members();
+        if bounds.is_empty() {
+            return Vec::new();
+        }
+        let ordinary: Vec<_> = self
+            .signature
+            .generics
+            .iter()
+            .map(|slot| slot.at)
+            .filter(|at| types.iter().any(|ty| mentions(ty, &[*at])))
+            .collect();
+        let (_, keys) = self.stated_member_keys(types, &ordinary, &bounds, &|_| None);
+        let used: Vec<_> = bounds
+            .iter()
             .filter(|member| {
-                types.iter().any(|ty| {
-                    ty.any_part(
-                        &|part| {
-                            let Type::PackMember { pack, key, .. } = part else {
-                                return false;
-                            };
-                            *pack == member.pack
-                                && match &member.key {
-                                    StatedPackKey::One(stated) => {
-                                        stated.value.same(&key.value) != Some(false)
-                                    }
-                                    StatedPackKey::Every(_) => true,
-                                }
-                        },
-                        &|_| false,
-                    )
+                keys.iter().any(|(pack, key)| {
+                    *pack == member.pack
+                        && match &member.key {
+                            StatedPackKey::One(stated) => {
+                                stated.value.same(&key.value) != Some(false)
+                            }
+                            StatedPackKey::Every(_) => true,
+                        }
                 })
             })
             .collect();
@@ -1044,24 +1055,18 @@ impl<'a> Typer<'a> {
             .collect()
     }
 
-    /// The finite choices a body states for the reflected members a
-    /// call uses. Keep the key as well as the pack (GEN-3, GEN-7, GEN-17).
-    /// None means the given ordinary bindings contradict a member's bounds.
-    pub(super) fn stated_member_choices(
+    /// The keys read by this call come first. Also include keys whose stated
+    /// bounds can exclude an ordinary argument, so all parameters bounded
+    /// through that same key participate in the trial.
+    fn stated_member_keys(
         &self,
         types: &[&Type],
-        given: &[(Location, &Argument)],
-    ) -> Option<Vec<MemberChoices>> {
-        let bounds = self.stated_pack_members();
-        if bounds.is_empty() {
-            return Some(Vec::new());
-        }
-        let constant_at = |at| match given.iter().find(|(declared, _)| *declared == at)?.1 {
-            Argument::Constant(constant) => Some(constant.value.clone()),
-            Argument::Type(_) | Argument::NoResult => None,
-        };
+        ordinary: &[Location],
+        bounds: &[StatedPackMember],
+        constant_at: &impl Fn(Location) -> Option<ConstantValue>,
+    ) -> (usize, Vec<(Location, Constant)>) {
         let remember = |keys: &mut Vec<(Location, Constant)>, pack, key: &Constant| {
-            let value = key.value.substituted(&constant_at);
+            let value = key.value.substituted(constant_at);
             if !keys
                 .iter()
                 .any(|(at, known)| *at == pack && known.value.same(&value) == Some(true))
@@ -1094,19 +1099,14 @@ impl<'a> Typer<'a> {
         // A named key in the declaration can rule out an ordinary binding
         // even if the call uses just that parameter. An each alone promises
         // no key: an empty pack satisfies it as well.
-        let ordinary: Vec<_> = given.iter().map(|(at, _)| *at).collect();
-        for bound in &bounds {
-            let binds_type = bound
-                .types
-                .values()
-                .iter()
-                .any(|ty| mentions(ty, &ordinary));
+        for bound in bounds {
+            let binds_type = bound.types.values().iter().any(|ty| mentions(ty, ordinary));
             match &bound.key {
-                StatedPackKey::One(key) if binds_type || key.value.names_one_of(&ordinary) => {
+                StatedPackKey::One(key) if binds_type || key.value.names_one_of(ordinary) => {
                     remember(&mut keys, bound.pack, key);
                 }
                 StatedPackKey::Every(_) if binds_type => {
-                    for named in &bounds {
+                    for named in bounds {
                         if named.pack == bound.pack
                             && let StatedPackKey::One(key) = &named.key
                         {
@@ -1117,6 +1117,27 @@ impl<'a> Typer<'a> {
                 _ => {}
             }
         }
+        (used, keys)
+    }
+
+    /// The finite choices a body states for the reflected members a
+    /// call uses. Keep the key as well as the pack (GEN-3, GEN-7, GEN-17).
+    /// None means the given ordinary bindings contradict a member's bounds.
+    pub(super) fn stated_member_choices(
+        &self,
+        types: &[&Type],
+        given: &[(Location, &Argument)],
+    ) -> Option<Vec<MemberChoices>> {
+        let bounds = self.stated_pack_members();
+        if bounds.is_empty() {
+            return Some(Vec::new());
+        }
+        let constant_at = |at| match given.iter().find(|(declared, _)| *declared == at)?.1 {
+            Argument::Constant(constant) => Some(constant.value.clone()),
+            Argument::Type(_) | Argument::NoResult => None,
+        };
+        let ordinary: Vec<_> = given.iter().map(|(at, _)| *at).collect();
+        let (used, keys) = self.stated_member_keys(types, &ordinary, &bounds, &constant_at);
         let mut choices = Vec::new();
         for (index, (pack, key)) in keys.into_iter().enumerate() {
             let matching = bounds

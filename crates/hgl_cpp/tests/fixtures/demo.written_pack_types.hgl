@@ -238,6 +238,10 @@ const fn overlap_parameter<T, ...Ps>(f: const fn(...{Ps}) -> i64, value: T) -> T
     requires Ps[item_key] in {str, f64} && T in {f64, i64} && T == Ps[item_key]
     => float_only<T>(value)
 
+const fn shared_parameter<T, U, ...Ps>(f: const fn(...{Ps}) -> i64, value: T, other: U) -> T
+    requires T in {i64, f64} && U in {str, f64} && T == Ps[item_key] && U == Ps[item_key]
+    => float_only<T>(value)
+
 const fn narrowed_disjoint_atomic_opt_first<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, item: Ps[item_key]) -> Ps[item_key]
     requires Ps[item_key] in {atomic<T?>, str} && Ps[item_key] in {i64, str} => exact_str<Ps[item_key]>(item)
 
@@ -264,6 +268,7 @@ test each_proves_the_member_type {
     assert nested_nullable_delta(words, 2, "nested") == "nested"
     assert overlap_member(real_item, 1.5, 3.5) == 0.0
     assert overlap_parameter(real_item, 3.5) == 3.5
+    assert shared_parameter(real_item, 1.5, 3.5) == 1.5
     assert narrowed_disjoint_atomic_opt_first(words, 2, "ok") == "ok"
     assert narrowed_disjoint_atomic_opt_second(words, 2, "ok") == "ok"
 }

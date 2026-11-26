@@ -130,6 +130,57 @@ fn reflected_members_and_parameters_keep_only_their_common_types() {
     }
 }
 
+/// GEN-3 and GEN-7: two parameters equated to one member have to agree,
+/// even when only one parameter reaches the callee. Distinct keys do not.
+#[test]
+fn parameters_bounded_through_the_same_member_constrain_each_other() {
+    let declarations = concat!(
+        "const key: str = \"spot\"\n",
+        "const other: str = \"rate\"\n",
+        "const fn float<X>(x: X) -> X requires X == f64 => x\n",
+        "operator pick<X>(x: X) -> X\n",
+        "impl const fn pick(x: f64) -> f64 => x\n",
+        "const fn caller<T, U, ...Ps>(f: const fn(...{Ps}) -> i64, x: T, y: U) -> T\n",
+    );
+    for (call, rejected) in [
+        ("float<T>(x)", "constraint/requires.unmet"),
+        ("pick(x)", "operator/operator.no_candidate"),
+    ] {
+        for (condition, admitted) in [
+            (
+                "T in {i64, f64} && U in {str, f64} && T == Ps[key] && U == Ps[key]",
+                true,
+            ),
+            (
+                "Ps[key] == U && Ps[key] == T && U in {str, f64} && T in {i64, f64}",
+                true,
+            ),
+            (
+                "T in {i64, f64} && U in {i64, f64} && T == Ps[key] && Ps[key] == U",
+                false,
+            ),
+            (
+                "T in {i64, f64} && U in {str, f64} && T == Ps[key] && U == Ps[other]",
+                false,
+            ),
+        ] {
+            let checked = module(&format!(
+                "{declarations}    requires {condition} => {call}\n"
+            ));
+            if admitted {
+                assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+            } else {
+                assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+                assert_eq!(
+                    checked.findings[0].code, rejected,
+                    "{condition}\n{}",
+                    checked.report
+                );
+            }
+        }
+    }
+}
+
 /// GEN-7 and GEN-10: universal bounds alone do not require the pack to
 /// contain a key. An unrelated member cannot invalidate a proof about T.
 #[test]
