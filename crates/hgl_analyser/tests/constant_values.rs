@@ -833,6 +833,58 @@ fn integer_division_and_mixed_comparison_are_exact() {
     );
 }
 
+/// TYPE-10, TIME-2 and CTRL-13: a graph's local fixed extent cannot
+/// take a connection. Type-only queries and ordinary construction-time
+/// values retain their existing behavior.
+#[test]
+fn a_graph_locals_list_size_cannot_be_a_connection() {
+    expect(
+        concat!(
+            "fn direct(size: i64) -> i64 {\n",
+            "    var held: list<i64, size>\n",
+            "    return 0\n",
+            "}\n",
+            "fn computed(size: i64) -> i64 {\n",
+            "    let held: list<i64, size + 1> = [1, 2]\n",
+            "    return 0\n",
+            "}\n",
+            "fn nested(size: i64) -> i64 {\n",
+            "    var held: tuple<str, list<i64, size>>\n",
+            "    return 0\n",
+            "}\n",
+            "fn aliased(size: i64) -> i64 {\n",
+            "    let extent = size + 1\n",
+            "    var held: list<i64, (extent)>\n",
+            "    return 0\n",
+            "}\n",
+            "fn branched(size: i64) -> i64 {\n",
+            "    var held: list<i64, if false { size } else { 2 }>\n",
+            "    return 0\n",
+            "}\n",
+        ),
+        &[
+            "3 list.size",
+            "7 list.size",
+            "11 list.size",
+            "16 list.size",
+            "20 list.size",
+        ],
+    );
+    expect(
+        concat!(
+            "const LENGTH: i64 = 2\n",
+            "fn sized<const N: i64>(const configured: i64, input: i64) -> i64 {\n",
+            "    let fixed: list<i64, LENGTH> = [4, 5]\n",
+            "    var generic: list<i64, N>\n",
+            "    var ordinary: list<i64, configured>\n",
+            "    var typed: list<i64, if type(input) == type(0) { 2 } else { 1 }>\n",
+            "    return input + fixed[0]\n",
+            "}\n",
+        ),
+        &[],
+    );
+}
+
 /// A constant's type may name a constant, as a list's size: the one
 /// reader follows it with the constants it is following, so that one
 /// whose type names itself is `constant.cycle` and ends (UNIT-13). A

@@ -8,16 +8,72 @@
 //! of the typing pass ([`super`]).
 //!
 //! The sizes inside a generic body, a local's `list<i64, N - 3>`, are
-//! not held here: GEN-7 has a body "judged once, where it is declared
-//! ... and never again for the generic arguments a call of it gives".
+//! not rechecked here as generic applications: GEN-7 has a body "judged
+//! once, where it is declared ... and never again for the generic
+//! arguments a call of it gives". Local graph annotations are checked
+//! against the body scope as they are read.
 
 use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
+use hgl_parser::{SyntaxKind, SyntaxNode};
 
-use super::inference::mentions;
+use super::{Typer, inference::mentions};
 use crate::declared::substitute_within;
+use crate::hir::ValueCategory;
 use crate::program::Program;
-use crate::types::{Argument, Constant, ConstantValue, Detail, GenericKind, NamedKind, Type};
+use crate::read::is_type;
+use crate::types::{
+    Argument, Constant, ConstantValue, Detail, GenericKind, NamedKind, Scalar, Type,
+};
 use crate::{codes, error};
+
+impl Typer<'_> {
+    /// TYPE-10 and TIME-2: an annotation in a graph cannot take a
+    /// connection as its fixed list size. The type pass cannot classify
+    /// the expression until the body has assigned categories to locals.
+    pub(super) fn reject_connection_list_size(&mut self, annotation: &SyntaxNode) -> bool {
+        let count = Type::Scalar(Scalar::I64);
+        let mut types = vec![annotation.clone()];
+        while let Some(ty) = types.pop() {
+            types.extend(
+                ty.children().filter(|child| {
+                    is_type(child.kind()) || child.kind() == SyntaxKind::GenericArgs
+                }),
+            );
+            if ty.kind() != SyntaxKind::ListType {
+                continue;
+            }
+            let Some(size) = ty
+                .children()
+                .find(|child| !is_type(child.kind()) && child.kind() != SyntaxKind::Error)
+            else {
+                continue;
+            };
+            if !matches!(
+                self.read_constant(&size, Some(&count)),
+                Err(crate::constant::Fault::NotConstant)
+            ) {
+                continue;
+            }
+            // Query the category without leaving a runtime read in the
+            // body. The annotation itself is still read as a type.
+            let mark = self.mark();
+            let value = self.expression(&size, Some(&count));
+            let category = self.category(&value);
+            self.take_back(mark, false);
+            if category == ValueCategory::Connection {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::LIST_SIZE,
+                    self.at(&size),
+                    "a list's size is a compile-time count, and this is a connection".to_string(),
+                    "TYPE-10",
+                ));
+                return true;
+            }
+        }
+        false
+    }
+}
 
 /// How deep the fields of the structs a type applies are followed. A
 /// struct may hold another of itself with other arguments, `list<G<N +
