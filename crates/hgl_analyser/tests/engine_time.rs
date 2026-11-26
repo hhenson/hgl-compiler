@@ -100,10 +100,6 @@ const fn local() -> str => render_graph_values("{", @2026-01-01T00:00:00Z)"#,
 
     let checked =
         module(r#"const fn external() -> str => render_graph_values("{}", @2026-01-01T00:00:00Z)"#);
-    assert!(checked.rejected, "{}", checked.report);
-    assert!(
-        checked.findings.iter().any(|f| f.code == "name/name.unknown"),
-        "{}",
-        checked.report
-    );
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "name/name.unknown");
 }
