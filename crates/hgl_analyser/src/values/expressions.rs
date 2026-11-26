@@ -702,6 +702,19 @@ impl<'a> Typer<'a> {
             Type::Nullable(inner) if present => inner.as_ref().clone(),
             ty => ty.clone(),
         };
+        if let Some((_, Argument::Constant(value))) = self
+            .field_passes
+            .iter()
+            .find(|(binding, _)| *binding == self.locals[local].at)
+            && let Some(kind) = self.program.constant(&value.value, &ty, at)
+        {
+            return Expr {
+                kind,
+                ty,
+                at,
+                category: ValueCategory::Value,
+            };
+        }
         if let Some((_, value)) = self
             .const_inputs
             .iter()

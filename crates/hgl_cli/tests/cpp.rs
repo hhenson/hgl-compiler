@@ -1029,6 +1029,28 @@ fn nested_forms_run_on_the_sdk() {
     );
 }
 
+/// CTRL-12/15/16: ordinary struct fields are heterogeneous and ordered.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn ordinary_struct_fields_iterate_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("struct-iteration");
+    let file = write(
+        &root,
+        "demo.struct_iteration.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.struct_iteration.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// TIME-1: a guarded child of a fixed-list field reads its own endpoint
 /// through nested fields or positions, including a fitted struct input.
 #[test]

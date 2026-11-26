@@ -302,7 +302,18 @@ impl<'a> Typer<'a> {
                     _ => None,
                 })
         };
-        self.typed_in_scope(file, node, expected, &parameter, &[])
+        let instance = if self.field_passes.is_empty() {
+            &[][..]
+        } else {
+            self.instance.as_slice()
+        };
+        let arguments: Vec<_> = self
+            .field_passes
+            .iter()
+            .chain(instance)
+            .map(|(at, value)| (*at, value))
+            .collect();
+        self.typed_in_scope(file, node, expected, &parameter, &arguments)
     }
 
     fn typed_in_scope(

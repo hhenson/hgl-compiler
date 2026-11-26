@@ -127,7 +127,7 @@ impl<'a> Typer<'a> {
     }
 
     /// Resolve a member against a known value, retaining its implicit reads.
-    fn member_value(
+    pub(super) fn member_value(
         &mut self,
         mut base: Expr,
         name: &str,

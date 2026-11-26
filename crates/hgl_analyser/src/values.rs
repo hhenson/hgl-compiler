@@ -1027,6 +1027,8 @@ struct Typer<'a> {
     pack_functions: Vec<(usize, hir::Callee)>,
     /// Active computed-pack passes, from the outermost to the current one.
     pack_passes: Vec<(String, hir::PackKey)>,
+    /// CTRL-16 field names in the currently expanded struct loop passes.
+    field_passes: Vec<(Location, Argument)>,
     /// Packs bound by `let`. Only their individual entries reach lowering.
     bound_packs: HashMap<LocalId, forwarded_packs::BoundPack>,
     /// The generic value parameters of the declaration being read that
@@ -1216,6 +1218,7 @@ impl<'a> Typer<'a> {
             lexical_default_dependencies: false,
             pack_functions: Vec::new(),
             pack_passes: Vec::new(),
+            field_passes: Vec::new(),
             bound_packs: HashMap::new(),
             bound: Vec::new(),
             diagnostics,
