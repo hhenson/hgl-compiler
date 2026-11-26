@@ -204,6 +204,36 @@ fn a_candidate_result_honours_its_operator() {
     assert!(checked.rejected);
 }
 
+/// GEN-6: a fixed result cannot acquire a failure or a null. An independent
+/// output parameter may bind to the complete candidate result.
+#[test]
+fn candidate_results_refine_their_public_declaration() {
+    let checked = module(concat!(
+        "operator maybe(x: i64) -> i64\n",
+        "impl const fn maybe(x: i64) -> i64? => null\n",
+        "operator failed<T>(x: T) -> T\n",
+        "impl const fn failed(x: i64) -> result<i64, error> => ok(x)\n",
+        "operator present(x: i64) -> i64?\n",
+        "impl const fn present(x: i64) -> i64 => x\n",
+        "operator success<T>(x: T) -> result<T, error>\n",
+        "impl const fn success(x: i64) -> i64 => x\n",
+        "operator policy<I, O>(x: I) -> O\n",
+        "impl const fn policy(x: i64) -> result<i64, error> => ok(x)\n",
+        "operator bound<T>(x: T) -> T\n",
+        "impl const fn bound<X>(x: X) -> result<X, error> => ok(x)\n",
+        "operator required<T>(x: T) -> T\n",
+        "impl const fn required<X>(x: X) -> X? => x\n",
+    ));
+    let failures: Vec<_> = checked.findings.iter().map(|d| d.code.as_str()).collect();
+    assert_eq!(failures, ["operator/impl.result"; 4], "{}", checked.report);
+    assert!(checked.findings[0].message.contains("result `i64?`"));
+    assert!(
+        checked.findings[1]
+            .message
+            .contains("result `result<i64, error>`")
+    );
+}
+
 /// GEN-6 and GEN-10: an exact homogeneous candidate pack supplies the
 /// public tuple's element types even when it is nested in a result.
 #[test]

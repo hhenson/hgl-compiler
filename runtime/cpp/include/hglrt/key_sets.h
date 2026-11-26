@@ -1,11 +1,25 @@
-// Core's SET-1 dictionary key set in value code and temporal composition.
+// Core's SET-1 dictionary key set and MAP-5 lifecycle key joins.
 #pragma once
 
 #include <hglrt/collections.h>
 
 #include <hgraph/types/generated.h>
 
+#include <cstddef>
+#include <span>
+
 namespace hglrt {
+
+/// MAP-5: select the keys of every split input, any split input, or the first.
+enum class MapKeyJoin { Inner, Outer, Left };
+
+/// MAP-5: derive lifecycle keys from the split ports in callback parameter order.
+hgraph::WiringPortRef joined_map_keys(
+    hgraph::Wiring& wiring,
+    std::span<const hgraph::WiringPortRef> inputs,
+    std::span<const std::size_t> split,
+    MapKeyJoin join
+);
 
 namespace key_sets_detail {
 /// The membership port of a dictionary, with the full wiring front end
