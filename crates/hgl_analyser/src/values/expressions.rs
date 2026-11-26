@@ -20,7 +20,7 @@ use crate::hir::{
     ValueCategory,
 };
 use crate::program::{Binding, DeclarationKind, LocalKind};
-use crate::syntax::{child, name_token, tokens, ungrouped};
+use crate::syntax::{child, name_before_less_than, name_token, tokens, ungrouped};
 use crate::types::{Argument, ConstantValue, Detail, GenericKind, Scalar, Type};
 use crate::{codes, error};
 
@@ -532,7 +532,17 @@ impl<'a> Typer<'a> {
                 declared.kind,
                 DeclarationKind::Struct | DeclarationKind::Enum | DeclarationKind::NativeType
             ) {
-                self.reject_type_name_value(name.text(), at, declared.at);
+                // The resolver already reports the malformed generic application (GEN-14).
+                let rejected_application = declared.kind == DeclarationKind::Struct
+                    && child(&declared.syntax, SyntaxKind::GenericParams).is_some()
+                    && node
+                        .parent()
+                        .and_then(|parent| name_before_less_than(&parent))
+                        .as_ref()
+                        == Some(node);
+                if !rejected_application {
+                    self.reject_type_name_value(name.text(), at, declared.at);
+                }
                 return unread;
             }
         }
