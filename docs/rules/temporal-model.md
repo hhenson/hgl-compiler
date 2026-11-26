@@ -122,6 +122,8 @@ analyser: partial
 transpiler: partial
 
 - Publishes returns, whole `out` assignments and supported struct or tuple child writes.
+  A removal-only delta on a never-published or wholly invalidated dictionary
+  establishes a valid empty value; later ignored removals are silent (TYPE-16).
   Whole-output invalidation notifies readers of supported collections. A source
   yields whole values or deltas. A window result exposes its latest
   staged arrival to reads in the handler body, and publishes the last arrival once.
