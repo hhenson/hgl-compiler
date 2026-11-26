@@ -779,3 +779,49 @@ fn engine_time_without_a_temporal_input_declines_without_a_cycle_context() {
         assert!(!target.exists());
     }
 }
+
+/// TIME-9: the borrowed output supplies its previously published, typed
+/// payload. The first cycle can render while that output is still invalid.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn graph_formatter_borrows_its_output_and_a_child() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("format-borrows-output-child");
+    let file = write(
+        &root,
+        "borrowed.hgl",
+        r#"module core part borrowed_formatting_test
+fn render_output_history(values: list<i64, 2>) -> str {
+    inject clock, out
+    when valid(values) {
+        return _format{not_valid: "_"}("{old}|{}", clock, values[1], old: out)
+    }
+}
+test describe_previous {
+    assert eval render_output_history(values: [[0, 1], [0, 2], [0, 4]]) == ["_|1", "_|1|2", "_|1|2|4"]
+}
+"#,
+    );
+    let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/hgl_core/hgl");
+    let output = hgl_in(
+        &[
+            "test",
+            &argument(&core),
+            &file,
+            "--target",
+            "cpp",
+            "--test-path",
+            &file,
+        ],
+        &[],
+        &[],
+    );
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.contains("passed   executable  core::describe_previous"),
+        "{stdout}"
+    );
+}

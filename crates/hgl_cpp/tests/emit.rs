@@ -2439,7 +2439,7 @@ test renders { assert eval describe(value: [7]) == ["EXPECTED"] }"#
         assert_eq!(render.matches("::hglrt::fn_modified(").count(), marks);
         let valid = render.find("::hglrt::fn_valid(").expect("validity guard");
         let read = render
-            .find("::hglrt::checked_value(")
+            .find("::hglrt::checked_whole(")
             .expect("payload read");
         assert!(valid < read, "{render}");
         assert!(render.contains("const auto& format_argument"), "{render}");

@@ -153,7 +153,7 @@ impl Emitter<'_> {
                             payload.as_ref(),
                             format!("::hglrt::fn_modified({held})"),
                             format!("::hglrt::fn_valid({held})"),
-                            self.temporal_read(payload, held, at),
+                            format!("::hglrt::checked_whole({held})"),
                         )),
                         ordinary => {
                             formatting::marked_payload(self.program, ordinary).map(|payload| {
