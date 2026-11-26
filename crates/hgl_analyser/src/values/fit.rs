@@ -12,7 +12,7 @@ use hgl_parser::SyntaxKind;
 use super::Typer;
 use super::arguments::Takes;
 use super::calls::removes;
-use crate::declared::{agree, names_one_of};
+use crate::declared::{agree, agree_with_input_pattern, names_one_of};
 use crate::hir::{
     BinaryOperator, Callee, ConfigurationRead, EndpointOperation, Expr, ExprKind, UnaryOperator,
     Value, ValueCategory,
@@ -44,6 +44,23 @@ pub(super) fn checked_child_result(value: &Expr) -> Option<Expr> {
         at: value.at,
         category: value.category,
     })
+}
+
+/// TYPE-10: when an operand fits a public input pattern, keep its extents in
+/// the type the operand is fitted to. Leave other conversions to `fit`.
+pub(super) fn fitted_input_pattern(supplied: &Type, pattern: &Type) -> Option<Type> {
+    if !whole(supplied) || open(supplied) {
+        return None;
+    }
+    if agree_with_input_pattern(supplied, pattern) {
+        return Some(supplied.clone());
+    }
+    match pattern {
+        Type::Nullable(payload) if agree_with_input_pattern(supplied, payload) => {
+            Some(Type::Nullable(Box::new(supplied.clone())))
+        }
+        _ => None,
+    }
 }
 
 impl<'a> Typer<'a> {

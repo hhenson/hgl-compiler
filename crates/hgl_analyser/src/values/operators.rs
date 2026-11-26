@@ -18,7 +18,7 @@ use super::dependent_packs::{
     PackTypes, dependent_slot, operator_packs, pack_exclusions, reflects, specialize_named_pack,
 };
 use super::expressions::written_null;
-use super::fit::{is_integer_literal, negated, open, whole};
+use super::fit::{fitted_input_pattern, is_integer_literal, negated, open, whole};
 use super::forms::received_type;
 use super::function_arguments::CallbackInputs;
 use super::inference::{
@@ -27,7 +27,7 @@ use super::inference::{
 };
 use super::lifting::contextual_type_is_pending;
 use super::{Candidate, Typer};
-use crate::declared::{agree, agree_with_input_pattern, names_parameter, substitute_within};
+use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
 use crate::program::{Declaration, DeclarationKind, DependentPack, OperatorRef, Program, Role};
 use crate::syntax::{child, has_token, name_token, ungrouped};
@@ -1876,26 +1876,15 @@ impl<'a> Typer<'a> {
                     );
                 }
             } else {
-                let value = self.argument_read(argument.clone(), &ty);
-                // TYPE-10: keep extents supplied to an unsized input
-                // pattern. A full result can itself match the pattern.
-                // Try it before looking at what an ordinary read takes.
-                let fitted_pattern = |supplied: &Type| {
-                    if !whole(supplied) || open(supplied) {
-                        return None;
-                    }
-                    if agree_with_input_pattern(supplied, &ty) {
-                        return Some(supplied.clone());
-                    }
-                    match &ty {
-                        Type::Nullable(payload) if agree_with_input_pattern(supplied, payload) => {
-                            Some(Type::Nullable(Box::new(supplied.clone())))
-                        }
-                        _ => None,
-                    }
+                let value = if argument.retried {
+                    self.expression_for_input_pattern(&argument.node, &ty)
+                } else {
+                    argument.value.clone()
                 };
-                let ty = fitted_pattern(&value.ty)
-                    .or_else(|| fitted_pattern(received_type(&value.ty, |_| true)))
+                // A full result can itself match the pattern. Try it
+                // before looking at what an ordinary read takes.
+                let ty = fitted_input_pattern(&value.ty, &ty)
+                    .or_else(|| fitted_input_pattern(received_type(&value.ty, |_| true), &ty))
                     .unwrap_or(ty);
                 let place = format!("the parameter `{}`", parameter.name);
                 self.fit_input(value, &ty, &place);

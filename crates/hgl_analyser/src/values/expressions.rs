@@ -9,7 +9,8 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::control::{Outcome, ValueUse, branch_is_null, branch_takes_its_type};
 use super::fit::{
-    accepts_float, hook_payload_type, is_integer_literal, not_null, nullable, open, whole,
+    accepts_float, fitted_input_pattern, hook_payload_type, is_integer_literal, not_null, nullable,
+    open, whole,
 };
 use super::node::RefRead;
 use super::results::proof_binding;
@@ -22,6 +23,21 @@ use crate::program::{Binding, LocalKind};
 use crate::syntax::{child, name_token, tokens, ungrouped};
 use crate::types::{Argument, ConstantValue, Detail, GenericKind, Scalar, Type};
 use crate::{codes, error};
+
+#[derive(Clone, Copy)]
+pub(super) enum ExpressionFit {
+    Value,
+    InputPattern,
+}
+
+impl ExpressionFit {
+    pub(super) fn input_type(self, supplied: &Type, expected: &Type) -> Option<Type> {
+        match self {
+            Self::Value => None,
+            Self::InputPattern => fitted_input_pattern(supplied, expected),
+        }
+    }
+}
 
 impl<'a> Typer<'a> {
     // ---- Expressions ----
@@ -44,9 +60,25 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         value_use: ValueUse,
     ) -> Expr {
+        self.expression_with_fit(node, expected, value_use, ExpressionFit::Value)
+    }
+
+    /// Check a public operator input pattern through its written literal
+    /// parts. The candidate still reads the operand in its own context.
+    pub(super) fn expression_for_input_pattern(&mut self, node: &SyntaxNode, ty: &Type) -> Expr {
+        self.read_literal_part(node, ty, ExpressionFit::InputPattern)
+    }
+
+    pub(super) fn expression_with_fit(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        value_use: ValueUse,
+        fit: ExpressionFit,
+    ) -> Expr {
         self.expressing += 1;
         let reported = self.diagnostics.len();
-        let mut value = self.expression_read(node, expected, value_use);
+        let mut value = self.expression_read(node, expected, value_use, fit);
         // A call with a settled type already has a result. Only an
         // unknown type needs the callee's signature to distinguish absence.
         if value_use == ValueUse::Required
@@ -87,6 +119,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         expected: Option<&Type>,
         value_use: ValueUse,
+        fit: ExpressionFit,
     ) -> Expr {
         // TIME-9: a place that expects an endpoint is given one, and no
         // value: the argument of an `endpoint<T>` parameter.
@@ -118,7 +151,7 @@ impl<'a> Typer<'a> {
             && !written_null(node)
         {
             let lifted = Type::delta((**payload).clone());
-            return self.expression(node, Some(&lifted));
+            return self.read_literal_part(node, &lifted, fit);
         }
         let at = self.at(node);
         let (kind, ty) = match node.kind() {
@@ -133,12 +166,14 @@ impl<'a> Typer<'a> {
             SyntaxKind::NameExpr => return self.name(node),
             // "Parentheses select grouping" (EXPR-1): the expression
             // inside, where it stands.
-            SyntaxKind::ParenExpr => match node.children().next() {
-                Some(inner) => return self.expression_in_flow(&inner, expected, value_use),
-                None => (ExprKind::Unread, Type::Unknown),
-            },
-            SyntaxKind::TupleExpr => self.tuple(node, expected),
-            SyntaxKind::SequenceExpr => self.sequence(node, expected),
+            SyntaxKind::ParenExpr => {
+                if let Some(inner) = node.children().next() {
+                    return self.expression_with_fit(&inner, expected, value_use, fit);
+                }
+                (ExprKind::Unread, Type::Unknown)
+            }
+            SyntaxKind::TupleExpr => self.tuple(node, expected, fit),
+            SyntaxKind::SequenceExpr => self.sequence(node, expected, fit),
             SyntaxKind::ListComprehension => self.list_comprehension(node, expected),
             SyntaxKind::PackComprehension => {
                 self.check_pack_comprehension(node);
@@ -186,7 +221,7 @@ impl<'a> Typer<'a> {
             SyntaxKind::RunExpr if self.testing => self.eval(node),
             // A block or an `if` whose value is used.
             SyntaxKind::Block | SyntaxKind::IfExpr => {
-                let (value, outcome) = self.flow(node, expected, value_use);
+                let (value, outcome) = self.flow_with_fit(node, expected, value_use, fit);
                 // CTRL-10: "A block whose last statement is an
                 // expression has that expression's value and type; any
                 // other block has none."
@@ -821,6 +856,21 @@ impl<'a> Typer<'a> {
             })
     }
 
+    fn read_literal_part(&mut self, node: &SyntaxNode, ty: &Type, fit: ExpressionFit) -> Expr {
+        self.expression_with_fit(node, Some(ty), ValueUse::Required, fit)
+    }
+
+    fn fit_literal_part(
+        &mut self,
+        value: Expr,
+        expected: &Type,
+        place: &str,
+        fit: ExpressionFit,
+    ) -> Expr {
+        let pattern_type = fit.input_type(&value.ty, expected);
+        self.fit(value, pattern_type.as_ref().unwrap_or(expected), place)
+    }
+
     /// `[key: value, ...]` (EXPR-9): "`[a: b]` has one pair entry, not a
     /// standalone pair value ... The use site and expected type
     /// constrain element types, keys, ordering, uniqueness, and
@@ -838,6 +888,7 @@ impl<'a> Typer<'a> {
         items: &[SyntaxNode],
         expected: Option<&Type>,
         unexpected: bool,
+        fit: ExpressionFit,
     ) -> (ExprKind, Type) {
         let sides = match expected {
             Some(Type::Dict { key, value }) => Some(((**key).clone(), (**value).clone())),
@@ -866,12 +917,14 @@ impl<'a> Typer<'a> {
             .filter_map(|pair| {
                 let mut parts = pair.children();
                 let (key, value) = (parts.next()?, parts.next()?);
-                let key = self.expression(&key, Some(key_type));
-                let value = self.expression(&value, Some(value_type));
+                let key = self.read_literal_part(&key, key_type, fit);
+                let value = self.read_literal_part(&value, value_type, fit);
                 Some(if sides.is_some() {
+                    let key_place = "a dictionary's key";
+                    let value_place = "a dictionary's value";
                     (
-                        self.fit(key, key_type, "a dictionary's key"),
-                        self.fit(value, value_type, "a dictionary's value"),
+                        self.fit_literal_part(key, key_type, key_place, fit),
+                        self.fit_literal_part(value, value_type, value_place, fit),
                     )
                 } else {
                     (key, value)
@@ -894,7 +947,12 @@ impl<'a> Typer<'a> {
 
     /// `(a, b)`. An expected tuple of as many elements gives each its
     /// expected type.
-    fn tuple(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
+    fn tuple(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        fit: ExpressionFit,
+    ) -> (ExprKind, Type) {
         let items: Vec<SyntaxNode> = node.children().collect();
         // True when nothing is expected of the tuple, which is not the
         // same as what is expected not being known.
@@ -908,9 +966,9 @@ impl<'a> Typer<'a> {
             .enumerate()
             .map(|(index, item)| match expected {
                 Some(expected) => {
-                    let expected = &expected[index];
-                    let element = self.expression(item, Some(expected));
-                    self.fit(element, expected, "this element of the tuple")
+                    let ty = &expected[index];
+                    let element = self.read_literal_part(item, ty, fit);
+                    self.fit_literal_part(element, ty, "this element of the tuple", fit)
                 }
                 // Nothing is expected of the tuple, and so of its
                 // elements: `(null, 1)` gives its `null` no type.
@@ -938,7 +996,12 @@ impl<'a> Typer<'a> {
     ///
     /// Pairs and `_` are for the passes that read dictionaries and test
     /// traces.
-    fn sequence(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
+    fn sequence(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        fit: ExpressionFit,
+    ) -> (ExprKind, Type) {
         // True when nothing is expected of the sequence, which is not
         // the same as what is expected not being known.
         let unexpected = expected.is_none();
@@ -984,7 +1047,7 @@ impl<'a> Typer<'a> {
             .iter()
             .any(|item| item.kind() == SyntaxKind::SequencePair);
         if pairs || (items.is_empty() && matches!(expected, Some(Type::Dict { .. }))) {
-            return self.pairs(node, &items, expected, unexpected);
+            return self.pairs(node, &items, expected, unexpected, fit);
         }
         let element = match expected {
             Some(Type::List { element, .. }) | Some(Type::Set(element)) => Some(&**element),
@@ -994,8 +1057,8 @@ impl<'a> Typer<'a> {
             let elements: Vec<Expr> = items
                 .iter()
                 .map(|item| {
-                    let value = self.expression(item, Some(element));
-                    self.fit(value, element, "an element")
+                    let value = self.read_literal_part(item, element, fit);
+                    self.fit_literal_part(value, element, "an element", fit)
                 })
                 .collect();
             // EXPR-9: a duplicate constant member of a string set is

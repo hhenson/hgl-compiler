@@ -116,6 +116,49 @@ fn a_written_list_element_type_keeps_fixed_list_admission() {
     );
 }
 
+/// TYPE-10: written operator input patterns preserve fixed list
+/// extents inside sequence, tuple and dictionary literals. The selected
+/// candidate still checks its own extents.
+#[test]
+fn written_operator_inputs_keep_extents_inside_literals() {
+    let checked = module(concat!(
+        "operator list_take<T>(items: list<list<T>>) -> i64\n",
+        "impl const fn list_take(items: list<list<i64, 2>, 2>) -> i64 => 1\n",
+        "operator tuple_take<T>(item: tuple<list<T>, bool>) -> i64\n",
+        "impl const fn tuple_take(item: tuple<list<i64, 2>, bool>) -> i64 => 2\n",
+        "operator dict_take<T>(items: dict<str, list<T>>) -> i64\n",
+        "impl const fn dict_take(items: dict<str, list<i64, 2>>) -> i64 => 3\n",
+        "operator sized<T, const N: i64>(item: tuple<list<T, N>, bool>) -> i64\n",
+        "impl const fn sized(item: tuple<list<i64, 2>, bool>) -> i64 => 4\n",
+        "const fn good(row: list<i64, 2>) {\n",
+        "    let a = list_take<i64>([row, row])\n",
+        "    let b = list_take([row, row])\n",
+        "    let c = tuple_take<i64>((row, true))\n",
+        "    let d = tuple_take((row, true))\n",
+        "    let e = dict_take<i64>([\"row\": row])\n",
+        "    let f = dict_take([\"row\": row])\n",
+        "    let g = sized<i64, 2>((row, true))\n",
+        "    let h = list_take<i64>([[13, 29], [13, 29]])\n",
+        "    let i = list_take<i64>({ [row, row] })\n",
+        "    let j = list_take<i64>([{ row }, { row }])\n",
+        "    let k = tuple_take<i64>(if true { (row, true) } else { (row, false) })\n",
+        "}\n",
+        "const fn wrong_item(row: list<str, 2>) -> i64 => dict_take<i64>([\"row\": row])\n",
+        "const fn wrong_size(row: list<i64, 3>) -> i64 => sized<i64, 2>((row, true))\n",
+        "const fn wrong_candidate_size(row: list<i64, 3>) -> i64 => tuple_take<i64>((row, true))\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:23:73 type/type.mismatch EXPR-5",
+            "m.hgl:24:65 type/type.mismatch EXPR-5",
+            "m.hgl:25:60 operator/operator.no_candidate GEN-5",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 /// The message of each finding, in order.
 fn messages(checked: &Checked) -> Vec<&str> {
     checked
