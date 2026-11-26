@@ -29,7 +29,7 @@ use super::{Candidate, Typer};
 use crate::declared::{agree, names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
 use crate::program::{Declaration, DeclarationKind, DependentPack, OperatorRef, Program, Role};
-use crate::syntax::{has_token, name_token, ungrouped};
+use crate::syntax::{child, has_token, name_token, ungrouped};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, NamedKind, Pack, Scalar,
     Signature, Type,
@@ -1365,20 +1365,38 @@ impl<'a> Typer<'a> {
             .collect()
     }
 
-    /// GEN-3 and FN-17: only a bare operator or generic function can take
-    /// unresolved types from the enclosing declaration's membership.
+    /// GEN-3 and FN-17: the enclosing declaration's memberships can
+    /// complete an operator or a bare generic function.
     fn uses_callback_evidence(&self, node: &SyntaxNode) -> bool {
         let node = ungrouped(node.clone());
-        if node.kind() != SyntaxKind::NameExpr || self.local_of(&node).is_some() {
+        if !matches!(
+            node.kind(),
+            SyntaxKind::NameExpr | SyntaxKind::FunctionReference
+        ) || self.local_of(&node).is_some()
+        {
             return false;
         }
-        name_token(&node)
-            .and_then(|name| self.declarations(&name))
+        let Some(name) = name_token(&node) else {
+            return false;
+        };
+        let bare = node.kind() == SyntaxKind::NameExpr;
+        let written = if bare {
+            0
+        } else {
+            let start = child(&node, SyntaxKind::QualifiedName)
+                .map_or(name.span().start, |qualified| qualified.span().start);
+            self.calls
+                .get(&(self.file, start))
+                .map_or(0, |call| call.arguments.len())
+        };
+        self.declarations(&name)
             .is_some_and(|(module, declarations)| {
                 let unit = &self.program.modules[module];
                 declarations.iter().any(|&index| {
-                    unit.declarations[index].kind == DeclarationKind::Operator
-                        || matches!(&unit.details[index], Detail::Callable(signature) if !signature.generics.is_empty())
+                    let operator = unit.declarations[index].kind == DeclarationKind::Operator;
+                    (bare && operator)
+                        || matches!(&unit.details[index], Detail::Callable(signature)
+                        if (operator || bare) && signature.generics.len() > written)
                 })
             })
     }

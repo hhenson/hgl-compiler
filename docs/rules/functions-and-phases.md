@@ -257,7 +257,7 @@ analyser: partial
 - Applies the proposed plain-parameter restriction to fixed inputs of plain functions and operator candidates, including where only the candidate gives a named callback its template. Keeps the remaining callback slots in declared order with their modes, defaults and pack shape.
 - A reflected operator callback selects from the resolved parameter types, including the dependent arguments. With no resolved parameter type, it reports `generic.unresolved` even for a lone candidate (FN-17).
 - A bare operator or generic function takes its reflected input evidence from positive memberships and equalities of the enclosing declaration (GEN-3). Those readings must agree with the known types of the call and the callback's signature, including a candidate's signature for an operator. Ordinary forwarding supplies the actual argument types.
-- A written operator reference supplies its resolved fixed input types to candidate selection. The enclosing dependent call keeps the actual argument types, including split inputs given to `map` (MAP-2).
+- A written operator reference binds its supplied generic arguments first. For a reflected input that is still open, the enclosing dependent call's compatible alternatives can complete the type before the operator's candidates are ranked (GEN-3, GEN-5). The enclosing call keeps its actual argument types, including split inputs given to `map` (MAP-2).
 - A reflected anonymous parameter beyond the fixed template needs a written type. Arguments of a homogeneous callback pack can determine its generic element type.
 - A call through a function parameter gives arguments by position or by a name written in its template (FN-17).
 

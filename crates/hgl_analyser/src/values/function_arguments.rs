@@ -6,7 +6,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::arguments::{Slot, Takes};
 use super::callback_evidence::{CallbackEvidence, MemberReading, ReadingFailure, select_readings};
 use super::candidates::{
-    CallbackOption, CallbackOptionSource, CallbackRequest, Given, Key, Wanted, in_instance,
+    CallbackOption, CallbackOptionSource, CallbackRequest, Chosen, Given, Key, Wanted, in_instance,
 };
 use super::constants::generic_default;
 use super::dependent_packs::PackTypes;
@@ -337,14 +337,15 @@ impl<'a> Typer<'a> {
                 template.result = Some(result.clone());
                 template
             });
+        let bindings = self.reference_bindings(node, name, signature)?;
         let ReferenceArguments {
             generics,
             type_packs,
             ..
         } = self.reference_arguments(
-            node,
-            name,
+            (node, name),
             (declared, signature),
+            &bindings,
             (
                 constrained.as_ref().unwrap_or(template),
                 given.as_ref().map(|read| read.given.as_slice()),
@@ -450,6 +451,28 @@ impl<'a> Typer<'a> {
                 })
                 .collect()
         });
+        let bindings = if node.kind() == SyntaxKind::FunctionReference {
+            Some(self.reference_bindings(node, name, public)?)
+        } else {
+            None
+        };
+        let written_shape = bindings
+            .as_ref()
+            .filter(|_| reflected && inputs.evidence.is_some())
+            .and_then(|bindings| {
+                let shape = ReferenceShape::with_bindings(
+                    public,
+                    template,
+                    bindings.explicit.fixed.clone(),
+                );
+                public
+                    .parameters
+                    .iter()
+                    .any(|parameter| {
+                        !parameter.configuration && mentions(&parameter.ty, &shape.unresolved)
+                    })
+                    .then_some((name, bindings, shape))
+            });
         let ReflectedArguments {
             mut given,
             result_shapes: reflected_results,
@@ -461,7 +484,13 @@ impl<'a> Typer<'a> {
                 template,
                 node,
                 inputs,
-                ReflectedTarget::Operator(operator, &candidates),
+                ReflectedTarget::Operator {
+                    operator,
+                    candidates: &candidates,
+                    written: written_shape
+                        .as_ref()
+                        .map(|&(name, bindings, ref shape)| (name, bindings, shape)),
+                },
             )
             .ok()?
         } else {
@@ -487,8 +516,8 @@ impl<'a> Typer<'a> {
         }
         // With written generics the operator can also complete a template
         // still open after the enclosing call's other arguments were read.
-        let explicit = if node.kind() == SyntaxKind::FunctionReference {
-            Some(self.operator_reference(node, name, operator, (template, &given))?)
+        let explicit = if let Some(bindings) = &bindings {
+            Some(self.operator_reference((node, name), (operator, bindings), (template, &given))?)
         } else {
             // FN-17: the inputs can select the callback and thereby
             // determine a result type the receiving template leaves open.
@@ -501,97 +530,23 @@ impl<'a> Typer<'a> {
             }
             None
         };
-        let request = explicit
-            .as_ref()
-            .map_or(template, |operator| &operator.signature);
         if !reflected {
+            let request = explicit
+                .as_ref()
+                .map_or(template, |operator| &operator.signature);
             given.extend(
                 request
                     .ordinary_parameters()
                     .enumerate()
                     .map(|(index, input)| callback_operand(index, node, at, input.ty().clone())),
             );
-        } else if explicit.is_some() {
-            // FN-17: use the reference's known fixed input types to
-            // select the callback. The dependent call binds its own
-            // argument types separately (MAP-2 gives a list to a
-            // scalar callback input).
-            for argument in &mut given {
-                if let Some(index) = argument.key.public_parameter(public) {
-                    let input = request.parameters[index].ty();
-                    if !input.any_part(&open, &|_| false) {
-                        argument.value.ty = input.clone();
-                    }
-                }
-            }
         }
-        let mut requested_values = Vec::new();
-        if let Some(explicit) = &explicit
-            && let Detail::Callable(public) =
-                &self.program.modules[operator.module].details[operator.declaration]
-        {
-            let declared =
-                &self.program.modules[operator.module].declarations[operator.declaration];
-            let written = self.reference_written(node, name);
-            let map: Vec<_> = public
-                .generics
-                .iter()
-                .map(|parameter| parameter.at)
-                .zip(&explicit.generics)
-                .collect();
-            for (index, (parameter, argument)) in
-                public.generics.iter().zip(&explicit.generics).enumerate()
-            {
-                let (GenericKind::Value(ty), Argument::Constant(value)) =
-                    (&parameter.kind, argument)
-                else {
-                    continue;
-                };
-                let source = if let Some(node) = written
-                    .and_then(|arguments| arguments.arguments.get(index))
-                    .and_then(|(at, _)| self.node_at(*at))
-                {
-                    CallbackOptionSource::Written(node)
-                } else if explicit.defaulted.contains(&index)
-                    && let Some(node) = generic_default(&declared.syntax, parameter)
-                {
-                    CallbackOptionSource::Default {
-                        file: declared.at.file,
-                        node,
-                        generics: &public.generics,
-                        arguments: &explicit.generics,
-                    }
-                } else {
-                    CallbackOptionSource::Resolved
-                };
-                requested_values.push(CallbackOption {
-                    name: &parameter.name,
-                    value,
-                    ty: substitute_within(ty, &map),
-                    source,
-                });
-            }
-        }
-        let result_shapes: Vec<_> = inputs
-            .known_result_shapes(node, template)
-            .chain(&reflected_results)
-            .collect();
-        let wanted = Wanted {
-            place: inputs.requested_result(node, request, &result_shapes),
-            among: explicit
-                .as_ref()
-                .and_then(|operator| operator.among.clone()),
-            written: explicit.is_some(),
-            callback: (explicit.is_some() || reflected).then_some(CallbackRequest {
-                reference: request.reference,
-                values: &requested_values,
-                reflected: reflected.then_some(inputs.excluded),
-                result_shapes: &result_shapes,
-            }),
-        };
-        let (mut matches, unknown) = self.with_callback_role(template, |typer, role| {
-            typer.admitted_for_callback(operator, &candidates, &given, &wanted, role)
-        });
+        let (mut matches, unknown) = self.operator_callback_matches(
+            node,
+            (operator, public, &candidates),
+            (template, inputs, &reflected_results),
+            (explicit.as_ref(), &mut given),
+        );
         if !unknown
             && matches.len() == 1
             && let Some(chosen) = matches.pop()
@@ -682,6 +637,95 @@ impl<'a> Typer<'a> {
         None
     }
 
+    /// Check a callback against the same operator contract in a trial and
+    /// in its final selection. Written options and types still bind first.
+    fn operator_callback_matches(
+        &mut self,
+        node: &SyntaxNode,
+        (operator, public, candidates): (OperatorRef, &Signature, &[Candidate<'a>]),
+        (template, inputs, reflected_results): (&FunctionType, &CallbackInputs<'_>, &[Type]),
+        (explicit, given): (Option<&OperatorReference<'a>>, &mut [Given]),
+    ) -> (Vec<Chosen<'a>>, bool) {
+        let reflected = template.named_pack.is_some();
+        let request = explicit.map_or(template, |operator| &operator.signature);
+        if reflected && explicit.is_some() {
+            // FN-17: use the reference's known fixed input types to
+            // select the callback. The dependent call binds its own
+            // argument types separately (MAP-2 gives a list to a
+            // scalar callback input).
+            for argument in given.iter_mut() {
+                if let Some(index) = argument.key.public_parameter(public) {
+                    let input = request.parameters[index].ty();
+                    if !input.any_part(&open, &|_| false) {
+                        argument.value.ty = input.clone();
+                    }
+                }
+            }
+        }
+        let mut requested_values = Vec::new();
+        if let Some(explicit) = explicit {
+            let declared =
+                &self.program.modules[operator.module].declarations[operator.declaration];
+            let map: Vec<_> = public
+                .generics
+                .iter()
+                .map(|parameter| parameter.at)
+                .zip(&explicit.generics)
+                .collect();
+            for (index, (parameter, argument)) in
+                public.generics.iter().zip(&explicit.generics).enumerate()
+            {
+                let (GenericKind::Value(ty), Argument::Constant(value)) =
+                    (&parameter.kind, argument)
+                else {
+                    continue;
+                };
+                let source = if let Some(node) = explicit
+                    .written
+                    .and_then(|arguments| arguments.arguments.get(index))
+                    .and_then(|(at, _)| self.node_at(*at))
+                {
+                    CallbackOptionSource::Written(node)
+                } else if explicit.defaulted.contains(&index)
+                    && let Some(node) = generic_default(&declared.syntax, parameter)
+                {
+                    CallbackOptionSource::Default {
+                        file: declared.at.file,
+                        node,
+                        generics: &public.generics,
+                        arguments: &explicit.generics,
+                    }
+                } else {
+                    CallbackOptionSource::Resolved
+                };
+                requested_values.push(CallbackOption {
+                    name: &parameter.name,
+                    value,
+                    ty: substitute_within(ty, &map),
+                    source,
+                });
+            }
+        }
+        let result_shapes: Vec<_> = inputs
+            .known_result_shapes(node, template)
+            .chain(reflected_results)
+            .collect();
+        let wanted = Wanted {
+            place: inputs.requested_result(node, request, &result_shapes),
+            among: explicit.and_then(|operator| operator.among.clone()),
+            written: explicit.is_some(),
+            callback: (explicit.is_some() || reflected).then_some(CallbackRequest {
+                reference: request.reference,
+                values: &requested_values,
+                reflected: reflected.then_some(inputs.excluded),
+                result_shapes: &result_shapes,
+            }),
+        };
+        self.with_callback_role(template, |typer, role| {
+            typer.admitted_for_callback(operator, candidates, given, &wanted, role)
+        })
+    }
+
     /// Use the receiving template's phase for both a trial and its final reading.
     fn with_callback_role<T>(
         &mut self,
@@ -705,11 +749,10 @@ impl<'a> Typer<'a> {
     /// from its written arguments and its receiving template (FN-17).
     fn operator_reference(
         &mut self,
-        node: &SyntaxNode,
-        name: &SyntaxToken,
-        operator: OperatorRef,
+        (node, name): (&SyntaxNode, &SyntaxToken),
+        (operator, bindings): (OperatorRef, &ReferenceBindings<'a>),
         (template, given): (&FunctionType, &[Given]),
-    ) -> Option<OperatorReference> {
+    ) -> Option<OperatorReference<'a>> {
         let module = &self.program.modules[operator.module];
         let Detail::Callable(public) = &module.details[operator.declaration] else {
             return None;
@@ -735,9 +778,9 @@ impl<'a> Typer<'a> {
             defaulted,
             ..
         } = self.reference_arguments(
-            node,
-            name,
+            (node, name),
             (&module.declarations[operator.declaration], public),
+            bindings,
             (template, Some(given)),
         )?;
         if generics
@@ -760,6 +803,7 @@ impl<'a> Typer<'a> {
         }
         let among = self.result_among(operator, public, &map, &own);
         Some(OperatorReference {
+            written: bindings.written,
             signature,
             generics,
             defaulted,
@@ -767,24 +811,28 @@ impl<'a> Typer<'a> {
         })
     }
 
+    /// Read written generic arguments once, before any dependent readings.
+    fn reference_bindings(
+        &mut self,
+        node: &SyntaxNode,
+        name: &SyntaxToken,
+        signature: &Signature,
+    ) -> Option<ReferenceBindings<'a>> {
+        let written = self.reference_written(node, name);
+        let explicit = self.explicit_generics(name, signature, written)?;
+        (!explicit.faulty).then_some(ReferenceBindings { written, explicit })
+    }
+
     /// Resolve the generic arguments shared by function and operator
     /// references, with any written arguments taking precedence (FN-17).
     fn reference_arguments(
         &mut self,
-        node: &SyntaxNode,
-        name: &SyntaxToken,
+        (node, name): (&SyntaxNode, &SyntaxToken),
         (declared, signature): (&Declaration, &Signature),
+        bindings: &ReferenceBindings<'a>,
         (template, given): (&FunctionType, Option<&[Given]>),
     ) -> Option<ReferenceArguments> {
-        let written = self.reference_written(node, name);
-        let ExplicitGenerics {
-            fixed: mut found,
-            faulty,
-            pack,
-        } = self.explicit_generics(name, signature, written)?;
-        if faulty {
-            return None;
-        }
+        let mut found = bindings.explicit.fixed.clone();
         infer_reference_template(signature, template, &mut found);
         for given in given.unwrap_or_default() {
             if let Some(index) = callback_parameter(signature, &given.key) {
@@ -806,7 +854,8 @@ impl<'a> Typer<'a> {
         // GEN-13: fit dependent public options once their type arguments
         // are resolved. An option the read pass already rejected needs
         // no further diagnostic (ERR-9).
-        let public_options: Vec<_> = written
+        let public_options: Vec<_> = bindings
+            .written
             .filter(|_| declared.kind == crate::program::DeclarationKind::Operator)
             .into_iter()
             .flat_map(|written| {
@@ -838,7 +887,7 @@ impl<'a> Typer<'a> {
         if self.diagnostics.len() != reported {
             return None;
         }
-        let mut type_packs: Vec<_> = pack.into_iter().collect();
+        let mut type_packs: Vec<_> = bindings.explicit.pack.iter().cloned().collect();
         for captured in super::inference::tuple_pack_bindings(
             &signature.generics,
             &mut found,
@@ -1475,11 +1524,18 @@ impl<'a> Typer<'a> {
 }
 
 /// The public operator signature and its resolved generic arguments (FN-17).
-struct OperatorReference {
+struct OperatorReference<'a> {
+    written: Option<&'a CallArguments>,
     signature: FunctionType,
     generics: Vec<Argument>,
     defaulted: Vec<usize>,
     among: Option<Vec<Type>>,
+}
+
+/// The source and raw arguments shared across trials of a reference.
+struct ReferenceBindings<'a> {
+    written: Option<&'a CallArguments>,
+    explicit: ExplicitGenerics,
 }
 
 /// Generic arguments from a function reference before candidate selection (FN-17).
@@ -1573,7 +1629,14 @@ struct ReferenceShape {
 
 impl ReferenceShape {
     fn new(signature: &Signature, template: &FunctionType) -> Self {
-        let mut found = vec![None; signature.generics.len()];
+        Self::with_bindings(signature, template, vec![None; signature.generics.len()])
+    }
+
+    fn with_bindings(
+        signature: &Signature,
+        template: &FunctionType,
+        mut found: Vec<Option<Argument>>,
+    ) -> Self {
         infer_reference_template(signature, template, &mut found);
         let unresolved = signature
             .generics
@@ -1627,7 +1690,15 @@ impl ReferenceShape {
 #[derive(Clone, Copy)]
 enum ReflectedTarget<'a, 's> {
     Declared(Option<&'s ReferenceShape>),
-    Operator(OperatorRef, &'s [Candidate<'a>]),
+    Operator {
+        operator: OperatorRef,
+        candidates: &'s [Candidate<'a>],
+        written: Option<(
+            &'s SyntaxToken,
+            &'s ReferenceBindings<'a>,
+            &'s ReferenceShape,
+        )>,
+    },
 }
 
 /// The argument and result evidence from one complete reflected reading.
@@ -1646,16 +1717,18 @@ fn reflected_arguments<'a>(
     inputs: &CallbackInputs<'_>,
     target: ReflectedTarget<'a, '_>,
 ) -> Result<ReflectedArguments, ()> {
+    let (declared_shape, written_shape) = match target {
+        ReflectedTarget::Declared(shape) => (shape, None),
+        ReflectedTarget::Operator { written, .. } => (None, written.map(|(_, _, shape)| shape)),
+    };
     let evidence = inputs
         .evidence
-        .filter(|_| node.kind() == SyntaxKind::NameExpr);
-    let declared_shape = match target {
-        ReflectedTarget::Declared(shape) => shape,
-        ReflectedTarget::Operator(..) => None,
-    };
-    let operator_shape = (matches!(target, ReflectedTarget::Operator(..)) && evidence.is_some())
-        .then(|| ReferenceShape::new(public, template));
-    let shape = declared_shape.or(operator_shape.as_ref());
+        .filter(|_| node.kind() == SyntaxKind::NameExpr || written_shape.is_some());
+    let bare_shape = (node.kind() == SyntaxKind::NameExpr
+        && matches!(target, ReflectedTarget::Operator { .. })
+        && evidence.is_some())
+    .then(|| ReferenceShape::new(public, template));
+    let shape = declared_shape.or(written_shape).or(bare_shape.as_ref());
     let fixed = public.positional_parameters().count();
     let mut remaining = public
         .positional_parameters()
@@ -1712,7 +1785,7 @@ fn reflected_arguments<'a>(
                     .map(FunctionParameter::ty)
                     .filter(|ty| whole(ty))
             });
-            // FN-17: a bare operator already declares a whole input
+            // FN-17: an operator already declares a whole input
             // when its public parameter has the actual argument type.
             let fixed_type = fixed_type.or_else(|| {
                 let ty = &public.parameters[slot?].ty;
@@ -1750,11 +1823,15 @@ fn reflected_arguments<'a>(
         })
         .collect();
     let operator_trial = match target {
-        ReflectedTarget::Operator(operator, candidates)
-            if choices.iter().any(|choices| choices.len() > 1) =>
-        {
-            Some((operator, candidates))
-        }
+        ReflectedTarget::Operator {
+            operator,
+            candidates,
+            written,
+        } if choices.iter().any(|choices| choices.len() > 1) => Some((
+            operator,
+            candidates,
+            written.map(|(name, bindings, _)| (name, bindings)),
+        )),
         _ => None,
     };
     let at = typer.at(node);
@@ -1783,7 +1860,8 @@ fn reflected_arguments<'a>(
             {
                 return false;
             }
-            let Some((operator, candidates)) = operator_trial.filter(|_| check_operator) else {
+            let Some((operator, candidates, written)) = operator_trial.filter(|_| check_operator)
+            else {
                 return true;
             };
             if !typer.may_reread() {
@@ -1802,6 +1880,21 @@ fn reflected_arguments<'a>(
                     .iter()
                     .map(|reading| reading.and_then(|reading| reading.ty.as_ref())),
             );
+            let mark = typer.mark();
+            if let Some((name, bindings)) = written {
+                let possible = typer
+                    .operator_reference((node, name), (operator, bindings), (template, &given))
+                    .is_some_and(|reference| {
+                        let (matches, unknown) = typer.operator_callback_matches(
+                            node,
+                            (operator, public, candidates),
+                            (template, inputs, &trial_shapes),
+                            (Some(&reference), &mut given),
+                        );
+                        unknown || !matches.is_empty()
+                    });
+                return typer.take_back(mark, false) && possible;
+            }
             let wanted = Wanted {
                 place: inputs.requested_result(node, template, &shapes),
                 among: None,
@@ -1813,7 +1906,6 @@ fn reflected_arguments<'a>(
                     result_shapes: &shapes,
                 }),
             };
-            let mark = typer.mark();
             let possible = typer.with_callback_role(template, |typer, role| {
                 let (admitted, unknown) =
                     typer.admitted_for_callback(operator, candidates, &given, &wanted, role);
@@ -1844,11 +1936,16 @@ fn reflected_arguments<'a>(
         result => result,
     }
     .map_err(|_| {
+        let reference = if node.kind() == SyntaxKind::NameExpr {
+            "the bare function"
+        } else {
+            "the function reference"
+        };
         typer.diagnostics.emit(error(
             Category::Type,
             codes::GENERIC_UNRESOLVED,
             typer.at(node),
-            "these arguments do not determine a unique type for the bare function".to_string(),
+            format!("these arguments do not determine a unique type for {reference}"),
             "GEN-3",
         ));
     })?;

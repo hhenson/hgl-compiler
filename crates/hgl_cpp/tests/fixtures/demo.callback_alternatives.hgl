@@ -79,3 +79,49 @@ test map_requires_a_shared_key_only_for_split_arguments {
     assert eval reversed_keys(x: [["a": 1.0, "b": 2.0]], y: [[10: 3.0]]) ==
         [["a": 7, "b": 7]]
 }
+
+operator typed<O, T>(value: T) -> O
+impl const fn typed(value: i64?) -> i64 => 500
+impl const fn typed(value: f64) -> i64 => 1000
+impl const fn typed(value: i64) -> i64 => value + 1
+
+abstract struct Shape { id: i64 }
+struct Round: Shape { radius: f64 }
+operator round_value<O, T>(value: T) -> O
+impl const fn round_value(value: Shape) -> i64 => 70
+impl const fn round_value(value: Round) -> i64 => value.id
+
+fn mapped_typed(items: list<i64, 2>) -> list<i64, 2> => map(typed<i64>, value: items)
+fn mapped_structs(items: list<Round, 2>) -> list<i64, 2> => map(round_value<i64>, items)
+
+test written_operator_arguments_keep_exact_member_ranking {
+    assert eval mapped_typed(items: [[3, 4]]) == [[4, 5]]
+    assert eval mapped_structs(items: [[Round(id: 3, radius: 1.0), Round(id: 4, radius: 2.0)]]) ==
+        [[3, 4]]
+}
+
+operator with_result<O, L, R>(left: L, right: R) -> O
+impl const fn with_result(left: bool, right: i64) -> i64 => right
+impl const fn with_result(left: bool, right: list<i64, 2>) -> list<i64, 2> => right
+
+fn written_members(flags: list<bool, 2>, xs: list<i64, 2>) -> list<i64, 2> =>
+    map(with_result<i64>, flags, xs)
+fn written_whole(flags: list<bool, 2>, xs: list<i64, 2>) -> list<list<i64, 2>, 2> =>
+    map(with_result<list<i64, 2>>, flags, xs)
+fn written_whole_user(flags: list<bool, 2>, xs: list<i64, 2>) -> tuple<list<i64, 2>, bool> =>
+    choose_arguments(with_result<list<i64, 2>>, flags, xs)
+fn fixed_whole(flags: list<bool, 2>, xs: list<i64, 2>) -> list<list<i64, 2>, 2> =>
+    map(with_result<list<i64, 2>, bool, list<i64, 2>>, flags, xs)
+
+const fn forward<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> R =>
+    f(...args)
+
+test written_operator_arguments_constrain_the_complete_reading {
+    assert eval written_members(flags: [[true, false]], xs: [[3, 4]]) == [[3, 4]]
+    assert eval written_whole(flags: [[true, false]], xs: [[3, 4]]) ==
+        [[[3, 4], [3, 4]]]
+    assert eval written_whole_user(flags: [[true, false]], xs: [[3, 4]]) == [([3, 4], true)]
+    assert eval fixed_whole(flags: [[true, false]], xs: [[3, 4]]) == [[[3, 4], [3, 4]]]
+    let xs: list<i64, 2> = [3, 4]
+    assert forward(with_result<list<i64, 2>>, true, xs) == xs
+}
