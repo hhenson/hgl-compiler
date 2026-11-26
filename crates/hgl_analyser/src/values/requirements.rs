@@ -1204,17 +1204,19 @@ impl<'a> Typer<'a> {
                 | Type::Atomic(_)
                 | Type::RollingWindow { .. }
                 | Type::Tuple(_) => true,
-                Type::Nullable(inner) => matches!(
-                    **inner,
+                Type::Nullable(inner) => match inner.as_ref() {
+                    // TYPE-16: a delta with its own identity is an ordinary
+                    // value. Its nullable's delta keeps that identity too.
+                    Type::Delta(payload) => delta_may_normalize(payload),
                     Type::Unknown
-                        | Type::Parameter { .. }
-                        | Type::PackMember { .. }
-                        | Type::RollingWindow { .. }
-                        | Type::Atomic(_)
-                        | Type::Signal
-                        | Type::Delta(_)
-                        | Type::Nullable(_)
-                ),
+                    | Type::Parameter { .. }
+                    | Type::PackMember { .. }
+                    | Type::RollingWindow { .. }
+                    | Type::Atomic(_)
+                    | Type::Signal
+                    | Type::Nullable(_) => true,
+                    _ => false,
+                },
                 _ => false,
             }
         }

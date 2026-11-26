@@ -4410,6 +4410,32 @@ fn function_arguments_select_static_targets() {
     );
 }
 
+/// FN-8/17/19: the written callback is checked in its slot; pack bounds
+/// and candidate admission use the entries supplied by the making call.
+#[test]
+fn a_deferred_operator_spread_uses_the_concrete_pack() {
+    let declarations = concat!(
+        "const fn inc(x: i64) -> i64 => x + 1\n",
+        "operator apply<...Ps{1}>(cb: const fn(i64) -> i64, values: ...Ps) -> i64\n",
+        "impl const fn apply<...Ps{1}>(cb: const fn(i64) -> i64, values: ...Ps) -> i64 => cb(1)\n",
+        "const fn relay<...Xs>(cb: const fn(i64) -> i64, xs: ...Xs) -> i64 =>\n",
+        "    apply(cb, ...{for k in arg_keys(Xs): xs[k]})\n",
+    );
+    let valid = module(&format!(
+        "{declarations}test one {{ assert relay(inc, 1) == 2 }}"
+    ));
+    assert!(valid.findings.is_empty(), "{}", valid.report);
+    let invalid = module(&format!(
+        "{declarations}test none {{ let value = relay(inc) }}"
+    ));
+    assert_eq!(invalid.findings.len(), 1, "{}", invalid.report);
+    assert_eq!(
+        invalid.findings[0].code, "type/pack.cardinality",
+        "{}",
+        invalid.report
+    );
+}
+
 /// FN-19: an ordinary function reads its written arguments against the
 /// declared slots before the computed spread supplies its entries.
 #[test]

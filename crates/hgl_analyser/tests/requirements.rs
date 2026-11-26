@@ -389,6 +389,7 @@ fn reflected_member_intersection_keeps_normalizing_open_types() {
         "const fn sig_list(size: list<i64>) -> i64 => 1\n",
         "const fn sig_pair(size: list<i64, 2>) -> i64 => 1\n",
         "const fn sig_opt(size: i64?) -> i64 => 1\n",
+        "const fn sig_delta(size: delta<delta<list<i64>>?>) -> i64 => 1\n",
         "const fn sig_tuple(size: tuple<i64, str>) -> i64 => 1\n",
     );
     let decl = concat!(
@@ -403,7 +404,21 @@ fn reflected_member_intersection_keeps_normalizing_open_types() {
     // Unsound narrowing regressions: both conjunction orders must reject at
     // declaration AND with a concrete invocation where the open type
     // normalizes into the concrete set (for both callee requires and operators).
+    let nested_delta_call =
+        "test actual { let v = demonstration(sig_delta, 2, delta<delta<list<i64>>?>()) }\n";
+    let nested_delta_op =
+        "test actual { let v = op_demo(sig_delta, 2, delta<delta<list<i64>>?>()) }\n";
     let rejecting_with_calls = [
+        (
+            "P[k] in {delta<delta<list<T>>?>, str} && P[k] in {delta<delta<list<i64>>?>, str}",
+            nested_delta_call,
+            nested_delta_op,
+        ),
+        (
+            "P[k] in {delta<delta<list<i64>>?>, str} && P[k] in {delta<delta<list<T>>?>, str}",
+            nested_delta_call,
+            nested_delta_op,
+        ),
         (
             "P[k] in {delta<T>, str} && P[k] in {i64, str}",
             "test actual { assert demonstration(sig_i64, 2, 3) == 3 }\n",
@@ -688,6 +703,8 @@ fn reflected_member_intersection_keeps_normalizing_open_types() {
     for condition in [
         "P[k] in {list<delta<T>>, str} && P[k] in {i64, str}",
         "P[k] in {i64, str} && P[k] in {list<delta<T>>, str}",
+        "P[k] in {list<T>, str} && P[k] in {delta<delta<list<i64>>?>, str}",
+        "P[k] in {delta<delta<list<i64>>?>, str} && P[k] in {list<T>, str}",
         "P[k] in {list<atomic<T>>, str} && P[k] in {i64, str}",
         "P[k] in {i64, str} && P[k] in {list<atomic<T>>, str}",
         "P[k] in {delta<list<T>>, str} && P[k] in {i64, str}",
