@@ -1732,6 +1732,7 @@ struct Stamp<const K: Type> { n: i64 }
 operator read<A, R>(value: A) -> R
 impl const fn read<A>(value: A) -> i64 => 1
 impl const fn read(value: Tag<7>) -> bool => true
+const fn fixed<A>(value: A) -> i64 => 1
 const REQUIRED: Type = type(Stamp<type(true)>(n: 0))
 struct Only<const K: Type> requires K == REQUIRED { n: i64? }
 const fn place<const N: i64>(arg: Tag<N>) -> i64 {
@@ -1740,23 +1741,46 @@ const fn place<const N: i64>(arg: Tag<N>) -> i64 {
     return 1
 }
 "#;
-    for (call, valid) in [
-        ("", true),
-        ("test fits { assert place<7>(Tag<7>(n: 9)) == 1 }", true),
-        ("test fails { assert place<3>(Tag<3>(n: 9)) == 1 }", false),
+    for (operand, initializer) in [
+        ("read(alias)", "let alias = arg"),
+        (
+            "alias",
+            "let selected = read(arg)\n    let alias = selected",
+        ),
     ] {
-        let source = format!("{definitions}{call}\n");
-        let checked = check(&[("m.hgl", &source)]);
-        if valid {
-            assert!(checked.findings.is_empty(), "{}", checked.report);
-        } else {
-            assert_eq!(checked.findings.len(), 1, "{}", checked.report);
-            assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
-            assert!(
-                checked
-                    .report
-                    .contains("this call makes the instance `place<3>`")
-            );
+        let definitions = definitions
+            .replace("let alias = arg", initializer)
+            .replace("type(read(alias))", &format!("type({operand})"));
+        for (call, valid) in [
+            ("", true),
+            ("test fits { assert place<7>(Tag<7>(n: 9)) == 1 }", true),
+            ("test fails { assert place<3>(Tag<3>(n: 9)) == 1 }", false),
+        ] {
+            let source = format!("{definitions}{call}\n");
+            let checked = check(&[("m.hgl", &source)]);
+            if valid {
+                assert!(checked.findings.is_empty(), "{}", checked.report);
+            } else {
+                assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+                assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+                assert!(
+                    checked
+                        .report
+                        .contains("this call makes the instance `place<3>`")
+                );
+            }
         }
+    }
+    // Both results have a fixed i64 type, even in a declaration with no callers.
+    for initializer in [
+        "let selected = read(arg)\n    let alias = fixed(selected)",
+        "let selected = read(arg)\n    let alias = { let ignored = selected\n 1 }",
+    ] {
+        let source = definitions
+            .replace("let alias = arg", initializer)
+            .replace("type(read(alias))", "type(alias)");
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
     }
 }

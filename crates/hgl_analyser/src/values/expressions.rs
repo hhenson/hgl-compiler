@@ -274,16 +274,20 @@ impl<'a> Typer<'a> {
         self.hook = None;
         self.initializing = false;
         self.caching = false;
-        let ty = query
+        let operand = query
             .children()
             .next()
-            .map_or(Type::Unknown, |operand| self.expression(&operand, None).ty);
+            .map(|node| self.expression(&node, None));
+        let provisional_result = operand
+            .as_ref()
+            .is_some_and(|value| self.result_depends_on_selection(value, mark.selecting));
+        let ty = operand.map_or(Type::Unknown, |value| value.ty);
         let new_errors = self.diagnostics.as_slice()[mark.diagnostics..]
             .iter()
             .any(|report| report.severity == hgl_diagnostics::Severity::Error);
         // The outer descriptor can contain this query as a nominal argument.
         // Retain its need for selection without adding its calls to runtime HIR.
-        let selects = self.nested_query_selects || self.selecting.borrow().len() > mark.selecting;
+        let selects = provisional_result || self.nested_query_selects;
         self.nested_query_selects = enclosing_selection || (querying && selects);
         // TYPE-18 evaluates nothing of the operand. Its local
         // effects and deferred calls do not belong to the body.
