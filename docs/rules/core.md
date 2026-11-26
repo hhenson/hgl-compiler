@@ -560,6 +560,8 @@ analyser: partial
 - A key forwarded to multiple aliased `const` parameters remains fixed.
   Store-cycle classification follows the candidates each type instance
   selects, with symbolic keys; an unselected candidate closes no cycle.
+- Fixed-key proofs belong to each call route. An unused entry with other
+  types or distinct aliases does not delay an independent fixed call.
 
 transpiler: partial
 
@@ -775,6 +777,8 @@ analyser: partial
   value (CAP-6).
 - Fixed aliased parameters and acyclic selected-candidate routes reject
   in source, or at the build when a computation supplies the key (CAP-6).
+- Forwarding follows concrete instances: revisiting one declaration with
+  different types on a finite route still checks the computed key at build.
 - Left: a helper outside a cycle that also formats its key (CAP-6, #877).
 
 transpiler: partial

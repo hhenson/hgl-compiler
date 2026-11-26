@@ -3142,6 +3142,10 @@ pub(super) fn instances_hold(
         let mut followed: HashMap<(usize, usize), usize> = HashMap::new();
         let mut exhausted = false;
         while let Some((made, parent, making)) = waiting.pop_front() {
+            // TIME-8: source locations shared by other instances do not erase
+            // the fixed store inputs of this making call. The guard restores
+            // the outer context on every exit from this iteration.
+            let _store_inputs = program.store_input_scope(made.callee, &made.constants.values);
             let root_calls: Vec<InstanceRoot> =
                 making.iter().map(|&call| all_calls[call].clone()).collect();
             let from: Vec<_> = root_calls.iter().map(|call| call.at).collect();

@@ -36,6 +36,37 @@ pub(crate) type Demands = HashMap<Declaration, BTreeMap<usize, Demand>>;
 /// unchanged is as fixed as in a function that does not call itself."
 pub(crate) type ChangingSlots = HashSet<Slot>;
 
+/// Store proofs are keyed without key values, so changing strings never
+/// create more instances. `None` also guards a proof currently being read.
+pub(crate) type StoreRoutes =
+    RefCell<HashMap<(String, Option<crate::TestCandidateScope>), Option<StoreRoute>>>;
+
+#[derive(Clone, Debug)]
+pub(crate) struct StoreRoute {
+    fixed: HashSet<usize>,
+    pub(crate) changing: HashSet<usize>,
+}
+
+/// Lexical provenance survives when an instance replaces a parameter read
+/// with a literal at the original read's source location.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct StoreInputContext {
+    parameters: HashSet<Location>,
+    fixed: HashSet<Location>,
+}
+
+/// Restores the outer store proof even when instance checking stops early.
+pub(crate) struct StoreInputScope<'a> {
+    contexts: &'a RefCell<Vec<StoreInputContext>>,
+    depth: usize,
+}
+
+impl Drop for StoreInputScope<'_> {
+    fn drop(&mut self) {
+        self.contexts.borrow_mut().truncate(self.depth);
+    }
+}
+
 /// Selected value calls or the resolved demand for a generic instance and slot.
 pub(crate) type SelectedDemands = RefCell<HashMap<InstanceSlot, SelectedDemand>>;
 
@@ -72,13 +103,16 @@ pub struct ConstInput {
     pub(crate) value: Expr,
     /// The identity of the value for both analyser and lowering keys.
     pub key: String,
+    /// This call's store route proves this input fixed, independently of
+    /// other calls of the same declaration.
+    pub(crate) store_fixed: bool,
 }
 
 /// Two inputs are one where their slot and value are (GEN-13: "each value
 /// one constant"); where each was written does not tell them apart.
 impl PartialEq for ConstInput {
     fn eq(&self, other: &Self) -> bool {
-        self.slot == other.slot && self.key == other.key
+        self.slot == other.slot && self.key == other.key && self.store_fixed == other.store_fixed
     }
 }
 
@@ -110,7 +144,9 @@ const INPUT_DEPTH: usize = 64;
 
 /// Read a string for a source check without requiring the target to know it.
 pub(crate) fn known_store_key(program: &Program, expression: &Expr) -> Option<String> {
-    if program.runtime_store_keys.contains(&expression.at) {
+    if program.runtime_store_keys.contains(&expression.at)
+        && !program.proven_store_input(expression)
+    {
         return None;
     }
     if let ExprKind::Literal(Value::Str(text)) = &expression.kind {
@@ -126,6 +162,72 @@ pub(crate) fn known_store_key(program: &Program, expression: &Expr) -> Option<St
 }
 
 impl Program {
+    /// Keep store-only input provenance local to this making call's check.
+    pub(crate) fn store_input_scope(
+        &self,
+        (module, declaration): Declaration,
+        inputs: &[ConstInput],
+    ) -> StoreInputScope<'_> {
+        let mut context = StoreInputContext::default();
+        if let Some(Detail::Callable(signature)) = self.modules[module].details.get(declaration) {
+            context
+                .fixed
+                .extend(
+                    inputs
+                        .iter()
+                        .filter(|input| input.store_fixed)
+                        .filter_map(|input| {
+                            signature
+                                .parameters
+                                .get(input.slot)
+                                .map(|parameter| parameter.at)
+                        }),
+                );
+            if !context.fixed.is_empty() {
+                context.parameters.extend(
+                    signature
+                        .parameters
+                        .iter()
+                        .filter(|p| p.constant)
+                        .map(|p| p.at),
+                );
+            }
+        }
+        let mut contexts = self.store_input_contexts.borrow_mut();
+        let depth = contexts.len();
+        contexts.push(context);
+        StoreInputScope {
+            contexts: &self.store_input_contexts,
+            depth,
+        }
+    }
+
+    /// Every parameter this reified expression reads is fixed on this route.
+    fn proven_store_input(&self, value: &Expr) -> bool {
+        let contexts = self.store_input_contexts.borrow();
+        let Some(context) = contexts.last().filter(|context| !context.fixed.is_empty()) else {
+            return false;
+        };
+        let mut found = false;
+        let mut fixed = true;
+        value.walk(&mut |part| {
+            if let Some(parameter) = self
+                .store_bindings()
+                .get(&(part.at.file, part.at.span.start))
+                && context.parameters.contains(parameter)
+            {
+                found = true;
+                fixed &= context.fixed.contains(parameter);
+            }
+        });
+        found && fixed
+    }
+
+    pub(crate) fn store_bindings(&self) -> &HashMap<(hgl_source::FileId, u32), Location> {
+        self.store_input_bindings
+            .get_or_init(|| self.modules.iter().flat_map(local_bindings).collect())
+    }
+
     /// Whether a compile-time check in this declaration needs const inputs.
     pub fn needs_const_inputs(&self, declaration: Declaration) -> bool {
         self.const_demands
@@ -188,12 +290,31 @@ impl Program {
         // FN-19: the entries a call gives a pack decide which calls a
         // forwarding body makes, and so which of its consts they read.
         let pack_inputs = pack_inputs_of(self, callee, signature, arguments);
+        let store_route = (check_store
+            && (demand.values().any(|d| *d == Demand::StoreKey)
+                || self
+                    .changing_store_slots
+                    .iter()
+                    .any(|(owner, _)| *owner == (module, declaration))))
+        .then(|| self.store_route(callee, arguments))
+        .flatten();
         // Give unconditional inputs the first use of the read budget.
         let ordered = [Demand::Always, Demand::IfSelected, Demand::StoreKey]
             .into_iter()
             .filter(|mode| check_store || *mode != Demand::StoreKey)
             .flat_map(|mode| demand.iter().filter(move |(_, demand)| **demand == mode));
         for (&slot, &demand) in ordered {
+            if demand == Demand::StoreKey
+                && store_route.as_ref().map_or_else(
+                    || {
+                        self.changing_store_slots
+                            .contains(&((module, declaration), slot))
+                    },
+                    |route| !route.fixed.contains(&slot),
+                )
+            {
+                continue;
+            }
             if demand == Demand::IfSelected
                 && !self.instance_reads_const(callee, pack_inputs.clone(), slot)
             {
@@ -218,6 +339,7 @@ impl Program {
                     // TIME-8: a key a cycle changes is the run's, on this route.
                     if demand == Demand::StoreKey
                         && self.runtime_store_keys.contains(&given.value.at)
+                        && !self.proven_store_input(&given.value)
                     {
                         return Err(Unread);
                     }
@@ -265,7 +387,20 @@ impl Program {
                 {
                     return Err(ReaderLimit);
                 }
-                Ok(ConstInput { slot, value, key })
+                let store_fixed = store_route
+                    .as_ref()
+                    .is_some_and(|route| route.fixed.contains(&slot));
+                if store_fixed {
+                    // Source instance identity includes the proof, not just the
+                    // string: another route may read that string only at runtime.
+                    key.insert_str(0, "fixed-store:");
+                }
+                Ok(ConstInput {
+                    slot,
+                    value,
+                    key,
+                    store_fixed,
+                })
             })();
             match input {
                 Ok(input) => known.values.push(input),
@@ -1209,10 +1344,9 @@ pub(crate) fn demands(
     while let Some(((declaration, slot), demand)) = pending.pop_front() {
         if demand == Demand::StoreKey {
             let position = (declaration, slot);
-            if changes_in_cycle(&position) {
-                continue;
-            }
-            if let Some(callers) = generic_uses.get(&position) {
+            if !changes_in_cycle(&position)
+                && let Some(callers) = generic_uses.get(&position)
+            {
                 generic_reads.extend(callers.iter().copied());
             }
         }
@@ -1245,6 +1379,173 @@ fn names_generic_value(value: &Expr) -> bool {
     let mut reads = false;
     value.walk(&mut |value| reads |= matches!(value.kind, ExprKind::GenericValue { .. }));
     reads
+}
+
+impl Program {
+    /// Prove this call's fixed observations using only its reachable concrete
+    /// instances. An unrelated entry must not change a key's checking stage.
+    pub(crate) fn store_route(
+        &self,
+        callee: &Callee,
+        arguments: &[Argument],
+    ) -> Option<StoreRoute> {
+        let declaration = callee.declaration()?;
+        let Detail::Callable(signature) = &self.modules[declaration.0].details[declaration.1]
+        else {
+            return None;
+        };
+        let requirements = match callee {
+            Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
+                requirements
+            }
+            _ => return None,
+        };
+        let mut key = crate::values::bounded_instance_key(
+            declaration,
+            callee.generics(),
+            callee.type_packs(),
+            requirements,
+        )?;
+        let entry = store_entry_arguments(signature, arguments);
+        key.push_str(&format!(
+            "aliases{:?}",
+            entry
+                .iter()
+                .filter_map(|argument| {
+                    match argument.value.kind {
+                        ExprKind::Local(local) => Some((argument.parameter, local)),
+                        _ => None,
+                    }
+                })
+                .collect::<Vec<_>>()
+        ));
+        if let Some(entries) = pack_inputs_of(self, callee, signature, arguments) {
+            key.push_str(&format!("entries{entries:?}"));
+        }
+        if key.len() > INPUT_BUDGET {
+            return None;
+        }
+        let key = (key, callee.test_candidates());
+        if let Some(cached) = self.selected_store_routes.borrow().get(&key) {
+            return cached.clone();
+        }
+        self.selected_store_routes
+            .borrow_mut()
+            .insert(key.clone(), None);
+        let proof = (|| {
+            let relevant = self
+                .modules
+                .iter()
+                .enumerate()
+                .flat_map(|(module, unit)| {
+                    unit.details
+                        .iter()
+                        .enumerate()
+                        .filter_map(move |(declaration, detail)| {
+                            matches!(detail, Detail::Callable(_)).then_some((module, declaration))
+                        })
+                })
+                .collect();
+            let store_slots = HashSet::new();
+            let mut read = StoreInstances {
+                program: self,
+                relevant,
+                store_slots: &store_slots,
+                nodes: Vec::new(),
+                instances: HashMap::new(),
+                counts: HashMap::new(),
+                pending: VecDeque::new(),
+                calls: StoreCalls::default(),
+                uses: HashMap::new(),
+                observed: HashSet::new(),
+            };
+            let root = read.instance(callee, arguments)?;
+            // Coinductive alias proofs need an external entry. Otherwise a
+            // cycle which swaps distinct ports could prove them equal itself.
+            let entry_node = read.nodes.len();
+            if entry_node >= INPUT_BUDGET {
+                return None;
+            }
+            read.nodes.push((None, signature.clone()));
+            let target = &read.nodes[root].1;
+            read.calls
+                .record(entry_node, signature, root, target, |slot| {
+                    entry
+                        .iter()
+                        .find(|argument| argument.parameter == Some(slot))
+                        .map(|argument| &argument.value)
+                });
+            while let Some((node, body)) = read.pending.pop_front() {
+                read.body(node, &body)?;
+            }
+            let changing = read.calls.changed(read.observed.clone(), &read.uses, true);
+            let mut fixed = HashSet::new();
+            let mut pending: Vec<_> = read.observed.into_iter().collect();
+            while let Some(slot) = pending.pop() {
+                if changing.contains(&slot) || !fixed.insert(slot) {
+                    continue;
+                }
+                if let Some(callers) = read.uses.get(&slot) {
+                    pending.extend(callers.iter().map(|(caller, _)| *caller));
+                }
+            }
+            Some(StoreRoute {
+                fixed: fixed
+                    .into_iter()
+                    .filter_map(|(node, slot)| (node == root).then_some(slot))
+                    .collect(),
+                changing: changing
+                    .into_iter()
+                    .filter_map(|(node, slot)| (node == root).then_some(slot))
+                    .collect(),
+            })
+        })();
+        self.selected_store_routes
+            .borrow_mut()
+            .insert(key, proof.clone());
+        proof
+    }
+}
+
+/// Retain only the entry's alias partition, never its string values. Each
+/// unproved input is a separate external port; equal locals/literals share one.
+fn store_entry_arguments(signature: &Signature, arguments: &[Argument]) -> Vec<Argument> {
+    let mut sources: Vec<(usize, &Expr)> = Vec::new();
+    arguments
+        .iter()
+        .filter(|argument| {
+            argument
+                .parameter
+                .is_some_and(|slot| signature.parameters.get(slot).is_some_and(|p| p.constant))
+        })
+        .map(|given| {
+            let mut argument = given.clone();
+            if let Some(slot) = argument.parameter
+                && signature
+                    .parameters
+                    .get(slot)
+                    .is_some_and(|parameter| parameter.constant)
+            {
+                let source = sources
+                    .iter()
+                    .find_map(|(slot, earlier)| {
+                        let same = match (&earlier.kind, &argument.value.kind) {
+                            (ExprKind::Local(a), ExprKind::Local(b)) => a == b,
+                            (
+                                ExprKind::Literal(Value::Str(a)),
+                                ExprKind::Literal(Value::Str(b)),
+                            ) => a.len() <= INPUT_BUDGET && b.len() <= INPUT_BUDGET && a == b,
+                            _ => false,
+                        };
+                        same.then_some(*slot)
+                    })
+                    .unwrap_or(slot);
+                sources.push((source, &given.value));
+                argument.value.kind = ExprKind::Local(source);
+            }
+            argument
+        })
+        .collect()
 }
 
 /// TIME-8 follows the calls an instance makes, not all candidates of the

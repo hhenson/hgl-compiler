@@ -98,3 +98,65 @@ fn partial_store_node() {
 test an_unselected_member_keeps_its_changing_key {
     eval partial_store_node()
 }
+
+# TIME-8, CAP-6: source fixes the key through both relay instances too.
+fn forwarded_choice_key_node(const key: str) {
+    inject global_state
+    when {}
+    stop { choice_relay(global_state, key, 1) }
+}
+test an_extra_forwarding_hop_fixes_the_key_in_source {
+    # expect-error(injectable, "store.reserved_key")
+    eval forwarded_choice_key_node(key: "run.out")
+}
+
+# TIME-8, CAP-6: another unused entry does not change this fixed route.
+operator isolated_dispatch<S,T>(s: S, depth: i64, const label: str, tag: T) requires S in {GlobalState}
+impl const fn isolated_dispatch(s: GlobalState, depth: i64, const label: str, tag: f64) { put(s, label, tag) }
+impl const fn isolated_dispatch(s: GlobalState, depth: i64, const label: str, tag: i64) {
+    put(s, label, tag)
+    if depth > 0 { isolated_via(s, depth - 1, label + "put", tag) }
+}
+const fn isolated_via<T>(s: GlobalState, depth: i64, const label: str, tag: T) requires T in {f64, i64} {
+    isolated_dispatch(s, depth, label, tag)
+}
+fn isolated_stable(const label: str, const d: i64) {
+    inject global_state
+    start { let guard = 1 // d }
+    when {}
+    stop { isolated_via(global_state, 2, label, 3.5) }
+}
+fn unused_moving(const label: str, const d: i64, const n: i64) {
+    inject global_state
+    start { let guard = 1 // d }
+    when {}
+    stop { isolated_via(global_state, n, label, 7) }
+}
+test isolated_stable_is_fixed_in_source {
+    # expect-error(injectable, "store.reserved_key")
+    eval isolated_stable("run.output", 1)
+}
+
+# TIME-8, CAP-6: another unused entry does not change this fixed route.
+const fn isolated_copy(s: GlobalState, n: i64, flag: bool, const key: str) {
+    put(s, key, n)
+    if n > 0 { isolated_choose(s, n - 1, flag, key, key) }
+}
+const fn isolated_choose(s: GlobalState, n: i64, flag: bool, const left: str, const right: str) {
+    if flag { isolated_copy(s, n, flag, right) } else { isolated_copy(s, n, flag, left) }
+}
+fn isolated_alias(const key: str, const divisor: i64, const flag: bool) {
+    inject global_state
+    start { let guard = 1 // divisor }
+    when {}
+    stop { isolated_copy(global_state, 3, flag, key) }
+}
+fn unused_alias_entry(const p: str, const q: str) {
+    inject global_state
+    when {}
+    stop { isolated_choose(global_state, 1, false, p, q) }
+}
+test isolated_alias_is_fixed_in_source {
+    # expect-error(injectable, "store.reserved_key")
+    eval isolated_alias("run.output", 1, false)
+}

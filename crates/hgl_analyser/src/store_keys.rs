@@ -108,10 +108,56 @@ pub(crate) fn key_types(
 }
 
 impl Program {
+    /// Parameter slots a key reads, including reads reified as literals in an
+    /// instance. Their lexical use locations retain the original provenance.
+    pub fn store_input_slots(&self, value: &Expr, parameters: &[crate::Parameter]) -> Vec<usize> {
+        let declared: HashMap<_, _> = parameters
+            .iter()
+            .enumerate()
+            .map(|(slot, p)| (p.at, slot))
+            .collect();
+        let mut slots = std::collections::BTreeSet::new();
+        value.walk(&mut |part| {
+            if let Some(binding) = self
+                .store_bindings()
+                .get(&(part.at.file, part.at.span.start))
+            {
+                if let Some(slot) = declared.get(binding) {
+                    slots.insert(*slot);
+                }
+            } else if let Some(slot) = declared.get(&part.at) {
+                slots.insert(*slot);
+            } else if let ExprKind::Local(slot) = part.kind
+                && slot < parameters.len()
+            {
+                slots.insert(slot);
+            }
+        });
+        slots.into_iter().collect()
+    }
+
     /// Whether `const` parameter `slot` of `declaration` is one of a cycle
     /// whose store key can differ between its calls (TIME-8).
     pub fn store_key_changes(&self, declaration: (usize, usize), slot: usize) -> bool {
         self.changing_store_slots.contains(&(declaration, slot))
+    }
+
+    /// Whether this concrete call changes its key on a recursive route.
+    /// Unread or bounded-out routes retain the declaration's classification.
+    pub fn store_key_changes_in_call(
+        &self,
+        callee: &Callee,
+        arguments: &[CallArgument],
+        slot: usize,
+    ) -> bool {
+        self.store_route(callee, arguments).map_or_else(
+            || {
+                callee
+                    .declaration()
+                    .is_some_and(|declaration| self.store_key_changes(declaration, slot))
+            },
+            |route| route.changing.contains(&slot),
+        )
     }
 
     /// Whether TIME-8 leaves this store key to a recursive operation: the

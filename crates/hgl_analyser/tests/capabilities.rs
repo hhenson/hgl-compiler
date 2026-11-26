@@ -1062,3 +1062,88 @@ test source { eval node(key:"safe") }
         );
     }
 }
+
+/// TIME-8, CAP-6: unrelated entry routes cannot change a fixed call's stage.
+#[test]
+fn an_unused_specialization_does_not_delay_a_fixed_store_key() {
+    let source = r#"module m
+const fn computed(s: str) -> str => s
+operator dispatch_k<S,T>(s: S, depth: i64, const label: str, tag: T) requires S in {GlobalState}
+impl const fn dispatch_k(s: GlobalState, depth: i64, const label: str, tag: f64) { put(s, label, tag) }
+impl const fn dispatch_k(s: GlobalState, depth: i64, const label: str, tag: i64) {
+    put(s, label, tag)
+    if depth > 0 { via(s, depth - 1, label + "put", tag) }
+}
+const fn via<T>(s: GlobalState, depth: i64, const label: str, tag: T) requires T in {f64, i64} {
+    dispatch_k(s, depth, label, tag)
+}
+fn stable(const label: str, const d: i64) {
+    inject global_state
+    start { let guard = 1 // d }
+    when {}
+    stop { via(global_state, 2, label, 3.5) }
+}
+test fixed { eval stable("run.output", 1) }
+"#;
+    let unused = r#"fn moving(const label: str, const d: i64, const n: i64) {
+    inject global_state
+    start { let guard = 1 // d }
+    when {}
+    stop { via(global_state, n, label, 7) }
+}
+"#;
+    for source in [source.to_owned(), format!("{source}{unused}")] {
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked
+                .summary()
+                .iter()
+                .filter(|s| s.contains("store.reserved_key"))
+                .count(),
+            1,
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// TIME-8, CAP-6: unrelated entry routes cannot change a fixed call's stage.
+#[test]
+fn an_unused_distinct_alias_entry_does_not_delay_a_fixed_store_key() {
+    let source = r#"module m
+const fn copied(s: GlobalState, n: i64, flag: bool, const key: str) {
+    put(s, key, n)
+    if n > 0 { choose_key(s, n - 1, flag, key, key) }
+}
+const fn choose_key(s: GlobalState, n: i64, flag: bool, const left: str, const right: str) {
+    if flag { copied(s, n, flag, right) } else { copied(s, n, flag, left) }
+}
+fn sample(const key: str, const divisor: i64, const flag: bool) {
+    inject global_state
+    start { let guard = 1 // divisor }
+    when {}
+    stop { copied(global_state, 3, flag, key) }
+}
+const fn computed(s: str) -> str => s
+test fixed { eval sample("run.output", 1, false) }
+"#;
+    let unused = r#"fn other(const p: str, const q: str) {
+    inject global_state
+    when {}
+    stop { choose_key(global_state, 1, false, p, q) }
+}
+"#;
+    for source in [source.to_owned(), format!("{source}{unused}")] {
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked
+                .summary()
+                .iter()
+                .filter(|s| s.contains("store.reserved_key"))
+                .count(),
+            1,
+            "{}",
+            checked.report
+        );
+    }
+}
