@@ -11,14 +11,15 @@ use super::Typer;
 use super::arguments::{Slot, Takes};
 use crate::declared::substitute_within;
 use crate::hir::{
-    Argument, Body, Callee, Expr, ExprKind, Form, LocalId, Node, NodeMut, PackKey, Stmt,
-    ValueCategory, walk_statement_nodes, walk_statement_nodes_at, walk_statement_nodes_mut,
-    walk_statements_mut,
+    Argument, Body, Callee, ExprKind, Form, LabelValue, LocalId, Node, NodeMut, PackKey, Stmt,
+    ValueCategory, walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
 };
 use crate::program::LocalKind;
 use crate::read::is_type;
 use crate::syntax::{child, tokens};
 use crate::types::Type;
+
+mod flow;
 
 /// What belongs to the anonymous function currently being checked.
 #[derive(Clone, PartialEq, Eq)]
@@ -27,8 +28,8 @@ pub(super) struct Anonymous {
     pub(super) result: Option<Type>,
     /// FN-17: infer whether a complete, unwritten result exists.
     pub(super) infer_result: bool,
-    /// Boolean inputs and immutable locals known for a direct call.
-    pub(super) immediate_conditions: Option<Vec<(LocalId, bool)>>,
+    /// Literal selectors bound to an input or immutable local of a direct call.
+    pub(super) immediate_conditions: Option<Vec<(LocalId, LabelValue)>>,
     /// The first of its own locals. Earlier locals would be captures.
     pub(super) first_local: LocalId,
 }
@@ -139,7 +140,7 @@ impl Typer<'_> {
                 .unwrap_or_default();
             for argument in arguments {
                 if let Some(parameter) = argument.parameter
-                    && let Some(value) = super::lifting::known_bool(&argument.value, &known)
+                    && let Some(value) = super::lifting::known_selector(&argument.value, &known)
                 {
                     known.push((first_local + parameter, value));
                 }
@@ -177,12 +178,14 @@ impl Typer<'_> {
             self.at(function),
             "this anonymous function",
         );
-        let live_result = direct_arguments.is_some()
-            && self.graph
+        let live_result = self.graph
             && !self.type_query
-            && statements
-                .as_deref()
-                .is_some_and(|statements| self.anonymous_result_is_live(statements));
+            && self
+                .anonymous
+                .as_ref()
+                .and_then(|scope| scope.immediate_conditions.as_deref())
+                .zip(statements.as_deref())
+                .is_some_and(|(known, body)| flow::result_is_live(self, body, known));
         let needs_pack_inputs = specialization.is_none()
             && statements
                 .as_deref()
@@ -214,87 +217,6 @@ impl Typer<'_> {
         self.dynamic = dynamic;
         self.must_return = must_return;
         (output, needs_pack_inputs, live_result)
-    }
-
-    /// The body of a direct call is discarded, so keep any established
-    /// live dependency of its reached returns before the local scope goes.
-    fn anonymous_result_is_live(&self, statements: &[Stmt]) -> bool {
-        let known = self
-            .anonymous
-            .as_ref()
-            .and_then(|scope| scope.immediate_conditions.as_deref())
-            .unwrap_or_default();
-        let mut skipped_operands = HashSet::new();
-        let mut live_branches = HashSet::new();
-        let mut live_branch_depth = None;
-        let mut skipped_depth = None;
-        let mut returning_blocks = Vec::new();
-        walk_statement_nodes_at(statements, 1, &mut |node, depth| {
-            if skipped_depth.is_some_and(|skipped| depth > skipped) {
-                return Ok(());
-            }
-            skipped_depth = None;
-            if live_branch_depth.is_some_and(|branch| depth <= branch) {
-                live_branch_depth = None;
-            }
-            while returning_blocks
-                .last()
-                .is_some_and(|returned| depth < *returned)
-            {
-                returning_blocks.pop();
-            }
-            if returning_blocks.last() == Some(&depth) {
-                // A later statement of a block cannot run after its return.
-                skipped_depth = Some(depth);
-                return Ok(());
-            }
-            match node {
-                Node::Expression(value) => {
-                    let root = std::ptr::from_ref(value);
-                    if skipped_operands.remove(&root) {
-                        skipped_depth = Some(depth);
-                    } else if let Some(operand) = super::lifting::skipped_operand(value, known) {
-                        skipped_operands.insert(std::ptr::from_ref(operand));
-                    }
-                    if live_branches.remove(&root) && live_branch_depth.is_none() {
-                        live_branch_depth = Some(depth);
-                    }
-                    if skipped_depth.is_none()
-                        && live_branch_depth.is_none()
-                        && let ExprKind::If {
-                            condition,
-                            then,
-                            otherwise,
-                            ..
-                        } = &value.kind
-                        && self.category(condition) == ValueCategory::Connection
-                    {
-                        live_branches.insert(std::ptr::from_ref(then.as_ref()));
-                        if let Some(otherwise) = otherwise {
-                            live_branches.insert(std::ptr::from_ref(otherwise.as_ref()));
-                        }
-                    }
-                }
-                Node::Statement(Stmt::Return { value, .. }) => {
-                    // A live condition can choose a return even where
-                    // each of its possible payloads is known.
-                    if live_branch_depth.is_some()
-                        || value
-                            .as_ref()
-                            .is_some_and(|value| self.category(value) == ValueCategory::Connection)
-                    {
-                        return Err(());
-                    }
-                    returning_blocks.push(depth);
-                }
-                Node::Statement(Stmt::Expr(value)) if always_returns(value, known) => {
-                    returning_blocks.push(depth);
-                }
-                _ => {}
-            }
-            Ok(())
-        })
-        .is_err()
     }
 
     /// The direct call `(fn(x) => x + 1)(7)` supplies the parameter
@@ -363,39 +285,6 @@ impl Typer<'_> {
             lifted: false,
         };
         (kind, result)
-    }
-}
-
-/// A block after a guaranteed return is unreachable in this direct call.
-fn always_returns(value: &Expr, known: &[(LocalId, bool)]) -> bool {
-    match &value.kind {
-        ExprKind::Block { statements, value } => {
-            statements.iter().any(|statement| match statement {
-                Stmt::Return { .. } => true,
-                Stmt::Expr(value) => always_returns(value, known),
-                _ => false,
-            }) || value
-                .as_deref()
-                .is_some_and(|value| always_returns(value, known))
-        }
-        ExprKind::If {
-            condition,
-            then,
-            otherwise,
-            ..
-        } => {
-            let other_returns = || {
-                otherwise
-                    .as_deref()
-                    .is_some_and(|other| always_returns(other, known))
-            };
-            match super::lifting::known_bool(condition, known) {
-                Some(true) => always_returns(then, known),
-                Some(false) => other_returns(),
-                None => always_returns(then, known) && other_returns(),
-            }
-        }
-        _ => false,
     }
 }
 

@@ -33,8 +33,9 @@ analyser: partial
 - A connection given as a written generic value argument rejects with `generic.argument_constant` (GEN-8).
 - A connection used as a fixed list size in a local annotation rejects with
   `list.size` (TYPE-10). An immediately invoked anonymous function preserves
-  the connection category of its result, including when it reaches a live
-  capture or a supplied callback and its result is first bound to a local.
+  the connection category of its result, including through a local binding.
+  The result depends on reached captures, supplied callbacks, selectors and
+  writes that determine the returned value (CTRL-13 to CTRL-15).
 
 transpiler: done
 

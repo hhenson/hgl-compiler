@@ -2,7 +2,7 @@
 //! while the graph is built, and the places that take no connection
 //! (FN-3, FN-6, CTRL-14, EXPR-14). Part of the typing pass ([`super`]).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
 use hgl_parser::{SyntaxKind, SyntaxNode};
@@ -18,8 +18,8 @@ use super::members::{index_result, indexed_payload};
 use super::results::{captured_binding, captured_output};
 use super::{CapturedOutput, Typer};
 use crate::hir::{
-    BinaryOperator, Body, Callee, Expr, ExprKind, IfInference, Local, LocalId, Node, NodeMut, Run,
-    Stmt, Value, ValueCategory, walk_statement_nodes, walk_statement_nodes_mut,
+    BinaryOperator, Body, Callee, Expr, ExprKind, IfInference, LabelValue, Local, LocalId, Node,
+    NodeMut, Run, Stmt, Value, ValueCategory, walk_statement_nodes, walk_statement_nodes_mut,
     walk_statements_mut,
 };
 use crate::program::{DeclarationKind, Program, Role};
@@ -68,6 +68,16 @@ impl<'a> Typer<'a> {
     /// What a value read in a graph is (FN-3), as [`category`] says,
     /// with the locals read so far.
     pub(super) fn category(&self, value: &Expr) -> ValueCategory {
+        self.category_with_live_locals(value, None)
+    }
+
+    /// Classify an immediately invoked result with the reached writes in
+    /// its discarded body. The additional categories belong to that call.
+    pub(super) fn category_with_live_locals(
+        &self,
+        value: &Expr,
+        live_locals: Option<&HashSet<LocalId>>,
+    ) -> ValueCategory {
         category_with_functions(
             self.program,
             &self.locals,
@@ -78,6 +88,7 @@ impl<'a> Typer<'a> {
                 .as_ref()
                 .filter(|_| !self.type_query)
                 .and_then(|body| body.immediate_conditions.as_deref()),
+            live_locals,
         )
     }
 
@@ -305,46 +316,36 @@ fn gives_a_value(value: &Expr) -> bool {
 /// as it reads ([`Typer::category`]), and [`record`] writes its answer
 /// on each expression for the stages after the analyser.
 pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> ValueCategory {
-    category_with_functions(program, locals, value, &[], &[], None)
+    category_with_functions(program, locals, value, &[], &[], None, None)
 }
 
-/// A literal or an immutable Boolean binding whose value is already known.
-pub(super) fn known_bool(expr: &Expr, known: &[(LocalId, bool)]) -> Option<bool> {
-    match expr.kind {
-        ExprKind::Literal(Value::Bool(value)) => Some(value),
+/// A literal selector or an immutable binding already known in a direct call.
+pub(super) fn known_selector(expr: &Expr, known: &[(LocalId, LabelValue)]) -> Option<LabelValue> {
+    match &expr.kind {
+        ExprKind::Literal(Value::Bool(value)) => Some(LabelValue::Bool(*value)),
+        ExprKind::Literal(Value::Int(value)) => Some(LabelValue::Int(*value)),
+        ExprKind::Literal(Value::Str(value)) => Some(LabelValue::Str(value.clone())),
+        ExprKind::EnumMember { member, .. } => Some(LabelValue::Member(*member)),
         ExprKind::Local(local) => known
             .iter()
-            .find_map(|&(id, value)| (id == local).then_some(value)),
+            .find_map(|(id, value)| (id == local).then(|| value.clone())),
         _ => None,
     }
 }
 
-fn skips_right(operator: BinaryOperator, left: &Expr, known: &[(LocalId, bool)]) -> bool {
+/// A known condition of an immediate call's `if`, `while`, `&&` or `||`.
+pub(super) fn known_bool(expr: &Expr, known: &[(LocalId, LabelValue)]) -> Option<bool> {
+    match known_selector(expr, known)? {
+        LabelValue::Bool(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn skips_right(operator: BinaryOperator, left: &Expr, known: &[(LocalId, LabelValue)]) -> bool {
     matches!(
         (operator, known_bool(left, known)),
         (BinaryOperator::And, Some(false)) | (BinaryOperator::Or, Some(true))
     )
-}
-
-/// An operand this value computation cannot reach (CTRL-10, EXPR-6).
-pub(super) fn skipped_operand<'a>(value: &'a Expr, known: &[(LocalId, bool)]) -> Option<&'a Expr> {
-    if let ExprKind::If {
-        condition,
-        then,
-        otherwise,
-        ..
-    } = &value.kind
-    {
-        return match known_bool(condition, known) {
-            Some(true) => otherwise.as_deref(),
-            Some(false) => Some(then),
-            None => None,
-        };
-    }
-    value
-        .kind
-        .binary()
-        .and_then(|(operator, left, right)| skips_right(operator, left, known).then_some(right))
 }
 
 fn category_with_functions(
@@ -353,7 +354,8 @@ fn category_with_functions(
     value: &Expr,
     functions: &[(usize, Callee)],
     callback_captures: &[ValueCategory],
-    evaluated: Option<&[(LocalId, bool)]>,
+    evaluated: Option<&[(LocalId, LabelValue)]>,
+    live_locals: Option<&HashSet<LocalId>>,
 ) -> ValueCategory {
     use ValueCategory::{Connection, Unsettled, Value};
     let category = |value: &Expr| {
@@ -364,7 +366,15 @@ fn category_with_functions(
             functions,
             callback_captures,
             evaluated,
+            live_locals,
         )
+    };
+    let local_category = |id| {
+        if live_locals.is_some_and(|live| live.contains(&id)) {
+            Connection
+        } else {
+            locals.get(id).map_or(Value, |local| local.category)
+        }
     };
     if let Some(known) = evaluated
         && let Some((operator, left, _)) = value.kind.binary()
@@ -379,9 +389,7 @@ fn category_with_functions(
         // (UNIT-7, UNIT-13).
         ExprKind::Local(local)
         | ExprKind::DeferredPresent(local)
-        | ExprKind::PackEntry { pack: local, .. } => {
-            locals.get(*local).map_or(Value, |local| local.category)
-        }
+        | ExprKind::PackEntry { pack: local, .. } => local_category(*local),
         ExprKind::DeferredPackRead | ExprKind::DeferredPackCondition => Unsettled,
         // EXPR-16: a range has ordinary bounds. Its loop variable does
         // not become a connection even when a bound was reported.
@@ -404,7 +412,7 @@ fn category_with_functions(
             Callee::Anonymous(function) => function
                 .captures
                 .iter()
-                .map(|&local| locals[local].category)
+                .map(|&local| local_category(local))
                 .fold(Value, join),
             _ => Value,
         },
@@ -465,7 +473,7 @@ fn category_with_functions(
                 Callee::Anonymous(function) => function
                     .captures
                     .iter()
-                    .map(|&local| locals[local].category)
+                    .map(|&local| local_category(local))
                     .fold(given, join),
                 Callee::Parameter { temporal: true, .. } | Callee::UnreadWithConnection => {
                     Connection

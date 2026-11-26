@@ -537,7 +537,7 @@ impl<'a> Typer<'a> {
                 .and_then(|scope| scope.immediate_conditions.as_mut())
             && let Some(value) = value
                 .as_ref()
-                .and_then(|value| super::lifting::known_bool(value, known))
+                .and_then(|value| super::lifting::known_selector(value, known))
         {
             known.push((local, value));
         }

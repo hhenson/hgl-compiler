@@ -1011,6 +1011,82 @@ fn a_local_list_size_checks_immediately_invoked_supplied_callbacks() {
     );
 }
 
+/// CTRL-13, CTRL-15 and TYPE-10: a live selection can choose the result
+/// of an immediate call even where each return gives an ordinary value.
+#[test]
+fn a_local_list_size_checks_the_reached_return_of_an_immediate_call() {
+    let inline = |body| {
+        format!(
+            "fn measured(input: i64, const fixed: i64) -> i64 {{\n\
+             var held: list<i64, (fn(k: i64) -> i64 {{ {body} }})(2)>\n\
+             return input\n}}\n"
+        )
+    };
+    for body in [
+        "switch input { case 0: return 3\ndefault: return 4 }",
+        "if input > 0 { return 3 }\nreturn 4",
+        "while input > 0 { return 3 }\nreturn 4",
+        "switch fixed { case 0: return 3\ndefault: return input }",
+    ] {
+        expect(&inline(body), &["3 list.size"]);
+    }
+    for body in [
+        "switch fixed { case 0: return 3\ndefault: return 4 }",
+        "let selector = k\nswitch selector { case 0: return input\ndefault: return 3 }",
+        "switch k { case 0: return 3\ndefault: return 4 }\nreturn input",
+        "if false { return input }\nreturn 4",
+        "while false { return input }\nreturn 4",
+        "while true { return 3 }\nreturn input",
+        "for i in 0..<0 { return input }\nreturn 4",
+    ] {
+        expect(&inline(body), &[]);
+    }
+    expect(
+        concat!(
+            "fn measured(input: i64) -> i64 {\n",
+            "    let width = (fn() -> i64 {\n",
+            "        switch input { case 0: return 3\n",
+            "                       default: return 4 }\n",
+            "    })()\n",
+            "    var held: list<i64, width>\n",
+            "    return input\n",
+            "}\n",
+        ),
+        &["7 list.size"],
+    );
+}
+
+/// EXPR-3, CTRL-14 and TYPE-10: a reached write can supply a later
+/// return, including across passes of a loop or via a live case.
+#[test]
+fn a_local_list_size_checks_reached_writes_to_the_returned_binding() {
+    let inline = |body| {
+        format!(
+            "fn measured(input: i64, const fixed: i64) -> i64 {{\n\
+             var held: list<i64, (fn() -> i64 {{ var n = 3\n{body} }})()>\n\
+             return input\n}}\n"
+        )
+    };
+    for body in [
+        "n = input + 2\nreturn n",
+        "if input > 0 { n = 4 }\nreturn n",
+        "switch input { case 0: n = 4\ndefault: n = 5 }\nreturn n",
+        "while input > n { n += 1 }\nreturn n",
+        "var m = 3\nvar i = 0\nwhile i < 2 { n = m\nm = input\ni += 1 }\nreturn n",
+    ] {
+        expect(&inline(body), &["3 list.size"]);
+    }
+    for body in [
+        "n = fixed + 2\nreturn n",
+        "n = input\nreturn 3",
+        "switch fixed { case 0: n = 4\ndefault: n = 5 }\nreturn n",
+        "while false { n = input }\nreturn n",
+        "var m = 3\nvar i = 0\nwhile i < 2 { n = m\nm = fixed\ni += 1 }\nreturn n",
+    ] {
+        expect(&inline(body), &[]);
+    }
+}
+
 /// TYPE-10 and FN-17: a static callback can still capture a connection.
 /// Report the instance that supplies the live callback and keep the
 /// capture-free and ordinary named callbacks admissible.

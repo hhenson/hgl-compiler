@@ -1467,7 +1467,7 @@ impl<'a> Typer<'a> {
                 .as_mut()
                 .and_then(|scope| scope.immediate_conditions.as_mut())
             {
-                known.retain(|&(local, _)| local < mark.locals);
+                known.retain(|(local, _)| *local < mark.locals);
             }
         }
         self.present.truncate(mark.present);
