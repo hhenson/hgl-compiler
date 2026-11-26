@@ -2992,6 +2992,28 @@ fn forwarded_packs_run_on_the_sdk() {
     );
 }
 
+/// CTRL-16 and FN-19: the supplied pack chooses which branch is read.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn pack_key_conditions_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("pack-key-conditions");
+    let file = write(
+        &root,
+        "demo.pack_key_conditions.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.pack_key_conditions.hgl"),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 7 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-19 and GEN-17: a constant key reads a fitted entry, including a
 /// captured value or a connection. An absent key rejects under the shape
 /// supplied at the call. TIME-1, TIME-4 and TIME-9 use that shape for a
@@ -6372,7 +6394,7 @@ fn category_constraints_and_tuple_packs_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 28 passed, 0 failed\nexecutable cases: 19 passed, 0 failed, 0 not run\n"
+            "rejection cases: 30 passed, 0 failed\nexecutable cases: 21 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );

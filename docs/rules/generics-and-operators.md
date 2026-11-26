@@ -204,7 +204,7 @@ analyser: partial
 - Guaranteed indexed tuple members retain their pack's universal category facts only where the effective minimum guarantees that key. Exact tuple-pack occurrences inside parameter containers also prove a positive minimum. Tuple equations are retained inside lists, dictionary values, nullable types and nested tuples without changing argument reading.
 - Left: key-preserving universal finite-membership and named-call inheritance for indexed members (#723). The direct reflected-member operator proof uses separate alternatives per key (GEN-7).
 - Left: positive existential constraints do not yet prove a nonempty pack for tuple indexing (#724).
-- Left: named operator requirements bound by a quantifier.
+- A named operator requirement under `each` or `any` checks the value candidates for the current concrete type or key, including nested written types (GEN-16). The candidate's return value does not determine the verdict.
 - An ordinary value context rejects the borrowed view from `schemas(pack)`.
 
 transpiler: partial

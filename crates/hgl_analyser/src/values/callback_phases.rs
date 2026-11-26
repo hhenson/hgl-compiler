@@ -228,6 +228,7 @@ impl Typer<'_> {
         // Keep the actual inputs of a partially bound instance, changing
         // only captures whose caller still supplied another open formal.
         trial.absent_type_uses = self.absent_type_uses;
+        trial.guarded_pack_faults = self.guarded_pack_faults;
         trial.instance.clone_from(&self.instance);
         trial.const_inputs.clone_from(&self.const_inputs);
         trial.pack_inputs = self.pack_inputs;
