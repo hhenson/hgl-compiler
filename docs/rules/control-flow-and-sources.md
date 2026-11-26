@@ -192,12 +192,14 @@ transpiler: partial
 analyser: partial
 
 - A computed pack reads only the branch selected in each concrete pack-key pass. A chain with no selected branch and no `else` supplies no entry (FN-19, GEN-7).
+- A pack-key condition with a resolved module constant or generic value parameter checks only the selected branch. A generic pack supplies its keys in the making instance. Ordinary `const` and runtime parameters cannot supply the key (FN-1, GEN-17).
 - An ordinary `if` with no selected branch and no `else` in a pass gives `null`. A nullable place supplies its type. A `let` with no type context reports `null.context_type` (CTRL-10, TYPE-14).
-- Left: A constant bound or generic argument stays deferred when the reader cannot determine its value in a pass.
+- Left: A constant bound, generic argument or pack-key condition stays deferred when the reader cannot determine its constant value.
 
 transpiler: partial
 
 - C++ emits the entries supplied by the selected branches of a computed pack.
+- C++ emits the selected branch of a resolved pack-key condition in a graph, node or value function.
 
 ## SOURCE-1
 

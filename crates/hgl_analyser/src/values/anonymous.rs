@@ -92,14 +92,16 @@ impl Typer<'_> {
     /// (TIME-9).
     ///
     /// A written type or one supplied by the accepting form guides this
-    /// check. Missing types stay unknown.
+    /// check. Missing types stay unknown. A direct call waits for any
+    /// pack inputs the body still needs (CTRL-16).
     pub(super) fn anonymous_body(
         &mut self,
         function: &SyntaxNode,
         parameters: Vec<(SyntaxToken, Option<Type>)>,
         result: &Type,
-    ) {
-        self.checked_anonymous(function, parameters, (Some(result), false), None);
+    ) -> bool {
+        self.checked_anonymous(function, parameters, (Some(result), false), None)
+            .1
     }
 
     /// Read a static anonymous argument in the phase supplied by FN-17.
@@ -111,6 +113,7 @@ impl Typer<'_> {
         temporal: bool,
     ) -> Option<AnonymousDefinition> {
         self.checked_anonymous(function, parameters, result, Some(temporal))
+            .0
     }
 
     fn checked_anonymous(
@@ -119,7 +122,7 @@ impl Typer<'_> {
         parameters: Vec<(SyntaxToken, Option<Type>)>,
         (result, infer_result): (Option<&Type>, bool),
         specialization: Option<bool>,
-    ) -> Option<AnonymousDefinition> {
+    ) -> (Option<AnonymousDefinition>, bool) {
         // CTRL-5: a return belongs to this function alone.
         self.check_capability_captures(function);
         let mut mark = self.mark();
@@ -154,6 +157,10 @@ impl Typer<'_> {
             self.at(function),
             "this anonymous function",
         );
+        let needs_pack_inputs = specialization.is_none()
+            && statements
+                .as_deref()
+                .is_some_and(super::forwarded_packs::statements_need_pack_inputs);
         let output = specialization.and(statements).map(|statements| {
             // GEN-7: a deferred selection survives closing over its
             // lexical scope. Diagnostics still use the local IDs from
@@ -180,7 +187,7 @@ impl Typer<'_> {
         self.temporal = temporal;
         self.dynamic = dynamic;
         self.must_return = must_return;
-        output
+        (output, needs_pack_inputs)
     }
 
     /// The direct call `(fn(x) => x + 1)(7)` supplies the parameter
@@ -224,10 +231,16 @@ impl Typer<'_> {
             .and_then(|annotation| self.anonymous_type(&annotation))
             .or_else(|| expected.cloned())
             .unwrap_or(Type::Unknown);
-        self.anonymous_body(function, parameters, &result);
-        // The C++ target has no anonymous functions yet.
+        let needs_pack_inputs = self.anonymous_body(function, parameters, &result);
+        // A later instance must still check the body even though the
+        // direct anonymous call has no native representation (CTRL-16).
+        let callee = if needs_pack_inputs {
+            Callee::DeferredPackCall
+        } else {
+            Callee::Unread
+        };
         let kind = ExprKind::Call {
-            callee: Callee::Unread,
+            callee,
             arguments,
             form: Form::Named,
             text: None,

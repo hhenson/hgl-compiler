@@ -1454,3 +1454,144 @@ fn discarding_a_call_does_not_bind_a_result_parameter_to_none() {
     assert_eq!(checked.findings.len(), 1, "{}", checked.report);
     assert_eq!(checked.findings[0].code, "type/generic.unresolved");
 }
+
+/// CTRL-16 admits module constants and generic value parameters as keys.
+#[test]
+fn ordinary_parameters_are_not_pack_membership_keys() {
+    for modifier in ["", "const "] {
+        let checked = module(&format!(
+            "const fn pick<...Ps>({modifier}key: i64, items: ...Ps) -> i64 =>
+    if key in arg_keys(Ps) {{ 1 }} else {{ 2 }}"
+        ));
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, "type/type.mismatch");
+        assert_eq!(checked.findings[0].rule, "CTRL-16");
+    }
+}
+
+/// CTRL-16: only values can supply keys, even for an unused declaration.
+#[test]
+fn type_parameters_and_pack_objects_are_not_pack_membership_keys() {
+    for (generics, key, call) in [
+        ("<T, ...Ps>", "T", "pick<i64>(7)"),
+        ("<...Ps>", "Ps", "pick(7)"),
+        ("<...Ps>", "items", "pick(7)"),
+    ] {
+        let membership = format!("{key} in arg_keys(Ps)");
+        let conditional = format!("if {membership} {{ true }} else {{ false }}");
+        for (body, column) in [(&conditional, 8), (&membership, 5)] {
+            for used in [
+                String::new(),
+                format!("\nconst fn invoke() -> bool => {call}"),
+            ] {
+                let checked = module(&format!(
+                    "const fn pick{generics}(items: ...Ps) -> bool =>\n    {body}{used}"
+                ));
+                assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+                let finding = &checked.findings[0];
+                assert_eq!(finding.code, "type/type.mismatch", "{}", checked.report);
+                assert_eq!(finding.rule, "CTRL-16", "{}", checked.report);
+                assert_eq!(
+                    finding.at,
+                    format!("m.hgl:3:{column}"),
+                    "{}",
+                    checked.report
+                );
+            }
+        }
+    }
+}
+
+/// Only an instance that selects the branch reports its errors (CTRL-16).
+#[test]
+fn a_chosen_pack_branch_reports_its_own_error_at_the_making_call() {
+    for (other, code) in [
+        (r#""wrong""#, "type/type.mismatch"),
+        ("not_bound()", "name/name.unknown"),
+        ("hold<Ps[Key]>(4)", "type/pack.name"),
+    ] {
+        let checked = module(&format!(
+            "const Key: i64 = 0
+const fn hold<T>(value: T) -> T => value
+const fn pick<...Ps>(items: ...Ps) -> i64 =>
+    if Key in arg_keys(Ps) {{ items[Key] }} else {{ {other} }}
+const fn good() -> i64 => pick(7)
+const fn bad() -> i64 => pick()",
+        ));
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, code);
+        assert_eq!(checked.findings[0].at, "m.hgl:7:26", "{}", checked.report);
+    }
+}
+
+/// A direct anonymous call checks its chosen pack arm at the making call (FN-7, CTRL-16).
+#[test]
+fn direct_anonymous_calls_recheck_the_chosen_pack_arm() {
+    let branch = r#"if Key in arg_keys(Ps) { "wrong" } else { 0 }"#;
+    let direct = format!("(fn() -> i64 => {branch})()");
+    let nested = format!("(fn() -> i64 => {direct})()");
+    for body in [direct, nested] {
+        let source = format!(
+            "const Key: i64 = 0
+const fn pick<...Ps>(items: ...Ps) -> i64 =>
+    {body}
+const fn skips() -> i64 => pick()"
+        );
+        let skipped = module(&source);
+        assert!(skipped.findings.is_empty(), "{}", skipped.report);
+
+        let selected = module(&format!("{source}\nconst fn selects() -> i64 => pick(7)"));
+        assert_eq!(selected.findings.len(), 1, "{}", selected.report);
+        assert_eq!(
+            selected.findings[0].code, "type/type.mismatch",
+            "{}",
+            selected.report
+        );
+        assert_eq!(selected.findings[0].at, "m.hgl:6:30", "{}", selected.report);
+    }
+}
+
+/// A callback role trial leaves a selected arm's written pack lookup checked (FN-4, CTRL-16).
+#[test]
+fn callback_role_trials_keep_selected_pack_member_errors() {
+    let checked = module(
+        "const First: i64 = 0
+const Second: i64 = 1
+const fn ident<T>(value: T) -> T => value
+const fn calculate(input: i64) -> i64 => input + 2
+fn calculate(input: str) -> i64 => 17
+fn project<...Ps>(read: const fn(i64) -> i64, tick: i64, items: ...Ps) -> i64 {
+    let score = calculate(read(1))
+    if First in arg_keys(Ps) {
+        return tick + score + ident<Ps[Second]>(7)
+    } else { return tick + score }
+}
+fn relay(read: const fn(i64) -> i64, tick: i64) -> i64 => project(read, tick, tick + 1)",
+    );
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(
+        checked.findings[0].code, "type/pack.name",
+        "{}",
+        checked.report
+    );
+    assert_eq!(checked.findings[0].at, "m.hgl:13:59", "{}", checked.report);
+}
+
+/// Deferring a membership test does not establish a later assignment
+/// in an instance whose selected branch has no assignment (CTRL-11/16).
+#[test]
+fn a_pack_branch_must_assign_where_the_instance_reads_the_binding() {
+    let checked = module(
+        "const Key: i64 = 0
+const fn pick<...Ps>(items: ...Ps) -> i64 {
+    var answer: i64
+    if Key in arg_keys(Ps) { answer = 7 }
+    return answer
+}
+const fn good() -> i64 => pick(7)
+const fn bad() -> i64 => pick()",
+    );
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "name/binding.unassigned");
+    assert_eq!(checked.findings[0].at, "m.hgl:9:26", "{}", checked.report);
+}
