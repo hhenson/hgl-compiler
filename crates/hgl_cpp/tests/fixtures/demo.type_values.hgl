@@ -341,11 +341,11 @@ struct DefaultLabel<T, const Kind: Type = type(cold_sample(cold_make<T>()))> {
     label: Tagged<Kind>?
 }
 test default_selected_in_instance {
-    assert default_kind(3) == type(1)
-    assert default_kind("text") == type(true)
+    assert format("{}", default_kind(3)) == "list<str, 2>"
+    assert default_kind("text") == type((true, false))
     assert default_kind<str, type(1)>("text") == type(1)
-    assert forwarded_default("text") == type(true)
+    assert forwarded_default("text") == type((true, false))
     let selected = DefaultLabel(item: "text")
-    assert type(selected) == type(DefaultLabel<str, type(true)>(item: "text"))
+    assert type(selected) == type(DefaultLabel<str, type((true, false))>(item: "text"))
     assert type(selected) != type(DefaultLabel<str, type(1)>(item: "text"))
 }
