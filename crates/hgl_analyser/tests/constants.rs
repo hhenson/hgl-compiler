@@ -587,6 +587,32 @@ fn packed_constructors_follow_omitted_field_defaults() {
     }
 }
 
+/// CTRL-16 and UNIT-13: only the selected pack arm contributes dependencies.
+#[test]
+fn a_constant_depends_only_on_the_selected_pack_arm() {
+    let branch = "if Key in arg_keys(Ps) { items[Key] } else { Value }";
+    let anonymous = format!("(fn() -> i64 => {branch})()");
+    for body in [branch, anonymous.as_str()] {
+        let source = |arguments| {
+            format!(
+                "module m\n\
+                 const Key: i64 = 0\n\
+                 const Value: i64 = pick({arguments})\n\
+                 const fn pick<...Ps>(items: ...Ps) -> i64 => {body}\n"
+            )
+        };
+        let present = check(&[("m.hgl", &source("7"))]);
+        assert_eq!(present.summary(), NONE, "{}", present.report);
+        let absent = check(&[("m.hgl", &source(""))]);
+        assert_eq!(
+            absent.summary(),
+            ["m.hgl:3:7 name/constant.cycle UNIT-13"],
+            "{}",
+            absent.report
+        );
+    }
+}
+
 /// TYPE-5: giving a field bypasses its default even when another call of
 /// the same function uses that default through a different pack shape.
 #[test]

@@ -1,6 +1,6 @@
 //! Compile-time matching of a dependent argument pack (FN-8, GEN-17).
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
@@ -13,7 +13,7 @@ use super::inference::{pack_bounds, type_pack};
 use super::{Candidate, Typer};
 use crate::declared::{substitute_with_packs, weight};
 use crate::hir::{Callee, Expr, ExprKind, PackKey, ReflectedInputs, TypePackArgument};
-use crate::syntax::{child, ungrouped};
+use crate::syntax::{child, pack_key_branches, ungrouped};
 use crate::types::{
     Argument as GenericArgument, Constant, ConstantValue, Detail, FunctionType, GenericParameter,
     Pack, Signature, Type,
@@ -220,6 +220,7 @@ impl<'p> PackTypes<'p> {
         };
         let span = declared.syntax.span();
         let requires = child(&declared.syntax, hgl_parser::SyntaxKind::RequiresClause);
+        let branches = OnceCell::<Vec<_>>::new();
         let in_body = |at: Location| {
             at.file == declared.at.file
                 && contains(span, at.span)
@@ -231,21 +232,35 @@ impl<'p> PackTypes<'p> {
             .written
             .iter()
             .filter(|written| in_body(written.at))
-            .map(|written| &written.ty);
+            .map(|written| (written.at, &written.ty));
         // GEN-8 writes the call's type arguments in the separate call table.
         let call_types = unit
             .call_arguments
             .iter()
             .filter(|call| in_body(call.at))
             .flat_map(|call| call.arguments.iter())
-            .filter_map(|(_, argument)| match argument {
-                GenericArgument::Type(ty) => Some(ty),
+            .filter_map(|(at, argument)| match argument {
+                GenericArgument::Type(ty) => Some((*at, ty)),
                 GenericArgument::Constant(_) | GenericArgument::NoResult => None,
             });
         written
             .chain(call_types)
-            .filter(|ty| ty.any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false))
-            .find_map(|ty| self.project(ty, map).err())
+            .filter(|(_, ty)| {
+                ty.any_part(&|part| matches!(part, Type::PackMember { .. }), &|_| false)
+            })
+            .find_map(|(at, ty)| {
+                let branches = branches.get_or_init(|| {
+                    pack_key_branches(&declared.syntax)
+                        .map(|branch| branch.span())
+                        .collect()
+                });
+                // The instance checks a written use only in the branch
+                // it takes (CTRL-16).
+                if branches.iter().any(|branch| contains(*branch, at.span)) {
+                    return None;
+                }
+                self.project(ty, map).err()
+            })
     }
 }
 

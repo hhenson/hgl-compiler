@@ -1850,9 +1850,9 @@ fn a_call_that_does_not_meet_its_callees_requires_is_rejected() {
     assert_eq!(answers(&checked, "neither"), ["unread"]);
 }
 
-/// GEN-3 and GEN-10: `each` checks every captured type, including a
-/// named pack's types, and holds over an empty capture. A failing type
-/// settles the verdict even when another test is still untold.
+/// GEN-3, GEN-10 and GEN-16: `each` checks every captured type, including
+/// a named pack's types, and holds over an empty capture. A named
+/// requirement asks for a candidate for the current type.
 #[test]
 fn a_call_checks_each_type_its_pack_requires() {
     let checked = module(concat!(
@@ -1867,25 +1867,19 @@ fn a_call_checks_each_type_its_pack_requires() {
         "const fn good_named() -> i64 => named_i64(an: 1, other: 2)\n",
         "const fn mixed() -> i64 => all_i64(1, true)\n",
         "const fn mixed_named() -> i64 => named_i64(an: 1, other: true)\n",
-        "const fn untold() -> i64 => needs_judgment(1)\n",
-        "const fn false_over_untold() -> i64 => needs_judgment(1, \"no\")\n",
-        "const fn empty_opaque() -> i64 => needs_judgment()\n",
+        "const fn callable() -> i64 => needs_judgment(1)\n",
+        "const fn false_member() -> i64 => needs_judgment(1, \"no\")\n",
+        "const fn empty_condition() -> i64 => needs_judgment()\n",
     ));
     assert_eq!(
         checked.summary(),
         [
             "m.hgl:11:28 constraint/requires.unmet GEN-3",
             "m.hgl:12:34 constraint/requires.unmet GEN-3",
-            "m.hgl:13:29 constraint/requires.unmet GEN-3",
-            "m.hgl:14:40 constraint/requires.unmet GEN-3",
+            "m.hgl:14:35 constraint/requires.unmet GEN-3",
         ],
         "{}",
         checked.report
-    );
-    assert!(
-        checked
-            .report
-            .contains("the `requires` of `needs_judgment` is not known to hold for this call")
     );
     assert!(
         checked

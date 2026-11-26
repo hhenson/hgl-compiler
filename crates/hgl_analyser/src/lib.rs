@@ -573,6 +573,9 @@ pub mod codes {
     /// "tied most-specific candidates are ambiguous").
     pub const OPERATOR_AMBIGUOUS: &str = "operator.ambiguous";
 
+    /// GEN-6: a call can match two declared candidates equally.
+    pub const OPERATOR_CANDIDATES_TIE: &str = "operator.candidates_tie";
+
     /// A parameter that may not be omitted follows one that may
     /// (UNIT-8).
     pub const DEFAULT_ORDER: &str = "default.order";
@@ -714,6 +717,7 @@ fn analyse_with_test_candidates(
         declare::declare(module, files, diagnostics);
     }
     imports::resolve(&mut program, diagnostics);
+    let before_bodies = diagnostics.len();
     resolve::resolve(&mut program, diagnostics);
     forms::check(&program, diagnostics);
     phases::classify(&mut program);
@@ -722,6 +726,7 @@ fn analyse_with_test_candidates(
     declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics, tests);
     documentation::check(&program, diagnostics);
+    values::defer_pack_branch_reports(&mut program, diagnostics, before_bodies);
     let store_key_uses = values::check(&mut program, diagnostics);
     resolve::warn_hidden_callables(&program, diagnostics);
     // UNIT-13: asked of the typed program, where each call has the

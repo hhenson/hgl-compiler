@@ -81,6 +81,7 @@ impl DefaultExpr {
     /// Cold Type queries also need their existing instance-specific read.
     pub fn needs_contextual_specialization(&self, expected: &Type) -> bool {
         self.needs_type_specialization()
+            || self.needs_pack_specialization()
             || matches!(
                 self.value.kind,
                 ExprKind::Sequence(_) | ExprKind::Tuple(_) | ExprKind::Pairs(_)
@@ -131,6 +132,35 @@ impl DefaultExpr {
         self.value
             .walk(&mut |value| found = found || depends(value));
         found
+    }
+
+    /// CTRL-16 and UNIT-8: an omitted default needs the concrete keys
+    /// for a pack guard or an anonymous call deferred by one.
+    pub(crate) fn needs_pack_specialization(&self) -> bool {
+        fn find(value: &Expr, pending: &mut bool) {
+            if *pending {
+                return;
+            }
+            let callee = match &value.kind {
+                ExprKind::DeferredPackCondition
+                | ExprKind::Call {
+                    callee: Callee::DeferredPackCall,
+                    ..
+                } => {
+                    *pending = true;
+                    return;
+                }
+                ExprKind::Call { callee, .. } => callee,
+                ExprKind::StaticCallable(callee) => callee.as_ref(),
+                _ => return,
+            };
+            if let Callee::Anonymous(function) = callee {
+                walk_statements(&function.body.statements, &mut |value| find(value, pending));
+            }
+        }
+        let mut pending = false;
+        self.value.walk(&mut |value| find(value, &mut pending));
+        pending
     }
 
     /// Treat the expression as a body for specialization and analysis of its locals.
@@ -629,6 +659,8 @@ pub enum ExprKind {
     /// An indexed pack read awaiting the concrete entries and key of an
     /// instance. The source expression is read again there (FN-19).
     DeferredPackRead,
+    /// A membership test or branch awaiting its instance's pack keys (CTRL-16).
+    DeferredPackCondition,
     /// An immutable graph binding read where a null test proved its
     /// presence, before the instance has determined its ordinary type (ERR-12).
     DeferredPresent(LocalId),
@@ -1308,7 +1340,7 @@ pub enum Callee {
     Anonymous(Box<AnonymousFunction>),
     /// A named operator awaiting an argument type before selection (GEN-7).
     DeferredOperator(Box<DeferredOperator>),
-    /// A call waiting for the entries of its pack arguments (FN-19).
+    /// A call whose arguments or body wait for concrete pack inputs (FN-19, CTRL-16).
     DeferredPackCall,
     /// A deferred operator call whose candidates are all value functions.
     DeferredValue,
@@ -1867,6 +1899,7 @@ impl Expr {
             | ExprKind::Local(_)
             | ExprKind::PackEntry { .. }
             | ExprKind::DeferredPackRead
+            | ExprKind::DeferredPackCondition
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
@@ -2039,6 +2072,7 @@ impl Expr {
             | ExprKind::Local(_)
             | ExprKind::PackEntry { .. }
             | ExprKind::DeferredPackRead
+            | ExprKind::DeferredPackCondition
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)

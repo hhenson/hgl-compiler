@@ -367,7 +367,12 @@ impl const fn typed(value: i64) -> i64 => 2
                 .iter()
                 .map(|finding| (finding.code.as_str(), finding.rule))
                 .collect::<Vec<_>>(),
-            [("type/type.mismatch", "FN-17"); 2],
+            [
+                ("warning/operator.candidates_tie", "GEN-6"),
+                ("type/type.mismatch", "FN-17"),
+                ("type/type.mismatch", "FN-17"),
+                ("warning/operator.candidates_tie", "GEN-6"),
+            ],
             "{}",
             checked.report,
         );
