@@ -125,3 +125,35 @@ test written_operator_arguments_constrain_the_complete_reading {
     let xs: list<i64, 2> = [3, 4]
     assert forward(with_result<list<i64, 2>>, true, xs) == xs
 }
+
+operator fee<const N: i64, A, O>(x: A) -> O
+impl const fn fee(x: i64) -> i64 => x + 1
+impl const fn fee(x: list<i64, 2>) -> list<i64, 2> => x
+
+const fn head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires R == list<i64, 2> && each k in arg_keys(As) {
+        As[k] in {Ps[k], list<Ps[k], 2>}
+    }
+    => f(...args)[0]
+
+operator operator_head<R, O, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> O
+impl const fn operator_head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires R == list<i64, 2> && each k in arg_keys(As) {
+        As[k] in {Ps[k], list<Ps[k], 2>}
+    }
+    => f(...args)[0]
+
+fn first_price(xs: list<i64, 2>) -> i64 => head(fee<4>, xs)
+fn operator_first_price(xs: list<i64, 2>) -> i64 => operator_head(fee<4>, xs)
+
+operator price<A, O>(x: A) -> O
+impl const fn price(x: list<i64, 2>) -> i64 => x[0] + 1
+impl const fn price(x: list<i64, 2>) -> list<i64, 2> => x
+
+fn price_with_written_input(xs: list<i64, 2>) -> i64 => head(price<list<i64, 2>>, xs)
+
+test receiver_result_constraint_selects_the_whole_input {
+    assert eval first_price(xs: [[23, 42]]) == [23]
+    assert eval operator_first_price(xs: [[23, 42]]) == [23]
+    assert eval price_with_written_input(xs: [[23, 42]]) == [23]
+}

@@ -458,20 +458,29 @@ impl<'a> Typer<'a> {
         };
         let written_shape = bindings
             .as_ref()
-            .filter(|_| reflected && inputs.evidence.is_some())
-            .and_then(|bindings| {
+            .filter(|_| reflected && inputs.evidence.is_some_and(|evidence| !evidence.is_empty()))
+            .filter(|bindings| {
+                bindings
+                    .explicit
+                    .fixed
+                    .iter()
+                    .enumerate()
+                    .any(|(index, value)| {
+                        value.is_none()
+                            && bindings
+                                .explicit
+                                .pack
+                                .as_ref()
+                                .is_none_or(|pack| pack.parameter != index)
+                    })
+            })
+            .map(|bindings| {
                 let shape = ReferenceShape::with_bindings(
                     public,
                     template,
                     bindings.explicit.fixed.clone(),
                 );
-                public
-                    .parameters
-                    .iter()
-                    .any(|parameter| {
-                        !parameter.configuration && mentions(&parameter.ty, &shape.unresolved)
-                    })
-                    .then_some((name, bindings, shape))
+                (name, bindings, shape)
             });
         let ReflectedArguments {
             mut given,
@@ -541,10 +550,14 @@ impl<'a> Typer<'a> {
                     .map(|(index, input)| callback_operand(index, node, at, input.ty().clone())),
             );
         }
+        let result_shapes: Vec<_> = inputs
+            .known_result_shapes(template, bindings.is_none() || written_shape.is_some())
+            .chain(&reflected_results)
+            .collect();
         let (mut matches, unknown) = self.operator_callback_matches(
             node,
             (operator, public, &candidates),
-            (template, inputs, &reflected_results),
+            (template, inputs, &result_shapes),
             (explicit.as_ref(), &mut given),
         );
         if !unknown
@@ -643,7 +656,7 @@ impl<'a> Typer<'a> {
         &mut self,
         node: &SyntaxNode,
         (operator, public, candidates): (OperatorRef, &Signature, &[Candidate<'a>]),
-        (template, inputs, reflected_results): (&FunctionType, &CallbackInputs<'_>, &[Type]),
+        (template, inputs, result_shapes): (&FunctionType, &CallbackInputs<'_>, &[&Type]),
         (explicit, given): (Option<&OperatorReference<'a>>, &mut [Given]),
     ) -> (Vec<Chosen<'a>>, bool) {
         let reflected = template.named_pack.is_some();
@@ -706,19 +719,15 @@ impl<'a> Typer<'a> {
                 });
             }
         }
-        let result_shapes: Vec<_> = inputs
-            .known_result_shapes(node, template)
-            .chain(reflected_results)
-            .collect();
         let wanted = Wanted {
-            place: inputs.requested_result(node, request, &result_shapes),
+            place: inputs.requested_result(node, request, result_shapes),
             among: explicit.and_then(|operator| operator.among.clone()),
             written: explicit.is_some(),
             callback: (explicit.is_some() || reflected).then_some(CallbackRequest {
                 reference: request.reference,
                 values: &requested_values,
                 reflected: reflected.then_some(inputs.excluded),
-                result_shapes: &result_shapes,
+                result_shapes,
             }),
         };
         self.with_callback_role(template, |typer, role| {
@@ -1567,13 +1576,12 @@ impl CallbackInputs<'_> {
         self.evidence?.expected_result(template.result.as_ref()?)
     }
 
-    /// An enclosing bare-callback trial can contribute several partial result shapes.
+    /// An enclosing callback trial can contribute several partial result shapes.
     fn known_result_shapes<'s>(
         &'s self,
-        node: &SyntaxNode,
         template: &'s FunctionType,
+        use_enclosing_evidence: bool,
     ) -> impl Iterator<Item = &'s Type> {
-        let bare = node.kind() == SyntaxKind::NameExpr;
         self.result_shapes
             .iter()
             .chain(template.result.iter().filter(|ty| !open(ty) && !whole(ty)))
@@ -1581,7 +1589,7 @@ impl CallbackInputs<'_> {
                 self.evidence
                     .map_or(&[][..], CallbackEvidence::result_shapes),
             )
-            .filter(move |_| bare)
+            .filter(move |_| use_enclosing_evidence)
     }
 
     /// A known result can specialize the callback before its candidates are ranked.
@@ -1757,7 +1765,12 @@ fn reflected_arguments<'a>(
         .iter()
         .map(|(key, _)| callback_parameter(public, key).map(|slot| &public.parameters[slot].ty))
         .collect();
-    let result_shapes: Vec<_> = inputs.known_result_shapes(node, template).collect();
+    let result_shapes: Vec<_> = inputs
+        .known_result_shapes(
+            template,
+            node.kind() == SyntaxKind::NameExpr || written_shape.is_some(),
+        )
+        .collect();
     let choices: Vec<_> = supplied
         .iter()
         .zip(&parameters)
@@ -1888,7 +1901,7 @@ fn reflected_arguments<'a>(
                         let (matches, unknown) = typer.operator_callback_matches(
                             node,
                             (operator, public, candidates),
-                            (template, inputs, &trial_shapes),
+                            (template, inputs, &shapes),
                             (Some(&reference), &mut given),
                         );
                         unknown || !matches.is_empty()
