@@ -28,10 +28,10 @@
 //! endpoint of the whole struct as any other is: hgraph maps the C++
 //! optional of the field to its `Optional`, a null to a published null.
 //!
-//! Not this family's, and reported: an abstract struct or a struct with
-//! generic value arguments as a temporal value, a struct with no field,
-//! a tuple with an atomic position, a struct or a tuple
-//! with a part whose form is not a scalar's, an enum's, a nullable's, a
+//! Not this family's, and reported: an abstract struct, a struct with no field,
+//! a struct with an unsupported generic value argument kind (such as `str`,
+//! non-finite `f64`, or a pack), a tuple with an atomic position, a struct or a
+//! tuple with a part whose form is not a scalar's, an enum's, a nullable's, a
 //! list's or another of this family's (a set, a dictionary, a window), a
 //! constant connection of one (FN-3), and a read of a part of `out`.
 
@@ -70,8 +70,20 @@ pub(super) fn bundled(program: &Program, ty: &Type) -> Option<(usize, usize)> {
     bundles(program, ty, 0, &mut Vec::new()).then_some((*module, *declaration))
 }
 
+/// True where a concrete generic value argument can be encoded in a C++
+/// nominal bundle schema (`hglrt::nominal_struct_name`, TYPE-3, TYPE-9).
+fn bundle_value_argument(constant: &ConstantValue) -> bool {
+    match constant {
+        ConstantValue::Int(_) | ConstantValue::Bool(_) => true,
+        ConstantValue::Float(number) => number.is_finite(),
+        ConstantValue::Member(member) => member.of.is_some(),
+        ConstantValue::Type(ty) => ty.identity().is_some(),
+        _ => false,
+    }
+}
+
 /// Check the fields of this particular application, giving each field
-/// the struct's type arguments before looking up its schema (TYPE-3,
+/// the struct's generic arguments before looking up its schema (TYPE-3,
 /// TYPE-4). `depth` bounds the structs it holds (TYPE-6).
 fn bundles(program: &Program, ty: &Type, depth: usize, checked: &mut Vec<(Type, usize)>) -> bool {
     let Type::Named {
@@ -95,8 +107,10 @@ fn bundles(program: &Program, ty: &Type, depth: usize, checked: &mut Vec<(Type, 
     if depth > 32 || inherited(program, *module, *declaration) || cpp_type(program, ty).is_none() {
         return false;
     }
-    let supported = arguments.iter().all(|argument| {
-        matches!(argument, Argument::Type(ty) if bundle_field(program, ty, depth + 1, checked).is_some())
+    let supported = arguments.iter().all(|argument| match argument {
+        Argument::Type(ty) => bundle_field(program, ty, depth + 1, checked).is_some(),
+        Argument::Constant(constant) => bundle_value_argument(&constant.value),
+        Argument::NoResult => false,
     }) && fields_of(program, ty).is_some_and(|fields| {
         !fields.is_empty()
             && fields
@@ -696,14 +710,20 @@ impl Emitter<'_> {
         };
         if inherited(program, self.module, index)
             || read.members.is_empty()
-            || read
-                .generics
-                .iter()
-                .any(|parameter| !matches!(parameter.kind, GenericKind::Plain | GenericKind::Type))
+            || read.generics.iter().any(|parameter| {
+                !matches!(
+                    parameter.kind,
+                    GenericKind::Plain | GenericKind::Type | GenericKind::Value(_)
+                )
+            })
         {
             return String::new();
         }
         let generic = !parameters.is_empty();
+        let has_value_generics = read
+            .generics
+            .iter()
+            .any(|parameter| matches!(parameter.kind, GenericKind::Value(_)));
         let ns = runtime::NAMESPACE;
         let schema_of = |ty: &str| format!("::{ns}::bundle_value<{ty}>");
         let mut fields = Vec::new();
@@ -728,15 +748,40 @@ impl Emitter<'_> {
         let namespace = hgl_name
             .rsplit_once("::")
             .map_or(&*declared.path, |(scope, _)| scope);
-        let arguments = parameters
-            .iter()
-            .map(|parameter| schema_of(parameter))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let (local_name, arguments) = if has_value_generics {
+            let mut schema_args = Vec::new();
+            let mut type_args = Vec::new();
+            for (generic_param, param_name) in read.generics.iter().zip(parameters) {
+                match generic_param.kind {
+                    GenericKind::Value(_) => {
+                        schema_args.push(format!("::{ns}::value_arg<{param_name}>"));
+                    }
+                    GenericKind::Plain | GenericKind::Type => {
+                        schema_args.push(format!("::{ns}::type_arg_slot"));
+                        type_args.push(schema_of(param_name));
+                    }
+                    GenericKind::Pack { .. } => unreachable!(),
+                }
+            }
+            (
+                format!(
+                    "::{ns}::nominal_struct_name<{}, {}>",
+                    names::string(name),
+                    schema_args.join(", ")
+                ),
+                type_args.join(", "),
+            )
+        } else {
+            let arguments = parameters
+                .iter()
+                .map(|parameter| schema_of(parameter))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (names::string(name), arguments)
+        };
         let schema = format!(
-            "::hgraph::NominalBundle<{}, {}, false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<{arguments}>, {}>",
+            "::hgraph::NominalBundle<{}, {local_name}, false, ::hgraph::BundleParents<>, ::hgraph::BundleArguments<{arguments}>, {}>",
             names::string(namespace),
-            names::string(name),
             fields.join(", ")
         );
         let mut text = format!(
@@ -750,11 +795,26 @@ impl Emitter<'_> {
             .iter()
             .map(|member| names::string(&member.name))
             .collect();
+        let display_args: Vec<String> = if has_value_generics {
+            read.generics
+                .iter()
+                .zip(parameters)
+                .map(|(generic_param, param_name)| match generic_param.kind {
+                    GenericKind::Value(_) => format!("::{ns}::value_arg<{param_name}>"),
+                    GenericKind::Plain | GenericKind::Type => {
+                        format!("::{ns}::type_arg<{param_name}>")
+                    }
+                    GenericKind::Pack { .. } => unreachable!(),
+                })
+                .collect()
+        } else {
+            parameters.to_vec()
+        };
         for (of, is_delta) in [(qualified, false), (delta, true)] {
             let name = if generic {
                 let applied = format!(
                     "::{ns}::applied_struct_name<{}>({})",
-                    parameters.join(", "),
+                    display_args.join(", "),
                     names::string(&hgl_name),
                 );
                 let name = if is_delta {
