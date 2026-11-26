@@ -147,6 +147,8 @@ impl<'a> Typer<'a> {
                 SyntaxKind::Literal
                     | SyntaxKind::TupleExpr
                     | SyntaxKind::SequenceExpr
+                    | SyntaxKind::KeyedExpr
+                    | SyntaxKind::SetExpr
                     | SyntaxKind::UnaryExpr
             ) || takes_its_type(node))
             && !written_null(node)
@@ -173,8 +175,23 @@ impl<'a> Typer<'a> {
                 }
                 (ExprKind::Unread, Type::Unknown)
             }
-            SyntaxKind::TupleExpr => self.tuple(node, expected, fit),
+            SyntaxKind::TupleExpr | SyntaxKind::SequencePair => self.tuple(node, expected, fit),
             SyntaxKind::SequenceExpr => self.sequence(node, expected, fit),
+            SyntaxKind::SetExpr => {
+                let context =
+                    not_null(expected).filter(|ty| matches!(ty, Type::Set(_)) || open(ty));
+                let (kind, ty) = self.sequence(node, context, fit);
+                let ty = match ty {
+                    Type::List { element, .. } => {
+                        let set = Type::Set(element);
+                        self.check_collection_constants(node.children(), &set);
+                        set
+                    }
+                    other => other,
+                };
+                (kind, ty)
+            }
+            SyntaxKind::KeyedExpr => self.keyed_literal(node, not_null(expected), fit),
             SyntaxKind::ListComprehension => self.list_comprehension(node, expected, fit),
             SyntaxKind::PackComprehension => {
                 self.check_pack_comprehension(node);
@@ -484,6 +501,13 @@ impl<'a> Typer<'a> {
     /// they use as callees or type names before reading ordinary values.
     fn name(&mut self, node: &SyntaxNode) -> Expr {
         let at = self.at(node);
+        if crate::syntax::is_keyed_field_name(node)
+            && let Some(reports) = self.module.contextual_type_reports.get(&at)
+        {
+            for report in reports {
+                self.diagnostics.emit(report.clone());
+            }
+        }
         let unread = Expr {
             kind: ExprKind::Unread,
             ty: Type::Unknown,
@@ -904,6 +928,74 @@ impl<'a> Typer<'a> {
             })
     }
 
+    fn keyed_literal(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        fit: ExpressionFit,
+    ) -> (ExprKind, Type) {
+        let items: Vec<_> = node.children().collect();
+        if !items.is_empty()
+            && let Some(Type::Named {
+                module,
+                declaration,
+                arguments,
+                kind: crate::types::NamedKind::Struct,
+                ..
+            }) = expected
+        {
+            let declared = &self.program.modules[*module].declarations[*declaration];
+            if let Some(name) = tokens(&declared.syntax).find(|token| token.text() == declared.name)
+            {
+                return self.construct(
+                    &name,
+                    node,
+                    *module,
+                    *declaration,
+                    Some(arguments.clone()),
+                    true,
+                );
+            }
+            return (ExprKind::Unread, Type::Unknown);
+        }
+        if matches!(expected, Some(Type::Dict { .. })) {
+            return self.pairs(&items, expected, fit);
+        }
+        // An implied enum member, a null, or an empty nested collection can
+        // take its type from a sibling. Probe both columns in written order;
+        // commit the complete reads only once both types are available.
+        let mut known = [Vec::new(), Vec::new()];
+        let mut has_null = [false, false];
+        let mark = self.mark();
+        for pair in &items {
+            for (side, part) in pair.children().take(2).enumerate() {
+                has_null[side] |= branch_is_null(&part);
+                if !branch_takes_its_type(&part) {
+                    known[side].push(self.expression(&part, Some(&Type::Unknown)).ty);
+                }
+            }
+        }
+        self.take_back(mark, false);
+        let [key, value] = std::array::from_fn(|side| {
+            sequence_element(&known[side].iter().collect::<Vec<_>>(), has_null[side])
+        });
+        if (key.is_none() || value.is_none()) && !expected.is_some_and(open) {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::SEQUENCE_CONTEXT,
+                self.at(node),
+                "this dictionary needs a key and value type from its entries or its context"
+                    .to_string(),
+                "EXPR-9",
+            ));
+        }
+        let ty = Type::Dict {
+            key: Box::new(key.unwrap_or(Type::Unknown)),
+            value: Box::new(value.unwrap_or(Type::Unknown)),
+        };
+        self.pairs(&items, Some(&ty), fit)
+    }
+
     /// Read a literal component with the fit of the enclosing operand.
     pub(super) fn read_literal_part(
         &mut self,
@@ -926,41 +1018,17 @@ impl<'a> Typer<'a> {
         self.fit(value, pattern_type.as_ref().unwrap_or(expected), place)
     }
 
-    /// `[key: value, ...]` (EXPR-9): "`[a: b]` has one pair entry, not a
-    /// standalone pair value ... The use site and expected type
-    /// constrain element types, keys, ordering, uniqueness, and
-    /// placeholder admission; syntax alone does not select a
-    /// dictionary, timed trace, or sparse delta."
-    ///
-    /// So pairs are a dictionary where one is expected: each key is
-    /// read as its key type and each value as its value type. Where
-    /// nothing is expected, nothing says what they are
-    /// (`sequence.context_type`); where another type that is known is
-    /// expected, the place reports that this is none of it.
+    /// Read and fit the two columns of a dictionary in written order.
     fn pairs(
         &mut self,
-        node: &SyntaxNode,
         items: &[SyntaxNode],
         expected: Option<&Type>,
-        unexpected: bool,
         fit: ExpressionFit,
     ) -> (ExprKind, Type) {
         let sides = match expected {
             Some(Type::Dict { key, value }) => Some(((**key).clone(), (**value).clone())),
             _ => None,
         };
-        if sides.is_none() && unexpected {
-            self.diagnostics.emit(
-                error(
-                    Category::Type,
-                    codes::SEQUENCE_CONTEXT,
-                    self.at(node),
-                    "nothing here says what these pairs make: write the type".to_string(),
-                    "EXPR-9",
-                )
-                .with_note("pairs are a dictionary where one is expected: `let book: dict<str, f64> = [\"a\": 1.0]`"),
-            );
-        }
         let unknown = Type::Unknown;
         let (key_type, value_type) = match &sides {
             Some((key, value)) => (key, value),
@@ -1055,8 +1123,8 @@ impl<'a> Typer<'a> {
     /// of the one type they have, `f64` when some are `i64` and some
     /// `f64` (NUM-1).
     ///
-    /// Pairs and `_` are for the passes that read dictionaries and test
-    /// traces.
+    /// In a list, colon entries abbreviate tuples. A dictionary or trace
+    /// place reads them according to its own rules.
     fn sequence(
         &mut self,
         node: &SyntaxNode,
@@ -1107,8 +1175,10 @@ impl<'a> Typer<'a> {
         let pairs = items
             .iter()
             .any(|item| item.kind() == SyntaxKind::SequencePair);
-        if pairs || (items.is_empty() && matches!(expected, Some(Type::Dict { .. }))) {
-            return self.pairs(node, &items, expected, unexpected, fit);
+        if matches!(expected, Some(Type::Dict { .. })) && (items.is_empty() || pairs)
+            || pairs && matches!(expected, Some(Type::Set(_)))
+        {
+            return self.pairs(&items, expected, fit);
         }
         let element = match expected {
             Some(Type::List { element, .. }) | Some(Type::Set(element)) => Some(&**element),

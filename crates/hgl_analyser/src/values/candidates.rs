@@ -1803,12 +1803,23 @@ impl<'a> Typer<'a> {
                 matches_template(template, actual)
             }
             (Type::Function(_), _) | (_, Type::Function(_)) => false,
+            // A braced literal may take a candidate's fixed list extent,
+            // but its independently established struct schema stays fixed.
+            _ if given.by_place
+                && let Some(schema) = &given.explicit
+                && super::braces::contains_braced_literal(&given.node)
+                && !self.admits(ty, schema)
+                && !super::fit::fits_declared_input_pattern(ty, schema)
+                && !crate::declared::agrees_with_brace_schema(ty, schema) =>
+            {
+                false
+            }
             _ if given.by_place => {
                 given
                     .explicit
                     .as_ref()
                     .is_none_or(|public| sequence_readings::compatible(given, public, ty))
-                    && self.fits_place(&given.node, ty, widening)
+                    && self.fits_argument_place(given, ty, widening)
             }
             _ => {
                 self.admits(ty, given.ty())
@@ -1824,6 +1835,15 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// Candidate-only context may choose a collection reading or extent.
+    /// It cannot provide the schema for a shorthand struct construction.
+    fn fits_argument_place(&mut self, given: &Given, ty: &Type, widening: bool) -> bool {
+        self.fits_literal(&given.node, ty, widening, |read| {
+            !super::braces::contains_braced_literal(&given.node)
+                || super::braces::keeps_struct_fields(&given.node, &given.value, read)
+        })
+    }
+
     /// True when the expression at `node`, which is read as the type of
     /// its place, is a value of `ty`. It is read as one, and what that
     /// reading reports is taken back: the caller asks, and reports for
@@ -1834,6 +1854,16 @@ impl<'a> Typer<'a> {
     /// The expression has been read once already, with nothing expected
     /// of it, so a reading here changes nothing but the diagnostics.
     pub(super) fn fits_place(&mut self, node: &SyntaxNode, ty: &Type, widening: bool) -> bool {
+        self.fits_literal(node, ty, widening, |_| true)
+    }
+
+    fn fits_literal(
+        &mut self,
+        node: &SyntaxNode,
+        ty: &Type,
+        widening: bool,
+        preserves: impl FnOnce(&Expr) -> bool,
+    ) -> bool {
         // Past the function's bound nothing more is tried, and the
         // caller leaves its call unjudged.
         if !self.may_reread() {
@@ -1843,7 +1873,7 @@ impl<'a> Typer<'a> {
         let value = self.expression(node, Some(ty));
         let value = self.fit(value, ty, "its place");
         let fits = self.take_back(mark, false);
-        fits && (widening || !widens_an_entry(&value))
+        fits && (widening || !widens_an_entry(&value)) && preserves(&value)
     }
 
     /// GEN-6 and FN-17: resolve the candidate's function templates from
@@ -4814,7 +4844,14 @@ fn widens_an_entry(value: &Expr) -> bool {
 pub(super) fn typed_by_place(node: &SyntaxNode) -> bool {
     let node = &ungrouped(node.clone());
     match node.kind() {
-        SyntaxKind::SequenceExpr | SyntaxKind::TupleExpr => true,
+        SyntaxKind::SequenceExpr
+        | SyntaxKind::TupleExpr
+        | SyntaxKind::SetExpr
+        | SyntaxKind::KeyedExpr => true,
+        SyntaxKind::ListComprehension => node
+            .children()
+            .nth(1)
+            .is_some_and(|entry| super::braces::contains_braced_literal(&entry)),
         // An integer literal that is a block's value is an `f64` where
         // one is expected (EXPR-5), as the block's place says.
         SyntaxKind::Block => value_of_branch(node)

@@ -148,7 +148,11 @@ impl<'a> Typer<'a> {
                 error(
                     Category::Type,
                     codes::STRUCT_ABSTRACT,
-                    Location::new(self.file, name.span()),
+                    if list.kind() == SyntaxKind::KeyedExpr {
+                        self.at(list)
+                    } else {
+                        Location::new(self.file, name.span())
+                    },
                     format!(
                         "`{}` is an abstract struct and is not constructed",
                         declared.name
@@ -284,7 +288,11 @@ impl<'a> Typer<'a> {
         } = &ty
             && self.diagnostics.len() == before
         {
-            let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
+            let at = if list.kind() == SyntaxKind::KeyedExpr {
+                self.at(list)
+            } else {
+                Location::new(self.file, Span::new(name.span().start, list.span().end))
+            };
             self.requires_met(at, (module, declaration), applied);
         }
         // TST-3: a trace "is stored in no field", bare or inside a
@@ -412,7 +420,11 @@ impl<'a> Typer<'a> {
         dependent: Option<usize>,
     ) -> Vec<Assigned> {
         let what = takes.noun();
-        let callee_at = Location::new(self.file, callee.span());
+        let callee_at = if list.kind() == SyntaxKind::KeyedExpr {
+            self.at(list)
+        } else {
+            Location::new(self.file, callee.span())
+        };
         let pack = |kind| {
             let mut matches = slots
                 .iter()

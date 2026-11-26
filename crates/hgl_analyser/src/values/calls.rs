@@ -2548,6 +2548,18 @@ pub(super) fn pending_function_inference(kind: &ExprKind) -> bool {
 /// The arguments of an argument list, in order: each with its name,
 /// when it has one, and its value.
 pub(super) fn arguments_of(list: &SyntaxNode) -> Vec<(Option<SyntaxToken>, SyntaxNode)> {
+    if list.kind() == SyntaxKind::KeyedExpr {
+        return list
+            .children()
+            .filter_map(|pair| {
+                let mut parts = pair.children();
+                let key = parts.next()?;
+                let field = crate::syntax::keyed_field_name(&key);
+                let value = if field.is_some() { parts.next()? } else { key };
+                Some((field, value))
+            })
+            .collect();
+    }
     list.children()
         .filter(|argument| argument.kind() == SyntaxKind::Arg)
         .filter_map(|argument| {

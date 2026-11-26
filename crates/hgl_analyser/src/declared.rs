@@ -2332,6 +2332,12 @@ pub(crate) fn agree_with_input_pattern(given: &Type, pattern: &Type) -> bool {
     agree_as(given, pattern, Agreement::InputPattern)
 }
 
+/// TYPE-5, EXPR-9: keep the public parts of a braced operand's type,
+/// while a public `any` within a collection leaves that position open.
+pub(crate) fn agrees_with_brace_schema(candidate: &Type, public: &Type) -> bool {
+    agree_as(candidate, public, Agreement::BraceInput)
+}
+
 /// Whether two types are one: `Some(true)` where they are known to be,
 /// `Some(false)` where they are known to differ, and `None` where a
 /// constant in either is not known, `FBox<X>` beside `FBox<2.0>` with `X`
@@ -2408,6 +2414,7 @@ fn opened(ty: &Type) -> Type {
 enum Agreement {
     Known,
     InputPattern,
+    BraceInput,
     Possible,
     CandidateResult,
 }
@@ -2438,6 +2445,7 @@ fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
     };
     match (left, right) {
         (Type::Unknown, _) | (_, Type::Unknown) => true,
+        (_, Type::Scalar(Scalar::Any)) if matches!(agreement, Agreement::BraceInput) => true,
         (
             Type::Named {
                 module,
@@ -2459,7 +2467,14 @@ fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
                     .iter()
                     .zip(other_arguments)
                     .all(|pair| match pair {
-                        (Argument::Type(left), Argument::Type(right)) => agree(left, right),
+                        (Argument::Type(left), Argument::Type(right)) => {
+                            // A known nominal schema has invariant generic arguments.
+                            if matches!(agreement, Agreement::BraceInput) {
+                                agree_with_input_pattern(left, right)
+                            } else {
+                                agree(left, right)
+                            }
+                        }
                         (Argument::Constant(left), Argument::Constant(right)) => {
                             constants_agree(left, right)
                         }
@@ -2483,7 +2498,7 @@ fn agree_as(left: &Type, right: &Type, agreement: Agreement) -> bool {
                 (Some(size), None) if matches!(agreement, Agreement::CandidateResult) => {
                     size.value.key().is_none()
                 }
-                (Some(size), None) if matches!(agreement, Agreement::InputPattern) => {
+                (Some(size), None) if matches!(agreement, Agreement::InputPattern | Agreement::BraceInput) => {
                     !matches!(size.value, ConstantValue::Unbounded)
                 }
                 (size, other_size) => size == other_size,

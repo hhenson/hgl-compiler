@@ -228,8 +228,8 @@ pub struct Module {
     /// constraints that resolved, with what it resolved to (UNIT-10), in
     /// file order and then source order.
     pub uses: Vec<NameUse>,
-    /// GEN-14 lookup reports for a contextual Type argument. The type reader
-    /// emits them only when the corresponding slot chooses a value.
+    /// GEN-14 and TYPE-5: saved ordinary-name lookup errors for a contextual
+    /// Type argument or braced field. Only the value interpretation emits them.
     pub(crate) contextual_type_reports: HashMap<Location, Vec<hgl_diagnostics::Diagnostic>>,
     /// UNIT-7: ordinary type lookup reports when a default’s bare generic argument is a type.
     pub(crate) default_type_reports: HashMap<Location, Vec<hgl_diagnostics::Diagnostic>>,

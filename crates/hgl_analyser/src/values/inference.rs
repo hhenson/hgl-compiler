@@ -1169,7 +1169,26 @@ impl<'a> Typer<'a> {
                 }
                 _ => None,
             };
-            if takes_its_type(node) || !(mentions(pattern, &unfound) || widenable.is_some()) {
+            // TYPE-5: field names cannot decide a generic schema. A later
+            // argument may supply it; an earlier inferred struct is already
+            // the literal's expected type and cannot be widened by labels.
+            let keyed = ungrouped(node.clone());
+            let waits_for_schema = keyed.kind() == SyntaxKind::KeyedExpr
+                && (widenable.is_some()
+                    || keyed
+                        .children()
+                        .filter_map(|entry| entry.children().next())
+                        .any(|key| {
+                            crate::syntax::keyed_field_name(&key).is_some()
+                                && self
+                                    .module
+                                    .contextual_type_reports
+                                    .contains_key(&self.at(&key))
+                        }));
+            if takes_its_type(node)
+                || waits_for_schema
+                || !(mentions(pattern, &unfound) || widenable.is_some())
+            {
                 continue;
             }
             // What the argument's type says: a parameter not yet found,

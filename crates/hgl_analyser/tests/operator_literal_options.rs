@@ -692,6 +692,31 @@ fn tagged_payload_choices_follow_the_candidate_result_type() {
     );
 }
 
+/// EXPR-9: brace collections have a fixed outer interpretation, but
+/// context-dependent bracketed keys, values and members stay eligible.
+#[test]
+fn brace_collections_compare_only_their_nested_bracketed_literals() {
+    let checked = common::module(concat!(
+        "operator pick<T>(v:T)->i64\n",
+        "impl const fn pick(v:dict<list<i64>,set<i64>>)->i64=>1\n",
+        "impl const fn pick(v:dict<set<i64>,list<i64>>)->i64=>2\n",
+        "const fn crossed()->i64=>pick({[1]:[2]})\n",
+        "operator bags<T>(v:T)->i64\n",
+        "impl const fn bags(v:set<list<i64,2>>)->i64=>1\n",
+        "impl const fn bags(v:set<set<i64>>)->i64=>2\n",
+        "const fn inner()->i64=>bags({[1,2],})\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:26 operator/operator.ambiguous GEN-5",
+            "m.hgl:9:30 warning/operator.sequence_reading GEN-5",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// EXPR-17: the comprehension's result supplies its element context.
 #[test]
 fn a_comprehension_compares_its_entry_and_leaves_the_iterable_alone() {

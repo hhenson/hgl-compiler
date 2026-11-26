@@ -1,0 +1,115 @@
+module demo.collections
+
+use core::{eq_}
+
+struct BraceQuote {
+    bid: i64
+    ask: i64 = 7
+}
+
+struct DifferentQuote { bid: i64 }
+# These candidates cannot supply a competing schema at a plain BraceQuote comparison.
+impl const fn eq_{enabled: bool}(lhs: BraceQuote, rhs: DifferentQuote) -> bool => enabled
+impl const fn eq_<T>(lhs: T, rhs: DifferentQuote) -> bool requires T == str => false
+
+struct BraceEnvelope {
+    quote: BraceQuote
+}
+
+const brace_origin: BraceQuote = {bid: 4}
+const fn quote_total(quote: BraceQuote) -> i64 => quote.bid + quote.ask
+operator quote_amount(quote: BraceQuote) -> i64
+impl const fn quote_amount(quote: BraceQuote) -> i64 => quote.bid
+operator first_quote<T>(a: T, b: T) -> T
+impl const fn first_quote<U>(a: U, b: U) -> U => a
+const fn earlier_quote<T>(a: T, b: T) -> T => a
+enum BraceSide { buy, sell }
+operator member_score<T>(members: T) -> i64
+impl const fn member_score(members: set<BraceSide>) -> i64 => if members == [BraceSide.buy] { 1 } else { 0 }
+impl const fn member_score(members: dict<BraceSide, i64>) -> i64 => members[.buy]
+operator quote_success<T>(v: result<list<T>, error>) -> i64
+impl const fn quote_success(v: result<list<BraceQuote, 2>, error>) -> i64 => 2
+operator quote_failure<T>(v: result<bool, list<T>>) -> i64
+impl const fn quote_failure(v: result<bool, list<BraceQuote, 2>>) -> i64 => 3
+operator nested_dict_value<A>(a:A)->i64
+impl const fn nested_dict_value(a:dict<str,set<i64>>)->i64=>2
+operator nested_dict_key<A>(a:A)->i64
+impl const fn nested_dict_key(a:dict<set<i64>,str>)->i64=>3
+operator nested_set_value<A>(a:A)->i64
+impl const fn nested_set_value(a:set<set<i64>>)->i64=>4
+operator paired_dicts<A>(a:A,b:A)->i64
+impl const fn paired_dicts(a:dict<str,set<i64>>,b:dict<str,set<i64>>)->i64=>5
+operator quote_after_rows<A>(rows:list<A>,row:A)->A
+impl const fn quote_after_rows<Q>(rows:list<Q>,row:Q)->Q=>row
+const fn dictionary_count(book: dict<str, i64>) -> i64 => book["bid"]
+const fn optional_dictionary() -> dict<str, i64?> => {"bid": null, "ask": 7}
+
+test explicit_collection_literals {
+    let empty_set: set<i64> = {,}
+    let empty_dictionary: dict<str, i64> = {:}
+    let name = "bid"
+    let single = {7,}
+    let many = {7, 9}
+    let dictionary = {name: 4}
+    let prices = {"bid": 4, "ask": 7}
+    assert empty_set == [] && empty_dictionary == []
+    assert single == [7] && many == [7, 9]
+    assert dictionary_count(dictionary) == 4
+    assert optional_dictionary()["bid"] == null
+    assert dictionary == ({name: 4})
+    assert prices["ask"] == 7
+    let missed:result<i64,error> = get<i64>(["bid":4], "missing", null)
+    let found:result<i64,error> = get<i64>({"bid":4}, "bid", null)
+    assert is_err(missed) && !is_err(found)
+    assert get<i64>(["bid":4], "missing", 7) == 7
+    assert member_score({.buy,}) == 1
+    assert member_score({.buy: 7}) == 7
+    assert nested_dict_value({"k":[3,4]}) == 2
+    assert nested_dict_key({[3,4]:"k"}) == 3
+    assert nested_set_value({[3,4],}) == 4
+    assert nested_dict_value<dict<str,any>>({"k":[3,4]}) == 2
+    assert nested_dict_key<dict<any,str>>({[3,4]:"k"}) == 3
+    assert nested_set_value<set<any>>({[3,4],}) == 4
+    assert paired_dicts({"a":[3,4]}, {"b":[7]}) == 5
+    let named = quote_after_rows([BraceQuote(bid:3)],{bid:7})
+    assert named.bid == 7
+}
+
+test ordered_list_of_pairs {
+    let pairs = ["bid": 4, "ask": 7, "bid": 9]
+    let annotated: list<tuple<str, i64>> = ["bid": 4, "ask": 7, "bid": 9]
+    assert pairs == [("bid", 4), ("ask", 7), ("bid", 9)]
+    assert annotated == pairs
+    let one = [0s: 4]
+    let empty: list<tuple<duration, i64>> = []
+    assert one[0][1] == 4 && empty == []
+}
+
+test known_schema_field_literals {
+    let bid = "other"
+    let book = {bid: 4}
+    assert book["other"] == 4
+    let envelope: BraceEnvelope = {quote: {bid: 4}}
+    assert envelope.quote == brace_origin
+    assert quote_total({bid: 4}) == 11
+    assert quote_success<BraceQuote>(ok([{bid: 4}, {bid: 7}])) == 2
+    assert quote_failure<BraceQuote>(err([{bid: 4}, {bid: 7}])) == 3
+    assert quote_success<BraceQuote>(ok([for i in 0..<2: {bid:i}])) == 2
+    assert quote_failure<BraceQuote>(err([for i in 0..<2: {bid:i}])) == 3
+    assert earlier_quote(BraceQuote(bid: 2), {bid: 3}).bid == 2
+    let earlier: BraceQuote = earlier_quote({bid: 3}, BraceQuote(bid: 2))
+    assert earlier.bid == 3
+    var order = 0
+    var quote: BraceQuote = {ask: {order += 1
+                                   order},
+                             bid: {order += 1
+                                   order}}
+    assert quote.ask == 1 && quote.bid == 2 && order == 2
+    quote = {bid: 8}
+    assert quote == BraceQuote(bid: 8)
+    assert quote == ({bid: 8}) && ({bid: 8}) == quote
+    assert quote_amount({bid: 11}) == 11
+    let inferred = first_quote(BraceQuote(bid: 13), {bid: 14})
+    let explicit = first_quote<BraceQuote>({bid: 15}, {bid: 16})
+    assert inferred.bid == 13 && explicit.bid == 15
+}

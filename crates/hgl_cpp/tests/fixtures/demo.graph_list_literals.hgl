@@ -121,6 +121,26 @@ test tagged_collection_readings {
     assert failure<result<bool, set<i64>>>(err([2, 3])) == 2
 }
 
+# Braces determine the outer collection. Both readings of an inner
+# bracketed literal still participate in GEN-5 selection.
+operator bags<T>(items: T) -> i64
+impl const fn bags(items: set<list<i64, 2>>) -> i64 => 1
+impl const fn bags(items: set<set<i64>>) -> i64 => 2
+
+operator pairs<T>(items: T) -> i64
+impl const fn pairs(items: list<tuple<i64, list<i64, 2>>>) -> i64 => 1
+impl const fn pairs(items: list<tuple<i64, set<i64>>>) -> i64 => 2
+
+test shared_brackets_in_explicit_collections {
+    assert table({"k": [3, 4]}) == 1 && table({"k": {3, 4}}) == 2
+    assert keyed({[3, 4]: "k"}) == 1 && keyed({{3, 4}: "k"}) == 2
+    assert bags({[3, 4],}) == 1 && bags({[3, 4, 5],}) == 2
+    assert table<dict<str, any>>({"k": [3, 4]}) == 1
+    assert keyed<dict<any, str>>({[3, 4]: "k"}) == 1
+    assert bags<set<any>>({[3, 4],}) == 1
+    assert pairs([9: [3, 4]]) == 1 && pairs([9: [3, 4, 5]]) == 2
+}
+
 # EXPR-17: the iterable retains its own context. Each candidate supplies
 # its expected element type for the inner bracketed literal.
 operator generated<T>(items: T) -> i64

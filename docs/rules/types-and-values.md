@@ -75,6 +75,7 @@ analyser: partial
 
 - Constructors in value functions, graph composition and node hooks name the
   supplied fields. A graph also rejects a positional constructor argument.
+- A known concrete struct type admits a nonempty keyed literal with bare field names. Required fields, defaults and source evaluation order follow the named constructor. Field names alone cannot select a schema.
 - Once an inferred graph construction has concrete field types, its implied enum members, empty collections and null literals use those types, including in block tails (GEN-2, CTRL-10, TYPE-7, TYPE-14, EXPR-9).
 
 transpiler: partial

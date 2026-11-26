@@ -29,6 +29,32 @@ pub(crate) fn is_pack_key_if(node: &SyntaxNode) -> bool {
             .is_some_and(|guard| ungrouped(guard).kind() == SyntaxKind::PackKeyMembership)
 }
 
+/// EXPR-9, TYPE-5: only one unquoted word can also be a field label.
+pub(crate) fn keyed_field_name(key: &SyntaxNode) -> Option<SyntaxToken> {
+    if key.children().next().is_some() {
+        return None;
+    }
+    let token = tokens(key).next()?;
+    (key.kind() == SyntaxKind::NameExpr
+        || matches!(
+            token.kind(),
+            SyntaxKind::KwTrue | SyntaxKind::KwFalse | SyntaxKind::KwNull
+        ))
+    .then_some(token)
+}
+
+pub(crate) fn is_keyed_field_name(key: &SyntaxNode) -> bool {
+    let Some(pair) = key.parent() else {
+        return false;
+    };
+    pair.kind() == SyntaxKind::SequencePair
+        && pair.children().next().as_ref() == Some(key)
+        && pair
+            .parent()
+            .is_some_and(|literal| literal.kind() == SyntaxKind::KeyedExpr)
+        && keyed_field_name(key).is_some()
+}
+
 /// The tokens directly inside `node`, without whitespace and comments.
 pub(crate) fn tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
     node.children_with_tokens()

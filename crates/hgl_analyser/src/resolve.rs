@@ -1057,6 +1057,19 @@ impl Resolver<'_> {
     /// Resolves the name a node uses: its `alias::name`, or its first
     /// identifier.
     fn name_of(&mut self, node: &SyntaxNode) -> Option<Binding> {
+        // EXPR-9, TYPE-5: an independently expected struct consumes this
+        // word as a field label. Only a dictionary reads it as a name.
+        if crate::syntax::is_keyed_field_name(node) {
+            let name = crate::syntax::keyed_field_name(node)?;
+            let before = self.diagnostics.len();
+            let binding = self.lookup(&name);
+            let reports = self.diagnostics.as_slice()[before..].to_vec();
+            self.diagnostics.truncate(before);
+            if !reports.is_empty() {
+                self.contextual_type_reports.insert(self.at(&name), reports);
+            }
+            return binding;
+        }
         // TYPE-18: a written type Type always names the descriptor. A lone
         // generic argument shares value/type syntax, however: GEN-14 chooses
         // its meaning once the target slot's kind is known. Record ordinary
