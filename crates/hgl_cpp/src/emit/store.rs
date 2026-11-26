@@ -91,7 +91,9 @@ impl Keys {
         bindings: Bindings<'_>,
         remaining: &Cell<usize>,
     ) {
-        if program.store_key_at_execution(key) || bindings.changes(key) || source_safe(program, key)
+        if (program.store_key_at_execution(key) && !bindings.proves_fixed(program, key))
+            || bindings.changes(program, key)
+            || source_safe(program, key)
         {
             return;
         }
@@ -164,7 +166,7 @@ struct ForwardedKeys<'a> {
     program: &'a Program,
     instances: &'a Instances,
     store: Type,
-    path: Vec<(usize, usize)>,
+    path: Vec<((usize, usize), Option<String>)>,
     remaining: Cell<usize>,
 }
 
@@ -174,7 +176,7 @@ enum Bindings<'a> {
     /// The node's own hooks: its `const` parameters are its configuration.
     Configuration(&'a [Parameter]),
     /// A helper's parameters, as the route followed gives them.
-    Given(&'a [Binding]),
+    Given(&'a [Parameter], &'a [Binding]),
 }
 
 /// One parameter of a helper on the route followed.
@@ -189,17 +191,26 @@ struct Binding {
 
 impl Bindings<'_> {
     /// Whether `value` reads a parameter that varies on this route.
-    fn changes(self, value: &Expr) -> bool {
-        let Self::Given(bindings) = self else {
+    fn changes(self, program: &Program, value: &Expr) -> bool {
+        let Self::Given(parameters, bindings) = self else {
             return false;
         };
-        let mut changing = false;
-        value.walk(&mut |part| {
-            if let ExprKind::Local(local) = part.kind {
-                changing |= bindings.get(local).is_some_and(|binding| binding.changing);
-            }
-        });
-        changing
+        program
+            .store_input_slots(value, parameters)
+            .iter()
+            .any(|slot| bindings.get(*slot).is_some_and(|binding| binding.changing))
+    }
+
+    /// A reified literal still reads the parameter at its lexical location.
+    fn proves_fixed(self, program: &Program, value: &Expr) -> bool {
+        let Self::Given(parameters, bindings) = self else {
+            return false;
+        };
+        let slots = program.store_input_slots(value, parameters);
+        !slots.is_empty()
+            && slots
+                .iter()
+                .all(|slot| bindings.get(*slot).is_some_and(|binding| !binding.changing))
     }
 }
 
@@ -233,18 +244,21 @@ impl ForwardedKeys<'_> {
             return;
         }
         let identity = (module, declaration);
+        let instance = self.instances.find_call(program, callee, arguments);
+        // Different specializations can revisit one declaration on a finite
+        // route. The suffix identifies the lowered instance within its owner.
+        let route = (identity, instance.map(|instance| instance.suffix.clone()));
         // The source classification already says which keys can change
         // on the way round. Follow the fixed ones once through the cycle;
         // a helper reached again by another route is followed again, with
         // that route's bindings.
-        if self.path.contains(&identity) {
+        if self.path.contains(&route) {
             return;
         }
         // A route not followed leaves its keys to their operations.
         if spend(&self.remaining).is_none() || self.path.len() == 64 {
             return;
         }
-        let instance = self.instances.find_call(program, callee, arguments);
         let (signature, body) = if let Some(instance) = instance {
             (&instance.signature, &instance.body)
         } else {
@@ -253,6 +267,19 @@ impl ForwardedKeys<'_> {
             };
             (signature, body)
         };
+        // Project only fixed expressions before proving entry aliases. Two
+        // ports supplied by one caller binding must remain one key here too.
+        let route_arguments: Vec<_> = arguments
+            .iter()
+            .map(|argument| {
+                let value = project(program, &argument.value, caller, &self.remaining)
+                    .unwrap_or_else(|| argument.value.clone());
+                Argument {
+                    value,
+                    ..argument.clone()
+                }
+            })
+            .collect();
         let fixed: Vec<_> = signature
             .parameters
             .iter()
@@ -269,10 +296,11 @@ impl ForwardedKeys<'_> {
                 });
                 // TIME-8: a parameter its cycle changes varies on every
                 // route, and one given a varying key varies on this one.
-                if program.store_key_changes(identity, declared_slot)
+                if program.store_key_changes_in_call(callee, &route_arguments, declared_slot)
                     || written.is_some_and(|argument| {
-                        caller.changes(&argument.value)
-                            || program.store_key_at_execution(&argument.value)
+                        caller.changes(program, &argument.value)
+                            || (program.store_key_at_execution(&argument.value)
+                                && !caller.proves_fixed(program, &argument.value))
                     })
                 {
                     return Binding {
@@ -284,9 +312,12 @@ impl ForwardedKeys<'_> {
                     Some(written) => project(program, &written.value, caller, &self.remaining),
                     None => left_out(program, callee, declared_slot, parameter).and_then(|left| {
                         match left {
-                            LeftOut::Default(default) => {
-                                project(program, &default, Bindings::Given(&[]), &self.remaining)
-                            }
+                            LeftOut::Default(default) => project(
+                                program,
+                                &default,
+                                Bindings::Given(&[], &[]),
+                                &self.remaining,
+                            ),
                             LeftOut::Null => Some(Expr {
                                 kind: ExprKind::Literal(Value::Null),
                                 ty: parameter.ty.clone(),
@@ -302,7 +333,7 @@ impl ForwardedKeys<'_> {
                 }
             })
             .collect();
-        self.path.push(identity);
+        self.path.push(route);
         walk_statements(&body.statements, &mut |expression| {
             let ExprKind::Call {
                 callee, arguments, ..
@@ -310,7 +341,7 @@ impl ForwardedKeys<'_> {
             else {
                 return;
             };
-            let bindings = Bindings::Given(&fixed);
+            let bindings = Bindings::Given(&signature.parameters, &fixed);
             if let Some(key) = program.store_key_argument(callee, arguments) {
                 keys.read(program, key, bindings, &self.remaining);
             } else {
@@ -334,7 +365,7 @@ fn project(
     let kind = match &value.kind {
         ExprKind::Local(slot) => {
             return match bindings {
-                Bindings::Given(fixed) => {
+                Bindings::Given(_, fixed) => {
                     let value = fixed.get(*slot)?.value.as_ref()?;
                     value.walk(&mut |_| {
                         let _ = spend(remaining);
