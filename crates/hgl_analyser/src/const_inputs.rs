@@ -468,8 +468,8 @@ impl Program {
             if required {
                 return;
             }
-            if let Some(signature) = formatting::value_signature(self, callee) {
-                required = formatting::argument(signature, arguments, "fmt_str")
+            if let Some(renderer) = formatting::renderer(self, callee) {
+                required = formatting::argument(renderer.signature, arguments, "fmt_str")
                     .is_some_and(|pattern| reads_parameter(&pattern.value));
                 return;
             }
@@ -1149,8 +1149,9 @@ pub(crate) fn demands(
                         });
                     }
                 }
-                if let Some(signature) = formatting::value_signature(program, callee)
-                    && let Some(pattern) = formatting::argument(signature, arguments, "fmt_str")
+                if let Some(renderer) = formatting::renderer(program, callee)
+                    && let Some(pattern) =
+                        formatting::argument(renderer.signature, arguments, "fmt_str")
                 {
                     read_compile_time_value(&pattern.value, Demand::Always);
                 }

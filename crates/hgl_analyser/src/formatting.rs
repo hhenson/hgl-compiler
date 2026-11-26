@@ -317,24 +317,64 @@ fn digits(text: &str) -> Option<&str> {
     Some(&text[count..])
 }
 
-/// The signature of Core's native value candidate, when it is selected.
-pub fn value_signature<'a>(program: &'a Program, callee: &Callee) -> Option<&'a Signature> {
+/// A selected Core declaration backed by the value formatter (FMT-1, FMT-9).
+pub struct Renderer<'a> {
+    /// Signature used to locate the pattern, value packs and options.
+    pub signature: &'a Signature,
+    /// The private graph entry takes its evaluation time as ordinary data.
+    cycle_time_slot: Option<usize>,
+}
+
+impl Renderer<'_> {
+    /// Index of the clock supplied by HGL, independent of named argument order.
+    pub fn cycle_time_argument(&self, arguments: &[Argument]) -> Option<usize> {
+        let slot = self.cycle_time_slot?;
+        arguments
+            .iter()
+            .position(|argument| argument.parameter == Some(slot) && argument.pack.is_none())
+    }
+}
+
+/// Recognize the public value candidate and the private graph entry by their
+/// resolved Core declaration. Both use the same format checker and renderer.
+pub fn renderer<'a>(program: &'a Program, callee: &Callee) -> Option<Renderer<'a>> {
     let (module, declaration) = callee.declaration()?;
-    let owner = &program.modules[module];
-    let declared = &owner.declarations[declaration];
-    if Some(module) != program.core()
-        || declared.name != "format"
-        || !matches!(
-            declared.kind,
-            DeclarationKind::NativeCandidate(Role::Value, _)
-        )
-    {
+    if Some(module) != program.core() {
         return None;
     }
-    match &owner.details[declaration] {
-        Detail::Callable(signature) => Some(signature),
-        _ => None,
-    }
+    let owner = &program.modules[module];
+    let declared = &owner.declarations[declaration];
+    let Detail::Callable(signature) = &owner.details[declaration] else {
+        return None;
+    };
+    let cycle_time_slot = match (declared.name.as_str(), declared.kind) {
+        ("format", DeclarationKind::NativeCandidate(Role::Value, _)) => None,
+        ("render_graph_values", DeclarationKind::NativeFunction(Role::Value))
+            if !declared.exported
+                && !declared.test_only
+                && owner.files[declared.file].part.as_deref() == Some("formatting") =>
+        {
+            Some(signature.parameters.iter().position(|p| {
+                p.name == "engine_time"
+                    && p.pack.is_none()
+                    && p.ty == Type::Scalar(Scalar::Datetime)
+            })?)
+        }
+        _ => return None,
+    };
+    Some(Renderer {
+        signature,
+        cycle_time_slot,
+    })
+}
+
+/// The signature of Core's public native value candidate, when selected.
+pub fn value_signature<'a>(program: &'a Program, callee: &Callee) -> Option<&'a Signature> {
+    let renderer = renderer(program, callee)?;
+    renderer
+        .cycle_time_slot
+        .is_none()
+        .then_some(renderer.signature)
 }
 
 /// An argument supplied to the requested declaration slot, excluding packs.
@@ -578,11 +618,11 @@ pub(crate) fn has_dependent_formatting(
         else {
             return;
         };
-        if let Some(signature) = value_signature(program, callee) {
+        if let Some(renderer) = renderer(program, callee) {
             dependent = arguments.iter().any(|argument| {
                 argument.pack.is_some() && crate::declared::names_parameter(&argument.value.ty)
             });
-            if let Some(pattern) = argument(signature, arguments, "fmt_str") {
+            if let Some(pattern) = argument(renderer.signature, arguments, "fmt_str") {
                 pattern.value.walk(&mut |value| {
                     dependent |= matches!(value.kind, ExprKind::GenericValue { .. });
                 });

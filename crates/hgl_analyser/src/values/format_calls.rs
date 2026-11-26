@@ -29,10 +29,10 @@ impl Typer<'_> {
             return;
         };
         *planned = None;
-        let Some(signature) = formatting::value_signature(self.program, callee) else {
+        let Some(renderer) = formatting::renderer(self.program, callee) else {
             return;
         };
-        let Some(pattern) = formatting::argument(signature, arguments, "fmt_str") else {
+        let Some(pattern) = formatting::argument(renderer.signature, arguments, "fmt_str") else {
             return;
         };
         if pattern.value.ty == Type::Unknown || matches!(pattern.value.kind, ExprKind::Unread) {
@@ -72,6 +72,7 @@ impl Typer<'_> {
         let Some(parts) = self.checked_places(&pattern.value, &text) else {
             return;
         };
+        let cycle_time = renderer.cycle_time_argument(arguments);
         let mut used = vec![false; arguments.len()];
         let mut conversions = vec![None; arguments.len()];
         let mut next_position = 0;
@@ -82,7 +83,10 @@ impl Typer<'_> {
             };
             // TST-3 temporarily reads an eval's target as composition,
             // but its trace cells and const operands remain value code.
-            if place.name == "engine_time" && (!self.graph || self.value_code) {
+            if place.name == "engine_time"
+                && cycle_time.is_none()
+                && (!self.graph || self.value_code)
+            {
                 missing = true;
                 self.format_fault(
                     &pattern.value,

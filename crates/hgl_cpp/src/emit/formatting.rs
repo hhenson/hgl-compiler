@@ -25,11 +25,12 @@ impl Emitter<'_> {
         &mut self,
         scope: &mut Scope,
         callee: &Callee,
-        signature: &Signature,
+        renderer: formatting::Renderer<'_>,
         arguments: &[Argument],
         text: Option<&TextCall>,
         whole: &Expr,
     ) -> String {
+        let signature = renderer.signature;
         let Some(pattern) = formatting::argument(signature, arguments, "fmt_str") else {
             return self.missing(whole.at, "a format call without a pattern");
         };
@@ -83,29 +84,33 @@ impl Emitter<'_> {
         let output = temporary("format_text", self.temporary());
         let _ = write!(statements, "::hglrt::str {output}; ");
         let mut wall_time = None;
+        // The graph format node passes its cycle time as ordinary data.
+        // A lifted public format call has an output endpoint for that cycle.
+        let cycle_time = renderer
+            .cycle_time_argument(arguments)
+            .map(|index| held[index].clone())
+            .or_else(|| {
+                (self.kind() == Some(Kind::Lifted)).then(|| format!("{OUT}.evaluation_time()"))
+            });
         let mut engine_time = None;
         let mut next_position = 0;
         for part in parts {
             match part {
                 Piece::Text(text) => append_text(&mut statements, &output, text),
                 Piece::Place(place) => {
-                    let (held, ty, at, conversion) = if matches!(
-                        place.name,
-                        "wall_time" | "engine_time"
-                    ) {
-                        // FMT-9: the lifted node already owns its cycle's
-                        // time through its output endpoint, not a native
-                        // argument. Read each reserved clock only once.
+                    let clock_place = matches!(place.name, "wall_time" | "engine_time");
+                    let (held, ty, at, conversion) = if clock_place {
+                        // FMT-9: read each requested clock once.
                         let (clock, source) = if place.name == "engine_time" {
-                            if self.kind() != Some(Kind::Lifted) {
+                            let Some(source) = cycle_time.as_ref() else {
                                 return self.missing(
-                                        pattern.value.at,
-                                        "an {engine_time} format place without a lifted node's cycle context",
-                                    );
-                            }
-                            (&mut engine_time, format!("{OUT}.evaluation_time()"))
+                                    pattern.value.at,
+                                    "an {engine_time} format place without a cycle time",
+                                );
+                            };
+                            (&mut engine_time, source.as_str())
                         } else {
-                            (&mut wall_time, "::hglrt::format_wall_time()".to_string())
+                            (&mut wall_time, "::hglrt::format_wall_time()")
                         };
                         let held = clock.get_or_insert_with(|| {
                             let name = temporary(place.name, self.temporary());

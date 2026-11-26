@@ -136,8 +136,8 @@ impl Emitter<'_> {
             ExprKind::Call { text, .. } => text.as_deref(),
             _ => None,
         };
-        if let Some(signature) = hgl_analyser::formatting::value_signature(self.program, callee) {
-            return self.format_call(scope, callee, signature, arguments, text, whole);
+        if let Some(renderer) = hgl_analyser::formatting::renderer(self.program, callee) {
+            return self.format_call(scope, callee, renderer, arguments, text, whole);
         }
         if let Callee::Anonymous(function) = callee {
             if !function.template.value {
