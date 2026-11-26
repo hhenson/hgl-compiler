@@ -3174,6 +3174,8 @@ pub(super) struct CallbackRequest<'w> {
     pub(super) result_shapes: &'w [&'w Type],
     /// Enclosing requirements that can be checked with the chosen result (GEN-3).
     pub(super) result_requirements: &'w [ResultRequirement],
+    /// Prefer a proven receiver in the first complete reflected trial (GEN-3).
+    pub(super) require_receiver_proof: bool,
     /// The original expressions in the enclosing call's dependent pack (GEN-17).
     pub(super) supplied: &'w [(Option<&'w str>, &'w Expr)],
     /// Other known static arguments the receiving declarations query (GEN-18).
@@ -3327,9 +3329,11 @@ impl CallbackRequest<'_> {
             at: declared.at,
             category: hir::ValueCategory::Value,
         };
-        self.result_requirements
-            .iter()
-            .all(|requirement| requirement.admits(typer, &callback, self.supplied, self.law_inputs))
+        self.result_requirements.iter().all(|requirement| {
+            requirement
+                .admits(typer, &callback, self.supplied, self.law_inputs)
+                .unwrap_or(!self.require_receiver_proof)
+        })
     }
 }
 

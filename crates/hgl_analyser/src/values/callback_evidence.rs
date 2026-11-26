@@ -404,23 +404,23 @@ pub(super) struct ResultRequirement {
 }
 
 impl ResultRequirement {
-    /// A candidate result cannot contradict a receiver requirement (GEN-3).
+    /// Whether the receiver's requirement holds for this callback trial (GEN-3).
     pub(super) fn admits(
         &self,
         typer: &mut Typer<'_>,
         callback: &Expr,
         supplied: &[(Option<&str>, &Expr)],
         law_inputs: &[CallbackLawInput],
-    ) -> bool {
+    ) -> Option<bool> {
         let program = typer.program;
         let (module, declaration) = self.declaration;
         let unit = &program.modules[module];
         let Detail::Callable(signature) = &unit.details[declaration] else {
-            return true;
+            return Some(true);
         };
         let Some(input) = dependent_slot(unit, signature).map(|slot| &signature.parameters[slot])
         else {
-            return true;
+            return Some(true);
         };
         let dependent = &unit.dependent_packs[&input.at];
         let Some((callback_slot, template)) =
@@ -438,10 +438,10 @@ impl ResultRequirement {
                     }
                 })
         else {
-            return true;
+            return Some(true);
         };
         let Type::Function(actual) = &callback.ty else {
-            return true;
+            return Some(true);
         };
         let generics = &signature.generics;
         let mut found = self.known.clone();
@@ -481,7 +481,7 @@ impl ResultRequirement {
             &packs,
             law_inputs,
         ) else {
-            return false;
+            return Some(false);
         };
         let argument = |typer: &Typer<'_>, slot, law| {
             if slot == callback_slot {
@@ -500,7 +500,7 @@ impl ResultRequirement {
             (&mut found, &self.defaulted),
             &packs,
             &argument,
-        ) != Some(false)
+        )
     }
 }
 

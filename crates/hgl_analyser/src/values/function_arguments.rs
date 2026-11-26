@@ -562,7 +562,7 @@ impl<'a> Typer<'a> {
             node,
             (operator, public, &candidates),
             (template, inputs),
-            (&result_shapes, &reflected_result.requirements),
+            (&result_shapes, &reflected_result.requirements, false),
             (explicit.as_ref(), &mut given),
         );
         // GEN-3: when the receiver rejects every result, its ordinary
@@ -572,7 +572,7 @@ impl<'a> Typer<'a> {
                 node,
                 (operator, public, &candidates),
                 (template, inputs),
-                (&result_shapes, &[]),
+                (&result_shapes, &[], false),
                 (explicit.as_ref(), &mut given),
             );
         }
@@ -661,7 +661,11 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         (operator, public, candidates): (OperatorRef, &Signature, &[Candidate<'a>]),
         (template, inputs): (&FunctionType, &CallbackInputs<'_>),
-        (result_shapes, result_requirements): (&[&Type], &[ResultRequirement]),
+        (result_shapes, result_requirements, require_receiver_proof): (
+            &[&Type],
+            &[ResultRequirement],
+            bool,
+        ),
         (explicit, given): (Option<&OperatorReference<'a>>, &mut [Given]),
     ) -> (Vec<Chosen<'a>>, bool) {
         let reflected = template.named_pack.is_some();
@@ -734,6 +738,7 @@ impl<'a> Typer<'a> {
                 reflected: reflected.then_some(inputs.excluded),
                 result_shapes,
                 result_requirements,
+                require_receiver_proof,
                 supplied: inputs.supplied.unwrap_or_default(),
                 law_inputs: inputs.law_inputs,
             }),
@@ -1726,6 +1731,13 @@ enum ReflectedTarget<'a, 's> {
     },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReflectedTrial {
+    Proven,
+    Compatible,
+    TypesOnly,
+}
+
 /// The argument and result evidence from one complete reflected reading.
 #[derive(Default)]
 struct ReflectedArguments {
@@ -1866,7 +1878,7 @@ fn reflected_arguments<'a>(
         _ => None,
     };
     let at = typer.at(node);
-    let mut select = |check_operator| {
+    let mut select = |check| {
         select_readings(&choices, |trial, complete| {
             let trial_result = evidence.map_or_else(
                 || Ok(ReflectedResultEvidence::default()),
@@ -1899,7 +1911,8 @@ fn reflected_arguments<'a>(
             {
                 return false;
             }
-            let Some((operator, candidates, written)) = operator_trial.filter(|_| check_operator)
+            let Some((operator, candidates, written)) =
+                operator_trial.filter(|_| check != ReflectedTrial::TypesOnly)
             else {
                 return true;
             };
@@ -1921,6 +1934,8 @@ fn reflected_arguments<'a>(
             );
             let mark = typer.mark();
             if let Some((name, bindings)) = written {
+                let require_proof =
+                    check == ReflectedTrial::Proven && !trial_result.requirements.is_empty();
                 let possible = typer
                     .operator_reference((node, name), (operator, bindings), (template, &given))
                     .is_some_and(|reference| {
@@ -1928,10 +1943,14 @@ fn reflected_arguments<'a>(
                             node,
                             (operator, public, candidates),
                             (template, inputs),
-                            (&shapes, &trial_result.requirements),
+                            (&shapes, &trial_result.requirements, require_proof),
                             (Some(&reference), &mut given),
                         );
-                        unknown || !matches.is_empty()
+                        if require_proof {
+                            !unknown && !matches.is_empty()
+                        } else {
+                            unknown || !matches.is_empty()
+                        }
                     });
                 return typer.take_back(mark, false) && possible;
             }
@@ -1945,6 +1964,7 @@ fn reflected_arguments<'a>(
                     reflected: Some(inputs.excluded),
                     result_shapes: &shapes,
                     result_requirements: &[],
+                    require_receiver_proof: false,
                     supplied: &[],
                     law_inputs: &[],
                 }),
@@ -1972,10 +1992,25 @@ fn reflected_arguments<'a>(
             possible
         })
     };
-    let readings = match select(true) {
+    let mut readings = if include_requirements && operator_trial.is_some() {
+        select(ReflectedTrial::Proven)
+    } else {
+        select(ReflectedTrial::Compatible)
+    };
+    if include_requirements
+        && operator_trial.is_some()
+        && matches!(readings, Err(ReadingFailure::NoMatch))
+    {
+        // GEN-7 and GEN-18: a proven requirement wins over one that
+        // still needs evidence from an enclosing formal or instance.
+        readings = select(ReflectedTrial::Compatible);
+    }
+    let readings = match readings {
         // The ordinary operator reference check reports a failed
         // candidate selection using the best structural reading.
-        Err(ReadingFailure::NoMatch) if operator_trial.is_some() => select(false),
+        Err(ReadingFailure::NoMatch) if operator_trial.is_some() => {
+            select(ReflectedTrial::TypesOnly)
+        }
         result => result,
     }
     .map_err(|_| {

@@ -330,9 +330,36 @@ fn check_symbolic_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
 fn check_symbolic_default_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
     symbolic_default_meld(a, b, true)
 
+const fn reversed_symbolic_head<H, R, ...Ps, ...As>(
+    token: H, other: const fn(H, H) -> H, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires (R == list<i64, 2> || associative(other))
+    && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+const fn forwarded_symbolic_meld<G>(
+    token: G, other: const fn(G, G) -> G, a: list<i64, 2>, b: list<i64, 2>,
+) -> i64 => symbolic_head(token, other, meld<4>, a, b)
+    + reversed_symbolic_head(token, other, meld<4>, a, b)
+
+const fn strict_symbolic_head<H, R, ...Ps, ...As>(
+    token: H, other: const fn(H, H) -> H, f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires associative(other) && each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => 23
+
+const fn strict_forwarded_meld<G>(
+    token: G, other: const fn(G, G) -> G, a: list<i64, 2>, b: list<i64, 2>,
+) -> i64 {
+    # expect-error(constraint, "requires.unmet")
+    return strict_symbolic_head(token, other, meld<4>, a, b)
+}
+
+fn check_forwarded_symbolic_meld(a: list<i64, 2>, b: list<i64, 2>) -> i64 =>
+    forwarded_symbolic_meld(17, symbolic_sibling, a, b)
+
 test receiver_law_siblings_take_the_trials_result_type {
     assert eval fitted_sibling_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
     assert eval fitted_default_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
     assert eval check_symbolic_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
     assert eval check_symbolic_default_meld(a: [[1, 2]], b: [[3, 4]]) == [4]
+    assert eval check_forwarded_symbolic_meld(a: [[1, 2]], b: [[3, 4]]) == [8]
 }
