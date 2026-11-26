@@ -29,3 +29,227 @@ test e_only_the_fixed_route_rejects {
     # expect-error(injectable, "store.reserved_key")
     eval both(key: "run.output")
 }
+
+# TIME-8, CAP-6: only the selected calls can change the key.
+const fn same_sa(store: GlobalState, depth: i64, flag: bool, const k: str) {
+    put(store, k, 1)
+    if depth > 0 { same_sb(store, depth - 1, flag, k, k) }
+}
+const fn same_sb(store: GlobalState, depth: i64, flag: bool, const p: str, const q: str) {
+    if flag { same_sa(store, depth, flag, p) } else { same_sa(store, depth, flag, q) }
+}
+fn same_key_node(const key: str) {
+    inject global_state
+    when {}
+    stop { same_sa(global_state, 1, true, key) }
+}
+test same_route_fixes_the_key_in_source {
+    # expect-error(injectable, "store.reserved_key")
+    eval same_key_node(key: "run.output")
+}
+
+# TIME-8, CAP-6: only the selected calls can change the key.
+operator choice_w<S, T>(store: S, const key: str, value: T) requires S in {GlobalState}
+impl const fn choice_w(store: GlobalState, const key: str, value: i64) { choice_relay(store, key + "put", 1.5) }
+impl const fn choice_w(store: GlobalState, const key: str, value: f64) { put(store, key, value) }
+const fn choice_relay<T>(store: GlobalState, const key: str, value: T) requires T in {i64, f64} { choice_w(store, key, value) }
+fn choice_key_node(const key: str) {
+    inject global_state
+    when {}
+    stop { choice_w(global_state, key, 1) }
+}
+test choice_route_fixes_the_key_in_source {
+    # expect-error(injectable, "store.reserved_key")
+    eval choice_key_node(key: "run.out")
+}
+
+# TIME-8, CAP-6: no concrete entry can prove this exported cycle fixed.
+export const fn uncalled_store_cycle(store: GlobalState, depth: i64, const key: str) {
+    put(store, key, 1)
+    if depth > 0 { uncalled_store_cycle(store, depth - 1, "run.output") }
+}
+export const fn reached_store_cycle(store: GlobalState, depth: i64, const key: str) {
+    put(store, key, 1)
+    if depth > 0 { reached_store_cycle(store, depth - 1, "run.output") }
+}
+fn reached_store_node() {
+    inject global_state
+    when {}
+    stop { reached_store_cycle(global_state, 0, "safe") }
+}
+test an_exported_changing_cycle_admits_a_safe_entry {
+    eval reached_store_node()
+}
+
+# TIME-8, CAP-6: a reached float route does not fix an unvisited integer cycle.
+operator partial_store<S,T>(store:S, const key:str, value:T) requires S in {GlobalState}
+impl const fn partial_store(store:GlobalState, const key:str, value:i64) {
+    put(store, key, value)
+    partial_relay(store, key + "put", 1.5)
+    partial_store(store, "run.output", 1)
+}
+impl const fn partial_store(store:GlobalState, const key:str, value:f64) { put(store,key,value) }
+const fn partial_relay<T>(store:GlobalState, const key:str, value:T) requires T in {i64,f64} { partial_store(store,key,value) }
+fn partial_store_node() {
+    inject global_state
+    when {}
+    stop { partial_relay(global_state,"safe",1.5) }
+}
+test an_unselected_member_keeps_its_changing_key {
+    eval partial_store_node()
+}
+
+# TIME-8, CAP-6: source fixes the key through both relay instances too.
+fn forwarded_choice_key_node(const key: str) {
+    inject global_state
+    when {}
+    stop { choice_relay(global_state, key, 1) }
+}
+test an_extra_forwarding_hop_fixes_the_key_in_source {
+    # expect-error(injectable, "store.reserved_key")
+    eval forwarded_choice_key_node(key: "run.out")
+}
+
+# TIME-8, CAP-6: another unused entry does not change this fixed route.
+operator isolated_dispatch<S,T>(s: S, depth: i64, const label: str, tag: T) requires S in {GlobalState}
+impl const fn isolated_dispatch(s: GlobalState, depth: i64, const label: str, tag: f64) { put(s, label, tag) }
+impl const fn isolated_dispatch(s: GlobalState, depth: i64, const label: str, tag: i64) {
+    put(s, label, tag)
+    if depth > 0 { isolated_via(s, depth - 1, label + "put", tag) }
+}
+const fn isolated_via<T>(s: GlobalState, depth: i64, const label: str, tag: T) requires T in {f64, i64} {
+    isolated_dispatch(s, depth, label, tag)
+}
+fn isolated_stable(const label: str, const d: i64) {
+    inject global_state
+    start { let guard = 1 // d }
+    when {}
+    stop { isolated_via(global_state, 2, label, 3.5) }
+}
+fn unused_moving(const label: str, const d: i64, const n: i64) {
+    inject global_state
+    start { let guard = 1 // d }
+    when {}
+    stop { isolated_via(global_state, n, label, 7) }
+}
+test isolated_stable_is_fixed_in_source {
+    # expect-error(injectable, "store.reserved_key")
+    eval isolated_stable("run.output", 1)
+}
+
+# TIME-8, CAP-6: another unused entry does not change this fixed route.
+const fn isolated_copy(s: GlobalState, n: i64, flag: bool, const key: str) {
+    put(s, key, n)
+    if n > 0 { isolated_choose(s, n - 1, flag, key, key) }
+}
+const fn isolated_choose(s: GlobalState, n: i64, flag: bool, const left: str, const right: str) {
+    if flag { isolated_copy(s, n, flag, right) } else { isolated_copy(s, n, flag, left) }
+}
+fn isolated_alias(const key: str, const divisor: i64, const flag: bool) {
+    inject global_state
+    start { let guard = 1 // divisor }
+    when {}
+    stop { isolated_copy(global_state, 3, flag, key) }
+}
+fn unused_alias_entry(const p: str, const q: str) {
+    inject global_state
+    when {}
+    stop { isolated_choose(global_state, 1, false, p, q) }
+}
+test isolated_alias_is_fixed_in_source {
+    # expect-error(injectable, "store.reserved_key")
+    eval isolated_alias("run.output", 1, false)
+}
+
+# TIME-8, CAP-6, UNIT-13: a named constant is one value at both entry ports.
+const entry_reserved: str = "run.output"
+const fn entry_rotate(s: GlobalState, n: i64, const left: str, const right: str) {
+    put(s, left, n)
+    if n > 0 { entry_rotate(s, n - 1, right, left) }
+}
+test entry_named_rejects_in_source {
+    fn entry_named() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, entry_reserved, entry_reserved)
+        }
+    }
+    eval entry_named()
+}
+
+# UNIT-13, TIME-8: aliases and matching literals do not make distinct ports.
+const entry_alias: str = entry_reserved
+test entry_alias_rejects_in_source {
+    fn entry_node() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, entry_reserved, entry_alias)
+        }
+    }
+    eval entry_node()
+}
+test entry_literal_rejects_in_source {
+    fn entry_node() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, entry_reserved, "run.output")
+        }
+    }
+    eval entry_node()
+}
+
+# TIME-8, CAP-6, UNIT-13: named and inlined source-known entries compare
+# symmetrically, including an alias inside the concatenation.
+const entry_root: str = "run."
+const entry_root_alias: str = entry_root
+const entry_tail: str = "output"
+test entry_expression_literal_rejects_in_source {
+    fn entry_node() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, entry_root + entry_tail, "run.output")
+        }
+    }
+    eval entry_node()
+}
+test entry_literal_expression_rejects_in_source {
+    fn entry_node() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, "run.output", entry_root + entry_tail)
+        }
+    }
+    eval entry_node()
+}
+test entry_alias_expression_literal_rejects_in_source {
+    fn entry_node() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, entry_root_alias + entry_tail, "run.output")
+        }
+    }
+    eval entry_node()
+}
+test entry_literal_alias_expression_rejects_in_source {
+    fn entry_node() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, "run.output", entry_root_alias + entry_tail)
+        }
+    }
+    eval entry_node()
+}

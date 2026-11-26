@@ -42,6 +42,13 @@ pub struct Program {
     /// The `const` slots of a cycle whose store key can differ between its
     /// calls (TIME-8).
     pub(crate) changing_store_slots: crate::const_inputs::ChangingSlots,
+    /// Store-key demands proved for one concrete type/pack call route.
+    pub(crate) selected_store_routes: crate::const_inputs::StoreRoutes,
+    /// The fixed store inputs of the callable instance currently checked.
+    pub(crate) store_input_contexts:
+        std::cell::RefCell<Vec<crate::const_inputs::StoreInputContext>>,
+    /// Lexical parameter provenance shared by source and target store checks.
+    pub(crate) store_input_bindings: std::sync::OnceLock<HashMap<(FileId, u32), Location>>,
     /// Bodies that read a generic value to fix a run-store key.
     pub(crate) generic_store_bodies: HashSet<(usize, usize)>,
     /// Lexical lookup ranges reused across concrete checks of one body.
