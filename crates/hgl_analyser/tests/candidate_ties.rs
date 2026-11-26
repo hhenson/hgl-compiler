@@ -265,6 +265,33 @@ fn declaration_witnesses_honour_the_public_requirement() {
     assert_eq!(warnings(&checked).len(), 2, "{}", checked.report);
 }
 
+/// GEN-6: each admitted candidate's default supplies the omitted type
+/// when checking the public requirement.
+#[test]
+fn declaration_witnesses_check_the_public_requirement_after_defaults() {
+    let own_defaults = concat!(
+        "operator quote<T>(size: T) -> i64 requires T in {bool, str}\n",
+        "impl const fn quote(size: bool = true) -> i64 => 17\n",
+        "impl const fn quote(size: str = \"lot\") -> i64 => 23\n",
+    );
+    let checked = module(&format!(
+        "{own_defaults}test omitted {{ assert quote() == 17 }}\n"
+    ));
+    assert_ambiguous(&checked);
+    let only_one_admitted = own_defaults.replace("{bool, str}", "{bool, i64}");
+    let checked = module(&only_one_admitted);
+    assert!(warnings(&checked).is_empty(), "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "operator/impl.requires");
+
+    let checked = module(concat!(
+        "operator quote<T>(size: T = 1) -> i64 requires T in {i64, f64}\n",
+        "impl const fn quote(size: i64) -> i64 => 17\n",
+        "impl const fn quote(size: f64) -> i64 => 23\n",
+        "test omitted { assert quote() == 17 }\n",
+    ));
+    assert_ambiguous(&checked);
+}
+
 /// GEN-6 and UNIT-8: ordinary omitted-argument admission uses the
 /// operator's default even when candidates declare none of their own.
 #[test]

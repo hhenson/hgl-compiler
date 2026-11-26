@@ -17,7 +17,7 @@ use crate::program::{
 };
 use crate::syntax::child;
 use crate::types::{Argument, Detail, GenericKind, Scalar, Signature, Type};
-use crate::values::candidates::{Given, Wanted};
+use crate::values::candidates::{Chosen, Given, Wanted};
 use crate::values::fit::{open, whole};
 use crate::values::inference::unsaid;
 use crate::values::operators::from_place;
@@ -399,28 +399,8 @@ fn record_tied_call<'a>(
     let mark = typer.mark();
     let mut found = vec![None; public.generics.len()];
     from_place(public, *expected, &mut found);
-    let request = typer.argument_output_requested(operator, public, found.clone(), &given, false);
-    let supplied: Vec<_> = types.iter().map(Some).collect();
-    typer.infer_operator_inputs(public, &mut found, &supplied);
-    let public_arguments: Vec<_> = public
-        .generics
-        .iter()
-        .zip(found)
-        .map(|(parameter, value)| {
-            value.unwrap_or_else(|| match parameter.kind {
-                GenericKind::Value(_) => Argument::Constant(unsaid()),
-                _ => Argument::Type(Type::Unknown),
-            })
-        })
-        .collect();
-    let target = (operator.module, operator.declaration);
-    // Ordinary admission can leave the public requirement to a later
-    // report. A declaration warning needs a call the public signature admits.
-    if request.unfit.is_some()
-        || typer
-            .requires_told_with_packs(target, &public_arguments, &request.type_packs, None)
-            .is_some_and(|(_, holds, _)| holds != Some(true))
-    {
+    let request = typer.argument_output_requested(operator, public, found, &given, false);
+    if request.unfit.is_some() {
         typer.take_back(mark, false);
         return;
     }
@@ -430,9 +410,17 @@ fn record_tied_call<'a>(
         written: false,
         callback: None,
     };
-    let (selected, unknown) = typer.admitted(operator, candidates, &given, &wanted);
+    let (mut selected, unknown) = typer.admitted(operator, candidates, &given, &wanted);
     if !typer.take_back(mark, false) || unknown || selected.len() < 2 {
         return;
+    }
+    if child(&declaration.syntax, SyntaxKind::RequiresClause).is_some() {
+        selected.retain(|candidate| {
+            public_requirement_holds(typer, operator, public, types, *expected, candidate)
+        });
+        if selected.len() < 2 {
+            return;
+        }
     }
     for candidate in &selected {
         let at = (candidate.module, candidate.declaration);
@@ -443,4 +431,50 @@ fn record_tied_call<'a>(
                 .filter(|&other| other != at),
         );
     }
+}
+
+/// An omitted argument takes the instantiated type of the admitted
+/// candidate's default, which can differ across the same call (GEN-6).
+fn public_requirement_holds(
+    typer: &mut Typer<'_>,
+    operator: OperatorRef,
+    public: &Signature,
+    types: &[Type],
+    expected: Option<&Type>,
+    candidate: &Chosen<'_>,
+) -> bool {
+    let signature = candidate.signature();
+    let supplied: Vec<_> = public
+        .candidate_parameters(signature)
+        .enumerate()
+        .map(|(position, slot)| {
+            types
+                .get(position)
+                .or_else(|| slot.map(|slot| &signature.parameters[slot].ty))
+        })
+        .collect();
+    let mut found = vec![None; public.generics.len()];
+    from_place(public, expected, &mut found);
+    typer.infer_operator_inputs(public, &mut found, &supplied);
+    let arguments: Vec<_> = public
+        .generics
+        .iter()
+        .zip(found)
+        .map(|(parameter, value)| {
+            value.unwrap_or_else(|| match parameter.kind {
+                GenericKind::Value(_) => Argument::Constant(unsaid()),
+                _ => Argument::Type(Type::Unknown),
+            })
+        })
+        .collect();
+    let mark = typer.mark();
+    let holds = typer
+        .requires_told_with_packs(
+            (operator.module, operator.declaration),
+            &arguments,
+            &[],
+            None,
+        )
+        .is_none_or(|(_, holds, _)| holds == Some(true));
+    typer.take_back(mark, false) && holds
 }
