@@ -446,7 +446,7 @@ pub fn left_out<'p>(
             .and_then(Option::as_ref)
     });
     if let Some(default) = default {
-        if default.needs_type_specialization()
+        if default.needs_contextual_specialization(&parameter.ty)
             && !callee.generics().is_empty()
             && let Some(owner) = callee.declaration()
         {

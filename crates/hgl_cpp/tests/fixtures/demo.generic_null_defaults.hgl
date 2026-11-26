@@ -53,3 +53,35 @@ test omitted_nullable_connections_stay_silent {
     assert eval call_with_omission(tick: [1, 2]) == [false, false]
     assert eval implicit_input(tick: [1, 2], other: [_, 3]) == [false, true]
 }
+
+# UNIT-8, EXPR-5: aggregate literals are read against the concrete type
+# of an omitted generic parameter, including through another generic body.
+const fn listed_default<T>(fallback: T = [1]) -> T => fallback
+const fn tuple_default<T>(fallback: T = (1, 2)) -> T => fallback
+const fn nullable_default<T>(fallback: T? = [1]) -> T? => fallback
+const fn forwarded_default<T>() -> T => listed_default<T>()
+const fn nested_default<T>(fallback: T = [(1, 2)]) -> T => fallback
+struct FieldLiteralDefault<T> { value: T = [1] }
+
+test generic_list_default_reads_its_elements_in_context {
+    assert format("{}", listed_default<list<f64>>()) == "[1.0]"
+    assert format("{}", forwarded_default<list<f64>>()) == "[1.0]"
+    assert listed_default<list<i64>>() == [1]
+    assert listed_default<str>("given") == "given"
+}
+
+test generic_tuple_default_reads_each_element_in_context {
+    let pair = tuple_default<tuple<f64, f64>>()
+    assert pair[0] == 1.0 && pair[1] == 2.0
+    let nested = nested_default<list<tuple<f64, f64>>>()
+    assert nested[0][0] == 1.0 && nested[0][1] == 2.0
+}
+
+test generic_nullable_default_keeps_its_element_context {
+    assert format("{}", nullable_default<list<f64>>()) == "[1.0]"
+    assert format("{}", listed_default<list<f64>?>()) == "[1.0]"
+}
+
+test generic_field_literal_default_keeps_its_applied_context {
+    assert format("{}", FieldLiteralDefault<list<f64>>().value) == "[1.0]"
+}

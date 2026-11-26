@@ -106,6 +106,41 @@ fn an_omitted_default_fits_the_concrete_parameter_type() {
     );
 }
 
+/// UNIT-8 and EXPR-5: an aggregate literal takes the omitted parameter's
+/// instantiated element types, rather than keeping its declaration-time i64s.
+#[test]
+fn generic_literal_defaults_use_the_concrete_context() {
+    let checked = module(concat!(
+        "const fn listed<T>(fallback: T = [1]) -> T => fallback\n",
+        "const fn paired<T>(fallback: T = (1, 2)) -> T => fallback\n",
+        "const fn optional<T>(fallback: T? = [1]) -> T? => fallback\n",
+        "struct Holder<T> { value: T = [1] }\n",
+        "const fn floats() -> list<f64> => listed<list<f64>>()\n",
+        "const fn tupled() -> tuple<f64, f64> => paired<tuple<f64, f64>>()\n",
+        "const fn nullable() -> list<f64>? => optional<list<f64>>()\n",
+        "const fn field() -> Holder<list<f64>> => Holder<list<f64>>()\n",
+        "const fn supplied() -> str => listed<str>(\"given\")\n",
+    ));
+    assert!(checked.summary().is_empty(), "{}", checked.report);
+}
+
+/// EXPR-5: rereading a named constant does not turn it into an aggregate
+/// literal, so its already established integer element type cannot widen.
+#[test]
+fn a_named_default_keeps_its_established_element_type() {
+    let checked = module(concat!(
+        "const ints: list<i64> = [1]\n",
+        "const fn listed<T>(fallback: T = ints) -> T => fallback\n",
+        "const fn wrong() -> list<f64> => listed<list<f64>>()\n",
+    ));
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(
+        checked.findings[0].code, "type/type.mismatch",
+        "{}",
+        checked.report
+    );
+}
+
 /// UNIT-8, ERR-9: the catalogued constant.failure code also
 /// covers field defaults; an operand skipped by EXPR-6 does not fail.
 #[test]
