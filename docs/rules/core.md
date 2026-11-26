@@ -800,9 +800,9 @@ runner: planned
 
 transpiler: partial
 
-- Fixed-size list `map` runs its HGL candidates. C++ wires a result-bearing keyed map over one split dictionary.
+- Fixed-size list `map` runs its HGL candidates. C++ wires a result-bearing keyed map over one or more split dictionaries.
 - Core currently declares result-bearing native map candidates. Native calls with resultless callbacks reject during checking.
-- Left: native growing lists and multiple split dictionaries (#370).
+- Left: native growing lists (#370).
 
 ## MAP-2
 
@@ -813,8 +813,8 @@ analyser: partial
 transpiler: partial
 
 - A fixed-size map binds positional and named inputs, splits the fitted list inputs, and supplies whole inputs to each child. An explicitly specialized operator can supply the callback's member types (FN-17). An omitted callback input uses the callback's default (FN-8, UNIT-8).
-- The native one-dictionary map binds the callback's checked arguments, passes the selected dictionary entry, and gives each whole input to every child.
-- Left: a function supplied to a keyed child, multiple split dictionaries and growing lists (#370). Bare operator selection is tracked in #776 and inline dictionary argument fitting in #826.
+- The native keyed map binds the callback's checked arguments, passes the selected entry from each split dictionary, and gives each whole input to every child.
+- Left: a function supplied to a keyed child and growing lists (#370). Bare operator selection is tracked in #776 and inline dictionary argument fitting in #826.
 
 ## MAP-3
 
@@ -824,17 +824,16 @@ analyser: done
 
 ## MAP-4
 
-transpiler: partial
+transpiler: done
 
-- In a one-dictionary map the explicit key set or split dictionary supplies K. The keyed candidate requires an injected parameter to have type K.
-- Left: multiple split dictionaries (#370).
+- An explicit key set supplies K. Otherwise the first split dictionary in callback parameter order supplies K, shared by the other split dictionaries. The keyed candidate requires an injected parameter to have type K.
 
 ## MAP-5
 
 transpiler: partial
 
-- One split dictionary supplies the keys when the option is omitted or written as `null`. An explicit nonnullable key set selects its own keys and has no children before it becomes valid.
-- Left: joins of multiple dictionaries and nullable `keys` connections, which need nullable set publications to switch the key set (#370).
+- When `keys` is omitted or written as `null`, an inner join uses the intersection, an outer join uses the union, and a left join uses the first split dictionary in callback parameter order. An explicit nonnullable set takes precedence and has no children before it becomes valid.
+- Left: nullable `keys` connections, which need nullable set publications to switch the key set (#370).
 
 ## MAP-6
 
@@ -853,8 +852,8 @@ transpiler: partial
 
 transpiler: partial
 
-- A one-dictionary map with explicit keys leaves a split input invalid while its selected key has no entry.
-- Left: missing entries under joins of multiple dictionaries or lists (#370).
+- A keyed map with an outer join, left join, or explicit keys leaves a split input invalid while its selected key has no entry.
+- Left: missing entries under joins of growing lists (#370).
 
 ## MAP-9
 
@@ -873,7 +872,7 @@ transpiler: partial
 
 - Fixed-size results hold the children's publications. A callback with no result runs at each fixed position, and the map gives no result. A failure that leaves a child leaves either form.
 - The C++ target's existing [size-zero temporal list limit](https://github.com/hhenson/hgl-compiler/issues/829) applies to both fixed-size forms (TYPE-10).
-- The native one-dictionary map holds published entries, including a child's first empty dictionary, and publishes a valid empty dictionary once if no child publishes. Lifecycle changes of an unpublished child leave an already valid result silent (TIME-7). A child failure propagates, and an entry is removed when its child stops.
+- The native keyed map holds published entries, including a child's first empty dictionary, and publishes a valid empty dictionary once if no child publishes. Lifecycle changes of an unpublished child leave an already valid result silent (TIME-7). A child failure propagates, and an entry is removed when its child stops.
 - Proposed. Invalidating a child result removes its entry until that child publishes again. Under explicit keys, a pass-through result withdraws when its split entry leaves, while the child remains alive (MAP-8).
 - Left: other native result shapes (#370).
 

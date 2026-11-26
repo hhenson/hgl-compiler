@@ -2711,7 +2711,7 @@ fn let_bound_packs_run_on_the_sdk() {
 }
 
 /// MAP-1, RED-1, RED-4 and RED-5: C++ reports the remaining native forms.
-/// C++ writes a one-dictionary keyed map and growing ordered folds with
+/// C++ writes joined keyed maps and growing ordered folds with
 /// and without callback captures.
 #[test]
 fn native_mapping_forms_decline_cpp_emission() {
@@ -2758,10 +2758,13 @@ export fn dictionary_tree(values: dict<str, i64>) -> i64 => reduce(add_, values,
         "{stderr}"
     );
     assert!(!stderr.contains("map{keys: selected}"), "{stderr}");
-    assert!(stderr.contains("map(sum_for_map, left, right)"), "{stderr}");
+    assert!(
+        !stderr.contains("map(sum_for_map, left, right)"),
+        "{stderr}"
+    );
     assert_eq!(
         stderr.matches("error[build/target.unsupported]").count(),
-        5,
+        4,
         "{stderr}"
     );
 }
@@ -2777,8 +2780,6 @@ fn keyed_map_declines_name_the_unsupported_form() {
 
 const fn twice(x: i64) -> i64 => x * 2
 fn applied(member: i64, f: fn(i64) -> i64) -> i64 => f(member)
-fn sum_members(left: i64, right: i64) -> i64 => left + right
-
 export fn mapped_function(items: dict<i64, i64>) -> dict<i64, i64> => map(applied, items, twice)
 export fn mapped_local(items: dict<i64, i64>) -> dict<i64, i64> {
     let r = map(applied, items, twice)
@@ -2789,7 +2790,6 @@ export fn fixed_local(items: list<i64, 3>) -> list<i64, 3> {
     let r = map(applied, items, twice)
     return r
 }
-export fn mapped_pair(a: dict<i64, i64>, b: dict<i64, i64>) -> dict<i64, i64> => map(sum_members, a, b)
 "#,
     );
     let checked = hgl_in(&["check", &file], &[], &[]);
@@ -2802,12 +2802,6 @@ export fn mapped_pair(a: dict<i64, i64>, b: dict<i64, i64>) -> dict<i64, i64> =>
     );
     let stderr = text(&emitted.stderr);
     assert_eq!(emitted.status.code(), Some(1), "{stderr}");
-    for reason in [
-        "a keyed map passing a function argument to its child",
-        "a keyed map with multiple split dictionaries",
-    ] {
-        assert!(stderr.contains(reason), "{stderr}");
-    }
     assert_eq!(
         stderr
             .matches("a keyed map passing a function argument to its child")
@@ -2817,7 +2811,7 @@ export fn mapped_pair(a: dict<i64, i64>, b: dict<i64, i64>) -> dict<i64, i64> =>
     );
     assert_eq!(
         stderr.matches("error[build/target.unsupported]").count(),
-        7,
+        6,
         "{stderr}"
     );
 }
