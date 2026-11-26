@@ -128,7 +128,8 @@ analyser: partial
 - A candidate's own result or callback result can be absent when the operator permits a result-only generic to bind to none (GEN-1). A candidate whose result disagrees with its operator reports `impl.result` at the result type or at the candidate's name when it has no result.
 - A fixed public result rejects a candidate that adds null or failure. A candidate may guarantee the value of a nullable or fallible result. A complete fallible place takes that value as a success. An independent output parameter can bind to the candidate's own result.
 - The types and values bound by a candidate's declared parameters can show that the operator's `requires` does not hold. The candidate's name then reports `impl.requires`.
-- Left: other checks of a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidate selection
+- The declaration check warns at each candidate when a positional call with a common concrete result leaves several candidates equally preferred. It checks fixed scalar slots and bare type parameters, including calls that omit trailing arguments with candidate or operator defaults, through the ordinary candidate matcher. Each admitted candidate's filled defaults supply the omitted input types. Public generic defaults are resolved before checking the public requirement. In slots where both declarations use bare type parameters, each trial uses one common type from `i64`, `f64`, `bool` and `str`. Requirement resolution uses the same production or test candidate view as the call (TST-1). A declaration may acknowledge its own warning (ERR-10).
+- Left: other checks of a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; tie witnesses that need named or configured inputs, structured input patterns, packs or dependent results, or test candidate views that reach the operator only through a selected candidate body; temporal candidate selection
 
 ## GEN-7
 
@@ -203,7 +204,7 @@ analyser: partial
 - Guaranteed indexed tuple members retain their pack's universal category facts only where the effective minimum guarantees that key. Exact tuple-pack occurrences inside parameter containers also prove a positive minimum. Tuple equations are retained inside lists, dictionary values, nullable types and nested tuples without changing argument reading.
 - Left: key-preserving universal finite-membership and named-call inheritance for indexed members (#723). The direct reflected-member operator proof uses separate alternatives per key (GEN-7).
 - Left: positive existential constraints do not yet prove a nonempty pack for tuple indexing (#724).
-- Left: named operator requirements bound by a quantifier.
+- A named operator requirement under `each` or `any` checks the value candidates for the current concrete type or key, including nested written types (GEN-16). The candidate's return value does not determine the verdict.
 - An ordinary value context rejects the borrowed view from `schemas(pack)`.
 
 transpiler: partial

@@ -397,6 +397,16 @@ void keyed_publish(const E& out, const typename keyed_form<schema_of<E>>::type& 
 /// change", through hgraph's write of a delta.
 template <class E>
 void keyed_publish(const E& out, const endpoint_delta_t<E>& delta) {
+    using Form = keyed_form<schema_of<E>>;
+    if constexpr (detail::is_dict<typename Form::type>::value) {
+        // TIME-7, TYPE-16: ignored removals name no change, but make an
+        // unset dictionary valid and empty. hgraph's removal-only delta
+        // leaves it unset; its whole empty publication establishes validity.
+        if (!out.valid() && delta.updated.empty() && !delta.removed.empty()) {
+            keyed_publish(out, typename Form::type{});
+            return;
+        }
+    }
     hgraph::apply_delta(out.base(), keyed_form<schema_of<E>>::change(delta).view());
 }
 

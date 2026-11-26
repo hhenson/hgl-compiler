@@ -253,6 +253,33 @@ TEST_CASE("a removal of a key the dictionary does not hold is no tick, and a rem
           });
 }
 
+TEST_CASE("ignored dictionary removals establish validity once (TIME-7, TYPE-16)") {
+    CHECK(watch_book(Dense<i64>{3, 3, 1, 3, 9, 3}) ==
+          std::vector<Seen<Book, BookDelta>>{
+              {start, true, true, Book{}, BookDelta{}},
+              {start + 2us, true, true, Book{{"A", 7}}, BookDelta{{{"A", 7}}, {}}},
+              {start + 4us, true, true, Book{}, BookDelta{{}, {"A"}}},
+          });
+    CHECK(book_all_valid == std::vector<bool>{true, true, true});
+}
+
+TEST_CASE("ignored removals restore an invalidated dictionary (TIME-7, END-4)") {
+    CHECK(watch_book(Dense<i64>{1, 4, 3, 3}) ==
+          std::vector<Seen<Book, BookDelta>>{
+              {start, true, true, Book{{"A", 7}}, BookDelta{{{"A", 7}}, {}}},
+              {start + 1us, false, false, std::nullopt, std::nullopt},
+              {start + 2us, true, true, Book{}, BookDelta{}},
+          });
+    CHECK(book_all_valid == std::vector<bool>{true, false, true});
+    // The corresponding set operation already has this validity transition.
+    CHECK(watch_members(Dense<i64>{3, 3, 4, 3}) ==
+          std::vector<Seen<Members, MembersDelta>>{
+              {start, true, true, Members{}, MembersDelta{}},
+              {start + 2us, false, false, std::nullopt, std::nullopt},
+              {start + 3us, true, true, Members{}, MembersDelta{}},
+          });
+}
+
 TEST_CASE("a dictionary given whole publishes each entry, and an empty one given to an empty one is none "
           "(TIME-7)") {
     CHECK(watch_book(Dense<i64>{5, 5, 6, 6, 7, 8}) ==
