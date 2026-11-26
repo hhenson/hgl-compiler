@@ -1732,6 +1732,9 @@ struct Stamp<const K: Type> { n: i64 }
 operator read<A, R>(value: A) -> R
 impl const fn read<A>(value: A) -> i64 => 1
 impl const fn read(value: Tag<7>) -> bool => true
+struct Row<T> { v: T
+ size: i64 }
+const fn keep<A,B>(x:A,y:B)->A=>x
 const fn fixed<A>(value: A) -> i64 => 1
 const REQUIRED: Type = type(Stamp<type(true)>(n: 0))
 struct Only<const K: Type> requires K == REQUIRED { n: i64? }
@@ -1746,6 +1749,18 @@ const fn place<const N: i64>(arg: Tag<N>) -> i64 {
         (
             "alias",
             "let selected = read(arg)\n    let alias = selected",
+        ),
+        (
+            "alias[0]",
+            "let selected = read(arg)\n    let alias = (selected, 17)",
+        ),
+        (
+            "alias.v",
+            "let selected = read(arg)\n    let alias = Row(v:selected, size:17)",
+        ),
+        (
+            "alias",
+            "let selected = read(arg)\n    let alias = keep(selected,17)",
         ),
     ] {
         let definitions = definitions
@@ -1771,8 +1786,12 @@ const fn place<const N: i64>(arg: Tag<N>) -> i64 {
             }
         }
     }
-    // Both results have a fixed i64 type, even in a declaration with no callers.
+    // These results have a fixed i64 type, even in a declaration with no callers.
     for initializer in [
+        "let selected = read(arg)\n    let alias = (selected,17)[1]",
+        "let selected = read(arg)\n    let alias = Row(v:selected,size:17).size",
+        "let selected = read(arg)\n    let alias = keep(17,selected)",
+        "let selected = read(arg)\n    let alias = [(selected,17)][0][1]",
         "let selected = read(arg)\n    let alias = fixed(selected)",
         "let selected = read(arg)\n    let alias = { let ignored = selected\n 1 }",
     ] {

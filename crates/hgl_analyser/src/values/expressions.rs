@@ -280,7 +280,8 @@ impl<'a> Typer<'a> {
             .map(|node| self.expression(&node, None));
         let provisional_result = operand
             .as_ref()
-            .is_some_and(|value| self.result_depends_on_selection(value, mark.selecting));
+            .and_then(|value| self.provisional_type(value, mark.selecting))
+            .is_some();
         let ty = operand.map_or(Type::Unknown, |value| value.ty);
         let new_errors = self.diagnostics.as_slice()[mark.diagnostics..]
             .iter()

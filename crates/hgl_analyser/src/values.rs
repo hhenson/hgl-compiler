@@ -116,6 +116,7 @@ pub(crate) use operator_defaults::{
 // A call of an operator: its requested output, arguments and candidates (GEN-5, GEN-6).
 mod operators;
 // `requires`, and what a generic body may call by it (GEN-3, GEN-7, GEN-16).
+mod provisional_types;
 mod quantifiers;
 mod requirements;
 pub(crate) use requirements::bounded_instance_key;
@@ -858,7 +859,7 @@ struct Typer<'a> {
     /// A nested descriptor's cold operand selected an overload provisionally.
     nested_query_selects: bool,
     /// Inferred bindings whose type depends on per-instance operator selection.
-    provisional_locals: HashSet<LocalId>,
+    provisional_locals: HashMap<LocalId, Type>,
     /// The locals a capability has been bound to, each with the
     /// capability it is: `let bound = clock` (TIME-8: "Binding one to a
     /// `let` ... [is a use]"). The local is then the capability under
@@ -1113,7 +1114,7 @@ impl<'a> Typer<'a> {
             probing_logic: false,
             type_query: false,
             nested_query_selects: false,
-            provisional_locals: HashSet::new(),
+            provisional_locals: HashMap::new(),
             aliases: HashMap::new(),
             bound_children: HashMap::new(),
             binding_child: None,
@@ -1365,7 +1366,8 @@ impl<'a> Typer<'a> {
             // What was noted of a local that is taken back goes with it:
             // its number is given to the next local declared.
             self.aliases.retain(|local, _| *local < mark.locals);
-            self.provisional_locals.retain(|local| *local < mark.locals);
+            self.provisional_locals
+                .retain(|local, _| *local < mark.locals);
             self.bound_children.retain(|local, _| *local < mark.locals);
             self.bound_packs.retain(|local, _| *local < mark.locals);
             self.captures.retain(|local, _| *local < mark.locals);

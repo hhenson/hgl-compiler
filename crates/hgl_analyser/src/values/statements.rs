@@ -497,11 +497,11 @@ impl<'a> Typer<'a> {
         if annotation.is_none()
             && !self.signature.generics.is_empty()
             && self.instance.is_empty()
-            && value
+            && let Some(projected) = value
                 .as_ref()
-                .is_some_and(|value| self.result_depends_on_selection(value, selections_before))
+                .and_then(|value| self.provisional_type(value, selections_before))
         {
-            self.provisional_locals.insert(local);
+            self.provisional_locals.insert(local, projected);
         }
         if let Some(origin) = child {
             self.bound_children.insert(local, origin);
@@ -528,71 +528,6 @@ impl<'a> Typer<'a> {
             _ => ValueCategory::Value,
         };
         Stmt::Declare { local, value }
-    }
-
-    /// An inferred local or cold query takes its type from the result of the
-    /// expression. A block's discarded statements and a fixed function's
-    /// arguments can use selected values without changing that result.
-    pub(super) fn result_depends_on_selection(
-        &self,
-        value: &Expr,
-        selections_before: usize,
-    ) -> bool {
-        let calls = self.selecting.borrow();
-        let calls = &calls[selections_before..];
-        if self.provisional_locals.is_empty() && calls.is_empty() {
-            return false;
-        }
-        self.provisional_result(value, calls)
-    }
-
-    fn provisional_result(&self, value: &Expr, calls: &[super::candidates::Selecting]) -> bool {
-        let selected = |part: &Expr| calls.iter().any(|call| call.at == part.at);
-        if selected(value) {
-            return true;
-        }
-        let depends = |part: &Expr| self.provisional_result(part, calls);
-        if let Some(branches) = value.kind.branch_values() {
-            return branches.into_iter().any(depends);
-        }
-        match &value.kind {
-            ExprKind::Local(id) | ExprKind::DeferredPresent(id) => {
-                self.provisional_locals.contains(id)
-            }
-            ExprKind::Call {
-                callee, arguments, ..
-            } => {
-                if let Some((m, d)) = callee.declaration()
-                    && let crate::Detail::Callable(signature) = &self.program.modules[m].details[d]
-                    && signature
-                        .result
-                        .as_ref()
-                        .is_some_and(|ty| ty.identity().is_some())
-                {
-                    return false;
-                }
-                arguments.iter().any(|arg| depends(&arg.value))
-            }
-            ExprKind::Index { base, .. } | ExprKind::Field { base, .. } => depends(base),
-            ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => entries.iter().any(depends),
-            ExprKind::Pairs(entries) => entries.iter().any(|(k, v)| depends(k) || depends(v)),
-            ExprKind::Construct {
-                infer_types,
-                arguments,
-                ..
-            } => {
-                crate::constant::type_has_instance_query(&value.ty)
-                    || (*infer_types && arguments.iter().any(|arg| depends(&arg.value)))
-            }
-            _ => {
-                let mut found = false;
-                value.walk(&mut |part| {
-                    found |= selected(part) || matches!(part.kind,
-                        ExprKind::Local(id) | ExprKind::DeferredPresent(id) if self.provisional_locals.contains(&id));
-                });
-                found
-            }
-        }
     }
 
     /// EXPR-3: "`let` is immutable; `var` may be assigned within the
