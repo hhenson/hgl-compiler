@@ -8,7 +8,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
-use hgl_parser::HasSpan;
 
 use super::constants::parameter_default_type;
 use super::fit::{open, whole};
@@ -49,13 +48,9 @@ pub(super) fn check(
             constant.value.walk(&mut visit);
         }
         for (defaults, declaration) in module.defaults.iter().zip(&module.declarations) {
-            let span = declaration.syntax.span();
             for default in defaults.iter().flatten() {
                 // Check inherited defaults at their original declarations.
-                if default.value.at.file == declaration.at.file
-                    && span.start <= default.value.at.span.start
-                    && default.value.at.span.end <= span.end
-                {
+                if declaration.declares_default(default) {
                     default.value.walk(&mut visit);
                 }
             }

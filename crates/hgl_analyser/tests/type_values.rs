@@ -1595,3 +1595,43 @@ const fn nested<T>(x: T, v: i64 = invoke(fn(n: i64) => fixed(make<T>().tag))) ->
         }
     }
 }
+
+/// GEN-6, UNIT-8, TYPE-18: copying the operator's default to an
+/// implementation does not turn its generic helper into a concrete root.
+#[test]
+fn inherited_defaults_follow_only_the_selected_operator_call() {
+    let definitions = r#"module m
+const INTEGER: Type = type(1)
+const fn rows<T>() -> list<T> => []
+operator pick<A,R>(value: A) -> R
+impl const fn pick<A>(value: A) -> i64 => 1
+impl const fn pick(value: list<str>) -> bool => true
+struct Stamp<const Kind: Type> { id: i64 }
+struct Frame<T> { item: T?
+    tag: Stamp<type(pick(rows<T>()))> }
+const fn make<T>() -> Frame<T> => Frame<T>(tag: Stamp<type(pick(rows<T>()))>(id: 17))
+operator configured<T>{v: Stamp<INTEGER> = make<T>().tag}(x: T) -> i64
+impl const fn configured{v: Stamp<INTEGER>}(x: i64) -> i64 => v.id
+impl const fn configured{v: Stamp<INTEGER>}(x: str) -> i64 => v.id
+"#;
+    for (call, valid) in [
+        ("17", true),
+        ("configured(1)", true),
+        (r#"configured{v: Stamp<INTEGER>(id: 17)}("s")"#, true),
+        (r#"configured("s")"#, false),
+    ] {
+        let source = format!("{definitions}\ntest use_it {{ assert {call} == 17 }}\n");
+        let checked = check(&[("m.hgl", &source)]);
+        if valid {
+            assert_eq!(
+                checked.summary(),
+                Vec::<String>::new(),
+                "{call}\n{}",
+                checked.report
+            );
+        } else {
+            assert_eq!(checked.findings.len(), 1, "{call}\n{}", checked.report);
+            assert_eq!(checked.findings[0].code, "type/type.mismatch");
+        }
+    }
+}

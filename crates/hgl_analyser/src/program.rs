@@ -593,6 +593,14 @@ pub struct Declaration {
 }
 
 impl Declaration {
+    /// An implementation inherits the public operator's configuration defaults
+    /// (GEN-6). Only their defining declaration owns the open generic calls.
+    pub fn declares_default(&self, default: &DefaultExpr) -> bool {
+        let at = default.value.at;
+        let span = self.syntax.span();
+        at.file == self.at.file && span.start <= at.span.start && at.span.end <= span.end
+    }
+
     /// True when another module may import the declaration (UNIT-3).
     pub fn is_public(&self) -> bool {
         self.exported

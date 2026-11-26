@@ -423,3 +423,15 @@ test ordinary_default_field_fit {
     assert dependent_place(2) == 19
     assert dependent_place("s", Tagged<type((true, false))>(value: 29)) == 29
 }
+
+# GEN-6, UNIT-8, TYPE-18: each candidate inherits the public default
+# in the operator's scope. Its helper is instantiated only if that call
+# omits the configuration argument.
+operator configured_label<T>{label: Tagged<type(cold_sample(cold_make<T>()))> = make_default_source<T>().label}(item: T) -> i64
+impl const fn configured_label{label: Tagged<BASE_LABEL>}(item: i64) -> i64 => label.value
+impl const fn configured_label{label: Tagged<type((true, false))>}(item: str) -> i64 => label.value
+test inherited_type_dependent_default {
+    assert configured_label(1) == 17
+    assert configured_label("x") == 17
+    assert configured_label{label: Tagged<type((true, false))>(value: 29)}("x") == 29
+}

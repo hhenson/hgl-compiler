@@ -2756,7 +2756,9 @@ pub(super) fn instances_hold(
                 .flatten()
                 .flatten()
             {
-                made_by(program, &default.value, &mut made);
+                if module.declarations[position].declares_default(default) {
+                    made_by(program, &default.value, &mut made);
+                }
             }
             // A struct a type written in it applies, a field's or a
             // parameter's (GEN-3: "an application of a struct whose

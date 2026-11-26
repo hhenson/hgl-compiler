@@ -915,16 +915,12 @@ impl Instances {
             }
             // Generic struct defaults ask for instances at omitted
             // fields, with the struct's arguments in place (TYPE-5).
-            let defaults = module
-                .defaults
-                .iter()
-                .zip(&module.details)
-                .filter_map(|(defaults, detail)| match detail {
-                    Detail::Struct(shape) if !shape.generics.is_empty() => None,
-                    _ => Some(defaults),
-                })
-                .flatten()
-                .flatten();
+            let defaults = module.defaults.iter().enumerate().filter(|(index, _)| {
+                !matches!(&module.details[*index], Detail::Struct(shape) if !shape.generics.is_empty())
+            }).flat_map(|(index, defaults)| {
+                let owner = &module.declarations[index];
+                defaults.iter().flatten().filter(move |default| owner.declares_default(default))
+            });
             // Constants and other defaults are read in their defining
             // scope (UNIT-13, UNIT-8).
             for value in module.constants.iter().flatten().chain(defaults) {
