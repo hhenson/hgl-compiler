@@ -4240,7 +4240,7 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 26 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 27 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
@@ -6230,7 +6230,7 @@ fn call_role_preferences_run_on_the_sdk() {
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
         stdout.ends_with(
-            "rejection cases: 5 passed, 0 failed\nexecutable cases: 15 passed, 0 failed, 0 not run\n"
+            "rejection cases: 7 passed, 0 failed\nexecutable cases: 17 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );
@@ -6394,7 +6394,7 @@ fn category_constraints_and_tuple_packs_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 28 passed, 0 failed\nexecutable cases: 19 passed, 0 failed, 0 not run\n"
+            "rejection cases: 30 passed, 0 failed\nexecutable cases: 21 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );

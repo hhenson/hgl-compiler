@@ -340,3 +340,39 @@ impl const fn homogeneous_pair(values: ...i64{2}) -> tuple<i64, i64> => (1, 2)
 test homogeneous_candidate_supplies_the_tuple_result {
     assert homogeneous_pair(10, 20) == (1, 2)
 }
+
+# GEN-10, GEN-16 and GEN-17: check named requirements with each actual
+# tuple member's type, including via its positional key.
+operator describe_member<T>(value: T) -> str
+impl const fn describe_member(value: i64) -> str => "integer"
+impl const fn describe_member(value: str) -> str => "string"
+
+operator describe_tuple<T>(value: T) -> str
+impl const fn describe_tuple<...Ts{2:*}>(value: tuple<Ts>) -> str
+    requires each T in types(Ts) { describe_member(T) -> str } =>
+    join{separator: ", "}(...{for key in arg_keys(Ts): describe_member(value[key])})
+
+const fn describe_keyed_tuple<...Ts{2:*}>(value: tuple<Ts>) -> str
+    requires each key in arg_keys(Ts) { describe_member(Ts[key]) -> str } =>
+    join{separator: ", "}(...{for key in arg_keys(Ts): describe_member(value[key])})
+
+test quantified_named_tuple_requirements {
+    assert describe_tuple((1, "two")) == "integer, string"
+    assert describe_tuple(("one", 2)) == "string, integer"
+    assert describe_keyed_tuple((1, "two")) == "integer, string"
+}
+
+# A named requirement checks whether the operator can be called.
+operator callable_member<T>(value: T) -> bool
+impl const fn callable_member(value: i64) -> bool => false
+const fn has_callable_member<...Ts>(value: tuple<Ts>) -> bool
+    requires any T in types(Ts) { callable_member(T) -> bool } => true
+
+test existential_tuple_callability {
+    assert has_callable_member(("first", 2))
+}
+
+# expect-error(operator, "operator.no_candidate")
+const fn missing_member_call() -> str => describe_tuple((1, false))
+# expect-error(constraint, "requires.unmet")
+const fn no_callable_member() -> bool => has_callable_member(("first", false))

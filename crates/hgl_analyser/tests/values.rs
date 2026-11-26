@@ -2572,7 +2572,11 @@ fn equally_specific_generic_candidates_are_ambiguous() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:8:15 operator/operator.ambiguous GEN-5"]
+        [
+            "m.hgl:3:15 warning/operator.candidates_tie GEN-6",
+            "m.hgl:4:15 warning/operator.candidates_tie GEN-6",
+            "m.hgl:8:15 operator/operator.ambiguous GEN-5",
+        ]
     );
     assert_eq!(locals(&checked, "uses")[2..4], ["one: i64", "two: i64"]);
 }
