@@ -1346,3 +1346,55 @@ struct Fields<...Ts> {{
         }
     }
 }
+
+/// FN-19 can leave an entire expansion unopened. UNIT-7 still applies
+/// at each written use, and a function reference takes the receiving
+/// template's role (FN-17) even when there is no pack entry to run.
+#[test]
+fn excluded_names_in_an_unexpanded_pack_follow_the_lexical_call_site() {
+    let prelude = r#"
+const width:i64=23
+struct Unit { n:i64 }
+const row:Unit=Unit(n:3)
+const fn measure<const N:i64>(x:i64)->i64=>N
+fn measure<T>(x:T)->T=>x
+const fn pick<T>(x:T)->T=>x
+fn pick<const N:i64>(x:i64)->i64=>N
+const fn entries<...As>(args:...As)->i64=>1
+const fn inspect(f:const fn(Unit)->Unit)->i64=>f(row).n
+const fn route(f:fn(i64)->i64)->i64=>4
+"#;
+    for (binding, entry, invalid) in [
+        ("width", "measure<width>(2)", true),
+        ("Unit", "inspect(pick<Unit>)", false),
+        ("width", "route(pick<width>)", true),
+        (
+            "width",
+            "entries(...{for j in arg_keys(Ps): measure<width>(2)})",
+            true,
+        ),
+        ("other", "measure<width>(2)", false),
+    ] {
+        let spread = format!("entries(...{{for k in arg_keys(Ps): {entry}}})");
+        let checked = module(&format!(
+            "{prelude}
+const fn generic<...Ps,const K:i64={spread}>({binding}:i64,v:tuple<Ps>)->i64=>K
+const fn ordinary<...Ps>({binding}:i64,v:tuple<Ps>,k:i64={spread})->i64=>k
+const fn config<...Ps>{{{binding}:i64,k:i64={spread}}}(v:tuple<Ps>)->i64=>k
+struct Fields<...Ps> {{ {binding}:i64\n v:tuple<Ps>\n k:i64={spread} }}
+test override {{ assert ordinary(9,(11,),12)==12 }}
+"
+        ));
+        let codes: Vec<_> = checked
+            .findings
+            .iter()
+            .map(|report| report.code.as_str())
+            .collect();
+        let expected = if invalid {
+            &["name/default.formal_argument"; 4][..]
+        } else {
+            &[]
+        };
+        assert_eq!(codes, expected, "{entry}\n{}", checked.report);
+    }
+}

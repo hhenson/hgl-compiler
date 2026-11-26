@@ -1116,18 +1116,54 @@ pub(super) fn check_default_names(
     }));
     for (default, expected) in defaults {
         let span = default.span();
-        if !module.paired_default_names.keys().any(|at| {
-            at.file == declaration.at.file && span.start <= at.span.start && at.span.end <= span.end
-        }) {
+        let mut pending: Vec<_> = module
+            .paired_default_names
+            .keys()
+            .copied()
+            .filter(|at| {
+                at.file == declaration.at.file
+                    && span.start <= at.span.start
+                    && at.span.end <= span.end
+            })
+            .collect();
+        if pending.is_empty() {
             continue;
         }
         let mut typer = Typer::bare(program, module, declaration, signature, found, diagnostics);
-        // UNIT-7 applies to names in either branch of a cold default,
-        // including a GEN-10 pack-key guard whose instance is still open.
         typer.lexical_default_dependencies = true;
+        typer.default_name_visits = Some(Vec::new());
         let mark = typer.mark();
         let before = typer.diagnostics.len();
         typer.expression(&default, expected);
+        // Open pack expansion and cold branches need not elaborate all
+        // expressions. Visit still-unread call sites in source-tree order:
+        // a containing call first supplies a reference's FN-17 template.
+        // Keep only the namespace diagnostics from these speculative reads.
+        for site in default.descendants().skip(1).filter(|node| {
+            matches!(
+                node.kind(),
+                SyntaxKind::CallExpr
+                    | SyntaxKind::TypedConstructor
+                    | SyntaxKind::UndecidedConstructor
+                    | SyntaxKind::FnExpr
+            )
+        }) {
+            if let Some(visits) = &mut typer.default_name_visits {
+                for at in visits.drain(..) {
+                    pending.retain(|other| *other != at);
+                }
+            }
+            if pending.is_empty() {
+                break;
+            }
+            let range = site.span();
+            if pending
+                .iter()
+                .any(|at| range.start <= at.span.start && at.span.end <= range.end)
+            {
+                typer.expression(&site, None);
+            }
+        }
         // The normal default reader owns all other diagnostics.
         let selected: Vec<_> = typer.diagnostics.as_slice()[before..]
             .iter()

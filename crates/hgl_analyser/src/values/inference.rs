@@ -705,6 +705,9 @@ impl<'a> Typer<'a> {
                         .filter(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
                 });
                 let Some(generic) = kind else { continue };
+                if let Some(visits) = &mut self.default_name_visits {
+                    visits.push(*at);
+                }
                 let value_slot = matches!(generic.kind, GenericKind::Value(_))
                     || generic.kind == GenericKind::Plain
                         && matches!(argument, Argument::Type(Type::Unknown | Type::TypeValue));
