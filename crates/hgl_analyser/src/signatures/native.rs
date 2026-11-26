@@ -111,26 +111,7 @@ fn difference(contract: &Signature, written: &Signature) -> Option<String> {
         .map(|(at, argument)| (*at, argument))
         .collect();
     let types_differ = |public: &Type, part: &Type| {
-        let dependent = |ty: &Type| {
-            ty.any_part(
-                &|ty| match ty {
-                    Type::PackMember { .. } => true,
-                    // `same_type` uses structural equality for callbacks.
-                    // It cannot compare symbolic values bound in different
-                    // declarations, so defer those template comparisons.
-                    Type::Function(template) => {
-                        template.named_pack.is_some()
-                            || template.types().any(|ty| {
-                                ty.any_part(&|ty| matches!(ty, Type::Unknown), &|constant| {
-                                    constant.value.key().is_none()
-                                })
-                            })
-                    }
-                    _ => false,
-                },
-                &|_| false,
-            )
-        };
+        let dependent = |ty: &Type| ty.any_part(&dependent_signature_part, &|_| false);
         if dependent(public) || dependent(part) {
             return false;
         }
@@ -193,6 +174,23 @@ fn difference(contract: &Signature, written: &Signature) -> Option<String> {
         (None, Some(_)) => Some("this declaration has no result".into()),
         (Some(public), None) => Some(format!("this declaration returns `{public}`")),
         _ => None,
+    }
+}
+
+/// Structural callback equality cannot compare symbolic parts bound in
+/// different declarations. Leave them for the general NATIVE-2 check.
+fn dependent_signature_part(ty: &Type) -> bool {
+    match ty {
+        Type::PackMember { .. } => true,
+        Type::Function(template) => {
+            template.named_pack.is_some()
+                || template.types().any(|ty| {
+                    ty.any_part(&|ty| matches!(ty, Type::Unknown), &|constant| {
+                        constant.value.key().is_none()
+                    })
+                })
+        }
+        _ => false,
     }
 }
 
@@ -266,12 +264,50 @@ fn finite_membership<'a>(
         .children()
         .map(|member| {
             let ty = written_at(&member)?;
-            (!names_parameter(ty)
-                && !ty.any_part(&|part| matches!(part, Type::Unknown), &|c| {
-                    c.value.key().is_none()
-                }))
-            .then_some(ty)
+            concrete_constraint_member(ty).then_some(ty)
         })
         .collect::<Option<Vec<_>>>()?;
     (!types.is_empty()).then_some((slot, types))
+}
+
+/// A member whose identity can be compared before specialization.
+fn concrete_constraint_member(ty: &Type) -> bool {
+    !names_parameter(ty)
+        && !ty.any_part(
+            &|part| matches!(part, Type::Unknown) || dependent_signature_part(part),
+            &|constant| constant.value.key().is_none(),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use hgl_diagnostics::Location;
+    use hgl_source::{SourceMap, Span};
+
+    use super::concrete_constraint_member;
+    use crate::types::{FunctionType, ReflectedPack, Scalar, Type};
+
+    /// NATIVE-2 does not compare unresolved GEN-17 packs as concrete members.
+    #[test]
+    fn reflected_callback_members_need_specialization() {
+        let mut template = FunctionType {
+            value: true,
+            parameters: Vec::new(),
+            named_pack: None,
+            result: Some(Type::Scalar(Scalar::I64)),
+            result_admits_none: false,
+            reference: false,
+        };
+        assert!(concrete_constraint_member(&Type::Function(Box::new(
+            template.clone()
+        ))));
+        let file = SourceMap::new().add("part.hgl", "Ps").unwrap();
+        template.named_pack = Some(ReflectedPack {
+            at: Location::new(file, Span::new(0, 2)),
+            name: "Ps".into(),
+            bounds: (0, None),
+        });
+        let reflected = Type::Tuple(vec![Type::Function(Box::new(template))]);
+        assert!(!concrete_constraint_member(&reflected));
+    }
 }
