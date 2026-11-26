@@ -16,10 +16,9 @@ use crate::program::{
     Binding, Declaration, ImportKind, LocalKind, Module, OperatorRef, Program, Role,
 };
 use crate::syntax::child;
-use crate::types::{Argument, Detail, GenericKind, Scalar, Signature, Type};
+use crate::types::{Detail, Scalar, Signature, Type};
 use crate::values::candidates::{Chosen, Given, Wanted};
 use crate::values::fit::{open, whole};
-use crate::values::inference::unsaid;
 use crate::values::operators::from_place;
 use crate::values::{Candidate, Tables, Typer, tables};
 use crate::{TestCandidateScope, codes, warning};
@@ -455,18 +454,9 @@ fn public_requirement_holds(
         .collect();
     let mut found = vec![None; public.generics.len()];
     from_place(public, expected, &mut found);
-    typer.infer_operator_inputs(public, &mut found, &supplied);
-    let arguments: Vec<_> = public
-        .generics
-        .iter()
-        .zip(found)
-        .map(|(parameter, value)| {
-            value.unwrap_or_else(|| match parameter.kind {
-                GenericKind::Value(_) => Argument::Constant(unsaid()),
-                _ => Argument::Type(Type::Unknown),
-            })
-        })
-        .collect();
+    let Some(arguments) = typer.public_witness_arguments(operator, public, found, &supplied) else {
+        return false;
+    };
     let mark = typer.mark();
     let holds = typer
         .requires_told_with_packs(

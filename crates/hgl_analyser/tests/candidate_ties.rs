@@ -292,6 +292,24 @@ fn declaration_witnesses_check_the_public_requirement_after_defaults() {
     assert_ambiguous(&checked);
 }
 
+/// GEN-6 and GEN-8: a declaration witness takes public generic
+/// defaults before checking whether the operator's requirement holds.
+#[test]
+fn declaration_witnesses_resolve_public_generic_defaults() {
+    let definitions = concat!(
+        "operator fee<A, B, const allowed: bool = true>(qty: A, price: B) -> i64 requires allowed\n",
+        "impl const fn fee<T>(qty: T, price: i64) -> i64 => 7\n",
+        "impl const fn fee<T>(qty: i64, price: T) -> i64 => 11\n",
+    );
+    let checked = module(&format!(
+        "{definitions}const fn call_fee() -> i64 => fee(8, 13)\n"
+    ));
+    assert_ambiguous(&checked);
+    let disabled = definitions.replace("bool = true", "bool = false");
+    let checked = module(&disabled);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
 /// GEN-6 and UNIT-8: ordinary omitted-argument admission uses the
 /// operator's default even when candidates declare none of their own.
 #[test]
