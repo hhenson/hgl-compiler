@@ -6,12 +6,16 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
-use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_diagnostics::{Category, Code, Diagnostics, Location};
 
 use super::constants::parameter_default_type;
 use super::fit::{open, whole};
-use super::requirements::{IndependentSourceBodies, Made, concrete_default_calls};
+use super::requirements::{
+    IndependentSourceBodies, Made, MakingCall, MakingPath, concrete_default_calls,
+    dependent_default_call_sites, emit_labeled_instance_report,
+};
 use super::{Tables, Typer, lifting};
 use crate::declared::names_parameter;
 use crate::hir::{self, Body, Callee, ConfigurationRead, Expr, ExprKind, Value};
@@ -63,10 +67,20 @@ pub(super) fn check(
 /// An explicit worklist keeps cycles and long chains out of the Rust
 /// stack. Like body instances, the work is bounded by INSTANCES.
 #[derive(Default)]
-struct Defaults {
+struct Defaults<'a> {
     seen: Vec<DefaultUse>,
-    pending: Vec<Expr>,
+    pending: Vec<PendingDefault>,
+    /// Path to the default whose expression the worklist is visiting.
+    containing_default: Option<Rc<MakingPath>>,
     pack_conditions_only: bool,
+    /// Enclosing body-instance paths, needed only if a default rejects.
+    making_paths: Option<&'a dyn Fn() -> Vec<Vec<MakingCall>>>,
+}
+
+struct PendingDefault {
+    value: Expr,
+    path: Rc<MakingPath>,
+    dependent_calls: Vec<Location>,
 }
 
 #[derive(PartialEq)]
@@ -112,17 +126,25 @@ fn follow_defaults(
     value: &Expr,
     made: &mut Vec<Made>,
     diagnostics: &mut Diagnostics,
-    mut defaults: Defaults,
+    mut defaults: Defaults<'_>,
 ) {
     defaults.visit(program, value, diagnostics);
     defaults.pack_conditions_only = false;
     while let Some(default) = defaults.pending.pop() {
-        concrete_default_calls(program, &default, made);
-        default.walk(&mut |value| defaults.visit(program, value, diagnostics));
+        concrete_default_calls(
+            program,
+            &default.value,
+            (&default.path, &default.dependent_calls),
+            made,
+        );
+        defaults.containing_default = Some(default.path);
+        default
+            .value
+            .walk(&mut |value| defaults.visit(program, value, diagnostics));
     }
 }
 
-impl Defaults {
+impl Defaults<'_> {
     fn visit(&mut self, program: &Program, value: &Expr, diagnostics: &mut Diagnostics) {
         match &value.kind {
             ExprKind::Call {
@@ -231,7 +253,7 @@ pub(super) fn check_instance(
     (generics, requirements): (&[Argument], &[hir::Answer]),
     inputs: crate::InstanceInputs<'_>,
     made: &mut Vec<Made>,
-    diagnostics: &mut Diagnostics,
+    (diagnostics, making_paths): (&mut Diagnostics, &dyn Fn() -> Vec<Vec<MakingCall>>),
     graph_diagnostics: &mut Diagnostics,
 ) -> Option<crate::instance::CheckedInstance> {
     let reports = RefCell::new(Diagnostics::new());
@@ -246,7 +268,16 @@ pub(super) fn check_instance(
     let mut reports = reports.into_inner();
     instance.walk_calls(&mut |value| {
         if matches!(value.kind, ExprKind::Call { .. }) {
-            check_expression(program, value, made, &mut reports);
+            follow_defaults(
+                program,
+                value,
+                made,
+                &mut reports,
+                Defaults {
+                    making_paths: Some(making_paths),
+                    ..Defaults::default()
+                },
+            );
         }
     });
     for report in reports.as_slice() {
@@ -261,7 +292,7 @@ pub(super) fn check_instance(
 /// parameter types are concrete.
 fn check_declared_defaults(
     program: &Program,
-    checking: &mut Defaults,
+    checking: &mut Defaults<'_>,
     (callee, at): (&Callee, Location),
     supplied: impl Fn(usize) -> bool,
     diagnostics: &mut Diagnostics,
@@ -314,7 +345,12 @@ fn check_declared_defaults(
         checking.specialize(
             program,
             (owner, generics, callee.type_packs()),
-            (default, &concrete, at),
+            (
+                default,
+                &concrete,
+                at,
+                follows_omitted_default(parameter, default),
+            ),
             diagnostics,
         );
     }
@@ -323,7 +359,7 @@ fn check_declared_defaults(
 /// UNIT-8: check only the inherited defaults that this selected call uses.
 fn check_inherited_defaults(
     program: &Program,
-    checking: &mut Defaults,
+    checking: &mut Defaults<'_>,
     (callee, at): (&Callee, Location),
     supplied: impl Fn(usize) -> bool,
     diagnostics: &mut Diagnostics,
@@ -382,25 +418,31 @@ fn check_inherited_defaults(
         checking.specialize(
             program,
             (*operator, operator_generics, &packs),
-            (default, &concrete, at),
+            (default, &concrete, at, false),
             diagnostics,
         );
     }
 }
 
-impl Defaults {
+impl Defaults<'_> {
     /// Check a default in its defining scope and follow the calls it uses.
     fn specialize(
         &mut self,
         program: &Program,
         (owner, generics, type_packs): ((usize, usize), &[Argument], &[hir::TypePackArgument]),
-        (default, parameter, at): (&hir::DefaultExpr, &Parameter, Location),
+        (default, parameter, at, carry_path): (&hir::DefaultExpr, &Parameter, Location, bool),
         diagnostics: &mut Diagnostics,
     ) {
         let pack_condition = default.needs_pack_specialization();
         if self.pack_conditions_only && !pack_condition {
             return;
         }
+        let path = || {
+            MakingPath::new(
+                MakingCall::new(program, owner, generics, type_packs, at),
+                self.containing_default.clone(),
+            )
+        };
         let type_packs = if pack_condition || default.needs_type_specialization() {
             // A generic caller can forward its own parameters here. Its
             // concrete call will visit this default with the chosen types.
@@ -455,6 +497,28 @@ impl Defaults {
                 let selected = report.primary;
                 report.primary = at;
                 report = report.with_related(selected, "in the selected arm of the default");
+            } else if !parameter.configuration
+                && !generics.is_empty()
+                && report.code == Code::Catalogued(codes::TYPE_MISMATCH)
+            {
+                // GEN-7: the call, including any enclosing instance
+                // calls, decides the omitted default's expected type.
+                let here = path();
+                let mut paths = self.making_paths.map_or_else(Vec::new, |paths| paths());
+                if paths.is_empty() {
+                    paths.push(here.calls().cloned().collect());
+                } else {
+                    for outer in &mut paths {
+                        *outer = here.calls().cloned().chain(std::mem::take(outer)).collect();
+                    }
+                }
+                emit_labeled_instance_report(
+                    report,
+                    &paths,
+                    diagnostics,
+                    "the omitted default is checked here",
+                );
+                continue;
             }
             if !diagnostics.as_slice().contains(&report) {
                 diagnostics.emit(report);
@@ -463,9 +527,40 @@ impl Defaults {
         if !reports.has_errors() {
             // GEN-16: the specialized expression can call a candidate
             // that was not known when its source declaration was read.
-            self.pending.push(specialized.value);
+            let dependent_calls = if carry_path {
+                dependent_default_call_sites(program, owner, &default.value)
+            } else {
+                Vec::new()
+            };
+            self.pending.push(PendingDefault {
+                value: specialized.value,
+                path: path(),
+                dependent_calls,
+            });
         }
     }
+}
+
+/// An ordinary generic parameter's dependent calls are made by the
+/// argument that omits it. Pack guards retain their dedicated traversal.
+pub(super) fn follows_omitted_default(parameter: &Parameter, default: &hir::DefaultExpr) -> bool {
+    !parameter.configuration
+        && !default.needs_pack_specialization()
+        && (names_parameter(&parameter.ty) || reads_generic_call(default))
+}
+
+fn reads_generic_call(default: &hir::DefaultExpr) -> bool {
+    let mut found = false;
+    default.value.walk(&mut |value| {
+        if !found && let Some(callee) = super::requirements::called_or_referenced(value) {
+            found = super::requirements::forwards_default_types(
+                callee.generics(),
+                callee.type_packs(),
+                |_| true,
+            );
+        }
+    });
+    found
 }
 
 /// An omitted default can depend on generic arguments through its type
@@ -476,6 +571,7 @@ fn dependent_default(parameter: &Parameter, default: &hir::DefaultExpr) -> bool 
         || reads_generic_value(default)
         || default.needs_type_specialization()
         || default.needs_pack_specialization()
+        || !parameter.configuration && reads_generic_call(default)
 }
 
 fn reads_generic_value(default: &hir::DefaultExpr) -> bool {
