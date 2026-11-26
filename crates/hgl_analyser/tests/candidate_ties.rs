@@ -198,6 +198,73 @@ fn test_only_requirement_candidates_supply_a_view_for_production_candidates() {
     assert_ambiguous(&checked);
 }
 
+/// TST-1: a helper candidate from a different module's test can prove a
+/// tie only where that test module can name the operator.
+#[test]
+fn test_requirement_evidence_respects_operator_visibility() {
+    let helper = "module witness.base\nexport operator enabled<T>(x: T) -> i64\n";
+    let owner = concat!(
+        "module witness.owner\nuse witness.base::{enabled}\n",
+        "operator choose<A, B>(a: A, b: B) -> i64\n",
+        "impl const fn choose<T>(a: i64, b: T) -> i64 requires enabled(T) -> i64 => 1\n",
+        "impl const fn choose<T>(a: T, b: i64) -> i64 requires enabled(T) -> i64 => 2\n",
+    );
+    let observer = "module witness.observer\nuse witness.base::{enabled}\n";
+    let test = "test local {\nimpl const fn enabled(x: i64) -> i64 => x\n";
+    let isolated_test = format!("{observer}{test}assert true\n}}\n");
+    let check_view = |owner: &str, test: &str| {
+        check(&[
+            ("base.hgl", helper),
+            ("owner.hgl", owner),
+            ("test.hgl", test),
+        ])
+    };
+    let checked = check_view(owner, &isolated_test);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+
+    let bridge = format!(
+        "{owner}impl const fn choose<T, U>(a: T, b: U) -> i64 => 3\n\
+         export const fn drive(a: i64, b: i64) -> i64 => choose(a, b)\n"
+    );
+    let uses_bridge =
+        format!("{observer}use witness.owner::{{drive}}\n{test}assert drive(1, 1) == 3\n}}\n");
+    assert_ambiguous(&check_view(&bridge, &uses_bridge));
+    let skips_bridge = uses_bridge.replace("drive(1, 1) == 3", "true");
+    let checked = check_view(&bridge, &skips_bridge);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+
+    let owner = owner.replace("operator choose", "export operator choose");
+    let checked = check_view(&owner, &isolated_test);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+
+    for (import, function) in [
+        ("use witness.owner::{choose}", "choose"),
+        ("use witness.owner as selected", "selected::choose"),
+    ] {
+        let test = format!("{observer}{import}\n{test}assert {function}(1, 1) == 1\n}}\n");
+        assert_ambiguous(&check_view(&owner, &test));
+    }
+}
+
+/// GEN-3 and GEN-6: two candidates do not tie through an argument pair
+/// excluded by the public operator's requirement.
+#[test]
+fn declaration_witnesses_honour_the_public_requirement() {
+    let definitions = concat!(
+        "operator pair<A, B>(a: A, b: B) -> i64 requires A == B\n",
+        "impl const fn pair<T>(a: i64, b: T) -> i64 => 1\n",
+        "impl const fn pair<T>(a: T, b: bool) -> i64 => 2\n",
+    );
+    let checked = module(&format!(
+        "{definitions}const fn integers() -> i64 => pair(1, 2)\n\
+         const fn booleans() -> i64 => pair(true, false)\n"
+    ));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+    let admitted = definitions.replace("b: bool", "b: i64");
+    let checked = module(&admitted);
+    assert_eq!(warnings(&checked).len(), 2, "{}", checked.report);
+}
+
 /// GEN-6 and UNIT-8: ordinary omitted-argument admission uses the
 /// operator's default even when candidates declare none of their own.
 #[test]

@@ -6,14 +6,20 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use hgl_diagnostics::{Category, Diagnostics};
+use hgl_parser::{HasSpan, SyntaxKind, ast::Item};
+use hgl_source::{FileId, Span};
 
 use super::declaration_has_error;
 use crate::declared::names_parameter;
 use crate::hir::{Expr, ExprKind, Local, ValueCategory};
-use crate::program::{LocalKind, OperatorRef, Program, Role};
-use crate::types::{Detail, Scalar, Signature, Type};
+use crate::program::{
+    Binding, Declaration, ImportKind, LocalKind, Module, OperatorRef, Program, Role,
+};
+use crate::syntax::child;
+use crate::types::{Argument, Detail, GenericKind, Scalar, Signature, Type};
 use crate::values::candidates::{Given, Wanted};
 use crate::values::fit::{open, whole};
+use crate::values::inference::unsaid;
 use crate::values::operators::from_place;
 use crate::values::{Candidate, Tables, Typer, tables};
 use crate::{TestCandidateScope, codes, warning};
@@ -44,7 +50,9 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics, tests: boo
         .iter()
         .filter(|_| tests)
         .filter_map(|module| TestCandidateScope::of(program, module))
+        .map(|scope| (scope, test_body_uses(program, scope.module())))
         .collect();
+    let core = program.core();
 
     for ((module, declaration), candidates) in operators {
         if candidates.len() < 2 {
@@ -69,7 +77,12 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics, tests: boo
         }
 
         let mut ties = BTreeMap::new();
-        for test_scope in std::iter::once(None).chain(test_scopes.iter().copied().map(Some)) {
+        let reachable_scopes = test_scopes.iter().filter_map(|(scope, uses)| {
+            (test_sees_operator(program, scope.module(), module, core, operator)
+                || uses.contains(&(module, declaration)))
+            .then_some(*scope)
+        });
+        for test_scope in std::iter::once(None).chain(reachable_scopes.map(Some)) {
             let scope = test_scope.map(TestCandidateScope::module);
             let visible: Vec<_> = candidates
                 .iter()
@@ -120,6 +133,85 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics, tests: boo
             diagnostics.emit(report);
         }
     }
+}
+
+/// A declaration witness can name the operator in its own module, through
+/// an import or through the prelude (UNIT-2, UNIT-11, TST-1).
+fn test_sees_operator(
+    program: &Program,
+    test: usize,
+    owner: usize,
+    core: Option<usize>,
+    operator: &Declaration,
+) -> bool {
+    test == owner
+        || (operator.exported
+            && (core == Some(owner)
+                || program.modules[test]
+                    .files
+                    .iter()
+                    .flat_map(|file| &file.imports)
+                    .any(|import| {
+                        import.module == Some(owner)
+                            && (import.kind == ImportKind::Alias || import.name == operator.name)
+                    })))
+}
+
+/// TST-1: a test's candidate view also reaches operators in functions
+/// called by that test, including private operators behind public wrappers.
+fn test_body_uses(program: &Program, test_module: usize) -> BTreeSet<(usize, usize)> {
+    let unit = &program.modules[test_module];
+    let mut pending = Vec::new();
+    for test in &unit.tests {
+        let Some(block) = child(&test.syntax, SyntaxKind::Block) else {
+            continue;
+        };
+        let Some(statement) = block
+            .children()
+            .find(|node| Item::cast(node.clone()).is_none())
+        else {
+            continue;
+        };
+        let span = Span::new(statement.span().start, block.span().end);
+        pending.extend(declarations_used(unit, test.at.file, span));
+    }
+
+    let mut reached = BTreeSet::new();
+    while let Some((module, declaration)) = pending.pop() {
+        if !reached.insert((module, declaration)) {
+            continue;
+        }
+        let unit = &program.modules[module];
+        let declaration = &unit.declarations[declaration];
+        if declaration.kind.binding_role().is_some() {
+            pending.extend(declarations_used(
+                unit,
+                declaration.at.file,
+                declaration.syntax.span(),
+            ));
+        }
+    }
+    reached
+}
+
+fn declarations_used(
+    unit: &Module,
+    file: FileId,
+    span: Span,
+) -> impl Iterator<Item = (usize, usize)> + '_ {
+    unit.uses
+        .iter()
+        .filter(move |used| {
+            used.at.file == file && (span.start..span.end).contains(&used.at.span.start)
+        })
+        .filter_map(|used| match &used.binding {
+            Binding::Declarations {
+                module,
+                declarations,
+            } => Some((*module, declarations)),
+            Binding::Local { .. } => None,
+        })
+        .flat_map(|(module, declarations)| declarations.iter().map(move |&index| (module, index)))
 }
 
 type Ties = BTreeMap<(usize, usize), BTreeSet<(usize, usize)>>;
@@ -307,8 +399,28 @@ fn record_tied_call<'a>(
     let mark = typer.mark();
     let mut found = vec![None; public.generics.len()];
     from_place(public, *expected, &mut found);
-    let request = typer.argument_output_requested(operator, public, found, &given, false);
-    if request.unfit.is_some() {
+    let request = typer.argument_output_requested(operator, public, found.clone(), &given, false);
+    let supplied: Vec<_> = types.iter().map(Some).collect();
+    typer.infer_operator_inputs(public, &mut found, &supplied);
+    let public_arguments: Vec<_> = public
+        .generics
+        .iter()
+        .zip(found)
+        .map(|(parameter, value)| {
+            value.unwrap_or_else(|| match parameter.kind {
+                GenericKind::Value(_) => Argument::Constant(unsaid()),
+                _ => Argument::Type(Type::Unknown),
+            })
+        })
+        .collect();
+    let target = (operator.module, operator.declaration);
+    // Ordinary admission can leave the public requirement to a later
+    // report. A declaration warning needs a call the public signature admits.
+    if request.unfit.is_some()
+        || typer
+            .requires_told_with_packs(target, &public_arguments, &request.type_packs, None)
+            .is_some_and(|(_, holds, _)| holds != Some(true))
+    {
         typer.take_back(mark, false);
         return;
     }
