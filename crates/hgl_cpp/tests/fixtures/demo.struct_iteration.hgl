@@ -15,6 +15,15 @@ struct Quote : Labelled<str>, Quoted {
 
 struct Empty {}
 
+struct Flags {
+    ready: bool
+    rank: i64
+}
+
+struct FieldTag<const Kind: Type> {
+    mark: i64
+}
+
 const fn describe(quote: Quote) -> str {
     var text = ""
     for name, value in quote {
@@ -36,6 +45,19 @@ const fn names(quote: Quote) -> str {
     var text = ""
     for name in quote { text += name + " " }
     return text
+}
+
+const fn reflected_types(quote: Quote) -> str {
+    var text = convert<str>(type(quote.ask)) + " "
+    let flags = Flags(ready: true, rank: 1)
+    for name, value in quote {
+        text += name + "=" + convert<str>(type(value)) + ":"
+        for flag, item in flags {
+            text += convert<str>(type(item)) + ","
+        }
+        text += convert<str>(type(value)) + " "
+    }
+    return text + convert<str>(type(quote.label))
 }
 
 const fn constant_labels(quote: Quote) -> i64 {
@@ -92,6 +114,17 @@ test field_types_and_order {
     assert describe(quote) == "label:first;bid:8;ask:3.0;open:yes;"
     assert names(quote) == "label bid ask open "
     assert constant_labels(quote) == 1
+    assert reflected_types(quote) ==
+        "f64 label=str:bool,i64,str bid=i64:bool,i64,i64 ask=f64:bool,i64,f64 open=bool:bool,i64,bool str"
+    for name, value in quote {
+        let marked: FieldTag<type(value)> = FieldTag<type(value)>(mark: 0)
+        if name == "bid" {
+            assert type(marked) == type(FieldTag<type(1)>(mark: 0))
+        }
+        if name == "open" {
+            assert type(marked) == type(FieldTag<type(true)>(mark: 0))
+        }
+    }
 }
 
 test whole_struct_is_held_once {

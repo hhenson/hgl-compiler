@@ -932,6 +932,11 @@ impl<'a> Typer<'a> {
         }];
         let name = &names[0];
         let name_at = Location::new(self.file, name.span());
+        let type_queries = self.type_query_locations.len();
+        // A written type inside the loop may differ in every pass.
+        // Each HIR binding keeps its own type. The module's written
+        // table can store only one type at a source location.
+        let outer_written = self.resolved_written.take();
         for field in members {
             let name_ty = Type::Scalar(Scalar::Str);
             let name_local = self.declare(
@@ -979,8 +984,12 @@ impl<'a> Typer<'a> {
             ));
             pass.extend(self.loop_body(body.as_ref()));
             self.field_passes.pop();
+            // TYPE-18: the next pass reads the same syntax with a
+            // different field binding. Keep only the enclosing queries.
+            self.restore_type_queries(type_queries);
             statements.push(field_loop_block(pass, at));
         }
+        self.resolved_written = outer_written;
         field_loop_block(statements, at)
     }
 

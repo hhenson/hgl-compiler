@@ -1429,7 +1429,17 @@ impl<'a> Typer<'a> {
         for diagnostic in spent {
             self.diagnostics.emit(diagnostic);
         }
-        while self.type_query_locations.len() > mark.type_queries {
+        self.restore_type_queries(mark.type_queries);
+        if let Some(target) = self.resolved_written {
+            target.borrow_mut().truncate(mark.resolved_written);
+        }
+        self.restore_read(mark, keep_flow);
+        clean
+    }
+
+    /// Restore the TYPE-18 query entries that preceded a lexical reread.
+    fn restore_type_queries(&mut self, saved: usize) {
+        while self.type_query_locations.len() > saved {
             if let Some((at, previous)) = self.type_query_locations.pop() {
                 match previous {
                     Some(old) => {
@@ -1439,11 +1449,6 @@ impl<'a> Typer<'a> {
                 }
             }
         }
-        if let Some(target) = self.resolved_written {
-            target.borrow_mut().truncate(mark.resolved_written);
-        }
-        self.restore_read(mark, keep_flow);
-        clean
     }
 
     /// Restores the surrounding scope after an anonymous function's
