@@ -178,3 +178,28 @@ test entry_named_rejects_in_source {
     }
     eval entry_named()
 }
+
+# UNIT-13, TIME-8: aliases and matching literals do not make distinct ports.
+const entry_alias: str = entry_reserved
+test entry_alias_rejects_in_source {
+    fn entry_node() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, entry_reserved, entry_alias)
+        }
+    }
+    eval entry_node()
+}
+test entry_literal_rejects_in_source {
+    fn entry_node() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, entry_reserved, "run.output")
+        }
+    }
+    eval entry_node()
+}

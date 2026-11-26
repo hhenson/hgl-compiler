@@ -1035,6 +1035,51 @@ test source {{ eval node({argument}) }}
     }
 }
 
+/// TIME-8, CAP-6, UNIT-13: a constant, its aliases and its known literal
+/// supply one key, while another incoming string still permits a change.
+#[test]
+fn named_store_entry_aliases_and_literals_share_their_value() {
+    for right in [
+        "alias_key",
+        "alias_again",
+        "same_text",
+        "same_expression",
+        "\"run.output\"",
+        "\"safe\"",
+    ] {
+        let source = format!(
+            r#"module m
+const original: str = "run.output"
+const alias_key: str = original
+const alias_again: str = alias_key
+const same_text: str = "run.output"
+const same_expression: str = "run.out" + "put"
+const fn rotate(s: GlobalState, n: i64, const left: str, const right: str) {{
+    if n == 0 {{ put(s, left, n) }}
+    else {{ rotate(s, n - 1, right, left) }}
+}}
+fn node() {{
+    inject global_state
+    when {{}}
+    stop {{ rotate(global_state, 1, original, {right}) }}
+}}
+test source {{ eval node() }}
+"#
+        );
+        let checked = check(&[("m.hgl", &source)]);
+        if right == "\"safe\"" {
+            assert!(checked.summary().is_empty(), "{}", checked.report);
+        } else {
+            assert_eq!(checked.summary().len(), 1, "{right}: {}", checked.report);
+            assert!(
+                checked.summary()[0].ends_with("injectable/store.reserved_key TIME-8"),
+                "{right}: {}",
+                checked.report
+            );
+        }
+    }
+}
+
 /// TIME-8, CAP-6: a helper computes the key at graph build, not in source.
 #[test]
 fn fixed_store_routes_leave_computed_keys_to_the_build() {

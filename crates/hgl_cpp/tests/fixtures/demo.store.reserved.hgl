@@ -726,3 +726,43 @@ test entry_tuple_rejects_with_start_enabled {
 test entry_tuple_accepts_benign {
     eval entry_tuple(("unused", supply("tenant.key")), 1, 3)
 }
+
+# TIME-8, CAP-6: distinct constants can swap; a freshly supplied named
+# constant on the back edge still changes the key instead of forwarding it.
+const entry_reserved: str = "run.output"
+const entry_alias: str = entry_reserved
+const entry_safe: str = "tenant.entry"
+const fn entry_swap_last(s: GlobalState, n: i64, const left: str, const right: str) {
+    if n == 0 { put(s, left, n) }
+    else { entry_swap_last(s, n - 1, right, left) }
+}
+const fn entry_fresh(s: GlobalState, n: i64, const key: str) {
+    if n == 0 { put(s, key, n) }
+    else { entry_fresh(s, n - 1, entry_alias) }
+}
+fn entry_distinct(const divisor: i64, const depth: i64) {
+    inject global_state
+    start { let guard = 1 // divisor }
+    when {}
+    stop { entry_swap_last(global_state, depth, entry_safe, entry_reserved) }
+}
+fn entry_replaced(const divisor: i64, const depth: i64) {
+    inject global_state
+    start { let guard = 1 // divisor }
+    when {}
+    stop { entry_fresh(global_state, depth, entry_safe) }
+}
+test entry_distinct_leaves_start_first {
+    assert raises("numeric.division_by_zero") { eval entry_distinct(0, 1) }
+}
+test entry_distinct_accepts_an_early_stop { eval entry_distinct(1, 0) }
+test entry_distinct_checks_the_reached_key {
+    assert raises("store.reserved_key") { eval entry_distinct(1, 1) }
+}
+test entry_replaced_leaves_start_first {
+    assert raises("numeric.division_by_zero") { eval entry_replaced(0, 1) }
+}
+test entry_replaced_accepts_an_early_stop { eval entry_replaced(1, 0) }
+test entry_replaced_checks_the_reached_key {
+    assert raises("store.reserved_key") { eval entry_replaced(1, 1) }
+}

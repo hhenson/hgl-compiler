@@ -1573,16 +1573,9 @@ fn same_store_entry(
     let mut same = |a: &Expr, b: &Expr| same_store_entry(program, a, b, depth - 1, remaining);
     match (&first.kind, &second.kind) {
         (ExprKind::Local(a), ExprKind::Local(b)) => a == b,
-        (
-            ExprKind::Constant {
-                module: am,
-                declaration: ad,
-            },
-            ExprKind::Constant {
-                module: bm,
-                declaration: bd,
-            },
-        ) => (am, ad) == (bm, bd),
+        (ExprKind::Constant { .. }, _) | (_, ExprKind::Constant { .. }) => {
+            same_named_store_entry(program, first, second, depth, remaining)
+        }
         (ExprKind::Literal(Value::Str(a)), ExprKind::Literal(Value::Str(b))) => {
             a.len() <= INPUT_BUDGET && b.len() <= INPUT_BUDGET && a == b
         }
@@ -1684,6 +1677,71 @@ fn same_store_entry(
         }
         _ => false,
     }
+}
+
+/// UNIT-13 gives a constant the same value at each read. Follow direct aliases
+/// before comparing provenance; a source-readable string can also equal a
+/// literal. This uses the existing bounded reader without evaluating helpers.
+fn same_named_store_entry(
+    program: &Program,
+    first: &Expr,
+    second: &Expr,
+    depth: usize,
+    remaining: &mut usize,
+) -> bool {
+    let Some((first, first_owner)) = store_entry_root(program, first, remaining) else {
+        return false;
+    };
+    let Some((second, second_owner)) = store_entry_root(program, second, remaining) else {
+        return false;
+    };
+    if first_owner.is_some() && first_owner == second_owner {
+        return true;
+    }
+    if first.ty == Type::Scalar(Scalar::Str) && second.ty == first.ty {
+        let mut reader = Reader::new(program);
+        reader.steps_left = *remaining;
+        reader.read_string_helpers = false;
+        let left = reader.read(first, depth - 1, &[]);
+        let right = reader.read(second, depth - 1, &[]);
+        *remaining = reader.steps_left;
+        if let (Ok(left), Ok(right)) = (left, right)
+            && let (ExprKind::Literal(Value::Str(a)), ExprKind::Literal(Value::Str(b))) =
+                (&left.kind, &right.kind)
+        {
+            return a == b;
+        }
+    }
+    same_store_entry(program, first, second, depth - 1, remaining)
+}
+
+/// Keep the last named declaration as well as its initializer: two aliases of
+/// one computed constant are equal without executing its initializer again.
+fn store_entry_root<'a>(
+    program: &'a Program,
+    mut value: &'a Expr,
+    remaining: &mut usize,
+) -> Option<(&'a Expr, Option<Declaration>)> {
+    let mut owner = None;
+    for _ in 0..INPUT_DEPTH {
+        let ExprKind::Constant {
+            module,
+            declaration,
+        } = value.kind
+        else {
+            return Some((value, owner));
+        };
+        *remaining = remaining.checked_sub(1)?;
+        owner = Some((module, declaration));
+        value = &program
+            .modules
+            .get(module)?
+            .constants
+            .get(declaration)?
+            .as_ref()?
+            .value;
+    }
+    None
 }
 
 /// TIME-8 follows the calls an instance makes, not all candidates of the
