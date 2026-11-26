@@ -4111,9 +4111,50 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 21 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 26 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
+}
+
+/// TIME-7: output all_valid and delta_value observers keep staged keyed writes.
+#[test]
+fn keyed_output_observers_use_staging() {
+    let root = scratch("keyed-output-observers");
+    let source = write(
+        &root,
+        "src/demo.keyed_output_observers.hgl",
+        r#"module demo.keyed_output_observers
+export fn observes_all_valid(step: i64) -> dict<i64, i64> {
+    inject out
+    when {
+        if step == 1 { return [5: 1] }
+        out = delta<dict<i64, i64>>(updated: [8: step])
+        if all_valid(out) { out = delta<dict<i64, i64>>(removed: [8]) }
+    }
+}
+
+export fn observes_delta(step: i64) -> dict<i64, i64> {
+    inject out
+    when {
+        if step == 1 { return [5: 1] }
+        let change = delta<dict<i64, i64>>(updated: [8: step])
+        out = change
+        if delta_value(out) == change { out = delta<dict<i64, i64>>(removed: [8]) }
+    }
+}
+"#,
+    );
+    let out = root.join("out");
+    let result = hgl_in(
+        &["emit", &source, "--target", "cpp", "--out", &argument(&out)],
+        &[],
+        &[],
+    );
+    assert!(result.status.success(), "{}", text(&result.stderr));
+    let cpp = fs::read_to_string(out.join("modules/mod-demo-keyed_output_observers.cpp")).unwrap();
+    assert_eq!(cpp.matches("::hglrt::KeyedEvaluation<").count(), 2, "{cpp}");
+    assert!(cpp.contains("::hglrt::fn_all_valid(out_)"), "{cpp}");
+    assert!(cpp.contains("::hglrt::fn_delta_value(out_)"), "{cpp}");
 }
 
 /// TIME-7: mutually exclusive writes still use the single-write path.
