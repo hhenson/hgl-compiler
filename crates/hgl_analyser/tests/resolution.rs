@@ -1152,3 +1152,54 @@ const fn outer(value: i64 = dep::marker()) -> i64 => value"#,
         checked.report
     );
 }
+
+/// UNIT-7 excludes formal and field names in generic value defaults, even
+/// when the enclosing module or a file import provides a matching value.
+#[test]
+fn generic_value_defaults_exclude_formal_and_field_names() {
+    let checked = check(&[
+        ("lib.hgl", "module lib\nexport const cap: i64 = 3\n"),
+        (
+            "m.hgl",
+            r#"module m
+use lib as dep
+const outer: i64 = 2
+const fn callable<const K: i64 = outer>(outer: i64) -> i64 => K
+const fn missing<const K: i64 = depth>(depth: i64) -> i64 => K
+const fn configured<const K: i64 = dep::cap>{const dep: i64 = 3}() -> i64 => K
+struct Held<const N: i64 = outer> { outer: i64 }
+struct Alone<const N: i64 = width> { width: i64 }
+operator guarded<const N: i64 = outer>(outer: i64) -> i64"#,
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:34 name/default.formal_argument UNIT-7",
+            "m.hgl:5:33 name/default.formal_argument UNIT-7",
+            "m.hgl:6:36 name/default.formal_argument UNIT-7",
+            "m.hgl:7:28 name/default.formal_argument UNIT-7",
+            "m.hgl:8:29 name/default.formal_argument UNIT-7",
+            "m.hgl:9:33 name/default.formal_argument UNIT-7",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// UNIT-7 leaves ordinary names in signature types, earlier generic
+/// bindings, a default's local bindings, and GEN-18's callback visible.
+#[test]
+fn generic_defaults_keep_their_lexical_scope_and_law_operand() {
+    let checked = module(
+        r#"struct Kind { n: i64 }
+const fn typed<const K: Kind>(Kind: i64) -> i64 => K.n
+const limit: i64 = 3
+struct Shape<const N: i64 = limit> { n: i64 }
+const fn local<const N: i64 = { let count = 2
+count }, const K: i64 = N>(count: i64) -> i64 => K + count
+const fn laws<const A: bool = associative(f), const C: bool = commutative(f)>(
+    f: const fn(i64, i64) -> i64) -> tuple<bool, bool> => (A, C)"#,
+    );
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}

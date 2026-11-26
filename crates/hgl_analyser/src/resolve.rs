@@ -396,16 +396,19 @@ impl Resolver<'_> {
     /// A function, an operator or a native function.
     fn callable(&mut self, node: &SyntaxNode) {
         self.frames.push(Frame::default());
-        // GEN-1: "Generic scope covers the whole declaration."
-        if let Some(generics) = child(node, SyntaxKind::GenericParams) {
-            self.generic_params(&generics, true);
-        }
+        // GEN-18: a law default needs the bound function parameter.
+        let (law_defaults, mut defaults): (Vec<_>, Vec<_>) = self
+            .generic_params(node)
+            .into_iter()
+            .partition(|expr| crate::laws::predicate(expr).is_some());
         let parameters = crate::read::parameters(node);
         // The types first: they see the generic parameters.
         for parameter in &parameters {
-            for part in split_at_default(parameter).0 {
+            let (types, initializers) = split_at_default(parameter);
+            for part in types {
                 self.walk(&part);
             }
+            defaults.extend(initializers);
         }
         if let Some(result) = child(node, SyntaxKind::ReturnType) {
             self.walk(&result);
@@ -421,10 +424,8 @@ impl Resolver<'_> {
                 what: "a parameter of the same declaration",
             })
             .collect();
-        for parameter in &parameters {
-            for part in split_at_default(parameter).1 {
-                self.walk(&part);
-            }
+        for default in defaults {
+            self.walk(&default);
         }
         self.hidden.clear();
         for parameter in &parameters {
@@ -438,14 +439,8 @@ impl Resolver<'_> {
                 self.bind(&name, kind);
             }
         }
-        if let Some(generics) = child(node, SyntaxKind::GenericParams) {
-            for generic in generics.children() {
-                if let Some(default) = crate::read::default_of(&generic)
-                    && crate::laws::predicate(&default).is_some()
-                {
-                    self.walk(&default);
-                }
-            }
+        for default in law_defaults {
+            self.walk(&default);
         }
         // FN-8: a pack's `for f` sees the callable's parameters. This is
         // separate from reading the pack's type or the parameter defaults.
@@ -477,7 +472,12 @@ impl Resolver<'_> {
         self.frames.pop();
     }
 
-    fn generic_params(&mut self, generics: &SyntaxNode, defer_laws: bool) {
+    /// Binds generic names and resolves their types. The caller walks their
+    /// defaults in the same UNIT-7 scope as the declaration's other defaults.
+    fn generic_params(&mut self, declaration: &SyntaxNode) -> Vec<SyntaxNode> {
+        let Some(generics) = child(declaration, SyntaxKind::GenericParams) else {
+            return Vec::new();
+        };
         let parameters: Vec<SyntaxNode> = generics
             .children()
             .filter(|parameter| parameter.kind() == SyntaxKind::GenericParam)
@@ -491,27 +491,20 @@ impl Resolver<'_> {
                 self.bind(&name, LocalKind::GenericParameter);
             }
         }
-        // The type of `const N: i64`.
+        let mut defaults = Vec::new();
         for parameter in &parameters {
-            let (types, defaults) = split_at_default(parameter);
+            let (types, initializers) = split_at_default(parameter);
             for part in types {
                 self.walk(&part);
             }
-            for part in defaults {
-                // GEN-18, UNIT-8: the one default that may inspect a
-                // formal function waits until those parameters are bound.
-                if !defer_laws || crate::laws::predicate(&part).is_none() {
-                    self.walk(&part);
-                }
-            }
+            defaults.extend(initializers);
         }
+        defaults
     }
 
     fn structure(&mut self, node: &SyntaxNode) {
         self.frames.push(Frame::default());
-        if let Some(generics) = child(node, SyntaxKind::GenericParams) {
-            self.generic_params(&generics, false);
-        }
+        let mut defaults = self.generic_params(node);
         // UNIT-7: a default is resolved "excluding ... the struct's
         // instance fields". A field's name is the first token of its
         // member; `time` may be one (LEX-9) and is no name to look up.
@@ -529,27 +522,21 @@ impl Resolver<'_> {
             match part.kind() {
                 SyntaxKind::GenericParams => {}
                 SyntaxKind::StructMember => {
-                    let (types, defaults) = split_at_default(&part);
+                    let (types, initializers) = split_at_default(&part);
                     // `name = value` has no `:`; everything is after `=`.
                     for part in types {
                         self.walk(&part);
                     }
-                    self.hidden = fields
-                        .iter()
-                        .map(|field| Hidden {
-                            name: field.name.clone(),
-                            at: field.at,
-                            what: field.what,
-                        })
-                        .collect();
-                    for part in defaults {
-                        self.walk(&part);
-                    }
-                    self.hidden.clear();
+                    defaults.extend(initializers);
                 }
                 _ => self.walk(&part),
             }
         }
+        self.hidden = fields;
+        for default in defaults {
+            self.walk(&default);
+        }
+        self.hidden.clear();
         self.frames.pop();
     }
 
