@@ -488,7 +488,7 @@ impl Program {
             // retained without retaining or executing the operand's calls.
             || crate::type_values::has_instance_query(self, (module, declaration))
             || (!generics.is_empty()
-                && (crate::values::has_dependent_index(&body)
+                && (crate::values::has_dependent_index(self, (module, declaration), &body)
                     || crate::formatting::has_dependent_formatting(
                         self,
                         (module, declaration),

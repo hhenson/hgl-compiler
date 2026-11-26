@@ -3,8 +3,11 @@
 //! tuple or a dictionary (TYPE-7, EXPR-7, ERR-6, ERR-12). Part of the
 //! typing pass ([`super`]).
 
+use std::collections::HashSet;
+
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
+use hgl_source::Span;
 
 use super::constants::constant_text;
 use super::dependent_packs::MemberFault;
@@ -15,9 +18,9 @@ use super::inference::{fixed, placed, type_pack};
 use super::results::{captured_output, proof_binding};
 use super::{Fact, Typer};
 use crate::constant::Fault;
-use crate::hir::{Body, Expr, ExprKind, Hook, PackKey, Value, ValueCategory};
-use crate::program::DeclarationKind;
-use crate::syntax::{name_token, tokens, ungrouped};
+use crate::hir::{Body, Callee, Expr, ExprKind, Hook, PackKey, Value, ValueCategory};
+use crate::program::{DeclarationKind, Module, Program};
+use crate::syntax::{child, name_token, tokens, ungrouped};
 use crate::types::{Argument, Constant, ConstantValue, Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
 
@@ -29,19 +32,199 @@ enum PackEntryKey {
 
 /// EXPR-7 and GEN-7: the type of an indexed parameter is known only in
 /// the instance. Reread the bracket and any call it supplies there.
-pub(crate) fn has_dependent_index(body: &Body) -> bool {
+pub(crate) fn has_dependent_index(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    body: &Body,
+) -> bool {
     let mut dependent = false;
-    super::forwarded_packs::walk_nested_calls(&body.statements, &mut |value| {
-        if let ExprKind::Index { base, .. } = &value.kind
-            && matches!(
+    let mut unread_spans = Vec::new();
+    let mut unread_dependent_calls = Vec::new();
+    super::forwarded_packs::walk_nested_calls(&body.statements, &mut |value| match &value.kind {
+        ExprKind::Index { base, .. }
+            if matches!(
                 index_base_shape(&base.ty),
                 Type::Parameter { .. } | Type::PackMember { .. }
-            )
+            ) =>
         {
             dependent = true;
         }
+        ExprKind::Unread => {
+            unread_spans.push(value.at.span);
+        }
+        ExprKind::Call {
+            callee: Callee::Unread | Callee::DeferredPackCall,
+            arguments,
+            ..
+        } => {
+            unread_spans.push(value.at.span);
+            if arguments
+                .iter()
+                .any(|arg| crate::declared::names_parameter(&arg.value.ty))
+            {
+                unread_dependent_calls.push(value.at.span);
+            }
+        }
+        _ => {}
     });
-    dependent
+    if dependent {
+        return true;
+    }
+    if unread_spans.is_empty() {
+        return false;
+    }
+    let Some(unit) = program.modules.get(module) else {
+        return false;
+    };
+    let Some(declared) = unit.declarations.get(declaration) else {
+        return false;
+    };
+    let dependent_locals: HashSet<&str> = body
+        .locals
+        .iter()
+        .filter(|local| crate::declared::names_parameter(&local.ty))
+        .map(|local| local.name.as_str())
+        .collect();
+    // FN-7: direct anonymous calls and standalone anonymous functions are
+    // checked without retaining their body HIR. Recheck only when a discarded
+    // anonymous function contains a bracket syntax node and touches a generic
+    // parameter via capture, written type, or direct-call argument.
+    has_dependent_anonymous_index(
+        unit,
+        &declared.syntax,
+        &unread_spans,
+        &unread_dependent_calls,
+        &dependent_locals,
+    )
+}
+
+fn contains_span(outer: Span, inner: Span) -> bool {
+    outer.start <= inner.start && inner.end <= outer.end
+}
+
+fn has_dependent_anonymous_index(
+    unit: &Module,
+    node: &SyntaxNode,
+    unread_spans: &[Span],
+    unread_dependent_calls: &[Span],
+    dependent_locals: &HashSet<&str>,
+) -> bool {
+    if node.kind() == SyntaxKind::TypeOfExpr {
+        return false;
+    }
+    if node.kind() == SyntaxKind::FnExpr {
+        let span = node.span();
+        let discarded = unread_spans.iter().any(|&outer| contains_span(outer, span));
+        if discarded
+            && anonymous_has_dependent_index(unit, node, unread_dependent_calls, dependent_locals)
+        {
+            return true;
+        }
+    }
+    node.children().any(|part| {
+        has_dependent_anonymous_index(
+            unit,
+            &part,
+            unread_spans,
+            unread_dependent_calls,
+            dependent_locals,
+        )
+    })
+}
+
+fn anonymous_has_dependent_index(
+    unit: &Module,
+    function: &SyntaxNode,
+    unread_dependent_calls: &[Span],
+    dependent_locals: &HashSet<&str>,
+) -> bool {
+    let span = function.span();
+    let mut has_index = false;
+    let mut captures_dependent = false;
+    let mut shadowed = HashSet::new();
+    scan_anonymous_body(
+        function,
+        dependent_locals,
+        &mut shadowed,
+        &mut has_index,
+        &mut captures_dependent,
+    );
+    if !has_index {
+        return false;
+    }
+    if captures_dependent {
+        return true;
+    }
+    if unread_dependent_calls
+        .iter()
+        .any(|&outer| contains_span(outer, span))
+    {
+        return true;
+    }
+    unit.written.iter().any(|written| {
+        contains_span(span, written.at.span) && crate::declared::names_parameter(&written.ty)
+    })
+}
+
+fn scan_anonymous_body(
+    node: &SyntaxNode,
+    dependent_locals: &HashSet<&str>,
+    shadowed: &mut HashSet<String>,
+    has_index: &mut bool,
+    captures_dependent: &mut bool,
+) {
+    match node.kind() {
+        SyntaxKind::TypeOfExpr => return,
+        SyntaxKind::IndexExpr => *has_index = true,
+        SyntaxKind::NameExpr => {
+            if let Some(name) = name_token(node)
+                && dependent_locals.contains(name.text())
+                && !shadowed.contains(name.text())
+            {
+                *captures_dependent = true;
+            }
+        }
+        SyntaxKind::FnExpr => {
+            let mut added = Vec::new();
+            for parameter in child(node, SyntaxKind::ParamList)
+                .into_iter()
+                .flat_map(|list| list.children())
+                .filter(|part| part.kind() == SyntaxKind::LambdaParam)
+            {
+                if let Some(ident) =
+                    tokens(&parameter).find(|token| token.kind() == SyntaxKind::Ident)
+                {
+                    let name = ident.text().to_owned();
+                    if shadowed.insert(name.clone()) {
+                        added.push(name);
+                    }
+                }
+            }
+            for part in node.children() {
+                scan_anonymous_body(
+                    &part,
+                    dependent_locals,
+                    shadowed,
+                    has_index,
+                    captures_dependent,
+                );
+            }
+            for name in added {
+                shadowed.remove(&name);
+            }
+            return;
+        }
+        _ => {}
+    }
+    for part in node.children() {
+        scan_anonymous_body(
+            &part,
+            dependent_locals,
+            shadowed,
+            has_index,
+            captures_dependent,
+        );
+    }
 }
 
 /// Unwraps transparent value wrappers (TYPE-9, ERR-12, ERR-15) to the
@@ -814,4 +997,102 @@ fn has_members(ty: &Type) -> bool {
             | Type::ErrorContext
             | Type::Delta(_)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use hgl_diagnostics::Diagnostics;
+    use hgl_parser::{Entry, Limits, parse};
+    use hgl_source::SourceMap;
+
+    use super::has_dependent_index;
+    use crate::{ParsedFile, Program, analyse};
+
+    fn analyse_module(source: &str) -> Program {
+        let mut sources = SourceMap::new();
+        let mut diagnostics = Diagnostics::new();
+        let file = sources.add("m.hgl", source).unwrap();
+        let tokens = hgl_lexer::lex(&sources, file, &mut diagnostics);
+        let tree = parse(
+            &sources,
+            file,
+            &tokens,
+            Entry::SourceFile,
+            Limits::default(),
+            &mut diagnostics,
+        );
+        analyse(&[ParsedFile::new(file, tree.syntax())], &mut diagnostics)
+    }
+
+    fn dependent_index_for(program: &Program, name: &str) -> bool {
+        let unit = &program.modules[0];
+        let position = unit
+            .declarations
+            .iter()
+            .position(|declaration| declaration.name == name)
+            .unwrap_or_else(|| panic!("missing declaration `{name}`"));
+        let body = unit.bodies[position]
+            .as_ref()
+            .unwrap_or_else(|| panic!("missing body for `{name}`"));
+        has_dependent_index(program, (0, position), body)
+    }
+
+    #[test]
+    fn anonymous_dependent_index_detection_stays_narrow() {
+        let program = analyse_module(concat!(
+            "module m\n",
+            "const fn apply_one(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+            "const fn close_over<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
+            "const fn passed_arg<T>(src: T?) -> i64 => (fn(p) => p[0])(src)\n",
+            "const fn typed_param<T>(x: T) -> i64 {\n",
+            "    let f = fn(p: T?) => p[0]\n",
+            "    return 0\n",
+            "}\n",
+            "const fn unused_captured<T>(src: T?) -> i64 {\n",
+            "    let f = fn(i: i64) => src[i]\n",
+            "    return 0\n",
+            "}\n",
+            "const fn retained_dependent<T>(src: T?) -> i64 => apply_one(fn(i: i64) => src[i], 0)\n",
+            "const fn unrelated_concrete<T>(x: T, xs: list<i64>) -> i64 => (fn(i: i64) => xs[i])(0)\n",
+            "const fn retained_concrete<T>(x: T, xs: list<i64>) -> i64 => apply_one(fn(i: i64) => xs[i], 0)\n",
+            "const fn static_bad<T>(x: T) -> i64 => (fn(b: bool) => b[0])(true)\n",
+            "const fn no_index<T>(src: T?) -> i64 => (fn(i: i64) => i)(0)\n",
+            "const fn unused_concrete<T>(x: T, xs: list<i64>) -> i64 {\n",
+            "    let f = fn(i: i64) => xs[i]\n",
+            "    return 0\n",
+            "}\n",
+            "const fn unused_untyped<T>(x: T) -> i64 {\n",
+            "    let f = fn(p) => p[0]\n",
+            "    return 0\n",
+            "}\n",
+            "const fn cold_typeof<T>(src: T?) -> Type => type((fn(i: i64) => src[i])(0))\n",
+        ));
+
+        for expected_true in [
+            "close_over",
+            "passed_arg",
+            "typed_param",
+            "unused_captured",
+            "retained_dependent",
+        ] {
+            assert!(
+                dependent_index_for(&program, expected_true),
+                "`{expected_true}` should need dependent-index rechecking"
+            );
+        }
+        for expected_false in [
+            "unrelated_concrete",
+            "retained_concrete",
+            "static_bad",
+            "no_index",
+            "unused_concrete",
+            "unused_untyped",
+            "cold_typeof",
+        ] {
+            assert!(
+                !dependent_index_for(&program, expected_false),
+                "`{expected_false}` should NOT trigger dependent-index rechecking"
+            );
+        }
+    }
 }

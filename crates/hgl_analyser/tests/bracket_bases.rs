@@ -186,3 +186,133 @@ fn wrapped_generic_bracket_bases_check_concrete_instances() {
     ));
     assert_eq!(valid.summary(), Vec::<String>::new(), "{}", valid.report);
 }
+
+/// EXPR-7, GEN-7, FN-7: generic bracket bases inside direct anonymous calls
+/// and standalone anonymous functions are rechecked in concrete instances,
+/// while nongeneric, uninstantiated, unrelated/concrete, and no-index controls
+/// behave identically without spurious or duplicate diagnostics.
+#[test]
+fn anonymous_generic_bracket_bases_check_concrete_instances() {
+    let rejected = module(concat!(
+        "const fn nongeneric_close(src: bool?) -> i64 => (fn(i: i64) => src[i])(0)\n",
+        "const fn nongeneric_unused(src: bool?) -> i64 {\n",
+        "    let f = fn(i: i64) => src[i]\n",
+        "    return 0\n",
+        "}\n",
+        "const fn close_over<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
+        "const fn passed_arg<T>(src: T?) -> i64 => (fn(p) => p[0])(src)\n",
+        "const fn forwarded_close<U>(src: U?) -> i64 => close_over(src)\n",
+        "const fn nested_close<T>(src: T?) -> i64 => (fn(i: i64) => (fn(j: i64) => src[i + j])(0))(0)\n",
+        "const fn unused_closure<T>(src: T?) -> i64 {\n",
+        "    let f = fn(i: i64) => src[i]\n",
+        "    return 0\n",
+        "}\n",
+        "const fn typed_param<T>(x: T) -> i64 {\n",
+        "    let f = fn(p: T?) => p[0]\n",
+        "    return 0\n",
+        "}\n",
+        "const fn place_close<T>(src: T?) -> T? => (fn(i: i64) -> T? {\n",
+        "    var kept = src\n",
+        "    kept[i] = 1\n",
+        "    return kept\n",
+        "})(0)\n",
+        "fn node_close<T>(src: T?) -> i64 { when { return (fn(i: i64) => src[i])(0) } }\n",
+        "const fn static_bad<T>(x: T) -> i64 => (fn(b: bool) => b[0])(true)\n",
+        "const fn never_called<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
+        "test probe {\n",
+        "    let flag: bool? = true\n",
+        "    close_over(flag)\n",
+        "    passed_arg(flag)\n",
+        "    forwarded_close(flag)\n",
+        "    nested_close(flag)\n",
+        "    unused_closure(flag)\n",
+        "    typed_param(true)\n",
+        "    place_close(flag)\n",
+        "    assert eval node_close(src: [true]) == [1]\n",
+        "    static_bad(1)\n",
+        "    static_bad(\"two\")\n",
+        "}\n",
+    ));
+    assert_eq!(
+        rejected.summary(),
+        [
+            "m.hgl:2:64 type/type.mismatch EXPR-7",
+            "m.hgl:4:27 type/type.mismatch EXPR-7",
+            "m.hgl:25:56 type/type.mismatch EXPR-7",
+            "m.hgl:29:5 type/type.mismatch EXPR-7",
+            "m.hgl:30:5 type/type.mismatch EXPR-7",
+            "m.hgl:31:5 type/type.mismatch EXPR-7",
+            "m.hgl:32:5 type/type.mismatch EXPR-7",
+            "m.hgl:33:5 type/type.mismatch EXPR-7",
+            "m.hgl:34:5 type/type.mismatch EXPR-7",
+            "m.hgl:35:5 type/type.mismatch EXPR-7",
+            "m.hgl:36:12 type/type.mismatch EXPR-7",
+        ],
+        "{}",
+        rejected.report
+    );
+    for expected in [
+        "this call makes the instance `close_over<bool>`",
+        "this call makes the instance `passed_arg<bool>`",
+        "this call makes the instance `forwarded_close<bool>`",
+        "this call makes the instance `nested_close<bool>`",
+        "this call makes the instance `unused_closure<bool>`",
+        "this call makes the instance `typed_param<bool>`",
+        "this call makes the instance `place_close<bool>`",
+        "this call makes the instance `node_close<bool>`",
+        "src[i]",
+    ] {
+        assert!(
+            rejected.report.contains(expected),
+            "missing `{expected}` in:\n{}",
+            rejected.report
+        );
+    }
+
+    let valid = module(concat!(
+        "const fn close_over<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
+        "const fn passed_arg<T>(src: T?) -> i64 => (fn(p) => p[0])(src)\n",
+        "const fn forwarded_close<U>(src: U?) -> i64 => close_over(src)\n",
+        "const fn nested_close<T>(src: T?) -> i64 => (fn(i: i64) => (fn(j: i64) => src[i + j])(0))(0)\n",
+        "const fn unused_closure<T>(src: T?) -> i64 {\n",
+        "    let f = fn(i: i64) => src[i]\n",
+        "    return 0\n",
+        "}\n",
+        "const fn unused_concrete<T>(x: T, xs: list<i64>) -> i64 {\n",
+        "    let f = fn(i: i64) => xs[i]\n",
+        "    return 0\n",
+        "}\n",
+        "const fn unused_untyped<T>(x: T) -> i64 {\n",
+        "    let f = fn(p) => p[0]\n",
+        "    return 0\n",
+        "}\n",
+        "const fn unrelated_concrete<T>(x: T, xs: list<i64>) -> i64 => (fn(i: i64) => xs[i])(0)\n",
+        "const fn apply_one(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+        "const fn retained_concrete<T>(x: T, xs: list<i64>) -> i64 => apply_one(fn(i: i64) => xs[i], 0)\n",
+        "const fn no_index<T>(src: T?) -> i64 => (fn(i: i64) => i)(0)\n",
+        "const fn close_tuple<T>(src: T?) -> i64 => (fn(_unused: i64) => src[0])(0)\n",
+        "const fn close_key<T>(src: T?) -> i64 => (fn(k: str) => src[k])(\"k\")\n",
+        "fn node_close<T>(src: T?) -> i64 { when { return (fn(i: i64) => src[i])(0) } }\n",
+        "const fn uninstantiated<T>(src: T?) -> i64 => (fn(i: i64) => src[i])(0)\n",
+        "test probe {\n",
+        "    let xs: list<i64>? = [7]\n",
+        "    close_over(xs)\n",
+        "    passed_arg(xs)\n",
+        "    forwarded_close(xs)\n",
+        "    nested_close(xs)\n",
+        "    unused_closure(xs)\n",
+        "    let flag: bool? = true\n",
+        "    unused_concrete(flag, [1])\n",
+        "    unused_untyped(flag)\n",
+        "    unrelated_concrete(flag, [1])\n",
+        "    retained_concrete(flag, [1])\n",
+        "    no_index(flag)\n",
+        "    let pair: tuple<i64, str>? = (8, \"ok\")\n",
+        "    close_tuple(pair)\n",
+        "    let book: dict<str, i64>? = [\"k\": 9]\n",
+        "    close_key(book)\n",
+        "    assert eval node_close(src: [[11]]) == [11]\n",
+        "}\n",
+    ));
+    assert_eq!(valid.summary(), Vec::<String>::new(), "{}", valid.report);
+}
