@@ -60,17 +60,26 @@ pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
             diagnostics,
             uses: Vec::new(),
             contextual_type_reports: HashMap::new(),
+            default_type_reports: HashMap::new(),
             hidden_callables: HashMap::new(),
             prelude: Vec::new(),
             decisions: Vec::new(),
         };
         resolver.module();
-        let (mut uses, prelude, decisions, hidden_callables, contextual_type_reports) = (
+        let (
+            mut uses,
+            prelude,
+            decisions,
+            hidden_callables,
+            contextual_type_reports,
+            default_type_reports,
+        ) = (
             resolver.uses,
             resolver.prelude,
             resolver.decisions,
             resolver.hidden_callables,
             resolver.contextual_type_reports,
+            resolver.default_type_reports,
         );
 
         let module = &mut program.modules[index];
@@ -86,6 +95,7 @@ pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
         module.decisions = decisions;
         module.hidden_callables = hidden_callables;
         module.contextual_type_reports = contextual_type_reports;
+        module.default_type_reports = default_type_reports;
         for name in prelude {
             if !module
                 .prelude_names
@@ -230,6 +240,7 @@ struct Resolver<'a> {
     uses: Vec<NameUse>,
     /// Value-only reports wait for the GEN-14 argument kind to be known.
     contextual_type_reports: HashMap<Location, Vec<hgl_diagnostics::Diagnostic>>,
+    default_type_reports: HashMap<Location, Vec<hgl_diagnostics::Diagnostic>>,
     hidden_callables: HashMap<Location, Location>,
     prelude: Vec<PreludeName>,
     decisions: Vec<Decision>,
@@ -663,8 +674,55 @@ impl Resolver<'_> {
     /// constraint, an instantiation.
     #[inline(never)]
     fn name_use(&mut self, node: &SyntaxNode) {
-        self.name_of(node);
+        if !self.default_type_name(node) {
+            self.name_of(node);
+        }
         self.children(node);
+    }
+
+    /// UNIT-7 excludes values. A type in the same scope has its ordinary
+    /// binding; GEN-14 decides which reading of a lone generic argument is used.
+    fn default_type_name(&mut self, node: &SyntaxNode) -> bool {
+        if self.hidden.is_empty() || node.kind() != SyntaxKind::NamedType {
+            return false;
+        }
+        let qualified = child(node, SyntaxKind::QualifiedName);
+        let Some(first) = identifiers(qualified.as_ref().unwrap_or(node)).next() else {
+            return false;
+        };
+        if qualified.is_none() && first.text() == "Type"
+            || self
+                .frames
+                .iter()
+                .rev()
+                .any(|frame| frame.bound.contains_key(first.text()))
+            || !self.hidden.iter().any(|hidden| hidden.name == first.text())
+        {
+            return false;
+        }
+        let Some(name) = crate::syntax::name_token(node) else {
+            return false;
+        };
+        let ambiguous = child(node, SyntaxKind::GenericArgs).is_none()
+            && node
+                .parent()
+                .is_some_and(|parent| parent.kind() == SyntaxKind::GenericArgs);
+        let before = self.diagnostics.len();
+        let hidden = std::mem::take(&mut self.hidden);
+        self.name_of(node);
+        self.hidden = hidden;
+        if ambiguous {
+            let key = self.at(&name);
+            let reports = self.diagnostics.as_slice()[before..].to_vec();
+            self.diagnostics.truncate(before);
+            if !reports.is_empty() {
+                self.default_type_reports.insert(key, reports);
+            }
+            if let Some(report) = self.default_name_report(&first) {
+                self.contextual_type_reports.insert(key, vec![report]);
+            }
+        }
+        true
     }
 
     /// `name<...>(...)` that reads two ways.
@@ -1298,11 +1356,17 @@ impl Resolver<'_> {
     /// UNIT-7 rejects a formal or field name in a default before looking
     /// for the same name in the enclosing scope.
     fn reject_default_name(&mut self, token: &SyntaxToken) -> bool {
+        if let Some(report) = self.default_name_report(token) {
+            self.diagnostics.emit(report);
+            return true;
+        }
+        false
+    }
+
+    fn default_name_report(&self, token: &SyntaxToken) -> Option<hgl_diagnostics::Diagnostic> {
         let name = token.text();
-        let Some(hidden) = self.hidden.iter().find(|hidden| hidden.name == name) else {
-            return false;
-        };
-        self.diagnostics.emit(
+        let hidden = self.hidden.iter().find(|hidden| hidden.name == name)?;
+        Some(
             error(
                 Category::Name,
                 codes::DEFAULT_FORMAL_ARGUMENT,
@@ -1311,8 +1375,7 @@ impl Resolver<'_> {
                 "UNIT-7",
             )
             .with_related(hidden.at, "declared here"),
-        );
-        true
+        )
     }
 
     /// UNIT-2: "an alias qualifies a public interface with

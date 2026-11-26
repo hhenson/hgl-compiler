@@ -1203,3 +1203,35 @@ const fn laws<const A: bool = associative(f), const C: bool = commutative(f)>(
     );
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
 }
+
+/// UNIT-7 and GEN-14: the slot decides whether the bare name reads a
+/// value. The same spelling can legitimately supply a type in a default.
+#[test]
+fn bare_generic_arguments_in_defaults_follow_the_declared_slot_kind() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+struct Price { cents: i64 }
+struct Quote<T> { bid: T }
+struct Tag<const N: i64> { n: i64 }
+const amount: Price = Price(cents: 77)
+const outer: i64 = 4
+const fn correct<const K: Type = type(Quote<Price>(bid: amount))>(Price: i64) -> Type => K
+const fn wrong<const K: Type = type(Tag<Price>(n: 1))>(Price: i64) -> Type => K
+const fn shadowed<const K: Type = type(Tag<outer>(n: 1))>(outer: i64) -> Type => K
+const fn unbound<const K: Type = type(Tag<absent>(n: 1))>(absent: i64) -> Type => K
+struct Good<const K: Type = type(Quote<Price>(bid: amount))> { Price: i64 }
+struct Bad<const K: Type = type(Tag<Price>(n: 1))> { Price: i64 }
+"#,
+    )]);
+    let reports: Vec<_> = checked
+        .findings
+        .iter()
+        .map(|report| report.code.as_str())
+        .collect();
+    assert_eq!(
+        reports, ["name/default.formal_argument"; 4],
+        "{}",
+        checked.report
+    );
+}

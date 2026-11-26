@@ -217,6 +217,8 @@ pub struct Module {
     /// GEN-14 lookup reports for a contextual Type argument. The type reader
     /// emits them only when the corresponding slot chooses a value.
     pub(crate) contextual_type_reports: HashMap<Location, Vec<hgl_diagnostics::Diagnostic>>,
+    /// UNIT-7: ordinary type lookup reports when a default’s bare generic argument is a type.
+    pub(crate) default_type_reports: HashMap<Location, Vec<hgl_diagnostics::Diagnostic>>,
     /// Local bindings that hide a callable, mapped to the callable's declaration (UNIT-12).
     pub(crate) hidden_callables: HashMap<Location, Location>,
     /// What each `name<...>(...)` the parser left undecided was decided

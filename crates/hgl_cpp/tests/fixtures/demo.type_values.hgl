@@ -444,3 +444,19 @@ test inherited_type_dependent_default {
     assert configured_label("x") == 17
     assert configured_label{label: Tagged<type((true, false))>(value: 29)}("x") == 29
 }
+
+# UNIT-7 excludes value reads of same-declaration formals and fields.
+# A nominal type supplied to a type generic still resolves under UNIT-10.
+struct DefaultPrice { cents: i64 }
+struct DefaultQuote<T> { bid: T }
+const default_amount: DefaultPrice = DefaultPrice(cents: 77)
+const fn quote_descriptor<const Kind: Type = type(DefaultQuote<DefaultPrice>(bid: default_amount))>(DefaultPrice: i64) -> Type => Kind
+struct DefaultTrade<const Kind: Type = type(DefaultQuote<DefaultPrice>(bid: default_amount))> {
+    DefaultPrice: i64
+}
+const fn trade_price(trade: DefaultTrade<type(DefaultQuote<DefaultPrice>(bid: default_amount))>) -> i64 => trade.DefaultPrice
+
+test generic_defaults_can_name_types_that_share_a_field_or_formal_name {
+    assert quote_descriptor(2) == type(DefaultQuote<DefaultPrice>(bid: default_amount))
+    assert trade_price(DefaultTrade(DefaultPrice: 77)) == 77
+}

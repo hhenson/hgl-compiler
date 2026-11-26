@@ -47,6 +47,16 @@ impl Reader<'_> {
         }
         let list = child(node, SyntaxKind::GenericArgs);
         let name = name_token(node);
+        if let Some(reports) = name
+            .as_ref()
+            .and_then(|name| self.module.default_type_reports.get(&self.at(name.span())))
+        {
+            for report in reports {
+                if !self.diagnostics.as_slice().contains(report) {
+                    self.diagnostics.emit(report.clone());
+                }
+            }
+        }
         let binding = name
             .as_ref()
             .and_then(|name| self.bindings.get(&(self.file, name.span().start)).copied());
@@ -496,7 +506,12 @@ impl Reader<'_> {
                 && placed
                 && at_least > 0
                 && argument.kind() == SyntaxKind::NamedType
-                && argument.text().to_string().trim() == "Type"
+                && (argument.text().to_string().trim() == "Type"
+                    || name_token(&argument).is_some_and(|name| {
+                        self.module
+                            .contextual_type_reports
+                            .contains_key(&self.at(name.span()))
+                    }))
                 && let Some(kinds) = values_of.and_then(|id| self.kinds.get(&id))
             {
                 want = kinds
@@ -695,12 +710,19 @@ impl Reader<'_> {
         let contextual_type =
             name.text() == "Type" && child(node, SyntaxKind::QualifiedName).is_none();
         let binding = self.bindings.get(&(self.file, name.span().start)).copied();
+        if want == Kind::Value
+            && self
+                .module
+                .contextual_type_reports
+                .contains_key(&self.at(name.span()))
+        {
+            return Some(self.held(node, Err(Fault::Reported), expected, place));
+        }
         let Some(binding) = binding else {
-            if contextual_type
-                && self
-                    .module
-                    .contextual_type_reports
-                    .contains_key(&self.at(name.span()))
+            if self
+                .module
+                .contextual_type_reports
+                .contains_key(&self.at(name.span()))
             {
                 // A failed ordinary value lookup is not a second reading as
                 // the descriptor type. held emits the retained lookup report.
