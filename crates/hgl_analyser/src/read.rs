@@ -310,7 +310,7 @@ impl<'a> Reader<'a> {
                 .flat_map(|module| &module.uses)
                 .map(|used| ((used.at.file, used.at.span.start), &used.binding))
                 .collect(),
-            constants: Constants::default(),
+            constants: Constants::deferred(),
             diagnostics,
         })
     }

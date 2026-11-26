@@ -15,7 +15,6 @@ use super::inference::{fixed, placed, type_pack};
 use super::results::{captured_output, proof_binding};
 use super::{Fact, Typer};
 use crate::constant::Fault;
-use crate::declared::substitute_within;
 use crate::hir::{Body, Expr, ExprKind, Hook, PackKey, Value, ValueCategory};
 use crate::program::DeclarationKind;
 use crate::syntax::{name_token, tokens, ungrouped};
@@ -239,7 +238,7 @@ impl<'a> Typer<'a> {
         // place. Where a pack's place is not filled in, it is not
         // known.
         let map: Vec<(Location, &Argument)> = fixed(&read.generics).zip(arguments).collect();
-        let ty = substitute_within(&read.members[member].ty, &map);
+        let ty = self.program.specialize_type(&read.members[member].ty, &map);
         let own: Vec<Location> = read.generics.iter().map(|generic| generic.at).collect();
         let ty = placed(ty, &own);
         let ty = if atomic {

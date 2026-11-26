@@ -12,7 +12,7 @@ use hgl_parser::SyntaxKind;
 use super::Typer;
 use super::arguments::Takes;
 use super::calls::removes;
-use crate::declared::{agree, names_one_of, substitute_within};
+use crate::declared::{agree, names_one_of};
 use crate::hir::{
     BinaryOperator, Callee, ConfigurationRead, EndpointOperation, Expr, ExprKind, UnaryOperator,
     Value, ValueCategory,
@@ -252,6 +252,20 @@ impl<'a> Typer<'a> {
         if open(expected) || open(ty) || agree(expected, ty) {
             return true;
         }
+        // A delayed declaration query has no identity until this body is
+        // checked at its making call. Keep checking the known parts here.
+        if !self.signature.generics.is_empty()
+            && self.instance.is_empty()
+            && self.pack_inputs.is_none()
+            && (crate::constant::type_has_instance_query(expected)
+                || crate::constant::type_has_instance_query(ty))
+            && crate::declared::same_type(expected, ty) != Some(false)
+        {
+            if let Some(deferred) = self.deferred_type_fit {
+                deferred.set(true);
+            }
+            return true;
+        }
         match expected {
             Type::Nullable(inner) => self.admits(inner, ty),
             Type::Named { .. } => self.inherits(ty, expected),
@@ -318,7 +332,7 @@ impl<'a> Typer<'a> {
             // once the arguments are in place has been given none here.
             let own: Vec<Location> = read.generics.iter().map(|generic| generic.at).collect();
             for parent in &read.parents {
-                let parent = substitute_within(parent, &map);
+                let parent = self.program.specialize_type(parent, &map);
                 // Where the struct passes a type pack on to its parent,
                 // the pack is not put in place here: the parent may be
                 // the application expected, and nothing is reported of

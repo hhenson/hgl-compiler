@@ -84,6 +84,56 @@ pub(crate) fn number_enums(program: &mut Program, diagnostics: &mut Diagnostics)
 
 /// Checks every struct of the program.
 pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
+    let ids = populate_structs(program, diagnostics, true);
+    // TYPE-18, GEN-13: now that every module's declaration details and
+    // initial struct members are in place, resolve declaration-level
+    // deferred `type(...)` arguments before field-conflict, recursion,
+    // delta, and signature checks consume them.
+    if crate::values::resolve_declared_type_queries(program, diagnostics) {
+        let mut silent = Diagnostics::new();
+        populate_structs(program, &mut silent, false);
+    }
+    let mut structs = build_structs(program, diagnostics, false);
+    for &id in &ids {
+        structs.fields(id);
+    }
+    structs.recursion(&ids);
+    crate::type_values::check_deltas(program, diagnostics);
+}
+
+/// Recomputes struct members after a fixed-point pass resolves a
+/// declaration-level `type(...)` argument inside a struct parent or field.
+pub(crate) fn refresh_members(program: &mut Program) {
+    let mut silent = Diagnostics::new();
+    populate_structs(program, &mut silent, false);
+}
+
+fn populate_structs(
+    program: &mut Program,
+    diagnostics: &mut Diagnostics,
+    check_parents: bool,
+) -> Vec<Id> {
+    let mut structs = build_structs(program, diagnostics, check_parents);
+    let ids = structs.ids();
+    if check_parents {
+        structs.inheritance_cycles(&ids);
+    }
+    // What each struct has, for the passes that read constructors and
+    // member accesses.
+    let members: Vec<(Id, Vec<Member>)> = ids.iter().map(|&id| (id, structs.members(id))).collect();
+    for ((module, declaration), members) in members {
+        if let Detail::Struct(read) = &mut program.modules[module].details[declaration] {
+            read.members = members;
+        }
+    }
+    ids
+}
+
+fn build_structs<'a>(
+    program: &'a Program,
+    diagnostics: &'a mut Diagnostics,
+    emit_parent_errors: bool,
+) -> Structs<'a> {
     let mut structs = Structs {
         program,
         diagnostics,
@@ -105,6 +155,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             .collect();
         structs.packs.extend(packs);
     }
+    let before = structs.diagnostics.len();
     for &id in &ids {
         let parents = structs.parents_of(id);
         for parent in &parents {
@@ -116,21 +167,11 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         }
         structs.parents.insert(id, parents);
     }
-    structs.inheritance_cycles(&ids);
+    if !emit_parent_errors {
+        structs.diagnostics.truncate(before);
+    }
     structs.fields = structs.collect_fields(&ids);
-    for &id in &ids {
-        structs.fields(id);
-    }
-    structs.recursion(&ids);
-    // What each struct has, for the passes that read constructors and
-    // member accesses.
-    let members: Vec<(Id, Vec<Member>)> = ids.iter().map(|&id| (id, structs.members(id))).collect();
-    for ((module, declaration), members) in members {
-        if let Detail::Struct(read) = &mut program.modules[module].details[declaration] {
-            read.members = members;
-        }
-    }
-    crate::type_values::check_deltas(program, diagnostics);
+    structs
 }
 
 // ---- Enums (TYPE-7) ----
@@ -398,20 +439,22 @@ pub(crate) fn names_parameter(ty: &Type) -> bool {
     )
 }
 
-/// `ty` with each generic parameter in `map` replaced by the argument
-/// given for it. `map` pairs where a parameter is declared with its
-/// argument.
+/// Resolve a bound query by checking it, or by reading its lowered identity.
+pub(crate) type QueryResolver<'a> = dyn Fn(Location, &[(Location, Argument)]) -> Option<Type> + 'a;
+
 type PackMember<'a> = dyn Fn(Location, &str, &Constant) -> Option<Type> + 'a;
 
+/// Replace generic parameters with their bound arguments throughout a type.
 fn substitute(
     ty: &Type,
     map: &[(Location, &Argument)],
     member: &PackMember<'_>,
     pack: &dyn Fn(Location) -> Option<Vec<Type>>,
     applications: bool,
+    resolve: Option<&QueryResolver<'_>>,
 ) -> Type {
     // `Box::new` puts the substituted part where a `Box<Type>` points.
-    let part = |inner: &Type| Box::new(substitute(inner, map, member, pack, applications));
+    let part = |inner: &Type| Box::new(substitute(inner, map, member, pack, applications, resolve));
     // The constant given for the generic value parameter declared at
     // `at`, where `map` gives one.
     let given = |at: Location| {
@@ -420,33 +463,24 @@ fn substitute(
             _ => None,
         })
     };
-    let constant = |constant: &Constant| match &constant.value {
-        ConstantValue::Type(ty) => Constant {
-            text: constant.text.clone(),
-            value: ConstantValue::Type(part(ty)),
-        },
-        ConstantValue::Parameter { at, .. } => {
-            given(*at).cloned().unwrap_or_else(|| constant.clone())
+    let constant = |constant: &Constant| {
+        if let ConstantValue::Parameter { at, .. } = &constant.value {
+            return given(*at).cloned().unwrap_or_else(|| constant.clone());
         }
-        // `N + 1`: worked out with what `N` is given; `[N]` and
-        // `Side(N)` hold it.
-        ConstantValue::Unary(..)
-        | ConstantValue::Binary(..)
-        | ConstantValue::RangeLength(..)
-        | ConstantValue::List(_)
-        | ConstantValue::Tuple(_)
-        | ConstantValue::Constructed { .. } => {
-            let value = constant
-                .value
-                .substituted(&|at| given(at).map(|given| given.value.clone()));
-            // The constant is still written as it was (`N + 1`): only
-            // its value changes.
-            Constant {
-                text: constant.text.clone(),
-                value,
+        let descriptor = |value: &ConstantValue| match value {
+            ConstantValue::Type(ty) => ConstantValue::Type(part(ty)),
+            ConstantValue::InstanceTypeQuery { at, bindings } => {
+                specialize_query_bindings(*at, bindings, map, &|inner| *part(inner), resolve)
             }
+            _ => unreachable!("only a descriptor calls this projection"),
+        };
+        Constant {
+            text: constant.text.clone(),
+            value: constant.value.substituted_with_types(
+                &|at| given(at).map(|given| given.value.clone()),
+                &descriptor,
+            ),
         }
-        _ => constant.clone(),
     };
     match ty {
         Type::Parameter { at, .. } => map
@@ -489,9 +523,14 @@ fn substitute(
                         None
                     };
                     let single = expanded.is_none().then(|| match argument {
-                        Argument::Type(argument) => {
-                            Argument::Type(substitute(argument, map, member, pack, applications))
-                        }
+                        Argument::Type(argument) => Argument::Type(substitute(
+                            argument,
+                            map,
+                            member,
+                            pack,
+                            applications,
+                            resolve,
+                        )),
                         Argument::Constant(argument) => Argument::Constant(constant(argument)),
                         Argument::NoResult => Argument::NoResult,
                     });
@@ -512,12 +551,19 @@ fn substitute(
                     {
                         return types;
                     }
-                    vec![substitute(element, map, member, pack, applications)]
+                    vec![substitute(
+                        element,
+                        map,
+                        member,
+                        pack,
+                        applications,
+                        resolve,
+                    )]
                 })
                 .collect(),
         ),
         Type::List { element, size } => Type::list(
-            substitute(element, map, member, pack, applications),
+            substitute(element, map, member, pack, applications, resolve),
             size.as_ref().map(constant),
         ),
         Type::Set(inner) => Type::Set(part(inner)),
@@ -556,7 +602,7 @@ fn substitute(
             let mut function = function.as_ref().clone();
             for parameter in &mut function.parameters {
                 let ty = parameter.ty_mut();
-                *ty = substitute(ty, map, member, pack, applications);
+                *ty = substitute(ty, map, member, pack, applications, resolve);
             }
             // GEN-1: only an unresolved result-only parameter can learn
             // the absence of a result. Another type parameter is a binding.
@@ -568,12 +614,14 @@ fn substitute(
                 _ => false,
             };
             function.result = bind_result(function.result.as_ref(), map)
-                .map(|ty| substitute(ty, map, member, pack, applications));
+                .map(|ty| substitute(ty, map, member, pack, applications, resolve));
             Type::Function(Box::new(function))
         }
         // TYPE-16: "In a generic declaration it stays as written until
         // T is known", and is then what the table gives for that T.
-        Type::Delta(inner) => Type::delta(substitute(inner, map, member, pack, applications)),
+        Type::Delta(inner) => {
+            Type::delta(substitute(inner, map, member, pack, applications, resolve))
+        }
         // TST-5: a tuple's trace cell names its T (`Type::trace_cell`),
         // which the tuple's delta formed again would not. A generic
         // target's parameter that is a tuple naming a parameter,
@@ -586,17 +634,17 @@ fn substitute(
         Type::Trace { cell, style } => {
             let cell = match &**cell {
                 Type::Delta(of) if matches!(**of, Type::Tuple(_)) => {
-                    Type::trace_cell(substitute(of, map, member, pack, applications))
+                    Type::trace_cell(substitute(of, map, member, pack, applications, resolve))
                 }
                 own if names_parameter(own) => {
-                    match substitute(own, map, member, pack, applications) {
+                    match substitute(own, map, member, pack, applications, resolve) {
                         of @ (Type::Tuple(_) | Type::Atomic(_) | Type::RollingWindow { .. }) => {
                             Type::trace_cell(of)
                         }
                         other => other,
                     }
                 }
-                other => substitute(other, map, member, pack, applications),
+                other => substitute(other, map, member, pack, applications, resolve),
             };
             Type::Trace {
                 cell: Box::new(cell),
@@ -605,10 +653,12 @@ fn substitute(
         }
         // TYPE-14: "either a T or null". A `T?` whose T is given a
         // nullable type is that type.
-        Type::Nullable(inner) => match substitute(inner, map, member, pack, applications) {
-            inner @ Type::Nullable(_) => inner,
-            inner => Type::Nullable(Box::new(inner)),
-        },
+        Type::Nullable(inner) => {
+            match substitute(inner, map, member, pack, applications, resolve) {
+                inner @ Type::Nullable(_) => inner,
+                inner => Type::Nullable(Box::new(inner)),
+            }
+        }
         Type::TypeValue
         | Type::Scalar(_)
         | Type::Signal
@@ -634,6 +684,12 @@ pub(crate) fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
         },
         &|_| false,
     )
+}
+
+/// True when a type, a size or a constant argument nested in it names a
+/// parameter of the enclosing generic declaration (GEN-2, TYPE-18).
+pub(crate) fn mentions(ty: &Type, own: &[Location]) -> bool {
+    names_one_of(ty, own) || ty.any_part(&|_| false, &|constant| constant.value.names_one_of(own))
 }
 
 /// The most a type may weigh once arguments stand for its parameters.
@@ -692,6 +748,94 @@ pub fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
     substitute_with_members(ty, map, &|_, _, _| None, 1)
 }
 
+/// Compose the lexical arguments of a delayed type query with this use's
+/// arguments. An application can pass an expression of an outer generic.
+fn specialize_query_bindings(
+    at: Location,
+    bindings: &[(Location, Argument)],
+    map: &[(Location, &Argument)],
+    project: &dyn Fn(&Type) -> Type,
+    resolver: Option<&QueryResolver<'_>>,
+) -> ConstantValue {
+    let bindings: Vec<_> = bindings
+        .iter()
+        .map(|(declared, argument)| {
+            let argument = match argument {
+                Argument::Type(ty) => Argument::Type(project(ty)),
+                argument => crate::instance::placed(argument, map),
+            };
+            (*declared, argument)
+        })
+        .collect();
+    resolver
+        .and_then(|resolve| resolve(at, &bindings))
+        .map(|ty| ConstantValue::Type(Box::new(ty)))
+        .unwrap_or(ConstantValue::InstanceTypeQuery { at, bindings })
+}
+
+impl Program {
+    /// Specialize a declared type, including cold queries whose overload is
+    /// chosen by a concrete generic application (TYPE-18).
+    pub(crate) fn specialize_type(&self, ty: &Type, map: &[(Location, &Argument)]) -> Type {
+        self.resolve_instance_type(substitute_within(ty, map))
+    }
+
+    pub(crate) fn resolve_instance_type(&self, ty: Type) -> Type {
+        self.resolve_query_types(ty, &|at, args| self.instance_query_type(at, args))
+    }
+
+    pub(crate) fn resolve_query_types(&self, ty: Type, resolve: &QueryResolver<'_>) -> Type {
+        if self.has_dependent_type_queries && crate::constant::type_has_instance_query(&ty) {
+            substitute(&ty, &[], &|_, _, _| None, &|_| None, false, Some(resolve))
+        } else {
+            ty
+        }
+    }
+
+    /// Place the call's arguments in an entire generic constant. Both value
+    /// parameters and type descriptors can occur inside aggregate elements.
+    pub(crate) fn specialize_constant(
+        &self,
+        value: &ConstantValue,
+        map: &[(Location, &Argument)],
+    ) -> ConstantValue {
+        value.substituted_with_types(
+            &|at| {
+                map.iter().find_map(|(own, given)| match given {
+                    Argument::Constant(given) if *own == at => Some(given.value.clone()),
+                    _ => None,
+                })
+            },
+            &|descriptor| self.specialize_query(descriptor, map),
+        )
+    }
+
+    /// Specialize a type-valued generic argument in its lexical environment.
+    pub(crate) fn specialize_query(
+        &self,
+        value: &ConstantValue,
+        map: &[(Location, &Argument)],
+    ) -> ConstantValue {
+        self.project_query(value, map, &|at, args| self.instance_query_type(at, args))
+    }
+
+    pub(crate) fn project_query(
+        &self,
+        value: &ConstantValue,
+        map: &[(Location, &Argument)],
+        resolve: &QueryResolver<'_>,
+    ) -> ConstantValue {
+        let project = |ty: &Type| self.resolve_query_types(substitute_within(ty, map), resolve);
+        match value {
+            ConstantValue::Type(ty) => ConstantValue::Type(Box::new(project(ty))),
+            ConstantValue::InstanceTypeQuery { at, bindings } => {
+                specialize_query_bindings(*at, bindings, map, &project, Some(resolve))
+            }
+            _ => value.clone(),
+        }
+    }
+}
+
 /// Apply a result-only generic binding (GEN-1). A remaining result type
 /// is still specialized by the caller, including any pack members.
 pub(crate) fn bind_result<'a>(
@@ -737,7 +881,7 @@ pub(crate) fn substitute_with_packs(
     if weight(ty).saturating_mul(heaviest.max(pack_weight)) > WEIGHT {
         return Type::Unknown;
     }
-    substitute(ty, map, member, pack, false)
+    substitute(ty, map, member, pack, false, None)
 }
 
 /// TYPE-18: project stored field types, including forwarded generic type
@@ -759,7 +903,7 @@ pub(crate) fn substitute_storage(
         .max()
         .unwrap_or(1);
     (weight(ty).saturating_mul(heaviest.max(pack_weight)) <= WEIGHT)
-        .then(|| substitute(ty, map, member, pack, true))
+        .then(|| substitute(ty, map, member, pack, true, None))
 }
 
 /// TYPE-4: "A field is optional when its type is nullable, `T?`, or an
@@ -1111,7 +1255,7 @@ impl Structs<'_> {
         if names_one_of(ty, &packs) {
             return Type::Unknown;
         }
-        substitute_within(ty, &map)
+        self.program.specialize_type(ty, &map)
     }
 
     /// Every field the struct `id` has, its parents' first. A field
@@ -2250,7 +2394,7 @@ fn opened(ty: &Type) -> Type {
     if map.is_empty() {
         return ty.clone();
     }
-    substitute(ty, &map, &|_, _, _| None, &|_| None, false)
+    substitute(ty, &map, &|_, _, _| None, &|_| None, false, None)
 }
 
 #[derive(Clone, Copy)]

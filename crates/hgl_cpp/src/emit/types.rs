@@ -32,15 +32,20 @@ use crate::runtime;
 /// The C++ type of `ty`, qualified from the global namespace, or `None`
 /// for a type the target does not write yet.
 pub(super) fn cpp_type(program: &Program, ty: &Type) -> Option<String> {
-    cpp_type_in(program, ty, false)
+    cpp_type_in(program, ty, None)
 }
 
-/// [`cpp_type`], where `generic` says whether `ty` is written inside the
+/// [`cpp_type`], where `queries` is present when `ty` is written inside the
 /// declaration of a generic struct, where a generic parameter of it is
 /// the C++ template's parameter of its name (`composites`). Anywhere else
 /// a generic parameter is not written: a generic function is written for
-/// each instance, its parameters given.
-pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option<String> {
+/// each instance, its parameters given. The slice names reflected type identities
+/// forwarded by this layout (TYPE-18).
+pub(super) fn cpp_type_in(
+    program: &Program,
+    ty: &Type,
+    queries: Option<&[ConstantValue]>,
+) -> Option<String> {
     Some(match ty {
         Type::TypeValue => "::hglrt::type_value".to_string(),
         Type::Scalar(scalar) => scalar_type(*scalar)?.to_string(),
@@ -52,7 +57,7 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
         } => match program.modules[*module].declarations[*declaration].kind {
             DeclarationKind::Enum => enum_name(program, *module, *declaration),
             DeclarationKind::Struct => {
-                composites::struct_type(program, (*module, *declaration), arguments, generic)?
+                composites::struct_type(program, (*module, *declaration), arguments, queries)?
             }
             // CAP-1: a capability is the runtime library's (`endpoints`).
             DeclarationKind::NativeType => {
@@ -64,12 +69,12 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
         // its delta is itself.
         Type::Delta(inner) if matches!(**inner, Type::Scalar(_)) => cpp_type(program, inner)?,
         Type::Nullable(inner) => {
-            format!("::std::optional<{}>", cpp_type_in(program, inner, generic)?)
+            format!("::std::optional<{}>", cpp_type_in(program, inner, queries)?)
         }
         Type::Tuple(positions) => {
             let positions: Option<Vec<String>> = positions
                 .iter()
-                .map(|position| cpp_type_in(program, position, generic))
+                .map(|position| cpp_type_in(program, position, queries))
                 .collect();
             format!("::std::tuple<{}>", positions?.join(", "))
         }
@@ -78,19 +83,19 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
                 None => format!(
                     "::{}::list<{}>",
                     runtime::NAMESPACE,
-                    cpp_type_in(program, element, generic)?
+                    cpp_type_in(program, element, queries)?
                 ),
                 // TYPE-4: a fixed list holds exactly its size.
                 Some(ConstantValue::Int(count)) if *count >= 0 => {
                     format!(
                         "::std::array<{}, {count}>",
-                        cpp_type_in(program, element, generic)?
+                        cpp_type_in(program, element, queries)?
                     )
                 }
                 // The size of a generic struct's own (GEN-13).
-                Some(ConstantValue::Parameter { name, .. }) if generic => format!(
+                Some(ConstantValue::Parameter { name, .. }) if queries.is_some() => format!(
                     "::std::array<{}, {}>",
-                    cpp_type_in(program, element, generic)?,
+                    cpp_type_in(program, element, queries)?,
                     names::template_parameter(name)
                 ),
                 _ => return None,
@@ -104,17 +109,17 @@ pub(super) fn cpp_type_in(program: &Program, ty: &Type, generic: bool) -> Option
         Type::Result { value, error } if **error == Type::Error => format!(
             "::{}::result<{}>",
             runtime::NAMESPACE,
-            cpp_type_in(program, value, generic)?
+            cpp_type_in(program, value, queries)?
         ),
         Type::Result { value, error } => format!(
             "::std::expected<{}, {}>",
-            cpp_type_in(program, value, generic)?,
-            cpp_type_in(program, error, generic)?
+            cpp_type_in(program, value, queries)?,
+            cpp_type_in(program, error, queries)?
         ),
         Type::Set(_) | Type::Dict { .. } | Type::Delta(_) | Type::Atomic(_) => {
-            composites::composite_type(program, ty, generic)?
+            composites::composite_type(program, ty, queries)?
         }
-        Type::Parameter { name, .. } if generic => names::template_parameter(name),
+        Type::Parameter { name, .. } if queries.is_some() => names::template_parameter(name),
         _ => return None,
     })
 }
@@ -195,13 +200,6 @@ impl Emitter<'_> {
     pub(super) fn written_type(&mut self, ty: &Type, at: Location) -> Option<String> {
         let written = self.named_type(ty);
         if written.is_none() {
-            if let Type::Named { name, arguments, .. } = ty
-                && arguments.iter().any(|argument| matches!(argument,
-                    hgl_analyser::Argument::Constant(value) if matches!(value.value, ConstantValue::Type(_))))
-            {
-                self.unsupported(at, &format!("a Type-valued generic argument of `{name}`"));
-                return None;
-            }
             self.unsupported(at, &format!("the type `{ty}`"));
         }
         written

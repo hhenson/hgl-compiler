@@ -529,6 +529,26 @@ TEST_CASE("a refused list publication in a struct or tuple reports the HGL write
     CHECK(refused_publications == 2);
 }
 
+template <auto Kind>
+struct TaggedValue {
+    i64 value{};
+    friend bool operator==(const TaggedValue&, const TaggedValue&) = default;
+};
+
+TEST_CASE("type_tag distinguishes generic struct template identities (TYPE-18, GEN-13)") {
+    using First = TaggedValue<hglrt::type_tag{"i64"}>;
+    using Same = TaggedValue<hglrt::type_tag{"i64"}>;
+    using Other = TaggedValue<hglrt::type_tag{"f64"}>;
+    using ModuleA = TaggedValue<hglrt::type_tag{"declaration(1,0)<>"}>;
+    using ModuleB = TaggedValue<hglrt::type_tag{"declaration(2,0)<>"}>;
+    static_assert(std::same_as<First, Same>);
+    static_assert(!std::same_as<First, Other>);
+    static_assert(!std::same_as<ModuleA, ModuleB>);
+    const First a{7};
+    const Same b{7};
+    CHECK(a == b);
+}
+
 // The generated code sets the HGL file and line at each publication.
 // A composite child such as this tuple receives that place through its publisher.
 void publish_bad_counts_at_hgl_source(const FixedCountsOutput& out) {

@@ -11,7 +11,7 @@ use hgl_analyser::hir::{
 };
 use hgl_analyser::{
     Argument as GenericArgument, ConstantValue, DeclarationKind, Detail, FieldRef, GenericKind,
-    Parameter, Program, Role, Type, substitute_within,
+    Parameter, Program, Role, Type,
 };
 use hgl_diagnostics::Location;
 
@@ -446,7 +446,7 @@ pub fn left_out<'p>(
             .and_then(Option::as_ref)
     });
     if let Some(default) = default {
-        if default.has_type_query()
+        if default.needs_type_specialization()
             && !callee.generics().is_empty()
             && let Some(owner) = callee.declaration()
         {
@@ -569,7 +569,7 @@ fn field_arguments(
         pending.extend(
             read.parents
                 .iter()
-                .map(|parent| substitute_within(parent, &bindings)),
+                .map(|parent| program.checked_layout_type(parent, &bindings)),
         );
         applications.push(arguments);
     }

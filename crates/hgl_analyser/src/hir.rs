@@ -75,12 +75,40 @@ pub struct DefaultExpr {
 }
 
 impl DefaultExpr {
-    /// TYPE-18: a cold query has become a descriptor literal. Its operand
-    /// must be read again when a generic default acquires concrete types.
-    pub fn has_type_query(&self) -> bool {
-        let mut found = false;
+    /// TYPE-18: a default can use a cold query directly, or read a field or
+    /// call result whose type contains an instance-dependent query. Both
+    /// need the defining scope and the arguments of the call that omitted it.
+    pub fn needs_type_specialization(&self) -> bool {
+        fn depends(value: &Expr) -> bool {
+            if matches!(value.kind, ExprKind::Literal(Value::Type(_)))
+                || crate::constant::type_has_instance_query(&value.ty)
+            {
+                return true;
+            }
+            let callee = match &value.kind {
+                ExprKind::Call { callee, .. } => callee,
+                ExprKind::StaticCallable(callee) => callee.as_ref(),
+                _ => return false,
+            };
+            let Callee::Anonymous(function) = callee else {
+                return false;
+            };
+            let mut found = function
+                .body
+                .locals
+                .iter()
+                .any(|local| crate::constant::type_has_instance_query(&local.ty));
+            walk_statements(&function.body.statements, &mut |value| {
+                found = found || depends(value);
+            });
+            found
+        }
+        let mut found = self
+            .locals
+            .iter()
+            .any(|local| crate::constant::type_has_instance_query(&local.ty));
         self.value
-            .walk(&mut |value| found |= matches!(value.kind, ExprKind::Literal(Value::Type(_))));
+            .walk(&mut |value| found = found || depends(value));
         found
     }
 

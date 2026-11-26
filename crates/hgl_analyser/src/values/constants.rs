@@ -398,6 +398,308 @@ impl<'a> Typer<'a> {
         self.read_in(self.file, node, expected)
     }
 
+    /// Resolves a deferred `type(...)` generic argument value in the current
+    /// body scope, preserving operand diagnostics (TYPE-18, GEN-8).
+    pub(super) fn resolve_deferred_value(
+        &mut self,
+        at: Location,
+        value: &ConstantValue,
+        expected: Option<&Type>,
+        place: Option<&str>,
+    ) -> ConstantValue {
+        match value {
+            ConstantValue::DeferredTypeQuery(expr_at) => {
+                self.resolve_deferred_constant(*expr_at, expected, place)
+            }
+            ConstantValue::Type(inner) if crate::constant::type_has_deferred_query(inner) => {
+                ConstantValue::Type(Box::new(self.resolve_deferred_in_type(at, inner)))
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Evaluates the deferred constant expression at `expr_at` in the current
+    /// body scope (or in its owning file if it came from a declaration default),
+    /// emitting operand diagnostics rather than swallowing them (TYPE-18, GEN-8).
+    pub(super) fn resolve_deferred_constant(
+        &mut self,
+        expr_at: Location,
+        expected: Option<&Type>,
+        place: Option<&str>,
+    ) -> ConstantValue {
+        let node = if let Some(node) = self.node_at(expr_at) {
+            self.remember_type_queries_in(&node);
+            node
+        } else if let Some((_, _, node)) = super::type_queries::find_node(self.program, expr_at) {
+            let mut queries = Vec::new();
+            super::type_queries::outermost_type_queries(&node, &mut queries);
+            for query in &queries {
+                let query_at = Location::new(expr_at.file, query.span());
+                if self.constants.remembered_type(query_at).is_none() {
+                    let result = super::type_queries::query_type_into(
+                        self.program,
+                        expr_at.file,
+                        query,
+                        Some(self.diagnostics),
+                    );
+                    let previous = self.constants.remember_type(query_at, result);
+                    self.type_query_locations.push((query_at, previous));
+                }
+            }
+            node
+        } else {
+            return ConstantValue::Unknown;
+        };
+        let read = self.read_in(expr_at.file, &node, expected);
+        match read {
+            Ok(value)
+                if crate::constant::worked_out(&value)
+                    && !crate::constant::has_deferred_type_query(&value) =>
+            {
+                value
+            }
+            Ok(_) => {
+                if let Some(place) = place {
+                    self.diagnostics.emit(error(
+                        Category::Type,
+                        codes::GENERIC_ARGUMENT_CONSTANT,
+                        expr_at,
+                        format!(
+                            "{place} is a generic value parameter, and this is no compile-time \
+                             constant: this compiler does not work out its value"
+                        ),
+                        "GEN-8",
+                    ));
+                }
+                ConstantValue::Unknown
+            }
+            Err(Fault::NotConstant) => {
+                if let Some(place) = place {
+                    self.diagnostics.emit(error(
+                        Category::Type,
+                        codes::GENERIC_ARGUMENT_CONSTANT,
+                        expr_at,
+                        format!(
+                            "{place} is a generic value parameter, and this is no compile-time \
+                             constant: it is known only when the program runs"
+                        ),
+                        "GEN-8",
+                    ));
+                }
+                ConstantValue::Unknown
+            }
+            Err(fault) => {
+                if let (Some(place), Some(expected)) = (place, expected)
+                    && let Some(report) = fault.report(expr_at, place, expected)
+                {
+                    self.diagnostics.emit(report);
+                }
+                ConstantValue::Unknown
+            }
+        }
+    }
+
+    /// Resolves any deferred `type(...)` generic arguments inside `ty` in the
+    /// current body scope and checks `requires` on newly resolved struct
+    /// applications (TYPE-18, GEN-3, GEN-13).
+    pub(super) fn resolve_deferred_in_type(&mut self, at: Location, ty: &Type) -> Type {
+        if !crate::constant::type_has_deferred_query(ty) {
+            return ty.clone();
+        }
+        let resolved = self.resolve_deferred_in_type_inner(at, ty);
+        self.check_resolved_struct_applications(at, &resolved);
+        resolved
+    }
+
+    fn resolve_deferred_in_type_inner(&mut self, at: Location, ty: &Type) -> Type {
+        if !crate::constant::type_has_deferred_query(ty) {
+            return ty.clone();
+        }
+        match ty {
+            Type::Named {
+                name,
+                module,
+                declaration,
+                arguments,
+                kind,
+            } => {
+                let generics = match self.program.modules[*module].details.get(*declaration) {
+                    Some(Detail::Struct(read)) => read.generics.as_slice(),
+                    _ => &[],
+                };
+                let mut resolved_args: Vec<Argument> = Vec::with_capacity(arguments.len());
+                for (slot, argument) in arguments.iter().enumerate() {
+                    let next = match argument {
+                        Argument::Type(inner) => {
+                            Argument::Type(self.resolve_deferred_in_type_inner(at, inner))
+                        }
+                        Argument::NoResult => Argument::NoResult,
+                        Argument::Constant(constant)
+                            if crate::constant::has_deferred_type_query(&constant.value) =>
+                        {
+                            let (expected, place) = match generics.get(slot) {
+                                Some(generic) => {
+                                    let expected = match &generic.kind {
+                                        GenericKind::Value(pattern) => {
+                                            let map: Vec<_> = generics
+                                                .iter()
+                                                .map(|g| g.at)
+                                                .zip(&resolved_args)
+                                                .collect();
+                                            let substituted = substitute_within(pattern, &map);
+                                            whole(&substituted).then_some(substituted)
+                                        }
+                                        _ => None,
+                                    };
+                                    (expected, Some(format!("`{}` of `{name}`", generic.name)))
+                                }
+                                None => (None, None),
+                            };
+                            let value = if let ConstantValue::DeferredDefaultQuery(default) =
+                                constant.value
+                            {
+                                super::type_queries::applied_default(
+                                    self.program,
+                                    default,
+                                    (generics, &resolved_args),
+                                    expected.as_ref(),
+                                    place.as_deref(),
+                                    self.diagnostics,
+                                )
+                            } else {
+                                self.resolve_deferred_value(
+                                    at,
+                                    &constant.value,
+                                    expected.as_ref(),
+                                    place.as_deref(),
+                                )
+                            };
+                            Argument::Constant(Constant {
+                                text: constant.text.clone(),
+                                value,
+                            })
+                        }
+                        Argument::Constant(_) => argument.clone(),
+                    };
+                    resolved_args.push(next);
+                }
+                Type::Named {
+                    name: name.clone(),
+                    module: *module,
+                    declaration: *declaration,
+                    arguments: resolved_args,
+                    kind: *kind,
+                }
+            }
+            Type::List { element, size } => Type::List {
+                element: Box::new(self.resolve_deferred_in_type_inner(at, element)),
+                size: size.as_ref().map(|size| {
+                    if crate::constant::has_deferred_type_query(&size.value) {
+                        let integer = Type::Scalar(crate::types::Scalar::I64);
+                        Constant {
+                            text: size.text.clone(),
+                            value: self.resolve_deferred_value(
+                                at,
+                                &size.value,
+                                Some(&integer),
+                                Some("a list's size"),
+                            ),
+                        }
+                    } else {
+                        size.clone()
+                    }
+                }),
+            },
+            Type::RollingWindow {
+                value,
+                maximum,
+                minimum,
+            } => Type::RollingWindow {
+                value: Box::new(self.resolve_deferred_in_type_inner(at, value)),
+                maximum: if crate::constant::has_deferred_type_query(&maximum.value) {
+                    Constant {
+                        text: maximum.text.clone(),
+                        value: self.resolve_deferred_value(
+                            at,
+                            &maximum.value,
+                            None,
+                            Some("a window's size"),
+                        ),
+                    }
+                } else {
+                    maximum.clone()
+                },
+                minimum: minimum.as_ref().map(|minimum| {
+                    if crate::constant::has_deferred_type_query(&minimum.value) {
+                        Constant {
+                            text: minimum.text.clone(),
+                            value: self.resolve_deferred_value(
+                                at,
+                                &minimum.value,
+                                None,
+                                Some("a window's minimum size"),
+                            ),
+                        }
+                    } else {
+                        minimum.clone()
+                    }
+                }),
+            },
+            Type::PackMember { pack, name, key } => Type::PackMember {
+                pack: *pack,
+                name: name.clone(),
+                key: if crate::constant::has_deferred_type_query(&key.value) {
+                    Constant {
+                        text: key.text.clone(),
+                        value: self.resolve_deferred_value(at, &key.value, None, None),
+                    }
+                } else {
+                    key.clone()
+                },
+            },
+            Type::Tuple(elements) => Type::Tuple(
+                elements
+                    .iter()
+                    .map(|element| self.resolve_deferred_in_type_inner(at, element))
+                    .collect(),
+            ),
+            Type::Set(inner) => Type::Set(Box::new(self.resolve_deferred_in_type_inner(at, inner))),
+            Type::Dict { key, value } => Type::Dict {
+                key: Box::new(self.resolve_deferred_in_type_inner(at, key)),
+                value: Box::new(self.resolve_deferred_in_type_inner(at, value)),
+            },
+            Type::Endpoint(inner) => {
+                Type::Endpoint(Box::new(self.resolve_deferred_in_type_inner(at, inner)))
+            }
+            Type::Atomic(inner) => Type::atomic(self.resolve_deferred_in_type_inner(at, inner)),
+            Type::Delta(inner) => Type::delta(self.resolve_deferred_in_type_inner(at, inner)),
+            Type::Result { value, error } => Type::Result {
+                value: Box::new(self.resolve_deferred_in_type_inner(at, value)),
+                error: Box::new(self.resolve_deferred_in_type_inner(at, error)),
+            },
+            Type::Nullable(inner) => {
+                Type::Nullable(Box::new(self.resolve_deferred_in_type_inner(at, inner)))
+            }
+            Type::Trace { cell, style } => Type::Trace {
+                cell: Box::new(self.resolve_deferred_in_type_inner(at, cell)),
+                style: *style,
+            },
+            Type::Function(function) => {
+                let mut function = function.as_ref().clone();
+                for parameter in &mut function.parameters {
+                    let inner = parameter.ty_mut();
+                    *inner = self.resolve_deferred_in_type_inner(at, inner);
+                }
+                function.result = function
+                    .result
+                    .as_ref()
+                    .map(|result| self.resolve_deferred_in_type_inner(at, result));
+                Type::Function(Box::new(function))
+            }
+            _ => ty.clone(),
+        }
+    }
+
     /// The constant the default of `generic`, a generic value parameter
     /// of `declaration`, comes to (GEN-2), read as a value of the
     /// parameter's type where that is known, in the file the default is

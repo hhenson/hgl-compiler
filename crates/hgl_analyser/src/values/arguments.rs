@@ -12,7 +12,7 @@ use super::Typer;
 use super::evals::{holds_trace, publications};
 use super::fit::whole;
 use super::inference::{Inferred, Places, fixed, infer, mentions, placed};
-use crate::declared::{agree, is_optional, substitute_within};
+use crate::declared::{agree, is_optional};
 use crate::hir::{self, EndpointOperation, Expr, ExprKind, Value};
 use crate::program::DeclarationKind;
 use crate::syntax::{child, has_token, name_token, tokens};
@@ -61,7 +61,7 @@ impl<'a> Typer<'a> {
         }
         // The type the `read` pass gave `Name<arguments>`.
         let written = self.written_type_at(start);
-        match written {
+        match written.as_deref() {
             Some(Type::Named {
                 module,
                 declaration,
@@ -202,7 +202,7 @@ impl<'a> Typer<'a> {
             .members
             .iter()
             .map(|member| {
-                let ty = substitute_within(&member.ty, &map);
+                let ty = self.program.specialize_type(&member.ty, &map);
                 Slot {
                     name: &member.name,
                     configuration: false,

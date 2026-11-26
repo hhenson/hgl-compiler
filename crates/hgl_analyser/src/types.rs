@@ -627,6 +627,14 @@ impl Eq for Constant {}
 pub enum ConstantValue {
     /// A type's identity, fixed at compilation (TYPE-18, GEN-13).
     Type(Box<Type>),
+    /// A cold declaration query whose operand selects its result only after
+    /// generic arguments are known (TYPE-18, GEN-7).
+    InstanceTypeQuery {
+        /// Location of the lexical type query.
+        at: Location,
+        /// Type and value arguments in that declaration's environment.
+        bindings: Vec<(Location, Argument)>,
+    },
     /// An `i64`.
     Int(i64),
     /// An `f64`. Never a NaN: a constant that comes to one is
@@ -704,6 +712,15 @@ pub enum ConstantValue {
     ),
     /// The number of passes of a range with generic value bounds (EXPR-17).
     RangeLength(Box<ConstantValue>, Box<ConstantValue>),
+    /// A constant expression whose value depends on a `type(...)` query
+    /// (TYPE-18) that cannot be evaluated until declaration signatures,
+    /// struct fields, or body locals are known. Resolved in place before
+    /// analysis completes, or replaced with [`ConstantValue::Unknown`] once
+    /// its operand diagnostic is reported.
+    DeferredTypeQuery(Location),
+    /// A deferred query supplied by a bare struct application. Its lexical
+    /// environment uses the defaults already applied to preceding parameters.
+    DeferredDefaultQuery(Location),
     /// Not valued: a constant whose value this compiler does not work
     /// out (an operation that overflows, a date moved by a tenor), or
     /// what is no constant at all. It is equal to nothing and unequal to

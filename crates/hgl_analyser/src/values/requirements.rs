@@ -63,8 +63,31 @@ impl<'a> Typer<'a> {
             }
             // Each argument is held as the value it is (`crate::constant`),
             // however the type writes it, or as the default it takes.
+            // Body-level applications whose `type(...)` arguments are still
+            // deferred are checked once `written_type_at` resolves them.
             for (struct_, arguments) in &found {
+                if arguments.iter().any(|argument| match argument {
+                    Argument::Type(ty) => crate::constant::type_has_deferred_query(ty),
+                    Argument::Constant(constant) => {
+                        crate::constant::has_deferred_type_query(&constant.value)
+                    }
+                    Argument::NoResult => false,
+                }) {
+                    continue;
+                }
                 self.requires_met(written.at, *struct_, arguments);
+            }
+        }
+    }
+
+    /// GEN-3: checks `requires` on struct applications inside `ty` whose
+    /// deferred `type(...)` arguments have just resolved in a body (TYPE-18).
+    pub(super) fn check_resolved_struct_applications(&mut self, at: Location, ty: &Type) {
+        let mut found = Vec::new();
+        struct_applications(ty, &mut found);
+        for (struct_, arguments) in &found {
+            if required(self.program, *struct_).is_some() {
+                self.requires_met(at, *struct_, arguments);
             }
         }
     }
@@ -799,7 +822,7 @@ impl<'a> Typer<'a> {
                     .iter()
                     .map(|argument| match argument {
                         Argument::Type(ty) => Argument::Type(project(ty)),
-                        _ => given_in(argument, &given, &own),
+                        _ => given_in(program, argument, &given, &own),
                     })
                     .collect::<Vec<_>>();
                 let placed_packs = type_packs
@@ -2766,7 +2789,9 @@ pub(super) fn instances_hold(
                 .flatten()
                 .flatten()
             {
-                made_by(program, &default.value, &mut made);
+                if module.declarations[position].declares_default(default) {
+                    made_by(program, &default.value, &mut made);
+                }
             }
             // A struct a type written in it applies, a field's or a
             // parameter's (GEN-3: "an application of a struct whose
@@ -3286,7 +3311,7 @@ pub(super) fn instances_hold(
                         let generics: Vec<Argument> = call
                             .generics
                             .iter()
-                            .map(|argument| given_in(argument, &map, &declared))
+                            .map(|argument| given_in(program, argument, &map, &declared))
                             .collect();
                         // ERR-9: "Failure during argument evaluation
                         // precedes later admission checks."
@@ -3322,7 +3347,9 @@ pub(super) fn instances_hold(
                             generics,
                             call.answers
                                 .iter()
-                                .map(|answer| answered_in(answer, &map, &declared, &made.answers))
+                                .map(|answer| {
+                                    answered_in(program, answer, &map, &declared, &made.answers)
+                                })
                                 .collect(),
                         )
                     }
@@ -4271,20 +4298,18 @@ fn packs_pass_on(packs: &[hir::TypePackArgument], declared: &[Location]) -> bool
 
 /// `argument`, a generic argument a call in a generic body gives, with
 /// what a call of that body gives its parameters, `map`, in place.
-fn given_in(argument: &Argument, map: &[(Location, &Argument)], declared: &[Location]) -> Argument {
+fn given_in(
+    program: &Program,
+    argument: &Argument,
+    map: &[(Location, &Argument)],
+    declared: &[Location],
+) -> Argument {
     match argument {
         Argument::Constant(constant) => Argument::Constant(Constant {
             text: constant.text.clone(),
-            value: constant.value.substituted(&|at| {
-                map.iter()
-                    .find(|(own, _)| *own == at)
-                    .and_then(|(_, given)| match given {
-                        Argument::Constant(given) => Some(given.value.clone()),
-                        Argument::Type(_) | Argument::NoResult => None,
-                    })
-            }),
+            value: program.specialize_constant(&constant.value, map),
         }),
-        Argument::Type(ty) => Argument::Type(placed(substitute_within(ty, map), declared)),
+        Argument::Type(ty) => Argument::Type(placed(program.specialize_type(ty, map), declared)),
         Argument::NoResult => Argument::NoResult,
     }
 }
@@ -4694,6 +4719,7 @@ pub(super) fn made_forwarded_callee(
 /// the instance's caller answers the body's own requirements with,
 /// `answers`, in place of each it states (`Answer::Stated`).
 fn answered_in(
+    program: &Program,
     answer: &hir::Answer,
     map: &[(Location, &Argument)],
     declared: &[Location],
@@ -4712,11 +4738,11 @@ fn answered_in(
             declaration: *declaration,
             generics: generics
                 .iter()
-                .map(|argument| given_in(argument, map, declared))
+                .map(|argument| given_in(program, argument, map, declared))
                 .collect(),
             requirements: requirements
                 .iter()
-                .map(|answer| answered_in(answer, map, declared, answers))
+                .map(|answer| answered_in(program, answer, map, declared, answers))
                 .collect(),
         },
         hir::Answer::Stated(position) => answers
@@ -4943,7 +4969,7 @@ pub(super) struct Condition<'c> {
 
 /// A concrete application names no type or value parameter and uses
 /// only known constant values, including those nested inside its types.
-fn resolved_default_argument(argument: &Argument) -> bool {
+pub(super) fn resolved_default_argument(argument: &Argument) -> bool {
     fn known(value: &ConstantValue) -> bool {
         match value {
             ConstantValue::Member(member) => member.of.is_some(),

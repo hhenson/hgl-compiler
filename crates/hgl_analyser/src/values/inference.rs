@@ -17,7 +17,8 @@ use super::fit::{not_null, open, whole};
 use super::forms::Taken;
 use super::{Fact, Typer};
 use crate::constant::Fault;
-use crate::declared::{names_one_of, names_parameter, substitute_within};
+pub(super) use crate::declared::mentions;
+use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Expr, ValueCategory};
 use crate::program::{Binding, Declaration, DeclarationKind, LocalKind};
 use crate::syntax::{child, name_token, ungrouped};
@@ -392,6 +393,7 @@ impl<'a> Typer<'a> {
                 GenericKind::Value(ty) if !names_parameter(ty) => Some(ty),
                 _ => None,
             };
+            self.remember_type_queries_in(&value);
             let read = self.read_constant(&value, expected);
             if let Some(why) = Self::not_constant(&read) {
                 self.diagnostics.emit(error(
@@ -503,16 +505,13 @@ impl<'a> Typer<'a> {
             let expected = type_of(index, found);
             match self.unfit_default(declaration, &default, &expected, declared) {
                 Some(Ok(value)) => {
-                    let Some(value) = defaulted_value(value, index, &own, found) else {
-                        found[index] = None;
-                        continue;
-                    };
                     // The default as a value of the type the call
                     // resolves (EXPR-5): the `f64` 2 where `T` is one.
-                    found[index] = Some(Argument::Constant(Constant {
+                    let constant = Constant {
                         text: constant_text(&default),
                         value,
-                    }));
+                    };
+                    found[index] = defaulted_argument(self.program, constant, index, &own, found);
                 }
                 Some(Err(described)) => {
                     self.diagnostics.emit(error(
@@ -633,7 +632,10 @@ impl<'a> Typer<'a> {
             let types = types
                 .iter()
                 .map(|(at, argument)| match argument {
-                    Argument::Type(ty) => self.project_pack_pass_type(ty, *at),
+                    Argument::Type(ty) => {
+                        let ty = self.resolve_deferred_in_type(*at, ty);
+                        self.project_pack_pass_type(&ty, *at)
+                    }
                     Argument::NoResult => {
                         faulty = true;
                         self.diagnostics.emit(super::absent_type_argument(*at));
@@ -841,34 +843,70 @@ impl<'a> Typer<'a> {
                 // A parameter whose kind its signature does not settle
                 // is what the call gives it (GEN-13).
                 _ => {
-                    // GEN-8: "The value a call gives a generic value
-                    // parameter is a compile-time constant ... Any other
-                    // rejects." What it comes to has been read with the
-                    // types (`read`); one not valued is read again here
-                    // for what it is.
-                    if let Argument::Constant(Constant {
-                        value: ConstantValue::Unevaluated,
-                        ..
-                    }) = argument
-                        && let Some(node) = self.node_at(*at)
-                        && let Some(why) = Self::not_constant(&self.read_constant(&node, None))
+                    // GEN-8, TYPE-18: resolve any `type(...)` constant deferred
+                    // from `read` now that locals and signatures are in scope.
+                    if let Argument::Constant(constant) = argument
+                        && crate::constant::has_deferred_type_query(&constant.value)
                     {
-                        self.diagnostics.emit(error(
-                            Category::Type,
-                            codes::GENERIC_ARGUMENT_CONSTANT,
+                        let unknown = Argument::Type(Type::Unknown);
+                        let expected = match &generic.kind {
+                            GenericKind::Value(pattern) => {
+                                let map: Vec<_> = generics
+                                    .iter()
+                                    .zip(&found)
+                                    .map(|(generic, arg)| {
+                                        (generic.at, arg.as_ref().unwrap_or(&unknown))
+                                    })
+                                    .collect();
+                                let substituted = substitute_within(pattern, &map);
+                                whole(&substituted).then_some(substituted)
+                            }
+                            _ => None,
+                        };
+                        let place = format!("the generic parameter `{}`", generic.name);
+                        let value = self.resolve_deferred_value(
                             *at,
-                            format!(
-                                "`{}` is a generic value parameter, and this is no \
-                                 compile-time constant: {why}",
-                                generic.name
-                            ),
-                            "GEN-8",
-                        ));
+                            &constant.value,
+                            expected.as_ref(),
+                            Some(&place),
+                        );
+                        found[position] = Some(Argument::Constant(Constant {
+                            text: constant.text.clone(),
+                            value,
+                        }));
+                    } else {
+                        // GEN-8: "The value a call gives a generic value
+                        // parameter is a compile-time constant ... Any other
+                        // rejects." What it comes to has been read with the
+                        // types (`read`); one not valued is read again here
+                        // for what it is.
+                        if let Argument::Constant(Constant {
+                            value: ConstantValue::Unevaluated,
+                            ..
+                        }) = argument
+                            && let Some(node) = self.node_at(*at)
+                            && let Some(why) = Self::not_constant(&self.read_constant(&node, None))
+                        {
+                            self.diagnostics.emit(error(
+                                Category::Type,
+                                codes::GENERIC_ARGUMENT_CONSTANT,
+                                *at,
+                                format!(
+                                    "`{}` is a generic value parameter, and this is no \
+                                     compile-time constant: {why}",
+                                    generic.name
+                                ),
+                                "GEN-8",
+                            ));
+                        }
+                        found[position] = Some(match argument {
+                            Argument::Type(ty) => {
+                                let ty = self.resolve_deferred_in_type(*at, ty);
+                                Argument::Type(self.project_pack_pass_type(&ty, *at))
+                            }
+                            Argument::Constant(_) | Argument::NoResult => argument.clone(),
+                        });
                     }
-                    found[position] = Some(match argument {
-                        Argument::Type(ty) => Argument::Type(self.project_pack_pass_type(ty, *at)),
-                        Argument::Constant(_) | Argument::NoResult => argument.clone(),
-                    });
                     None
                 }
             };
@@ -1283,12 +1321,10 @@ impl<'a> Typer<'a> {
         for (index, default) in defaults.iter().enumerate() {
             if found[index].is_none()
                 && let Some(default) = default
-                && let Some(value) = defaulted_value(default.value.clone(), index, &own, &found)
+                && let Some(argument) =
+                    defaulted_argument(self.program, default.clone(), index, &own, &found)
             {
-                found[index] = Some(Argument::Constant(Constant {
-                    text: default.text.clone(),
-                    value,
-                }));
+                found[index] = Some(argument);
                 defaulted.push(index);
             }
         }
@@ -1399,7 +1435,7 @@ impl<'a> Typer<'a> {
                         self.pack_member_fault(self.at(node), &missing);
                         Type::Unknown
                     });
-                    placed(ty, &own)
+                    placed(self.program.resolve_instance_type(ty), &own)
                 };
                 let written_type = written_pack
                     .filter(|(generic, _)| slots[index].type_pack == Some(*generic))
@@ -2270,49 +2306,37 @@ pub(super) fn placed(ty: Type, own: &[Location]) -> Type {
     }
 }
 
-/// True when `ty` names one of the generic parameters declared at
-/// `own`: as a type, or as a value in a size or a constant argument.
-pub(super) fn mentions(ty: &Type, own: &[Location]) -> bool {
-    names_one_of(ty, own) || names_value_of(ty, own)
-}
-
-/// True when a size or a constant argument inside `ty` names a generic
-/// value parameter declared at one of `own`: the `N` of `list<i64, N>`,
-/// of `list<i64, N + 1>`, of `Box<[N]>`.
-fn names_value_of(ty: &Type, own: &[Location]) -> bool {
-    ty.any_part(&|_| false, &|constant| constant.value.names_one_of(own))
-}
-
-/// The default `value` of the generic value parameter at `index`, of a
+/// The default argument for the generic value parameter at `index`, of a
 /// declaration whose generic parameters are declared at `own`, with what
 /// a call has `found` for the others in place. A default that names a
 /// parameter before its own, `<const N: i64 = 1, const M: i64 = N>`, is
 /// of what the call gives that one. `None` for one that names its own,
 /// or one the call leaves unresolved, which gives it no value: GEN-8, "A
 /// call rejects when it leaves a generic parameter unresolved".
-fn defaulted_value(
-    value: ConstantValue,
+pub(super) fn defaulted_argument(
+    program: &crate::Program,
+    mut constant: Constant,
     index: usize,
     own: &[Location],
     found: &[Option<Argument>],
-) -> Option<ConstantValue> {
-    // What the call gives the parameter declared at `at`: none for the
-    // one whose default this is.
-    let given = |at: Location| -> Option<ConstantValue> {
-        let other = own.iter().position(|own| *own == at)?;
-        match found.get(other)? {
-            Some(Argument::Constant(given)) if other != index => Some(given.value.clone()),
-            _ => None,
-        }
-    };
-    // The default is asked of what it names before what the call gives
-    // is put in its place: a call in the function's own body may give
-    // `N` its own `N`, `rec<N>(v)`, which is then no default left
-    // unresolved.
-    let unresolved: Vec<Location> = own
+) -> Option<Argument> {
+    // Check the original references first. A recursive or forwarded call
+    // can legitimately bind a parameter to a symbolic argument of its caller.
+    let unavailable: Vec<_> = own
         .iter()
-        .copied()
-        .filter(|at| given(*at).is_none())
+        .enumerate()
+        .filter_map(|(i, at)| {
+            (i == index || found.get(i).is_none_or(Option::is_none)).then_some(*at)
+        })
         .collect();
-    (!value.names_one_of(&unresolved)).then(|| value.substituted(&given))
+    if constant.value.names_one_of(&unavailable) {
+        return None;
+    }
+    let map: Vec<_> = own
+        .iter()
+        .zip(found)
+        .filter_map(|(&at, given)| Some((at, given.as_ref()?)))
+        .collect();
+    constant.value = program.specialize_constant(&constant.value, &map);
+    Some(Argument::Constant(constant))
 }

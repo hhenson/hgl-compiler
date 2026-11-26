@@ -9,7 +9,6 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use super::Typer;
 use super::fit::{nullable, open};
 use super::inference::{fixed, placed};
-use crate::declared::substitute_within;
 use crate::hir::{self, Expr, ExprKind};
 use crate::program::Program;
 use crate::syntax::{child, ungrouped};
@@ -99,7 +98,7 @@ impl Program {
                     read.members
                         .iter()
                         .map(|member| {
-                            let ty = placed(substitute_within(&member.ty, &map), &own);
+                            let ty = placed(self.specialize_type(&member.ty, &map), &own);
                             // A field whose type is not known has a
                             // delta that is not known either.
                             let delta = if open(&ty) {
@@ -176,11 +175,11 @@ impl<'a> Typer<'a> {
         };
         // The delta is recorded where the constructor starts.
         let written = self.written_type_at(node.span().start);
-        let properties = match written {
+        let properties = match written.as_deref() {
             Some(Type::Delta(of)) => self.program.delta_properties(of),
             _ => None,
         };
-        if let Some(ty) = written
+        if let Some(ty) = written.as_deref()
             && !matches!(ty, Type::Delta(_))
             && !open(ty)
         {
@@ -191,7 +190,7 @@ impl<'a> Typer<'a> {
         let (Some(ty), Some(properties)) = (written, properties) else {
             return self.unread_call(&list);
         };
-        let ty = ty.clone();
+        let ty = ty.into_owned();
         let mut given = vec![false; properties.len()];
         let mut arguments = Vec::new();
         // Each property given, with its value as written and its type,

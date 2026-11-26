@@ -213,3 +213,234 @@ test inherited_named_query_defaults {
     assert named_inspect{tag: type(true)}(named_callback) == "bool"
     assert named_inspect{tag: type(1)}(other_callback) == "i64"
 }
+
+# TYPE-18, GEN-13: late Type-valued generic arguments (locals, same-module
+# calls/constructors, module constants) and Type-valued generic structs.
+struct LocalQuote { value: i64 }
+struct Tagged<const Kind: Type> { value: i64 }
+struct WrappedTagged<const Kind: Type> { inner: Tagged<Kind> }
+const fn one_i64() -> i64 => 1
+const TAG_FROM_FN: Type = type(one_i64())
+const TAG_FROM_STRUCT: Type = type(LocalQuote(value: 1))
+const fn pick_kind<const Kind: Type>() -> Type => Kind
+const fn wrap_kind<T>(x: T) -> Type => pick_kind<type(x)>()
+const fn wrap_tagged<T>(x: T) -> i64 {
+    let t = Tagged<type(x)>(value: 19)
+    return t.value
+}
+const fn tagged_from_fn() -> Tagged<type(one_i64())> => Tagged<type(one_i64())>(value: 11)
+# TYPE-18: preserve the overload-dependent query until each concrete call.
+operator inspect_tag<A, R>(value: A) -> R
+impl const fn inspect_tag(value: bool) -> i64 => 1 // 0
+impl const fn inspect_tag(value: str) -> str => value
+const fn nested_query<T>(x: T) -> Type requires T in {bool, str} =>
+    pick_kind<type(inspect_tag(x))>()
+test late_type_generic_arguments {
+    assert nested_query(true) == type(1)
+    assert nested_query("s") == type("")
+    let x = 1
+    let local: i64 = 2
+    var unassigned: i64
+    assert pick_kind<type(x)>() == type(1)
+    assert pick_kind<type(local)>() == type(1)
+    assert pick_kind<type(unassigned)>() == type(1)
+    assert pick_kind<type(one_i64())>() == type(1)
+    assert pick_kind<type(LocalQuote(value: 1))>() == TAG_FROM_STRUCT
+    assert pick_kind<TAG_FROM_FN>() == type(1)
+    assert pick_kind(Kind: type(x)) == type(1)
+    assert wrap_kind(x) == type(1)
+    assert wrap_kind(1.0) == type(1.0)
+    assert wrap_tagged(x) == 19
+    assert wrap_tagged(1.0) == 19
+    let first: Tagged<type(1)> = Tagged<type(x)>(value: 7)
+    let second: Tagged<type(one_i64())> = tagged_from_fn()
+    let missing: Tagged<type(x)>? = null
+    let wrapped = WrappedTagged<type(x)>(inner: first)
+    assert first.value == 7
+    assert second.value == 11
+    assert missing == null
+    assert wrapped.inner.value == 7
+    assert type(first) == type(second)
+    assert type(first) != type(Tagged<type(1.0)>(value: 7))
+    assert convert<str>(type(first)) == "Tagged<i64>"
+    unassigned = 5
+    assert unassigned == 5
+}
+
+# TYPE-18, GEN-13: a type query in a field depends on the concrete struct
+# arguments. A containing layout forwards the same identity to that field.
+const fn empty_items<T>() -> list<T> => []
+struct TaggedFrame<T> {
+    item: T
+    tag: Tagged<type(empty_items<T>())>
+}
+struct TaggedEnvelope<T> { frame: TaggedFrame<T> }
+const fn enclose<T>(item: T) -> TaggedEnvelope<T> =>
+    TaggedEnvelope<T>(frame: TaggedFrame<T>(item: item, tag: Tagged<type(empty_items<T>())>(value: 12)))
+test reflected_field_layout {
+    let direct = TaggedFrame<i64>(item: 5, tag: Tagged<type(empty_items<i64>())>(value: 3))
+    let nested = enclose("ok")
+    assert direct.tag.value == 3
+    assert nested.frame.item == "ok"
+    assert nested.frame.tag.value == 12
+    assert type(direct.tag) != type(nested.frame.tag)
+}
+
+# GEN-7, TYPE-18: each concrete input selects the result used in the
+# field, parent and callable signatures. The selected body stays cold.
+operator label_kind<A, R>(value: A) -> R
+impl const fn label_kind(value: list<i64>) -> bool {
+    assert false
+    return true
+}
+impl const fn label_kind(value: list<str>) -> str {
+    assert false
+    return "label"
+}
+abstract struct Labelled<T> requires T in {i64, str} {
+    item: T
+    label: Tagged<type(label_kind(empty_items<T>()))>
+}
+struct LabelledItem<T> : Labelled<T> {}
+const fn make_label<T>(item: T, n: i64) -> Tagged<type(label_kind(empty_items<T>()))>
+    requires T in {i64, str} => Tagged<type(label_kind(empty_items<T>()))>(value: n)
+const fn read_label<T>(item: T, label: Tagged<type(label_kind(empty_items<T>()))>) -> i64
+    requires T in {i64, str} => label.value
+test instance_selected_field_layout {
+    let number = LabelledItem<i64>(item: 4, label: make_label(4, 11))
+    let text = LabelledItem<str>(item: "a", label: make_label("a", 13))
+    let parent: Labelled<i64> = number
+    assert read_label(4, parent.label) == 11
+    assert read_label("a", text.label) == 13
+    assert type(parent.label) == type(Tagged<type(true)>(value: 0))
+    assert type(text.label) == type(Tagged<type("")>(value: 0))
+}
+# expect-error(type, "type.mismatch")
+const fn crossed_labels() -> i64 => read_label("a", make_label(4, 11))
+
+# The open application admits a generic candidate. A more specific
+# candidate supplies the layout identity when the argument becomes str.
+struct RankedLabel<T> {
+    item: T
+    label: Tagged<type(cold_sample(cold_make<T>()))>
+}
+test specific_candidate_field_layout {
+    let base = RankedLabel<i64>(item: 1, label: Tagged<type(cold_sample(cold_make<i64>()))>(value: 3))
+    let specific = RankedLabel<str>(item: "a", label: Tagged<type((true, false))>(value: 5))
+    assert base.label.value == 3
+    assert specific.label.value == 5
+    assert type(base.label) != type(specific.label)
+}
+
+# GEN-8, TYPE-18: an omitted Type argument is evaluated with the generic
+# arguments inferred from the call, including through a generic caller.
+const fn default_kind<T, const Kind: Type = type(cold_sample(cold_make<T>()))>(x: T) -> Type => Kind
+const fn reordered_default<const Kind: Type = type(cold_sample(cold_make<T>())), T>(x: T) -> Type => Kind
+const fn forwarded_default<T>(x: T) -> Type => default_kind(x)
+const fn default_kinds<T, const Ks: list<Type> = [type(cold_make<T>()), type(cold_sample(cold_make<T>()))]>(x: T) -> list<Type> => Ks
+const fn default_group<const N: i64 = 3, const Group: tuple<list<Type>, i64> = ([type(cold_make<T>()), type(cold_sample(cold_make<T>()))], N + 1), T>(x: T) -> tuple<list<Type>, i64> => Group
+const fn forward_group<T>(x: T) -> tuple<list<Type>, i64> => default_group(x)
+operator candidate_kinds<T>(x: T) -> list<Type>
+impl const fn candidate_kinds<T, const Ks: list<Type> = [type(cold_sample(cold_make<T>()))]>(x: T) -> list<Type> => Ks
+struct DefaultLabel<T, const Kind: Type = type(cold_sample(cold_make<T>()))> {
+    item: T
+    label: Tagged<Kind>?
+}
+test default_selected_in_instance {
+    assert format("{}", default_kind(3)) == "list<str, 2>"
+    assert default_kind("text") == type((true, false))
+    assert default_kind<str, type(1)>("text") == type(1)
+    assert forwarded_default("text") == type((true, false))
+    assert reordered_default("text") == type((true, false))
+    assert default_kinds(1) == [type(cold_make<i64>()), type(cold_sample(cold_make<i64>()))]
+    assert default_kinds<str, [type(1)]>("text") == [type(1)]
+    assert forward_group("text") == ([type(cold_make<str>()), type((true, false))], 4)
+    assert candidate_kinds("text") == [type((true, false))]
+    let selected = DefaultLabel(item: "text")
+    assert type(selected) == type(DefaultLabel<str, type((true, false))>(item: "text"))
+    assert type(selected) != type(DefaultLabel<str, type(1)>(item: "text"))
+}
+
+# GEN-2/8, TYPE-18: the bare type uses each preceding default when reading
+# the next cold query, in a formal, a field or a local annotation.
+struct Counted<const N: i64> { n: i64 }
+struct DefaultFrame<const N: i64 = 2, const Kind: Type = type(Counted<N>(n: 0)),
+                    const Marker: Type = type(Tagged<Kind>(value: 0))> { n: i64 }
+struct DefaultEnvelope { frame: DefaultFrame }
+const fn frame_kind(f: DefaultFrame) -> Type => type(f)
+test bare_dependent_type_defaults {
+    let exact = DefaultFrame<2, type(Counted<2>(n: 0)), type(Tagged<type(Counted<2>(n: 0))>(value: 0))>(n: 7)
+    let bare: DefaultFrame = exact
+    assert frame_kind(exact) == type(bare)
+    assert type(DefaultEnvelope(frame: exact).frame) == type(bare)
+}
+# expect-error(type, "type.mismatch")
+const fn wrong_default_frame(f: DefaultFrame<2, type(Counted<3>(n: 0)), type(true)>) -> Type => frame_kind(f)
+
+# TYPE-3, TYPE-18: a generic parent supplies its selected Type to the
+# grandparent. Both concrete children convert directly to their own base.
+abstract struct LabelBase<const Kind: Type> { tag: Tagged<Kind> }
+abstract struct LabelFamily<T> : LabelBase<type(label_kind(empty_items<T>()))>
+    requires T in {i64, str} {}
+struct NumberLabel : LabelFamily<i64> {}
+struct TextLabel : LabelFamily<str> {}
+const fn bool_label_id(label: LabelBase<type(true)>) -> i64 => label.tag.value
+const fn str_label_id(label: LabelBase<type("")>) -> i64 => label.tag.value
+test instance_selected_grandparent {
+    let number = NumberLabel(tag: Tagged<type(true)>(value: 12))
+    let text = TextLabel(tag: Tagged<type("")>(value: 37))
+    assert type(number.tag) != type(text.tag)
+    assert bool_label_id(number) == 12
+    assert str_label_id(text) == 37
+}
+# expect-error(type, "type.mismatch")
+const fn crossed_label_base(label: TextLabel) -> i64 => bool_label_id(label)
+
+# FN-14, GEN-2, TYPE-18: these applications occur only in a specialized
+# callback body. The enclosing functions expose neither concrete layout.
+struct CallbackLabel<T> {
+    item: T
+    tag: Tagged<type(cold_sample(cold_make<T>()))>
+}
+const fn call_once<T>(op: const fn(T) -> i64, item: T) -> i64 => op(item)
+const fn callback_label<T>(item: T) -> i64 => call_once(fn(value: T) => {
+    let local = CallbackLabel<T>(item: value, tag: Tagged<type(cold_sample(cold_make<T>()))>(value: 17))
+    local.tag.value
+}, item)
+test layout_in_callback_only {
+    assert callback_label(2) == 17
+    assert callback_label("text") == 17
+}
+
+# UNIT-8, TYPE-18: only an omitted argument uses the selected default. Its
+# generic producer must be instantiated even when no ordinary body calls it.
+const BASE_LABEL: Type = type(cold_sample(cold_make<i64>()))
+struct DefaultSource<T> {
+    item: T?
+    label: Tagged<type(cold_sample(cold_make<T>()))>
+}
+const fn make_default_source<T>() -> DefaultSource<T> =>
+    DefaultSource<T>(label: Tagged<type(cold_sample(cold_make<T>()))>(value: 17))
+const fn default_label<T>(x: T, label: Tagged<BASE_LABEL> = make_default_source<T>().label) -> i64 =>
+    label.value
+const fn forwarded_label<T>(x: T) -> i64 => default_label(x)
+const fn dependent_place<T>(x: T, label: Tagged<type(cold_sample(cold_make<T>()))> = Tagged<BASE_LABEL>(value: 19)) -> i64 =>
+    label.value
+test ordinary_default_field_fit {
+    assert forwarded_label(2) == 17
+    assert default_label("s", Tagged<BASE_LABEL>(value: 23)) == 23
+    assert dependent_place(2) == 19
+    assert dependent_place("s", Tagged<type((true, false))>(value: 29)) == 29
+}
+
+# GEN-6, UNIT-8, TYPE-18: each candidate inherits the public default
+# in the operator's scope. Its helper is instantiated only if that call
+# omits the configuration argument.
+operator configured_label<T>{label: Tagged<type(cold_sample(cold_make<T>()))> = make_default_source<T>().label}(item: T) -> i64
+impl const fn configured_label{label: Tagged<BASE_LABEL>}(item: i64) -> i64 => label.value
+impl const fn configured_label{label: Tagged<type((true, false))>}(item: str) -> i64 => label.value
+test inherited_type_dependent_default {
+    assert configured_label(1) == 17
+    assert configured_label("x") == 17
+    assert configured_label{label: Tagged<type((true, false))>(value: 29)}("x") == 29
+}

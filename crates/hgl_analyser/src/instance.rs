@@ -68,6 +68,7 @@ pub struct InstanceInputs<'a> {
 /// The enclosing declaration and the arguments common to its body and
 /// any anonymous bodies written inside it.
 struct InstanceArguments<'a> {
+    program: &'a Program,
     declaration: (usize, usize),
     generics: &'a [Argument],
     types: &'a Map<'a>,
@@ -87,7 +88,8 @@ impl InstanceArguments<'_> {
             &|part| matches!(part, Type::Parameter { .. } | Type::PackMember { .. }),
             &|constant| constant.value.key().is_none(),
         ) {
-            self.packs.project(ty, self.types).unwrap_or(Type::Unknown)
+            self.program
+                .resolve_instance_type(self.packs.project(ty, self.types).unwrap_or(Type::Unknown))
         } else {
             // A reread can already supply a concrete type. Substitution's
             // growth bound applies only when there is something to place.
@@ -228,7 +230,7 @@ impl Program {
         let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
             return default.clone();
         };
-        let type_packs = if default.has_type_query() {
+        let type_packs = if default.needs_type_specialization() {
             type_packs
         } else {
             &[]
@@ -259,6 +261,7 @@ impl Program {
         };
         let packs = PackTypes::new(&signature.generics, type_packs);
         let instance = InstanceArguments {
+            program: self,
             declaration: operator,
             generics,
             types: &types,
@@ -273,7 +276,7 @@ impl Program {
         };
         // UNIT-7: a default has no formal parameters in scope. Run the
         // same membership-based selection here as in a specialized body.
-        let mut body = if default.has_type_query() && !generics.is_empty() {
+        let mut body = if default.needs_type_specialization() && !generics.is_empty() {
             crate::values::reread_parameter_default(
                 self,
                 operator,
@@ -419,7 +422,9 @@ impl Program {
             .zip(generics)
             .collect();
         let packs = PackTypes::new(&signature.generics, inputs.type_packs);
-        let project = |ty: &Type| packs.project(ty, &map).unwrap_or(Type::Unknown);
+        let project = |ty: &Type| {
+            self.resolve_instance_type(packs.project(ty, &map).unwrap_or(Type::Unknown))
+        };
         let mut taken = Signature {
             generics: Vec::new(),
             parameters: signature
@@ -440,6 +445,7 @@ impl Program {
             .pack_inputs
             .filter(|_| crate::values::has_forwarded_calls(&body));
         let arguments = InstanceArguments {
+            program: self,
             declaration: (module, declaration),
             generics,
             types: &map,
@@ -1122,7 +1128,15 @@ fn place_callee(
     };
     let place = |argument: &Argument| match argument {
         Argument::Type(ty) => Argument::Type(place_type(ty)),
-        Argument::Constant(_) => placed(argument, instance.types),
+        Argument::Constant(c) if matches!(c.value, ConstantValue::Parameter { .. }) => {
+            placed(argument, instance.types)
+        }
+        Argument::Constant(c) => Argument::Constant(Constant {
+            text: c.text.clone(),
+            value: instance
+                .program
+                .specialize_constant(&c.value, instance.types),
+        }),
         Argument::NoResult => Argument::NoResult,
     };
     if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } = callee {

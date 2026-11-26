@@ -1,6 +1,6 @@
 //! Writes struct declarations, templates, layouts and their C++ traits.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use hgl_analyser::{
     Argument as GenericArgument, ConstantValue, Detail, GenericKind, GenericParameter, NamedKind,
@@ -47,13 +47,13 @@ pub(crate) struct Layout {
 
 /// The C++ type of the application of the struct `(module, declaration)`
 /// to `arguments` (TYPE-3): its name, and the arguments of its template.
-/// `generic` is as `types::cpp_type_in` has it. `None` where an argument
+/// `queries` is as `types::cpp_type_in` has it. `None` where an argument
 /// is not written yet.
 pub(in crate::emit) fn struct_type(
     program: &Program,
     (module, declaration): (usize, usize),
     arguments: &[GenericArgument],
-    generic: bool,
+    queries: Option<&[ConstantValue]>,
 ) -> Option<String> {
     let name = names::declared_type(
         &program.modules[module].declarations[declaration],
@@ -62,7 +62,7 @@ pub(in crate::emit) fn struct_type(
     let namespace = module_namespace(&program.modules[module].path);
     Some(format!(
         "{namespace}::{name}{}",
-        template_arguments(program, (module, declaration), arguments, generic)?
+        template_arguments(program, (module, declaration), arguments, queries)?
     ))
 }
 
@@ -73,7 +73,7 @@ pub(super) fn struct_delta_type(
     program: &Program,
     (module, declaration): (usize, usize),
     arguments: &[GenericArgument],
-    generic: bool,
+    queries: Option<&[ConstantValue]>,
 ) -> Option<String> {
     let declared = &program.modules[module].declarations[declaration];
     if program
@@ -95,7 +95,7 @@ pub(super) fn struct_delta_type(
     let namespace = module_namespace(&program.modules[module].path);
     Some(format!(
         "{namespace}::d_::{name}{}",
-        template_arguments(program, (module, declaration), arguments, generic)?
+        template_arguments(program, (module, declaration), arguments, queries)?
     ))
 }
 
@@ -106,7 +106,7 @@ fn template_arguments(
     program: &Program,
     struct_of: (usize, usize),
     arguments: &[GenericArgument],
-    generic: bool,
+    queries: Option<&[ConstantValue]>,
 ) -> Option<String> {
     let Some(Detail::Struct(read)) = program.modules[struct_of.0].details.get(struct_of.1) else {
         return None;
@@ -128,14 +128,20 @@ fn template_arguments(
     let written: Option<Vec<String>> = arguments
         .iter()
         .map(|argument| match argument {
-            GenericArgument::Type(ty) => cpp_type_in(program, ty, generic),
+            GenericArgument::Type(ty) => cpp_type_in(program, ty, queries),
             GenericArgument::NoResult => None,
             GenericArgument::Constant(constant) => {
-                constant_argument(program, &constant.value, generic)
+                constant_argument(program, &constant.value, queries)
             }
         })
         .collect();
-    Some(format!("<{}>", written?.join(", ")))
+    let mut written = written?;
+    let bindings: Vec<_> = read.generics.iter().map(|p| p.at).zip(arguments).collect();
+    for reflected in layout_queries(program, struct_of) {
+        let applied = program.checked_layout_query(&reflected, &bindings);
+        written.push(type_tag(&applied, queries)?);
+    }
+    Some(format!("<{}>", written.join(", ")))
 }
 
 /// True where the C++ template of a generic struct, applied to the C++
@@ -276,12 +282,17 @@ fn template_keeps(
             }
         });
     }
+    let bindings: Vec<_> = generics
+        .iter()
+        .map(|generic| generic.at)
+        .zip(arguments)
+        .collect();
     nested.into_iter().all(|(of, given)| {
         let given: Vec<GenericArgument> = given
             .iter()
             .map(|argument| match argument {
                 GenericArgument::Type(ty) => {
-                    GenericArgument::Type(substituted(ty, generics, arguments))
+                    GenericArgument::Type(program.checked_layout_type(ty, &bindings))
                 }
                 GenericArgument::Constant(_) | GenericArgument::NoResult => argument.clone(),
             })
@@ -326,9 +337,13 @@ fn walk_types(ty: &Type, visit: &mut dyn FnMut(&Type)) {
 /// A constant generic argument of a struct (GEN-8) as a C++ template
 /// argument: an integer, a `bool`, an enum's member, an `f64` (C++ tells
 /// `-0.0` from `0.0` as a template argument, as TYPE-3 does an argument
-/// by its value, UNIT-13), or a generic value parameter of the struct
-/// being declared. `None` for any other.
-fn constant_argument(program: &Program, value: &ConstantValue, generic: bool) -> Option<String> {
+/// by its value, UNIT-13), a compiled `Type` identity (TYPE-18), or a
+/// generic value parameter of the struct being declared. `None` for any other.
+fn constant_argument(
+    program: &Program,
+    value: &ConstantValue,
+    queries: Option<&[ConstantValue]>,
+) -> Option<String> {
     match value {
         ConstantValue::Int(number) => Some(integer_literal(*number)),
         ConstantValue::Bool(flag) => Some(flag.to_string()),
@@ -341,9 +356,117 @@ fn constant_argument(program: &Program, value: &ConstantValue, generic: bool) ->
                 identifier(&member.name)
             ))
         }
-        ConstantValue::Parameter { name, .. } if generic => Some(names::template_parameter(name)),
+        ConstantValue::Type(_) | ConstantValue::InstanceTypeQuery { .. } => {
+            type_tag(value, queries)
+        }
+        ConstantValue::Parameter { name, .. } if queries.is_some() => {
+            Some(names::template_parameter(name))
+        }
         _ => None,
     }
+}
+
+/// TYPE-18: concrete applications use the analyser's canonical identity. A
+/// generic layout forwards that same tag as an extra C++ template argument.
+fn type_tag(value: &ConstantValue, queries: Option<&[ConstantValue]>) -> Option<String> {
+    if let ConstantValue::Type(ty) = value
+        && let Some(identity) = ty.identity()
+    {
+        return Some(format!(
+            "::{}::type_tag{{{}}}",
+            runtime::NAMESPACE,
+            names::string(&identity)
+        ));
+    }
+    let index = queries?
+        .iter()
+        .position(|query| query.same(value) == Some(true))?;
+    Some(query_parameter(index))
+}
+
+fn query_parameter(index: usize) -> String {
+    format!("hgl_query_{index}")
+}
+
+/// The reflected identities a struct's fields and parents need from its
+/// instantiator, expressed in the struct's own generic parameters. A field
+/// of another generic struct forwards the identities that layout requires.
+fn layout_queries(program: &Program, root: (usize, usize)) -> Vec<ConstantValue> {
+    type Decl = (usize, usize);
+    fn collect(
+        program: &Program,
+        decl: Decl,
+        memo: &mut HashMap<Decl, Vec<ConstantValue>>,
+    ) -> Vec<ConstantValue> {
+        if let Some(known) = memo.get(&decl) {
+            return known.clone();
+        }
+        let Some(Detail::Struct(read)) = program.modules[decl.0].details.get(decl.1) else {
+            return Vec::new();
+        };
+        if read.generics.is_empty() {
+            return Vec::new();
+        }
+        // Recursive stored layouts are diagnosed separately.
+        memo.insert(decl, Vec::new());
+        let mut queries = Vec::new();
+        let mut record = |query: ConstantValue| {
+            if query.key().is_none()
+                && !queries
+                    .iter()
+                    .any(|existing: &ConstantValue| existing.same(&query) == Some(true))
+            {
+                queries.push(query);
+            }
+        };
+        for ty in read
+            .members
+            .iter()
+            .map(|member| &member.ty)
+            .chain(&read.parents)
+        {
+            walk_types(ty, &mut |part| {
+                let Type::Named {
+                    module,
+                    declaration,
+                    arguments,
+                    kind: NamedKind::Struct,
+                    ..
+                } = part
+                else {
+                    return;
+                };
+                for argument in arguments {
+                    if let GenericArgument::Constant(constant) = argument
+                        && matches!(
+                            constant.value,
+                            ConstantValue::Type(_) | ConstantValue::InstanceTypeQuery { .. }
+                        )
+                    {
+                        record(constant.value.clone());
+                    }
+                }
+                let child = (*module, *declaration);
+                let nested = collect(program, child, memo);
+                if !nested.is_empty()
+                    && let Detail::Struct(target) = &program.modules[*module].details[*declaration]
+                {
+                    let map: Vec<_> = target
+                        .generics
+                        .iter()
+                        .map(|generic| generic.at)
+                        .zip(arguments)
+                        .collect();
+                    for query in nested {
+                        record(program.checked_layout_query(&query, &map));
+                    }
+                }
+            });
+        }
+        memo.insert(decl, queries.clone());
+        queries
+    }
+    collect(program, root, &mut HashMap::new())
 }
 
 /// The type of the property of a struct's delta for a field of type
@@ -429,91 +552,6 @@ fn collect_structs(ty: &Type, found: &mut Vec<(usize, usize)>) {
     }
 }
 
-/// `ty` with each generic parameter of `generics` replaced by the
-/// argument of the same place in `arguments` (GEN-2), a parameter being
-/// known by where it is declared.
-fn substituted(ty: &Type, generics: &[GenericParameter], arguments: &[GenericArgument]) -> Type {
-    let argument_of = |at: &Location| {
-        generics
-            .iter()
-            .position(|generic| generic.at == *at)
-            .and_then(|position| arguments.get(position))
-    };
-    let again = |inner: &Type| Box::new(substituted(inner, generics, arguments));
-    match ty {
-        Type::Parameter { at, .. } => match argument_of(at) {
-            Some(GenericArgument::Type(argument)) => argument.clone(),
-            _ => ty.clone(),
-        },
-        Type::Named {
-            name,
-            module,
-            declaration,
-            arguments: own,
-            kind,
-        } => Type::Named {
-            name: name.clone(),
-            module: *module,
-            declaration: *declaration,
-            arguments: own
-                .iter()
-                .map(|argument| match argument {
-                    GenericArgument::Type(argument) => {
-                        GenericArgument::Type(substituted(argument, generics, arguments))
-                    }
-                    GenericArgument::NoResult => argument.clone(),
-                    GenericArgument::Constant(constant) => match &constant.value {
-                        ConstantValue::Parameter { at, .. } => match argument_of(at) {
-                            Some(given @ GenericArgument::Constant(_)) => given.clone(),
-                            _ => argument.clone(),
-                        },
-                        _ => argument.clone(),
-                    },
-                })
-                .collect(),
-            kind: *kind,
-        },
-        // As the analyser substitutes (`declared::substitute`): TYPE-14,
-        // "A `T?` whose T is given a nullable type is that type"; an
-        // atomic and a delta formed again with what they now hold
-        // (TYPE-9, TYPE-16).
-        Type::Nullable(inner) => match substituted(inner, generics, arguments) {
-            inner @ Type::Nullable(_) => inner,
-            inner => Type::Nullable(Box::new(inner)),
-        },
-        Type::Set(inner) => Type::Set(again(inner)),
-        Type::Delta(inner) => Type::delta(substituted(inner, generics, arguments)),
-        Type::Atomic(inner) => Type::atomic(substituted(inner, generics, arguments)),
-        // A size that is a generic value parameter of `generics` is the
-        // constant its argument gives (GEN-13).
-        Type::List { element, size } => Type::List {
-            element: again(element),
-            size: size.as_ref().map(|size| match &size.value {
-                ConstantValue::Parameter { at, .. } => match argument_of(at) {
-                    Some(GenericArgument::Constant(given)) => given.clone(),
-                    _ => size.clone(),
-                },
-                _ => size.clone(),
-            }),
-        },
-        Type::Dict { key, value } => Type::Dict {
-            key: again(key),
-            value: again(value),
-        },
-        Type::Tuple(positions) => Type::Tuple(
-            positions
-                .iter()
-                .map(|position| substituted(position, generics, arguments))
-                .collect(),
-        ),
-        Type::Result { value, error } => Type::Result {
-            value: again(value),
-            error: again(error),
-        },
-        other => other.clone(),
-    }
-}
-
 /// The abstract structs the struct `(module, declaration)` inherits
 /// from, at any depth, each with the arguments the struct gives it, in
 /// its own generic parameters (TYPE-3: "through any number of parents,
@@ -541,8 +579,14 @@ fn ancestors(program: &Program, (module, declaration): (usize, usize)) -> Vec<Ty
             .details
             .get(*parent_declaration)
         {
+            let bindings: Vec<_> = above
+                .generics
+                .iter()
+                .map(|generic| generic.at)
+                .zip(arguments)
+                .collect();
             for grand in &above.parents {
-                next.push(substituted(grand, &above.generics, arguments));
+                next.push(program.checked_layout_type(grand, &bindings));
             }
         }
         found.push(parent);
@@ -557,6 +601,7 @@ fn ancestors(program: &Program, (module, declaration): (usize, usize)) -> Vec<Ty
 fn template_head(
     program: &Program,
     generics: &[GenericParameter],
+    queries: &[ConstantValue],
 ) -> Option<(String, Vec<String>)> {
     if generics.is_empty() {
         return Some((String::new(), Vec::new()));
@@ -568,8 +613,9 @@ fn template_head(
         let parameter = match &generic.kind {
             GenericKind::Plain | GenericKind::Type => format!("class {name}"),
             // A value written with no type is a size, or has its kind once
-            // resolved (GEN-13): the template takes it as it comes.
-            GenericKind::Value(Type::Unknown) => format!("auto {name}"),
+            // resolved (GEN-13): the template takes it as it comes. A `Type`
+            // parameter receives a structural `hglrt::type_tag<N>` (TYPE-18).
+            GenericKind::Value(Type::Unknown | Type::TypeValue) => format!("auto {name}"),
             GenericKind::Value(
                 ty @ Type::Scalar(
                     hgl_analyser::Scalar::I64
@@ -586,6 +632,11 @@ fn template_head(
             _ => return None,
         };
         parameters.push(parameter);
+        named.push(name);
+    }
+    for index in 0..queries.len() {
+        let name = query_parameter(index);
+        parameters.push(format!("auto {name}"));
         named.push(name);
     }
     Some((format!("template <{}>\n", parameters.join(", ")), named))
@@ -623,7 +674,8 @@ impl Emitter<'_> {
             self.unsupported(at, "a struct that holds itself");
             return;
         }
-        let Some((template, parameters)) = template_head(program, &read.generics) else {
+        let queries = layout_queries(program, (self.module, index));
+        let Some((template, parameters)) = template_head(program, &read.generics, &queries) else {
             self.unsupported(at, "a generic parameter of this kind of a struct");
             return;
         };
@@ -662,14 +714,14 @@ impl Emitter<'_> {
         let mut members: Vec<(String, String, String)> = Vec::new();
         let mut holds = BTreeSet::new();
         for member in &read.members {
-            let Some(ty) = cpp_type_in(program, &member.ty, true) else {
+            let Some(ty) = cpp_type_in(program, &member.ty, Some(&queries)) else {
                 self.unsupported(member.at, &format!("the type `{}`", member.ty));
                 return;
             };
             let property = if !has_delta {
                 Some(String::new())
             } else {
-                cpp_type_in(program, &property_type(&member.ty), true)
+                cpp_type_in(program, &property_type(&member.ty), Some(&queries))
             };
             let Some(property) = property else {
                 self.unsupported(member.at, &format!("the type `delta<{}>`", member.ty));
@@ -715,7 +767,7 @@ impl Emitter<'_> {
         let mut parents = Vec::new();
         for ancestor in &ancestors {
             self.note_types(ancestor);
-            let Some(written) = cpp_type_in(program, ancestor, true) else {
+            let Some(written) = cpp_type_in(program, ancestor, Some(&queries)) else {
                 self.unsupported(at, &format!("the type `{ancestor}`"));
                 return;
             };
@@ -807,7 +859,8 @@ impl Emitter<'_> {
                 &qualified,
                 &delta,
                 &specialized,
-                &parameters,
+                &parameters[..read.generics.len()],
+                &queries,
             ));
         }
         layout.traits = traits;

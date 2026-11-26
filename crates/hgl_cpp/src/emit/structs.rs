@@ -37,7 +37,7 @@
 
 use hgl_analyser::hir::{EndpointOperation, Expr, ExprKind, Hook, Stmt, Value};
 use hgl_analyser::{
-    Argument, DeclarationKind, Detail, GenericKind, NamedKind, Program, Scalar, Type,
+    Argument, ConstantValue, DeclarationKind, Detail, GenericKind, NamedKind, Program, Scalar, Type,
 };
 use hgl_lower::types::{fields_of, fixed_list_size, inherited};
 
@@ -687,6 +687,7 @@ impl Emitter<'_> {
         delta: &str,
         specialized: &str,
         parameters: &[String],
+        queries: &[ConstantValue],
     ) -> String {
         let program = self.program;
         let declared = &program.modules[self.module];
@@ -709,7 +710,7 @@ impl Emitter<'_> {
         let mut checked = Vec::new();
         for member in &read.members {
             let field = if generic {
-                cpp_type_in(program, &member.ty, true).map(|ty| schema_of(&ty))
+                cpp_type_in(program, &member.ty, Some(queries)).map(|ty| schema_of(&ty))
             } else {
                 bundle_field(program, &member.ty, 0, &mut checked)
             };

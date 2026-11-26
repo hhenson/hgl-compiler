@@ -136,24 +136,276 @@ const fn ordinary_struct(value: delta<atomic<Plain>>) {}
     );
 }
 
-/// GEN-8, TYPE-18: resolving the type of an inferred local as a generic
-/// value argument is deferred to #871; it rejects cleanly in this slice.
+/// GEN-8, GEN-13, TYPE-18: local bindings, same-module calls and constructors,
+/// written struct type applications, and module Type constants derived from
+/// them are accepted as Type-valued generic arguments without evaluating the
+/// operand or mutating local flow.
 #[test]
-fn a_local_type_as_a_generic_value_argument_is_reported() {
+fn late_type_queries_work_as_generic_value_arguments() {
+    let checked = check(&[
+        (
+            "defs.hgl",
+            r#"
+module defs
+export struct Quote { value: i64 }
+export const fn one() -> i64 => 1
+export const FROM_FN: Type = type(one())
+export const FROM_STRUCT: Type = type(Quote(value: 1))
+"#,
+        ),
+        (
+            "m.hgl",
+            r#"
+module m
+use defs::{FROM_FN, FROM_STRUCT}
+
+struct Quote { value: i64 }
+struct Tagged<const Kind: Type> { value: i64 }
+struct Defaulted<const Kind: Type = type(one())> { value: i64 }
+const INT_KIND: Type = type(1)
+struct OnlyInt<const Kind: Type>
+    requires Kind == INT_KIND
+{
+    value: i64
+}
+
+const fn one() -> i64 => 1
+const LOCAL_FROM_FN: Type = type(one())
+const LOCAL_FROM_STRUCT: Type = type(Quote(value: 1))
+const fn selected<const Kind: Type>() -> Type => Kind
+const fn wrap<T>(x: T) -> Type => selected<type(x)>()
+const fn returns_tagged() -> Tagged<type(one())> => Tagged<type(one())>(value: 7)
+const fn returns_defaulted() -> Defaulted => Defaulted(value: 9)
+const fn uses_imported() -> Tagged<FROM_FN> => Tagged<type(1)>(value: 3)
+
+test late_queries {
+    let x = 1
+    let local: i64 = 1
+    var unassigned: i64
+    let a = selected<type(x)>()
+    let b = selected<type(local)>()
+    let c = selected<type(unassigned)>()
+    let d = selected<type(one())>()
+    let e = selected<type(Quote(value: 1))>()
+    let f = selected<LOCAL_FROM_FN>()
+    let g = selected<LOCAL_FROM_STRUCT>()
+    let h = selected<FROM_FN>()
+    let i = selected<FROM_STRUCT>()
+    let j = selected(Kind: type(x))
+    let k: Tagged<type(x)> = Tagged<type(1)>(value: 7)
+    let l: Tagged<type(one())>? = null
+    let m = Tagged<type(x)>(value: 7)
+    let n: Tagged<type(local)> = m
+    let o = OnlyInt<type(x)>(value: 1)
+    let p = wrap(x)
+    let q = returns_tagged()
+    let r = returns_defaulted()
+    let s = uses_imported()
+    unassigned = 2
+    assert unassigned == 2
+}
+"#,
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        Vec::<String>::new(),
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-5, GEN-8, TYPE-18: an operator's default constrains the requested
+/// output with the descriptor selected by its ordinary input.
+#[test]
+fn an_aggregate_operator_default_selects_the_requested_result() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn rows<T>() -> list<T> => []
+struct Tag<const Ks: list<Type>> { n: i64 }
+operator labelled<T, const Ks: list<Type> = [type(rows<T>())]>(x: T) -> Tag<Ks>
+impl const fn labelled(x: i64) -> Tag<[type(rows<i64>())]> => Tag<[type(rows<i64>())]>(n: 1)
+impl const fn labelled(x: i64) -> Tag<[type(5)]> => Tag<[type(5)]>(n: 2)
+const fn read_label(t: Tag<[type(rows<i64>())]>) -> i64 => t.n
+operator inspect<T, const Ks: list<Type> = [type(rows<T>())]>(f: const fn(T) -> T) -> Tag<Ks>
+impl const fn inspect(f: const fn(i64) -> i64) -> Tag<[type(rows<i64>())]> => Tag<[type(rows<i64>())]>(n: 1)
+impl const fn inspect(f: const fn(i64) -> i64) -> Tag<[type(5)]> => Tag<[type(5)]>(n: 2)
+test selected {
+    let tag = labelled(1)
+    assert read_label(tag) == 1
+    let callback_tag = inspect(fn(x) => x)
+    assert read_label(callback_tag) == 1
+}
+"#,
+    )]);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
+/// GEN-2, GEN-8, TYPE-18: aggregate defaults can use only the type and
+/// value arguments the call resolves independently of that default.
+#[test]
+fn aggregate_query_defaults_require_their_generic_arguments() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn rows<T>() -> list<T> => []
+const fn missing_type<T, const Ks: list<Type> = [type(rows<T>())]>() -> bool => true
+const fn missing_value<T, const N: i64, const Ks: tuple<i64, Type> = (N, type(rows<T>()))>(x: T) -> bool => true
+struct Tag<const Ks: list<Type>> { n: i64 }
+operator tagged<T, const Ks: list<Type> = [type(rows<T>())]>(x: i64) -> Tag<Ks>
+impl const fn tagged(x: i64) -> Tag<[type(1)]> => Tag<[type(1)]>(n: 1)
+test t {
+    assert missing_type()
+    assert missing_value(1)
+    let tag = tagged(1)
+}
+"#,
+    )]);
+    let unresolved: Vec<_> = checked
+        .findings
+        .iter()
+        .filter(|finding| finding.code == "type/generic.unresolved" && finding.rule == "GEN-8")
+        .map(|finding| finding.message.as_str())
+        .collect();
+    assert_eq!(checked.findings.len(), 3, "{}", checked.report);
+    assert!(
+        unresolved.iter().any(|m| m.contains("`T`, `Ks`"))
+            && unresolved.iter().any(|m| m.contains("`N`, `Ks`"))
+            && unresolved
+                .iter()
+                .any(|m| m.contains("leaves `Ks` unresolved")),
+        "{}",
+        checked.report
+    );
+}
+
+/// TYPE-18, GEN-8: cold queries in a chain of written results have the
+/// operand's type once each declaration they refer to has its signature.
+#[test]
+fn declaration_query_dependencies_resolve_to_a_fixed_point() {
+    use std::fmt::Write;
+    let mut program = String::from(
+        "module m\nstruct Tagged<const K: Type> { n: i64 }\nconst fn base() -> str => \"x\"\n",
+    );
+    let mut previous = String::from("base");
+    for index in 0..24 {
+        let ty = format!("Tagged<type({previous}())>");
+        let name = format!("f{index}");
+        writeln!(program, "const fn {name}() -> {ty} => {ty}(n: {index})").unwrap();
+        previous = name;
+    }
+    let checked = check(&[("m.hgl", &program)]);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+
+    let cycle = check(&[(
+        "m.hgl",
+        r#"module m
+struct Token<const K: Type> { n: i64 }
+const fn a() -> Token<type(b())> => Token<type(b())>(n: 1)
+const fn b() -> Token<type(a())> => Token<type(a())>(n: 2)
+"#,
+    )]);
+    assert!(!cycle.findings.is_empty());
+}
+
+/// TYPE-18 and GEN-13: a field and its initializer agree when both describe
+/// the same symbolic type after substitution into the surrounding generic.
+#[test]
+fn symbolic_field_tag_agrees_with_constructor_argument() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+struct Token<const K: Type> { n: i64 }
+const fn empty<T>() -> list<T> => []
+struct Frame<T> {
+    element: T
+    token: Token<type(empty<T>())>
+}
+const fn make<T>(x: T) -> Frame<T> =>
+    Frame<T>(element: x, token: Token<type(empty<T>())>(n: 2))
+test concrete { assert make(1).token.n == 2 }
+"#,
+    )]);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
+/// TYPE-18, GEN-8: a bare result that depends on overload selection in
+/// a generic template must remain a Type through all three argument forms.
+#[test]
+fn reflected_generic_values_wait_for_the_concrete_callback_result() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+operator inspect<A, R>(value: A) -> R
+impl const fn inspect(value: bool) -> i64 => 1
+impl const fn inspect(value: str) -> str => value
+const fn selected<const K: Type>() -> Type => K
+const fn infer<T>(x: T) -> tuple<Type, Type, Type> requires T in {bool, str} =>
+    (selected<type(inspect(x))>(), selected<(type(inspect(x)))>(), selected(K: type(inspect(x))))
+test both {
+    assert infer(true) == (type(1), type(1), type(1))
+    assert infer("s") == (type("s"), type("s"), type("s"))
+}
+"#,
+    )]);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
+/// TYPE-18, GEN-13: distinct Type arguments on a generic struct remain
+/// distinct types, and struct `requires` clauses are enforced once deferred
+/// queries resolve.
+#[test]
+fn late_type_valued_struct_arguments_enforce_identity_and_requires() {
     let checked = check(&[(
         "m.hgl",
         r#"
 module m
-const fn selected<const Kind: Type>() -> Type => Kind
-test local_type {
+struct Tagged<const Kind: Type> { value: i64 }
+const INT_KIND: Type = type(1)
+struct OnlyInt<const Kind: Type>
+    requires Kind == INT_KIND
+{
+    value: i64
+}
+const fn one() -> i64 => 1
+const fn mismatch_and_requires() {
     let x = 1
-    let given = selected<type(x)>()
+    let y = 1.0
+    let wrong: Tagged<type(y)> = Tagged<type(x)>(value: 7)
+    let unmet = OnlyInt<type(y)>(value: 7)
+    let ok_val: Tagged<type(one())> = Tagged<type(x)>(value: 7)
+}
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 2, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/type.mismatch");
+    assert_eq!(checked.findings[1].code, "constraint/requires.unmet");
+}
+
+/// TYPE-18, EXPR-3: a cold `type(u)` generic argument never assigns or reads
+/// an unassigned local; a later ordinary read still rejects.
+#[test]
+fn late_type_query_generic_argument_preserves_unassigned_flow() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"
+module m
+struct Tagged<const Kind: Type> { value: i64 }
+const fn selected<const Kind: Type>() -> Type => Kind
+const fn still_unassigned() -> i64 {
+    var u: i64
+    let a = selected<type(u)>()
+    let b = Tagged<type({
+        u = 1
+        u
+    })>(value: 7)
+    return u
 }
 "#,
     )]);
     assert_eq!(checked.findings.len(), 1, "{}", checked.report);
-    assert_eq!(checked.findings[0].code, "type/generic.argument_constant");
-    assert!(checked.findings[0].message.contains("Kind"));
+    assert_eq!(checked.findings[0].code, "name/binding.unassigned");
 }
 
 /// TYPE-18 and GEN-2: Type is a builtin value type with no parameters.
@@ -256,22 +508,33 @@ fn kind() -> bool => type(temporal(1)) == type(1)
     assert!(found_payload);
 }
 
-/// TYPE-18 and GEN-8: the early query probe cannot turn an ill-typed
-/// tuple into a Type constant merely because its outer tuple type is known.
+/// TYPE-18 and GEN-8: ill-typed operands inside `type(...)` generic arguments
+/// preserve their operand diagnostics instead of collapsing into
+/// `generic.argument_constant`, in calls, structs, and signatures.
 #[test]
-fn an_ill_typed_early_query_is_not_a_type_constant() {
+fn ill_typed_generic_type_queries_preserve_operand_diagnostics() {
     let checked = check(&[(
         "m.hgl",
         r#"
 module m
+struct Tagged<const Kind: Type> { value: i64 }
 const fn selected<const K: Type>() -> Type => K
-const fn wrong_operand() -> Type => selected<type((1, 1 + true))>()
+const fn wrong_tuple() -> Type => selected<type((1, 1 + true))>()
+const fn wrong_call() -> Type => selected<type(1 + true)>()
+const fn wrong_named() -> Type => selected(K: type(1 + true))
+const fn wrong_struct() -> Tagged<type(1 + true)> => Tagged<type(1 + true)>(value: 7)
 test valid_tuple { let known = selected<type((1, true))>() }
 "#,
     )]);
-    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
-    assert_eq!(checked.findings[0].code, "type/generic.argument_constant");
-    assert!(checked.findings[0].message.contains("`K`"));
+    assert_eq!(checked.findings.len(), 5, "{}", checked.report);
+    assert!(
+        checked
+            .findings
+            .iter()
+            .all(|finding| finding.code == "operator/operator.no_candidate"),
+        "{}",
+        checked.report
+    );
 }
 
 /// TYPE-16/18: constructor scans preserve the same original delta operand;
@@ -1235,4 +1498,378 @@ fn indexed_storage_reports_a_bound_instead_of_silently_dropping_a_dependency() {
         "{}",
         rejected.report
     );
+}
+
+/// GEN-7 and TYPE-18: overload selection can determine a Type argument in
+/// a generic declaration after its caller supplies the type arguments.
+#[test]
+fn generic_signature_and_fields_use_the_selected_operand_type() {
+    let declarations = r#"
+module m
+struct Tag<const K: Type> { n: i64 }
+const fn values<T>() -> list<T> => []
+operator probe<I, O>(input: I) -> O
+impl const fn probe(input: list<i64>) -> bool => true
+impl const fn probe(input: list<str>) -> str => ""
+abstract struct Parent<T> requires T in {i64, str} {
+    value: T
+    tag: Tag<type(probe(values<T>()))>
+}
+struct Child<T> : Parent<T> {}
+const fn make<T>(x: T) -> Tag<(type(probe(values<T>())))> requires T in {i64, str} =>
+    Tag<type(probe(values<T>()))>(n: 7)
+const fn take<T>(x: T, tag: Tag<type(probe(values<T>()))>) -> i64
+    requires T in {i64, str} => tag.n
+"#;
+    let source = format!(
+        "{declarations}
+test identities {{
+    let a: Tag<type(true)> = make(3)
+    let b: Tag<type(\"\")> = make(\"s\")
+    let child = Child<i64>(value: 4, tag: a)
+    assert take(3, child.tag) + take(\"s\", b) == 14
+}}"
+    );
+    let good = check(&[("m.hgl", &source)]);
+    assert!(good.findings.is_empty(), "{}", good.report);
+    let source = source.replace("take(3, child.tag)", "take(3, b)");
+    let bad = check(&[("m.hgl", &source)]);
+    assert_eq!(bad.findings.len(), 1, "{}", bad.report);
+    assert_eq!(bad.findings[0].code, "type/type.mismatch");
+}
+
+/// A declaration cycle that happens to pass a generic argument cannot supply
+/// a Type identity. Only an operator waiting for selection is deferred.
+#[test]
+fn generic_declaration_cycles_are_not_deferred_to_a_making_call() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"
+module m
+struct Tag<const K: Type> { value: i64 }
+const fn cyclic<T>() -> Tag<type(cyclic<T>())> =>
+    Tag<type(cyclic<T>())>(value: 2)
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/generic.argument_constant");
+}
+
+/// TYPE-18, GEN-2: a generic body can inherit a deferred fit through a
+/// field without writing type(...) itself. Decide each fit at its making call.
+#[test]
+fn field_tag_fits_are_checked_at_concrete_calls() {
+    let definitions = r#"module m
+const INTEGER: Type = type(1)
+const fn values<T>() -> list<T> => []
+operator select<A,R>(value: A) -> R
+impl const fn select<A>(value: A) -> i64 => 1
+impl const fn select(value: list<str>) -> bool => true
+struct Stamp<const Kind: Type> { id: i64 }
+struct Frame<T> { item: T
+    tag: Stamp<type(select(values<T>()))> }
+const fn read(stamp: Stamp<INTEGER>) -> i64 => stamp.id
+const fn returned<T>(f: Frame<T>) -> Stamp<INTEGER> => f.tag
+const fn assigned<T>(f: Frame<T>) -> i64 {
+    var stamp: Stamp<INTEGER> = Stamp<INTEGER>(id: 0)
+    stamp = f.tag
+    return stamp.id
+}
+const fn passed<T>(f: Frame<T>) -> i64 => read(f.tag)
+const fn forwarded<T>(f: Frame<T>) -> i64 => returned(f).id
+"#;
+    for (item, tag, valid) in [("2", "1", true), (r#""s""#, "true", false)] {
+        let source = format!(
+            "{definitions}
+test fits {{
+    let f = Frame(item: {item}, tag: Stamp<type({tag})>(id: 17))
+    assert returned(f).id == 17
+    assert assigned(f) == 17
+    assert passed(f) == 17
+    assert forwarded(f) == 17
+}}
+"
+        );
+        let checked = check(&[("m.hgl", &source)]);
+        if valid {
+            assert_eq!(
+                checked.summary(),
+                Vec::<String>::new(),
+                "{}",
+                checked.report
+            );
+        } else {
+            assert_eq!(checked.findings.len(), 4, "{}", checked.report);
+            assert!(
+                checked
+                    .findings
+                    .iter()
+                    .all(|d| d.code == "type/type.mismatch"),
+                "{}",
+                checked.report
+            );
+        }
+    }
+}
+
+/// UNIT-8, TYPE-18: when a generic call omits a parameter, either the
+/// supplied default or its receiving type can depend on a selected field tag.
+#[test]
+fn omitted_defaults_fit_the_concrete_field_identity_on_both_sides() {
+    let definitions = r#"module m
+const INTEGER: Type = type(1)
+const fn rows<T>() -> list<T> => []
+operator pick<A,R>(value: A) -> R
+impl const fn pick<A>(value: A) -> i64 => 1
+impl const fn pick(value: list<str>) -> bool => true
+struct Stamp<const Kind: Type> { id: i64 }
+struct Frame<T> { item: T?
+    tag: Stamp<type(pick(rows<T>()))> }
+const fn make<T>() -> Frame<T> => Frame<T>(tag: Stamp<type(pick(rows<T>()))>(id: 17))
+const fn read<T>(x: T, v: Stamp<INTEGER> = make<T>().tag) -> i64 => v.id
+const fn place<T>(x: T, v: Stamp<type(pick(rows<T>()))> = Stamp<INTEGER>(id: 17)) -> i64 => v.id
+const fn forward<T>(x: T) -> i64 => read(x)
+const fn fixed(stamp: Stamp<INTEGER>) -> i64 => stamp.id
+const fn invoke(f: const fn(i64) -> i64) -> i64 => f(1)
+const fn nested<T>(x: T, v: i64 = invoke(fn(n: i64) => fixed(make<T>().tag))) -> i64 => v
+"#;
+    for (call, valid) in [
+        ("forward(2)", true),
+        (r#"forward("s")"#, false),
+        ("nested(2)", true),
+        (r#"nested("s")"#, false),
+        (r#"nested("s", 17)"#, true),
+        ("place(2)", true),
+        (r#"place("s")"#, false),
+        (r#"read("s", Stamp<INTEGER>(id: 17))"#, true),
+        (r#"place("s", Stamp<type(true)>(id: 17))"#, true),
+        (r#"read("s", make<str>().tag)"#, false),
+    ] {
+        let source = format!("{definitions}\ntest use_it {{ assert {call} == 17 }}\n");
+        let checked = check(&[("m.hgl", &source)]);
+        if valid {
+            assert_eq!(
+                checked.summary(),
+                Vec::<String>::new(),
+                "{call}\n{}",
+                checked.report
+            );
+        } else {
+            assert_eq!(checked.findings.len(), 1, "{call}\n{}", checked.report);
+            assert_eq!(checked.findings[0].code, "type/type.mismatch");
+        }
+    }
+}
+
+/// GEN-6, UNIT-8, TYPE-18: copying the operator's default to an
+/// implementation does not turn its generic helper into a concrete root.
+#[test]
+fn inherited_defaults_follow_only_the_selected_operator_call() {
+    let definitions = r#"module m
+const INTEGER: Type = type(1)
+const fn rows<T>() -> list<T> => []
+operator pick<A,R>(value: A) -> R
+impl const fn pick<A>(value: A) -> i64 => 1
+impl const fn pick(value: list<str>) -> bool => true
+struct Stamp<const Kind: Type> { id: i64 }
+struct Frame<T> { item: T?
+    tag: Stamp<type(pick(rows<T>()))> }
+const fn make<T>() -> Frame<T> => Frame<T>(tag: Stamp<type(pick(rows<T>()))>(id: 17))
+operator configured<T>{v: Stamp<INTEGER> = make<T>().tag}(x: T) -> i64
+impl const fn configured{v: Stamp<INTEGER>}(x: i64) -> i64 => v.id
+impl const fn configured{v: Stamp<INTEGER>}(x: str) -> i64 => v.id
+"#;
+    for (call, valid) in [
+        ("17", true),
+        ("configured(1)", true),
+        (r#"configured{v: Stamp<INTEGER>(id: 17)}("s")"#, true),
+        (r#"configured("s")"#, false),
+    ] {
+        let source = format!("{definitions}\ntest use_it {{ assert {call} == 17 }}\n");
+        let checked = check(&[("m.hgl", &source)]);
+        if valid {
+            assert_eq!(
+                checked.summary(),
+                Vec::<String>::new(),
+                "{call}\n{}",
+                checked.report
+            );
+        } else {
+            assert_eq!(checked.findings.len(), 1, "{call}\n{}", checked.report);
+            assert_eq!(checked.findings[0].code, "type/type.mismatch");
+        }
+    }
+}
+
+/// GEN-3, TYPE-18: concrete outer arguments reach requirements on nested
+/// struct fields and parents, including tags determined by a cold overload.
+#[test]
+fn nested_requirements_receive_the_concrete_type_value() {
+    let library = r#"module library
+export const INTEGER: Type = type(1)
+export const PAIR: tuple<Type, Type> = (INTEGER, type(true))
+export const fn rows<T>() -> list<T> => []
+export operator select<A,R>(value: A) -> R
+impl const fn select<A>(value: A) -> i64 => 1
+impl const fn select(value: list<str>) -> bool => true
+export abstract struct Base<const K: Type> requires K == INTEGER { id: i64? }
+export struct Only<const K: Type> requires K == INTEGER { id: i64? }
+export struct Pair<const K: tuple<Type, Type>> requires K == PAIR { id: i64? }
+"#;
+    for (declaration, required) in [
+        (
+            "struct Outer<T> { item:T?\n nested:lib::Only<type(lib::rows<T>()[0])>? }",
+            "Only",
+        ),
+        (
+            "struct Outer<T> : lib::Base<type(lib::select(lib::rows<T>()))> { item:T? }",
+            "Base",
+        ),
+        (
+            "struct Relay<const K:Type> { nested:lib::Only<K>? }\nstruct Outer<T> { item:T?\n nested:Relay<type(lib::select(lib::rows<T>()))>? }",
+            "Only",
+        ),
+        (
+            "struct Outer<T> { item:T?\n nested:lib::Pair<(type(lib::select(lib::rows<T>())), type(true))>? }",
+            "Pair",
+        ),
+    ] {
+        for (argument, valid) in [("i64", true), ("str", false)] {
+            let source = format!(
+                "module m\nuse library as lib\n{declaration}\ntest make {{ let x = Outer<{argument}>() }}\n"
+            );
+            let checked = check(&[("library.hgl", library), ("m.hgl", &source)]);
+            if valid {
+                assert_eq!(
+                    checked.summary(),
+                    Vec::<String>::new(),
+                    "{}",
+                    checked.report
+                );
+            } else {
+                assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+                assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+                assert!(
+                    checked
+                        .report
+                        .contains(&format!("the `requires` of `{required}`")),
+                    "{}",
+                    checked.report
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn requirements_follow_constants_inside_a_nominal_type_descriptor() {
+    let definitions = r#"module m
+struct Tagged<const Pair: tuple<Type, i64>> { n: i64 }
+const WANTED: Type = type(Tagged<(type(1), 5)>(n: 0))
+const fn rows<T>() -> list<T> => []
+operator select<A, R>(value: A) -> R
+impl const fn select<A>(value: A) -> i64 => 1
+impl const fn select(value: list<str>) -> bool => true
+struct Only<const Key: Type> requires Key == WANTED { n: i64? }
+struct Route<T, const N: i64> {
+    anchor: T?
+    nested: Only<type(Tagged<(type(select(rows<T>())), N*2+1)>(n: 0))>?
+}
+"#;
+    for (arguments, valid) in [("i64, 2", true), ("str, 2", false), ("i64, 3", false)] {
+        let source = format!("{definitions}test make {{ let x = Route<{arguments}>() }}\n");
+        let checked = check(&[("m.hgl", &source)]);
+        if valid {
+            assert!(checked.findings.is_empty(), "{}", checked.report);
+        } else {
+            assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+            assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+            assert!(checked.report.contains("the `requires` of `Only`"));
+        }
+    }
+}
+
+#[test]
+fn a_body_checks_descriptor_requirements_with_its_selected_cold_result() {
+    let definitions = r#"module m
+struct Tag<const N: i64> { n: i64 }
+struct Stamp<const K: Type> { n: i64 }
+operator read<A, R>(value: A) -> R
+impl const fn read<A>(value: A) -> i64 => 1
+impl const fn read(value: Tag<7>) -> bool => true
+struct Row<T> { v: T
+ size: i64 }
+const fn keep<A,B>(x:A,y:B)->A=>x
+const fn fixed<A>(value: A) -> i64 => 1
+operator always_int<A>(value:A) -> i64
+impl const fn always_int<A>(value:A) -> i64 => 1
+impl const fn always_int(value:Tag<7>) -> i64 => 7
+const REQUIRED: Type = type(Stamp<type(true)>(n: 0))
+struct Only<const K: Type> requires K == REQUIRED { n: i64? }
+const fn place<const N: i64>(arg: Tag<N>) -> i64 {
+    let alias = arg
+    let checked = Only<type(Stamp<type(read(alias))>(n: 0))>()
+    return 1
+}
+"#;
+    for (operand, initializer) in [
+        ("read(alias)", "let alias = arg"),
+        (
+            "alias",
+            "let selected = read(arg)\n    let alias = selected",
+        ),
+        (
+            "alias[0]",
+            "let selected = read(arg)\n    let alias = (selected, 17)",
+        ),
+        (
+            "alias.v",
+            "let selected = read(arg)\n    let alias = Row(v:selected, size:17)",
+        ),
+        (
+            "alias",
+            "let selected = read(arg)\n    let alias = keep(selected,17)",
+        ),
+    ] {
+        let definitions = definitions
+            .replace("let alias = arg", initializer)
+            .replace("type(read(alias))", &format!("type({operand})"));
+        for (call, valid) in [
+            ("", true),
+            ("test fits { assert place<7>(Tag<7>(n: 9)) == 1 }", true),
+            ("test fails { assert place<3>(Tag<3>(n: 9)) == 1 }", false),
+        ] {
+            let source = format!("{definitions}{call}\n");
+            let checked = check(&[("m.hgl", &source)]);
+            if valid {
+                assert!(checked.findings.is_empty(), "{}", checked.report);
+            } else {
+                assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+                assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+                assert!(
+                    checked
+                        .report
+                        .contains("this call makes the instance `place<3>`")
+                );
+            }
+        }
+    }
+    // These results have a fixed i64 type, even in a declaration with no callers.
+    for initializer in [
+        "let selected = read(arg)\n    let alias = (selected,17)[1]",
+        "let selected = read(arg)\n    let alias = Row(v:selected,size:17).size",
+        "let selected = read(arg)\n    let alias = keep(17,selected)",
+        "let selected = read(arg)\n    let alias = [(selected,17)][0][1]",
+        "let alias = always_int(arg)",
+        "let selected = read(arg)\n    let items = [(selected,17,2),(17,selected,2)]\n    let alias = items[0][2]",
+        "let selected = read(arg)\n    let alias = fixed(selected)",
+        "let selected = read(arg)\n    let alias = { let ignored = selected\n 1 }",
+    ] {
+        let source = definitions
+            .replace("let alias = arg", initializer)
+            .replace("type(read(alias))", "type(alias)");
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+        assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+    }
 }

@@ -8,13 +8,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
-use hgl_parser::HasSpan;
 
 use super::constants::parameter_default_type;
 use super::fit::{open, whole};
 use super::requirements::{IndependentSourceBodies, Made, concrete_default_calls};
 use super::{Tables, Typer, lifting};
-use crate::declared::{names_parameter, substitute_within};
+use crate::declared::names_parameter;
 use crate::hir::{self, Body, Callee, ConfigurationRead, Expr, ExprKind, Value};
 use crate::program::{Module, Program};
 use crate::types::{Argument, Detail, Parameter, Type};
@@ -49,13 +48,9 @@ pub(super) fn check(
             constant.value.walk(&mut visit);
         }
         for (defaults, declaration) in module.defaults.iter().zip(&module.declarations) {
-            let span = declaration.syntax.span();
             for default in defaults.iter().flatten() {
                 // Check inherited defaults at their original declarations.
-                if default.value.at.file == declaration.at.file
-                    && span.start <= default.value.at.span.start
-                    && default.value.at.span.end <= span.end
-                {
+                if declaration.declares_default(default) {
                     default.value.walk(&mut visit);
                 }
             }
@@ -277,7 +272,7 @@ fn check_declared_defaults(
         {
             continue;
         }
-        let ty = substitute_within(&parameter.ty, &map);
+        let ty = program.specialize_type(&parameter.ty, &map);
         if names_parameter(&ty) || !whole(&ty) {
             continue;
         }
@@ -348,7 +343,7 @@ fn check_inherited_defaults(
             continue;
         }
         let parameter = &candidate.parameters[slot];
-        let ty = substitute_within(&parameter.ty, &map);
+        let ty = program.specialize_type(&parameter.ty, &map);
         let concrete = Parameter {
             ty,
             ..parameter.clone()
@@ -371,7 +366,15 @@ impl Defaults {
         (default, parameter): (&hir::DefaultExpr, &Parameter),
         diagnostics: &mut Diagnostics,
     ) {
-        let type_packs = if default.has_type_query() {
+        let type_packs = if default.needs_type_specialization() {
+            // A generic caller can forward its own parameters here. Its
+            // concrete call will visit this default with the chosen types.
+            if !generics
+                .iter()
+                .all(super::requirements::resolved_default_argument)
+            {
+                return;
+            }
             type_packs
         } else {
             &[]
@@ -417,7 +420,10 @@ impl Defaults {
 /// An omitted default can depend on generic arguments through its type
 /// or through a value read by the expression.
 fn dependent_default(parameter: &Parameter, default: &hir::DefaultExpr) -> bool {
-    names_parameter(&parameter.ty) || reads_generic_value(default) || default.has_type_query()
+    names_parameter(&parameter.ty)
+        || crate::constant::type_has_instance_query(&parameter.ty)
+        || reads_generic_value(default)
+        || default.needs_type_specialization()
 }
 
 fn reads_generic_value(default: &hir::DefaultExpr) -> bool {

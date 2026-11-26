@@ -102,6 +102,8 @@ mod store_keys;
 mod syntax;
 mod test_candidates;
 pub use test_candidates::TestCandidateScope;
+mod layout_queries;
+pub use layout_queries::LayoutApplications;
 mod type_values;
 pub use type_values::TypeStorageLimit;
 mod types;

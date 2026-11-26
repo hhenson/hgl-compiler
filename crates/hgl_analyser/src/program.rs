@@ -10,7 +10,7 @@ use hgl_parser::ast::{AstNode, SourceFile};
 use hgl_parser::{HasSpan, SyntaxNode};
 use hgl_source::FileId;
 
-use crate::declared::{names_one_of, substitute_within};
+use crate::declared::names_one_of;
 use crate::hir::{Body, DefaultExpr, Run};
 use crate::types::{
     Argument, CallArguments, DeltaInput, Detail, GenericKind, NamedKind, Type, WrittenType,
@@ -19,6 +19,12 @@ use crate::types::{
 /// Every module found in the files analysed, in order of module path.
 #[derive(Debug, Clone, Default)]
 pub struct Program {
+    /// A declaration contains an overload-dependent static type query (TYPE-18).
+    pub(crate) has_dependent_type_queries: bool,
+    /// Generic bodies whose fit accepted an unresolved TYPE-18 identity.
+    pub(crate) deferred_type_fits: HashSet<(usize, usize)>,
+    /// Checked TYPE-18 identities needed by reached struct applications.
+    pub(crate) layout_queries: crate::layout_queries::LayoutQueries,
     /// Storage dependencies after declared struct fields resolve (TYPE-18).
     /// Later passes fill bodies, leaving this immutable summary reusable.
     pub(crate) type_value_storage: std::sync::OnceLock<crate::type_values::TypeStorage>,
@@ -160,7 +166,7 @@ impl Program {
             read.members
                 .iter()
                 .map(|member| {
-                    let ty = substitute_within(&member.ty, &map);
+                    let ty = self.checked_layout_type(&member.ty, &map);
                     if names_one_of(&ty, &own) {
                         Type::Unknown
                     } else {
@@ -587,6 +593,14 @@ pub struct Declaration {
 }
 
 impl Declaration {
+    /// An implementation inherits the public operator's configuration defaults
+    /// (GEN-6). Only their defining declaration owns the open generic calls.
+    pub fn declares_default(&self, default: &DefaultExpr) -> bool {
+        let at = default.value.at;
+        let span = self.syntax.span();
+        at.file == self.at.file && span.start <= at.span.start && at.span.end <= span.end
+    }
+
     /// True when another module may import the declaration (UNIT-3).
     pub fn is_public(&self) -> bool {
         self.exported

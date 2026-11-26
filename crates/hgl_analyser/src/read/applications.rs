@@ -847,6 +847,12 @@ impl Reader<'_> {
         }
         let value = read.and_then(|read| crate::constant::fit(read, expected, self.program));
         let value = match value {
+            // TYPE-18, GEN-8: a constant depending on `type(e)` cannot be
+            // judged until declaration signatures, struct fields and body
+            // locals are available. Defer it without losing operand errors.
+            Ok(value) if crate::constant::has_deferred_type_query(&value) => {
+                ConstantValue::DeferredTypeQuery(self.at(node.span()))
+            }
             // GEN-8: a generic value argument is "a compile-time
             // constant ... Any other rejects." One whose value this pass
             // does not work out cannot be told from another, and is
@@ -950,6 +956,9 @@ impl Reader<'_> {
             // What is wrong with a default is reported where it is
             // written (`signatures`), and says nothing more (ERR-9).
             let value = match read {
+                Ok(value) if crate::constant::has_deferred_type_query(&value) => {
+                    ConstantValue::DeferredDefaultQuery(Location::new(file, default.span()))
+                }
                 Ok(value) => value,
                 Err(Fault::NotConstant) => ConstantValue::Unevaluated,
                 Err(_) => ConstantValue::Unknown,
