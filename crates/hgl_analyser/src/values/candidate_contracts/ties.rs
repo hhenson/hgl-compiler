@@ -16,7 +16,7 @@ use crate::values::candidates::{Given, Wanted};
 use crate::values::fit::{open, whole};
 use crate::values::operators::from_place;
 use crate::values::{Candidate, Tables, Typer, tables};
-use crate::{codes, warning};
+use crate::{TestCandidateScope, codes, warning};
 
 /// Look for a concrete call that leaves multiple candidates equally preferred.
 pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics, tests: bool) {
@@ -77,6 +77,8 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics, tests: boo
                 })
                 .collect();
             if visible.len() >= 2 {
+                let test_scope = scope
+                    .and_then(|module| TestCandidateScope::of(program, &program.modules[module]));
                 witness_ties(
                     program,
                     OperatorRef {
@@ -85,6 +87,7 @@ pub(super) fn check(program: &Program, diagnostics: &mut Diagnostics, tests: boo
                     },
                     public,
                     &visible,
+                    test_scope,
                     &mut ties,
                 );
             }
@@ -128,6 +131,7 @@ fn witness_ties<'a>(
     operator: OperatorRef,
     public: &Signature,
     visible: &[Candidate<'a>],
+    test_scope: Option<TestCandidateScope>,
     ties: &mut Ties,
 ) {
     let module = &program.modules[operator.module];
@@ -155,6 +159,9 @@ fn witness_ties<'a>(
         tables,
         &mut trial_diagnostics,
     );
+    // TST-1: requirements can call other operators with test-only
+    // candidates. They must see the same view as the call being tried.
+    typer.test_candidates = test_scope;
     let declared_role = |(module, candidate, _): Candidate<'_>| {
         program.modules[module].declarations[candidate].kind.role()
     };

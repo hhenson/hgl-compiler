@@ -129,3 +129,51 @@ fn value_and_temporal_candidates_do_not_warn_for_equal_inputs() {
     ));
     assert!(checked.findings.is_empty(), "{}", checked.report);
 }
+
+/// TST-1 and GEN-6: a declaration witness sees the module's test
+/// candidates both for the operator it checks and through requirements.
+#[test]
+fn declaration_witnesses_resolve_requirements_in_the_test_view() {
+    let declarations = concat!(
+        "operator choose<A, B>(a: A, b: B) -> i64\n",
+        "operator helper<X>(x: X) -> i64\n",
+    );
+    let crossed = concat!(
+        "impl const fn choose<T>(a: i64, b: T) -> i64 => 1\n",
+        "impl const fn choose<T>(a: T, b: i64) -> i64 => 2\n",
+    );
+    let concrete = "impl const fn choose(a: i64, b: i64) -> i64 requires helper(i64) -> i64 => 3\n";
+    let checked = module(&format!(
+        "{declarations}test local {{\n\
+         impl const fn helper(x: i64) -> i64 => 99\n\
+         {crossed}{concrete}assert choose(1, 1) == 3\n}}\n"
+    ));
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+
+    let checked = module(&format!(
+        "{declarations}test local {{\n\
+         impl const fn helper(x: str) -> i64 => 99\n\
+         {crossed}{concrete}assert choose(1, 1) == 1\n}}\n"
+    ));
+    assert_ambiguous(&checked);
+
+    let guarded = crossed.replace("-> i64 =>", "-> i64 requires helper(T) -> i64 =>");
+    let checked = module(&format!(
+        "{declarations}test local {{\n\
+         impl const fn helper(x: i64) -> i64 => 99\n\
+         {guarded}assert choose(1, 1) == 1\n}}\n"
+    ));
+    assert_ambiguous(&checked);
+}
+
+fn assert_ambiguous(checked: &Checked) {
+    assert_eq!(warnings(checked).len(), 2, "{}", checked.report);
+    assert!(
+        checked
+            .findings
+            .iter()
+            .any(|finding| finding.code == "operator/operator.ambiguous"),
+        "{}",
+        checked.report
+    );
+}
