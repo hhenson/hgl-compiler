@@ -3202,6 +3202,12 @@ fn concrete_generic_structs_use_applied_bundle_schemas() {
     assert!(types.contains(
         "::hglrt::nominal_struct_name<\"Mixed\", ::hglrt::type_arg_slot, ::hglrt::value_arg<N_p_>>"
     ));
+    assert!(
+        types.contains("::hglrt::nominal_struct_name<\"InferredSized\", ::hglrt::value_arg<N_p_>>")
+    );
+    assert!(types.contains(
+        "::hglrt::nominal_struct_name<\"InferredRow\", ::hglrt::type_arg_slot, ::hglrt::value_arg<N_p_>>"
+    ));
 }
 
 /// Structs, sets, dictionaries and deltas as values (TYPE-3 to TYPE-6,

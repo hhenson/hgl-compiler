@@ -181,3 +181,39 @@ test piecewise_and_collection_value_argument_structs {
         delta<list<Bucket<1>, 2>>(updated: [0: delta<Bucket<1>>(value: 8)]),
     ]
 }
+
+# GEN-13, TYPE-3, TYPE-9: inferred fixed list-size value parameters (value-only
+# and mixed type/value) compile and run identically to explicit `const N: i64`,
+# including forwarding a typed `const M: i64` parameter into an inferred size.
+struct InferredSized<N> { items: list<i64, N> }
+struct InferredRow<T, N> { items: list<T, N> }
+struct ForwardedRow<const M: i64> { row: InferredRow<i64, M> }
+
+fn same_inferred_sized_2(value: InferredSized<2>) -> InferredSized<2> => value
+fn same_inferred_sized_3(value: InferredSized<3>) -> InferredSized<3> => value
+fn same_inferred_row_2(value: InferredRow<i64, 2>) -> InferredRow<i64, 2> => value
+fn same_inferred_row_3(value: InferredRow<i64, 3>) -> InferredRow<i64, 3> => value
+fn unwrap_forwarded_row(value: ForwardedRow<2>) -> InferredRow<i64, 2> => value.row
+
+test inferred_list_size_generic_structs {
+    assert eval same_inferred_sized_2(value: [
+        1s: InferredSized<2>(items: [19, 31]),
+        2s: delta<InferredSized<2>>(items: delta<list<i64, 2>>(updated: [0: 23])),
+    ]) == [
+        1s: InferredSized<2>(items: [19, 31]),
+        2s: delta<InferredSized<2>>(items: delta<list<i64, 2>>(updated: [0: 23])),
+    ]
+    assert eval same_inferred_sized_3(value: [1s: InferredSized<3>(items: [1, 2, 3])]) ==
+        [1s: InferredSized<3>(items: [1, 2, 3])]
+    assert eval same_inferred_row_2(value: [
+        1s: InferredRow<i64, 2>(items: [19, 31]),
+        2s: delta<InferredRow<i64, 2>>(items: delta<list<i64, 2>>(updated: [1: 37])),
+    ]) == [
+        1s: InferredRow<i64, 2>(items: [19, 31]),
+        2s: delta<InferredRow<i64, 2>>(items: delta<list<i64, 2>>(updated: [1: 37])),
+    ]
+    assert eval same_inferred_row_3(value: [1s: InferredRow<i64, 3>(items: [4, 5, 6])]) ==
+        [1s: InferredRow<i64, 3>(items: [4, 5, 6])]
+    assert eval unwrap_forwarded_row(value: [1s: ForwardedRow<2>(row: InferredRow<i64, 2>(items: [11, 13]))]) ==
+        [1s: InferredRow<i64, 2>(items: [11, 13])]
+}

@@ -4184,9 +4184,64 @@ fn concrete_generic_struct_traces_run_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 8 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 9 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
+}
+
+/// A failing trace comparison of concrete generic structs with inferred fixed
+/// list sizes (value-only and mixed) and Boolean value parameters compiles and
+/// renders their generic arguments accurately (GEN-13, TYPE-3, TYPE-9, CEVAL-4).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn generic_inferred_size_and_bool_trace_failure_displays_arguments() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("generic-inferred-size-display");
+    let file = write(
+        &root,
+        "src/demo.inferred-size-display.hgl",
+        concat!(
+            "module demo.inferred_size_display\n",
+            "struct Sized<N> { items: list<i64, N> }\n",
+            "struct Row<T, N> { items: list<T, N> }\n",
+            "struct Flagged<const B: bool> { value: i64 }\n",
+            "fn copy_sized(p: Sized<2>) -> Sized<2> => p\n",
+            "fn copy_row(p: Row<i64, 2>) -> Row<i64, 2> => p\n",
+            "fn copy_true(p: Flagged<true>) -> Flagged<true> => p\n",
+            "fn copy_false(p: Flagged<false>) -> Flagged<false> => p\n",
+            "test sized_mismatch {\n",
+            "    assert eval copy_sized(p: [1s: Sized<2>(items: [19, 31])]) == [1s: Sized<2>(items: [19, 32])]\n",
+            "}\n",
+            "test row_mismatch {\n",
+            "    assert eval copy_row(p: [1s: Row<i64, 2>(items: [19, 31])]) == [1s: Row<i64, 2>(items: [19, 32])]\n",
+            "}\n",
+            "test bool_true_mismatch {\n",
+            "    assert eval copy_true(p: [1s: Flagged<true>(value: 1)]) == [1s: Flagged<true>(value: 2)]\n",
+            "}\n",
+            "test bool_false_mismatch {\n",
+            "    assert eval copy_false(p: [1s: Flagged<false>(value: 1)]) == [1s: Flagged<false>(value: 2)]\n",
+            "}\n",
+        ),
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    for expected in [
+        "demo.inferred_size_display::Sized<2>(items: [19, 31])",
+        "demo.inferred_size_display::Row<i64, 2>(items: [19, 31])",
+        "demo.inferred_size_display::Flagged<true>(value: 1)",
+        "demo.inferred_size_display::Flagged<false>(value: 1)",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "missing `{expected}` in:\n{stdout}"
+        );
+    }
+    assert!(!stdout.contains("Flagged<1>"), "{stdout}");
+    assert!(!stdout.contains("Flagged<0>"), "{stdout}");
 }
 
 /// A failing trace comparison of a concrete generic struct parameterized by a

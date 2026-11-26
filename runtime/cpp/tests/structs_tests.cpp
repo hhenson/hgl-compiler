@@ -617,6 +617,18 @@ TEST_CASE("nominal_struct_name distinguishes generic value arguments and builds 
     using MixedInt2 = hgraph::NominalBundle<
         "test", hglrt::nominal_struct_name<"Mixed", hglrt::type_arg_slot, hglrt::value_arg<i64{2}>>, false,
         hgraph::BundleParents<>, hgraph::BundleArguments<i64>, hgraph::Field<"value", i64>>;
+    using InferredInt2 = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Sized", hglrt::value_arg<2>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using InferredInt3 = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Sized", hglrt::value_arg<3>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<>, hgraph::Field<"value", i64>>;
+    using InferredMixedInt2 = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Row", hglrt::type_arg_slot, hglrt::value_arg<2>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<i64>, hgraph::Field<"value", i64>>;
+    using InferredMixedInt3 = hgraph::NominalBundle<
+        "test", hglrt::nominal_struct_name<"Row", hglrt::type_arg_slot, hglrt::value_arg<3>>, false,
+        hgraph::BundleParents<>, hgraph::BundleArguments<i64>, hgraph::Field<"value", i64>>;
 
     CHECK(hgraph::value_schema_descriptor<IntOne>::value_meta() !=
           hgraph::value_schema_descriptor<IntTwo>::value_meta());
@@ -640,9 +652,21 @@ TEST_CASE("nominal_struct_name distinguishes generic value arguments and builds 
           hgraph::value_schema_descriptor<MixedStr1>::value_meta());
     CHECK(hgraph::value_schema_descriptor<MixedInt1>::value_meta() !=
           hgraph::value_schema_descriptor<MixedInt2>::value_meta());
+    CHECK(hgraph::value_schema_descriptor<InferredInt2>::value_meta() !=
+          hgraph::value_schema_descriptor<InferredInt3>::value_meta());
+    CHECK(hgraph::value_schema_descriptor<InferredMixedInt2>::value_meta() !=
+          hgraph::value_schema_descriptor<InferredMixedInt3>::value_meta());
+    CHECK(hglrt::nominal_struct_name<"Sized", hglrt::value_arg<2>>.sv() ==
+          hglrt::nominal_struct_name<"Sized", hglrt::value_arg<i64{2}>>.sv());
+    CHECK(hglrt::nominal_struct_name<"Flagged", hglrt::value_arg<true>>.sv() !=
+          hglrt::nominal_struct_name<"Flagged", hglrt::value_arg<1>>.sv());
     CHECK(hglrt::applied_struct_name<hglrt::type_arg<i64>, hglrt::value_arg<i64{2}>>("test::Mixed") ==
           "test::Mixed<i64, 2>");
+    CHECK(hglrt::applied_struct_name<hglrt::value_arg<2>>("test::Sized") == "test::Sized<2>");
+    CHECK(hglrt::applied_struct_name<hglrt::value_arg<std::size_t{3}>>("test::Sized") == "test::Sized<3>");
+    CHECK(hglrt::applied_struct_name<hglrt::type_arg<i64>, hglrt::value_arg<2>>("test::Row") == "test::Row<i64, 2>");
     CHECK(hglrt::applied_struct_name<hglrt::value_arg<true>>("test::Flagged") == "test::Flagged<true>");
+    CHECK(hglrt::applied_struct_name<hglrt::value_arg<false>>("test::Flagged") == "test::Flagged<false>");
     CHECK(hglrt::applied_struct_name<hglrt::value_arg<hglrt::type_tag{"i64"}>>("test::Tagged") ==
           "test::Tagged<i64>");
     CHECK(hglrt::applied_struct_name<hglrt::value_arg<hglrt::type_tag{"declaration(1,0)<>", "Descriptor"}>>(

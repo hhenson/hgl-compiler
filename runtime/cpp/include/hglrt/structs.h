@@ -851,6 +851,10 @@ std::string display_generic_arg_tag(value_arg<V>) {
     using T = std::remove_cvref_t<decltype(V)>;
     if constexpr (is_type_tag<T>::value) {
         return std::string{V.spelling, sizeof(V.spelling) - 1};
+    } else if constexpr (std::same_as<T, bool>) {
+        return text_of(V);
+    } else if constexpr (std::integral<T>) {
+        return text_of(static_cast<i64>(V));
     } else {
         return text_of(V);
     }
