@@ -134,22 +134,25 @@ impl Typer<'_> {
         self.check_capability_captures(function);
         let mut mark = self.mark();
         let first_local = mark.locals;
-        let immediate_values = direct_arguments.map(|arguments| {
-            let mut known = self
-                .anonymous
-                .as_ref()
-                .and_then(|outer| outer.immediate_values.clone())
-                .unwrap_or_default();
-            for argument in arguments {
-                if let Some(parameter) = argument.parameter
-                    && let Some(value) = ImmediateValues::new(self.program, &self.instance, &known)
-                        .read(&argument.value)
-                {
-                    known.push((first_local + parameter, Rc::new(value)));
+        let immediate_values = direct_arguments
+            .filter(|_| self.graph && !self.type_query)
+            .map(|arguments| {
+                let mut known = self
+                    .anonymous
+                    .as_ref()
+                    .and_then(|outer| outer.immediate_values.clone())
+                    .unwrap_or_default();
+                for argument in arguments {
+                    if let Some(parameter) = argument.parameter
+                        && let Some(value) =
+                            ImmediateValues::new(self.program, &self.instance, &known)
+                                .read(&argument.value)
+                    {
+                        known.push((first_local + parameter, Rc::new(value)));
+                    }
                 }
-            }
-            known
-        });
+                known
+            });
         let outer = self.anonymous.replace(Anonymous {
             result: result.cloned(),
             infer_result,
