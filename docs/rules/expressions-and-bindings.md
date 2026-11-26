@@ -18,15 +18,18 @@ analyser: partial
 
 - In a value function, a hook and a graph, the arguments of a value function's call, positional before named, and of a struct's construction, all named; duplicate, unknown, missing, surplus and mistyped arguments rejected
 - A named operator call, and a symbol's configuration, may name an option its candidates declare
-- Left: what a pack holds; a generic function's parameter types
+- Binds, indexes and spreads homogeneous and reflected packs. Ordinary generic
+  calls use their fitted parameter types. FN-17 and GEN-7 record remaining callback
+  and forwarded type-evidence limits.
 
 transpiler: partial
 
 - Materializes arguments that can change state or fail in written order, before filling
   omitted defaults. Applies this to calls, constructors, lifted operands and entry
   calls.
-- Left: Field defaults with statements and defaults that propagate a failure remain unsupported (UNIT-8, TYPE-5).
-  Calls with no resolved target or argument slot have defensive reports.
+- Emits statement-block field defaults for concrete and specialized structs
+  (UNIT-8, TYPE-5). In the emitted forms an omitted field default can propagate
+  a failure. Calls with no resolved target or argument slot have defensive reports.
 
 ## EXPR-3
 
@@ -36,7 +39,8 @@ analyser: partial
 - In a graph a local is a connection or an ordinary value by its first value
 - A `var` of a graph declared with no value takes the category of its first assignment
 - In a value function, a hook and a source an assignment names a place inside a value, `point.x = 1`, `row[0] += 1`, `book["a"] = 1`: the root is a `var`, a `state`, a `cache` or `out`, a `let`, a parameter and an iteration binding are read-only all the way down (`binding.immutable`), the value is of the place's type, and a compound assignment reads the place first
-- Left: an annotation checked against the category of its value
+- A graph local's annotation checks its type. A typed binding keeps its
+  initializer's value or connection category.
 
 optimiser: done
 
@@ -57,7 +61,10 @@ analyser: partial
 
 - In a graph each value is a connection or an ordinary value: a temporal parameter and the result of a temporal or lifted call are connections
 - A reassignment across the two is rejected (`binding.category`, with CTRL-14)
-- Left: reassigning a graph `var` rewires
+
+C++ rebinding is recorded under CTRL-14. A whole connection reassignment
+rewires subsequent reads, and earlier aliases keep their original connection.
+A supported temporal branch selects the replacement or the previous connection.
 
 ## EXPR-5
 
@@ -67,7 +74,10 @@ analyser: partial
 - A graph instance rechecks newly known values against established field, tuple, list, set and dictionary entry types (GEN-7).
 - A graph instance refits an assigned list literal's known entries against the element type established by the inferred variable's initializer (EXPR-3, GEN-7).
 - What is read again to learn its place's type is counted for each statement, so a statement is judged the same whatever comes before it; one that needs more than its bound, 10,000 and 16 for each node of its syntax, is local `reading.limit`, and is not accepted
-- Left: const expression restrictions
+- A written generic value argument that is a live connection rejects with
+  `generic.argument_constant` (GEN-8).
+- Left: A required-constant call to a `const fn` can pass checking without its
+  failure being reported (UNIT-13, ERR-9).
 
 ## EXPR-6
 
@@ -77,7 +87,8 @@ analyser: partial
 - Composition selects core's Boolean operators, with unparenthesized chains selecting `all_` or `any_` over their operands. A graph instance selects after any deferred operands settle (FN-6, GEN-7, OPS-5).
 - Boolean category probes defer nested scalar-flow retries to the real read, so 24 nested guards can each read the binding they refine without exponential rereading. Scalar subtrees retain their own short-circuit facts inside a temporal outer form (ERR-12, FN-6).
 - A compile-time constant short-circuits (`constant`): the right operand of `false &&` and `true ||` is not needed where it is a parameter, a constant held by its name, or one whose evaluation fails, which is then no failure (`const NO: bool = false && (1 // 0 == 0)` is `false`); one of no type is held to a `bool` still
-- Left: a guard precedes the payload read it protects
+- In a handler with manual validity, a leading `valid(input)` guards a read of
+  that input on the right of `&&`. The reversed order reports `payload.unguarded`.
 
 transpiler: done
 
@@ -96,16 +107,18 @@ analyser: partial
 - An index whose base has a known type outside lists, tuples and dictionaries reports `type.mismatch`, including when that base settles in a graph instance (GEN-7). A set has no indexed place to assign (EXPR-3).
 - A member or an element of a nullable's payload is read where a null test proves it present (ERR-12), and a result's payload through its tag (ERR-3)
 - A structural projection of a `ref` parameter in a hook, `xs[i]` or `quote.bid`, selects its child, an endpoint, and reads no payload; an atomic projection of one, `quote.bid` of `ref quote: atomic<Quote>`, reads its payload and is `ref.read` (FN-16)
-- Left: checking bracket bases in the remaining generic instance paths; temporal projection
+- Left: A bare type parameter can still be indexed without a requirement
+  establishing a valid bracket base (GEN-7).
 
 transpiler: partial
 
 - Writes ordinary checked list and dictionary indexing, tuple and struct projection,
   temporal child access, atomic struct projection, and keyed graph references.
-- Left: Reports an unresolved tuple index in HIR, a hook child of a list of structs or
-  tuples, a graph child of a list at a connection-valued index, nested dictionary entry
-  reads and unsupported endpoint operations on children. Unsupported fields and element
-  forms are reported at the projection.
+- A hook can read a guarded field or tuple position of a fixed-list child.
+  The emitter reports an unresolved tuple position defensively.
+- Left: Reports a list child at a connection-valued index in a graph, a nested
+  dictionary entry's payload read in a hook, and other unsupported endpoint
+  operations and projection forms.
 
 ## EXPR-8
 
@@ -126,15 +139,18 @@ analyser: partial
 - Pairs are a dictionary where one is expected, each key and value read as its type; with nothing expected they are `sequence.context_type`
 - A named function's empty sequence argument takes the parameter type when another argument supplies the missing type in a graph instance (GEN-2, GEN-7).
 - A written `set<str>` rejects a repeated constant string at the later member (`set.duplicate_member`, UNIT-13).
-- Left: `_`; pairs as a timed trace; ordering and uniqueness for other collection forms
+- In a trace, timed pairs have explicit publications. `_` is admitted in a dense
+  trace and rejected in a timed trace or ordinary sequence (EXPR-8, TST-7).
+- Left: Repeated constant dictionary keys and repeated constant non-string set
+  members can still pass source checking.
 
 transpiler: partial
 
 - Writes list, set and dictionary literals, and sequence-of-pairs where a timed trace is
   expected.
 - A fixed list literal of connections wires each entry in order to its own list position.
-- Left: Reports dictionary keys that might coincide and sequence types without a
-  constructor. Constant duplicate dictionary key rejection is pending (TYPE-1).
+- A set retains a member once if two value-dependent entries turn out to be equal.
+- Left: Reports dictionary literals whose keys might coincide.
 
 ## EXPR-10
 
@@ -163,7 +179,8 @@ analyser: done
 analyser: partial
 
 - In a value function, a hook and a graph, an option of an operator's call, by name or as a symbol's configuration, that a candidate's `requires` reads selects the candidate, and so the result type. A selecting option is a compile-time constant. The use of the result chooses its form (ERR-15).
-- Left: an option that is a parameter of its candidates, given what is no constant, which is not judged
+- A runtime value given as division's `zero` option rejects with
+  `generic.argument_constant` in both the named and symbol forms (GEN-8).
 
 ## EXPR-13
 

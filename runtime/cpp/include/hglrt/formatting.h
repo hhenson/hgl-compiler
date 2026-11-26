@@ -56,32 +56,4 @@ void format_float_text(str& output, f64 value, TextPadding padding,
 /// Write an HGL string literal for `{:?}` and compound members (FMT-4, FMT-5).
 str format_quoted(std::string_view value);
 
-/// Write a list or set in exactly the order of traversal (FMT-5).
-template <class Collection, class Text>
-str format_collection(const Collection& values, Text render) {
-    str text{"["};
-    std::string_view separator;
-    for (const auto& value : values) {
-        text += separator;
-        text += render(value);
-        separator = ", ";
-    }
-    return text + ']';
-}
-
-/// Write dictionary entries in exactly the order of traversal (FMT-5).
-template <class Dictionary, class KeyText, class ValueText>
-str format_dictionary(const Dictionary& values, KeyText key_text, ValueText value_text) {
-    str text{"["};
-    std::string_view separator;
-    for (const auto& [key, value] : values) {
-        text += separator;
-        text += key_text(key);
-        text += ": ";
-        text += value_text(value);
-        separator = ", ";
-    }
-    return text + ']';
-}
-
 } // namespace hglrt
