@@ -219,6 +219,7 @@ analyser: done
 - `ref` is no type but a mark of a node's parameter and result, whose type is the T after it (FN-16); a graph gives a `ref` parameter of T a connection of T
 - A `signal` parameter marked `ref` is `ref.position` (FN-16)
 - `rolling_window`, `atomic` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input; `endpoint<T>` only as the whole type of a native value function's parameter (`endpoint.position`)
+- A borrowed endpoint default is checked as an endpoint binding and rejects an ordinary value (TIME-9, UNIT-8).
 - A `signal` takes no default but `null` (`type.mismatch`). A hook gives it to an endpoint operation and reads its payload nowhere (`type.not_ordinary`), including from a constant-key pack entry whose type is supplied by an instance.
 
 transpiler: partial
@@ -229,9 +230,10 @@ transpiler: partial
 - Maps a temporal parameter or configuration of `signal` or `signal?` to hgraph's
   `SIGNAL`. A supplied connection is observed for publications without reading its
   payload. An omitted optional signal never ticks (UNIT-8, END-2).
-- Left: A reference designation of a struct field is declined (FN-16, #932).
-  Borrowed endpoint call limits are under TIME-9. Admission of ordinary defaults
-  for borrowed endpoints is tracked by #931.
+- Writes reference designations of ordinary struct fields, including nested
+  fields (FN-16, TIME-10).
+- Left: Other reference targets, including tuple positions and children of a
+  `ref` parameter, follow FN-16. Borrowed endpoint call limits are under TIME-9.
 
 ## TYPE-13
 
