@@ -1570,15 +1570,32 @@ fn same_store_entry(
     if depth == 0 || first.ty != second.ty || first.category != second.category {
         return false;
     }
+    let Some((first, first_owner)) = store_entry_root(program, first, remaining) else {
+        return false;
+    };
+    let Some((second, second_owner)) = store_entry_root(program, second, remaining) else {
+        return false;
+    };
+    if first_owner.is_some() && first_owner == second_owner {
+        return true;
+    }
+    if let (ExprKind::Literal(Value::Str(a)), ExprKind::Literal(Value::Str(b))) =
+        (&first.kind, &second.kind)
+    {
+        return a.len() <= INPUT_BUDGET && b.len() <= INPUT_BUDGET && a == b;
+    }
+    // Compare source-known strings independently of their spelling and order.
+    // A named constant is no more fixed than its inlined primitive expression.
+    if first.ty == Type::Scalar(Scalar::Str)
+        && !matches!(first.kind, ExprKind::Local(_))
+        && !matches!(second.kind, ExprKind::Local(_))
+        && let Some(equal) = same_known_store_entry(program, first, second, depth, remaining)
+    {
+        return equal;
+    }
     let mut same = |a: &Expr, b: &Expr| same_store_entry(program, a, b, depth - 1, remaining);
     match (&first.kind, &second.kind) {
         (ExprKind::Local(a), ExprKind::Local(b)) => a == b,
-        (ExprKind::Constant { .. }, _) | (_, ExprKind::Constant { .. }) => {
-            same_named_store_entry(program, first, second, depth, remaining)
-        }
-        (ExprKind::Literal(Value::Str(a)), ExprKind::Literal(Value::Str(b))) => {
-            a.len() <= INPUT_BUDGET && b.len() <= INPUT_BUDGET && a == b
-        }
         (ExprKind::Literal(a), ExprKind::Literal(b))
             if !matches!(a, Value::Type(_) | Value::Str(_)) =>
         {
@@ -1679,40 +1696,29 @@ fn same_store_entry(
     }
 }
 
-/// UNIT-13 gives a constant the same value at each read. Follow direct aliases
-/// before comparing provenance; a source-readable string can also equal a
-/// literal. This uses the existing bounded reader without evaluating helpers.
-fn same_named_store_entry(
+/// Compare both source-known entries with the same bounded reader (UNIT-13,
+/// TIME-8), without evaluating helpers. Unread values retain structural proof.
+fn same_known_store_entry(
     program: &Program,
     first: &Expr,
     second: &Expr,
     depth: usize,
     remaining: &mut usize,
-) -> bool {
-    let Some((first, first_owner)) = store_entry_root(program, first, remaining) else {
-        return false;
-    };
-    let Some((second, second_owner)) = store_entry_root(program, second, remaining) else {
-        return false;
-    };
-    if first_owner.is_some() && first_owner == second_owner {
-        return true;
+) -> Option<bool> {
+    let mut reader = Reader::new(program);
+    reader.steps_left = *remaining;
+    reader.read_string_helpers = false;
+    let left = reader.read(first, depth - 1, &[]);
+    let right = reader.read(second, depth - 1, &[]);
+    *remaining = reader.steps_left;
+    if let (Ok(left), Ok(right)) = (left, right)
+        && let (ExprKind::Literal(Value::Str(a)), ExprKind::Literal(Value::Str(b))) =
+            (&left.kind, &right.kind)
+    {
+        Some(a == b)
+    } else {
+        None
     }
-    if first.ty == Type::Scalar(Scalar::Str) && second.ty == first.ty {
-        let mut reader = Reader::new(program);
-        reader.steps_left = *remaining;
-        reader.read_string_helpers = false;
-        let left = reader.read(first, depth - 1, &[]);
-        let right = reader.read(second, depth - 1, &[]);
-        *remaining = reader.steps_left;
-        if let (Ok(left), Ok(right)) = (left, right)
-            && let (ExprKind::Literal(Value::Str(a)), ExprKind::Literal(Value::Str(b))) =
-                (&left.kind, &right.kind)
-        {
-            return a == b;
-        }
-    }
-    same_store_entry(program, first, second, depth - 1, remaining)
 }
 
 /// Keep the last named declaration as well as its initializer: two aliases of
@@ -2107,6 +2113,7 @@ struct StoreCalls<N = Declaration> {
 }
 
 /// What one call hands to a const parameter, without evaluating value code.
+#[derive(Clone)]
 enum StoreSource {
     Parameter(usize),
     Literal(String),
@@ -2135,33 +2142,35 @@ impl<N: Copy + Eq + Hash> StoreCalls<N> {
         argument_for: impl Fn(usize) -> Option<&'a Expr>,
     ) {
         self.calls.insert((caller, callee));
-        let mut sources = Vec::new();
-        let mut fixed: Vec<(usize, &Expr)> = Vec::new();
+        let mut sources: Vec<StoreSource> = Vec::new();
+        let mut written: Vec<(usize, &Expr)> = Vec::new();
         let mut remaining = INPUT_BUDGET;
         for (slot, parameter) in target.parameters.iter().enumerate() {
-            let source = argument_for(slot).map(|argument| match &argument.kind {
-                ExprKind::Local(local) => StoreSource::Parameter(*local),
-                ExprKind::Literal(Value::Str(text)) => StoreSource::Literal(text.clone()),
-                _ => {
-                    let earlier = fixed.iter().find_map(|(slot, earlier)| {
-                        same_store_entry(program, earlier, argument, INPUT_DEPTH, &mut remaining)
-                            .then_some(*slot)
-                    });
-                    if let Some(earlier) = earlier {
-                        StoreSource::Fixed(earlier)
-                    } else if same_store_entry(
+            let source = argument_for(slot).map(|argument| {
+                // All spellings join the same incoming partition, including
+                // literals beside expressions. Preserve the earlier port's
+                // provenance rather than giving expressions a separate class.
+                let earlier = written.iter().find_map(|(slot, earlier)| {
+                    same_store_entry(program, earlier, argument, INPUT_DEPTH, &mut remaining)
+                        .then(|| sources[*slot].clone())
+                });
+                let source = earlier.unwrap_or_else(|| match &argument.kind {
+                    ExprKind::Local(local) => StoreSource::Parameter(*local),
+                    ExprKind::Literal(Value::Str(text)) => StoreSource::Literal(text.clone()),
+                    _ if same_store_entry(
                         program,
                         argument,
                         argument,
                         INPUT_DEPTH,
                         &mut remaining,
-                    ) {
-                        fixed.push((slot, argument));
+                    ) =>
+                    {
                         StoreSource::Fixed(slot)
-                    } else {
-                        StoreSource::Other
                     }
-                }
+                    _ => StoreSource::Other,
+                });
+                written.push((slot, argument));
+                source
             });
             sources.push(source.unwrap_or(StoreSource::Other));
             if !parameter.constant {

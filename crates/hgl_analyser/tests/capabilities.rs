@@ -1080,6 +1080,80 @@ test source {{ eval node() }}
     }
 }
 
+/// TIME-8, CAP-6, UNIT-13: entry equality is symmetric and independent of
+/// spelling. Exercise every ordered pair, plus benign and unequal values.
+#[test]
+fn source_known_store_entries_share_one_symmetric_partition() {
+    let spellings = [
+        "\"run.output\"",
+        "reserved",
+        "alias_key",
+        "root_text + suffix",
+        "root_alias + suffix",
+        "composed",
+        "composed_alias",
+    ];
+    let source = |left: &str, right: &str| {
+        format!(
+            r#"module m
+const reserved: str = "run.output"
+const alias_key: str = reserved
+const root_text: str = "run."
+const root_alias: str = root_text
+const suffix: str = "output"
+const composed: str = root_text + suffix
+const composed_alias: str = composed
+const fn rotate(s: GlobalState, n: i64, const left: str, const right: str) {{
+    put(s, left, n)
+    if n > 0 {{ rotate(s, n - 1, right, left) }}
+}}
+fn node() {{
+    inject global_state
+    when {{}}
+    stop {{ rotate(global_state, 1, {left}, {right}) }}
+}}
+test source {{ eval node() }}
+"#
+        )
+    };
+    for left in spellings {
+        for right in spellings {
+            let program = source(left, right);
+            let checked = check(&[("m.hgl", &program)]);
+            assert_eq!(
+                checked.summary().len(),
+                1,
+                "{left} / {right}: {}",
+                checked.report
+            );
+            assert!(
+                checked.summary()[0].ends_with("injectable/store.reserved_key TIME-8"),
+                "{left} / {right}: {}",
+                checked.report
+            );
+            let benign = program
+                .replace("run.output", "tenant.value")
+                .replace("run.", "tenant.")
+                .replace("\"output\"", "\"value\"");
+            let checked = check(&[("m.hgl", &benign)]);
+            assert!(
+                checked.summary().is_empty(),
+                "{left} / {right}: {}",
+                checked.report
+            );
+        }
+        for (a, b) in [(left, "\"tenant.distinct\""), ("\"tenant.distinct\"", left)] {
+            let program = source(a, b);
+            let checked = check(&[("m.hgl", &program)]);
+            assert!(
+                checked.summary().is_empty(),
+                "{a} / {b}: {}",
+                checked.report
+            );
+        }
+    }
+}
+
 /// TIME-8, CAP-6: a helper computes the key at graph build, not in source.
 #[test]
 fn fixed_store_routes_leave_computed_keys_to_the_build() {

@@ -564,9 +564,10 @@ analyser: partial
   types or distinct aliases does not delay an independent fixed call.
 - Entry aliases include repeated reads of a named constant, a fixed field,
   list or tuple position, or a primitive expression computed before the
-  cycle. A constant's direct aliases and its matching source-known string
-  literal share that entry. Distinct projections stay distinct; computing a
-  key again on a recursive edge still leaves its check to the operation.
+  cycle. Equal source-known strings share that entry symmetrically across
+  literals, direct aliases and primitive expressions. Distinct projections
+  stay distinct; computing a key again on a recursive edge still leaves its
+  check to the operation.
 
 transpiler: partial
 

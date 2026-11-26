@@ -203,3 +203,53 @@ test entry_literal_rejects_in_source {
     }
     eval entry_node()
 }
+
+# TIME-8, CAP-6, UNIT-13: named and inlined source-known entries compare
+# symmetrically, including an alias inside the concatenation.
+const entry_root: str = "run."
+const entry_root_alias: str = entry_root
+const entry_tail: str = "output"
+test entry_expression_literal_rejects_in_source {
+    fn entry_node() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, entry_root + entry_tail, "run.output")
+        }
+    }
+    eval entry_node()
+}
+test entry_literal_expression_rejects_in_source {
+    fn entry_node() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, "run.output", entry_root + entry_tail)
+        }
+    }
+    eval entry_node()
+}
+test entry_alias_expression_literal_rejects_in_source {
+    fn entry_node() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, entry_root_alias + entry_tail, "run.output")
+        }
+    }
+    eval entry_node()
+}
+test entry_literal_alias_expression_rejects_in_source {
+    fn entry_node() {
+        inject global_state
+        when {}
+        stop {
+            # expect-error(injectable, "store.reserved_key")
+            entry_rotate(global_state, 2, "run.output", entry_root_alias + entry_tail)
+        }
+    }
+    eval entry_node()
+}
