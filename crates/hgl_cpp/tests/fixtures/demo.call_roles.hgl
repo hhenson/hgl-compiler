@@ -227,3 +227,49 @@ test callback_evidence_in_declared_order {
 const fn wrong_sample() -> bool => result_first(fn(n) => 4, 3.5, 9) == 4
 # expect-error(type, "type.mismatch")
 const fn wrong_shared() -> i64 => shared_type(fn(n) => 2, 3.5)
+
+# FN-4, FN-17 and GEN-3: only the selected role instantiates its helpers.
+struct IntegerPrice<T> requires T == i64 { amount: i64 }
+const fn minimum_price<T>() -> i64 => IntegerPrice<T>(amount: 17).amount
+const fn quoted_price<T>(x: T) -> i64 => 2
+fn quoted_price<T>(x: T) -> i64 => minimum_price<T>()
+const fn currency(n: i64) -> str => "GBP"
+fn price_from(f: const fn(i64) -> str, t: i64) -> i64 => t + quoted_price(f(1))
+fn relay_price(f: const fn(i64) -> str, t: i64) -> i64 => price_from(f, t)
+fn value_price(t: i64) -> i64 => relay_price(currency, t)
+fn live_price(t: i64) -> i64 => t + quoted_price(t)
+
+# A consumer also instantiates its helper with the selected result type.
+const fn price_units(x: str) -> i64 => 4
+fn price_units(x: str) -> str => x
+const fn minimum_for<T>(x: T) -> i64 => minimum_price<T>()
+fn consume_units(f: const fn(i64) -> str, t: i64) -> i64 =>
+    t + minimum_for(price_units(f(1)))
+fn relay_units(f: const fn(i64) -> str, t: i64) -> i64 => consume_units(f, t)
+fn value_units(t: i64) -> i64 => relay_units(currency, t)
+
+# expect-error(constraint, "requires.unmet")
+fn invalid_live_price(t: str) -> i64 => price_from(fn(n) => t, 2)
+
+test callback_pair_follows_selected_instances {
+    assert eval value_price(t: [2]) == [4]
+    assert eval live_price(t: [2]) == [19]
+    assert eval value_units(t: [2]) == [19]
+}
+
+# GEN-17: the selected pack arm can reveal a pair whose callback is still open.
+const first_price: i64 = 0
+fn maybe_price<...Ps>(f: const fn(i64) -> str, t: i64, items: ...Ps) -> i64 =>
+    if first_price in arg_keys(Ps) { t + quoted_price(f(1)) } else { t + 20 }
+fn with_price(f: const fn(i64) -> str, t: i64) -> i64 => maybe_price(f, t, 1)
+fn without_price(f: const fn(i64) -> str, t: i64) -> i64 => maybe_price(f, t)
+fn selected_price(t: i64) -> i64 => with_price(currency, t)
+fn omitted_price(t: i64) -> i64 => without_price(fn(n) => currency(t), t)
+
+# expect-error(constraint, "requires.unmet")
+fn invalid_selected_price(t: i64) -> i64 => with_price(fn(n) => currency(t), t)
+
+test callback_pair_in_selected_pack_arm {
+    assert eval selected_price(t: [2]) == [4]
+    assert eval omitted_price(t: [2]) == [22]
+}

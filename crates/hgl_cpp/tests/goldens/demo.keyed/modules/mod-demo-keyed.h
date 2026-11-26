@@ -117,43 +117,43 @@ namespace w_
 
 namespace w_
 {
-// relay_book(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 127
+// relay_book(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 137
 ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> relay_book(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book);
 }  // namespace w_
 
 namespace w_
 {
-// book_changes(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 131
+// book_changes(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 141
 ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book_changes(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book);
 }  // namespace w_
 
 namespace w_
 {
-// relay_groups(groups: dict<str, set<i64>>) -> dict<str, set<i64>> (node), module demo.keyed, line 145
+// relay_groups(groups: dict<str, set<i64>>) -> dict<str, set<i64>> (node), module demo.keyed, line 155
 ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TSS<::hgraph::Int>>> relay_groups(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TSS<::hgraph::Int>>> groups);
 }  // namespace w_
 
 namespace w_
 {
-// entry_a(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 159
+// entry_a(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 169
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> entry_a(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book);
 }  // namespace w_
 
 namespace w_
 {
-// entry_at(book: dict<str, i64>, key: str) -> i64 (node), module demo.keyed, line 163
+// entry_at(book: dict<str, i64>, key: str) -> i64 (node), module demo.keyed, line 173
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> entry_at(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key);
 }  // namespace w_
 
 namespace w_
 {
-// entry_or_code(book: dict<str, i64>, key: str) -> str (node), module demo.keyed, line 167
+// entry_or_code(book: dict<str, i64>, key: str) -> str (node), module demo.keyed, line 177
 ::hgraph::Port<::hgraph::TS<::hgraph::Str>> entry_or_code(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key);
 }  // namespace w_
 
 namespace w_
 {
-// entry_delta(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 177
+// entry_delta(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 187
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> entry_delta(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book);
 }  // namespace w_
 

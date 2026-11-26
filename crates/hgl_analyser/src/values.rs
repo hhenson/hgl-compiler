@@ -705,21 +705,23 @@ pub(crate) fn reread_instance_body(
     typer.pack_functions = inputs.functions.to_vec();
     let selected = RefCell::new(Vec::new());
     typer.selected_pack_branches = Some(&selected);
-    let body = if owner.phases[declaration] == Some(Phase::Graph)
-        && program
-            .callback_phase_bodies
-            .contains(&(module, declaration))
-    {
-        typer.mark_open_instance_captures();
-        let before = typer.diagnostics.len();
-        let (body, _) = typer.graph();
-        if typer.unsettled_callback_pair {
-            typer.check_open_pair_reports(found, before);
-        }
-        body
-    } else {
-        typer.body_at_phase(owner.phases[declaration])
-    }?;
+    // FN-17, GEN-17: a concrete pack may reveal a pair that the source
+    // reading could not visit. Use this instance's actual callback bindings.
+    let body =
+        if owner.phases[declaration] == Some(Phase::Graph) && typer.mark_open_instance_captures() {
+            let before = typer.diagnostics.len();
+            let (body, _) = typer.graph();
+            if typer.unsettled_callback_pair {
+                typer.check_open_pair_reports(found, before);
+                // Keep selected pack arms from the same reading as the returned body.
+                selected.borrow_mut().clear();
+                typer.independent_callback_body(found)
+            } else {
+                body
+            }
+        } else {
+            typer.body_at_phase(owner.phases[declaration])
+        }?;
     Some((body, selected.into_inner()))
 }
 

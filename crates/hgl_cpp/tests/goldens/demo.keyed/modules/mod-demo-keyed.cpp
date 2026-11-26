@@ -26,6 +26,7 @@
 #undef error
 #undef found
 #undef groups
+#undef ignored_removals_establish_only_missing_dictionary_validity
 #undef key
 #undef keyed
 #undef member
@@ -437,14 +438,14 @@ namespace w_
 
 namespace n_::relay_book
 {
-// relay_book(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 127
+// relay_book(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 137
 struct impl_
 {
     static constexpr auto name = "demo.keyed::relay_book";
 
     static void eval([[maybe_unused]] ::hgraph::In<"book", ::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book, [[maybe_unused]] ::hgraph::Out<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> out_)
     {
-        // when, line 128 (TIME-3)
+        // when, line 138 (TIME-3)
         if (::hglrt::fn_all_valid(book))
         {
             ::hglrt::keyed_publish(out_, ::hglrt::keyed_value(book));
@@ -455,7 +456,7 @@ struct impl_
 }  // namespace n_::relay_book
 namespace w_
 {
-// relay_book(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 127
+// relay_book(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 137
 ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> relay_book(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book)
 {
     return ::hgraph::wire<::hgl::demo::keyed::m_::n_::relay_book::impl_>(wiring_, book);
@@ -464,14 +465,14 @@ namespace w_
 
 namespace n_::book_changes
 {
-// book_changes(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 131
+// book_changes(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 141
 struct impl_
 {
     static constexpr auto name = "demo.keyed::book_changes";
 
     static void eval([[maybe_unused]] ::hgraph::In<"book", ::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book, [[maybe_unused]] ::hgraph::Out<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> out_)
     {
-        // when, line 132 (TIME-3)
+        // when, line 142 (TIME-3)
         {
             ::hglrt::keyed_publish(out_, ::hglrt::fn_delta_value(book));
             return;
@@ -481,7 +482,7 @@ struct impl_
 }  // namespace n_::book_changes
 namespace w_
 {
-// book_changes(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 131
+// book_changes(book: dict<str, i64>) -> dict<str, i64> (node), module demo.keyed, line 141
 ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book_changes(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book)
 {
     return ::hgraph::wire<::hgl::demo::keyed::m_::n_::book_changes::impl_>(wiring_, book);
@@ -490,14 +491,14 @@ namespace w_
 
 namespace n_::relay_groups
 {
-// relay_groups(groups: dict<str, set<i64>>) -> dict<str, set<i64>> (node), module demo.keyed, line 145
+// relay_groups(groups: dict<str, set<i64>>) -> dict<str, set<i64>> (node), module demo.keyed, line 155
 struct impl_
 {
     static constexpr auto name = "demo.keyed::relay_groups";
 
     static void eval([[maybe_unused]] ::hgraph::In<"groups", ::hgraph::TSD<::hgraph::Str, ::hgraph::TSS<::hgraph::Int>>> groups, [[maybe_unused]] ::hgraph::Out<::hgraph::TSD<::hgraph::Str, ::hgraph::TSS<::hgraph::Int>>> out_)
     {
-        // when, line 146 (TIME-3)
+        // when, line 156 (TIME-3)
         {
             ::hglrt::keyed_publish(out_, ::hglrt::keyed_value(groups));
             return;
@@ -507,7 +508,7 @@ struct impl_
 }  // namespace n_::relay_groups
 namespace w_
 {
-// relay_groups(groups: dict<str, set<i64>>) -> dict<str, set<i64>> (node), module demo.keyed, line 145
+// relay_groups(groups: dict<str, set<i64>>) -> dict<str, set<i64>> (node), module demo.keyed, line 155
 ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TSS<::hgraph::Int>>> relay_groups(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TSS<::hgraph::Int>>> groups)
 {
     return ::hgraph::wire<::hgl::demo::keyed::m_::n_::relay_groups::impl_>(wiring_, groups);
@@ -516,14 +517,14 @@ namespace w_
 
 namespace n_::entry_a
 {
-// entry_a(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 159
+// entry_a(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 169
 struct impl_
 {
     static constexpr auto name = "demo.keyed::entry_a";
 
     static void eval([[maybe_unused]] ::hgraph::In<"book", ::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        // when, line 160 (TIME-3)
+        // when, line 170 (TIME-3)
         {
             if (::hglrt::keyed_entry_valid(book, ::hgraph::Str{"A"}))
             {
@@ -536,7 +537,7 @@ struct impl_
 }  // namespace n_::entry_a
 namespace w_
 {
-// entry_a(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 159
+// entry_a(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 169
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> entry_a(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book)
 {
     return ::hgraph::wire<::hgl::demo::keyed::m_::n_::entry_a::impl_>(wiring_, book);
@@ -545,14 +546,14 @@ namespace w_
 
 namespace n_::entry_at
 {
-// entry_at(book: dict<str, i64>, key: str) -> i64 (node), module demo.keyed, line 163
+// entry_at(book: dict<str, i64>, key: str) -> i64 (node), module demo.keyed, line 173
 struct impl_
 {
     static constexpr auto name = "demo.keyed::entry_at";
 
     static void eval([[maybe_unused]] ::hgraph::In<"book", ::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book, [[maybe_unused]] ::hgraph::In<"key", ::hgraph::TS<::hgraph::Str>> key, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        // when, line 164 (TIME-3)
+        // when, line 174 (TIME-3)
         {
             out_.set(::hglrt::keyed_entry_value(book, ::hglrt::checked_value(key)));
             return;
@@ -562,7 +563,7 @@ struct impl_
 }  // namespace n_::entry_at
 namespace w_
 {
-// entry_at(book: dict<str, i64>, key: str) -> i64 (node), module demo.keyed, line 163
+// entry_at(book: dict<str, i64>, key: str) -> i64 (node), module demo.keyed, line 173
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> entry_at(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key)
 {
     return ::hgraph::wire<::hgl::demo::keyed::m_::n_::entry_at::impl_>(wiring_, book, key);
@@ -571,14 +572,14 @@ namespace w_
 
 namespace n_::entry_or_code
 {
-// entry_or_code(book: dict<str, i64>, key: str) -> str (node), module demo.keyed, line 167
+// entry_or_code(book: dict<str, i64>, key: str) -> str (node), module demo.keyed, line 177
 struct impl_
 {
     static constexpr auto name = "demo.keyed::entry_or_code";
 
     static void eval([[maybe_unused]] ::hgraph::In<"book", ::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book, [[maybe_unused]] ::hgraph::In<"key", ::hgraph::TS<::hgraph::Str>> key, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Str>> out_)
     {
-        // when, line 168 (TIME-3)
+        // when, line 178 (TIME-3)
         {
             [[maybe_unused]] const ::hglrt::result<::hgraph::Int> read = ::hglrt::keyed_entry_result(book, ::hglrt::checked_value(key));
             if ((read).has_value())
@@ -600,7 +601,7 @@ struct impl_
 }  // namespace n_::entry_or_code
 namespace w_
 {
-// entry_or_code(book: dict<str, i64>, key: str) -> str (node), module demo.keyed, line 167
+// entry_or_code(book: dict<str, i64>, key: str) -> str (node), module demo.keyed, line 177
 ::hgraph::Port<::hgraph::TS<::hgraph::Str>> entry_or_code(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book, ::hgraph::Port<::hgraph::TS<::hgraph::Str>> key)
 {
     return ::hgraph::wire<::hgl::demo::keyed::m_::n_::entry_or_code::impl_>(wiring_, book, key);
@@ -609,14 +610,14 @@ namespace w_
 
 namespace n_::entry_delta
 {
-// entry_delta(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 177
+// entry_delta(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 187
 struct impl_
 {
     static constexpr auto name = "demo.keyed::entry_delta";
 
     static void eval([[maybe_unused]] ::hgraph::In<"book", ::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>, ::hgraph::InputValidity::Unchecked> book, [[maybe_unused]] ::hgraph::Out<::hgraph::TS<::hgraph::Int>> out_)
     {
-        // when, line 178 (TIME-3)
+        // when, line 188 (TIME-3)
         if (::hglrt::fn_modified(book))
         {
             if (::hglrt::keyed_entry_modified(book, ::hgraph::Str{"A"}))
@@ -630,7 +631,7 @@ struct impl_
 }  // namespace n_::entry_delta
 namespace w_
 {
-// entry_delta(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 177
+// entry_delta(book: dict<str, i64>) -> i64 (node), module demo.keyed, line 187
 ::hgraph::Port<::hgraph::TS<::hgraph::Int>> entry_delta(::hgraph::Wiring& wiring_, ::hgraph::Port<::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> book)
 {
     return ::hgraph::wire<::hgl::demo::keyed::m_::n_::entry_delta::impl_>(wiring_, book);
@@ -837,6 +838,109 @@ void a_dictionary_ticks_only_where_it_changes()
     });
         const auto right_08_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, true, true};
         ::hglrt::testing::expect_same(left_07_, right_08_);
+    }();
+}
+
+void ignored_removals_establish_only_missing_dictionary_validity()
+{
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_03_ = ::hglrt::testing::evaluate<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_00_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{3, 3}, start_));
+        struct held_01_
+        {
+            static void eval(::hgraph::In<"result", ::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> result_, ::hgraph::DateTime now_)
+            {
+                if (!::hglrt::fn_modified(result_))
+                {
+                    return;
+                }
+                ::std::optional<::hglrt::dict<::hgraph::Str, ::hgraph::Int>> whole_;
+                try
+                {
+                    whole_.emplace(::hglrt::keyed_value(result_));
+                }
+                catch (const ::hglrt::Failure&)
+                {
+                }
+                ::hglrt::testing::hold<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(now_, ::std::move(whole_));
+            }
+        };
+        const auto result_02_ = ::hgl::demo::keyed::m_::w_::write_book(wiring_, input_00_);
+        ::hgraph::wire<held_01_>(wiring_, result_02_);
+        ::hgl::core::m_::w_::i_::record::of_1dict_1str_1_1i64_1_(wiring_, result_02_, ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_04_ = ::hglrt::testing::Dense<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict<::hgraph::Str, ::hgraph::Int>{}}, ::std::nullopt};
+        ::hglrt::testing::expect_same(left_03_, right_04_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_08_ = ::hglrt::testing::evaluate<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_05_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{3, 1, 3, 4, 3, 3}, start_));
+        struct held_06_
+        {
+            static void eval(::hgraph::In<"result", ::hgraph::TSD<::hgraph::Str, ::hgraph::TS<::hgraph::Int>>> result_, ::hgraph::DateTime now_)
+            {
+                if (!::hglrt::fn_modified(result_))
+                {
+                    return;
+                }
+                ::std::optional<::hglrt::dict<::hgraph::Str, ::hgraph::Int>> whole_;
+                try
+                {
+                    whole_.emplace(::hglrt::keyed_value(result_));
+                }
+                catch (const ::hglrt::Failure&)
+                {
+                }
+                ::hglrt::testing::hold<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>(now_, ::std::move(whole_));
+            }
+        };
+        const auto result_07_ = ::hgl::demo::keyed::m_::w_::write_book(wiring_, input_05_);
+        ::hgraph::wire<held_06_>(wiring_, result_07_);
+        ::hgl::core::m_::w_::i_::record::of_1dict_1str_1_1i64_1_(wiring_, result_07_, ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_09_ = ::hglrt::testing::Dense<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict<::hgraph::Str, ::hgraph::Int>{}}, ::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict_of<::hgraph::Str, ::hgraph::Int>({{::hgraph::Str{"A"}, 7}})}, ::std::nullopt, ::std::nullopt, ::hglrt::testing::Whole<::hglrt::dict<::hgraph::Str, ::hgraph::Int>>{::hglrt::dict<::hgraph::Str, ::hgraph::Int>{}}, ::std::nullopt};
+        ::hglrt::testing::expect_same(left_08_, right_09_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_011_ = ::hglrt::testing::evaluate<::hgraph::Bool>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_010_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{3, 3, 1, 3, 4, 3, 3}, start_));
+        ::hgl::core::m_::w_::i_::record::of_bool(wiring_, ::hgl::demo::keyed::m_::w_::book_wakes(wiring_, input_010_), ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_012_ = ::hglrt::testing::Dense<::hgraph::Bool>{true, ::std::nullopt, true, ::std::nullopt, false, true, ::std::nullopt};
+        ::hglrt::testing::expect_same(left_011_, right_012_);
+    }();
+    ::hglrt::testing::statement();
+    [&] {
+        const auto left_016_ = ::hglrt::testing::evaluate<::hglrt::set<::hgraph::Int>>([&](::hgraph::Wiring& wiring_, [[maybe_unused]] ::hgraph::DateTime start_) {
+        const ::hgraph::Port<::hgraph::TS<::hgraph::Int>> input_013_ = ::hgl::core::m_::w_::i_::replay::of_i64(wiring_, ::hglrt::testing::replay_items(::hglrt::testing::Dense<::hgraph::Int>{3, 3, 1, 3, 4, 3, 3}, start_));
+        struct held_014_
+        {
+            static void eval(::hgraph::In<"result", ::hgraph::TSS<::hgraph::Int>> result_, ::hgraph::DateTime now_)
+            {
+                if (!::hglrt::fn_modified(result_))
+                {
+                    return;
+                }
+                ::std::optional<::hglrt::set<::hgraph::Int>> whole_;
+                try
+                {
+                    whole_.emplace(::hglrt::keyed_value(result_));
+                }
+                catch (const ::hglrt::Failure&)
+                {
+                }
+                ::hglrt::testing::hold<::hglrt::set<::hgraph::Int>>(now_, ::std::move(whole_));
+            }
+        };
+        const auto result_015_ = ::hgl::demo::keyed::m_::w_::write_members(wiring_, input_013_);
+        ::hgraph::wire<held_014_>(wiring_, result_015_);
+        ::hgl::core::m_::w_::i_::record::of_1set_1i64_1_(wiring_, result_015_, ::hgraph::Str{::hglrt::testing::run_output});
+    });
+        const auto right_017_ = ::hglrt::testing::Dense<::hglrt::set<::hgraph::Int>>{::hglrt::testing::Whole<::hglrt::set<::hgraph::Int>>{::hglrt::set<::hgraph::Int>{}}, ::std::nullopt, ::hglrt::testing::Whole<::hglrt::set<::hgraph::Int>>{::hglrt::set<::hgraph::Int>{1}}, ::std::nullopt, ::std::nullopt, ::hglrt::testing::Whole<::hglrt::set<::hgraph::Int>>{::hglrt::set<::hgraph::Int>{}}, ::std::nullopt};
+        ::hglrt::testing::expect_same(left_016_, right_017_);
     }();
 }
 
