@@ -182,3 +182,48 @@ test nested_callbacks_preserve_capture_categories {
     assert eval ordinary_quantity(rate: [1, 5]) == [9, 13]
     assert eval graph_quantity(rate: [1, 5]) == [13, 17]
 }
+
+fn chained_nested(tick: i64) -> i64 =>
+    tick + apply(fn(n2) => apply(fn(n1) => n2 + apply(fn(n0) => n1 + later(n0), 1), 1), 1)
+fn top_down_nested(tick: i64) -> i64 =>
+    apply(fn(n2) => apply(fn(n1) => n2 + apply(fn(n0) => n1 + n0, 1), 1) + tick, 1)
+fn pure_nested(tick: i64) -> i64 =>
+    tick + apply(fn(n2) => n2 + apply(fn(n1) => n1 + apply(fn(n0) => n0 + 1, 1), 1), 1)
+fn branch_let_nested(tick: i64) -> i64 =>
+    tick + apply(fn(n1) {
+        let v = n1 + 1
+        if v > 0 {
+            return later(v) + apply(fn(n0) => later(n0) + 1, 1)
+        } else {
+            return 0
+        }
+    }, 1)
+fn generic_nested(tick: i64) -> i64 =>
+    tick + generic_apply(fn(n1) => later(n1) + generic_apply(fn(n0) => later(n0) + 1, 1), 1)
+fn value_callback_pair_capture(tick: i64) -> i64 =>
+    apply(fn(n) => apply_value(fn(k) => doubled(tick), n), 1)
+
+test nested_callbacks_across_lexical_environments {
+    assert eval chained_nested(tick: [1, 2]) == [334, 335]
+    assert eval top_down_nested(tick: [1, 5]) == [66, 78]
+    assert eval pure_nested(tick: [1, 5]) == [23, 27]
+    assert eval branch_let_nested(tick: [1]) == [145]
+    assert eval generic_nested(tick: [1]) == [142]
+    assert eval value_callback_pair_capture(tick: [1, 5]) == [12, 60]
+}
+
+# GEN-2, FN-17: an unfinished callback input does not discard its
+# independent result or its other, explicitly typed input.
+const fn result_first<T, R>(f: const fn(T) -> R, sample: R, x: T) -> R => f(x)
+const fn annotated_first<T, U>(f: const fn(T, U) -> i64, sample: T, x: U) -> i64 => f(sample, x)
+const fn shared_type<T>(f: const fn(T) -> T, x: T) -> i64 => 8
+test callback_evidence_in_declared_order {
+    let value = result_first(x: 9, sample: 4, f: fn(n) => 3.5)
+    assert value == 3.5
+    assert annotated_first(fn(p: f64, q) => q, 4, 9) == 9
+    assert shared_type(fn(n) => 3.5, 2) == 8
+}
+# expect-error(type, "type.mismatch")
+const fn wrong_sample() -> bool => result_first(fn(n) => 4, 3.5, 9) == 4
+# expect-error(type, "type.mismatch")
+const fn wrong_shared() -> i64 => shared_type(fn(n) => 2, 3.5)

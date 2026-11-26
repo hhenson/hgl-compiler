@@ -230,3 +230,38 @@ test phase_and_short_circuit_controls {
     assert eval temporal_outer(tick: [true, false], value: 1) == [true, false]
     assert eval temporal_outer(tick: [true, false], value: null) == [false, false]
 }
+
+# EXPR-6, ERR-3/12, FN-6: constrained scalar calls under negation keep
+# their outer guard's presence proof; they are not lifted connections.
+const fn constrained_positive<T>(value: T) -> bool requires T in {i64} => value > 0
+const fn negated_value(value: i64?) -> bool => value == null || !constrained_positive(value)
+fn negated_or(const value: i64?) -> bool => value == null || !constrained_positive(value)
+fn negated_and(const value: i64?) -> bool => value != null && !constrained_positive(value)
+fn negated_nested(const value: i64?) -> bool =>
+    value == null || !(constrained_positive(value) && constrained_positive(value))
+fn negated_temporal(tick: bool, const value: i64?) -> bool =>
+    tick && (value == null || !constrained_positive(value))
+
+test negated_scalar_guards_run {
+    assert eval negated_or(value: null) == [true]
+    assert eval negated_or(value: 1) == [false]
+    assert eval negated_or(value: -1) == [true]
+    assert eval negated_and(value: null) == [false]
+    assert eval negated_and(value: 1) == [false]
+    assert eval negated_and(value: -1) == [true]
+    assert eval negated_nested(value: null) == [true]
+    assert eval negated_nested(value: 1) == [false]
+    assert eval negated_nested(value: -1) == [true]
+}
+
+test negated_scalar_subtree_in_temporal_logic {
+    assert eval negated_temporal(tick: [true, false, true], value: null) == [true, false, true]
+    assert eval negated_temporal(tick: [true, false, true], value: 1) == [false, false, false]
+    assert eval negated_temporal(tick: [true, false, true], value: -1) == [true, false, true]
+}
+
+test negated_value_short_circuit_control {
+    assert negated_value(null)
+    assert !negated_value(1)
+    assert negated_value(-1)
+}

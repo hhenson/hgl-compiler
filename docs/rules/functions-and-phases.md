@@ -52,7 +52,7 @@ analyser: partial
 - A call in a graph takes the temporal definition of a pair when given a connection, and the value definition when all arguments are ordinary (FN-6, GEN-5)
 - A temporal function name, or an anonymous function that captures a connection or calls a temporal function, selects the temporal definition (FN-17, GEN-6). A callable both roles admit directly leaves the choice to the other arguments. The selected definition checks its template's input types.
 - The selected definition checks the call's signature
-- An inner pair can reuse its phase check across a change to an enclosing anonymous formal it does not read. A referenced formal keeps its actual category.
+- Nested anonymous callbacks given to pairs reuse phase checks across unread lexical locals, branches, and monotonic temporal probes, and skip redundant inner committed reads while probing a role so each callback is read a bounded number of times at arbitrary nesting depth. A referenced local whose category or type affects selection still keeps its actual phase and type. In a generic pair, an unresolved callback input leaves independent result and parameter-annotation evidence in declared argument order (GEN-2, FN-17).
 - A call in value code takes the value definition. An eval's target takes the temporal definition where it exists.
 - Left: named-pair selection where an operand's category settles only after instance selection or after it receives a contextual type
 
