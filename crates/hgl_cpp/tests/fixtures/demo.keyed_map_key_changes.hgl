@@ -1,0 +1,76 @@
+module demo.keyed_map_key_changes
+
+# MAP-5, MAP-7, MAP-8, TIME-10: membership changes and full refreshes.
+
+fn read_key(key: i64, left: i64, right: i64) -> i64 => key
+
+fn edited(step: i64) -> dict<i64, i64> {
+    inject out
+    when {
+        if step == 0 { return [1: 10] }
+        if step == 1 { return delta<dict<i64, i64>>(updated: [2: 20]) }
+        if step == 2 { invalidate(out) }
+        if step == 3 { return [2: 40, 3: 50] }
+        if step == 4 { return delta<dict<i64, i64>>(removed: [2]) }
+        if step == 5 { return delta<dict<i64, i64>>(updated: [2: 60]) }
+    }
+}
+
+fn after_edits(step: i64, other: dict<i64, i64>) -> dict<i64, i64> =>
+    map(read_key, edited(step), other)
+
+test membership_and_invalidation {
+    assert eval after_edits(step: [0, 1, 2, 3, 4, 5], other: [[1: 1, 2: 2, 3: 3]]) == [
+        [1: 1],
+        delta<dict<i64, i64>>(updated: [2: 2]),
+        delta<dict<i64, i64>>(removed: [1, 2]),
+        delta<dict<i64, i64>>(updated: [2: 2, 3: 3]),
+        delta<dict<i64, i64>>(removed: [2]),
+        delta<dict<i64, i64>>(updated: [2: 2]),
+    ]
+}
+
+fn pick(flag: bool, ref low: dict<i64, i64>, ref high: dict<i64, i64>) -> ref dict<i64, i64> {
+    when modified(flag) {
+        if flag { return high }
+        return low
+    }
+}
+
+fn after_retarget(
+    flag: bool, a: dict<i64, i64>, b: dict<i64, i64>, other: dict<i64, i64>,
+) -> dict<i64, i64> =>
+    map(read_key, pick(flag, a, b), other)
+
+test replaces_valid_members_after_retarget {
+    assert eval after_retarget(
+        flag: [false, true, false],
+        a: [[1: 10]],
+        b: [[2: 20]],
+        other: [[1: 1, 2: 2]],
+    ) == [
+        [1: 1],
+        delta<dict<i64, i64>>(updated: [2: 2], removed: [1]),
+        delta<dict<i64, i64>>(updated: [1: 1], removed: [2]),
+    ]
+}
+
+fn count_visit(a: i64, b: i64) -> i64 {
+    state visits: i64 = 0
+    when valid([]) {
+        visits += 1
+        if valid(a) { return visits * 100 + a }
+        if valid(b) { return visits * 100 + b }
+        return visits * 100
+    }
+}
+
+fn survives_move(a: dict<i64, i64>, b: dict<i64, i64>) -> dict<i64, i64> =>
+    map{join: .outer}(count_visit, a, b)
+
+test same_cycle_move_does_not_restart {
+    assert eval survives_move(a: [[1: 10], delta<dict<i64, i64>>(removed: [1])], b: [_, [1: 20]]) == [
+        [1: 110],
+        delta<dict<i64, i64>>(updated: [1: 220]),
+    ]
+}
