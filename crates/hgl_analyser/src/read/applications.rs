@@ -595,6 +595,36 @@ impl Reader<'_> {
 
             if defer_contextual
                 && kind == SyntaxKind::NamedType
+                && child(&argument, SyntaxKind::GenericArgs).is_none()
+                && let Some(name) = name_token(&argument)
+                && let name_at = self.at(name.span())
+                && let Some(value_error) = self
+                    .module
+                    .contextual_type_reports
+                    .get(&name_at)
+                    .and_then(|reports| {
+                        reports
+                            .iter()
+                            .find(|report| report.code.as_str() == codes::DEFAULT_FORMAL_ARGUMENT)
+                    })
+                    .cloned()
+            {
+                // The value reading is excluded. Retain the type and its
+                // diagnostics independently until this pair's role is known.
+                let before = self.diagnostics.len();
+                let ty = self.type_(&argument, position);
+                let reports = self.diagnostics.as_slice()[before..].to_vec();
+                self.diagnostics.truncate(before);
+                self.paired_default_names.insert(
+                    self.at(argument.span()),
+                    crate::program::PairedDefaultName {
+                        value_error,
+                        type_errors: reports,
+                    },
+                );
+                arguments.push(Argument::Type(ty));
+            } else if defer_contextual
+                && kind == SyntaxKind::NamedType
                 && child(&argument, SyntaxKind::QualifiedName).is_none()
                 && child(&argument, SyntaxKind::GenericArgs).is_none()
                 && name_token(&argument).is_some_and(|name| name.text() == "Type")

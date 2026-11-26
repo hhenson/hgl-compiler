@@ -1061,6 +1061,63 @@ fn field_initializer(declaration: &SyntaxNode, field: &Field) -> Option<SyntaxNo
         .and_then(|member| default_of(&member))
 }
 
+/// UNIT-7 and FN-4/17: a generic value default is normally read by the
+/// constant evaluator. Resolve any excluded name used in a paired call by
+/// typing the surrounding expression, even if no caller uses this default.
+pub(super) fn check_generic_default_names(
+    program: &Program,
+    module: &crate::program::Module,
+    index: usize,
+    found: Tables<'_>,
+    diagnostics: &mut Diagnostics,
+) {
+    let declaration = &module.declarations[index];
+    let written = &declaration.syntax;
+    let struct_signature;
+    let signature = match &module.details[index] {
+        Detail::Callable(signature) => signature,
+        Detail::Struct(read) => {
+            struct_signature = Signature::of_struct(read);
+            &struct_signature
+        }
+        _ => return,
+    };
+    for generic in &signature.generics {
+        let GenericKind::Value(expected) = &generic.kind else {
+            continue;
+        };
+        let Some(default) = generic_default(written, generic) else {
+            continue;
+        };
+        let span = default.span();
+        if !module.paired_default_names.keys().any(|at| {
+            at.file == declaration.at.file && span.start <= at.span.start && at.span.end <= span.end
+        }) {
+            continue;
+        }
+        let mut typer = Typer::bare(program, module, declaration, signature, found, diagnostics);
+        let mark = typer.mark();
+        let before = typer.diagnostics.len();
+        typer.expression(&default, Some(expected));
+        // The constant evaluator owns this default's other diagnostics.
+        let selected: Vec<_> = typer.diagnostics.as_slice()[before..]
+            .iter()
+            .filter(|report| {
+                module.paired_default_names.values().any(|readings| {
+                    readings.type_errors.contains(report) || readings.value_error == **report
+                })
+            })
+            .cloned()
+            .collect();
+        typer.take_back(mark, false);
+        for report in selected {
+            if !typer.diagnostics.as_slice().contains(&report) {
+                typer.diagnostics.emit(report);
+            }
+        }
+    }
+}
+
 /// The default a declaration writes for its generic value parameter
 /// `generic` (GEN-2).
 pub(crate) fn generic_default(

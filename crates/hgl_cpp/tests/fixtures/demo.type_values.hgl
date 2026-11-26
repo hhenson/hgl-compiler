@@ -460,3 +460,12 @@ test generic_defaults_can_name_types_that_share_a_field_or_formal_name {
     assert quote_descriptor(2) == type(DefaultQuote<DefaultPrice>(bid: default_amount))
     assert trade_price(DefaultTrade(DefaultPrice: 77)) == 77
 }
+
+# FN-4, GEN-14 and UNIT-7: the temporal definition is written first, but
+# this cold default calls the value definition and supplies a nominal type.
+fn default_role<const units:i64>(amount:i64) -> i64 => units
+const fn default_role<V>(amount:V) -> V => amount
+const fn default_role_descriptor<const Kind:Type = type(default_role<DefaultPrice>(default_amount))>(DefaultPrice:i64) -> Type => Kind
+test generic_default_uses_the_selected_callee_role {
+    assert default_role_descriptor(3) == type(default_amount)
+}

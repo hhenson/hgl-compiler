@@ -1235,3 +1235,58 @@ struct Bad<const K: Type = type(Tag<Price>(n: 1))> { Price: i64 }
         checked.report
     );
 }
+
+/// FN-4, FN-17, UNIT-7 and GEN-14: the selected role, in either
+/// declaration order, determines the namespace of its written argument.
+#[test]
+fn a_default_uses_the_selected_generic_slot_of_a_callable_pair() {
+    for reverse in [false, true] {
+        let paired = |value: &str, temporal: &str| {
+            if reverse {
+                format!("{temporal}\n{value}")
+            } else {
+                format!("{value}\n{temporal}")
+            }
+        };
+        let type_pair = paired(
+            "const fn pick<T>(v:T)->i64=>17",
+            "fn pick<const N:i64>(v:i64)->i64=>N",
+        );
+        let value_pair = paired(
+            "const fn choose_count<const N:i64>(v:i64)->i64=>N",
+            "fn choose_count<T>(v:T)->i64=>19",
+        );
+        let source = format!(
+            r#"module m
+struct Key {{ value: i64 }}
+const row: Key = Key(value: 9)
+const size: i64 = 29
+{type_pair}
+{value_pair}
+const fn call(f:const fn(Key)->i64)->i64=>f(row)
+const fn use_int(f:const fn(i64)->i64)->i64=>f(7)
+const fn direct<const Kind:Type=type(pick<Key>(row))>(Key:i64)->Type=>Kind
+struct Callback<const Kind:Type=type(call(pick<Key>))> {{ Key:i64 }}
+const fn wrong<const N:i64=choose_count<size>(7)>(size:i64)->i64=>N
+struct Wrong<const Kind:Type=type(use_int(choose_count<size>))> {{ size:i64 }}
+"#
+        );
+        let checked = check(&[("m.hgl", &source)]);
+        let codes: Vec<_> = checked
+            .findings
+            .iter()
+            .map(|report| report.code.as_str())
+            .collect();
+        assert_eq!(
+            codes, ["name/default.formal_argument"; 2],
+            "{source}\n{}",
+            checked.report
+        );
+        assert!(
+            checked
+                .findings
+                .iter()
+                .all(|report| report.message.contains("size"))
+        );
+    }
+}
