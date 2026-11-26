@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
-use hgl_source::Span;
+use hgl_source::{FileId, Span};
 
 use super::constants::constant_text;
 use super::dependent_packs::MemberFault;
@@ -38,7 +38,7 @@ pub(crate) fn has_dependent_index(
     body: &Body,
 ) -> bool {
     let mut dependent = false;
-    let mut unread_spans = Vec::new();
+    let mut unread_locations = Vec::new();
     let mut unread_dependent_calls = Vec::new();
     super::forwarded_packs::walk_nested_calls(&body.statements, &mut |value| match &value.kind {
         ExprKind::Index { base, .. }
@@ -50,19 +50,19 @@ pub(crate) fn has_dependent_index(
             dependent = true;
         }
         ExprKind::Unread => {
-            unread_spans.push(value.at.span);
+            unread_locations.push(value.at);
         }
         ExprKind::Call {
             callee: Callee::Unread | Callee::DeferredPackCall,
             arguments,
             ..
         } => {
-            unread_spans.push(value.at.span);
+            unread_locations.push(value.at);
             if arguments
                 .iter()
                 .any(|arg| crate::declared::names_parameter(&arg.value.ty))
             {
-                unread_dependent_calls.push(value.at.span);
+                unread_dependent_calls.push(value.at);
             }
         }
         _ => {}
@@ -70,7 +70,7 @@ pub(crate) fn has_dependent_index(
     if dependent {
         return true;
     }
-    if unread_spans.is_empty() {
+    if unread_locations.is_empty() {
         return false;
     }
     let Some(unit) = program.modules.get(module) else {
@@ -79,6 +79,20 @@ pub(crate) fn has_dependent_index(
     let Some(declared) = unit.declarations.get(declaration) else {
         return false;
     };
+    let file = declared.at.file;
+    let unread_spans: Vec<Span> = unread_locations
+        .into_iter()
+        .filter(|location| location.file == file)
+        .map(|location| location.span)
+        .collect();
+    if unread_spans.is_empty() {
+        return false;
+    }
+    let unread_dependent_calls: Vec<Span> = unread_dependent_calls
+        .into_iter()
+        .filter(|location| location.file == file)
+        .map(|location| location.span)
+        .collect();
     let dependent_locals: HashSet<&str> = body
         .locals
         .iter()
@@ -88,9 +102,11 @@ pub(crate) fn has_dependent_index(
     // FN-7: direct anonymous calls and standalone anonymous functions are
     // checked without retaining their body HIR. Recheck only when a discarded
     // anonymous function contains a bracket syntax node and touches a generic
-    // parameter via capture, written type, or direct-call argument.
+    // parameter via capture, written type in the declaration's file, or
+    // direct-call argument.
     has_dependent_anonymous_index(
         unit,
+        file,
         &declared.syntax,
         &unread_spans,
         &unread_dependent_calls,
@@ -104,6 +120,7 @@ fn contains_span(outer: Span, inner: Span) -> bool {
 
 fn has_dependent_anonymous_index(
     unit: &Module,
+    file: FileId,
     node: &SyntaxNode,
     unread_spans: &[Span],
     unread_dependent_calls: &[Span],
@@ -116,7 +133,13 @@ fn has_dependent_anonymous_index(
         let span = node.span();
         let discarded = unread_spans.iter().any(|&outer| contains_span(outer, span));
         if discarded
-            && anonymous_has_dependent_index(unit, node, unread_dependent_calls, dependent_locals)
+            && anonymous_has_dependent_index(
+                unit,
+                file,
+                node,
+                unread_dependent_calls,
+                dependent_locals,
+            )
         {
             return true;
         }
@@ -124,6 +147,7 @@ fn has_dependent_anonymous_index(
     node.children().any(|part| {
         has_dependent_anonymous_index(
             unit,
+            file,
             &part,
             unread_spans,
             unread_dependent_calls,
@@ -134,6 +158,7 @@ fn has_dependent_anonymous_index(
 
 fn anonymous_has_dependent_index(
     unit: &Module,
+    file: FileId,
     function: &SyntaxNode,
     unread_dependent_calls: &[Span],
     dependent_locals: &HashSet<&str>,
@@ -162,7 +187,9 @@ fn anonymous_has_dependent_index(
         return true;
     }
     unit.written.iter().any(|written| {
-        contains_span(span, written.at.span) && crate::declared::names_parameter(&written.ty)
+        written.at.file == file
+            && contains_span(span, written.at.span)
+            && crate::declared::names_parameter(&written.ty)
     })
 }
 
@@ -1002,7 +1029,7 @@ fn has_members(ty: &Type) -> bool {
 #[cfg(test)]
 mod tests {
     use hgl_diagnostics::Diagnostics;
-    use hgl_parser::{Entry, Limits, parse};
+    use hgl_parser::{Entry, HasSpan, Limits, parse};
     use hgl_source::SourceMap;
 
     use super::has_dependent_index;
@@ -1094,5 +1121,61 @@ mod tests {
                 "`{expected_false}` should NOT trigger dependent-index rechecking"
             );
         }
+    }
+
+    #[test]
+    fn anonymous_written_type_check_ignores_other_files_in_same_module() {
+        let file_a = concat!(
+            "module m\n",
+            "const fn concrete_anon<T>(x: T, xs: list<i64>) -> i64 => (fn(i: i64) => xs[i])(0)\n",
+        );
+        let file_b = concat!(
+            "module m\n",
+            "const fn other_file<T>(padding_0: i64, padding_1: i64, y: T?) -> i64 => 0\n",
+        );
+        let mut sources = SourceMap::new();
+        let mut diagnostics = Diagnostics::new();
+        let parsed: Vec<ParsedFile> = [("a.hgl", file_a), ("b.hgl", file_b)]
+            .into_iter()
+            .map(|(name, text)| {
+                let file = sources.add(name, text).unwrap();
+                let tokens = hgl_lexer::lex(&sources, file, &mut diagnostics);
+                let tree = parse(
+                    &sources,
+                    file,
+                    &tokens,
+                    Entry::SourceFile,
+                    Limits::default(),
+                    &mut diagnostics,
+                );
+                ParsedFile::new(file, tree.syntax())
+            })
+            .collect();
+        let program = analyse(&parsed, &mut diagnostics);
+        let unit = &program.modules[0];
+        let position = unit
+            .declarations
+            .iter()
+            .position(|declaration| declaration.name == "concrete_anon")
+            .unwrap();
+        let declared = &unit.declarations[position];
+        let fn_span = declared
+            .syntax
+            .descendants()
+            .find(|node| node.kind() == hgl_parser::SyntaxKind::FnExpr)
+            .unwrap()
+            .span();
+        // Verify another file in the same module has a generic written type
+        // whose byte offsets fall inside `concrete_anon`'s `FnExpr` span.
+        assert!(
+            unit.written.iter().any(|written| {
+                written.at.file != declared.at.file
+                    && super::contains_span(fn_span, written.at.span)
+                    && crate::declared::names_parameter(&written.ty)
+            }),
+            "test setup must place another file's generic written type within `fn_span`"
+        );
+        let body = unit.bodies[position].as_ref().unwrap();
+        assert!(!has_dependent_index(&program, (0, position), body));
     }
 }
