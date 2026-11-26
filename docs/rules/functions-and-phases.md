@@ -51,7 +51,7 @@ analyser: partial
 - A temporal and a value definition may share a name
 - A call in a graph takes the temporal definition of a pair when given a connection, and the value definition when all arguments are ordinary (FN-6, GEN-5)
 - A temporal function name, or an anonymous function that captures a connection or calls a temporal function, selects the temporal definition (FN-17, GEN-6). A callable both roles admit directly leaves the choice to the other arguments. The selected definition checks its template's input types.
-- A graph that passes a bound `const fn` parameter's result to a named pair uses the callback's actual inputs and captures to choose the role (FN-6, FN-17).
+- A graph that passes a bound `const fn` parameter's result to a named pair uses the callback's actual inputs and captures to choose the role. The selected definition checks its own inputs and result uses once the callback binds (FN-6, FN-17).
 - The selected definition checks the call's signature
 - Nested anonymous callbacks given to pairs reuse phase checks across unread lexical locals, branches, and monotonic temporal probes, and skip redundant inner committed reads while probing a role so each callback is read a bounded number of times at arbitrary nesting depth. A referenced local whose category or type affects selection still keeps its actual phase and type. In a generic pair, an unresolved callback input leaves independent result and parameter-annotation evidence in declared argument order (GEN-2, FN-17).
 - A call in value code takes the value definition. An eval's target takes the temporal definition where it exists.
