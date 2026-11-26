@@ -121,6 +121,7 @@ analyser: partial
 
 transpiler: partial
 
+- A scalar `out` read in a `when` sees the latest write in the evaluation or the retained value. A read in `stop` sees the last published value.
 - Publishes returns, whole `out` assignments and supported struct or tuple child writes.
   Whole-output invalidation notifies readers of supported collections. A source
   yields whole values or deltas. A window result exposes its latest
@@ -174,6 +175,7 @@ analyser: partial
 
 - In a node's hooks the endpoint operations are read as the forms they are, by their name or through an alias of core, `c::valid(a)`, whether core declares them or nothing does yet: `valid`, `all_valid`, `modified` and `scheduled` are bools, `delta_value` the `delta<T>` of the input's type (TYPE-16), or where its place takes a `result` that result (ERR-14), `last_modified` a `datetime?`; each takes a temporal input of the node by its name, or `out` (`endpoint.argument`), and `valid`, `all_valid`, `modified`, `delta_value` and `last_modified` a child of one, `parts[1]`, `quote.bid`, `parts[i]`, alone (END-8); an `atomic<V>`'s field is no child; a selector may stand with no argument or with several inputs, and `valid` and `modified` with `[]`
 - An `endpoint<T>` parameter of a native value function is given an input by its name, a child of one, or `out`, in a hook, and its payload is not read; anything else, and any argument in a graph or a value function, is `endpoint.argument`
+- Its default retains the endpoint expectation in the cold defining scope (UNIT-7, UNIT-8), so an ordinary value cannot supply the borrowed binding, even where the payload type remains generic.
 - Core declares the endpoint operations, including `delta_value` (UNIT-12)
 - `scheduled()` in a node that injects neither `scheduler` nor `alarm` is `inject.no_scheduler`: in a hook, a `state`'s or a `cache`'s initialiser, and a source's body (SOURCE-1)
 - The unqualified call still selects the wake when the same name binds a declaration or a local (UNIT-10).
@@ -189,9 +191,9 @@ analyser: partial
 - In a guard it sets neither subscription nor validity
 - An `endpoint<T>` result or state member rejects with `endpoint.position` (TYPE-12).
 - Left: An operator call through an ordinary public parameter does not match
-  the native candidate's borrowed endpoint parameter. The analyser accepts a
-  plain value default for a borrowed endpoint and accepts `scheduled()` in
-  state initializers and inline callbacks in a node with a scheduler.
+  the native candidate's borrowed endpoint parameter. The analyser accepts
+  `scheduled()` in state initializers and inline callbacks in a node with a
+  scheduler.
 
 transpiler: partial
 
