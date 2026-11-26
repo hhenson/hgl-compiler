@@ -20,6 +20,7 @@ use super::dependent_packs::{
 };
 use super::expressions::written_null;
 use super::fit::{is_integer_literal, negated, open, whole};
+use super::forms::received_type;
 use super::function_arguments::CallbackInputs;
 use super::inference::{
     ExplicitGenerics, bare_parameter, defaulted_argument, infer, infer_from_place, mentions,
@@ -1877,10 +1878,18 @@ impl<'a> Typer<'a> {
                 }
             } else {
                 let value = self.argument_read(argument.clone(), &ty);
-                if !fixed_list_fits(&ty, &value.ty) {
-                    let place = format!("the parameter `{}`", parameter.name);
-                    self.fit_input(value, &ty, &place);
-                }
+                // TYPE-10: keep the supplied extent when checking an
+                // unsized pattern, including through the usual reads.
+                let given_type = received_type(&value.ty, |_| true);
+                let ty = match &ty {
+                    Type::Nullable(payload) if fixed_list_fits(payload, given_type) => {
+                        Type::Nullable(Box::new(given_type.clone()))
+                    }
+                    _ if fixed_list_fits(&ty, given_type) => given_type.clone(),
+                    _ => ty,
+                };
+                let place = format!("the parameter `{}`", parameter.name);
+                self.fit_input(value, &ty, &place);
             }
             rejected.extend(
                 self.diagnostics.as_slice()[mark.diagnostics..]

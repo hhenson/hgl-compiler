@@ -93,6 +93,11 @@ fn a_written_list_element_type_keeps_fixed_list_admission() {
         "const fn good(items: list<i64, 2>) -> i64 => pick<i64>(items)\n",
         "const fn bad(items: list<str, 2>) -> i64 => pick<i64>(items)\n",
         "fn lifted(items: list<i64, 2>) -> i64 => pick<i64>(items)\n",
+        "const fn read_nullable(items: list<i64, 2>?) -> i64 => pick<i64>(items)\n",
+        "const fn read_result(items: result<list<i64, 2>, error>) -> i64 => pick<i64>(items)\n",
+        "operator optional<T>(items: list<T>?) -> i64\n",
+        "impl const fn optional(items: list<i64, 2>) -> i64 => 3\n",
+        "const fn pass_fixed(items: list<i64, 2>) -> i64 => optional<i64>(items)\n",
     ));
     assert_eq!(checked.summary(), ["m.hgl:6:55 type/type.mismatch EXPR-5"]);
 }
