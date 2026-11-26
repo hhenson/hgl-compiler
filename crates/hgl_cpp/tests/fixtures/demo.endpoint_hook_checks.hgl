@@ -50,3 +50,34 @@ fn unadmitted_delta(pulse: bool, input: i64) -> i64 {
     # expect-error(phase, "payload.unguarded")
     when modified(pulse) && valid([]) { return delta_value(input) }
 }
+
+# TIME-7: the second handler sees a write by the first or the retained value.
+fn count_from_out(step: i64) -> i64 {
+    inject out
+    when {
+        if step < 0 { invalidate(out) }
+        if step == 1 { out = 5 }
+    }
+    when {
+        if step > 0 {
+            if valid(out) { return out + 1 }
+        }
+    }
+}
+
+# TIME-7: a scalar read in stop sees the last publication.
+fn final_word(word: str) -> str {
+    inject out
+    when { return word }
+    stop {
+        if valid(out) {
+            if out == "fail" { let failed = 1 // 0 }
+        }
+    }
+}
+
+test scalar_out_reads_the_staged_or_retained_value {
+    assert eval count_from_out(step: [3, 1, 2, 0, 2, -1, 2, 1]) == [_, 6, 7, _, 8, _, _, 6]
+    assert eval final_word(word: ["fail", "pass"]) == ["fail", "pass"]
+    assert raises("numeric.division_by_zero") { eval final_word(word: ["pass", "fail"]) }
+}
