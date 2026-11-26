@@ -36,8 +36,8 @@ analyser: partial
   the connection category of its result, including through a local binding.
   The result depends on reached captures, supplied callbacks, selectors and
   writes that determine the returned value (CTRL-13 to CTRL-15, EXPR-16).
-  The check uses known fixed-range bindings to determine which returns are
-  reached, with bounds used for simple comparisons in large ranges.
+  The check follows known fixed ranges in order, using comparisons and case
+  labels to determine which returns are reached in large ranges.
 
 transpiler: done
 

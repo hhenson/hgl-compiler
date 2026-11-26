@@ -80,12 +80,10 @@ impl<'a> ImmediateValues<'a> {
         if let Some(LabelValue::Bool(value)) = self.selector(expression) {
             return Some(value);
         }
-        if self.ranges.is_empty()
-            || !crate::const_inputs::builtin_operation(self.program, expression)
-        {
+        if self.ranges.is_empty() {
             return None;
         }
-        let (operator, left, right) = expression.kind.binary()?;
+        let (operator, left, right) = self.builtin_binary(expression)?;
         if matches!(operator, BinaryOperator::And | BinaryOperator::Or) {
             let left = self.condition(left)?;
             return if left == (operator == BinaryOperator::Or) {
@@ -116,13 +114,46 @@ impl<'a> ImmediateValues<'a> {
         (always || never).then_some(always)
     }
 
+    /// A known threshold compared directly with this range's binding.
+    pub(super) fn comparison_boundary(self, expression: &Expr, binding: LocalId) -> Option<i64> {
+        use BinaryOperator::{Equal, Greater, GreaterEqual, Less, LessEqual, NotEqual};
+        let (operator, left, right) = self.builtin_binary(expression)?;
+        if !matches!(
+            operator,
+            Equal | NotEqual | Less | LessEqual | Greater | GreaterEqual
+        ) {
+            return None;
+        }
+        let other = match (&left.kind, &right.kind) {
+            (ExprKind::Local(local), _) if *local == binding => right,
+            (_, ExprKind::Local(local)) if *local == binding => left,
+            _ => return None,
+        };
+        let LabelValue::Int(value) = self.selector(other)? else {
+            return None;
+        };
+        Some(value)
+    }
+
+    fn builtin_binary(self, expression: &Expr) -> Option<(BinaryOperator, &Expr, &Expr)> {
+        let binary = expression.kind.binary()?;
+        crate::const_inputs::builtin_operation(self.program, expression).then_some(binary)
+    }
+
+    /// Inclusive integer bounds of an active range binding.
+    pub(super) fn range_bounds(self, expression: &Expr) -> Option<(i64, i64)> {
+        let ExprKind::Local(local) = expression.kind else {
+            return None;
+        };
+        let (_, range) = self.ranges.iter().find(|(id, _)| *id == local)?;
+        // Only nonempty ranges are installed, so end - 1 cannot overflow.
+        Some((range.start, range.end - 1))
+    }
+
     /// Inclusive integer bounds of a known value or an active range binding.
     fn integer_bounds(self, expression: &Expr) -> Option<(i64, i64)> {
-        if let ExprKind::Local(local) = expression.kind
-            && let Some((_, range)) = self.ranges.iter().find(|(id, _)| *id == local)
-        {
-            // Only nonempty ranges are installed, so end - 1 cannot overflow.
-            return Some((range.start, range.end - 1));
+        if let Some(bounds) = self.range_bounds(expression) {
+            return Some(bounds);
         }
         let LabelValue::Int(value) = self.selector(expression)? else {
             return None;

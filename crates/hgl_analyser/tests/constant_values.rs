@@ -1100,6 +1100,10 @@ fn a_local_list_size_uses_reached_fixed_range_values() {
         "for n in 0..<100 { for m in 0..<3 { if n == 100 && m == 2 { return input } } }",
         "for n in 0..<1000000000000 { if n == 1000000000000 { return input } }",
         "for n in 0..<1000000000000 { if n == 0 { return 3 }\nif n == 1 { return input } }",
+        "for n in 10..<150 { if n == 11 { return 3 }\nif n == 12 { return input } }",
+        "for n in 10..<210 { if n == 160 { return 3 }\nif n == 161 { return input } }",
+        "for n in 10..<1000000000000 { if n == 999999999998 { return 3 }\nif n == 999999999999 { return input } }",
+        "for n in 10..<210 { switch n { case 160: return 3\ncase 161: return input } }",
         "for n in 0..<1000000000000 { for m in 2..<4 { if 1000000000000 <= n { return input } } }",
     ] {
         expect(&program(body), &[]);
@@ -1112,6 +1116,10 @@ fn a_local_list_size_uses_reached_fixed_range_values() {
         "for n in 0..<100 { for m in 0..<3 { if n == 99 && m == 2 { return input } } }",
         "for n in 0..<1000000000000 { if n == 999999999999 { return input } }",
         "for n in 0..<1000000000000 { if n == 500000000000 { return input } }",
+        "for n in 10..<150 { if n == 13 { return 3 }\nif n == 12 { return input } }",
+        "for n in 10..<210 { if n == 162 { return 3 }\nif n == 161 { return input } }",
+        "for n in 10..<1000000000000 { if n == 999999999999 { return 3 }\nif n == 999999999998 { return input } }",
+        "for n in 10..<210 { switch n { case 161: return input\ncase 162: return 3 } }",
     ] {
         let line = 6 + body.lines().count();
         expect(&program(body), &[&format!("{line} list.size")]);

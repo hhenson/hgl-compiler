@@ -1,20 +1,25 @@
 //! The category of a reached return in an immediate anonymous call.
 //! The call's typed body is discarded after this check (TIME-2, TYPE-10).
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 
 use super::super::{Typer, lifting::ImmediateValues};
 use super::ImmediateBindings;
 use crate::hir::ValueCategory::{Connection, Value as Ordinary};
-use crate::hir::{BinaryOperator, Case, Expr, ExprKind, LabelValue, LocalId, Node, Stmt, Value};
+use crate::hir::{
+    BinaryOperator, Case, Expr, ExprKind, LabelValue, LocalId, Node, Stmt, Value,
+    walk_statement_nodes,
+};
 use crate::program::LocalKind;
 use crate::types::{ConstantValue, Scalar, Type};
 
 // The calls we classify here have value bodies, with no composition unroll.
 // Share one limit between all their fixed ranges, including nested loops.
 const RANGE_PASSES: u64 = 128;
+// Comparison and case boundaries also share one limit across nested ranges.
+const RANGE_SPLITS: usize = 128;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Return {
@@ -29,6 +34,7 @@ struct Flow<'a, 'p> {
     enclosing_bindings: usize,
     ranges: Vec<(LocalId, Range<i64>)>,
     range_passes_left: u64,
+    range_splits_left: usize,
     live: HashSet<LocalId>,
 }
 
@@ -43,6 +49,7 @@ pub(super) fn result_is_live(
         enclosing_bindings: known.len(),
         ranges: Vec::new(),
         range_passes_left: RANGE_PASSES,
+        range_splits_left: RANGE_SPLITS,
         live: HashSet::new(),
     };
     flow.statements(body, false) == Err(Return::Connection)
@@ -238,7 +245,14 @@ impl Flow<'_, '_> {
         // CTRL-15: the live selector chooses a case's return or assignment.
         let controlled = controlled || self.reads_live(selector);
         let exhaustive = self.typer.enum_members(&selector.ty) == Some(cases.len());
-        let bodies = cases.iter().map(|case| case.body.as_slice());
+        let bounds = self.known().range_bounds(selector);
+        let bodies = cases
+            .iter()
+            .filter(|case| match (&case.value, bounds) {
+                (Some(LabelValue::Int(value)), Some((min, max))) => (min..=max).contains(value),
+                _ => true,
+            })
+            .map(|case| case.body.as_slice());
         let otherwise = default.or_else(|| (!exhaustive).then_some(&[][..]));
         self.alternatives(bodies.chain(otherwise), |flow, body| {
             flow.statements(body, controlled)
@@ -271,30 +285,109 @@ impl Flow<'_, '_> {
                 return Ok(());
             };
             self.range_passes_left -= 1;
-            let enclosing = self.bindings.len();
-            self.bindings.push((
-                binding,
-                Rc::new(Expr {
-                    kind: ExprKind::Literal(Value::Int(value)),
-                    at: sequence.at,
-                    ty: Type::Scalar(Scalar::I64),
-                    category: Ordinary,
-                }),
-            ));
-            let checked = self.statements(body, controlled);
-            self.bindings.truncate(enclosing);
-            checked?;
+            self.range_pass(binding, sequence, value, body, controlled)?;
         }
         if range.is_empty() {
             return Ok(());
         }
-        // A remaining pass can see any of these values. Keep the bounds
-        // for comparisons, and join writes without enumerating the range.
+        // Split the remainder at known source comparisons so an ordinary
+        // return still ends the loop before later iterations are considered.
+        for upper in self.range_boundaries(binding, &range, body) {
+            let Some(remaining) = self.range_splits_left.checked_sub(1) else {
+                break;
+            };
+            self.range_splits_left = remaining;
+            self.range_piece(binding, sequence, range.start..upper, body, controlled)?;
+            range.start = upper;
+        }
+        self.range_piece(binding, sequence, range, body, controlled)
+    }
+
+    fn range_pass(
+        &mut self,
+        binding: LocalId,
+        sequence: &Expr,
+        value: i64,
+        body: &[Stmt],
+        controlled: bool,
+    ) -> Result<(), Return> {
+        let enclosing = self.bindings.len();
+        self.bindings.push((
+            binding,
+            Rc::new(Expr {
+                kind: ExprKind::Literal(Value::Int(value)),
+                at: sequence.at,
+                ty: Type::Scalar(Scalar::I64),
+                category: Ordinary,
+            }),
+        ));
+        let checked = self.statements(body, controlled);
+        self.bindings.truncate(enclosing);
+        checked
+    }
+
+    fn range_piece(
+        &mut self,
+        binding: LocalId,
+        sequence: &Expr,
+        range: Range<i64>,
+        body: &[Stmt],
+        controlled: bool,
+    ) -> Result<(), Return> {
         let passes = range.start.abs_diff(range.end);
+        if passes == 1 {
+            return self.range_pass(binding, sequence, range.start, body, controlled);
+        }
+        // A pass can see any value in this piece. Join its writes with
+        // those of later passes, using the bounds for known comparisons.
         self.ranges.push((binding, range));
         let checked = self.loop_passes(body, Some(passes), false, |_| controlled);
         self.ranges.pop();
         checked
+    }
+
+    fn range_boundaries(
+        &self,
+        binding: LocalId,
+        range: &Range<i64>,
+        body: &[Stmt],
+    ) -> BTreeSet<i64> {
+        let mut boundaries = BTreeSet::new();
+        if self.range_splits_left != 0 {
+            let known = self.known();
+            let mut insert = |boundary: i64| {
+                // Equality and a case label both isolate a single pass.
+                for point in [Some(boundary), boundary.checked_add(1)]
+                    .into_iter()
+                    .flatten()
+                {
+                    if point > range.start && range.contains(&point) {
+                        boundaries.insert(point);
+                        if boundaries.len() > self.range_splits_left {
+                            boundaries.pop_last();
+                        }
+                    }
+                }
+            };
+            walk_statement_nodes(body, &mut |node| match node {
+                Node::Expression(value) => {
+                    if let Some(boundary) = known.comparison_boundary(value, binding) {
+                        insert(boundary);
+                    }
+                }
+                Node::Statement(Stmt::Switch {
+                    selector, cases, ..
+                }) if matches!(selector.kind, ExprKind::Local(local) if local == binding) => {
+                    for case in cases {
+                        if let Some(LabelValue::Int(value)) = &case.value {
+                            insert(*value);
+                        }
+                    }
+                }
+                _ => {}
+            });
+        }
+        boundaries
     }
 
     fn passes(&self, sequence: &Expr) -> Option<u64> {
