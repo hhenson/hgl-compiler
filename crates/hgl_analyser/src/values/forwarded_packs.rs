@@ -940,6 +940,164 @@ pub(crate) struct ForwardingInstance {
     test_candidates: Option<crate::TestCandidateScope>,
 }
 
+/// GEN-7, FN-17/19: inputs that can change a forwarding body's checks.
+/// Runtime copies of an already checked anonymous source are not new
+/// generic arguments. Keep their typed source graph instead of their
+/// recursively substituted bodies. The complete HIR remains in the instance.
+#[derive(PartialEq)]
+struct ForwardingCheck {
+    declaration: (usize, usize),
+    generics: Vec<crate::Argument>,
+    requirements: Vec<crate::hir::Answer>,
+    functions: Vec<(usize, CallableCheck)>,
+    type_packs: Vec<crate::hir::TypePackArgument>,
+    pack_inputs: Vec<crate::hir::PackInput>,
+    constants: crate::const_inputs::ReadInputs,
+    test_candidates: Option<crate::TestCandidateScope>,
+    body_calls: Option<Vec<CheckedCall>>,
+    body_reports: Vec<hgl_diagnostics::Diagnostic>,
+}
+
+impl ForwardingCheck {
+    fn of(program: &crate::Program, instance: &ForwardingInstance) -> Self {
+        Self {
+            declaration: instance.declaration,
+            generics: instance.generics.clone(),
+            requirements: instance.requirements.clone(),
+            functions: instance
+                .functions
+                .iter()
+                .map(|(slot, callee)| (*slot, CallableCheck::of(program, callee)))
+                .collect(),
+            type_packs: instance.type_packs.clone(),
+            pack_inputs: instance.pack_inputs.clone(),
+            constants: instance.constants.clone(),
+            test_candidates: instance.test_candidates,
+            body_calls: None,
+            body_reports: Vec::new(),
+        }
+    }
+}
+
+/// One callable's validation graph. Edges retain selected identities and
+/// demanded constants; anonymous vertices retain their complete type context.
+struct CallableCheck {
+    root: CallableSource,
+    bodies: Vec<AnonymousCheck>,
+}
+
+impl PartialEq for CallableCheck {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root
+            && self.bodies.len() == other.bodies.len()
+            && self.bodies.iter().all(|body| other.bodies.contains(body))
+    }
+}
+
+#[derive(PartialEq)]
+enum CallableSource {
+    Selected(Callee),
+    Anonymous {
+        at: Location,
+        // Boxing the template keeps every call/source key compact.
+        template: Box<crate::types::FunctionType>,
+        specialization: crate::hir::AnonymousSpecialization,
+        captures: Vec<(Location, Type, ValueCategory, Option<PackKey>)>,
+    },
+}
+
+impl CallableSource {
+    fn of(callee: &Callee) -> Self {
+        let Callee::Anonymous(function) = callee else {
+            return Self::Selected(callee.clone());
+        };
+        Self::Anonymous {
+            at: function.at,
+            template: Box::new(function.template.clone()),
+            specialization: function.specialization.clone(),
+            captures: (0..function.captures.len())
+                .map(|index| {
+                    let local = &function.body.locals[function.template.parameters.len() + index];
+                    (
+                        local.at,
+                        local.ty.clone(),
+                        local.category,
+                        function.capture_pack_key(index).cloned(),
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(PartialEq)]
+struct AnonymousCheck {
+    source: CallableSource,
+    calls: Vec<CheckedCall>,
+}
+
+/// A selected call and the ordinary values its compile-time checks read.
+type CheckedCall = (Location, CallableSource, crate::const_inputs::ReadInputs);
+
+fn checked_calls(program: &crate::Program, body: &crate::hir::Body) -> Vec<CheckedCall> {
+    let mut calls = Vec::new();
+    crate::hir::walk_statements(&body.statements, &mut |value| {
+        let (callee, constants) = match &value.kind {
+            ExprKind::Call {
+                callee, arguments, ..
+            } => (callee, program.known_const_inputs(callee, arguments)),
+            ExprKind::StaticCallable(callee) => {
+                (&**callee, crate::const_inputs::ReadInputs::default())
+            }
+            _ => return,
+        };
+        calls.push((value.at, CallableSource::of(callee), constants));
+    });
+    calls
+}
+
+impl CallableCheck {
+    fn of(program: &crate::Program, callee: &Callee) -> Self {
+        let mut bodies = Vec::new();
+        let mut waiting = vec![callee];
+        while let Some(callee) = waiting.pop() {
+            let Callee::Anonymous(function) = callee else {
+                continue;
+            };
+            let mut calls = Vec::new();
+            // Use the explicit-lifetime node walker so pending callees borrow
+            // their HIR. Following anonymous bodies needs no recursive clone.
+            crate::hir::walk_statement_nodes(&function.body.statements, &mut |node| {
+                let crate::hir::Node::Expression(value) = node else {
+                    return;
+                };
+                let (target, constants) = match &value.kind {
+                    ExprKind::Call {
+                        callee, arguments, ..
+                    } => (callee, program.known_const_inputs(callee, arguments)),
+                    ExprKind::StaticCallable(callee) => {
+                        (&**callee, crate::const_inputs::ReadInputs::default())
+                    }
+                    _ => return,
+                };
+                calls.push((value.at, CallableSource::of(target), constants));
+                waiting.push(target);
+            });
+            let body = AnonymousCheck {
+                source: CallableSource::of(callee),
+                calls,
+            };
+            if !bodies.contains(&body) {
+                bodies.push(body);
+            }
+        }
+        Self {
+            root: CallableSource::of(callee),
+            bodies,
+        }
+    }
+}
+
 impl crate::Program {
     /// The type and source key of each pack entry bound to a call (FN-8,
     /// FN-19). A concrete parameter type takes precedence over the type
@@ -1344,11 +1502,14 @@ pub(super) fn check_instances(
         let mut seen = Vec::new();
         let mut counts = HashMap::new();
         while let Some((instance, written, parent)) = waiting.pop_front() {
-            if seen.contains(&instance) {
+            let mut checking = ForwardingCheck::of(program, &instance);
+            let anonymous = instance
+                .functions
+                .iter()
+                .any(|(_, callee)| matches!(callee, Callee::Anonymous(_)));
+            if !anonymous && seen.contains(&checking) {
                 continue;
             }
-            let count = counts.entry(instance.declaration).or_insert(0);
-            *count += 1;
             let shape = PackShape::of(&instance);
             let ancestors = std::iter::successors(parent, |&index| parents[index].parent)
                 .map(|index| parents[index].shape);
@@ -1356,14 +1517,13 @@ pub(super) fn check_instances(
                 past_pack_growth_limit(at, instance.declaration, program, PACK_GROWTH, diagnostics);
                 break;
             }
-            if *count > crate::INSTANCES
-                || bounded_instance_key(
-                    instance.declaration,
-                    &instance.generics,
-                    &instance.type_packs,
-                    &instance.requirements,
-                )
-                .is_none()
+            if bounded_instance_key(
+                instance.declaration,
+                &instance.generics,
+                &instance.type_packs,
+                &instance.requirements,
+            )
+            .is_none()
             {
                 past_the_limit(&[at], instance.declaration, program, diagnostics);
                 break;
@@ -1378,6 +1538,35 @@ pub(super) fn check_instances(
                 &reports,
                 &mut graph_reports,
             );
+            if anonymous {
+                // A callback's computed value can feed a compile-time check
+                // in this body. Recheck it before reusing the source graph,
+                // and retain those selected calls, values and diagnostics.
+                checking.body_calls = checked
+                    .as_ref()
+                    .map(|checked| checked_calls(program, &checked.body));
+                checking.body_reports = graph_reports.as_slice().to_vec();
+                checking
+                    .body_reports
+                    .extend_from_slice(reports.borrow().as_slice());
+                if let Some(uses) = checked
+                    .as_ref()
+                    .and_then(|checked| checked.result_uses.as_ref())
+                {
+                    checking
+                        .body_reports
+                        .extend_from_slice(uses.reports.as_slice());
+                }
+                if seen.contains(&checking) {
+                    continue;
+                }
+            }
+            let count = counts.entry(instance.declaration).or_insert(0);
+            *count += 1;
+            if *count > crate::INSTANCES {
+                past_the_limit(&[at], instance.declaration, program, diagnostics);
+                break;
+            }
             let here = MakingPath::new(
                 MakingCall::new(
                     program,
@@ -1417,7 +1606,7 @@ pub(super) fn check_instances(
                         diagnostics,
                     );
                     if result_uses.reports.has_errors() {
-                        seen.push(instance);
+                        seen.push(checking);
                         continue;
                     }
                 }
@@ -1479,7 +1668,7 @@ pub(super) fn check_instances(
                     break;
                 }
             }
-            seen.push(instance);
+            seen.push(checking);
         }
     }
 }
@@ -1489,6 +1678,75 @@ mod tests {
     use super::{ForwardingInstance, PACK_GROWTH, PackInput, PackKey, PackShape, Scalar, Type};
     use crate::hir::{ReflectedInputs, TypePackArgument};
     use crate::{Argument, Constant, ConstantValue};
+
+    /// FN-14/17: three finite copies of one typed callback introduce
+    /// only a source edge and its selected leaf. A different leaf still
+    /// makes a different validation context. Runtime HIR stays distinct.
+    #[test]
+    fn callback_copies_share_checks_without_losing_selected_sources() {
+        use crate::hir::{
+            AnonymousFunction, Body, Callee, Expr, ExprKind, Form, Stmt, ValueCategory,
+        };
+        use crate::types::FunctionType;
+
+        let mut sources = hgl_source::SourceMap::new();
+        let file = sources.add("callback.hgl", "fn() => f()").unwrap();
+        let at = hgl_diagnostics::Location::new(file, hgl_source::Span::new(0, 11));
+        let named = |declaration| Callee::Function {
+            module: 0,
+            declaration,
+            generics: Vec::new(),
+            type_packs: Vec::new(),
+            requirements: Vec::new(),
+            defer_pack_members: false,
+            contextual: Vec::new(),
+            test_candidates: None,
+        };
+        let callback = |callee| {
+            Callee::Anonymous(Box::new(AnonymousFunction {
+                at,
+                template: FunctionType {
+                    value: true,
+                    parameters: Vec::new(),
+                    named_pack: None,
+                    result: Some(Type::Scalar(Scalar::I64)),
+                    result_admits_none: false,
+                    reference: false,
+                },
+                body: Body {
+                    locals: Vec::new(),
+                    statements: vec![Stmt::Expr(Expr {
+                        kind: ExprKind::Call {
+                            callee,
+                            arguments: Vec::new(),
+                            form: Form::Named,
+                            text: None,
+                            braced: Vec::new(),
+                            lifted: false,
+                        },
+                        ty: Type::Scalar(Scalar::I64),
+                        at,
+                        category: ValueCategory::Value,
+                    })],
+                },
+                captures: Vec::new(),
+                pack_captures: Vec::new(),
+                specialization: Default::default(),
+            }))
+        };
+        let one = callback(named(0));
+        let two = callback(one.clone());
+        let three = callback(two.clone());
+        let other = callback(callback(named(1)));
+        let program = crate::Program::default();
+        assert!(two != three);
+        assert!(
+            super::CallableCheck::of(&program, &two) == super::CallableCheck::of(&program, &three)
+        );
+        assert!(
+            super::CallableCheck::of(&program, &two) != super::CallableCheck::of(&program, &other)
+        );
+    }
 
     /// GEN-13: the growth bound follows increasing widths of the same
     /// declaration across a call path. Unchanged and unrelated shapes do

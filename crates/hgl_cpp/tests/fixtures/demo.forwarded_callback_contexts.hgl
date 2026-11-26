@@ -1,0 +1,37 @@
+module demo.forwarded_callback_contexts
+
+# GEN-7, FN-17/19: finite named and anonymous callbacks keep their own
+# type, source and captured callable contexts through an ordinary spread.
+const fn apply<T, ...As>(f: const fn(T) -> T, values: ...As) -> T => f(...values)
+const fn wrap<T, ...As>(f: const fn(T) -> T, values: ...As) -> T =>
+    apply<T>(fn(value) => f(value), ...values)
+const fn outer<T, ...As>(f: const fn(T) -> T, values: ...As) -> T =>
+    wrap<T>(fn(value) => f(value), ...values)
+const fn identity<T>(value: T) -> T => value
+const fn add_one(value: i64) -> i64 => value + 1
+const fn add_two(value: i64) -> i64 => value + 2
+const fn sum_wrapped<...As>(values: ...As) -> i64 =>
+    wrap<i64>(add_one, ...values) + wrap<i64>(add_two, ...values)
+
+test finite_forwarded_callbacks {
+    assert wrap<i64>(identity, 3) == 3
+    assert outer<i64>(identity, 4) == 4
+    assert outer<f64>(identity, 1.5) == 1.5
+    assert outer<str>(identity, "text") == "text"
+}
+
+test distinct_captured_callables {
+    assert sum_wrapped(4) == 11
+    assert sum_wrapped(-2) == -1
+}
+
+# FN-1, FMT-3/4: the callback's captured compile-time pattern keeps its
+# own validation context even when the source and argument types match.
+const fn apply_text<...As>(f: const fn(i64) -> str, values: ...As) -> str => f(...values)
+const fn captured_format<...As>(const pattern: str, values: ...As) -> str =>
+    apply_text(fn(value) => format(pattern, value), ...values)
+
+test distinct_captured_constants {
+    assert captured_format("{}", 3) == "3"
+    assert captured_format("{:04d}", 3) == "0003"
+}
