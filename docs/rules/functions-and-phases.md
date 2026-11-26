@@ -236,11 +236,12 @@ transpiler: partial
 
 parser: done
 
-- Function types in parameter positions take fixed inputs and packs, a result type and the optional `const fn` phase. Explicit generic function references are read as arguments.
+- Function types in parameter positions parse fixed inputs and the pack syntax, a result type and the optional `const fn` phase. Explicit generic function references are read as arguments.
 
 analyser: partial
 
 - Check the fixed template's phase, input names and input and result types. A value target may lift in a temporal template. An anonymous body's phase comes from the accepting template (FN-7).
+- A function type may reflect a named pack `...{Ps}` (GEN-17). A positional pack `...T` in a function type reports local `pack.function_type` at the ellipsis. Callable declarations may still declare positional packs (FN-8).
 - When a graph instance completes a call's parameter types, an anonymous callback takes the completed template in its lexical scope. Its synthesized capture inputs are separate from the written arguments (GEN-2).
 - Match a declared function or an operator's selected candidate, infer generic types in either direction, and accept explicit generic arguments on function and operator references. An operator reference uses the public signature, with the written arguments and the template together resolving its generic parameters. Static parameters may be called or passed onward. They hold no runtime value.
 - A named operator call reads a fixed callback against each candidate's function template, including when only the candidate declares the option. The other arguments can resolve its input types, its template sets an anonymous callback's phase, and the supplied function can resolve its result type (GEN-2, GEN-6).
