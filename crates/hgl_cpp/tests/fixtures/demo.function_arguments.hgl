@@ -34,6 +34,27 @@ test bound_callback_result_selects_pair {
     assert eval from_temporal_name(tick: [2, 4]) == [8, 10]
 }
 
+# FN-4: the graph can check the selected signature once its callback binds.
+const fn value_input(x: i64) -> i64 => x * 2
+fn value_input(x: str) -> i64 => 100
+const fn phase_result(x: i64) -> i64 => x * 2
+fn phase_result(x: i64) -> str => "live"
+const fn text_score(s: str) -> i64 => 17
+
+fn signature_inputs(f: const fn(i64) -> i64, tick: i64) -> i64 =>
+    tick + value_input(f(1))
+fn signature_results(f: const fn(i64) -> i64, g: const fn(i64) -> i64, tick: i64) -> i64 {
+    let numeric = phase_result(f(1))
+    let text = phase_result(g(1))
+    return tick + numeric + text_score(text)
+}
+fn bound_signatures(tick: i64) -> i64 =>
+    signature_inputs(increment, tick) + signature_results(increment, fn(n) => n + tick, tick)
+
+test callback_pair_signatures_wait_for_the_binding {
+    assert eval bound_signatures(tick: [2, 3]) == [29, 31]
+}
+
 const fn double<T>(input: T) -> T requires T in {i64, f64} => input + input
 
 operator triple<T>(input: T) -> T

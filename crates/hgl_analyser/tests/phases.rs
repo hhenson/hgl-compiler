@@ -729,3 +729,62 @@ fn scalar(tick: i64) -> i64 => receive(inc, tick)
         checked.report
     );
 }
+
+/// FN-4/17: an uncertain capture cannot excuse a declaration whose result
+/// is incompatible with either role, or an error independent of the pair.
+#[test]
+fn open_callback_pairs_preserve_impossible_and_independent_errors() {
+    let checked = check(&[(
+        "errors.hgl",
+        r#"module errors
+const fn pick(x: i64) -> i64 => 7
+fn pick(x: i64) -> str => "x"
+const fn rate(x: i64) -> i64 => 1
+fn rate(x: str) -> i64 => 2
+fn impossible(f: const fn(i64) -> i64, t: i64) -> bool {
+    let result_of_pair = pick(f(1))
+    return result_of_pair
+}
+fn independent(f: const fn(i64) -> i64, t: i64) -> i64 {
+    let amount = rate(f(1))
+    let unrelated: bool = 17
+    return t + amount
+}
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 2, "{}", checked.report);
+    for line in [8, 12] {
+        assert!(
+            checked
+                .findings
+                .iter()
+                .any(|r| r.at.starts_with(&format!("errors.hgl:{line}:"))
+                    && r.code == "type/type.mismatch"),
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// FN-4: a live capture checks the temporal signature at its making call.
+#[test]
+fn callback_result_mismatch_is_reported_at_the_actual_binding() {
+    let checked = check(&[(
+        "result.hgl",
+        r#"module binding
+const fn choose(x: i64) -> i64 => x
+fn choose(x: i64) -> str => "x"
+const fn inc(x: i64) -> i64 => x + 1
+fn receive(f: const fn(i64) -> i64, t: i64) -> i64 => t + choose(f(1))
+fn scalar_binding(t: i64) -> i64 => receive(inc, t)
+fn live_binding(t: i64) -> i64 => receive(fn(n) => n + t, t)
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert!(
+        checked.findings[0].at.starts_with("result.hgl:7:"),
+        "{}",
+        checked.report
+    );
+    assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+}

@@ -62,6 +62,7 @@ mod arguments;
 mod call_checks;
 pub(crate) use call_checks::fixed_expression;
 // A call by name: of a value function, a form, or an enum's member (FN-4, EXPR-2).
+mod callback_phases;
 mod calls;
 mod candidate_contracts;
 pub(crate) use candidate_contracts::check_candidate_contracts;
@@ -263,9 +264,11 @@ pub(crate) fn check(
                     if signature.generics.is_empty() {
                         typer = typer.record_resolved_written(&resolved_written);
                     }
+                    let reported = typer.diagnostics.len();
                     let (body, pending) = typer.graph();
                     if typer.unsettled_callback_pair {
                         callback_phase_bodies.push((index, position));
+                        typer.check_open_pair_reports(found, reported);
                     }
                     check_return = pending;
                     body
@@ -790,6 +793,8 @@ struct Typer<'a> {
     pair_phases: Option<calls::PairPhases>,
     /// An open callback can change a committed named-pair selection (FN-4).
     unsettled_callback_pair: bool,
+    /// Hypothetical capture categories used only to check an open graph declaration.
+    callback_captures: Vec<ValueCategory>,
     /// Nesting depth of `anonymous_pair_category` role probes; lets nested
     /// pair calls skip redundant committed reads during a tentative probe (FN-4).
     probing_pair_role: u32,
@@ -1098,6 +1103,7 @@ impl<'a> Typer<'a> {
             locals: Vec::new(),
             pair_phases: None,
             unsettled_callback_pair: false,
+            callback_captures: Vec::new(),
             probing_pair_role: 0,
             probe_saw_temporal: false,
             unsettled_results: None,
