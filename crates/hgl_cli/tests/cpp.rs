@@ -3172,6 +3172,10 @@ impl fn choose(cb: fn(i64) -> i64, x: i64) -> i64 => cb(x)
 fn entry(x: i64) -> i64 => choose(fn(n: i64) => n + 2, x)
 fn grouped(x: i64) -> i64 => choose((fn(n) => n + 3), x)
 
+operator reflected<F,T>(cb: F, tag: T) -> i64
+impl const fn reflected<...Ps>(cb: const fn(...{Ps}) -> i64, tag: i64) -> i64 => tag
+const fn through_reflected(x: i64) -> i64 => reflected(fn(n: i64) => n + 2, x)
+
 test reads_result_from_candidate {
     assert eval entry(x: [1, 2]) == [3, 4]
 }
@@ -3179,13 +3183,17 @@ test reads_result_from_candidate {
 test reads_grouped_input_from_candidate {
     assert eval grouped(x: [1, 2]) == [4, 5]
 }
+
+test reads_written_inputs_at_a_reflected_template {
+    assert through_reflected(7) == 7
+}
 "#,
     );
     let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

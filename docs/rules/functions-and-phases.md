@@ -258,7 +258,7 @@ analyser: partial
 - A reflected operator callback selects from the resolved parameter types, including the dependent arguments. With no resolved parameter type, it reports `generic.unresolved` even for a lone candidate (FN-17).
 - A bare operator or generic function takes its reflected input evidence from positive memberships and equalities of the enclosing declaration (GEN-3). Those readings must agree with the known types of the call and the callback's signature, including a candidate's signature for an operator. Ordinary forwarding supplies the actual argument types.
 - A written operator reference supplies its resolved fixed input types to candidate selection. The enclosing dependent call keeps the actual argument types, including split inputs given to `map` (MAP-2).
-- A reflected anonymous parameter beyond the fixed template needs a written type. Arguments of a homogeneous callback pack can determine its generic element type.
+- A reflected anonymous parameter beyond the fixed template needs a written type. This also applies when only a candidate supplies the reflected template. Arguments of a homogeneous callback pack can determine its generic element type.
 - A call through a function parameter gives arguments by position or by a name written in its template (FN-17).
 
 transpiler: partial

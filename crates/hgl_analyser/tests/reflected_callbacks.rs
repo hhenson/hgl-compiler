@@ -54,6 +54,31 @@ fn entry(x: i64) -> i64 => choose(fn(n: i64) => "s", x)"#,
     );
 }
 
+/// A reflected candidate's known result still checks the body when the
+/// anonymous callback writes its input type (FN-17).
+#[test]
+fn an_anonymous_result_must_fit_a_reflected_candidates_template() {
+    for (other, line) in [
+        ("", 4),
+        (
+            "impl const fn choice(cb: const fn(i64) -> i64, tag: str) -> i64 => 9\n",
+            5,
+        ),
+    ] {
+        let checked = module(&format!(
+            r#"operator choice<F,T>(cb: F, tag: T) -> i64
+impl const fn choice<...Ps>(cb: const fn(...{{Ps}}) -> i64, tag: i64) -> i64 => tag
+{other}const fn trial(x: i64) -> i64 => choice(fn(n: i64) => "bad", x)"#,
+        ));
+        assert_eq!(
+            checked.summary(),
+            [format!("m.hgl:{line}:55 type/type.mismatch EXPR-5")],
+            "{}",
+            checked.report,
+        );
+    }
+}
+
 /// The static argument after FN-17 matching, independently of what
 /// the enclosing call resolves from the argument's reflected slots.
 fn callback<'a>(checked: &'a Checked, caller: &str) -> (&'a Callee, &'a FunctionType) {

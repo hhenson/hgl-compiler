@@ -1227,14 +1227,23 @@ impl<'a> Typer<'a> {
                 let fixed_template = |ty: &Type| {
                     matches!(ty, Type::Function(template) if template.named_pack.is_none())
                 };
-                let candidate_template = || {
+                let candidate_callback = || {
+                    let node = ungrouped(node.clone());
+                    if !self.is_static_callback(&node) {
+                        return false;
+                    }
                     candidates.iter().filter_map(|&(_, _, candidate)| {
                         let index = public
                             .candidate_parameters(candidate)
                             .nth(public_slot?)
                             .flatten()?;
                         Some(&candidate.parameters[index].ty)
-                    }).any(fixed_template)
+                    }).any(|ty| {
+                        // FN-17: a reflected anonymous input takes its
+                        // written type where the template gives none.
+                        matches!(ty, Type::Function(template)
+                            if node.kind() == SyntaxKind::FnExpr || template.named_pack.is_none())
+                    })
                 };
                 // A reflected pack needs its public reading to establish
                 // the arguments the operator admits (GEN-17).
@@ -1258,9 +1267,7 @@ impl<'a> Typer<'a> {
                     && !dependent_function
                     && ready.is_none()
                     && (public_type.is_some_and(fixed_template)
-                        || public_type.is_none()
-                            && self.is_static_callback(&node)
-                            && candidate_template());
+                        || public_type.is_none() && candidate_callback());
                 let explicit = match &key {
                     Key::Position(position) => position
                         .checked_sub(fixed)
@@ -1325,7 +1332,7 @@ impl<'a> Typer<'a> {
                         retried: by_function,
                     }
                 } else if by_function {
-                    // Read this callback under the candidate's fixed
+                    // Read this callback under the candidate's
                     // template (FN-17).
                     let at = self.at(&node);
                     Given {
@@ -1383,10 +1390,9 @@ impl<'a> Typer<'a> {
             })
     }
 
-    /// FN-17: a candidate can give a static callback its fixed template
+    /// FN-17: a candidate can give an ungrouped static callback its template
     /// when the operator's public slot supplies no function type.
     fn is_static_callback(&self, node: &SyntaxNode) -> bool {
-        let node = ungrouped(node.clone());
         if node.kind() == SyntaxKind::FnExpr {
             return true;
         }
@@ -1396,10 +1402,10 @@ impl<'a> Typer<'a> {
         ) {
             return false;
         }
-        if let Some(local) = self.local_of(&node) {
+        if let Some(local) = self.local_of(node) {
             return matches!(self.locals[local].ty, Type::Function(_));
         }
-        name_token(&node)
+        name_token(node)
             .and_then(|name| self.declarations(&name))
             .is_some_and(|(module, declarations)| {
                 declarations.iter().any(|&index| {
