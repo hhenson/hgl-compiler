@@ -843,7 +843,11 @@ impl<'a> Typer<'a> {
         let fixed_list_value = takes == Takes::Parameters
             && slot.listed
             && !self.composes(&value)
-            && fixed_list_fits(&slot.ty, &value.ty);
+            && matches!(
+                (&slot.ty, value.ty.omission_removed()),
+                (Type::List { element, size: None }, Type::List { element: actual, size: Some(size) })
+                    if !matches!(size.value, ConstantValue::Unbounded) && agree(element, actual)
+            );
         if lifted || fixed_list_value || (!traced && holds_trace(&value.ty)) {
             value
         } else {
@@ -874,16 +878,6 @@ impl<'a> Typer<'a> {
             .with_note("a trace is bound with `let`, compared, and given to a `const fn`"),
         );
     }
-}
-
-/// TYPE-10: an unsized parameter pattern admits a fixed size when the
-/// element types agree. The caller still decides how it takes the list.
-pub(super) fn fixed_list_fits(expected: &Type, given: &Type) -> bool {
-    matches!(
-        (expected, given.omission_removed()),
-        (Type::List { element, size: None }, Type::List { element: actual, size: Some(size) })
-            if !matches!(size.value, ConstantValue::Unbounded) && agree(element, actual)
-    )
 }
 
 /// Retain a capture's destination key and its place in that pack.

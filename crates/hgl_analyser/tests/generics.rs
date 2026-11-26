@@ -98,8 +98,19 @@ fn a_written_list_element_type_keeps_fixed_list_admission() {
         "operator optional<T>(items: list<T>?) -> i64\n",
         "impl const fn optional(items: list<i64, 2>) -> i64 => 3\n",
         "const fn pass_fixed(items: list<i64, 2>) -> i64 => optional<i64>(items)\n",
+        "operator nest<T>(rows: list<list<T>>) -> i64\n",
+        "impl const fn nest(rows: list<list<i64, 2>, 2>) -> i64 => 4\n",
+        "impl const fn nest(rows: list<list<str, 2>, 2>) -> i64 => 5\n",
+        "const fn nested(rows: list<list<i64, 2>, 2>) -> i64 => nest<i64>(rows)\n",
+        "const fn wrong_nested(rows: list<list<str, 2>, 2>) -> i64 => nest<i64>(rows)\n",
     ));
-    assert_eq!(checked.summary(), ["m.hgl:6:55 type/type.mismatch EXPR-5"]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:55 type/type.mismatch EXPR-5",
+            "m.hgl:17:72 type/type.mismatch EXPR-5",
+        ]
+    );
 }
 
 /// The message of each finding, in order.

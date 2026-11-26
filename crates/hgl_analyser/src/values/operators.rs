@@ -8,7 +8,6 @@ use std::collections::HashSet;
 use hgl_diagnostics::{Category, Diagnostic, Location, Severity};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::arguments::fixed_list_fits;
 use super::callback_evidence::CallbackEvidence;
 use super::calls::arguments_of;
 use super::candidates::{
@@ -28,7 +27,7 @@ use super::inference::{
 };
 use super::lifting::contextual_type_is_pending;
 use super::{Candidate, Typer};
-use crate::declared::{agree, names_parameter, substitute_within};
+use crate::declared::{agree, agree_with_input_pattern, names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form, ValueCategory};
 use crate::program::{Declaration, DeclarationKind, DependentPack, OperatorRef, Program, Role};
 use crate::syntax::{child, has_token, name_token, ungrouped};
@@ -1878,14 +1877,18 @@ impl<'a> Typer<'a> {
                 }
             } else {
                 let value = self.argument_read(argument.clone(), &ty);
-                // TYPE-10: keep the supplied extent when checking an
-                // unsized pattern, including through the usual reads.
+                // TYPE-10: keep extents supplied to an unsized input
+                // pattern. Fit the original value so its ordinary read
+                // checks still apply.
                 let given_type = received_type(&value.ty, |_| true);
+                let known = whole(given_type) && !open(given_type);
                 let ty = match &ty {
-                    Type::Nullable(payload) if fixed_list_fits(payload, given_type) => {
+                    Type::Nullable(payload)
+                        if known && agree_with_input_pattern(given_type, payload) =>
+                    {
                         Type::Nullable(Box::new(given_type.clone()))
                     }
-                    _ if fixed_list_fits(&ty, given_type) => given_type.clone(),
+                    _ if known && agree_with_input_pattern(given_type, &ty) => given_type.clone(),
                     _ => ty,
                 };
                 let place = format!("the parameter `{}`", parameter.name);
