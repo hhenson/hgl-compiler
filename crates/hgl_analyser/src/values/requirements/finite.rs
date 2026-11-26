@@ -9,7 +9,6 @@ use crate::declared::same_type;
 use crate::syntax::{child, has_token};
 use crate::types::{Argument, Constant, Type};
 use crate::values::Typer;
-use crate::values::callback_evidence::same_argument;
 use crate::values::candidates::combinations;
 use crate::values::fit::whole;
 use crate::values::inference::mentions;
@@ -116,11 +115,36 @@ impl FiniteDomain {
             bound.retain(|arg| {
                 choices
                     .iter()
-                    .any(|other| same_argument(arg, other) != Some(false))
+                    .any(|other| equal_members(arg, other) != Some(false))
             });
+            // Equal values may still be distinct constants when the body
+            // computes with them (NUM-5, UNIT-13). Keep each stated sign.
+            for choice in choices {
+                if let Argument::Constant(value) = &choice
+                    && bound
+                        .iter()
+                        .any(|arg| equal_members(arg, &choice) == Some(true))
+                    && !bound.iter().any(|arg| {
+                        matches!(arg, Argument::Constant(other)
+                        if other.value.same(&value.value) == Some(true))
+                    })
+                {
+                    bound.push(choice);
+                }
+            }
         } else {
             *bound = Some(choices);
         }
+    }
+}
+
+/// A written membership uses language equality for constant values (GEN-3,
+/// UNIT-13). This includes equal signed zeros and excludes NaN.
+fn equal_members(left: &Argument, right: &Argument) -> Option<bool> {
+    match (left, right) {
+        (Argument::Type(left), Argument::Type(right)) => same_type(left, right),
+        (Argument::Constant(left), Argument::Constant(right)) => left.value.equals(&right.value),
+        _ => Some(left == right),
     }
 }
 
@@ -280,7 +304,7 @@ impl FiniteDomains {
         self.trials(
             choices,
             |at| self.group(&FiniteSlot::Parameter(*at)),
-            same_argument,
+            equal_members,
         )
     }
 

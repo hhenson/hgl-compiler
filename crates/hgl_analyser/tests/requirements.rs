@@ -39,6 +39,53 @@ fn ordinary_finite_requirements_intersect() {
     }
 }
 
+/// GEN-3, UNIT-13 and NUM-5: intersect written constant memberships with
+/// the same comparison used when the caller supplies its generic value.
+#[test]
+fn constant_membership_intersections_use_language_equality() {
+    let declarations = concat!(
+        "const fn zero<const N: f64>(x: i64) -> i64 requires N == 0.0 => x\n",
+        "const fn wrap<const M: f64>(x: i64) -> i64",
+    );
+    for condition in ["M in {0.0} && M in {-0.0}", "M in {-0.0} && M in {0.0}"] {
+        let checked = module(&format!(
+            "{declarations} requires {condition} => zero<M>(x)\n\
+             test signs {{ assert wrap<0.0>(1) == 1\n    assert wrap<-0.0>(2) == 2 }}\n"
+        ));
+        assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+    }
+    // Though both signs satisfy membership, dividing by each gives a
+    // different infinity. A positive-only consumer must reject both orders.
+    for condition in ["M in {0.0} && M in {-0.0}", "M in {-0.0} && M in {0.0}"] {
+        let checked = module(&format!(
+            "const fn positive<const N: f64>(x: i64) -> i64 requires N == 1.0 / 0.0 => x\n\
+             const fn wrap<const M: f64>(x: i64) -> i64 requires {condition} => positive<1.0 / M>(x)\n"
+        ));
+        assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+        assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+        assert!(
+            checked.report.contains("`M` = `-0.0`"),
+            "{}",
+            checked.report
+        );
+    }
+    for condition in [
+        "M in {0.0} && M in {1.0}",
+        "M in {0.0 / 0.0} && M in {0.0 / 0.0}",
+    ] {
+        let checked = module(&format!(
+            "{declarations} requires {condition} => zero<M>(x)\n"
+        ));
+        assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+        assert_eq!(checked.findings[0].code, "constraint/requires.unmet");
+        assert!(
+            checked.report.contains("no combination satisfies"),
+            "{}",
+            checked.report
+        );
+    }
+}
+
 /// GEN-3, GEN-7 and GEN-17: carry finite bounds across positive equality
 /// chains. A function and an operator can each use the resulting type.
 #[test]
