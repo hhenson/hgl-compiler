@@ -472,9 +472,8 @@ impl<'a> Typer<'a> {
             .descendants()
             .filter(|node| {
                 node.kind() == SyntaxKind::ConstraintCall
-                    // GEN-10: calls within `each` need a verdict under
-                    // its bound type, which this evaluator does not yet
-                    // supply to named operator requirements (GEN-16).
+                    // GEN-10: the pack evaluator checks a quantified
+                    // call with each iteration's bound operands.
                     && !node
                         .ancestors()
                         .any(|parent| matches!(parent.kind(), SyntaxKind::ConstraintEach | SyntaxKind::ConstraintAny))
@@ -1701,9 +1700,19 @@ impl<'a> Typer<'a> {
         // values the call gives are `generics`, each read as a value of
         // its parameter's type where the call writes it or leaves it to
         // its default.
-        let this = &*self;
+        // Each projection reads constants and then tests the resulting
+        // types with the same typer. Those borrows do not overlap.
+        let typer = RefCell::new(self);
         let constant = |node: &SyntaxNode, ty: Option<&Type>| -> Option<ConstantValue> {
-            this.read_in(declared.at.file, node, ty).ok()
+            typer.borrow().read_in(declared.at.file, node, ty).ok()
+        };
+        let quantified = |call: &SyntaxNode, written: &RequirementType<'_>| -> Option<bool> {
+            let file = declared.at.file;
+            let (operator, operands, result) =
+                read_requirement(program, &program.modules[module], file, call, written)?;
+            typer
+                .borrow_mut()
+                .callable(operator, (file, operands), result.as_ref())
         };
         let unvalued = std::cell::Cell::new(false);
         let held = requires_holds(
@@ -1714,6 +1723,7 @@ impl<'a> Typer<'a> {
             &Told {
                 constant: &constant,
                 callable: &callable,
+                quantified: &quantified,
                 unvalued: &unvalued,
                 type_packs,
                 member_fault,
@@ -1754,47 +1764,7 @@ impl<'a> Typer<'a> {
         };
         calls
             .iter()
-            .map(|call| {
-                let name = name_token(call)?;
-                // What the name is bound to where the declaration is
-                // written.
-                let start = name.span().start;
-                let used = declared_in
-                    .uses
-                    .iter()
-                    .find(|used| used.at.file == file && used.at.span.start == start)?;
-                let Binding::Declarations {
-                    module: operator_module,
-                    declarations,
-                } = &used.binding
-                else {
-                    return None;
-                };
-                let declaration = declarations.iter().copied().find(|&declaration| {
-                    program.modules[*operator_module].declarations[declaration].kind
-                        == DeclarationKind::Operator
-                })?;
-                let mut operands = Vec::new();
-                let mut result = None;
-                for part in call.children() {
-                    match part.kind() {
-                        SyntaxKind::QualifiedName => {}
-                        SyntaxKind::ReturnType => {
-                            result = Some(written(&part.children().next()?)?);
-                        }
-                        kind if is_type(kind) => {
-                            let ty = written(&part)?;
-                            operands.push((part, ty));
-                        }
-                        _ => return None,
-                    }
-                }
-                let operator = OperatorRef {
-                    module: *operator_module,
-                    declaration,
-                };
-                Some((operator, operands, result))
-            })
+            .map(|call| read_requirement(program, declared_in, file, call, &written))
             .collect()
     }
 
@@ -2559,6 +2529,57 @@ fn requirement_inputs<'a>(
 /// the operator it names, the types it is supplied with, each with
 /// where it is written, and the type its arrow states.
 type Read = (OperatorRef, Vec<(SyntaxNode, Type)>, Option<Type>);
+
+type RequirementType<'a> = dyn Fn(&SyntaxNode) -> Option<Type> + 'a;
+
+/// Read a GEN-16 requirement using the types in scope at this occurrence.
+fn read_requirement(
+    program: &Program,
+    declared_in: &crate::Module,
+    file: FileId,
+    call: &SyntaxNode,
+    written: &RequirementType<'_>,
+) -> Option<Read> {
+    let name = name_token(call)?;
+    let start = name.span().start;
+    let used = declared_in
+        .uses
+        .iter()
+        .find(|used| used.at.file == file && used.at.span.start == start)?;
+    let Binding::Declarations {
+        module,
+        declarations,
+    } = &used.binding
+    else {
+        return None;
+    };
+    let declaration = declarations.iter().copied().find(|&declaration| {
+        program.modules[*module].declarations[declaration].kind == DeclarationKind::Operator
+    })?;
+    let mut operands = Vec::new();
+    let mut result = None;
+    for part in call.children() {
+        match part.kind() {
+            SyntaxKind::QualifiedName => {}
+            SyntaxKind::ReturnType => result = Some(written(&part.children().next()?)?),
+            // An indexed operand is a type only where the read table
+            // resolved it to a pack member (GEN-17).
+            kind if is_type(kind) || kind == SyntaxKind::IndexExpr => {
+                let ty = written(&part)?;
+                operands.push((part, ty));
+            }
+            _ => return None,
+        }
+    }
+    Some((
+        OperatorRef {
+            module: *module,
+            declaration,
+        },
+        operands,
+        result,
+    ))
+}
 
 /// What answers a requirement: see [`Typer::answered`].
 enum Answered {
@@ -5151,6 +5172,8 @@ fn required(
     Some((parameters, clause.children().next()?))
 }
 
+type QuantifiedCall<'a> = dyn Fn(&SyntaxNode, &RequirementType<'_>) -> Option<bool> + 'a;
+
 /// What the place a `requires` is tested at says of it, beyond the
 /// generic arguments ([`requires_holds`]).
 struct Told<'t> {
@@ -5161,6 +5184,8 @@ struct Told<'t> {
     /// Whether a named operator requirement holds (GEN-16). `None`
     /// when it cannot be told.
     callable: &'t dyn Fn(&SyntaxNode) -> Option<bool>,
+    /// Read a requirement using this iteration's bound type or key.
+    quantified: &'t QuantifiedCall<'t>,
     /// See [`Condition::unvalued`].
     unvalued: &'t std::cell::Cell<bool>,
     /// The types each pack parameter takes at the call (GEN-10).
@@ -5186,6 +5211,7 @@ pub(super) fn declared_requirement(
         &Told {
             constant: &|node, ty| crate::constant::read(node, ty, scope).ok(),
             callable: &|_| None,
+            quantified: &|_, _| None,
             unvalued: &std::cell::Cell::new(false),
             type_packs: &[],
             member_fault: None,
@@ -5282,6 +5308,10 @@ fn requires_holds(
         }
     };
     let written = |node: &SyntaxNode| keyed_type(node, &[]);
+    let callable = |call: &SyntaxNode, keys: &[ConstraintKey<'_>]| {
+        let written = |operand: &SyntaxNode| told(placed(keyed_type(operand, keys)?, &own));
+        (place.quantified)(call, &written)
+    };
     // A constant the condition compares an option with is a value of
     // the option's type (EXPR-5), its generic parameters in place.
     let constant = |node: &SyntaxNode, name: &str| -> Option<ConstantValue> {
@@ -5330,6 +5360,7 @@ fn requires_holds(
             file,
             pack: &pack,
             written: &keyed_type,
+            callable: &callable,
             constant: place.constant,
         }),
         &[],
@@ -5503,6 +5534,7 @@ impl ConstraintKey<'_> {
 
 type PackView<'a> = dyn Fn(&SyntaxToken, &str) -> Option<&'a hir::TypePackArgument> + 'a;
 type KeyedType<'a> = dyn Fn(&SyntaxNode, &[ConstraintKey<'_>]) -> Option<Type> + 'a;
+type KeyedCall<'a> = dyn Fn(&SyntaxNode, &[ConstraintKey<'_>]) -> Option<bool> + 'a;
 type ScopedConstant<'a> = dyn Fn(&SyntaxNode, Option<&Type>) -> Option<ConstantValue> + 'a;
 
 /// The known packs and written types of a declaration being specialized.
@@ -5510,6 +5542,7 @@ struct PackScope<'a> {
     file: FileId,
     pack: &'a PackView<'a>,
     written: &'a KeyedType<'a>,
+    callable: &'a KeyedCall<'a>,
     constant: &'a ScopedConstant<'a>,
 }
 
@@ -5539,7 +5572,12 @@ fn holds_with_packs(
             }
         }
         // GEN-16: a named operator requirement.
-        SyntaxKind::ConstraintCall => (of.callable)(node),
+        SyntaxKind::ConstraintCall => (of.callable)(node).or_else(|| {
+            if keys.is_empty() {
+                return None;
+            }
+            (scope?.callable)(node, keys)
+        }),
         SyntaxKind::ConstraintBinary => {
             let mut sides = node.children();
             let left = holds_with_packs(&sides.next()?, of, scope, keys);
