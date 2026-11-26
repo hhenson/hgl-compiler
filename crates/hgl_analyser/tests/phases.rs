@@ -729,3 +729,135 @@ fn scalar(tick: i64) -> i64 => receive(inc, tick)
         checked.report
     );
 }
+
+/// FN-4/17: an uncertain capture cannot excuse a declaration whose result
+/// is incompatible with either role, or an error independent of the pair.
+#[test]
+fn open_callback_pairs_preserve_impossible_and_independent_errors() {
+    let checked = check(&[(
+        "errors.hgl",
+        r#"module errors
+const fn pick(x: i64) -> i64 => 7
+fn pick(x: i64) -> str => "x"
+const fn rate(x: i64) -> i64 => 1
+fn rate(x: str) -> i64 => 2
+fn impossible(f: const fn(i64) -> i64, t: i64) -> bool {
+    let result_of_pair = pick(f(1))
+    return result_of_pair
+}
+fn independent(f: const fn(i64) -> i64, t: i64) -> i64 {
+    let amount = rate(f(1))
+    let unrelated: bool = 17
+    return t + amount
+}
+fn bad_operand(f: const fn(i64) -> i64, t: i64) -> i64 => t + pick(f("wrong"))
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 3, "{}", checked.report);
+    for line in [8, 12, 15] {
+        assert!(
+            checked
+                .findings
+                .iter()
+                .any(|r| r.at.starts_with(&format!("errors.hgl:{line}:"))
+                    && r.code == "type/type.mismatch"),
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// FN-4: a live capture checks the temporal signature at its making call.
+#[test]
+fn callback_result_mismatch_is_reported_at_the_actual_binding() {
+    let checked = check(&[(
+        "result.hgl",
+        r#"module binding
+const fn choose(x: i64) -> i64 => x
+fn choose(x: i64) -> str => "x"
+const fn inc(x: i64) -> i64 => x + 1
+fn receive(f: const fn(i64) -> i64, t: i64) -> i64 => t + choose(f(1))
+fn scalar_binding(t: i64) -> i64 => receive(inc, t)
+fn live_binding(t: i64) -> i64 => receive(fn(n) => n + t, t)
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert!(
+        checked.findings[0].at.starts_with("result.hgl:7:"),
+        "{}",
+        checked.report
+    );
+    assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+}
+
+/// FN-4/17: independent callback slots do not consume a mutable local's
+/// reading allowance or replace its invariant source error.
+#[test]
+fn an_unrelated_mutable_local_keeps_its_type_error() {
+    let callbacks = (0..32)
+        .map(|i| format!("f{i}: const fn(i64) -> i64"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        r#"module independent
+const fn pick(x: i64) -> i64 => x
+fn pick(x: str) -> i64 => 99
+fn subject({callbacks}, tick: i64) -> bool {{
+    let ordinary = pick(f0(1))
+    var fixed = 17
+    return fixed
+}}
+"#
+    );
+    let checked = check(&[("independent.hgl", &source)]);
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(checked.findings[0].code, "type/type.mismatch");
+    assert!(
+        checked.findings[0].at.starts_with("independent.hgl:7:"),
+        "{}",
+        checked.report
+    );
+}
+
+/// FN-4/17: forwarding keeps the outer formal open, including when two
+/// receiver slots share it. Bound slots and unrelated errors stay fixed.
+#[test]
+fn partial_callback_bindings_preserve_source_and_instance_errors() {
+    let checked = check(&[(
+        "relay.hgl",
+        r#"module relay
+const fn pair(n: i64) -> i64 => n
+fn pair(n: i64) -> str => "live"
+const fn need_number(n: i64) -> i64 => n
+const fn need_text(s: str) -> i64 => 17
+const fn inc(n: i64) -> i64 => n + 1
+fn both(f: const fn(i64) -> i64, g: const fn(i64) -> i64, t: i64) -> i64 {
+    let a = pair(f(1))
+    let b = pair(g(1))
+    return t + need_number(a) + need_text(b)
+}
+fn partly(f: const fn(i64) -> i64, t: i64) -> i64 => both(f, fn(n) => t + n, t)
+fn again(t: i64, f: const fn(i64) -> i64) -> i64 => partly(f, t)
+fn good(t: i64) -> i64 => again(t, inc)
+fn bad(t: i64) -> i64 => again(t, fn(n) => t + n)
+fn same(f: const fn(i64) -> i64, t: i64) -> i64 => both(f, fn(n) => f(n), t)
+fn fixed(f: const fn(i64) -> i64, t: i64) -> i64 => both(f, inc, t)
+fn wrong_local(f: const fn(i64) -> i64, t: i64) -> i64 {
+    let wrong: bool = 17
+    return again(t, f)
+}
+"#,
+    )]);
+    assert_eq!(checked.findings.len(), 4, "{}", checked.report);
+    for line in [15, 16, 17, 19] {
+        assert!(
+            checked
+                .findings
+                .iter()
+                .any(|r| r.at.starts_with(&format!("relay.hgl:{line}:"))
+                    && r.code == "type/type.mismatch"),
+            "{}",
+            checked.report
+        );
+    }
+}

@@ -992,7 +992,7 @@ fn inherited_functions(
 
 /// Record the declaration slots used by this anonymous body, including
 /// the slots referenced in a nested anonymous argument.
-fn used_function_parameters(body: &Body, used: &mut Vec<usize>) {
+pub(crate) fn used_function_parameters(body: &Body, used: &mut Vec<usize>) {
     walk_statements(&body.statements, &mut |expression| {
         let target = match &expression.kind {
             ExprKind::Call { callee, .. } => callee,

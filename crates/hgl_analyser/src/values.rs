@@ -62,6 +62,7 @@ mod arguments;
 mod call_checks;
 pub(crate) use call_checks::fixed_expression;
 // A call by name: of a value function, a form, or an enum's member (FN-4, EXPR-2).
+mod callback_phases;
 mod calls;
 mod candidate_contracts;
 pub(crate) use candidate_contracts::check_candidate_contracts;
@@ -263,9 +264,11 @@ pub(crate) fn check(
                     if signature.generics.is_empty() {
                         typer = typer.record_resolved_written(&resolved_written);
                     }
+                    let reported = typer.diagnostics.len();
                     let (body, pending) = typer.graph();
                     if typer.unsettled_callback_pair {
                         callback_phase_bodies.push((index, position));
+                        typer.check_open_pair_reports(found, reported);
                     }
                     check_return = pending;
                     body
@@ -641,17 +644,18 @@ pub(crate) fn reread_instance_body(
         ..signature.clone()
     };
     let pack_types = PackTypes::new(&reading.generics, inputs.type_packs);
+    let found = Tables {
+        bindings: &bindings,
+        written: &written,
+        calls: &calls,
+        selecting: &selecting,
+    };
     let mut typer = Typer::with_test_candidates(
         program,
         owner,
         declared,
         &reading,
-        Tables {
-            bindings: &bindings,
-            written: &written,
-            calls: &calls,
-            selecting: &selecting,
-        },
+        found,
         diagnostics,
         inputs.test_candidates,
     );
@@ -675,7 +679,21 @@ pub(crate) fn reread_instance_body(
         types: &pack_types,
     });
     typer.pack_functions = inputs.functions.to_vec();
-    typer.body_at_phase(owner.phases[declaration])
+    if owner.phases[declaration] == Some(Phase::Graph)
+        && program
+            .callback_phase_bodies
+            .contains(&(module, declaration))
+    {
+        typer.mark_open_instance_captures();
+        let before = typer.diagnostics.len();
+        let (body, _) = typer.graph();
+        if typer.unsettled_callback_pair {
+            typer.check_open_pair_reports(found, before);
+        }
+        body
+    } else {
+        typer.body_at_phase(owner.phases[declaration])
+    }
 }
 
 /// GEN-1: a written argument needs a type unless it takes a whole result.
@@ -790,6 +808,8 @@ struct Typer<'a> {
     pair_phases: Option<calls::PairPhases>,
     /// An open callback can change a committed named-pair selection (FN-4).
     unsettled_callback_pair: bool,
+    /// Hypothetical capture categories used only to check an open graph declaration.
+    callback_captures: Vec<ValueCategory>,
     /// Nesting depth of `anonymous_pair_category` role probes; lets nested
     /// pair calls skip redundant committed reads during a tentative probe (FN-4).
     probing_pair_role: u32,
@@ -1098,6 +1118,7 @@ impl<'a> Typer<'a> {
             locals: Vec::new(),
             pair_phases: None,
             unsettled_callback_pair: false,
+            callback_captures: Vec::new(),
             probing_pair_role: 0,
             probe_saw_temporal: false,
             unsettled_results: None,
