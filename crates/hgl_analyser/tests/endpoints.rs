@@ -215,6 +215,76 @@ fn an_endpoint_parameter_takes_an_input_by_its_name() {
     assert_eq!(arguments[0].value.ty.to_string(), "endpoint<i64>");
 }
 
+/// UNIT-8 and TIME-9: the default's place needs a borrowed endpoint,
+/// which an ordinary literal cannot supply, even when the call omits it.
+#[test]
+fn a_native_endpoint_default_is_checked_as_an_endpoint() {
+    let checked = module(concat!(
+        "native const fn observe(input: endpoint<i64> = 1) -> bool\n",
+        "fn use_it(input: i64) -> bool {\n",
+        "    when { return observe() }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:2:48 phase/endpoint.argument TIME-9"],
+        "{}",
+        checked.report
+    );
+}
+
+/// UNIT-7, UNIT-8 and TIME-9: a cold default has no node input to
+/// borrow. Null, named values and a generic payload do not provide one.
+#[test]
+fn cold_endpoint_defaults_cannot_supply_an_ordinary_value() {
+    for source in [
+        "native const fn observe(input: endpoint<i64> = null) -> bool\n",
+        "const ordinary: i64 = 1\nnative const fn observe(input: endpoint<i64> = ordinary) -> bool\n",
+        "native const fn observe<T>(input: endpoint<T> = 1) -> bool\n",
+        "operator observe<T>(input: T) -> bool\nnative impl const fn observe(input: endpoint<i64> = 1) -> bool\n",
+    ] {
+        let checked = module(source);
+        assert_eq!(checked.findings.len(), 1, "{source}\n{}", checked.report);
+        assert_eq!(
+            checked.findings[0].code, "phase/endpoint.argument",
+            "{source}\n{}",
+            checked.report
+        );
+        assert_eq!(checked.findings[0].rule, "TIME-9");
+    }
+}
+
+/// TIME-9 and UNIT-8: an explicitly supplied endpoint is still borrowed,
+/// while an ordinary parameter beside it can use its own cold default.
+#[test]
+fn supplied_native_endpoints_keep_their_borrowed_binding() {
+    let checked = module(concat!(
+        "native const fn observe(input: endpoint<i64>, fallback: i64 = 1) -> bool\n",
+        "fn use_it(input: i64) -> bool {\n",
+        "    when valid([]) {\n",
+        "        let actual = observe(input)\n",
+        "        return actual\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let node = body(&checked, "use_it");
+    let Some(Stmt::Hook { body, .. }) = node.statements.first() else {
+        panic!("`use_it` has a `when`");
+    };
+    let Some(Stmt::Declare {
+        value: Some(value), ..
+    }) = body.first()
+    else {
+        panic!("the hook starts with the call result");
+    };
+    let ExprKind::Call { arguments, .. } = &value.kind else {
+        panic!("`observe(input)` is a call");
+    };
+    assert!(matches!(arguments[0].value.kind, ExprKind::EndpointOf(0)));
+    assert_eq!(arguments[0].value.ty.to_string(), "endpoint<i64>");
+}
+
 /// TIME-9: a node can change the activity of a direct temporal input.
 /// Its output and a computed payload have no input subscription to change.
 #[test]
