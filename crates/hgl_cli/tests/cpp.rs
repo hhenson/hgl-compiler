@@ -3154,6 +3154,42 @@ fn function_parameters_run_on_the_sdk() {
     );
 }
 
+/// An anonymous callback can take its result and unwritten input types
+/// from an operator candidate (FN-17).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn candidate_only_anonymous_callbacks_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("candidate_only_anonymous_callbacks");
+    let file = write(
+        &root,
+        "demo.candidate_anonymous.hgl",
+        r#"module demo.candidate_anonymous
+operator choose<F>(cb: F, x: i64) -> i64
+impl fn choose(cb: fn(i64) -> i64, x: i64) -> i64 => cb(x)
+fn entry(x: i64) -> i64 => choose(fn(n: i64) => n + 2, x)
+fn grouped(x: i64) -> i64 => choose((fn(n) => n + 3), x)
+
+test reads_result_from_candidate {
+    assert eval entry(x: [1, 2]) == [3, 4]
+}
+
+test reads_grouped_input_from_candidate {
+    assert eval grouped(x: [1, 2]) == [4, 5]
+}
+"#,
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 2 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-17: a finite chain of static wrappers and a recursive call that
 /// forwards the same target both specialize and run.
 #[test]

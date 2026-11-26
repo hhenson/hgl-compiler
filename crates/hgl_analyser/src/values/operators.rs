@@ -1259,7 +1259,7 @@ impl<'a> Typer<'a> {
                     && ready.is_none()
                     && (public_type.is_some_and(fixed_template)
                         || public_type.is_none()
-                            && self.names_static_callback(&node)
+                            && self.is_static_callback(&node)
                             && candidate_template());
                 let explicit = match &key {
                     Key::Position(position) => position
@@ -1325,8 +1325,8 @@ impl<'a> Typer<'a> {
                         retried: by_function,
                     }
                 } else if by_function {
-                    // A candidate's fixed template reads this function
-                    // name. There is no ordinary value to read first.
+                    // Read this callback under the candidate's fixed
+                    // template (FN-17).
                     let at = self.at(&node);
                     Given {
                         key,
@@ -1383,10 +1383,13 @@ impl<'a> Typer<'a> {
             })
     }
 
-    /// FN-17: a candidate can give a named callback its fixed template
+    /// FN-17: a candidate can give a static callback its fixed template
     /// when the operator's public slot supplies no function type.
-    fn names_static_callback(&self, node: &SyntaxNode) -> bool {
+    fn is_static_callback(&self, node: &SyntaxNode) -> bool {
         let node = ungrouped(node.clone());
+        if node.kind() == SyntaxKind::FnExpr {
+            return true;
+        }
         if !matches!(
             node.kind(),
             SyntaxKind::NameExpr | SyntaxKind::FunctionReference

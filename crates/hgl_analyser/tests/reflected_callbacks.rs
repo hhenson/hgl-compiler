@@ -37,6 +37,23 @@ fn through_map(items: dict<i64, i64>) -> dict<i64, i64> => map_each(const_key, i
     }
 }
 
+/// An anonymous result must fit even when only the candidate supplies
+/// its function template (FN-17).
+#[test]
+fn an_anonymous_result_must_fit_the_candidates_template() {
+    let checked = module(
+        r#"operator choose<F>(cb: F, x: i64) -> i64
+impl fn choose(cb: fn(i64) -> i64, x: i64) -> i64 => cb(x)
+fn entry(x: i64) -> i64 => choose(fn(n: i64) => "s", x)"#,
+    );
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:49 type/type.mismatch EXPR-5"],
+        "{}",
+        checked.report,
+    );
+}
+
 /// The static argument after FN-17 matching, independently of what
 /// the enclosing call resolves from the argument's reflected slots.
 fn callback<'a>(checked: &'a Checked, caller: &str) -> (&'a Callee, &'a FunctionType) {
