@@ -230,11 +230,11 @@ impl Program {
         let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
             return default.clone();
         };
-        let type_packs = if default.needs_type_specialization() {
-            type_packs
-        } else {
-            &[]
-        };
+        // UNIT-8, EXPR-5: a literal's declaration-time type is provisional
+        // when the omitted parameter was generic. Read its syntax again
+        // once the selected parameter supplies a concrete context.
+        let reread = default.needs_contextual_specialization(&parameter.ty);
+        let type_packs = if reread { type_packs } else { &[] };
         let types: Vec<_> = signature
             .generics
             .iter()
@@ -276,7 +276,7 @@ impl Program {
         };
         // UNIT-7: a default has no formal parameters in scope. Run the
         // same membership-based selection here as in a specialized body.
-        let mut body = if default.needs_type_specialization() && !generics.is_empty() {
+        let mut body = if reread && !generics.is_empty() {
             crate::values::reread_parameter_default(
                 self,
                 operator,
@@ -992,7 +992,7 @@ fn inherited_functions(
 
 /// Record the declaration slots used by this anonymous body, including
 /// the slots referenced in a nested anonymous argument.
-fn used_function_parameters(body: &Body, used: &mut Vec<usize>) {
+pub(crate) fn used_function_parameters(body: &Body, used: &mut Vec<usize>) {
     walk_statements(&body.statements, &mut |expression| {
         let target = match &expression.kind {
             ExprKind::Call { callee, .. } => callee,
