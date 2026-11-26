@@ -85,3 +85,25 @@ test t { assert eval id(s: format("{wall_time:%S}"), v: [format("{wall_time:%S}"
     );
     assert!(checked.findings.is_empty(), "{}", checked.report);
 }
+
+#[test]
+fn only_cores_private_declaration_receives_the_renderer_clock() {
+    // UNIT-3, FMT-9: an application's same-named native is an ordinary call.
+    // The literal would be rejected as an unmatched brace by the format checker.
+    let checked = common::check(&[(
+        "m.hgl",
+        r#"module m part formatting
+native const fn render_graph_values(const fmt_str: str, engine_time: datetime) -> str
+const fn local() -> str => render_graph_values("{", @2026-01-01T00:00:00Z)"#,
+    )]);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+
+    let checked =
+        module(r#"const fn external() -> str => render_graph_values("{}", @2026-01-01T00:00:00Z)"#);
+    assert!(checked.rejected, "{}", checked.report);
+    assert!(
+        checked.findings.iter().any(|f| f.code == "name/name.unknown"),
+        "{}",
+        checked.report
+    );
+}
