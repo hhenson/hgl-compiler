@@ -1073,6 +1073,50 @@ fn a_local_list_size_checks_the_reached_return_of_an_immediate_call() {
     );
 }
 
+/// EXPR-16 and TYPE-10: fixed range bindings decide which returns are
+/// reached, including nested bounds and the first return in range order.
+#[test]
+fn a_local_list_size_uses_reached_fixed_range_values() {
+    let program = |body: &str| {
+        format!(
+            "fn measured(input: i64) -> i64 {{\n\
+                 let width = (fn() -> i64 {{\n\
+                     {body}\n\
+                     return 3\n\
+                 }})()\n\
+                 var held: list<i64, width>\n\
+                 return input\n\
+             }}\n"
+        )
+    };
+    for body in [
+        "for n in 2..<4 { if n == 4 { return input } }",
+        "for n in 4..<4 { return input }",
+        "for n in 4..<2 { return input }",
+        "for n in 2..<4 { let m = n + 1\nif m == 5 { return input } }",
+        "for n in 2..<4 { for m in n..<(n + 2) { if m == n + 2 { return input } } }",
+        "for n in 2..<4 { return if n == 4 { input } else { 3 } }",
+        "for n in 2..<4 { if n == 2 { return 3 }\nif n == 3 { return input } }",
+        "for n in 0..<100 { for m in 0..<3 { if n == 100 && m == 2 { return input } } }",
+        "for n in 0..<1000000000000 { if n == 1000000000000 { return input } }",
+        "for n in 0..<1000000000000 { for m in 2..<4 { if 1000000000000 <= n { return input } } }",
+    ] {
+        expect(&program(body), &[]);
+    }
+    for body in [
+        "for n in 2..<4 { if n == 3 { return input } }",
+        "for n in 2..<4 { let m = n + 1\nif m == 4 { return input } }",
+        "for n in 2..<4 { for m in n..<(n + 2) { if m == n + 1 { return input } } }",
+        "for n in 2..<4 { return if n == 2 { input } else { 3 } }",
+        "for n in 0..<100 { for m in 0..<3 { if n == 99 && m == 2 { return input } } }",
+        "for n in 0..<1000000000000 { if n == 999999999999 { return input } }",
+        "for n in 0..<1000000000000 { if n == 500000000000 { return input } }",
+    ] {
+        let line = 6 + body.lines().count();
+        expect(&program(body), &[&format!("{line} list.size")]);
+    }
+}
+
 /// EXPR-3, CTRL-14 and TYPE-10: a reached write can supply a later
 /// return, including across passes of a loop or via a live case.
 #[test]

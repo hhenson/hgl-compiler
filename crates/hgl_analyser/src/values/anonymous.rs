@@ -237,10 +237,7 @@ impl Typer<'_> {
                 .as_ref()
                 .and_then(|scope| scope.immediate_values.as_deref())
                 .zip(statements.as_deref())
-                .is_some_and(|(known, body)| {
-                    let known = ImmediateValues::new(self.program, &self.instance, known);
-                    flow::result_is_live(self, body, known)
-                });
+                .is_some_and(|(known, body)| flow::result_is_live(self, body, known));
         let needs_pack_inputs = specialization.is_none()
             && statements
                 .as_deref()

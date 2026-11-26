@@ -3,6 +3,7 @@
 //! (FN-3, FN-6, CTRL-14, EXPR-14). Part of the typing pass ([`super`]).
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::rc::Rc;
 
 use hgl_diagnostics::{Category, Diagnostic, Diagnostics, Location};
@@ -33,6 +34,7 @@ pub(super) struct ImmediateValues<'a> {
     program: &'a Program,
     generics: &'a [(Location, Argument)],
     locals: &'a [(LocalId, Rc<Expr>)],
+    ranges: &'a [(LocalId, Range<i64>)],
 }
 
 impl<'a> ImmediateValues<'a> {
@@ -46,7 +48,14 @@ impl<'a> ImmediateValues<'a> {
             program,
             generics,
             locals,
+            ranges: &[],
         }
+    }
+
+    /// The remaining iteration values where a fixed range was too large to walk.
+    pub(super) fn with_ranges(mut self, ranges: &'a [(LocalId, Range<i64>)]) -> Self {
+        self.ranges = ranges;
+        self
     }
 
     /// A checked ordinary expression reduced by the bounded const reader.
@@ -68,10 +77,57 @@ impl<'a> ImmediateValues<'a> {
 
     /// A known Boolean condition of an immediate call.
     pub(super) fn condition(self, expression: &Expr) -> Option<bool> {
-        match self.selector(expression)? {
-            LabelValue::Bool(value) => Some(value),
-            _ => None,
+        if let Some(LabelValue::Bool(value)) = self.selector(expression) {
+            return Some(value);
         }
+        if self.ranges.is_empty()
+            || !crate::const_inputs::builtin_operation(self.program, expression)
+        {
+            return None;
+        }
+        let (operator, left, right) = expression.kind.binary()?;
+        if matches!(operator, BinaryOperator::And | BinaryOperator::Or) {
+            let left = self.condition(left)?;
+            return if left == (operator == BinaryOperator::Or) {
+                Some(left)
+            } else {
+                self.condition(right)
+            };
+        }
+        let (min, max) = self.integer_bounds(left)?;
+        let (right_min, right_max) = self.integer_bounds(right)?;
+        use BinaryOperator::{Equal, Greater, GreaterEqual, Less, LessEqual, NotEqual};
+        let (always, never) = match operator {
+            Equal | NotEqual => {
+                let equal = min == max && right_min == right_max && min == right_min;
+                let different = max < right_min || right_max < min;
+                if operator == Equal {
+                    (equal, different)
+                } else {
+                    (different, equal)
+                }
+            }
+            Less => (max < right_min, min >= right_max),
+            LessEqual => (max <= right_min, min > right_max),
+            Greater => (min > right_max, max <= right_min),
+            GreaterEqual => (min >= right_max, max < right_min),
+            _ => return None,
+        };
+        (always || never).then_some(always)
+    }
+
+    /// Inclusive integer bounds of a known value or an active range binding.
+    fn integer_bounds(self, expression: &Expr) -> Option<(i64, i64)> {
+        if let ExprKind::Local(local) = expression.kind
+            && let Some((_, range)) = self.ranges.iter().find(|(id, _)| *id == local)
+        {
+            // Only nonempty ranges are installed, so end - 1 cannot overflow.
+            return Some((range.start, range.end - 1));
+        }
+        let LabelValue::Int(value) = self.selector(expression)? else {
+            return None;
+        };
+        Some((value, value))
     }
 }
 
@@ -117,7 +173,13 @@ impl<'a> Typer<'a> {
     /// What a value read in a graph is (FN-3), as [`category`] says,
     /// with the locals read so far.
     pub(super) fn category(&self, value: &Expr) -> ValueCategory {
-        self.category_with_live_locals(value, None)
+        let known = self
+            .anonymous
+            .as_ref()
+            .filter(|_| !self.type_query)
+            .and_then(|body| body.immediate_values.as_deref())
+            .map(|locals| ImmediateValues::new(self.program, &self.instance, locals));
+        self.category_with_live_locals(value, known, None)
     }
 
     /// Classify an immediately invoked result with the reached writes in
@@ -125,6 +187,7 @@ impl<'a> Typer<'a> {
     pub(super) fn category_with_live_locals(
         &self,
         value: &Expr,
+        known: Option<ImmediateValues<'_>>,
         live_locals: Option<&HashSet<LocalId>>,
     ) -> ValueCategory {
         category_with_functions(
@@ -133,11 +196,7 @@ impl<'a> Typer<'a> {
             value,
             &self.pack_functions,
             &self.callback_captures,
-            self.anonymous
-                .as_ref()
-                .filter(|_| !self.type_query)
-                .and_then(|body| body.immediate_values.as_deref())
-                .map(|locals| ImmediateValues::new(self.program, &self.instance, locals)),
+            known,
             live_locals,
         )
     }

@@ -899,7 +899,7 @@ impl<'a> Reader<'a> {
     ) -> Result<Expr, ConstInputFault> {
         use ConstInputFault::Unread;
 
-        if !self.builtin_operation(value) {
+        if !builtin_operation(self.program, value) {
             return Err(Unread);
         }
         let calculated = if value.ty == Type::Scalar(Scalar::Str)
@@ -930,35 +930,6 @@ impl<'a> Reader<'a> {
         })
     }
 
-    /// A user's named candidate can run value code. Fold only the checked
-    /// builtin arithmetic, with no opaque configuration operands.
-    fn builtin_operation(&self, value: &Expr) -> bool {
-        match &value.kind {
-            ExprKind::Binary { .. } | ExprKind::Unary { .. } => true,
-            ExprKind::Call {
-                callee,
-                form,
-                arguments,
-                ..
-            } => {
-                let arity = match form {
-                    Form::Binary(_) => 2,
-                    Form::Unary(_) => 1,
-                    Form::Named => return false,
-                };
-                arguments.len() == arity
-                    && callee.declaration().is_some_and(|(module, declaration)| {
-                        self.program.core() == Some(module)
-                            && matches!(
-                                self.program.modules[module].declarations[declaration].kind,
-                                crate::DeclarationKind::NativeCandidate(Role::Value, _)
-                            )
-                    })
-            }
-            _ => false,
-        }
-    }
-
     /// The components of one joined pattern share the same depth budget.
     fn concatenation(
         &mut self,
@@ -970,7 +941,7 @@ impl<'a> Reader<'a> {
         let mut pending = vec![value];
         while let Some(piece) = pending.pop() {
             if piece.ty == Type::Scalar(Scalar::Str)
-                && self.builtin_operation(piece)
+                && builtin_operation(self.program, piece)
                 && let Some((BinaryOperator::Add, left, right)) = piece.kind.binary()
             {
                 self.steps_left = self
@@ -986,6 +957,35 @@ impl<'a> Reader<'a> {
             }
         }
         Ok(text)
+    }
+}
+
+/// A user's named candidate can run value code. Fold only the checked
+/// builtin arithmetic, with no opaque configuration operands.
+pub(crate) fn builtin_operation(program: &Program, value: &Expr) -> bool {
+    match &value.kind {
+        ExprKind::Binary { .. } | ExprKind::Unary { .. } => true,
+        ExprKind::Call {
+            callee,
+            form,
+            arguments,
+            ..
+        } => {
+            let arity = match form {
+                Form::Binary(_) => 2,
+                Form::Unary(_) => 1,
+                Form::Named => return false,
+            };
+            arguments.len() == arity
+                && callee.declaration().is_some_and(|(module, declaration)| {
+                    program.core() == Some(module)
+                        && matches!(
+                            program.modules[module].declarations[declaration].kind,
+                            crate::DeclarationKind::NativeCandidate(Role::Value, _)
+                        )
+                })
+        }
+        _ => false,
     }
 }
 
