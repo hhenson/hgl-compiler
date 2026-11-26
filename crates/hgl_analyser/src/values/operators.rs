@@ -2399,13 +2399,17 @@ impl Typer<'_> {
             _ if matches!(store.value.kind, ExprKind::Pairs(_)) => None,
             // GEN-7: the operations of every stated member are callable here.
             Type::Parameter { at, .. }
-                if self.memberships().iter().any(|(position, members)| {
-                    position == at
-                        && !members.is_empty()
-                        && members
-                            .iter()
-                            .all(|member| matches!(member, Argument::Type(Type::Dict { .. })))
-                }) =>
+                if self
+                    .finite_domains()
+                    .memberships()
+                    .iter()
+                    .any(|(position, members)| {
+                        position == at
+                            && !members.is_empty()
+                            && members
+                                .iter()
+                                .all(|member| matches!(member, Argument::Type(Type::Dict { .. })))
+                    }) =>
             {
                 None
             }
