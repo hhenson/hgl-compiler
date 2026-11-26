@@ -415,6 +415,8 @@ struct KeyedWrites {
 
     void record(const hgraph::TSDataView&, const Delta& value) { latest = value; }
 
+    void withdraw(const hgraph::TSDataView&) { latest.reset(); }
+
     bool has_change() const { return latest.has_value(); }
 
     Delta delta() const { return *latest; }
@@ -447,6 +449,18 @@ struct KeyedWrites<hgraph::TSS<K>> {
         }
     }
 
+    void withdraw(const hgraph::TSDataView& original) {
+        members.clear();
+        active_changes = 0;
+        if (original.valid() && original.has_current_value()) {
+            for (const auto& raw : original.as_set().values()) {
+                if (members.try_emplace(key_of<K>(raw), Membership{true, false}).second) {
+                    ++active_changes;
+                }
+            }
+        }
+    }
+
     bool has_change() const { return active_changes > 0; }
 
     set_delta<K> delta() const {
@@ -473,6 +487,7 @@ struct KeyedWrites<hgraph::TSD<K, V>> {
     struct Entry {
         Membership member;
         bool valid;
+        bool withdrawn{};
         bool active{};
         KeyedWrites<V> child{};
     };
@@ -496,6 +511,22 @@ struct KeyedWrites<hgraph::TSD<K, V>> {
         }
     }
 
+    void withdraw(const hgraph::TSDataView& original) {
+        entries.clear();
+        active_changes = 0;
+        base_all_valid_.reset();
+        if (original.valid() && original.has_current_value()) {
+            for (const auto& [raw_key, child] : original.as_dict().items()) {
+                const bool valid = child.valid() && child.has_current_value();
+                auto [it, inserted] =
+                    entries.try_emplace(key_of<K>(raw_key), Entry{{true, false}, valid, true});
+                if (inserted) {
+                    update_active(it->second);
+                }
+            }
+        }
+    }
+
     void record(const hgraph::TSDataView& original, const Delta& delta) {
         const auto initial = [&](const K& key) -> hgraph::TSDataView {
             return original.valid() ? original.as_dict().at(hgraph::Value{key}.view())
@@ -510,17 +541,21 @@ struct KeyedWrites<hgraph::TSD<K, V>> {
         for (const auto& key : delta.removed) {
             auto& entry = entry_for(key, initial(key));
             entry.member.current = false;
+            entry.withdrawn = entry.member.initial;
             entry.child = KeyedWrites<V>{};
             update_active(entry);
         }
         for (const auto& [key, value] : delta.updated) {
             const auto source = initial(key);
             auto& entry = entry_for(key, source);
+            const auto child_source =
+                source.valid() && source.has_current_value() ? source.borrowed_ref() : hgraph::TSDataView{};
+            if (entry.withdrawn) {
+                entry.child.withdraw(child_source);
+                entry.withdrawn = false;
+            }
             entry.member.current = true;
-            entry.child.record(source.valid() && source.has_current_value()
-                                   ? source.borrowed_ref()
-                                   : hgraph::TSDataView{},
-                               value);
+            entry.child.record(child_source, value);
             update_active(entry);
         }
     }

@@ -571,6 +571,62 @@ TEST_CASE("KeyedEvaluation staged all_valid and delta_value track pre-existing i
     CHECK(staged_book_wakes == std::vector<datetime>{start, start + 2us});
 }
 
+using NestedSetBook = hglrt::dict<i64, hglrt::dict<i64, Members>>;
+using NestedSetBookDelta = hglrt::dict_delta<i64, hglrt::dict<i64, Members>>;
+using NestedSetBookSchema = hgraph::TSD<i64, hgraph::TSD<i64, MembersSchema>>;
+
+std::vector<Seen<NestedSetBook, NestedSetBookDelta>> nested_restore_seen;
+
+struct NestedRestoreWriter {
+    static constexpr auto name = "test::nested_restore_writer";
+
+    static void eval(hgraph::In<"step", hgraph::TS<i64>> step, hgraph::Out<NestedSetBookSchema> out) {
+        if (step.value() == 0) {
+            hglrt::keyed_publish(out, NestedSetBook{{5, {{10, {1, 2}}, {20, {3}}}}});
+            return;
+        }
+        hglrt::KeyedEvaluation<decltype(out)> staged{out};
+        staged.run([&](auto& out_) {
+            // Remove outer key 5, then restore only inner key 10 with {9}.
+            hglrt::keyed_publish(out_, NestedSetBookDelta{{}, {5}});
+            hglrt::keyed_publish(
+                out_, NestedSetBookDelta{{{5, hglrt::dict_delta<i64, Members>{{{10, MembersDelta{{9}, {}}}}, {}}}},
+                                         {}});
+            const auto expected = NestedSetBookDelta{
+                {{5, hglrt::dict_delta<i64, Members>{{{10, MembersDelta{{9}, {1, 2}}}}, {20}}}}, {}};
+            CHECK(hglrt::fn_delta_value(out_) == expected);
+        });
+    }
+};
+
+struct NestedRestoreWatcher {
+    static constexpr auto name = "test::nested_restore_watcher";
+
+    static void eval(hgraph::In<"book", NestedSetBookSchema, hgraph::InputValidity::Unchecked> book,
+                     hgraph::DateTime now) {
+        nested_restore_seen.push_back(seen_of(now, book));
+    }
+};
+
+TEST_CASE("KeyedEvaluation resets nested keyed descendants when restoring a removed key (TIME-7)") {
+    nested_restore_seen.clear();
+    (void)hglrt::testing::run([](hgraph::Wiring& wiring, datetime) {
+        hgraph::wire<NestedRestoreWatcher>(
+            wiring, hgraph::wire<NestedRestoreWriter>(wiring, replayed(wiring, Dense<i64>{0, 1})));
+    });
+    const auto expected_delta = NestedSetBookDelta{
+        {{5, hglrt::dict_delta<i64, Members>{{{10, MembersDelta{{9}, {1, 2}}}}, {20}}}}, {}};
+    CHECK(nested_restore_seen ==
+          std::vector<Seen<NestedSetBook, NestedSetBookDelta>>{
+              {start, true, true, NestedSetBook{{5, {{10, {1, 2}}, {20, {3}}}}},
+               NestedSetBookDelta{
+                   {{5, hglrt::dict_delta<i64, Members>{{{10, MembersDelta{{1, 2}, {}}}, {20, MembersDelta{{3}, {}}}},
+                                                        {}}}},
+                   {}}},
+              {start + 1us, true, true, NestedSetBook{{5, {{10, {9}}}}}, expected_delta},
+          });
+}
+
 // The generated code sets the HGL file and line at each read.
 void read_whole_book_at_hgl_source(const TupleBookInput& book) {
 #line 12 "demo/dictionary_reads.hgl"

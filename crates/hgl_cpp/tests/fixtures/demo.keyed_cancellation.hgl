@@ -367,6 +367,53 @@ fn nested_set_wake(book: dict<i64, set<i64>>) -> bool {
 fn observe_nested_out(step: i64) -> bool => nested_wake(nested_observes_out(step))
 fn observe_nested_set_out(step: i64) -> bool => nested_set_wake(nested_set_observes_out(step))
 
+fn nested_set_withdraw_restore(step: i64) -> dict<i64, set<i64>> {
+    inject out
+    when {
+        if step == 1 { return [5: [1]] }
+        if step == 2 {
+            out = delta<dict<i64, set<i64>>>(removed: [5])
+            if delta_value(out) == delta<dict<i64, set<i64>>>(removed: [5]) {
+                out = delta<dict<i64, set<i64>>>(updated: [5: delta<set<i64>>(added: [8])])
+                let expected = delta<dict<i64, set<i64>>>(
+                    updated: [5: delta<set<i64>>(added: [8], removed: [1])],
+                )
+                if delta_value(out) != expected {
+                    out = delta<dict<i64, set<i64>>>(updated: [99: delta<set<i64>>(added: [1])])
+                }
+            }
+        }
+        if step == 3 {
+            # Removing and re-adding the exact same member leaves the set unchanged.
+            out = delta<dict<i64, set<i64>>>(removed: [5])
+            out = delta<dict<i64, set<i64>>>(updated: [5: delta<set<i64>>(added: [8])])
+        }
+    }
+}
+
+fn nested_dict_withdraw_restore(step: i64) -> dict<i64, dict<i64, i64>> {
+    inject out
+    when {
+        if step == 1 { return [5: [1: 3, 2: 4]] }
+        if step == 2 {
+            out = delta<dict<i64, dict<i64, i64>>>(removed: [5])
+            out = delta<dict<i64, dict<i64, i64>>>(
+                updated: [5: delta<dict<i64, i64>>(updated: [8: 2])],
+            )
+            let expected = delta<dict<i64, dict<i64, i64>>>(
+                updated: [5: delta<dict<i64, i64>>(updated: [8: 2], removed: [1, 2])],
+            )
+            if delta_value(out) != expected {
+                out = delta<dict<i64, dict<i64, i64>>>(
+                    updated: [99: delta<dict<i64, i64>>(updated: [1: 1])],
+                )
+            }
+        }
+    }
+}
+
+fn observe_nested_set_restore(step: i64) -> bool => nested_set_wake(nested_set_withdraw_restore(step))
+
 # TIME-7, TIME-9 and END-3: nested keyed observers see intermediate inner
 # deltas, stay silent on inner cancellation, and preserve equal inner updates.
 test nested_output_observers_cancel_silently_and_keep_equal_updates {
@@ -377,6 +424,21 @@ test nested_output_observers_cancel_silently_and_keep_equal_updates {
     assert eval observe_nested_out(step: [1, 2, 3]) == [true, _, true]
     assert eval nested_set_observes_out(step: [1, 2]) == [[5: [1]], _]
     assert eval observe_nested_set_out(step: [1, 2]) == [true, _]
+}
+
+# TIME-7 and END-3: removing and restoring a keyed child resets prior members
+# instead of leaking them into the restored child.
+test nested_withdraw_and_restore_resets_child_members {
+    assert eval nested_set_withdraw_restore(step: [1, 2, 3]) == [
+        [5: [1]],
+        [5: [8]],
+        _,
+    ]
+    assert eval observe_nested_set_restore(step: [1, 2, 3]) == [true, true, _]
+    assert eval nested_dict_withdraw_restore(step: [1, 2]) == [
+        [5: [1: 3, 2: 4]],
+        [5: [8: 2]],
+    ]
 }
 
 fn nan_dictionary(step: i64) -> dict<f64, i64> {
