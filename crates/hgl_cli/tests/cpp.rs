@@ -5900,7 +5900,7 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.contains("rejection cases: 2 passed, 0 failed\n"),
+        stdout.contains("rejection cases: 4 passed, 0 failed\n"),
         "{stdout}"
     );
     let file = write(
@@ -5912,7 +5912,7 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 32 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 36 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }

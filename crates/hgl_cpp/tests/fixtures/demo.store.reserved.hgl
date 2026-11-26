@@ -512,3 +512,41 @@ fn side_effect(value: i64, const key: str) -> i64 {
 test a_value_argument_acts_before_the_operation_fails {
     assert eval side_effect(value: [5], key: "run") == [5]
 }
+
+# TIME-8, CAP-6: false declaration cycles must not delay these build checks.
+const fn paired_sa(store: GlobalState, depth: i64, flag: bool, const k: str) {
+    put(store, k, 1)
+    if depth > 0 { paired_sb(store, depth - 1, flag, k, k) }
+}
+const fn paired_sb(store: GlobalState, depth: i64, flag: bool, const p: str, const q: str) {
+    if flag { paired_sa(store, depth, flag, p) } else { paired_sa(store, depth, flag, q) }
+}
+fn pair_node(const key: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { paired_sa(global_state, 1, true, key) }
+}
+operator resolved_w<S, T>(store: S, const key: str, value: T) requires S in {GlobalState}
+impl const fn resolved_w(store: GlobalState, const key: str, value: i64) { resolved_relay(store, key + "put", 1.5) }
+impl const fn resolved_w(store: GlobalState, const key: str, value: f64) { put(store, key, value) }
+const fn resolved_relay<T>(store: GlobalState, const key: str, value: T) requires T in {i64, f64} { resolved_w(store, key, value) }
+fn choice_node(const key: str, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { resolved_w(global_state, key, 1) }
+}
+# TIME-8/CAP-6: computation fixes these keys at the build, before start.
+test pair_rejects_before_start {
+    assert raises("store.reserved_key") { eval pair_node(key: supply("run.output"), divisor: 0) }
+}
+test pair_accepts_safe_computed_key {
+    eval pair_node(key: supply("user.key"), divisor: 1)
+}
+test choice_rejects_before_start {
+    assert raises("store.reserved_key") { eval choice_node(key: supply("run.out"), divisor: 0) }
+}
+test choice_accepts_other_computed_key {
+    eval choice_node(key: supply("run.output"), divisor: 1)
+}

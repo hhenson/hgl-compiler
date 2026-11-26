@@ -29,3 +29,36 @@ test e_only_the_fixed_route_rejects {
     # expect-error(injectable, "store.reserved_key")
     eval both(key: "run.output")
 }
+
+# TIME-8, CAP-6: only the selected calls can change the key.
+const fn same_sa(store: GlobalState, depth: i64, flag: bool, const k: str) {
+    put(store, k, 1)
+    if depth > 0 { same_sb(store, depth - 1, flag, k, k) }
+}
+const fn same_sb(store: GlobalState, depth: i64, flag: bool, const p: str, const q: str) {
+    if flag { same_sa(store, depth, flag, p) } else { same_sa(store, depth, flag, q) }
+}
+fn same_key_node(const key: str) {
+    inject global_state
+    when {}
+    stop { same_sa(global_state, 1, true, key) }
+}
+test same_route_fixes_the_key_in_source {
+    # expect-error(injectable, "store.reserved_key")
+    eval same_key_node(key: "run.output")
+}
+
+# TIME-8, CAP-6: only the selected calls can change the key.
+operator choice_w<S, T>(store: S, const key: str, value: T) requires S in {GlobalState}
+impl const fn choice_w(store: GlobalState, const key: str, value: i64) { choice_relay(store, key + "put", 1.5) }
+impl const fn choice_w(store: GlobalState, const key: str, value: f64) { put(store, key, value) }
+const fn choice_relay<T>(store: GlobalState, const key: str, value: T) requires T in {i64, f64} { choice_w(store, key, value) }
+fn choice_key_node(const key: str) {
+    inject global_state
+    when {}
+    stop { choice_w(global_state, key, 1) }
+}
+test choice_route_fixes_the_key_in_source {
+    # expect-error(injectable, "store.reserved_key")
+    eval choice_key_node(key: "run.out")
+}

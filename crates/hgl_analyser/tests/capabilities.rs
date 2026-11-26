@@ -839,3 +839,106 @@ test unused { eval hook(key: "run.output", depth: 1) }
         checked.report
     );
 }
+
+/// The #885 route, with a key the text fixes.
+const SAME_KEY_ROUTES: &str = r#"module m
+const fn sa(store: GlobalState, depth: i64, flag: bool, const k: str) {
+    put(store, k, 1)
+    if depth > 0 { sb(store, depth - 1, flag, k, k) }
+}
+const fn sb(store: GlobalState, depth: i64, flag: bool, const p: str, const q: str) {
+    if flag { sa(store, depth, flag, p) } else { sa(store, depth, flag, q) }
+}
+fn node(const key: str) {
+    inject global_state
+    when {}
+    stop { sa(global_state, 1, true, key) }
+}
+test src {
+    eval node(key: "run.output")
+}
+"#;
+
+/// The #885 route, with a key the text fixes.
+const SELECTED_KEY_ROUTE: &str = r#"module m
+operator w<S, T>(store: S, const key: str, value: T) requires S in {GlobalState}
+impl const fn w(store: GlobalState, const key: str, value: i64) { relay(store, key + "put", 1.5) }
+impl const fn w(store: GlobalState, const key: str, value: f64) { put(store, key, value) }
+const fn relay<T>(store: GlobalState, const key: str, value: T) requires T in {i64, f64} { w(store, key, value) }
+fn node(const key: str) {
+    inject global_state
+    when {}
+    stop { w(global_state, key, 1) }
+}
+test src {
+    eval node(key: "run.out")
+}
+"#;
+
+/// TIME-8, CAP-6: this route fixes its one key in source (GEN-7).
+#[test]
+fn one_key_forwarded_to_two_const_slots_stays_fixed() {
+    let checked = check(&[("m.hgl", SAME_KEY_ROUTES)]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:15:5 injectable/store.reserved_key TIME-8"],
+        "{}",
+        checked.report
+    );
+}
+
+/// TIME-8, CAP-6: this route fixes its one key in source (GEN-7).
+#[test]
+fn a_selected_store_candidate_does_not_close_another_instances_cycle() {
+    let checked = check(&[("m.hgl", SELECTED_KEY_ROUTE)]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:12:5 injectable/store.reserved_key TIME-8"],
+        "{}",
+        checked.report
+    );
+}
+
+/// TIME-8, CAP-6: the same routes admit a nonreserved effective key.
+#[test]
+fn fixed_store_routes_admit_their_nonreserved_key() {
+    for source in [
+        SAME_KEY_ROUTES.replace("\"run.output\"", "\"user.key\""),
+        SELECTED_KEY_ROUTE.replace("\"run.out\"", "\"run.output\""),
+    ] {
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked.summary(),
+            Vec::<String>::new(),
+            "{}",
+            checked.report
+        );
+    }
+}
+
+/// TIME-8, CAP-6: a helper computes the key at graph build, not in source.
+#[test]
+fn fixed_store_routes_leave_computed_keys_to_the_build() {
+    for (source, literal) in [
+        (SAME_KEY_ROUTES, "run.output"),
+        (SELECTED_KEY_ROUTE, "run.out"),
+    ] {
+        let source = source
+            .replacen(
+                "module m\n",
+                "module m\nconst fn supply_key(key: str) -> str => key\n",
+                1,
+            )
+            .replace(
+                &format!("key: \"{literal}\""),
+                &format!("key: supply_key(\"{literal}\")"),
+            );
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked.summary(),
+            Vec::<String>::new(),
+            "{}",
+            checked.report
+        );
+    }
+}

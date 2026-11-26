@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::hash::Hash;
 use std::rc::Rc;
 
 use hgl_diagnostics::{Diagnostics, Location};
@@ -23,6 +24,8 @@ use crate::{
 
 type Declaration = (usize, usize);
 type Slot = (Declaration, usize);
+/// Const-slot dependency edges in a declaration or type-instance call graph.
+type StoreUses<N> = HashMap<(N, usize), Vec<((N, usize), Demand)>>;
 pub(crate) type Demands = HashMap<Declaration, BTreeMap<usize, Demand>>;
 
 /// The `const` slots of a cycle whose key can differ between its calls
@@ -1192,7 +1195,15 @@ pub(crate) fn demands(
         }
     }
     let observed_keys = store_reads.values().flatten().copied().collect();
-    let changing = store_calls.changed(observed_keys, &uses);
+    let conservative = store_calls.changed(observed_keys, &uses, false);
+    // Most programs have no changing store cycle. Only refine a possible
+    // cycle, and keep its existing runtime classification if reading its
+    // type instances is incomplete or reaches the ordinary instance bound.
+    let changing = if conservative.is_empty() {
+        conservative
+    } else {
+        resolved_store_changes(program).unwrap_or(conservative)
+    };
     let changes_in_cycle = |slot: &Slot| changing.contains(slot);
     while let Some(((declaration, slot), demand)) = pending.pop_front() {
         if demand == Demand::StoreKey {
@@ -1235,33 +1246,321 @@ fn names_generic_value(value: &Expr) -> bool {
     reads
 }
 
-/// Calls that can pass configuration in a recursive graph or store helper.
-#[derive(Default)]
-struct StoreCalls {
-    calls: HashSet<(Declaration, Declaration)>,
-    inputs: Vec<StoreInput>,
+/// TIME-8 follows the calls an instance makes, not all candidates of the
+/// operator it names. Keys stay symbolic here: this graph specializes types
+/// and forwarding shapes, never the values a recursive key can reach.
+fn resolved_store_changes(program: &Program) -> Option<ChangingSlots> {
+    let store = program.capability_type("global_state")?;
+    let borrows_store = |signature: &Signature| {
+        signature
+            .parameters
+            .iter()
+            .any(|parameter| parameter.ty == store)
+    };
+    let mut relevant = HashSet::new();
+    for (module, unit) in program.modules.iter().enumerate() {
+        for (declaration, detail) in unit.details.iter().enumerate() {
+            let Detail::Callable(signature) = detail else {
+                continue;
+            };
+            let injects = unit
+                .bodies
+                .get(declaration)
+                .and_then(Option::as_ref)
+                .is_some_and(|body| {
+                    body.locals
+                        .iter()
+                        .any(|local| local.kind == crate::LocalKind::Inject && local.ty == store)
+                });
+            if borrows_store(signature)
+                || injects
+                || unit.phases.get(declaration) == Some(&Some(Phase::Graph))
+            {
+                relevant.insert((module, declaration));
+            }
+        }
+    }
+    let mut read = StoreInstances {
+        program,
+        relevant,
+        nodes: Vec::new(),
+        instances: HashMap::new(),
+        counts: HashMap::new(),
+        pending: VecDeque::new(),
+        calls: StoreCalls::default(),
+        uses: HashMap::new(),
+        observed: HashSet::new(),
+    };
+    // An injected store is an entry to these borrowed-store routes. A helper
+    // receives the aliases its actual callers give it, rather than arbitrary
+    // independent values for every one of its const parameters.
+    let empty = Signature {
+        generics: Vec::new(),
+        parameters: Vec::new(),
+        result: None,
+        reference: false,
+    };
+    for (module, unit) in program.modules.iter().enumerate() {
+        for (declaration, body) in unit.bodies.iter().enumerate() {
+            let (Some(body), Some(Detail::Callable(signature))) =
+                (body, unit.details.get(declaration))
+            else {
+                continue;
+            };
+            if signature.generics.is_empty() && !borrows_store(signature) {
+                read.root(Some((module, declaration)), signature, body)?;
+            }
+        }
+        for body in unit.test_bodies.iter().flatten().chain(&unit.store_body) {
+            read.root(None, &empty, body)?;
+        }
+        if let Some(run) = &unit.run_body {
+            let body = crate::hir::Body {
+                locals: run.locals.clone(),
+                statements: vec![Stmt::Expr(run.call.clone())],
+            };
+            read.root(None, &empty, &body)?;
+        }
+    }
+    while let Some((node, body)) = read.pending.pop_front() {
+        read.body(node, &body)?;
+    }
+    let changed = read.calls.changed(read.observed, &read.uses, true);
+    Some(
+        changed
+            .into_iter()
+            .filter_map(|(node, slot)| read.nodes[node].0.map(|declaration| (declaration, slot)))
+            .collect(),
+    )
 }
 
-struct StoreInput {
-    caller: Declaration,
-    callee: Slot,
+/// A bounded type-instance graph, separate from the key's const inputs.
+struct StoreInstances<'a> {
+    program: &'a Program,
+    relevant: HashSet<Declaration>,
+    nodes: Vec<(Option<Declaration>, Signature)>,
+    instances: HashMap<(String, Option<crate::TestCandidateScope>), usize>,
+    counts: HashMap<Declaration, usize>,
+    pending: VecDeque<(usize, crate::hir::Body)>,
+    calls: StoreCalls<usize>,
+    uses: StoreUses<usize>,
+    observed: HashSet<(usize, usize)>,
+}
+
+impl StoreInstances<'_> {
+    fn root(
+        &mut self,
+        declaration: Option<Declaration>,
+        signature: &Signature,
+        body: &crate::hir::Body,
+    ) -> Option<()> {
+        let mut needed = false;
+        crate::values::walk_body_calls(body, &mut |call| {
+            if let ExprKind::Call { callee, .. } = &call.kind {
+                needed |= callee
+                    .declaration()
+                    .is_some_and(|called| self.relevant.contains(&called));
+            }
+        });
+        if needed {
+            let node = self.nodes.len();
+            self.nodes.push((declaration, signature.clone()));
+            self.body(node, body)?;
+        }
+        Some(())
+    }
+
+    fn instance(&mut self, callee: &Callee, arguments: &[Argument]) -> Option<usize> {
+        let declaration = callee.declaration()?;
+        let unit = &self.program.modules[declaration.0];
+        let Detail::Callable(signature) = &unit.details[declaration.1] else {
+            return None;
+        };
+        let requirements = match callee {
+            Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
+                requirements
+            }
+            _ => return None,
+        };
+        let entries = pack_inputs_of(self.program, callee, signature, arguments);
+        let mut key = crate::values::bounded_instance_key(
+            declaration,
+            callee.generics(),
+            callee.type_packs(),
+            requirements,
+        )?;
+        if let Some(entries) = &entries {
+            key.push_str(&format!("entries{entries:?}"));
+        }
+        if key.len() > INPUT_BUDGET {
+            return None;
+        }
+        let key = (key, callee.test_candidates());
+        if let Some(&node) = self.instances.get(&key) {
+            return Some(node);
+        }
+        let count = self.counts.entry(declaration).or_default();
+        *count += 1;
+        if *count > crate::INSTANCES || self.nodes.len() >= INPUT_BUDGET {
+            return None;
+        }
+        let (taken, body) = if unit
+            .bodies
+            .get(declaration.1)
+            .and_then(Option::as_ref)
+            .is_some()
+        {
+            let placement = RefCell::new(Diagnostics::new());
+            let mut reports = Diagnostics::new();
+            let instance = self.program.checked_instance(
+                declaration,
+                callee.generics(),
+                requirements,
+                crate::InstanceInputs {
+                    type_packs: callee.type_packs(),
+                    pack_inputs: entries.as_deref(),
+                    test_candidates: callee.test_candidates(),
+                    ..crate::InstanceInputs::default()
+                },
+                &placement,
+                &mut reports,
+            )?;
+            if reports.has_errors() || placement.borrow().has_errors() {
+                return None;
+            }
+            // Keep the original slot numbering. Existing demand analysis is the
+            // conservative fallback for a forwarding shape that expands it.
+            if instance
+                .signature
+                .parameters
+                .iter()
+                .map(|p| p.at)
+                .ne(signature.parameters.iter().map(|p| p.at))
+            {
+                return None;
+            }
+            (instance.signature, Some(instance.body))
+        } else {
+            (signature.clone(), None)
+        };
+        let node = self.nodes.len();
+        self.nodes.push((Some(declaration), taken));
+        self.instances.insert(key, node);
+        if let Some(body) = body {
+            self.pending.push_back((node, body));
+        }
+        Some(node)
+    }
+
+    fn body(&mut self, node: usize, body: &crate::hir::Body) -> Option<()> {
+        let (declaration, signature) = self.nodes[node].clone();
+        let bindings = declaration
+            .map(|(module, _)| local_bindings(&self.program.modules[module]))
+            .unwrap_or_default();
+        let slots = signature
+            .parameters
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.constant)
+            .map(|(slot, p)| (p.at, slot))
+            .collect();
+        let mut calls = Vec::new();
+        let mut unresolved = false;
+        crate::values::walk_body_calls(body, &mut |call| {
+            if let ExprKind::Call {
+                callee, arguments, ..
+            } = &call.kind
+            {
+                if let Some(key) = self.program.store_key_argument(callee, arguments) {
+                    slots_read(key, &bindings, &slots, |slot| {
+                        self.observed.insert((node, slot));
+                    });
+                }
+                unresolved |= matches!(
+                    callee,
+                    Callee::DeferredOperator(_) | Callee::DeferredPackCall
+                );
+                if callee
+                    .declaration()
+                    .is_some_and(|called| self.relevant.contains(&called))
+                {
+                    calls.push((callee.clone(), arguments.clone()));
+                }
+            }
+        });
+        if unresolved && declaration.is_some_and(|declaration| self.relevant.contains(&declaration))
+        {
+            return None;
+        }
+        for (callee, arguments) in calls {
+            let target = self.instance(&callee, &arguments)?;
+            let parameters = &self.nodes[target].1;
+            self.calls
+                .record(node, &signature, target, parameters, |slot| {
+                    arguments
+                        .iter()
+                        .find(|a| a.parameter == Some(slot))
+                        .map(|a| &a.value)
+                });
+            for argument in &arguments {
+                if let Some(slot) = argument.parameter {
+                    slots_read(&argument.value, &bindings, &slots, |from| {
+                        self.uses
+                            .entry((target, slot))
+                            .or_default()
+                            .push(((node, from), Demand::Always));
+                    });
+                }
+            }
+        }
+        Some(())
+    }
+}
+
+/// Calls that can pass configuration in a recursive graph or store helper.
+/// `N` is a declaration in the conservative graph and a type-instance index
+/// in the refinement; both use the same cycle and alias analysis.
+#[derive(Default)]
+struct StoreCalls<N = Declaration> {
+    calls: HashSet<(N, N)>,
+    inputs: Vec<StoreInput<N>>,
+    routes: HashMap<N, Vec<(N, Vec<StoreSource>)>>,
+}
+
+/// What one call hands to a const parameter, without evaluating value code.
+enum StoreSource {
+    Parameter(usize),
+    Literal(String),
+    Other,
+}
+
+struct StoreInput<N = Declaration> {
+    caller: N,
+    callee: (N, usize),
     forwarded: Option<usize>,
 }
 
-impl StoreCalls {
+impl<N: Copy + Eq + Hash> StoreCalls<N> {
     /// Record a call from `caller`, written as `signature`, of `callee`,
     /// written as `target`; `argument_for` gives the argument of each of
     /// the callee's slots, where the call writes one.
     fn record<'a>(
         &mut self,
-        caller: Declaration,
+        caller: N,
         signature: &Signature,
-        callee: Declaration,
+        callee: N,
         target: &Signature,
         argument_for: impl Fn(usize) -> Option<&'a Expr>,
     ) {
         self.calls.insert((caller, callee));
+        let mut sources = Vec::new();
         for (slot, parameter) in target.parameters.iter().enumerate() {
+            let source = argument_for(slot).map(|argument| match &argument.kind {
+                ExprKind::Local(local) => StoreSource::Parameter(*local),
+                ExprKind::Literal(Value::Str(text)) => StoreSource::Literal(text.clone()),
+                _ => StoreSource::Other,
+            });
+            sources.push(source.unwrap_or(StoreSource::Other));
             if !parameter.constant {
                 continue;
             }
@@ -1282,6 +1581,39 @@ impl StoreCalls {
                 forwarded,
             });
         }
+        self.routes
+            .entry(callee)
+            .or_default()
+            .push((caller, sources));
+    }
+
+    /// Two ports are aliases only when every incoming route supplies one key.
+    /// Following a pair already visited is coinductive: a cycle that merely
+    /// hands the pair on adds no difference. An unequal entry route disproves it.
+    fn same_key(&self, function: N, first: usize, second: usize) -> bool {
+        let mut waiting = vec![(function, first, second)];
+        let mut seen = HashSet::new();
+        while let Some((function, first, second)) = waiting.pop() {
+            if first == second || !seen.insert((function, first.min(second), first.max(second))) {
+                continue;
+            }
+            let Some(routes) = self.routes.get(&function) else {
+                return false;
+            };
+            for (caller, sources) in routes {
+                let (Some(left), Some(right)) = (sources.get(first), sources.get(second)) else {
+                    return false;
+                };
+                match (left, right) {
+                    (StoreSource::Parameter(left), StoreSource::Parameter(right)) => {
+                        waiting.push((*caller, *left, *right));
+                    }
+                    (StoreSource::Literal(left), StoreSource::Literal(right)) if left == right => {}
+                    _ => return false,
+                }
+            }
+        }
+        true
     }
 
     /// The slots of each cycle whose key can differ between its calls
@@ -1291,10 +1623,11 @@ impl StoreCalls {
     /// operation's key reads.
     fn changed(
         self,
-        mut observed: HashSet<Slot>,
-        uses: &HashMap<Slot, Vec<(Slot, Demand)>>,
-    ) -> ChangingSlots {
-        let mut graph = DiGraph::<Declaration, ()>::new();
+        mut observed: HashSet<(N, usize)>,
+        uses: &StoreUses<N>,
+        aliases: bool,
+    ) -> HashSet<(N, usize)> {
+        let mut graph = DiGraph::<N, ()>::new();
         let mut nodes = HashMap::new();
         for &(caller, callee) in &self.calls {
             let caller = *nodes
@@ -1311,14 +1644,14 @@ impl StoreCalls {
                 cycles.extend(declarations.into_iter().map(|node| (graph[node], number)));
             }
         }
-        let same_cycle = |caller: Declaration, callee: Declaration| {
+        let same_cycle = |caller: N, callee: N| {
             cycles
                 .get(&caller)
                 .is_some_and(|cycle| cycles.get(&callee) == Some(cycle))
         };
         // From a callee's slot to each slot of its caller that a call
         // leaving the caller's cycle reads for it.
-        let mut outside = HashMap::<Slot, Vec<Slot>>::new();
+        let mut outside = HashMap::<(N, usize), Vec<(N, usize)>>::new();
         for (&to, senders) in uses {
             for &(from, _) in senders {
                 if self.calls.contains(&(from.0, to.0)) && !same_cycle(from.0, to.0) {
@@ -1332,9 +1665,9 @@ impl StoreCalls {
         follow_slots(&mut observed, &outside);
 
         let mut changed = HashSet::new();
-        let mut forwarded: HashMap<Slot, Vec<Slot>> = HashMap::new();
-        let mut received: HashMap<Slot, Vec<Slot>> = HashMap::new();
-        for input in self.inputs {
+        let mut forwarded = HashMap::<(N, usize), Vec<(N, usize)>>::new();
+        let mut received = HashMap::<(N, usize), Vec<(N, usize)>>::new();
+        for input in &self.inputs {
             if !same_cycle(input.caller, input.callee.0) {
                 continue;
             }
@@ -1349,7 +1682,9 @@ impl StoreCalls {
         let readers: HashSet<_> = observed.iter().map(|slot| slot.0).collect();
         for &read in &observed {
             if !changed.contains(&read)
-                && cycle_passes_another_key(read, &received, &observed, &readers)
+                && cycle_passes_another_key(read, &received, &observed, &readers, &|node, a, b| {
+                    aliases && self.same_key(node, a, b)
+                })
             {
                 changed.insert(read);
             }
@@ -1360,7 +1695,7 @@ impl StoreCalls {
 }
 
 /// Add to `slots` every slot their `edges` reach.
-fn follow_slots(slots: &mut HashSet<Slot>, edges: &HashMap<Slot, Vec<Slot>>) {
+fn follow_slots<S: Copy + Eq + Hash>(slots: &mut HashSet<S>, edges: &HashMap<S, Vec<S>>) {
     let mut pending: Vec<_> = slots.iter().copied().collect();
     while let Some(slot) = pending.pop() {
         pending.extend(
@@ -1380,11 +1715,12 @@ fn follow_slots(slots: &mut HashSet<Slot>, edges: &HashMap<Slot, Vec<Slot>>) {
 /// the trace reaches two slots of one function, that of the key or any
 /// other on the way round, and where it reaches a slot of a function that
 /// reads keys which is none of its keys.
-fn cycle_passes_another_key(
-    read: Slot,
-    received: &HashMap<Slot, Vec<Slot>>,
-    observed: &HashSet<Slot>,
-    readers: &HashSet<Declaration>,
+fn cycle_passes_another_key<N: Copy + Eq + Hash>(
+    read: (N, usize),
+    received: &HashMap<(N, usize), Vec<(N, usize)>>,
+    observed: &HashSet<(N, usize)>,
+    readers: &HashSet<N>,
+    same_key: &impl Fn(N, usize, usize) -> bool,
 ) -> bool {
     let mut seen = HashSet::from([read]);
     let mut reached = HashMap::from([read]);
@@ -1394,8 +1730,13 @@ fn cycle_passes_another_key(
             if !seen.insert(source) {
                 continue;
             }
-            let exchanged = *reached.entry(source.0).or_insert(source.1) != source.1;
-            if exchanged || (readers.contains(&source.0) && !observed.contains(&source)) {
+            let earlier = *reached.entry(source.0).or_insert(source.1);
+            let exchanged = earlier != source.1 && !same_key(source.0, earlier, source.1);
+            let another = readers.contains(&source.0)
+                && !observed.iter().any(|&(node, slot)| {
+                    node == source.0 && (slot == source.1 || same_key(node, slot, source.1))
+                });
+            if exchanged || another {
                 return true;
             }
             waiting.push(source);
