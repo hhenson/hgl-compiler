@@ -689,6 +689,7 @@ pub(crate) fn reread_instance_body(
         let (body, _) = typer.graph();
         if typer.unsettled_callback_pair {
             typer.check_open_pair_reports(found, before);
+            return typer.independent_callback_body(found);
         }
         body
     } else {

@@ -570,20 +570,18 @@ impl<'a> Typer<'a> {
                 }
                 let (operands, all_fn_args_probed) =
                     self.pair_operands(name, list, module, (value, temporal));
-                if operands == ValueCategory::Unsettled
+                let open_callback_role = operands == ValueCategory::Unsettled
                     && self
                         .signature
                         .parameters
                         .iter()
-                        .any(|parameter| matches!(&parameter.ty, Type::Function(f) if f.value))
-                {
-                    self.unsettled_callback_pair = true;
-                }
+                        .any(|parameter| matches!(&parameter.ty, Type::Function(f) if f.value));
+                self.unsettled_callback_pair |= open_callback_role;
                 let selected = match preferred_call_role(true, [operands]) {
                     Role::Value => value,
                     Role::Temporal => temporal,
                 };
-                let result = if self.probing_pair_role > 0
+                let (mut call, ty) = if self.probing_pair_role > 0
                     && !self.evaluating
                     && (selected == temporal || all_fn_args_probed)
                 {
@@ -601,7 +599,16 @@ impl<'a> Typer<'a> {
                 if root {
                     self.pair_phases = None;
                 }
-                return result;
+                // FN-4/17: the signature supplies a provisional source reading,
+                // but its body is reached only after binding the callback.
+                if open_callback_role
+                    && self.unsettled_results.is_some()
+                    && let ExprKind::Call { callee, .. } = &mut call
+                {
+                    *callee = Callee::Unread;
+                    return (call, Type::Unknown);
+                }
+                return (call, ty);
             }
             (false, Some(value), Some(_))
                 if self.probing_pair_role > 0

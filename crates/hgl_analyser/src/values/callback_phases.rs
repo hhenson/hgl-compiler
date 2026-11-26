@@ -211,6 +211,30 @@ impl Typer<'_> {
         assigned: &[Option<ValueCategory>],
         callbacks: &[OpenCapture],
     ) -> Diagnostics {
+        let mut captures = vec![ValueCategory::Value; self.signature.parameters.len()];
+        for callback in callbacks {
+            captures[callback.slot] = callback
+                .classes
+                .iter()
+                .filter_map(|&id| assigned[id])
+                .fold(ValueCategory::Value, super::lifting::join_categories);
+        }
+        self.read_graph_captures(found, captures, false).1
+    }
+
+    /// A relay whose caller still supplies an open formal must expose only
+    /// calls determined by the bindings already present (FN-4, GEN-7).
+    pub(super) fn independent_callback_body(&self, found: Tables<'_>) -> Option<crate::hir::Body> {
+        self.read_graph_captures(found, self.callback_captures.clone(), true)
+            .0
+    }
+
+    fn read_graph_captures(
+        &self,
+        found: Tables<'_>,
+        captures: Vec<ValueCategory>,
+        independent: bool,
+    ) -> (Option<crate::hir::Body>, Diagnostics) {
         let selecting = RefCell::new(Vec::new());
         let mut reports = Diagnostics::new();
         let mut trial = Typer::with_test_candidates(
@@ -232,16 +256,13 @@ impl Typer<'_> {
         trial.const_inputs.clone_from(&self.const_inputs);
         trial.pack_inputs = self.pack_inputs;
         trial.pack_functions.clone_from(&self.pack_functions);
-        trial.callback_captures = vec![ValueCategory::Value; self.signature.parameters.len()];
-        for callback in callbacks {
-            trial.callback_captures[callback.slot] = callback
-                .classes
-                .iter()
-                .filter_map(|&id| assigned[id])
-                .fold(ValueCategory::Value, super::lifting::join_categories);
+        trial.callback_captures = captures;
+        let unsettled = HashSet::new();
+        if independent {
+            trial.unsettled_results = Some(&unsettled);
         }
-        trial.graph();
-        reports
+        let (body, _) = trial.graph();
+        (body, reports)
     }
 
     /// Select the owning statement, including the surrounding control flow
