@@ -43,16 +43,19 @@ use crate::{codes, error};
 /// Maximum cached scope variants per pair call site.
 const PAIR_SCOPE_CACHE_LIMIT: usize = 16;
 
+/// Per call site, each lexical scope and expected type has its own result.
+type PairResults<T> = HashMap<Location, Vec<(PairScope, Option<Type>, T)>>;
+
 /// One pair call, including its tentative and committed readings.
 /// Descendant probes can reuse categories in the same lexical scope.
 pub(super) struct PairPhases {
     scope: Location,
     call: SyntaxNode,
     categories: HashMap<Location, Vec<(PairScope, ValueCategory, bool)>>,
-    probe_types: HashMap<Location, Vec<(PairScope, Option<Type>, Type)>>,
+    probe_types: PairResults<Type>,
     /// The value signature's inferred result when checking a callback-dependent
     /// pair. A discarded reading has no flow or bindings to replay.
-    independent_value_results: HashMap<Location, Vec<(PairScope, Option<Type>, Option<Type>)>>,
+    independent_value_results: PairResults<Option<Type>>,
     local_reads: OnceCell<HashMap<Location, Vec<u32>>>,
 }
 
