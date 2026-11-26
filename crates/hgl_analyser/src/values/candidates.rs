@@ -435,6 +435,45 @@ impl<'a> Typer<'a> {
         widening: bool,
         forms: ArgumentForms,
     ) -> Admissions<'a> {
+        let mut admitted =
+            self.admitted_result_form(operator, candidates, given, wanted, (widening, forms), None);
+        // GEN-5, GEN-6: a complete fallible place may also receive a candidate
+        // that guarantees its success. Infer each reading independently: the
+        // same generic implementation may give a whole result in one instance
+        // and a plain value in another. FN-17 still requires an exact template.
+        if wanted.callback.is_none()
+            && let Some(result @ Type::Result { value, error }) = not_null(wanted.place)
+            && **error == Type::Error
+        {
+            let payload = Wanted {
+                place: Some(value),
+                among: wanted.among.clone(),
+                written: false,
+                callback: None,
+            };
+            admitted.include(self.admitted_result_form(
+                operator,
+                candidates,
+                given,
+                &payload,
+                (widening, forms),
+                Some(result),
+            ));
+        }
+        admitted
+    }
+
+    /// Try one requested output form. For a guaranteed success, check the
+    /// public contract with the candidate's inferred input and result types.
+    fn admitted_result_form(
+        &mut self,
+        operator: OperatorRef,
+        candidates: &[(usize, usize, &'a Signature)],
+        given: &[Given],
+        wanted: &Wanted,
+        (widening, forms): (bool, ArgumentForms),
+        success: Option<&Type>,
+    ) -> Admissions<'a> {
         let program = self.program;
         let operator_declaration =
             &program.modules[operator.module].declarations[operator.declaration];
@@ -685,6 +724,13 @@ impl<'a> Typer<'a> {
                         resolved.result = Some(project(result));
                     }
                 }
+                if let Some(result) = success
+                    && !candidate.kind.candidate().is_some_and(|(role, _)| {
+                        super::candidate_contracts::guarantees_success(public, &taken, role, result)
+                    })
+                {
+                    continue;
+                }
                 // FN-17: a function reference supplies a signature.
                 // Contextual operand or result reads do not make it fit.
                 if let Some(callback) = &wanted.callback
@@ -780,6 +826,7 @@ impl<'a> Typer<'a> {
                     module,
                     declaration,
                     declared: signature,
+                    success: success.cloned(),
                     taken,
                     generics,
                     type_packs,
@@ -1083,6 +1130,7 @@ impl<'a> Typer<'a> {
             public_generics,
             public_type_packs,
             mut selecting,
+            success,
             ..
         } = chosen;
         let operator_generics = public_generics.unwrap_or(operator_generics);
@@ -1313,6 +1361,7 @@ impl<'a> Typer<'a> {
             lifted: false,
         };
         self.finished_call(&mut kind, false);
+        let deferred = selecting.is_some();
         let kind = if let Some(selecting) = selecting {
             if self.graph {
                 self.constants_of(&kind);
@@ -1364,7 +1413,26 @@ impl<'a> Typer<'a> {
         } else {
             kind
         };
-        (kind, signature.result.clone().unwrap_or(Type::Unknown))
+        let ty = signature.result.clone().unwrap_or(Type::Unknown);
+        if let Some(result) = success {
+            if deferred {
+                return (kind, result);
+            }
+            let payload = Expr {
+                kind,
+                ty,
+                at,
+                category: hir::ValueCategory::Unsettled,
+            };
+            return (
+                ExprKind::Tagged {
+                    success: true,
+                    payload: Box::new(payload),
+                },
+                result,
+            );
+        }
+        (kind, ty)
     }
 
     /// True when the candidate `signature`, of an operator whose public
@@ -2017,11 +2085,7 @@ impl<'a> Typer<'a> {
                 &|_| false,
             )
         });
-        let member_dependencies = if uses_member {
-            self.stated_member_dependencies(&evidence_types)
-        } else {
-            Vec::new()
-        };
+        let member_dependencies = self.stated_member_dependencies(&evidence_types);
         // Ordinary memberships can constrain the call directly or through
         // the stated type or key of one of its reflected members.
         let memberships: Vec<(Location, Vec<Argument>)> = self
@@ -2129,10 +2193,9 @@ impl<'a> Typer<'a> {
                 .chain(combination)
                 .map(|(at, arg)| (*at, arg))
                 .collect();
-            let member_choices = if uses_member {
-                self.stated_member_choices(&evidence_types, &bindings)
-            } else {
-                Vec::new()
+            let Some(member_choices) = self.stated_member_choices(&evidence_types, &bindings)
+            else {
+                continue;
             };
             let mut member_trials = combinations(&member_choices);
             if member_choices.is_empty() {
@@ -2238,6 +2301,9 @@ impl<'a> Typer<'a> {
                  GEN-7)",
                 members.join(" and ")
             )));
+        }
+        if tried == 0 {
+            return Settled::Rejected(unsettled(self));
         }
         // What the call gives: the operator's result with what the
         // arguments say of its generic parameters, each given to the
@@ -3535,6 +3601,8 @@ pub(super) struct Chosen<'s> {
     pub(super) declaration: usize,
     /// Its signature as it is declared, generic parameters and all.
     declared: &'s Signature,
+    /// A complete fallible place taking this implementation's guaranteed success.
+    success: Option<Type>,
     /// Its signature as this call takes it: what its generic
     /// parameters stand for put in place.
     taken: std::borrow::Cow<'s, Signature>,

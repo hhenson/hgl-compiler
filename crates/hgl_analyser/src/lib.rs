@@ -714,6 +714,7 @@ fn analyse_with_test_candidates(
         declare::declare(module, files, diagnostics);
     }
     imports::resolve(&mut program, diagnostics);
+    let before_bodies = diagnostics.len();
     resolve::resolve(&mut program, diagnostics);
     forms::check(&program, diagnostics);
     phases::classify(&mut program);
@@ -722,6 +723,7 @@ fn analyse_with_test_candidates(
     declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics, tests);
     documentation::check(&program, diagnostics);
+    values::defer_pack_branch_reports(&mut program, diagnostics, before_bodies);
     let store_key_uses = values::check(&mut program, diagnostics);
     resolve::warn_hidden_callables(&program, diagnostics);
     // UNIT-13: asked of the typed program, where each call has the

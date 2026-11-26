@@ -1,4 +1,4 @@
-//! Writes result-bearing keyed map over one split dictionary (MAP-1, MAP-2).
+//! Writes result-bearing keyed map over split dictionaries (MAP-1, MAP-2).
 //! hgraph owns child lifetime. The keyed publisher exposes the children's publications (MAP-7, MAP-10).
 
 use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Local};
@@ -22,7 +22,7 @@ enum ParentArgument {
 }
 
 impl Emitter<'_> {
-    /// Wire the dictionary and its whole arguments to the checked callback of one child.
+    /// Wire the split dictionaries and whole arguments to the callback of one child.
     pub(super) fn keyed_map(
         &mut self,
         scope: &mut Scope,
@@ -37,9 +37,6 @@ impl Emitter<'_> {
             }
             Err(KeyedMapProblem::FunctionArgument(at)) => {
                 return self.missing(at, "a keyed map passing a function argument to its child");
-            }
-            Err(KeyedMapProblem::MultipleSplitDictionaries) => {
-                return self.missing(value.at, "a keyed map with multiple split dictionaries");
             }
         };
         let ExprKind::Call { arguments, .. } = &value.kind else {
@@ -81,7 +78,7 @@ impl Emitter<'_> {
         let mut scalars = Vec::new();
         let mut captures = String::new();
         let mut key_parameter = None;
-        let mut split = None;
+        let mut split = Vec::new();
         let mut given = Vec::new();
         for (position, argument) in bound.iter().enumerate() {
             let child_name = format!("input_{position}_");
@@ -126,7 +123,7 @@ impl Emitter<'_> {
                 Some(KeyedMapInput::Split(source) | KeyedMapInput::Whole(source)) => {
                     parent_arguments[source] = Some(ParentArgument::Port);
                     if matches!(binding, Some(KeyedMapInput::Split(_))) {
-                        split = Some(input_ports.len());
+                        split.push(input_ports.len());
                     }
                     runtime_parameters.push(parameter);
                     input_ports.push(format!("{}.erased()", parent_name(source)));
@@ -146,9 +143,9 @@ impl Emitter<'_> {
                 input: Some(ty.clone()),
             });
         }
-        let Some(split) = split else {
+        if split.is_empty() {
             return self.missing(value.at, "a keyed map without a split dictionary");
-        };
+        }
         let local_body = Body {
             locals: bound
                 .iter()
@@ -193,7 +190,8 @@ impl Emitter<'_> {
         let Some(child_result) = self.temporal_schema(&callback.ty, callback.at) else {
             return "0".to_string();
         };
-        let call = if map.keys.is_some() {
+        // MAP-8: a lifecycle key can outlive one of its split inputs.
+        let call = if map.keys.is_some() || split.len() > 1 {
             format!("::hglrt::keyed_map_child_result({WIRING}, {call})")
         } else {
             call
@@ -222,6 +220,28 @@ impl Emitter<'_> {
         if let Some(keys) = map.keys {
             parent_arguments[keys] = Some(ParentArgument::Port);
         }
+        // MAP-5: the split ports are already in the callback's parameter order.
+        let keys = if let Some(keys) = map.keys {
+            format!("map_argument_{keys}_.erased()")
+        } else if split.len() == 1 {
+            "::std::nullopt".to_string()
+        } else {
+            let join = if let Some(join) = map.join {
+                let written = &arguments[join].value;
+                let Some(ty) = self.written_type(&written.ty, written.at) else {
+                    return "0".to_string();
+                };
+                parent_arguments[join] = Some(ParentArgument::Scalar(ty.clone()));
+                format!(
+                    "map_argument_{join}_ == {ty}::left ? ::hglrt::MapKeyJoin::Left : \
+                     map_argument_{join}_ == {ty}::outer ? ::hglrt::MapKeyJoin::Outer : \
+                     ::hglrt::MapKeyJoin::Inner"
+                )
+            } else {
+                "::hglrt::MapKeyJoin::Inner".to_string()
+            };
+            format!("::hglrt::joined_map_keys({WIRING}, inputs_, split_, {join})")
+        };
         let mut wiring = String::new();
         for (source, (argument, mode)) in arguments.iter().zip(parent_arguments).enumerate() {
             let Some(mode) = mode else { continue };
@@ -250,23 +270,24 @@ impl Emitter<'_> {
                 "const {written_type} map_argument_{source}_ = {expression}; "
             ));
         }
-        // MAP-5, MAP-8: an explicit set drives lifecycle even where an entry
-        // is absent. hgraph leaves that child's split input invalid until it arrives.
-        let keys = map.keys.map_or("::std::nullopt".to_string(), |keys| {
-            format!("map_argument_{keys}_.erased()")
-        });
         let mut compile = vec![WIRING.to_string()];
         compile.extend(scalars);
         format!(
             "[&] {{ {wiring}{captures}\
              const ::std::array<::hgraph::WiringPortRef, {}> inputs_{{{}}}; \
-             constexpr ::std::array<::std::size_t, 1> split_{{{split}}}; \
+             constexpr ::std::array<::std::size_t, {}> split_{{{}}}; \
              const ::hgraph::Port<{result}> children_{{{WIRING}, ::hgraph::compiled::map_(\
              {WIRING}, inputs_, split_, ::hgraph::compile_subgraph<{name}>({}), \
              ::hgraph::MapKeyArg::{key_policy}, {keys})}}; \
              return ::hglrt::published_map_entries({WIRING}, children_); }}()",
             input_ports.len(),
             input_ports.join(", "),
+            split.len(),
+            split
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
             compile.join(", "),
         )
     }

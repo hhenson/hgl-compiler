@@ -235,10 +235,12 @@ analyser: partial
 transpiler: partial
 
 - Writes node `ref` inputs and results. A return can sample a ref-parameter designation,
-  designate a whole ordinary input, a fixed-list position or a dictionary entry.
-  Nodes with a scheduler or an alarm can make these designations.
-- Left: Reports designations of other children and list forms, simultaneous whole and
-  positional designation of one input, and unsupported assignments to a `ref` result.
+  designate a whole ordinary input, a fixed-list position, a dictionary entry, or a struct
+  field path of an ordinary input. Nodes with a scheduler or an alarm can make these
+  designations.
+- Left: Reports designations of other children (including children of a `ref` parameter,
+  tuple positions, and growing list positions), simultaneous whole and positional
+  designation of one input, and unsupported assignments to a `ref` result.
   Graph and source `ref` forms have defensive reports.
 
 ## FN-17
@@ -299,6 +301,7 @@ parser: partial
 analyser: partial
 
 - Reads a parameter pack entry by a constant name or position. The instance supplies the entry type. A missing key reports `pack.name` using its written spelling, with an instantiated generic parameter shown as the value supplied (GEN-17, UNIT-13).
+- A selected pack-key branch can read the entry's value and its member type. A projection in an untaken branch does not ask for the key (CTRL-16, GEN-17).
 - In a hook, the entry follows ordinary input admission and lifecycle rules (TIME-1, TIME-4, TIME-5) and reads the whole payload of an atomic or the list held by a window (TYPE-9, TYPE-11).
 - A direct temporal entry is named by its constant key in `valid`, `modified`, `all_valid` and `is_active`. A guard on one entry admits that entry (TIME-4, TIME-9).
 - A checked whole read from a window, an unsized list or a dictionary takes the result or nullable form of its place (ERR-14, ERR-15).
