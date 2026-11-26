@@ -3283,6 +3283,89 @@ test bounded_reflection_uses_the_anonymous_parameters {
     );
 }
 
+/// An option uses the selected candidate's callable template (FN-17,
+/// GEN-6) by name, by position, or in braces even with a configuration
+/// parameter of the same name on another candidate (EXPR-10).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn candidate_only_callable_options_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("candidate-only-callable-options");
+    let file = write(
+        &root,
+        "demo.candidate_callable_options.hgl",
+        r#"module demo.candidate_callable_options
+
+const fn plus_two(value: i64) -> i64 => value + 2
+const fn wrong_result(value: i64) -> bool => value > 0
+
+operator bump<T>(value: T) -> i64
+impl const fn bump(value: i64) -> i64 => value + 3
+impl const fn bump(value: str) -> i64 => 11
+
+operator transform<T>(value: T) -> i64
+impl const fn transform(value: i64, mapper: const fn(i64) -> i64) -> i64 => mapper(value)
+impl const fn transform(value: str, mapper: i64) -> i64 => mapper
+
+operator route<T>(item: T) -> i64
+impl const fn route(item: i64, action: const fn(i64) -> i64) -> i64 => action(item)
+impl const fn route{action: i64}(item: str) -> i64 => action + 100
+
+const fn pass_on(action: const fn(i64) -> i64) -> i64 {
+    return route{action: action}(8) + route(7, action)
+}
+
+test options {
+    assert transform(5, mapper: plus_two) == 7
+    assert transform{mapper: plus_two}(5) == 7
+    assert transform(5, mapper: bump) == 8
+    assert transform(5, mapper: fn(value) => value + 4) == 9
+    assert transform("value", mapper: 4) == 4
+    assert transform(5, plus_two) == 7
+    assert transform("value", 5) == 5
+    assert route(8, action: plus_two) == 10
+    assert route{action: plus_two}(8) == 10
+    assert route(7, plus_two) == 9
+    assert route{action: 7}("value") == 107
+    assert pass_on(plus_two) == 19
+    let plus_two = 5
+    assert transform("value", mapper: plus_two) == 5
+    assert route{action: plus_two}("value") == 105
+}
+
+const fn wrong_callback_shape() -> i64 {
+    # expect-error(type, "type.mismatch")
+    return transform(5, mapper: wrong_result)
+}
+
+const fn wrong_option_kind() -> i64 {
+    # expect-error(operator, "operator.no_candidate")
+    return transform("value", mapper: plus_two)
+}
+
+const fn wrong_braced_shape() -> i64 {
+    # expect-error(type, "type.mismatch")
+    return route{action: wrong_result}(8)
+}
+
+const fn wrong_positional_shape() -> i64 {
+    # expect-error(type, "type.mismatch")
+    return route(8, wrong_result)
+}
+"#,
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.contains("rejection cases: 4 passed, 0 failed\n")
+            && stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-17: a finite chain of static wrappers and a recursive call that
 /// forwards the same target both specialize and run.
 #[test]
