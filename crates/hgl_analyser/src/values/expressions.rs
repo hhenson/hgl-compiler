@@ -294,6 +294,15 @@ impl<'a> Typer<'a> {
         } else if has_unknown {
             if self.diagnostics.has_errors() {
                 crate::constant::QueryType::Reported
+            } else if !self.signature.generics.is_empty()
+                && self.instance.is_empty()
+                && self.pack_inputs.is_none()
+            {
+                // TYPE-18, GEN-8: the operand of a cold query in a generic
+                // body may select its result only in the concrete instance.
+                // It still supplies a Type-valued constant here. Preserve the
+                // partial operand type; the instance rereads the lexical query.
+                crate::constant::QueryType::Resolved(ty.clone())
             } else {
                 crate::constant::QueryType::Unresolved
             }

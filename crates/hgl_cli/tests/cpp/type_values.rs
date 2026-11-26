@@ -31,7 +31,7 @@ fn type_values_run_on_the_sdk() {
     );
     assert!(
         stdout.ends_with(
-            "rejection cases: 0 passed, 0 failed\nexecutable cases: 18 passed, 0 failed, 0 not run\n"
+            "rejection cases: 0 passed, 0 failed\nexecutable cases: 19 passed, 0 failed, 0 not run\n"
         ),
         "{stdout}"
     );

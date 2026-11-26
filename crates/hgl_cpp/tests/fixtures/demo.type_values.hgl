@@ -229,7 +229,15 @@ const fn wrap_tagged<T>(x: T) -> i64 {
     return t.value
 }
 const fn tagged_from_fn() -> Tagged<type(one_i64())> => Tagged<type(one_i64())>(value: 11)
+# TYPE-18: preserve the overload-dependent query until each concrete call.
+operator inspect_tag<A, R>(value: A) -> R
+impl const fn inspect_tag(value: bool) -> i64 => 1 // 0
+impl const fn inspect_tag(value: str) -> str => value
+const fn nested_query<T>(x: T) -> Type requires T in {bool, str} =>
+    pick_kind<type(inspect_tag(x))>()
 test late_type_generic_arguments {
+    assert nested_query(true) == type(1)
+    assert nested_query("s") == type("")
     let x = 1
     let local: i64 = 2
     var unassigned: i64
@@ -257,4 +265,23 @@ test late_type_generic_arguments {
     assert convert<str>(type(first)) == "Tagged<i64>"
     unassigned = 5
     assert unassigned == 5
+}
+
+# TYPE-18, GEN-13: a type query in a field depends on the concrete struct
+# arguments. A containing layout forwards the same identity to that field.
+const fn empty_items<T>() -> list<T> => []
+struct TaggedFrame<T> {
+    item: T
+    tag: Tagged<type(empty_items<T>())>
+}
+struct TaggedEnvelope<T> { frame: TaggedFrame<T> }
+const fn enclose<T>(item: T) -> TaggedEnvelope<T> =>
+    TaggedEnvelope<T>(frame: TaggedFrame<T>(item: item, tag: Tagged<type(empty_items<T>())>(value: 12)))
+test reflected_field_layout {
+    let direct = TaggedFrame<i64>(item: 5, tag: Tagged<type(empty_items<i64>())>(value: 3))
+    let nested = enclose("ok")
+    assert direct.tag.value == 3
+    assert nested.frame.item == "ok"
+    assert nested.frame.tag.value == 12
+    assert type(direct.tag) != type(nested.frame.tag)
 }

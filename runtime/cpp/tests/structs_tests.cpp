@@ -541,9 +541,9 @@ TEST_CASE("type_tag distinguishes generic struct template identities (TYPE-18, G
     using Other = TaggedValue<hglrt::type_tag{"f64"}>;
     using ModuleA = TaggedValue<hglrt::type_tag{"declaration(1,0)<>"}>;
     using ModuleB = TaggedValue<hglrt::type_tag{"declaration(2,0)<>"}>;
-    STATIC_CHECK(std::same_as<First, Same>);
-    STATIC_CHECK_FALSE(std::same_as<First, Other>);
-    STATIC_CHECK_FALSE(std::same_as<ModuleA, ModuleB>);
+    static_assert(std::same_as<First, Same>);
+    static_assert(!std::same_as<First, Other>);
+    static_assert(!std::same_as<ModuleA, ModuleB>);
     const First a{7};
     const Same b{7};
     CHECK(a == b);

@@ -215,6 +215,78 @@ test late_queries {
     );
 }
 
+/// TYPE-18, GEN-8: cold queries in a chain of written results have the
+/// operand's type once each declaration they refer to has its signature.
+#[test]
+fn declaration_query_dependencies_resolve_to_a_fixed_point() {
+    use std::fmt::Write;
+    let mut program = String::from(
+        "module m\nstruct Tagged<const K: Type> { n: i64 }\nconst fn base() -> str => \"x\"\n",
+    );
+    let mut previous = String::from("base");
+    for index in 0..24 {
+        let ty = format!("Tagged<type({previous}())>");
+        let name = format!("f{index}");
+        writeln!(program, "const fn {name}() -> {ty} => {ty}(n: {index})").unwrap();
+        previous = name;
+    }
+    let checked = check(&[("m.hgl", &program)]);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+
+    let cycle = check(&[(
+        "m.hgl",
+        r#"module m
+struct Token<const K: Type> { n: i64 }
+const fn a() -> Token<type(b())> => Token<type(b())>(n: 1)
+const fn b() -> Token<type(a())> => Token<type(a())>(n: 2)
+"#,
+    )]);
+    assert!(!cycle.findings.is_empty());
+}
+
+/// TYPE-18 and GEN-13: a field and its initializer agree when both describe
+/// the same symbolic type after substitution into the surrounding generic.
+#[test]
+fn symbolic_field_tag_agrees_with_constructor_argument() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+struct Token<const K: Type> { n: i64 }
+const fn empty<T>() -> list<T> => []
+struct Frame<T> {
+    element: T
+    token: Token<type(empty<T>())>
+}
+const fn make<T>(x: T) -> Frame<T> =>
+    Frame<T>(element: x, token: Token<type(empty<T>())>(n: 2))
+test concrete { assert make(1).token.n == 2 }
+"#,
+    )]);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
+/// TYPE-18, GEN-8: a bare result that depends on overload selection in
+/// a generic template must remain a Type through all three argument forms.
+#[test]
+fn reflected_generic_values_wait_for_the_concrete_callback_result() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+operator inspect<A, R>(value: A) -> R
+impl const fn inspect(value: bool) -> i64 => 1
+impl const fn inspect(value: str) -> str => value
+const fn selected<const K: Type>() -> Type => K
+const fn infer<T>(x: T) -> tuple<Type, Type, Type> requires T in {bool, str} =>
+    (selected<type(inspect(x))>(), selected<(type(inspect(x)))>(), selected(K: type(inspect(x))))
+test both {
+    assert infer(true) == (type(1), type(1), type(1))
+    assert infer("s") == (type("s"), type("s"), type("s"))
+}
+"#,
+    )]);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
 /// TYPE-18, GEN-13: distinct Type arguments on a generic struct remain
 /// distinct types, and struct `requires` clauses are enforced once deferred
 /// queries resolve.

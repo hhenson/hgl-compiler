@@ -687,6 +687,7 @@ impl Emitter<'_> {
         delta: &str,
         specialized: &str,
         parameters: &[String],
+        queries: &[Type],
     ) -> String {
         let program = self.program;
         let declared = &program.modules[self.module];
@@ -709,7 +710,7 @@ impl Emitter<'_> {
         let mut checked = Vec::new();
         for member in &read.members {
             let field = if generic {
-                cpp_type_in(program, &member.ty, true).map(|ty| schema_of(&ty))
+                cpp_type_in(program, &member.ty, Some(queries)).map(|ty| schema_of(&ty))
             } else {
                 bundle_field(program, &member.ty, 0, &mut checked)
             };

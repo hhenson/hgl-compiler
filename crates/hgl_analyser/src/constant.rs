@@ -2703,7 +2703,17 @@ impl ConstantValue {
             (V::Int(_), V::Float(_)) | (V::Float(_), V::Int(_)) => None,
             (V::Int(left), V::Int(right)) => Some(left == right),
             (V::Float(left), V::Float(right)) => Some(floats(*left, *right)),
-            (V::Type(left), V::Type(right)) => Some(left.identity()? == right.identity()?),
+            (V::Type(left), V::Type(right)) => match (left.identity(), right.identity()) {
+                (Some(left), Some(right)) => Some(left == right),
+                // TYPE-18: the same symbolic type in a generic body remains
+                // the same for every instance, even before it has an identity.
+                _ if left == right
+                    && !left.any_part(&|part| matches!(part, Type::Unknown), &|_| false) =>
+                {
+                    Some(true)
+                }
+                _ => None,
+            },
             (V::Bool(left), V::Bool(right)) => Some(left == right),
             (V::Str(left), V::Str(right)) => Some(left == right),
             (V::StringSet(left), V::StringSet(right)) => Some(left == right),

@@ -20,10 +20,6 @@ use crate::program::{Binding, LocalKind};
 use crate::types::{Argument, Constant, ConstantValue, GenericKind};
 use crate::{Declaration, Detail, Program, Scalar, Signature, Type, codes, error};
 
-/// Bounded number of fixed-point passes for mutually referencing
-/// declaration-level `type(...)` generic arguments.
-const MAX_DECLARED_PASSES: usize = 16;
-
 /// Collects every outermost `type(...)` query inside `node` (queries nested
 /// inside another `type(...)` are typed as part of the outer operand).
 pub(crate) fn outermost_type_queries(node: &SyntaxNode, found: &mut Vec<SyntaxNode>) {
@@ -166,9 +162,12 @@ pub(crate) fn resolve_declared_type_queries(
         return false;
     }
     let mut any_struct_changed = false;
-    for _ in 0..MAX_DECLARED_PASSES {
-        let (updates, struct_changed) = resolve_pass(program, None, &mut HashSet::new());
-        if updates.is_empty() {
+    // Each update replaces a deferred query with a resolved constant. A chain
+    // may cross any number of declarations; a cycle makes no further progress.
+    loop {
+        let mut pass = QueryPass::default();
+        let (updates, struct_changed) = resolve_pass(program, None, &mut pass);
+        if !pass.resolved || updates.is_empty() {
             break;
         }
         apply_updates(program, updates);
@@ -178,8 +177,8 @@ pub(crate) fn resolve_declared_type_queries(
         }
     }
     if has_any_declared_deferred(program) {
-        let mut diagnosed = HashSet::new();
-        let (updates, struct_changed) = resolve_pass(program, Some(diagnostics), &mut diagnosed);
+        let (updates, struct_changed) =
+            resolve_pass(program, Some(diagnostics), &mut QueryPass::default());
         if !updates.is_empty() {
             apply_updates(program, updates);
             if struct_changed {
@@ -296,10 +295,18 @@ fn is_declaration_level(program: &Program, module_index: usize, at: Location) ->
     true
 }
 
+/// An unresolved constant compares unequal even to itself. Only replacing
+/// a query with a known value counts as progress through declaration dependencies.
+#[derive(Default)]
+struct QueryPass {
+    resolved: bool,
+    diagnosed: HashSet<Location>,
+}
+
 fn resolve_pass(
     program: &Program,
     mut sink: Option<&mut Diagnostics>,
-    diagnosed: &mut HashSet<Location>,
+    pass: &mut QueryPass,
 ) -> (Vec<SlotUpdate>, bool) {
     let everywhere: HashMap<(FileId, u32), &Binding> = program
         .modules
@@ -313,13 +320,8 @@ fn resolve_pass(
         for (decl_index, detail) in module.details.iter().enumerate() {
             match detail {
                 Detail::Constant(ty) if type_has_deferred_query(ty) => {
-                    let next = resolve_type_declared(
-                        program,
-                        &everywhere,
-                        ty,
-                        sink.as_deref_mut(),
-                        diagnosed,
-                    );
+                    let next =
+                        resolve_type_declared(program, &everywhere, ty, sink.as_deref_mut(), pass);
                     if &next != ty {
                         updates.push(SlotUpdate::Constant(module_index, decl_index, next));
                     }
@@ -334,7 +336,7 @@ fn resolve_pass(
                                 &everywhere,
                                 ty,
                                 sink.as_deref_mut(),
-                                diagnosed,
+                                pass,
                             );
                             if &next != ty {
                                 struct_changed = true;
@@ -354,7 +356,7 @@ fn resolve_pass(
                                 &everywhere,
                                 parent,
                                 sink.as_deref_mut(),
-                                diagnosed,
+                                pass,
                             );
                             if &next != parent {
                                 struct_changed = true;
@@ -376,7 +378,7 @@ fn resolve_pass(
                                 &everywhere,
                                 ty,
                                 sink.as_deref_mut(),
-                                diagnosed,
+                                pass,
                             );
                             if &next != ty {
                                 struct_changed = true;
@@ -400,7 +402,7 @@ fn resolve_pass(
                                 &everywhere,
                                 ty,
                                 sink.as_deref_mut(),
-                                diagnosed,
+                                pass,
                             );
                             if &next != ty {
                                 updates.push(SlotUpdate::CallableGeneric(
@@ -419,7 +421,7 @@ fn resolve_pass(
                                 &everywhere,
                                 &parameter.ty,
                                 sink.as_deref_mut(),
-                                diagnosed,
+                                pass,
                             );
                             if next != parameter.ty {
                                 updates.push(SlotUpdate::CallableParam(
@@ -439,7 +441,7 @@ fn resolve_pass(
                             &everywhere,
                             result,
                             sink.as_deref_mut(),
-                            diagnosed,
+                            pass,
                         );
                         if &next != result {
                             updates.push(SlotUpdate::CallableResult(
@@ -462,7 +464,7 @@ fn resolve_pass(
                     &everywhere,
                     &written.ty,
                     sink.as_deref_mut(),
-                    diagnosed,
+                    pass,
                 );
                 if next != written.ty {
                     updates.push(SlotUpdate::Written(module_index, slot, next));
@@ -478,7 +480,7 @@ fn resolve_pass(
                     &everywhere,
                     &input.payload,
                     sink.as_deref_mut(),
-                    diagnosed,
+                    pass,
                 );
                 if next != input.payload {
                     updates.push(SlotUpdate::DeltaInput(module_index, slot, next));
@@ -546,14 +548,14 @@ fn resolve_type_declared(
     everywhere: &HashMap<(FileId, u32), &Binding>,
     ty: &Type,
     mut sink: Option<&mut Diagnostics>,
-    diagnosed: &mut HashSet<Location>,
+    pass: &mut QueryPass,
 ) -> Type {
     if !type_has_deferred_query(ty) {
         return ty.clone();
     }
-    let part = |inner: &Type, sink: Option<&mut Diagnostics>, diagnosed: &mut HashSet<Location>| {
+    let part = |inner: &Type, sink: Option<&mut Diagnostics>, pass: &mut QueryPass| {
         Box::new(resolve_type_declared(
-            program, everywhere, inner, sink, diagnosed,
+            program, everywhere, inner, sink, pass,
         ))
     };
     match ty {
@@ -576,7 +578,7 @@ fn resolve_type_declared(
                         everywhere,
                         inner,
                         sink.as_deref_mut(),
-                        diagnosed,
+                        pass,
                     )),
                     Argument::NoResult => Argument::NoResult,
                     Argument::Constant(constant) if has_deferred_type_query(&constant.value) => {
@@ -606,7 +608,7 @@ fn resolve_type_declared(
                             expected.as_ref(),
                             place.as_deref(),
                             sink.as_deref_mut(),
-                            diagnosed,
+                            pass,
                         );
                         Argument::Constant(Constant {
                             text: constant.text.clone(),
@@ -626,7 +628,7 @@ fn resolve_type_declared(
             }
         }
         Type::List { element, size } => Type::List {
-            element: part(element, sink.as_deref_mut(), diagnosed),
+            element: part(element, sink.as_deref_mut(), pass),
             size: size.as_ref().map(|size| {
                 if has_deferred_type_query(&size.value) {
                     let integer = Type::Scalar(Scalar::I64);
@@ -639,7 +641,7 @@ fn resolve_type_declared(
                             Some(&integer),
                             Some("a list's size"),
                             sink.as_deref_mut(),
-                            diagnosed,
+                            pass,
                         ),
                     }
                 } else {
@@ -652,7 +654,7 @@ fn resolve_type_declared(
             maximum,
             minimum,
         } => Type::RollingWindow {
-            value: part(value, sink.as_deref_mut(), diagnosed),
+            value: part(value, sink.as_deref_mut(), pass),
             maximum: if has_deferred_type_query(&maximum.value) {
                 Constant {
                     text: maximum.text.clone(),
@@ -663,7 +665,7 @@ fn resolve_type_declared(
                         None,
                         Some("a window's size"),
                         sink.as_deref_mut(),
-                        diagnosed,
+                        pass,
                     ),
                 }
             } else {
@@ -680,7 +682,7 @@ fn resolve_type_declared(
                             None,
                             Some("a window's minimum size"),
                             sink.as_deref_mut(),
-                            diagnosed,
+                            pass,
                         ),
                     }
                 } else {
@@ -701,7 +703,7 @@ fn resolve_type_declared(
                         None,
                         None,
                         sink.as_deref_mut(),
-                        diagnosed,
+                        pass,
                     ),
                 }
             } else {
@@ -712,49 +714,38 @@ fn resolve_type_declared(
             elements
                 .iter()
                 .map(|element| {
-                    resolve_type_declared(
-                        program,
-                        everywhere,
-                        element,
-                        sink.as_deref_mut(),
-                        diagnosed,
-                    )
+                    resolve_type_declared(program, everywhere, element, sink.as_deref_mut(), pass)
                 })
                 .collect(),
         ),
-        Type::Set(inner) => Type::Set(part(inner, sink, diagnosed)),
+        Type::Set(inner) => Type::Set(part(inner, sink, pass)),
         Type::Dict { key, value } => Type::Dict {
-            key: part(key, sink.as_deref_mut(), diagnosed),
-            value: part(value, sink, diagnosed),
+            key: part(key, sink.as_deref_mut(), pass),
+            value: part(value, sink, pass),
         },
-        Type::Endpoint(inner) => Type::Endpoint(part(inner, sink, diagnosed)),
-        Type::Atomic(inner) => Type::atomic(*part(inner, sink, diagnosed)),
-        Type::Delta(inner) => Type::delta(*part(inner, sink, diagnosed)),
+        Type::Endpoint(inner) => Type::Endpoint(part(inner, sink, pass)),
+        Type::Atomic(inner) => Type::atomic(*part(inner, sink, pass)),
+        Type::Delta(inner) => Type::delta(*part(inner, sink, pass)),
         Type::Result { value, error } => Type::Result {
-            value: part(value, sink.as_deref_mut(), diagnosed),
-            error: part(error, sink, diagnosed),
+            value: part(value, sink.as_deref_mut(), pass),
+            error: part(error, sink, pass),
         },
-        Type::Nullable(inner) => Type::Nullable(part(inner, sink, diagnosed)),
+        Type::Nullable(inner) => Type::Nullable(part(inner, sink, pass)),
         Type::Trace { cell, style } => Type::Trace {
-            cell: part(cell, sink, diagnosed),
+            cell: part(cell, sink, pass),
             style: *style,
         },
         Type::Function(function) => {
             let mut function = function.as_ref().clone();
             for parameter in &mut function.parameters {
                 let inner = parameter.ty_mut();
-                *inner = resolve_type_declared(
-                    program,
-                    everywhere,
-                    inner,
-                    sink.as_deref_mut(),
-                    diagnosed,
-                );
+                *inner =
+                    resolve_type_declared(program, everywhere, inner, sink.as_deref_mut(), pass);
             }
             function.result = function
                 .result
                 .as_ref()
-                .map(|result| resolve_type_declared(program, everywhere, result, sink, diagnosed));
+                .map(|result| resolve_type_declared(program, everywhere, result, sink, pass));
             Type::Function(Box::new(function))
         }
         _ => ty.clone(),
@@ -768,15 +759,15 @@ fn resolve_constant_declared(
     expected: Option<&Type>,
     place: Option<&str>,
     sink: Option<&mut Diagnostics>,
-    diagnosed: &mut HashSet<Location>,
+    pass: &mut QueryPass,
 ) -> ConstantValue {
     match value {
-        ConstantValue::DeferredTypeQuery(expr_at) => evaluate_deferred_declared(
-            program, everywhere, *expr_at, expected, place, sink, diagnosed,
-        ),
+        ConstantValue::DeferredTypeQuery(expr_at) => {
+            evaluate_deferred_declared(program, everywhere, *expr_at, expected, place, sink, pass)
+        }
         ConstantValue::Type(inner) if type_has_deferred_query(inner) => {
             ConstantValue::Type(Box::new(resolve_type_declared(
-                program, everywhere, inner, sink, diagnosed,
+                program, everywhere, inner, sink, pass,
             )))
         }
         other => other.clone(),
@@ -790,7 +781,7 @@ fn evaluate_deferred_declared(
     expected: Option<&Type>,
     place: Option<&str>,
     mut sink: Option<&mut Diagnostics>,
-    diagnosed: &mut HashSet<Location>,
+    pass: &mut QueryPass,
 ) -> ConstantValue {
     let final_pass = sink.is_some();
     let Some((module, declaration, node)) = find_node(program, expr_at) else {
@@ -800,7 +791,7 @@ fn evaluate_deferred_declared(
             ConstantValue::DeferredTypeQuery(expr_at)
         };
     };
-    let should_report = final_pass && diagnosed.insert(expr_at);
+    let should_report = final_pass && pass.diagnosed.insert(expr_at);
     let constants = Constants::default();
     let mut queries = Vec::new();
     outermost_type_queries(&node, &mut queries);
@@ -845,6 +836,7 @@ fn evaluate_deferred_declared(
     let read = crate::constant::read(&node, expected, &scope);
     match read {
         Ok(value) if crate::constant::worked_out(&value) && !has_deferred_type_query(&value) => {
+            pass.resolved = true;
             value
         }
         _ if !final_pass => ConstantValue::DeferredTypeQuery(expr_at),

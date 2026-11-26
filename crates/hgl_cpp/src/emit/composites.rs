@@ -45,25 +45,29 @@ mod layouts;
 /// The C++ type of a set, a dictionary, a delta or an atomic value (the
 /// arms of `types::cpp_type_in` this module writes). `None` for one not
 /// written yet.
-pub(super) fn composite_type(program: &Program, ty: &Type, generic: bool) -> Option<String> {
+pub(super) fn composite_type(
+    program: &Program,
+    ty: &Type,
+    queries: Option<&[Type]>,
+) -> Option<String> {
     Some(match ty {
         // TYPE-14: "A set's element and a dictionary's key are never
         // null".
         Type::Set(element) => format!(
             "::{}::set<{}>",
             runtime::NAMESPACE,
-            cpp_type_in(program, element, generic)?
+            cpp_type_in(program, element, queries)?
         ),
         Type::Dict { key, value } => format!(
             "::{}::dict<{}, {}>",
             runtime::NAMESPACE,
-            cpp_type_in(program, key, generic)?,
-            cpp_type_in(program, value, generic)?
+            cpp_type_in(program, key, queries)?,
+            cpp_type_in(program, value, queries)?
         ),
-        Type::Delta(of) => delta_type(program, of, generic)?,
+        Type::Delta(of) => delta_type(program, of, queries)?,
         // TYPE-9: "`atomic<V>` stops expansion at a complete ordinary V":
         // as a value, a struct's field of it holds the V.
-        Type::Atomic(payload) => cpp_type_in(program, payload, generic)?,
+        Type::Atomic(payload) => cpp_type_in(program, payload, queries)?,
         _ => return None,
     })
 }
@@ -73,23 +77,23 @@ pub(super) fn composite_type(program: &Program, ty: &Type, generic: bool) -> Opt
 /// struct's the struct's delta.
 /// "In a generic declaration it stays as written until T is known": in a
 /// generic struct, `hglrt::delta_t` of the parameter.
-fn delta_type(program: &Program, of: &Type, generic: bool) -> Option<String> {
+fn delta_type(program: &Program, of: &Type, queries: Option<&[Type]>) -> Option<String> {
     Some(match of {
         Type::Set(element) => format!(
             "::{}::set_delta<{}>",
             runtime::NAMESPACE,
-            cpp_type_in(program, element, generic)?
+            cpp_type_in(program, element, queries)?
         ),
         Type::Dict { key, value } if !changes_whole(value) => format!(
             "::{}::dict_delta<{}, {}>",
             runtime::NAMESPACE,
-            cpp_type_in(program, key, generic)?,
-            cpp_type_in(program, value, generic)?
+            cpp_type_in(program, key, queries)?,
+            cpp_type_in(program, value, queries)?
         ),
         Type::List { element, .. } if !changes_whole(element) => format!(
             "::{}::list_delta<{}>",
             runtime::NAMESPACE,
-            cpp_type_in(program, of, generic)?
+            cpp_type_in(program, of, queries)?
         ),
         // "A nullable's delta is an optional: it holds what was
         // published, a null among them", and a type of its own, which is
@@ -97,8 +101,8 @@ fn delta_type(program: &Program, of: &Type, generic: bool) -> Option<String> {
         Type::Nullable(payload) => format!(
             "::{}::nullable_delta<{}, {}>",
             runtime::NAMESPACE,
-            cpp_type_in(program, payload, generic)?,
-            cpp_type_in(program, &Type::delta((**payload).clone()), generic)?
+            cpp_type_in(program, payload, queries)?,
+            cpp_type_in(program, &Type::delta((**payload).clone()), queries)?
         ),
         Type::Named {
             module,
@@ -106,15 +110,15 @@ fn delta_type(program: &Program, of: &Type, generic: bool) -> Option<String> {
             arguments,
             kind: NamedKind::Struct,
             ..
-        } => struct_delta_type(program, (*module, *declaration), arguments, generic)?,
-        Type::Parameter { name, .. } if generic => format!(
+        } => struct_delta_type(program, (*module, *declaration), arguments, queries)?,
+        Type::Parameter { name, .. } if queries.is_some() => format!(
             "::{}::delta_t<{}>",
             runtime::NAMESPACE,
             names::template_parameter(name)
         ),
         // A delta that is no type of its own is the type it is.
         other if Type::delta(other.clone()) != Type::Delta(Box::new(other.clone())) => {
-            cpp_type_in(program, &Type::delta(other.clone()), generic)?
+            cpp_type_in(program, &Type::delta(other.clone()), queries)?
         }
         _ => return None,
     })
