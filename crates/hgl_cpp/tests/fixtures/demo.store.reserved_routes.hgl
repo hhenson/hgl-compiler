@@ -62,3 +62,21 @@ test choice_route_fixes_the_key_in_source {
     # expect-error(injectable, "store.reserved_key")
     eval choice_key_node(key: "run.out")
 }
+
+# TIME-8, CAP-6: no concrete entry can prove this exported cycle fixed.
+export const fn uncalled_store_cycle(store: GlobalState, depth: i64, const key: str) {
+    put(store, key, 1)
+    if depth > 0 { uncalled_store_cycle(store, depth - 1, "run.output") }
+}
+export const fn reached_store_cycle(store: GlobalState, depth: i64, const key: str) {
+    put(store, key, 1)
+    if depth > 0 { reached_store_cycle(store, depth - 1, "run.output") }
+}
+fn reached_store_node() {
+    inject global_state
+    when {}
+    stop { reached_store_cycle(global_state, 0, "safe") }
+}
+test an_exported_changing_cycle_admits_a_safe_entry {
+    eval reached_store_node()
+}

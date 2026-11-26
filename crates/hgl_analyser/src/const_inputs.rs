@@ -1373,6 +1373,13 @@ fn resolved_store_changes(
             while let Some((node, body)) = read.pending.pop_front() {
                 read.body(node, &body)?;
             }
+            // An exported helper without an entry has no proven input route.
+            // An empty instance graph cannot disprove its changing cycle.
+            if !read.nodes.iter().any(|(declaration, _)| {
+                declaration.is_some_and(|declaration| component.contains(&declaration))
+            }) {
+                return None;
+            }
             let result = read.calls.changed(read.observed, &read.uses, true);
             Some(
                 result

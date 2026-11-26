@@ -550,3 +550,22 @@ test choice_rejects_before_start {
 test choice_accepts_other_computed_key {
     eval choice_node(key: supply("run.output"), divisor: 1)
 }
+
+# TIME-8, CAP-6: exported changing routes still check each operation.
+export const fn changing_export(store: GlobalState, depth: i64, const key: str) {
+    put(store, key, 1)
+    if depth > 0 { changing_export(store, depth - 1, "run.output") }
+}
+fn changing_export_node(const depth: i64, const divisor: i64) {
+    inject global_state
+    start { let checked = 1 // divisor }
+    when {}
+    stop { changing_export(global_state, depth, "safe") }
+}
+test exported_changing_route_rejects_after_start {
+    assert raises("numeric.division_by_zero") { eval changing_export_node(depth: 1, divisor: 0) }
+    assert raises("store.reserved_key") { eval changing_export_node(depth: 1, divisor: 1) }
+}
+test exported_changing_route_accepts_a_safe_step {
+    eval changing_export_node(depth: 0, divisor: 1)
+}

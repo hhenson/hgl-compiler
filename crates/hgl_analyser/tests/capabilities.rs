@@ -1000,3 +1000,32 @@ test t { eval node(key: "run.output", next: "user.next") }
         checked.report
     );
 }
+
+/// TIME-8, CAP-6: an uncalled exported helper has no fixed entry route.
+/// Reaching the same changing cycle must preserve the declaration's admission.
+#[test]
+fn exported_changing_store_cycle_keeps_runtime_keys_without_an_entry() {
+    let helper = r#"module m
+export const fn helper(store: GlobalState, depth: i64, const key: str) {
+    put(store, key, 1)
+    if depth > 0 { helper(store, depth - 1, "run.output") }
+}
+"#;
+    let caller = r#"
+fn node() {
+    inject global_state
+    when {}
+    stop { helper(global_state, 1, "safe") }
+}
+test source { eval node() }
+"#;
+    for source in [helper.to_owned(), format!("{helper}{caller}")] {
+        let checked = check(&[("m.hgl", &source)]);
+        assert_eq!(
+            checked.summary(),
+            Vec::<String>::new(),
+            "{}",
+            checked.report
+        );
+    }
+}

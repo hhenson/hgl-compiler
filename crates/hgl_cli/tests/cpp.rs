@@ -5957,7 +5957,7 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 36 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 38 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
     let output = hgl_in(
@@ -5968,7 +5968,7 @@ fn reserved_store_keys_are_checked_when_fixed_on_the_sdk() {
     let stdout = text(&output.stdout);
     assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
     assert!(
-        stdout.ends_with("executable cases: 36 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 38 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
 }
