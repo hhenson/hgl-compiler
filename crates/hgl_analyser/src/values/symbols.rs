@@ -430,6 +430,13 @@ impl<'a> Typer<'a> {
                 .collect();
         }
         if self.diagnostics.len() != reported {
+            // EXPR-6, ERR-12: a failed scalar Boolean probe still has a
+            // value category, including a connective under `!`. Keep it so
+            // an outer guard can reread it with its presence fact; retain
+            // the probe's diagnostics until that guard-aware read.
+            if probing && scalar {
+                return self.call_logic(form, identity, at, given);
+            }
             return (self.unselected(given, form), BOOL);
         }
         if given.iter().any(|given| {
