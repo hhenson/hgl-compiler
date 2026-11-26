@@ -573,6 +573,9 @@ pub mod codes {
     /// "tied most-specific candidates are ambiguous").
     pub const OPERATOR_AMBIGUOUS: &str = "operator.ambiguous";
 
+    /// GEN-6: a call can match two declared candidates equally.
+    pub const OPERATOR_CANDIDATES_TIE: &str = "operator.candidates_tie";
+
     /// A parameter that may not be omitted follows one that may
     /// (UNIT-8).
     pub const DEFAULT_ORDER: &str = "default.order";

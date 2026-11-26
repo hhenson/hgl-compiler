@@ -127,7 +127,8 @@ analyser: partial
 - A fixed parameter in an operator pack's place reports the proposed `impl.pack` code at the candidate parameter name. A pack with cardinality one is accepted. Bare Boolean requirements await #367.
 - A candidate's own result or callback result can be absent when the operator permits a result-only generic to bind to none (GEN-1). A candidate whose result disagrees with its operator reports `impl.result` at the result type or at the candidate's name when it has no result.
 - The types and values bound by a candidate's declared parameters can show that the operator's `requires` does not hold. The candidate's name then reports `impl.requires`.
-- Left: other checks of a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidate selection
+- The declaration check warns at each candidate when a positional call with a common concrete result leaves several candidates equally preferred. It checks fixed scalar slots and bare type parameters, including calls that omit trailing defaults, through the ordinary candidate matcher. A declaration may acknowledge its own warning (ERR-10).
+- Left: other checks of a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; tie witnesses that need named or configured inputs, structured input patterns, packs or dependent results; temporal candidate selection
 
 ## GEN-7
 
