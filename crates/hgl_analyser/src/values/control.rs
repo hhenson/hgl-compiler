@@ -970,6 +970,7 @@ impl<'a> Typer<'a> {
         &mut self,
         node: &SyntaxNode,
         expected: Option<&Type>,
+        fit: ExpressionFit,
     ) -> (ExprKind, Type) {
         let mut parts = node.children();
         let (Some(sequence_node), Some(entry), Some(name)) = (
@@ -1008,10 +1009,17 @@ impl<'a> Typer<'a> {
         let returned = self.returned;
         let present = self.present.len();
         let range_scope = self.enter_range_bindings(&sequence, &[binding]);
-        let value = self.expression(&entry, element);
+        let value = self.expression_with_fit(&entry, element, ValueUse::Required, fit);
         self.unrolled_range_bindings.truncate(range_scope);
         let value = match element {
-            Some(element) => self.fit_input(value, element, "this list entry"),
+            Some(element) => {
+                let pattern_type = fit.input_type(&value.ty, element);
+                self.fit_input(
+                    value,
+                    pattern_type.as_ref().unwrap_or(element),
+                    "this list entry",
+                )
+            }
             None => value,
         };
         self.present.truncate(present);

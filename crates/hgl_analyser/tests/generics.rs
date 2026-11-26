@@ -208,6 +208,45 @@ fn written_operator_inputs_keep_extents_inside_result_tags() {
     );
 }
 
+/// EXPR-17 and TYPE-10: when an operator supplies a public pattern,
+/// the comprehension fits each entry without losing its fixed extent.
+#[test]
+fn written_operator_inputs_keep_extents_inside_comprehensions() {
+    let checked = module(concat!(
+        "operator success<T>(v: result<list<list<T>>, error>) -> i64\n",
+        "impl const fn success(v: result<list<list<i64, 2>>, error>) -> i64 => 1\n",
+        "operator failure<T>(v: result<bool, list<list<T>>>) -> i64\n",
+        "impl const fn failure(v: result<bool, list<list<i64, 2>>>) -> i64 => 2\n",
+        "operator pair<T>(v: tuple<str, list<list<T>>>) -> i64\n",
+        "impl const fn pair(v: tuple<str, list<list<i64, 2>>>) -> i64 => 3\n",
+        "const fn good(row: list<i64, 2>, flag: bool) {\n",
+        "    let a = success<i64>(ok([for i in 0..<2: row]))\n",
+        "    let b = success(ok([for i in 0..<2: row]))\n",
+        "    let c = failure<i64>(err([for i in 0..<2: { row }]))\n",
+        "    let d = failure(err([for i in 0..<2: row]))\n",
+        "    let e = pair<i64>((\"slot\", [for i in 0..<2: if flag { row } else { row }]))\n",
+        "    let f = pair((\"slot\", [for i in 0..<2: row]))\n",
+        "}\n",
+        "const fn wrong_element(row: list<str, 2>) -> i64 => success<i64>(ok([for i in 0..<2: row]))\n",
+        "const fn wrong_size(row: list<i64, 3>) -> i64 => failure<i64>(err([for i in 0..<2: row]))\n",
+        "const fn ordinary(row: list<i64, 2>) -> list<list<i64>> => [for i in 0..<2: row]\n",
+    ));
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "type/type.mismatch",
+            "operator/operator.no_candidate",
+            "type/type.mismatch",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 /// TYPE-11 and FN-12: a matching window can be read as a list. Writing
 /// a generic type argument leaves that admission to candidate selection.
 #[test]
