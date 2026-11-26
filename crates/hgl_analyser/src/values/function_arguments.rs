@@ -4,7 +4,10 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::arguments::{Slot, Takes};
-use super::callback_evidence::{CallbackEvidence, MemberReading, ReadingFailure, select_readings};
+use super::callback_evidence::{
+    CallbackEvidence, MemberReading, ReadingFailure, ReflectedResultEvidence, ResultRequirement,
+    select_readings,
+};
 use super::candidates::{
     CallbackOption, CallbackOptionSource, CallbackRequest, Chosen, Given, Key, Wanted, in_instance,
 };
@@ -328,7 +331,7 @@ impl<'a> Typer<'a> {
             })
             .transpose()
             .ok()?;
-        let result_shapes: Vec<_> = given.iter().flat_map(|read| &read.result_shapes).collect();
+        let result_shapes: Vec<_> = given.iter().flat_map(|read| &read.result.shapes).collect();
         let constrained = inputs
             .requested_result(node, template, &result_shapes)
             .filter(|result| template.result.as_ref() != Some(*result))
@@ -484,7 +487,7 @@ impl<'a> Typer<'a> {
             });
         let ReflectedArguments {
             mut given,
-            result_shapes: reflected_results,
+            result: reflected_result,
             ..
         } = if reflected {
             reflected_arguments(
@@ -552,14 +555,26 @@ impl<'a> Typer<'a> {
         }
         let result_shapes: Vec<_> = inputs
             .known_result_shapes(template, bindings.is_none() || written_shape.is_some())
-            .chain(&reflected_results)
+            .chain(&reflected_result.shapes)
             .collect();
-        let (mut matches, unknown) = self.operator_callback_matches(
+        let (mut matches, mut unknown) = self.operator_callback_matches(
             node,
             (operator, public, &candidates),
-            (template, inputs, &result_shapes),
+            (template, inputs),
+            (&result_shapes, &reflected_result.requirements),
             (explicit.as_ref(), &mut given),
         );
+        // GEN-3: when the receiver rejects every result, its ordinary
+        // requires check still diagnoses the selected callback.
+        if !reflected_result.requirements.is_empty() && matches.is_empty() && !unknown {
+            (matches, unknown) = self.operator_callback_matches(
+                node,
+                (operator, public, &candidates),
+                (template, inputs),
+                (&result_shapes, &[]),
+                (explicit.as_ref(), &mut given),
+            );
+        }
         if !unknown
             && matches.len() == 1
             && let Some(chosen) = matches.pop()
@@ -656,7 +671,8 @@ impl<'a> Typer<'a> {
         &mut self,
         node: &SyntaxNode,
         (operator, public, candidates): (OperatorRef, &Signature, &[Candidate<'a>]),
-        (template, inputs, result_shapes): (&FunctionType, &CallbackInputs<'_>, &[&Type]),
+        (template, inputs): (&FunctionType, &CallbackInputs<'_>),
+        (result_shapes, result_requirements): (&[&Type], &[ResultRequirement]),
         (explicit, given): (Option<&OperatorReference<'a>>, &mut [Given]),
     ) -> (Vec<Chosen<'a>>, bool) {
         let reflected = template.named_pack.is_some();
@@ -728,6 +744,7 @@ impl<'a> Typer<'a> {
                 values: &requested_values,
                 reflected: reflected.then_some(inputs.excluded),
                 result_shapes,
+                result_requirements,
             }),
         };
         self.with_callback_role(template, |typer, role| {
@@ -1714,7 +1731,7 @@ enum ReflectedTarget<'a, 's> {
 struct ReflectedArguments {
     given: Vec<Given>,
     projected: bool,
-    result_shapes: Vec<Type>,
+    result: ReflectedResultEvidence,
 }
 
 fn reflected_arguments<'a>(
@@ -1737,6 +1754,7 @@ fn reflected_arguments<'a>(
         && evidence.is_some())
     .then(|| ReferenceShape::new(public, template));
     let shape = declared_shape.or(written_shape).or(bare_shape.as_ref());
+    let include_requirements = written_shape.is_some();
     let fixed = public.positional_parameters().count();
     let mut remaining = public
         .positional_parameters()
@@ -1850,16 +1868,24 @@ fn reflected_arguments<'a>(
     let at = typer.at(node);
     let mut select = |check_operator| {
         select_readings(&choices, |trial, complete| {
-            let trial_shapes = evidence.map_or_else(
-                || Ok(Vec::new()),
+            let trial_result = evidence.map_or_else(
+                || Ok(ReflectedResultEvidence::default()),
                 |evidence| {
-                    evidence.trial_result_shapes(typer.program, trial.iter().flatten().copied())
+                    evidence.trial_result(
+                        typer.program,
+                        trial.iter().flatten().copied(),
+                        include_requirements,
+                    )
                 },
             );
-            let Ok(trial_shapes) = trial_shapes else {
+            let Ok(trial_result) = trial_result else {
                 return false;
             };
-            let shapes: Vec<_> = result_shapes.iter().copied().chain(&trial_shapes).collect();
+            let shapes: Vec<_> = result_shapes
+                .iter()
+                .copied()
+                .chain(&trial_result.shapes)
+                .collect();
             let arguments = parameters
                 .iter()
                 .zip(trial)
@@ -1901,7 +1927,8 @@ fn reflected_arguments<'a>(
                         let (matches, unknown) = typer.operator_callback_matches(
                             node,
                             (operator, public, candidates),
-                            (template, inputs, &shapes),
+                            (template, inputs),
+                            (&shapes, &trial_result.requirements),
                             (Some(&reference), &mut given),
                         );
                         unknown || !matches.is_empty()
@@ -1917,6 +1944,7 @@ fn reflected_arguments<'a>(
                     values: &[],
                     reflected: Some(inputs.excluded),
                     result_shapes: &shapes,
+                    result_requirements: &[],
                 }),
             };
             let possible = typer.with_callback_role(template, |typer, role| {
@@ -1962,9 +1990,15 @@ fn reflected_arguments<'a>(
             "GEN-3",
         ));
     })?;
-    let result_shapes = evidence.map_or_else(
-        || Ok(Vec::new()),
-        |evidence| evidence.trial_result_shapes(typer.program, readings.iter().copied()),
+    let result = evidence.map_or_else(
+        || Ok(ReflectedResultEvidence::default()),
+        |evidence| {
+            evidence.trial_result(
+                typer.program,
+                readings.iter().copied(),
+                include_requirements,
+            )
+        },
     )?;
     let (given, projected) = reflected_operands(
         public,
@@ -1977,7 +2011,7 @@ fn reflected_arguments<'a>(
     Ok(ReflectedArguments {
         given,
         projected,
-        result_shapes,
+        result,
     })
 }
 

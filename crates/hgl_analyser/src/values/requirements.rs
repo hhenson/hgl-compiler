@@ -5038,6 +5038,40 @@ pub(super) fn declared_requirement(
     )
 }
 
+/// GEN-3 and FN-17: an already known callback type may disprove a
+/// receiver's requirement. Unknown arguments and packs remain for the
+/// ordinary call check, and this trial supplies no additional bindings.
+pub(super) fn partial_requirement_holds(
+    program: &Program,
+    target: (usize, usize),
+    bindings: &[Option<Argument>],
+) -> Option<bool> {
+    let (parameters, condition) = required(program, target)?;
+    let arguments: Vec<_> = parameters
+        .iter()
+        .zip(bindings)
+        .map(|(parameter, bound)| {
+            bound.clone().unwrap_or_else(|| match parameter.kind {
+                GenericKind::Value(_) => Argument::Constant(unsaid()),
+                _ => Argument::Type(Type::Unknown),
+            })
+        })
+        .collect();
+    requires_holds(
+        program,
+        target,
+        &arguments,
+        &condition,
+        &Told {
+            constant: &|_, _| None,
+            callable: &|_| None,
+            unvalued: &std::cell::Cell::new(false),
+            type_packs: &[],
+            member_fault: None,
+        },
+    )
+}
+
 /// Whether `condition`, the `requires` of `declaration` of `module`,
 /// holds with `generics` for the declaration's generic parameters
 /// (GEN-3). `None` when it cannot be told: a generic argument is not

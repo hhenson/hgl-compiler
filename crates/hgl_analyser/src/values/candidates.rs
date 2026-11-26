@@ -9,7 +9,7 @@ use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
-use super::callback_evidence::CallbackEvidence;
+use super::callback_evidence::{CallbackEvidence, ResultRequirement};
 use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
 use super::dependent_packs::{
@@ -35,7 +35,7 @@ use crate::declared::{
     substitute_within, weight,
 };
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
-use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Role};
+use crate::program::{Binding, Declaration, LocalKind, OperatorRef, Program, Role};
 use crate::syntax::{child, name_token, tokens, ungrouped};
 use crate::types::{
     Argument, Constant, ConstantValue, Detail, FunctionType, GenericKind, GenericParameter,
@@ -681,7 +681,7 @@ impl<'a> Typer<'a> {
                 // FN-17: a function reference supplies a signature.
                 // Contextual operand or result reads do not make it fit.
                 if let Some(callback) = &wanted.callback
-                    && !callback.matches(&taken, (given, &bound), wanted.place)
+                    && !callback.matches(program, &taken, (given, &bound), wanted.place)
                 {
                     continue;
                 }
@@ -3130,6 +3130,8 @@ pub(super) struct CallbackRequest<'w> {
     pub(super) reflected: Option<&'w [&'w str]>,
     /// Result shapes that the enclosing call independently established (GEN-3).
     pub(super) result_shapes: &'w [&'w Type],
+    /// Enclosing requirements that can be checked with the chosen result (GEN-3).
+    pub(super) result_requirements: &'w [ResultRequirement],
 }
 
 /// ERR-6 requires a supplied fallback with the dictionary's exact value
@@ -3218,6 +3220,7 @@ fn widens_default_literals(public: &ConstantValue, fitted: &ConstantValue) -> bo
 impl CallbackRequest<'_> {
     fn matches(
         &self,
+        program: &Program,
         signature: &Signature,
         (given, bound): (&[Given], &[Place]),
         result: Option<&Type>,
@@ -3239,6 +3242,10 @@ impl CallbackRequest<'_> {
                 (Some(expected), Some(actual)) => {
                     agree(expected, actual)
                         && self.result_shapes.iter().all(|shape| agree(shape, actual))
+                        && self
+                            .result_requirements
+                            .iter()
+                            .all(|requirement| requirement.admits(program, actual))
                 }
                 (None, None) => true,
                 _ => false,

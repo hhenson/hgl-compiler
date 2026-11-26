@@ -157,3 +157,25 @@ test receiver_result_constraint_selects_the_whole_input {
     assert eval operator_first_price(xs: [[23, 42]]) == [23]
     assert eval price_with_written_input(xs: [[23, 42]]) == [23]
 }
+
+const fn membership_head<R, ...Ps, ...As>(f: const fn(...{Ps}) -> R, args: ...{As for f}) -> i64
+    requires R in {list<i64, 2>} && each k in arg_keys(As) {
+        As[k] in {Ps[k], list<Ps[k], 2>}
+    }
+    => f(...args)[0]
+
+operator membership_operator_head<R, O, ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> O requires R in {list<i64, 2>, list<i64, 3>}
+impl const fn membership_operator_head<R, ...Ps, ...As>(
+    f: const fn(...{Ps}) -> R, args: ...{As for f},
+) -> i64 requires each k in arg_keys(As) { As[k] in {Ps[k], list<Ps[k], 2>} }
+    => f(...args)[0]
+
+fn membership_price(xs: list<i64, 2>) -> i64 => membership_head(fee<4>, xs)
+fn membership_operator_price(xs: list<i64, 2>) -> i64 => membership_operator_head(fee<4>, x: xs)
+
+test receiver_result_membership_selects_the_whole_input {
+    assert eval membership_price(xs: [[23, 42]]) == [23]
+    assert eval membership_operator_price(xs: [[23, 42]]) == [23]
+}

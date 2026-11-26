@@ -9,7 +9,7 @@ use super::candidates::{Specific, alternative_specificity};
 use super::dependent_packs::dependent_slot;
 use super::fit::{open, whole};
 use super::inference::{infer, mentions, type_pack, unsaid};
-use super::requirements::{conjoined_terms, pack_view};
+use super::requirements::{conjoined_terms, pack_view, partial_requirement_holds};
 use crate::declared::{
     names_parameter, same_type, substitute_with_members, substitute_with_packs, substitute_within,
     weight,
@@ -50,26 +50,25 @@ impl CallbackEvidence {
         &self.results
     }
 
-    /// Result shapes a reading learns from enclosing bindings and equalities (GEN-3).
-    pub(super) fn trial_result_shapes<'a>(
+    /// Result restrictions from the receiver and the bindings learned in a trial (GEN-3).
+    pub(super) fn trial_result<'a>(
         &self,
         program: &Program,
         readings: impl IntoIterator<Item = &'a MemberReading<'a>>,
-    ) -> Result<Vec<Type>, ()> {
+        include_requirements: bool,
+    ) -> Result<ReflectedResultEvidence, ()> {
+        let mut result = ReflectedResultEvidence::default();
         if self.enclosing_bindings.is_empty() {
-            return Ok(Vec::new());
+            return Ok(result);
         }
         let bindings: Vec<_> = readings
             .into_iter()
             .flat_map(|reading| reading.shared_bindings())
             .collect();
-        let mut results = Vec::new();
         for scope in &self.enclosing_bindings {
-            if let Some(result) = scope.result_shape(program, &bindings)? {
-                results.push(result);
-            }
+            scope.add_result_evidence(program, &bindings, &mut result, include_requirements)?;
         }
-        Ok(results)
+        Ok(result)
     }
 
     /// Read the receiver's evidence and, in an operator trial, its candidate's.
@@ -147,16 +146,16 @@ impl CallbackEvidence {
                 let at = Location::new(declared.at.file, node.span());
                 unit.written.iter().find(|ty| ty.at == at).map(|ty| &ty.ty)
             };
-            let mut record = |result: Type| {
-                if !open(&result) && !evidence.results.contains(&result) {
-                    evidence.results.push(result);
-                }
-            };
             let own: Vec<_> = signature
                 .generics
                 .iter()
                 .map(|generic| generic.at)
                 .collect();
+            let mut record = |result: Type| {
+                if !open(&result) && !evidence.results.contains(&result) {
+                    evidence.results.push(result);
+                }
+            };
             if let Some(written) = &template.result {
                 let before = substitute_within(written, &fixed);
                 let result = substitute_within(written, &solved);
@@ -370,12 +369,40 @@ struct EnclosingBindings {
     result: Option<Type>,
 }
 
+/// Result shapes and finite restrictions that hold for a reflected reading.
+#[derive(Default)]
+pub(super) struct ReflectedResultEvidence {
+    /// Known result shapes inferred from the argument bindings in this reading.
+    pub(super) shapes: Vec<Type>,
+    /// Receiver requirements that can be checked against a candidate result (GEN-3).
+    pub(super) requirements: Vec<ResultRequirement>,
+}
+
+/// The result type and known bindings of one receiving declaration.
+pub(super) struct ResultRequirement {
+    declaration: (usize, usize),
+    result: Type,
+    generics: Vec<GenericParameter>,
+    known: Vec<Option<Argument>>,
+}
+
+impl ResultRequirement {
+    /// A candidate result cannot contradict a receiver requirement (GEN-3).
+    pub(super) fn admits(&self, program: &Program, actual: &Type) -> bool {
+        let mut found = self.known.clone();
+        infer(&self.result, actual, &self.generics, &mut found);
+        partial_requirement_holds(program, self.declaration, &found) != Some(false)
+    }
+}
+
 impl EnclosingBindings {
-    fn result_shape(
+    fn add_result_evidence(
         &self,
         program: &Program,
         bindings: &[(Location, &Argument)],
-    ) -> Result<Option<Type>, ()> {
+        evidence: &mut ReflectedResultEvidence,
+        include_requirements: bool,
+    ) -> Result<(), ()> {
         let mut found = self.found.clone();
         let mut learned = false;
         for (generic, slot) in self.generics.iter().zip(&mut found) {
@@ -390,12 +417,22 @@ impl EnclosingBindings {
                 }
             }
         }
-        if !learned {
-            return Ok(None);
-        }
         let unit = &program.modules[self.module];
         let declaration = &unit.declarations[self.declaration];
-        super::quantifiers::bind(unit, declaration, &self.generics, &[], &mut found);
+        if learned {
+            super::quantifiers::bind(unit, declaration, &self.generics, &[], &mut found);
+        }
+        if include_requirements && let Some(result) = &self.result {
+            evidence.requirements.push(ResultRequirement {
+                declaration: (self.module, self.declaration),
+                result: result.clone(),
+                generics: self.generics.clone(),
+                known: found.clone(),
+            });
+        }
+        if !learned {
+            return Ok(());
+        }
         let map: Vec<_> = self
             .generics
             .iter()
@@ -426,11 +463,15 @@ impl EnclosingBindings {
                 (generic.at, value.as_ref().unwrap_or(unknown))
             })
             .collect();
-        Ok(self
+        if let Some(shape) = self
             .result
             .as_ref()
             .map(|ty| substitute_within(ty, &partial))
-            .filter(|ty| !open(ty)))
+            .filter(|ty| !open(ty))
+        {
+            evidence.shapes.push(shape);
+        }
+        Ok(())
     }
 }
 
