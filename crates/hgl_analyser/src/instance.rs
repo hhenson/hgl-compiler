@@ -107,6 +107,8 @@ pub(crate) struct CheckedInstance {
     pub(crate) body: Body,
     /// The instance read the body from its syntax with concrete types.
     pub(crate) reread_body: bool,
+    /// Pack-key branches selected by this body for folded dependencies (CTRL-16).
+    pub(crate) selected_pack_branches: Vec<Location>,
     /// Checks made when a selected result differs from the admitting result.
     pub(crate) result_uses: Option<ResultUseChecks>,
 }
@@ -217,7 +219,8 @@ impl Program {
 
     /// Places a default in its defining callable's scope and fits it
     /// against the selected parameter type (UNIT-7, UNIT-8). A cold type
-    /// query also receives the call's bound type packs (GEN-10, TYPE-18).
+    /// query or pack-key guard receives the call's bound type packs
+    /// (GEN-10, TYPE-18, CTRL-16).
     pub fn specialize_parameter_default(
         &self,
         default: &DefaultExpr,
@@ -230,11 +233,11 @@ impl Program {
         let Detail::Callable(signature) = &self.modules[operator.0].details[operator.1] else {
             return default.clone();
         };
-        let type_packs = if default.needs_type_specialization() {
-            type_packs
-        } else {
-            &[]
-        };
+        // UNIT-8, EXPR-5: a literal's declaration-time type is provisional
+        // when the omitted parameter was generic. Read its syntax again
+        // once the selected parameter supplies a concrete context.
+        let reread = default.needs_contextual_specialization(&parameter.ty);
+        let type_packs = if reread { type_packs } else { &[] };
         let types: Vec<_> = signature
             .generics
             .iter()
@@ -276,13 +279,16 @@ impl Program {
         };
         // UNIT-7: a default has no formal parameters in scope. Run the
         // same membership-based selection here as in a specialized body.
-        let mut body = if default.needs_type_specialization() && !generics.is_empty() {
+        let mut body = if reread && !generics.is_empty() {
             crate::values::reread_parameter_default(
                 self,
                 operator,
-                generics,
                 default,
-                &|ty| instance.project(ty),
+                crate::values::ParameterDefaultRead::Specialization {
+                    arguments: generics,
+                    type_packs,
+                    project: &|ty| instance.project(ty),
+                },
                 &mut reports.borrow_mut(),
             )
             .unwrap_or_else(|| default.clone())
@@ -462,6 +468,7 @@ impl Program {
         let recheck_endpoints =
             crate::values::node_endpoint_reads(declared, declaration, Some(&taken));
         let mut reread_body = false;
+        let mut selected_pack_branches = Vec::new();
         let reread_inputs = InstanceInputs {
             functions: &functions,
             pack_inputs: pending_forwards,
@@ -487,7 +494,7 @@ impl Program {
                         (module, declaration),
                         &body,
                     ))))
-            && let Some(reread) = crate::values::reread_instance_body(
+            && let Some((reread, branches)) = crate::values::reread_instance_body(
                 self,
                 (module, declaration),
                 (&taken, &map),
@@ -497,6 +504,7 @@ impl Program {
             )
         {
             body = reread;
+            selected_pack_branches = branches;
             reread_body = true;
         }
         let recheck = graph
@@ -514,7 +522,7 @@ impl Program {
             // result. Read its uses with the selected type in place,
             // including inferred locals and the calls that consume them.
             let mut reports = Diagnostics::new();
-            if let Some(reread) = crate::values::reread_instance_body(
+            if let Some((reread, branches)) = crate::values::reread_instance_body(
                 self,
                 (module, declaration),
                 (&taken, &map),
@@ -524,6 +532,7 @@ impl Program {
             ) {
                 diagnostics.borrow_mut().truncate(before);
                 body = reread;
+                selected_pack_branches = branches;
                 reread_body = true;
                 destinations = recheck.then(|| crate::values::GraphDestinations::pending(&body));
                 self.place_body(&mut body, &arguments, &functions);
@@ -552,6 +561,7 @@ impl Program {
             signature: taken,
             body,
             reread_body,
+            selected_pack_branches,
             result_uses,
         })
     }
@@ -992,7 +1002,7 @@ fn inherited_functions(
 
 /// Record the declaration slots used by this anonymous body, including
 /// the slots referenced in a nested anonymous argument.
-fn used_function_parameters(body: &Body, used: &mut Vec<usize>) {
+pub(crate) fn used_function_parameters(body: &Body, used: &mut Vec<usize>) {
     walk_statements(&body.statements, &mut |expression| {
         let target = match &expression.kind {
             ExprKind::Call { callee, .. } => callee,

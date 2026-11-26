@@ -75,6 +75,28 @@ pub struct DefaultExpr {
 }
 
 impl DefaultExpr {
+    /// UNIT-8 and EXPR-5: reread an aggregate literal when a selected
+    /// parameter supplies a concrete context different from its provisional
+    /// type. Scalar literals already fit their selected place directly.
+    /// Cold Type queries also need their existing instance-specific read.
+    pub fn needs_contextual_specialization(&self, expected: &Type) -> bool {
+        self.needs_type_specialization()
+            || self.needs_pack_specialization()
+            || matches!(
+                self.value.kind,
+                ExprKind::Sequence(_) | ExprKind::Tuple(_) | ExprKind::Pairs(_)
+            ) && self.value.ty != *expected
+                && !expected.any_part(
+                    &|ty| {
+                        matches!(
+                            ty,
+                            Type::Parameter { .. } | Type::PackMember { .. } | Type::Unknown
+                        )
+                    },
+                    &|_| false,
+                )
+    }
+
     /// TYPE-18: a default can use a cold query directly, or read a field or
     /// call result whose type contains an instance-dependent query. Both
     /// need the defining scope and the arguments of the call that omitted it.
@@ -110,6 +132,35 @@ impl DefaultExpr {
         self.value
             .walk(&mut |value| found = found || depends(value));
         found
+    }
+
+    /// CTRL-16 and UNIT-8: an omitted default needs the concrete keys
+    /// for a pack guard or an anonymous call deferred by one.
+    pub(crate) fn needs_pack_specialization(&self) -> bool {
+        fn find(value: &Expr, pending: &mut bool) {
+            if *pending {
+                return;
+            }
+            let callee = match &value.kind {
+                ExprKind::DeferredPackCondition
+                | ExprKind::Call {
+                    callee: Callee::DeferredPackCall,
+                    ..
+                } => {
+                    *pending = true;
+                    return;
+                }
+                ExprKind::Call { callee, .. } => callee,
+                ExprKind::StaticCallable(callee) => callee.as_ref(),
+                _ => return,
+            };
+            if let Callee::Anonymous(function) = callee {
+                walk_statements(&function.body.statements, &mut |value| find(value, pending));
+            }
+        }
+        let mut pending = false;
+        self.value.walk(&mut |value| find(value, &mut pending));
+        pending
     }
 
     /// Treat the expression as a body for specialization and analysis of its locals.
@@ -608,6 +659,8 @@ pub enum ExprKind {
     /// An indexed pack read awaiting the concrete entries and key of an
     /// instance. The source expression is read again there (FN-19).
     DeferredPackRead,
+    /// A membership test or branch awaiting its instance's pack keys (CTRL-16).
+    DeferredPackCondition,
     /// An immutable graph binding read where a null test proved its
     /// presence, before the instance has determined its ordinary type (ERR-12).
     DeferredPresent(LocalId),
@@ -774,7 +827,7 @@ pub enum ExprKind {
         /// How the call is written.
         form: Form,
         /// The checked pattern and selected conversions for a native
-        /// formatter or collection conversion (FMT-3, FMT-5).
+        /// formatter (FMT-3, FMT-5).
         text: Option<Box<TextCall>>,
         /// Values explicitly supplied in braces (EXPR-10), by source
         /// location, for the instance's wiring-time check (EXPR-14).
@@ -1287,7 +1340,7 @@ pub enum Callee {
     Anonymous(Box<AnonymousFunction>),
     /// A named operator awaiting an argument type before selection (GEN-7).
     DeferredOperator(Box<DeferredOperator>),
-    /// A call waiting for the entries of its pack arguments (FN-19).
+    /// A call whose arguments or body wait for concrete pack inputs (FN-19, CTRL-16).
     DeferredPackCall,
     /// A deferred operator call whose candidates are all value functions.
     DeferredValue,
@@ -1644,13 +1697,12 @@ pub struct Cell {
     pub value: Option<Expr>,
 }
 
-/// Analysed text work carried by a formatting or collection call.
+/// Analysed text work carried by a native formatting call.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextCall {
-    /// The compile-time pattern of `format`; a collection has none.
-    pub pattern: Option<String>,
-    /// Selected FMT-5 conversions, indexed by arguments for `format`
-    /// or by members for a collection conversion.
+    /// The compile-time pattern of `format`.
+    pub pattern: String,
+    /// Selected FMT-5 conversions, indexed by arguments for `format`.
     pub conversions: Box<[Option<Expr>]>,
 }
 
@@ -1847,6 +1899,7 @@ impl Expr {
             | ExprKind::Local(_)
             | ExprKind::PackEntry { .. }
             | ExprKind::DeferredPackRead
+            | ExprKind::DeferredPackCondition
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)
@@ -2019,6 +2072,7 @@ impl Expr {
             | ExprKind::Local(_)
             | ExprKind::PackEntry { .. }
             | ExprKind::DeferredPackRead
+            | ExprKind::DeferredPackCondition
             | ExprKind::BoundChild(_)
             | ExprKind::DeferredPresent(_)
             | ExprKind::EndpointOf(_)

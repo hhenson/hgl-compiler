@@ -121,10 +121,12 @@ pub fn ordered_list_reduction(program: &Program, value: &Expr) -> Option<Ordered
     Some(OrderedReduction { inputs, combiner })
 }
 
-/// A checked result-bearing map with one split dictionary (MAP-1, MAP-2).
+/// A checked result-bearing keyed map (MAP-1, MAP-2).
 pub struct KeyedMap {
-    /// The written lifecycle key set, or the split dictionary's keys.
+    /// The written lifecycle key set, if one is supplied (MAP-5).
     pub keys: Option<usize>,
+    /// The written join option. An omitted option takes the inner join (MAP-5).
+    pub join: Option<usize>,
     /// The callback applied to this child's bindings.
     pub callback: Expr,
     /// Each bound argument's source, in the callback call's argument order.
@@ -144,14 +146,12 @@ pub enum KeyedMapInput {
     Configuration(usize),
 }
 
-/// A checked keyed map form that the single-dictionary adapter cannot bind.
+/// A checked keyed map form whose callback cannot be bound by this adapter.
 pub enum KeyedMapProblem {
     /// The key is a connection, but this callback takes a constant.
     ConstantKey(Location),
     /// A dependent argument supplies the child with a static callable.
     FunctionArgument(Location),
-    /// More than one dictionary needs to be split.
-    MultipleSplitDictionaries,
 }
 
 // MAP-4: an untyped graph local has no result place to reveal the
@@ -241,6 +241,7 @@ pub fn keyed_map_call(
             .position(|item| item.name == name)
     };
     let keys_parameter = position("keys")?;
+    let join_parameter = position("join")?;
     let callback_parameter = position("f")?;
     let pack_parameter = position("args")?;
     let selected = signature
@@ -276,6 +277,9 @@ pub fn keyed_map_call(
         arg.parameter == Some(keys_parameter)
             && !matches!(arg.value.kind, ExprKind::Literal(Value::Null))
     });
+    let join = arguments
+        .iter()
+        .position(|arg| arg.parameter == Some(join_parameter));
     let supplied: Vec<_> = arguments
         .iter()
         .enumerate()
@@ -343,10 +347,7 @@ pub fn keyed_map_call(
             }),
         });
     }
-    if splits > 1 {
-        return Some(Err(KeyedMapProblem::MultipleSplitDictionaries));
-    }
-    if splits != 1 || supplied.len() != matched {
+    if splits == 0 || supplied.len() != matched {
         return None;
     }
     let callback = Expr {
@@ -364,6 +365,7 @@ pub fn keyed_map_call(
     };
     Some(Ok(KeyedMap {
         keys,
+        join,
         callback,
         inputs,
     }))
@@ -446,7 +448,7 @@ pub fn left_out<'p>(
             .and_then(Option::as_ref)
     });
     if let Some(default) = default {
-        if default.needs_type_specialization()
+        if default.needs_contextual_specialization(&parameter.ty)
             && !callee.generics().is_empty()
             && let Some(owner) = callee.declaration()
         {

@@ -51,7 +51,7 @@ analyser: partial
 - A temporal and a value definition may share a name
 - A call in a graph takes the temporal definition of a pair when given a connection, and the value definition when all arguments are ordinary (FN-6, GEN-5)
 - A temporal function name, or an anonymous function that captures a connection or calls a temporal function, selects the temporal definition (FN-17, GEN-6). A callable both roles admit directly leaves the choice to the other arguments. The selected definition checks its template's input types.
-- A graph that passes a bound `const fn` parameter's result to a named pair uses the callback's actual inputs and captures to choose the role (FN-6, FN-17).
+- A graph that passes a bound `const fn` parameter's result to a named pair uses the callback's actual inputs and captures to choose the role. The selected definition checks its own inputs and result uses once the callback binds (FN-6, FN-17).
 - The selected definition checks the call's signature
 - Nested anonymous callbacks given to pairs reuse phase checks across unread lexical locals, branches, and monotonic temporal probes, and skip redundant inner committed reads while probing a role so each callback is read a bounded number of times at arbitrary nesting depth. A referenced local whose category or type affects selection still keeps its actual phase and type. In a generic pair, an unresolved callback input leaves independent result and parameter-annotation evidence in declared argument order (GEN-2, FN-17).
 - A call in value code takes the value definition. An eval's target takes the temporal definition where it exists.
@@ -235,10 +235,12 @@ analyser: partial
 transpiler: partial
 
 - Writes node `ref` inputs and results. A return can sample a ref-parameter designation,
-  designate a whole ordinary input, a fixed-list position or a dictionary entry.
-  Nodes with a scheduler or an alarm can make these designations.
-- Left: Reports designations of other children and list forms, simultaneous whole and
-  positional designation of one input, and unsupported assignments to a `ref` result.
+  designate a whole ordinary input, a fixed-list position, a dictionary entry, or a struct
+  field path of an ordinary input. Nodes with a scheduler or an alarm can make these
+  designations.
+- Left: Reports designations of other children (including children of a `ref` parameter,
+  tuple positions, and growing list positions), simultaneous whole and positional
+  designation of one input, and unsupported assignments to a `ref` result.
   Graph and source `ref` forms have defensive reports.
 
 ## FN-17
@@ -299,6 +301,7 @@ parser: partial
 analyser: partial
 
 - Reads a parameter pack entry by a constant name or position. The instance supplies the entry type. A missing key reports `pack.name` using its written spelling, with an instantiated generic parameter shown as the value supplied (GEN-17, UNIT-13).
+- A selected pack-key branch can read the entry's value and its member type. A projection in an untaken branch does not ask for the key (CTRL-16, GEN-17).
 - In a hook, the entry follows ordinary input admission and lifecycle rules (TIME-1, TIME-4, TIME-5) and reads the whole payload of an atomic or the list held by a window (TYPE-9, TYPE-11).
 - A direct temporal entry is named by its constant key in `valid`, `modified`, `all_valid` and `is_active`. A guard on one entry admits that entry (TIME-4, TIME-9).
 - A checked whole read from a window, an unsized list or a dictionary takes the result or nullable form of its place (ERR-14, ERR-15).

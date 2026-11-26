@@ -714,6 +714,7 @@ fn analyse_with_test_candidates(
         declare::declare(module, files, diagnostics);
     }
     imports::resolve(&mut program, diagnostics);
+    let before_bodies = diagnostics.len();
     resolve::resolve(&mut program, diagnostics);
     forms::check(&program, diagnostics);
     phases::classify(&mut program);
@@ -722,6 +723,7 @@ fn analyse_with_test_candidates(
     declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics, tests);
     documentation::check(&program, diagnostics);
+    values::defer_pack_branch_reports(&mut program, diagnostics, before_bodies);
     let store_key_uses = values::check(&mut program, diagnostics);
     resolve::warn_hidden_callables(&program, diagnostics);
     // UNIT-13: asked of the typed program, where each call has the
@@ -783,10 +785,14 @@ fn warning(
 /// `include_str!` puts a file's text in the compiler when the compiler
 /// is built, so the module is the one at the `spec/hgl_core` pin. A
 /// test fails when the pin adds a file this list does not have.
-pub const CORE_FILES: [(&str, &str); 14] = [
+pub const CORE_FILES: [(&str, &str); 15] = [
     (
         "<core>/core/calendar.hgl",
         include_str!("../../../spec/hgl_core/hgl/core/calendar.hgl"),
+    ),
+    (
+        "<core>/core/collection_text.hgl",
+        include_str!("../../../spec/hgl_core/hgl/core/collection_text.hgl"),
     ),
     (
         "<core>/core/core.hgl",

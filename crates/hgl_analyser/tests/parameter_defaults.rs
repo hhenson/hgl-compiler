@@ -106,6 +106,157 @@ fn an_omitted_default_fits_the_concrete_parameter_type() {
     );
 }
 
+/// CTRL-16 and UNIT-8: only an omitted default reads the selected pack arm.
+/// Report a rejected arm at the call that supplies its keys (GEN-7).
+#[test]
+fn an_omitted_default_checks_the_pack_arm_at_the_making_call() {
+    let defaults = concat!(
+        "const First: i64 = 0\n",
+        "const fn price<...Ps>(value: i64 = if First in arg_keys(Ps) { 11 } else { \"wrong\" }, items: ...Ps) -> i64 => value\n",
+        "const fn config<...Ps>{value: i64 = if First in arg_keys(Ps) { 11 } else { \"wrong\" }}(items: ...Ps) -> i64 => value\n",
+        "const fn forward<...Ps>(items: ...Ps) -> i64 => config(...items)\n",
+    );
+    let accepted = module(&format!(
+        "{defaults}\
+         const fn explicit() -> i64 => price(23)\n\
+         const fn selected() -> i64 => config(true) + forward(true)\n"
+    ));
+    assert!(accepted.summary().is_empty(), "{}", accepted.report);
+    let rejected = module(&format!(
+        "{defaults}\
+         const fn direct() -> i64 => price()\n\
+         const fn nested() -> i64 => forward()\n"
+    ));
+    assert_eq!(
+        rejected.summary(),
+        [
+            "m.hgl:6:29 type/type.mismatch EXPR-5",
+            "m.hgl:7:29 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        rejected.report
+    );
+    assert!(
+        rejected
+            .report
+            .contains("in the selected arm of the default")
+    );
+}
+
+/// CTRL-16 and UNIT-8: a directly invoked anonymous function waits for
+/// the omitted default's concrete pack keys, even when another call wraps it.
+#[test]
+fn an_omitted_default_checks_pack_guards_inside_direct_calls() {
+    let defaults = concat!(
+        "const Key: i64 = 0\n",
+        "const fn good<...Ps>(value: i64 = (fn() -> i64 => if Key in arg_keys(Ps) { \"wrong\" } else { 7 })(), items: ...Ps) -> i64 => value\n",
+        "const fn bad<...Ps>(value: i64 = (fn() -> i64 => (fn() -> i64 => if Key in arg_keys(Ps) { 7 } else { \"wrong\" })())(), items: ...Ps) -> i64 => value\n",
+    );
+    let accepted = module(&format!(
+        "{defaults}\
+         const fn chosen() -> i64 => good()\n\
+         const fn supplied() -> i64 => bad(23)\n"
+    ));
+    assert!(accepted.summary().is_empty(), "{}", accepted.report);
+    let rejected = module(&format!("{defaults}const fn rejected() -> i64 => bad()\n"));
+    assert_eq!(
+        rejected.summary(),
+        ["m.hgl:5:31 type/type.mismatch EXPR-5"],
+        "{}",
+        rejected.report
+    );
+    assert!(
+        rejected
+            .report
+            .contains("in the selected arm of the default")
+    );
+}
+
+/// UNIT-8: the omitted default's dependency cycle reads even an arm
+/// absent in every making instance. A call giving the argument is safe.
+#[test]
+fn a_pack_guarded_default_keeps_its_written_dependencies() {
+    let checked = module(concat!(
+        "const First: i64 = 0\n",
+        "const fn price<...Ps>(value: i64 = if First in arg_keys(Ps) { relay() } else { 7 }, items: ...Ps) -> i64 => value\n",
+        "const fn relay() -> i64 => price()\n",
+        "const fn safe<...Ps>(value: i64 = if First in arg_keys(Ps) { safe(3) } else { 7 }, items: ...Ps) -> i64 => value\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:36 name/default.cycle UNIT-8"],
+        "{}",
+        checked.report
+    );
+    assert!(checked.report.contains("through `relay`"));
+}
+
+/// UNIT-7 excludes formals from every written default arm.
+#[test]
+fn a_pack_guarded_default_excludes_its_own_formals() {
+    let defaults = concat!(
+        "const First: i64 = 0\n",
+        "const formal: i64 = 17\n",
+        "const fn price<...Ps>{value: i64 = if First in arg_keys(Ps) { formal } else { 7 }}(formal: i64, items: ...Ps) -> i64 => value\n",
+    );
+    for use_default in [
+        "",
+        "const fn selected() -> i64 => price(23, true)\n",
+        "const fn untaken() -> i64 => price(23)\n",
+        "const fn override() -> i64 => price{value: 11}(23, true)\n",
+    ] {
+        let checked = module(&format!("{defaults}{use_default}"));
+        assert_eq!(
+            checked.summary(),
+            ["m.hgl:4:63 name/default.formal_argument UNIT-7"],
+            "{}",
+            checked.report
+        );
+    }
+    let lexical = module(concat!(
+        "const First: i64 = 0\n",
+        "const formal: i64 = 17\n",
+        "const fn price<...Ps>{value: i64 = if First in arg_keys(Ps) { formal } else { 7 }}(items: ...Ps) -> i64 => value\n",
+        "const fn caller(formal: i64) -> i64 => price(true)\n",
+    ));
+    assert!(lexical.summary().is_empty(), "{}", lexical.report);
+}
+
+/// UNIT-8 and EXPR-5: an aggregate literal takes the omitted parameter's
+/// instantiated element types, rather than keeping its declaration-time i64s.
+#[test]
+fn generic_literal_defaults_use_the_concrete_context() {
+    let checked = module(concat!(
+        "const fn listed<T>(fallback: T = [1]) -> T => fallback\n",
+        "const fn paired<T>(fallback: T = (1, 2)) -> T => fallback\n",
+        "const fn optional<T>(fallback: T? = [1]) -> T? => fallback\n",
+        "struct Holder<T> { value: T = [1] }\n",
+        "const fn floats() -> list<f64> => listed<list<f64>>()\n",
+        "const fn tupled() -> tuple<f64, f64> => paired<tuple<f64, f64>>()\n",
+        "const fn nullable() -> list<f64>? => optional<list<f64>>()\n",
+        "const fn field() -> Holder<list<f64>> => Holder<list<f64>>()\n",
+        "const fn supplied() -> str => listed<str>(\"given\")\n",
+    ));
+    assert!(checked.summary().is_empty(), "{}", checked.report);
+}
+
+/// EXPR-5: rereading a named constant does not turn it into an aggregate
+/// literal, so its already established integer element type cannot widen.
+#[test]
+fn a_named_default_keeps_its_established_element_type() {
+    let checked = module(concat!(
+        "const ints: list<i64> = [1]\n",
+        "const fn listed<T>(fallback: T = ints) -> T => fallback\n",
+        "const fn wrong() -> list<f64> => listed<list<f64>>()\n",
+    ));
+    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+    assert_eq!(
+        checked.findings[0].code, "type/type.mismatch",
+        "{}",
+        checked.report
+    );
+}
+
 /// UNIT-8, ERR-9: the catalogued constant.failure code also
 /// covers field defaults; an operand skipped by EXPR-6 does not fail.
 #[test]

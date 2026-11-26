@@ -438,13 +438,59 @@ impl<'a> Typer<'a> {
             return (unread, Outcome::Value(Type::Unknown));
         };
         let otherwise = parts.next();
-        if let Some(selected) = self.active_pack_condition(&condition) {
+        let guard = ungrouped(condition.clone());
+        let selected = if self.lexical_default_dependencies {
+            None
+        } else if guard.kind() == SyntaxKind::PackKeyMembership {
+            let (kind, _) = self.pack_key_membership(&guard);
+            match kind {
+                ExprKind::Literal(hir::Value::Bool(selected)) => Some(selected),
+                kind => {
+                    // An unresolved guard leaves both alternatives to its instance.
+                    self.unsure = true;
+                    for assignment in then
+                        .descendants()
+                        .chain(otherwise.iter().flat_map(SyntaxNode::descendants))
+                        .filter(|part| part.kind() == SyntaxKind::AssignStmt)
+                    {
+                        if let Some(place) = assignment.children().next().map(ungrouped)
+                            && place.kind() == SyntaxKind::NameExpr
+                            && let Some(local) = self.local_of(&place)
+                        {
+                            // Recheck the continuation with actual assignments
+                            // once the branch is known (CTRL-11, CTRL-16).
+                            self.assigned[local] = true;
+                        }
+                    }
+                    let ty = expected.cloned().unwrap_or(Type::Unknown);
+                    let outcome = if value_use.is_used() {
+                        Outcome::Value(ty.clone())
+                    } else {
+                        Outcome::Nothing
+                    };
+                    return (
+                        Expr {
+                            kind,
+                            ty,
+                            at,
+                            category: ValueCategory::Unsettled,
+                        },
+                        outcome,
+                    );
+                }
+            }
+        } else {
+            self.active_pack_condition(&condition)
+        };
+        if let Some(selected) = selected {
             // CTRL-16: a constant condition in a concrete pack pass
             // composes only the selected branch.
             if selected {
+                self.report_pack_branch(&then);
                 return self.flow(&then, expected, value_use);
             }
             if let Some(otherwise) = otherwise {
+                self.report_pack_branch(&otherwise);
                 return self.flow(&otherwise, expected, value_use);
             }
             let (kind, outcome) = if value_use.is_used() {

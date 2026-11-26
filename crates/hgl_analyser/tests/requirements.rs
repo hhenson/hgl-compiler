@@ -69,6 +69,138 @@ fn reflected_member_conjuncts_prove_the_same_call_in_either_order() {
     }
 }
 
+/// GEN-3, GEN-7 and GEN-17: admit precisely the ordinary trials that can
+/// share a type with this reflected member. Both call forms need evidence.
+#[test]
+fn reflected_members_and_parameters_keep_only_their_common_types() {
+    let declarations = concat!(
+        "const key: str = \"item\"\n",
+        "const fn only_float<X>(x: X) -> X requires X == f64 => x\n",
+        "operator pick<X>(x: X) -> X\n",
+        "impl const fn pick(x: f64) -> f64 => x\n",
+        "const fn caller<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T, x: Ps[key]) -> ",
+    );
+    for (result, call, rejected) in [
+        (
+            "Ps[key]",
+            "only_float<Ps[key]>(x)",
+            "constraint/requires.unmet",
+        ),
+        ("Ps[key]", "pick(x)", "operator/operator.no_candidate"),
+        ("T", "only_float<T>(t)", "constraint/requires.unmet"),
+        ("T", "pick(t)", "operator/operator.no_candidate"),
+    ] {
+        for (condition, admitted) in [
+            (
+                "T in {i64, f64} && Ps[key] in {str, f64} && Ps[key] == T",
+                true,
+            ),
+            (
+                "T == Ps[key] && Ps[key] in {f64, str} && T in {f64, i64}",
+                true,
+            ),
+            (
+                "each k in arg_keys(Ps) { Ps[k] in {str, f64} } && Ps[key] == T && T in {i64, f64}",
+                true,
+            ),
+            (
+                "T in {str, f64} && Ps[key] in {str, f64} && Ps[key] == T",
+                false,
+            ),
+            (
+                "T in {i64, bool} && Ps[key] in {str, f64} && Ps[key] == T",
+                false,
+            ),
+            ("T in {i64, f64} && Ps[key] in {str, f64}", false),
+        ] {
+            let checked = module(&format!(
+                "{declarations}{result}\n    requires {condition} => {call}\n"
+            ));
+            if admitted {
+                assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+            } else {
+                assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+                assert_eq!(
+                    checked.findings[0].code, rejected,
+                    "{condition}\n{}",
+                    checked.report
+                );
+            }
+        }
+    }
+}
+
+/// GEN-3 and GEN-7: two parameters equated to one member have to agree,
+/// even when only one parameter reaches the callee. Distinct keys do not.
+#[test]
+fn parameters_bounded_through_the_same_member_constrain_each_other() {
+    let declarations = concat!(
+        "const key: str = \"spot\"\n",
+        "const other: str = \"rate\"\n",
+        "const fn float<X>(x: X) -> X requires X == f64 => x\n",
+        "operator pick<X>(x: X) -> X\n",
+        "impl const fn pick(x: f64) -> f64 => x\n",
+        "const fn caller<T, U, ...Ps>(f: const fn(...{Ps}) -> i64, x: T, y: U) -> T\n",
+    );
+    for (call, rejected) in [
+        ("float<T>(x)", "constraint/requires.unmet"),
+        ("pick(x)", "operator/operator.no_candidate"),
+    ] {
+        for (condition, admitted) in [
+            (
+                "T in {i64, f64} && U in {str, f64} && T == Ps[key] && U == Ps[key]",
+                true,
+            ),
+            (
+                "Ps[key] == U && Ps[key] == T && U in {str, f64} && T in {i64, f64}",
+                true,
+            ),
+            (
+                "T in {i64, f64} && U in {i64, f64} && T == Ps[key] && Ps[key] == U",
+                false,
+            ),
+            (
+                "T in {i64, f64} && U in {str, f64} && T == Ps[key] && U == Ps[other]",
+                false,
+            ),
+        ] {
+            let checked = module(&format!(
+                "{declarations}    requires {condition} => {call}\n"
+            ));
+            if admitted {
+                assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+            } else {
+                assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+                assert_eq!(
+                    checked.findings[0].code, rejected,
+                    "{condition}\n{}",
+                    checked.report
+                );
+            }
+        }
+    }
+}
+
+/// GEN-7 and GEN-10: universal bounds alone do not require the pack to
+/// contain a key. An unrelated member cannot invalidate a proof about T.
+#[test]
+fn only_linked_named_members_constrain_an_ordinary_trial() {
+    let definitions = concat!(
+        "const key: str = \"item\"\n",
+        "const fn float<X>(x: X) -> X requires X == f64 => x\n",
+        "const fn caller<T, ...Ps>(f: const fn(...{Ps}) -> i64, t: T) -> T\n",
+    );
+    let empty_pack = module(&format!(
+        "{definitions}    requires T in {{i64, f64}} && each k in arg_keys(Ps) {{ Ps[k] == T && Ps[k] in {{str, f64}} }} => float<T>(t)\n"
+    ));
+    assert_eq!(empty_pack.findings.len(), 1, "{}", empty_pack.report);
+    assert_eq!(empty_pack.findings[0].code, "constraint/requires.unmet");
+    let unrelated = module(&format!(
+        "{definitions}    requires T in {{f64}} && Ps[key] == bool && Ps[key] == str => float<T>(t)\n"
+    ));
+    assert_eq!(unrelated.summary(), NONE, "{}", unrelated.report);
+}
+
 /// GEN-3, GEN-7 and GEN-10: positive constraints on the same reflected key
 /// admit their intersection in any conjunction order, for both generic calls
 /// and operators, while retaining rejections when a failing type remains or

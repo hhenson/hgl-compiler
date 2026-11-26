@@ -67,7 +67,13 @@ impl<'a> Typer<'a> {
     /// What a value read in a graph is (FN-3), as [`category`] says,
     /// with the locals read so far.
     pub(super) fn category(&self, value: &Expr) -> ValueCategory {
-        category_with_functions(self.program, &self.locals, value, &self.pack_functions)
+        category_with_functions(
+            self.program,
+            &self.locals,
+            value,
+            &self.pack_functions,
+            &self.callback_captures,
+        )
     }
 
     /// FN-3: "Where a constant is required ... a `const` parameter's
@@ -293,7 +299,7 @@ fn gives_a_value(value: &Expr) -> bool {
 /// as it reads ([`Typer::category`]), and [`record`] writes its answer
 /// on each expression for the stages after the analyser.
 pub(crate) fn category(program: &Program, locals: &[Local], value: &Expr) -> ValueCategory {
-    category_with_functions(program, locals, value, &[])
+    category_with_functions(program, locals, value, &[], &[])
 }
 
 fn category_with_functions(
@@ -301,9 +307,12 @@ fn category_with_functions(
     locals: &[Local],
     value: &Expr,
     functions: &[(usize, Callee)],
+    callback_captures: &[ValueCategory],
 ) -> ValueCategory {
     use ValueCategory::{Connection, Unsettled, Value};
-    let category = |value: &Expr| category_with_functions(program, locals, value, functions);
+    let category = |value: &Expr| {
+        category_with_functions(program, locals, value, functions, callback_captures)
+    };
     let join = join_categories;
     let all = |values: &mut dyn Iterator<Item = &Expr>| values.map(category).fold(Value, join);
     match &value.kind {
@@ -314,7 +323,7 @@ fn category_with_functions(
         | ExprKind::PackEntry { pack: local, .. } => {
             locals.get(*local).map_or(Value, |local| local.category)
         }
-        ExprKind::DeferredPackRead => Unsettled,
+        ExprKind::DeferredPackRead | ExprKind::DeferredPackCondition => Unsettled,
         // EXPR-16: a range has ordinary bounds. Its loop variable does
         // not become a connection even when a bound was reported.
         ExprKind::Range { .. } => Value,
@@ -346,16 +355,26 @@ fn category_with_functions(
             let given = all(&mut arguments.iter().map(|argument| &argument.value));
             // FN-17: the binding of a value formal supplies the actual
             // callback's role and its captures for the FN-6 category below.
-            let callee = match callee {
-                Callee::Parameter {
-                    parameter,
-                    temporal: false,
-                    ..
-                } => functions
+            let (callee, given) = if let Callee::Parameter {
+                parameter,
+                temporal: false,
+                ..
+            } = callee
+            {
+                let target = functions
                     .iter()
                     .find(|(slot, _)| slot == parameter)
-                    .map_or(callee, |(_, target)| target),
-                _ => callee,
+                    .map_or(callee, |(_, target)| target);
+                // The trial category belongs to the receiving slot, even if
+                // the target names a different slot in the forwarding call.
+                let captured = match callback_captures.get(*parameter) {
+                    Some(&category) => category,
+                    None if matches!(target, Callee::Parameter { .. }) => Unsettled,
+                    None => Value,
+                };
+                (target, join(given, captured))
+            } else {
+                (callee, given)
             };
             match callee {
                 Callee::Function {
@@ -390,10 +409,8 @@ fn category_with_functions(
                     .map(|&local| locals[local].category)
                     .fold(given, join),
                 Callee::Parameter { temporal: true, .. } => Connection,
-                // An unbound callback may capture a connection. An operation
-                // awaiting instance selection may choose a temporal candidate.
-                Callee::Parameter { .. }
-                | Callee::Required { .. }
+                // An operation awaiting selection may choose a temporal candidate.
+                Callee::Required { .. }
                 | Callee::DeferredOperator(_)
                 | Callee::DeferredPackCall
                 | Callee::Unread => join(given, Unsettled),
