@@ -4082,6 +4082,40 @@ fn an_enum_is_constructed_from_a_number_or_a_name() {
     );
 }
 
+/// EXPR-9 and UNIT-13 compare known constants, including different
+/// spellings, while runtime keys still permit the last value to win.
+#[test]
+fn collections_reject_only_repeated_constants() {
+    let checked = module(
+        r#"
+const NAME: str = "bid"
+const FOUR: i64 = 4
+const fn collect(k: str, n: i64) {
+    let bad: dict<str, i64> = ["bid": 1, NAME: 9]
+    let ints: set<i64> = [4, FOUR]
+    let flags: set<bool> = [true, false, true]
+    let aliases: dict<duration, i64> = [1s: 1, 1000ms: 9]
+    let good: dict<str, i64> = [k: 1, "bid": 9]
+    let mixed: set<i64> = [n, FOUR]
+    let list = [4, FOUR]
+}
+"#,
+    );
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "type/dict.duplicate_key",
+            "type/set.duplicate_member",
+            "type/set.duplicate_member",
+            "type/dict.duplicate_key"
+        ],
+    );
+}
+
 /// EXPR-9: "`[a: b]` has one pair entry, not a standalone pair value.
 /// Empty brackets have no entries. The use site and expected type
 /// constrain element types, keys, ordering, uniqueness, and placeholder

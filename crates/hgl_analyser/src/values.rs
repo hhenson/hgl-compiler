@@ -74,6 +74,7 @@ mod capabilities;
 // The read of a collection's child, and the endpoint a child is (TIME-1).
 mod children;
 // The values a body reads as compile-time constants (UNIT-8, UNIT-13, GEN-8).
+mod collection_constants;
 mod constants;
 // Blocks, `if`, `while`, `for` and `switch` (CTRL-5, CTRL-10 to CTRL-15).
 mod control;
