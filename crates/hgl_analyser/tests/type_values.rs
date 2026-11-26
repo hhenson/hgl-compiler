@@ -1489,3 +1489,60 @@ const fn cyclic<T>() -> Tag<type(cyclic<T>())> =>
     assert_eq!(checked.findings.len(), 1, "{}", checked.report);
     assert_eq!(checked.findings[0].code, "type/generic.argument_constant");
 }
+
+/// TYPE-18, GEN-2: a generic body can inherit a deferred fit through a
+/// field without writing type(...) itself. Decide each fit at its making call.
+#[test]
+fn field_tag_fits_are_checked_at_concrete_calls() {
+    let definitions = r#"module m
+const INTEGER: Type = type(1)
+const fn values<T>() -> list<T> => []
+operator select<A,R>(value: A) -> R
+impl const fn select<A>(value: A) -> i64 => 1
+impl const fn select(value: list<str>) -> bool => true
+struct Stamp<const Kind: Type> { id: i64 }
+struct Frame<T> { item: T
+    tag: Stamp<type(select(values<T>()))> }
+const fn read(stamp: Stamp<INTEGER>) -> i64 => stamp.id
+const fn returned<T>(f: Frame<T>) -> Stamp<INTEGER> => f.tag
+const fn assigned<T>(f: Frame<T>) -> i64 {
+    var stamp: Stamp<INTEGER> = Stamp<INTEGER>(id: 0)
+    stamp = f.tag
+    return stamp.id
+}
+const fn passed<T>(f: Frame<T>) -> i64 => read(f.tag)
+const fn forwarded<T>(f: Frame<T>) -> i64 => returned(f).id
+"#;
+    for (item, tag, valid) in [("2", "1", true), (r#""s""#, "true", false)] {
+        let source = format!(
+            "{definitions}
+test fits {{
+    let f = Frame(item: {item}, tag: Stamp<type({tag})>(id: 17))
+    assert returned(f).id == 17
+    assert assigned(f) == 17
+    assert passed(f) == 17
+    assert forwarded(f) == 17
+}}
+"
+        );
+        let checked = check(&[("m.hgl", &source)]);
+        if valid {
+            assert_eq!(
+                checked.summary(),
+                Vec::<String>::new(),
+                "{}",
+                checked.report
+            );
+        } else {
+            assert_eq!(checked.findings.len(), 4, "{}", checked.report);
+            assert!(
+                checked
+                    .findings
+                    .iter()
+                    .all(|d| d.code == "type/type.mismatch"),
+                "{}",
+                checked.report
+            );
+        }
+    }
+}

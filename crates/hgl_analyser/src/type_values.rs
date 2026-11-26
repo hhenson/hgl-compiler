@@ -61,6 +61,11 @@ fn parameters(program: &Program, (module, declaration): (usize, usize)) -> &[Gen
 /// again with its concrete inputs. Its operand's calls never enter runtime
 /// HIR, so placement cannot recover a newly selected result from those calls.
 pub(crate) fn has_instance_query(program: &Program, declaration: (usize, usize)) -> bool {
+    // A field, formal or result can carry another declaration's query into a
+    // fit even where this body writes no query syntax of its own (TYPE-18).
+    if program.deferred_type_fits.contains(&declaration) {
+        return true;
+    }
     matches!(
         &program.modules[declaration.0].details[declaration.1],
         Detail::Callable(signature) if !signature.generics.is_empty()

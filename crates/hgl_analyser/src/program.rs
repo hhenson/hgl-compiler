@@ -21,6 +21,8 @@ use crate::types::{
 pub struct Program {
     /// A declaration contains an overload-dependent static type query (TYPE-18).
     pub(crate) has_dependent_type_queries: bool,
+    /// Generic bodies whose fit accepted an unresolved TYPE-18 identity.
+    pub(crate) deferred_type_fits: HashSet<(usize, usize)>,
     /// Checked TYPE-18 identities needed by reached struct applications.
     pub(crate) layout_queries: crate::layout_queries::LayoutQueries,
     /// Storage dependencies after declared struct fields resolve (TYPE-18).

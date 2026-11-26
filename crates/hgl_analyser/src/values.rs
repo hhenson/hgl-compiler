@@ -33,7 +33,7 @@
 //! it was found, and never again where it is used (ERR-9).
 
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Diagnostics, Location};
@@ -207,8 +207,10 @@ pub(crate) fn check(
         // declaration whose body it is.
         let mut selected = Vec::with_capacity(module.declarations.len());
         let mut graph_return_checks = Vec::with_capacity(module.declarations.len());
+        let mut deferred_type_fits = Vec::new();
         for (position, declaration) in module.declarations.iter().enumerate() {
             let mut check_return = None;
+            let deferred_fit = Cell::new(false);
             let body = match (&declaration.kind, module.details.get(position)) {
                 // FN-1: a `const fn`. GEN-4: "an `impl const fn` a value
                 // candidate", whose body is a value function's.
@@ -219,6 +221,7 @@ pub(crate) fn check(
                 ) => {
                     let mut typer =
                         Typer::new(program, module, declaration, signature, found, diagnostics);
+                    typer.deferred_type_fit = Some(&deferred_fit);
                     if signature.generics.is_empty() {
                         typer = typer.record_resolved_written(&resolved_written);
                     }
@@ -236,6 +239,7 @@ pub(crate) fn check(
                 ) if module.phases.get(position) == Some(&Some(Phase::Node)) => {
                     let mut typer =
                         Typer::new(program, module, declaration, signature, found, diagnostics);
+                    typer.deferred_type_fit = Some(&deferred_fit);
                     if signature.generics.is_empty() {
                         typer = typer.record_resolved_written(&resolved_written);
                     }
@@ -253,6 +257,7 @@ pub(crate) fn check(
                 ) if module.phases.get(position) == Some(&Some(Phase::Graph)) => {
                     let mut typer =
                         Typer::new(program, module, declaration, signature, found, diagnostics);
+                    typer.deferred_type_fit = Some(&deferred_fit);
                     if signature.generics.is_empty() {
                         typer = typer.record_resolved_written(&resolved_written);
                     }
@@ -284,6 +289,9 @@ pub(crate) fn check(
                     None
                 }
             };
+            if deferred_fit.get() {
+                deferred_type_fits.push((index, position));
+            }
             let mut calls = selecting.take();
             if let Some(body) = &body {
                 candidates::record_tag_tests(body, &mut calls);
@@ -407,6 +415,7 @@ pub(crate) fn check(
         program.modules[index].defaults = defaults;
         program.modules[index].selecting = selected;
         program.modules[index].graph_return_checks = graph_return_checks;
+        program.deferred_type_fits.extend(deferred_type_fits);
     }
     // GEN-3: a `requires` not told where a call passes on a generic
     // parameter of its own is told where each call gives that one.
@@ -931,6 +940,8 @@ struct Typer<'a> {
     /// Log of `type(...)` cache insertions in `constants`, with their previous
     /// value, so speculative rollbacks (`take_back`) restore the cache cleanly.
     type_query_locations: Vec<(Location, Option<crate::constant::QueryType>)>,
+    /// A committed fit in this declaration depends on a concrete Type identity.
+    deferred_type_fit: Option<&'a Cell<bool>>,
     /// Non-generic written types whose deferred `type(...)` arguments resolved
     /// during body typing, written back to `Module::written` afterwards.
     resolved_written: Option<&'a RefCell<ResolvedWritten>>,
@@ -1123,6 +1134,7 @@ impl<'a> Typer<'a> {
                 .flatten(),
             constants: Default::default(),
             type_query_locations: Vec::new(),
+            deferred_type_fit: None,
             resolved_written: None,
             selecting: tables.selecting,
             instance: Vec::new(),
@@ -1278,6 +1290,7 @@ impl<'a> Typer<'a> {
             present: self.present.len(),
             selecting: self.selecting.borrow().len(),
             type_queries: self.type_query_locations.len(),
+            deferred_type_fit: self.deferred_type_fit.is_some_and(Cell::get),
             resolved_written: self
                 .resolved_written
                 .map_or(0, |target| target.borrow().len()),
@@ -1295,6 +1308,9 @@ impl<'a> Typer<'a> {
     /// first to learn something and then where it stands, must leave
     /// one reading's worth of each.
     fn take_back(&mut self, mark: Mark, keep_flow: bool) -> bool {
+        if let Some(deferred) = self.deferred_type_fit {
+            deferred.set(mark.deferred_type_fit);
+        }
         let clean = self.diagnostics.len() == mark.diagnostics;
         // A construct's spent allowance is reported once, and the report
         // stands though the reading it was spent in is taken back.
@@ -1460,6 +1476,8 @@ struct Mark {
     selecting: usize,
     /// How many `type(...)` cache insertions have been logged.
     type_queries: usize,
+    /// Whether a fit was deferred before this tentative reading.
+    deferred_type_fit: bool,
     /// How many body-level resolved written types have been recorded.
     resolved_written: usize,
     /// Whether the active role probe already observed a temporal pair call.

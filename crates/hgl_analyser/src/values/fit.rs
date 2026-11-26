@@ -261,6 +261,9 @@ impl<'a> Typer<'a> {
                 || crate::constant::type_has_instance_query(ty))
             && crate::declared::same_type(expected, ty) != Some(false)
         {
+            if let Some(deferred) = self.deferred_type_fit {
+                deferred.set(true);
+            }
             return true;
         }
         match expected {
