@@ -471,6 +471,7 @@ impl Program {
         // instance reads its tail expression or an explicit return.
         if (inputs.test_candidates.is_some()
             || recheck_endpoints
+            || (!functions.is_empty() && self.callback_phase_bodies.contains(&(module, declaration)))
             || generics.contains(&Argument::NoResult)
             || pending_forwards.is_some()
             || !inputs.constants.is_empty()

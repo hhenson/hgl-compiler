@@ -52,7 +52,7 @@ impl<'a> Typer<'a> {
     /// Read so far: locals, calls and symbols, and what is returned. A
     /// conditional and a loop in composition are for a later part
     /// (CTRL-1 to CTRL-8), and are not read.
-    pub(super) fn graph(mut self) -> (Option<Body>, Option<GraphReturnCheck>) {
+    pub(super) fn graph(&mut self) -> (Option<Body>, Option<GraphReturnCheck>) {
         self.graph = true;
         for (local, parameter) in self.signature.parameters.iter().enumerate() {
             self.locals[local].category =
