@@ -1019,7 +1019,8 @@ transpiler: partial
 transpiler: partial
 
 - A graph call with connections lifts the native value formatter (FN-11), publishing text at every admitted evaluation, including an equal result.
-- Left: #434 step 2 supplies the HGL graph candidate's validity policy and triggers. The lifted value candidate currently binds `null` for a nullable argument that is not valid and writes that value, rather than withholding text until the argument is valid as FMT-6 requires.
+- In the review prototype, an explicit `require_valid` selects the HGL candidate for scalar positional and named inputs. The candidate observes input validity and tick state each cycle.
+- Left: general graph dispatch, triggers and graph-start publication (#434). The lifted value candidate currently binds `null` for a nullable argument that is not valid and writes that value, rather than withholding text until the argument is valid as FMT-6 requires.
 
 ## FMT-7
 
@@ -1032,7 +1033,8 @@ transpiler: done
 transpiler: partial
 
 - The lifted native value candidate formats a collection whole when it ticks. Explicit `Marked<T>` values retain the value formatter's existing tick-prefix support (FMT-7, FMT-9).
-- Left: #434 step 2 supplies the HGL graph body, default collection-delta formatting, marks, `require_valid`, sampling and triggers; the current lifted value call uses FN-11's ordinary input binding instead.
+- The prototype HGL graph candidate passes marked scalar inputs and the two text options to the private renderer.
+- Left: collection deltas, sampling, triggers and graph dispatch with default options (#434).
 
 ## FMT-9
 
@@ -1041,13 +1043,13 @@ analyser: partial
 - Value calls admit `{wall_time}` and reject `{engine_time}` with `format.argument`. A marked place accepts `Marked<T>`.
 - A native call from a graph admits `{engine_time}` as a reserved datetime place; it consumes no supplied argument and uses datetime's checked specifiers.
 - Trace cells and const arguments supplied to an eval remain value code and reject `{engine_time}` (TST-3).
-- Left: the HGL graph candidate supplies the arguments' tick state (#434).
+- Core's private rendering call takes the graph node's evaluation time as an explicit datetime. The same checker validates the constant pattern for both rendering paths.
 
 transpiler: partial
 
 - `{wall_time}` reads the process clock. A marked place writes the configured tick prefix when its argument ticked.
 - A lifted native format call reads `{engine_time}` from its node's output endpoint, once per call, with the checked pattern retained through lifting.
-- Left: the HGL graph candidate supplies the arguments' tick state and its trigger (#434 step 2, FMT-6); an `{engine_time}` place without a lifted node is explicitly unsupported until that candidate provides the graph-start tick.
+- The prototype renders the explicit evaluation time and scalar tick marks with the existing value formatter. Graph-start ticks and trigger-only publication remain open (#434).
 
 ## DBG-1
 
