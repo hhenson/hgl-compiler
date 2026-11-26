@@ -885,6 +885,51 @@ fn a_graph_locals_list_size_cannot_be_a_connection() {
     );
 }
 
+/// TYPE-10 and TIME-2: an immediate call used as a size also reads its
+/// lexical captures. A body that is only formed contributes no read.
+#[test]
+fn a_local_list_size_checks_immediate_anonymous_captures() {
+    expect(
+        concat!(
+            "fn captured(input: i64) -> i64 {\n",
+            "    var held: list<i64, (fn(x: i64) => input + x)(3)>\n",
+            "    return input\n",
+            "}\n",
+            "fn passed(input: i64) -> i64 {\n",
+            "    var held: list<i64, (fn(x: i64) => x + 3)(input)>\n",
+            "    return input\n",
+            "}\n",
+            "fn nested(input: i64) -> i64 {\n",
+            "    var held: list<i64, (fn(x: i64) => (fn(y: i64) => input + y)(x))(3)>\n",
+            "    return input\n",
+            "}\n",
+        ),
+        &["3 list.size", "7 list.size", "11 list.size"],
+    );
+    expect(
+        concat!(
+            "fn ordinary(input: i64) -> i64 {\n",
+            "    let ordinary_call = (fn(x: i64) => input + x)(3)\n",
+            "    let count: i64 = 4\n",
+            "    var held: list<i64, (fn(x: i64) => count + x)(3)>\n",
+            "    return input\n",
+            "}\n",
+            "fn unused(input: i64) -> i64 {\n",
+            "    var held: list<i64, (fn(x: i64) -> i64 {\n",
+            "        fn(y: i64) => (fn(z: i64) => input + z)(y)\n",
+            "        return x + 3\n",
+            "    })(3)>\n",
+            "    return input\n",
+            "}\n",
+            "fn cold(input: i64) -> i64 {\n",
+            "    var held: list<i64, (fn(x: i64) => if type((fn(y: i64) => input + y)(x)) == type(0) { 2 } else { 1 })(3)>\n",
+            "    return input\n",
+            "}\n",
+        ),
+        &[],
+    );
+}
+
 /// TYPE-10 and FN-17: a static callback can still capture a connection.
 /// Report the instance that supplies the live callback and keep the
 /// capture-free and ordinary named callbacks admissible.

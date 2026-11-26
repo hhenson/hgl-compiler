@@ -57,8 +57,13 @@ impl Typer<'_> {
             // Query the category without leaving a runtime read in the
             // body. The annotation itself is still read as a type.
             let mark = self.mark();
+            self.list_extent_reads_live_capture = Some(false);
             let value = self.expression(&size, Some(&count));
-            let category = self.category(&value);
+            let category = if self.list_extent_reads_live_capture == Some(true) {
+                ValueCategory::Connection
+            } else {
+                self.category(&value)
+            };
             self.take_back(mark, false);
             // An instance can give this extent a concrete callback or operator.
             if category == ValueCategory::Unsettled {

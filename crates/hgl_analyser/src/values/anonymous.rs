@@ -12,7 +12,7 @@ use super::arguments::{Slot, Takes};
 use crate::declared::substitute_within;
 use crate::hir::{
     Body, Callee, ExprKind, Form, LocalId, Node, NodeMut, PackKey, Stmt, ValueCategory,
-    walk_statement_nodes, walk_statement_nodes_mut, walk_statements_mut,
+    walk_statement_nodes, walk_statement_nodes_mut, walk_statements, walk_statements_mut,
 };
 use crate::program::LocalKind;
 use crate::read::is_type;
@@ -100,7 +100,7 @@ impl Typer<'_> {
         parameters: Vec<(SyntaxToken, Option<Type>)>,
         result: &Type,
     ) -> bool {
-        self.checked_anonymous(function, parameters, (Some(result), false), None)
+        self.checked_anonymous(function, parameters, (Some(result), false), None, false)
             .1
     }
 
@@ -112,7 +112,7 @@ impl Typer<'_> {
         result: (Option<&Type>, bool),
         temporal: bool,
     ) -> Option<AnonymousDefinition> {
-        self.checked_anonymous(function, parameters, result, Some(temporal))
+        self.checked_anonymous(function, parameters, result, Some(temporal), false)
             .0
     }
 
@@ -122,11 +122,18 @@ impl Typer<'_> {
         parameters: Vec<(SyntaxToken, Option<Type>)>,
         (result, infer_result): (Option<&Type>, bool),
         specialization: Option<bool>,
+        immediate: bool,
     ) -> (Option<AnonymousDefinition>, bool) {
         // CTRL-5: a return belongs to this function alone.
         self.check_capability_captures(function);
         let mut mark = self.mark();
         let first_local = mark.locals;
+        let extent_query = self.list_extent_reads_live_capture;
+        let observes_extent = immediate && !self.type_query;
+        if !observes_extent {
+            // Forming a callable or querying its type executes nothing.
+            self.list_extent_reads_live_capture = None;
+        }
         let outer = self.anonymous.replace(Anonymous {
             result: result.cloned(),
             infer_result,
@@ -157,6 +164,24 @@ impl Typer<'_> {
             self.at(function),
             "this anonymous function",
         );
+        if self.list_extent_reads_live_capture == Some(false)
+            && let Some(statements) = statements.as_deref()
+        {
+            // The opaque direct call retains only its explicit arguments.
+            // Record the live lexical reads before restoring the local scope.
+            let mut reads_live_capture = false;
+            walk_statements(statements, &mut |value| {
+                let local = match &value.kind {
+                    ExprKind::Local(local)
+                    | ExprKind::DeferredPresent(local)
+                    | ExprKind::PackEntry { pack: local, .. } => *local,
+                    _ => return,
+                };
+                reads_live_capture |=
+                    local < first_local && self.locals[local].category == ValueCategory::Connection;
+            });
+            self.list_extent_reads_live_capture = Some(reads_live_capture);
+        }
         let needs_pack_inputs = specialization.is_none()
             && statements
                 .as_deref()
@@ -183,6 +208,9 @@ impl Typer<'_> {
             close(body, first_local, count, specialization == Some(false))
         });
         self.restore_read(mark, false);
+        if !observes_extent {
+            self.list_extent_reads_live_capture = extent_query;
+        }
         self.anonymous = outer;
         self.temporal = temporal;
         self.dynamic = dynamic;
@@ -231,7 +259,8 @@ impl Typer<'_> {
             .and_then(|annotation| self.anonymous_type(&annotation))
             .or_else(|| expected.cloned())
             .unwrap_or(Type::Unknown);
-        let needs_pack_inputs = self.anonymous_body(function, parameters, &result);
+        let (_, needs_pack_inputs) =
+            self.checked_anonymous(function, parameters, (Some(&result), false), None, true);
         // A later instance must still check the body even though the
         // direct anonymous call has no native representation (CTRL-16).
         let callee = if needs_pack_inputs {
