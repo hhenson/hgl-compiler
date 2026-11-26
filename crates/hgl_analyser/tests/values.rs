@@ -2297,9 +2297,9 @@ fn an_operators_default_is_the_options_value_for_a_candidates_condition() {
     let checked = module(concat!(
         "enum Zero { ieee, nan, error }\n",
         "operator ratio<L, R, O>(lhs: L, rhs: R, const zero: Zero = .ieee) -> O\n",
-        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> f64\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, const zero: Zero) -> f64\n",
         "    requires zero in {.ieee, .nan} => lhs\n",
-        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> result<f64, error>\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, const zero: Zero) -> result<f64, error>\n",
         "    requires zero == .error => ok(lhs)\n",
         "const fn uses(a: f64, b: f64) {\n",
         "    let plain = ratio(a, b)\n",

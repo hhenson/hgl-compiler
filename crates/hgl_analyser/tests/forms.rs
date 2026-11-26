@@ -170,6 +170,43 @@ fn a_candidate_keeps_the_operator_pack_slot() {
     );
 }
 
+/// GEN-6: a public const parameter or callback keeps its mode.
+#[test]
+fn a_candidate_keeps_the_operators_parameter_modifiers() {
+    let checked = module(concat!(
+        "operator at(arg: i64, const n: i64) -> i64\n",
+        "impl const fn at(arg: i64, n: i64) -> i64 => arg + n\n",
+        "operator apply(f: const fn(i64) -> i64, x: i64) -> i64\n",
+        "impl fn apply(f: fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:28 operator/impl.parameter GEN-6",
+            "m.hgl:5:15 operator/impl.parameter GEN-6",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
+/// GEN-6: a candidate can add const, take a public callback as const in
+/// value code, or take a public ordinary input as any.
+#[test]
+fn a_candidate_can_add_const_or_take_any() {
+    let checked = module(concat!(
+        "operator at(arg: i64, n: i64) -> i64\n",
+        "impl const fn at(arg: i64, const n: i64) -> i64 => arg + n\n",
+        "operator apply(f: fn(i64) -> i64, x: i64) -> i64\n",
+        "impl const fn apply(f: const fn(i64) -> i64, x: i64) -> i64 => f(x)\n",
+        "operator pick(arg: i64) -> i64\n",
+        "impl const fn pick(arg: any) -> i64 => 1\n",
+        "const fn inc(value: i64) -> i64 => value + 1\n",
+        "const fn call() -> i64 => at(2, 3) + apply(inc, 2) + pick(3)\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
 /// GEN-6: the candidate's declaration reports the result it contradicts
 /// even when a generic caller or an explicit argument could select it.
 #[test]

@@ -1307,12 +1307,12 @@ fn a_const_option_compared_in_a_constraint_is_no_type() {
         "    requires zero in {.ieee, .nan}\n",
         "native impl fn ratio(lhs: f64, rhs: f64, const zero: Zero) -> result<f64, error>\n",
         "    requires zero == .error\n",
-        // Value candidates, HGL and native: no marker.
-        "native impl const fn ratio(lhs: i64, rhs: i64, zero: Zero) -> f64\n",
+        // Value candidates, HGL and native, keep the public modifier.
+        "native impl const fn ratio(lhs: i64, rhs: i64, const zero: Zero) -> f64\n",
         "    requires zero in {.ieee, .nan}\n",
-        "impl const fn ratio(lhs: str, rhs: str, zero: Zero) -> str requires zero == .nan => lhs\n",
+        "impl const fn ratio(lhs: str, rhs: str, const zero: Zero) -> str requires zero == .nan => lhs\n",
         // The constant may stand on either side of `==`.
-        "impl const fn ratio(lhs: bool, rhs: bool, zero: Zero) -> bool requires .nan == zero => lhs\n",
+        "impl const fn ratio(lhs: bool, rhs: bool, const zero: Zero) -> bool requires .nan == zero => lhs\n",
         // A const parameter of a function that is no candidate.
         "fn scaled(value: f64, const mode: Zero) -> f64 requires mode == .ieee => value\n",
         // An option of the candidate's own, which its operator does not
