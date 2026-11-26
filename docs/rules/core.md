@@ -1032,7 +1032,7 @@ transpiler: done
 transpiler: partial
 
 - The lifted native value candidate formats a collection whole when it ticks. Explicit `Marked<T>` values retain the value formatter's existing tick-prefix support (FMT-7, FMT-9).
-- The prototype HGL graph candidate passes marked scalar inputs and the two text options to the private renderer.
+- The prototype HGL graph candidate forwards positional and named input endpoints to the private renderer with the two text options. A wire-time scalar bound to a temporal input supplies a one-publication endpoint (FN-3).
 - Left: collection deltas, sampling, triggers and graph dispatch with default options (#434).
 
 ## FMT-9
@@ -1048,7 +1048,7 @@ transpiler: partial
 
 - `{wall_time}` reads the process clock. A marked place writes the configured tick prefix when its argument ticked.
 - A lifted native format call reads `{engine_time}` from its node's output endpoint, once per call, with the checked pattern retained through lifting.
-- The private formatter reads the supplied clock's evaluation time once when the pattern requests it, and renders scalar tick marks with the existing value formatter. Graph-start ticks and trigger-only publication remain open (#434).
+- The private formatter reads the supplied clock's evaluation time once when the pattern requests it, and checks each requested endpoint before reading its payload. Only a marked place queries modification. An invalid input renders the configured replacement. Graph-start ticks and trigger-only publication remain open (#434).
 
 ## DBG-1
 

@@ -3,8 +3,8 @@
 //! and typed values. Argument expressions run once in source order.
 //! Core's value `debug_print` calls this formatter and flushes the line
 //! through `write` (DBG-1, DBG-3, DBG-9).
-//! Graph calls currently lift this value formatter (FMT-6, FMT-8, FN-11),
-//! so whole inputs use value rendering until #434 supplies the graph body.
+//! The graph renderer borrows its input views (TIME-9) and reads their
+//! state for the requested places. Lifted value calls use value rendering.
 
 use std::fmt::Write;
 
@@ -58,7 +58,15 @@ impl Emitter<'_> {
             }
             let value = self.expression(scope, &argument.value);
             let name = temporary("format_argument", self.temporary());
-            let _ = write!(statements, "[[maybe_unused]] const auto {name} = {value}; ");
+            let held_type = if matches!(argument.value.ty, Type::Endpoint(_)) {
+                "const auto&"
+            } else {
+                "const auto"
+            };
+            let _ = write!(
+                statements,
+                "[[maybe_unused]] {held_type} {name} = {value}; "
+            );
             held.push(name);
         }
         let Some(not_valid) = self.format_option(
@@ -138,19 +146,37 @@ impl Emitter<'_> {
                             conversions.get(index).and_then(Option::as_ref),
                         )
                     };
-                    if let Some(payload) = formatting::marked_payload(self.program, ty) {
-                        if place.marked {
-                            let _ = write!(
-                                statements,
-                                "if ({held}.ticked) {{ {output} += {ticked}; }} "
-                            );
+                    // FMT-7, FMT-9: a borrow supplies live metadata; an
+                    // ordinary Marked value carries the metadata as fields.
+                    let marked = match ty {
+                        Type::Endpoint(payload) => Some((
+                            payload.as_ref(),
+                            format!("::hglrt::fn_modified({held})"),
+                            format!("::hglrt::fn_valid({held})"),
+                            self.temporal_read(payload, held, at),
+                        )),
+                        ordinary => {
+                            formatting::marked_payload(self.program, ordinary).map(|payload| {
+                                (
+                                    payload,
+                                    format!("{held}.ticked"),
+                                    format!("{held}.value"),
+                                    format!("(*{held}.value)"),
+                                )
+                            })
                         }
-                        let _ = write!(statements, "if ({held}.value) {{ ");
+                    };
+                    if let Some((payload, modified, valid, value)) = marked {
+                        if place.marked {
+                            let _ =
+                                write!(statements, "if ({modified}) {{ {output} += {ticked}; }} ");
+                        }
+                        let _ = write!(statements, "if ({valid}) {{ ");
                         self.format_field(
                             scope,
                             &mut statements,
                             &output,
-                            &format!("(*{held}.value)"),
+                            &value,
                             (payload, at, conversion),
                             place.specifier,
                         );

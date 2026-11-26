@@ -122,7 +122,10 @@ impl Typer<'_> {
                 used[index] = true;
                 (&arguments[index].value.ty, Some(index))
             };
-            let payload = formatting::marked_payload(self.program, ty);
+            let payload = match ty {
+                Type::Endpoint(payload) => Some(payload.as_ref()),
+                ordinary => formatting::marked_payload(self.program, ordinary),
+            };
             let effective = payload.unwrap_or(ty);
             let text_type = not_null(Some(effective)).unwrap_or(effective);
             if names_parameter(effective) || effective == &Type::Unknown {

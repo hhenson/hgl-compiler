@@ -2403,12 +2403,14 @@ fn a_capability_is_made_before_the_initializers_that_read_it() {
 /// FMT-9: a graph format call samples the injected clock only when requested.
 #[test]
 fn graph_format_reads_the_clock_once_for_repeated_places() {
-    for (pattern, expected, reads) in [
-        ("{clock}", "7", 0),
+    for (pattern, expected, reads, marks) in [
+        ("{clock}", "7", 0, 0),
+        ("{*clock}", "*7", 0, 1),
         (
             "{clock} {engine_time:%S.6} {engine_time:%S.6}",
             "7 00.000001 00.000001",
             1,
+            0,
         ),
     ] {
         let source = r#"module quote
@@ -2434,6 +2436,13 @@ test renders { assert eval describe(value: [7]) == ["EXPECTED"] }"#
             reads,
             "{pattern}"
         );
+        assert_eq!(render.matches("::hglrt::fn_modified(").count(), marks);
+        let valid = render.find("::hglrt::fn_valid(").expect("validity guard");
+        let read = render
+            .find("::hglrt::checked_value(")
+            .expect("payload read");
+        assert!(valid < read, "{render}");
+        assert!(render.contains("const auto& format_argument"), "{render}");
     }
 }
 
