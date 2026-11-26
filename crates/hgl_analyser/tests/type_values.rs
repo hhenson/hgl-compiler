@@ -1736,6 +1736,9 @@ struct Row<T> { v: T
  size: i64 }
 const fn keep<A,B>(x:A,y:B)->A=>x
 const fn fixed<A>(value: A) -> i64 => 1
+operator always_int<A>(value:A) -> i64
+impl const fn always_int<A>(value:A) -> i64 => 1
+impl const fn always_int(value:Tag<7>) -> i64 => 7
 const REQUIRED: Type = type(Stamp<type(true)>(n: 0))
 struct Only<const K: Type> requires K == REQUIRED { n: i64? }
 const fn place<const N: i64>(arg: Tag<N>) -> i64 {
@@ -1792,6 +1795,8 @@ const fn place<const N: i64>(arg: Tag<N>) -> i64 {
         "let selected = read(arg)\n    let alias = Row(v:selected,size:17).size",
         "let selected = read(arg)\n    let alias = keep(17,selected)",
         "let selected = read(arg)\n    let alias = [(selected,17)][0][1]",
+        "let alias = always_int(arg)",
+        "let selected = read(arg)\n    let items = [(selected,17,2),(17,selected,2)]\n    let alias = items[0][2]",
         "let selected = read(arg)\n    let alias = fixed(selected)",
         "let selected = read(arg)\n    let alias = { let ignored = selected\n 1 }",
     ] {

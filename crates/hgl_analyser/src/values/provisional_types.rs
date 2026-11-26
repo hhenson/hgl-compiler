@@ -2,11 +2,11 @@
 //! operator supplies. Known tuple positions, fields and independent generic
 //! arguments remain known even when a sibling takes its type from the instance.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use hgl_diagnostics::Location;
 
-use super::{Typer, inference::infer, members::index_result};
+use super::{Typer, candidates::Selecting, inference::infer, members::index_result};
 use crate::hir::{self, Expr, ExprKind};
 use crate::{Argument, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Type};
 
@@ -19,13 +19,59 @@ impl Typer<'_> {
         if self.provisional_locals.is_empty() && calls.is_empty() {
             return None;
         }
-        let positions = calls.iter().map(|call| call.at).collect();
+        let positions = calls.iter().map(|call| (call.at, call)).collect();
         self.project_result(value, &positions)
     }
 
-    fn project_result(&self, value: &Expr, calls: &HashSet<Location>) -> Option<Type> {
-        if calls.contains(&value.at) {
-            return Some(Type::Unknown);
+    fn project_result(&self, value: &Expr, calls: &HashMap<Location, &Selecting>) -> Option<Type> {
+        if let Some(call) = calls.get(&value.at) {
+            // A different candidate can only change a part of the public
+            // result left open by the operator signature and its inputs.
+            let operator = call.operator;
+            let Detail::Callable(public) =
+                &self.program.modules[operator.module].details[operator.declaration]
+            else {
+                return Some(Type::Unknown);
+            };
+            let result = public.result.as_ref()?;
+            if result.identity().is_some() {
+                return (result != &value.ty).then(|| result.clone());
+            }
+            let mut found = vec![None; public.generics.len()];
+            if let Some(written) = self.calls.get(&(value.at.file, value.at.span.start)) {
+                for (slot, (_, arg)) in found.iter_mut().zip(&written.arguments) {
+                    *slot = Some(arg.clone());
+                }
+            }
+            for (slot, param) in public.parameters.iter().enumerate() {
+                if let Some(arg) = call.argument_for(public, slot) {
+                    let projected = if arg.at == value.at {
+                        Some(Type::Unknown)
+                    } else {
+                        self.project_result(arg, calls)
+                    };
+                    infer(
+                        &param.ty,
+                        projected.as_ref().unwrap_or(&arg.ty),
+                        &public.generics,
+                        &mut found,
+                    );
+                }
+            }
+            let bindings: Vec<_> = public
+                .generics
+                .iter()
+                .zip(found)
+                .map(|(generic, bound)| bound.unwrap_or_else(|| unknown_arg(generic)))
+                .collect();
+            let map: Vec<_> = public
+                .generics
+                .iter()
+                .map(|g| g.at)
+                .zip(&bindings)
+                .collect();
+            let projected = self.program.specialize_type(result, &map);
+            return (projected != value.ty || projected == Type::Unknown).then_some(projected);
         }
         let project = |part: &Expr| self.project_result(part, calls);
         if let Some(branches) = value.kind.branch_values() {
@@ -173,7 +219,7 @@ impl Typer<'_> {
             _ => {
                 let mut found = false;
                 value.walk(&mut |part| {
-                    found |= calls.contains(&part.at) || matches!(part.kind,
+                    found |= calls.contains_key(&part.at) || matches!(part.kind,
                         ExprKind::Local(id) | ExprKind::DeferredPresent(id) if self.provisional_locals.contains_key(&id));
                 });
                 if !found {
@@ -193,7 +239,7 @@ impl Typer<'_> {
         generics: &[GenericParameter],
         given: &[Argument],
         formal: impl Fn(usize) -> Option<&'t Type>,
-        calls: &HashSet<Location>,
+        calls: &HashMap<Location, &Selecting>,
     ) -> Option<Vec<Argument>> {
         let mut found = vec![None; generics.len()];
         let mut dependent = vec![false; generics.len()];
@@ -226,13 +272,7 @@ impl Typer<'_> {
                     if !affected {
                         return original.clone();
                     }
-                    inferred.unwrap_or_else(|| match generic.kind {
-                        GenericKind::Value(_) => Argument::Constant(Constant {
-                            text: "_".into(),
-                            value: ConstantValue::Unknown,
-                        }),
-                        _ => Argument::Type(Type::Unknown),
-                    })
+                    inferred.unwrap_or_else(|| unknown_arg(generic))
                 })
                 .collect(),
         )
@@ -241,11 +281,81 @@ impl Typer<'_> {
 
 /// A branch or homogeneous collection may receive any of its projected
 /// result types. Agreeing projections preserve the common partially known type.
-fn common_projection(mut types: impl Iterator<Item = Type>) -> Option<Type> {
-    let first = types.next()?;
-    Some(if types.all(|other| other == first) {
-        first
-    } else {
-        Type::Unknown
-    })
+fn common_projection(types: impl Iterator<Item = Type>) -> Option<Type> {
+    types.reduce(common_type)
+}
+
+/// Keep the shape and slots on which two possible result types agree.
+fn common_type(mut left: Type, right: Type) -> Type {
+    if left == right {
+        return left;
+    }
+    let merge = |a: &mut Type, b| *a = common_type(std::mem::replace(a, Type::Unknown), b);
+    match (&mut left, right) {
+        (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
+            for (a, b) in left.iter_mut().zip(right) {
+                merge(a, b);
+            }
+        }
+        (
+            Type::List {
+                element: a,
+                size: x,
+            },
+            Type::List {
+                element: b,
+                size: y,
+            },
+        ) if *x == y => merge(a, *b),
+        (Type::Set(a), Type::Set(b))
+        | (Type::Nullable(a), Type::Nullable(b))
+        | (Type::Atomic(a), Type::Atomic(b))
+        | (Type::Endpoint(a), Type::Endpoint(b))
+        | (Type::Delta(a), Type::Delta(b)) => merge(a, *b),
+        (Type::Dict { key: a, value: x }, Type::Dict { key: b, value: y })
+        | (Type::Result { value: a, error: x }, Type::Result { value: b, error: y }) => {
+            merge(a, *b);
+            merge(x, *y);
+        }
+        (
+            Type::Named {
+                module: lm,
+                declaration: ld,
+                arguments: x,
+                ..
+            },
+            Type::Named {
+                module: rm,
+                declaration: rd,
+                arguments: y,
+                ..
+            },
+        ) if (*lm, *ld) == (rm, rd) && x.len() == y.len() => {
+            for (a, b) in x.iter_mut().zip(y) {
+                match (a, b) {
+                    (Argument::Type(a), Argument::Type(b)) => merge(a, b),
+                    (Argument::Constant(a), Argument::Constant(b)) if *a != b => {
+                        *a = Constant {
+                            text: "_".into(),
+                            value: ConstantValue::Unknown,
+                        };
+                    }
+                    (a, b) if *a == b => {}
+                    _ => return Type::Unknown,
+                }
+            }
+        }
+        _ => return Type::Unknown,
+    }
+    left
+}
+
+fn unknown_arg(generic: &GenericParameter) -> Argument {
+    match generic.kind {
+        GenericKind::Value(_) => Argument::Constant(Constant {
+            text: "_".into(),
+            value: ConstantValue::Unknown,
+        }),
+        _ => Argument::Type(Type::Unknown),
+    }
 }
