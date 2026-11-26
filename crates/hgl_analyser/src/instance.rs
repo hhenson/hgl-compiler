@@ -1128,6 +1128,12 @@ fn place_callee(
     };
     let place = |argument: &Argument| match argument {
         Argument::Type(ty) => Argument::Type(place_type(ty)),
+        Argument::Constant(c) if matches!(c.value, ConstantValue::InstanceTypeQuery { .. }) => {
+            Argument::Constant(Constant {
+                text: c.text.clone(),
+                value: instance.program.specialize_query(&c.value, instance.types),
+            })
+        }
         Argument::Constant(_) => placed(argument, instance.types),
         Argument::NoResult => Argument::NoResult,
     };

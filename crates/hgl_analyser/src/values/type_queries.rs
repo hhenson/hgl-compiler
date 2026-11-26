@@ -36,7 +36,7 @@ pub(crate) fn outermost_type_queries(node: &SyntaxNode, found: &mut Vec<SyntaxNo
 /// diagnostics. Used when `crate::constant` evaluates a module constant
 /// whose expression contains `type(...)` (TYPE-18).
 pub(crate) fn query_type(program: &Program, file: FileId, query: &SyntaxNode) -> QueryType {
-    query_type_into(program, file, query, None)
+    query_type_with_bindings(program, file, query, &[], true, None)
 }
 
 /// Read a cold `type(e)` query in its declaration's lexical environment.
@@ -182,7 +182,33 @@ fn query_type_with_bindings(
         && !type_has_deferred_query(&ty)
         && !selecting.borrow().is_empty()
     {
-        QueryType::InstanceDependent
+        // An omitted generic value default sees preceding generic parameters.
+        // The parameter it supplies cannot be one of the inputs it waits for.
+        let visible = signature.generics.iter().take_while(|generic| {
+            super::constants::generic_default(&declaration.syntax, generic).is_none_or(|default| {
+                default.span().start > query.span().start || query.span().end > default.span().end
+            })
+        });
+        let bindings = visible
+            .map(|g| {
+                let arg = if matches!(g.kind, GenericKind::Value(_)) {
+                    Argument::Constant(Constant {
+                        text: g.name.clone(),
+                        value: ConstantValue::Parameter {
+                            name: g.name.clone(),
+                            at: g.at,
+                        },
+                    })
+                } else {
+                    Argument::Type(Type::Parameter {
+                        name: g.name.clone(),
+                        at: g.at,
+                    })
+                };
+                (g.at, arg)
+            })
+            .collect();
+        QueryType::InstanceDependent(bindings)
     } else if has_unknown || type_has_deferred_query(&ty) {
         QueryType::Unresolved
     } else {
@@ -859,7 +885,7 @@ fn evaluate_deferred_declared(
                 None
             },
         );
-        depends_on_instance |= matches!(result, QueryType::InstanceDependent);
+        depends_on_instance |= matches!(result, QueryType::InstanceDependent(_));
         constants.remember_type(query_at, result);
     }
     let generics = match declaration.and_then(|decl| module.details.get(decl)) {
@@ -887,43 +913,11 @@ fn evaluate_deferred_declared(
         constants: &constants,
     };
     let read = crate::constant::read(&node, expected, &scope);
-    let operand = crate::syntax::ungrouped(node);
     match read {
         Ok(value) if crate::constant::worked_out(&value) && !has_deferred_type_query(&value) => {
+            pass.instance_dependent |= depends_on_instance;
             pass.resolved = true;
             value
-        }
-        Ok(_)
-            if depends_on_instance
-                && operand.kind() == SyntaxKind::TypeOfExpr
-                && !generics.is_empty() =>
-        {
-            pass.instance_dependent = true;
-            pass.resolved = true;
-            let bindings = generics
-                .iter()
-                .map(|g| {
-                    let arg = if matches!(g.kind, GenericKind::Value(_)) {
-                        Argument::Constant(Constant {
-                            text: g.name.clone(),
-                            value: ConstantValue::Parameter {
-                                name: g.name.clone(),
-                                at: g.at,
-                            },
-                        })
-                    } else {
-                        Argument::Type(Type::Parameter {
-                            name: g.name.clone(),
-                            at: g.at,
-                        })
-                    };
-                    (g.at, arg)
-                })
-                .collect();
-            ConstantValue::InstanceTypeQuery {
-                at: Location::new(expr_at.file, operand.span()),
-                bindings,
-            }
         }
         _ if !final_pass => ConstantValue::DeferredTypeQuery(expr_at),
         Ok(_) => {

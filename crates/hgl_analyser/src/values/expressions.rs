@@ -256,7 +256,7 @@ impl<'a> Typer<'a> {
             let ty = match &known {
                 crate::constant::QueryType::Resolved(resolved) => resolved.clone(),
                 crate::constant::QueryType::Reported
-                | crate::constant::QueryType::InstanceDependent
+                | crate::constant::QueryType::InstanceDependent(_)
                 | crate::constant::QueryType::Unresolved => Type::Unknown,
             };
             return (ty, known);
@@ -316,7 +316,7 @@ impl<'a> Typer<'a> {
         let value_ty = match &result {
             crate::constant::QueryType::Resolved(resolved) => resolved.clone(),
             crate::constant::QueryType::Reported
-            | crate::constant::QueryType::InstanceDependent
+            | crate::constant::QueryType::InstanceDependent(_)
             | crate::constant::QueryType::Unresolved => Type::Unknown,
         };
         (value_ty, result)

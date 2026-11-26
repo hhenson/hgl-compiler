@@ -331,3 +331,21 @@ test specific_candidate_field_layout {
     assert specific.label.value == 5
     assert type(base.label) != type(specific.label)
 }
+
+# GEN-8, TYPE-18: an omitted Type argument is evaluated with the generic
+# arguments inferred from the call, including through a generic caller.
+const fn default_kind<T, const Kind: Type = type(cold_sample(cold_make<T>()))>(x: T) -> Type => Kind
+const fn forwarded_default<T>(x: T) -> Type => default_kind(x)
+struct DefaultLabel<T, const Kind: Type = type(cold_sample(cold_make<T>()))> {
+    item: T
+    label: Tagged<Kind>?
+}
+test default_selected_in_instance {
+    assert default_kind(3) == type(1)
+    assert default_kind("text") == type(true)
+    assert default_kind<str, type(1)>("text") == type(1)
+    assert forwarded_default("text") == type(true)
+    let selected = DefaultLabel(item: "text")
+    assert type(selected) == type(DefaultLabel<str, type(true)>(item: "text"))
+    assert type(selected) != type(DefaultLabel<str, type(1)>(item: "text"))
+}

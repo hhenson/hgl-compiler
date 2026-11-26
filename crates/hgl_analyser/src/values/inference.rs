@@ -278,7 +278,8 @@ impl<'a> Typer<'a> {
             let expected = type_of(index, found);
             match self.unfit_default(declaration, &default, &expected, declared) {
                 Some(Ok(value)) => {
-                    let Some(value) = defaulted_value(value, index, &own, found) else {
+                    let Some(value) = defaulted_value(self.program, value, index, &own, found)
+                    else {
                         found[index] = None;
                         continue;
                     };
@@ -1051,7 +1052,8 @@ impl<'a> Typer<'a> {
         for (index, default) in defaults.iter().enumerate() {
             if found[index].is_none()
                 && let Some(default) = default
-                && let Some(value) = defaulted_value(default.value.clone(), index, &own, &found)
+                && let Some(value) =
+                    defaulted_value(self.program, default.value.clone(), index, &own, &found)
             {
                 found[index] = Some(Argument::Constant(Constant {
                     text: default.text.clone(),
@@ -2059,11 +2061,33 @@ fn names_value_of(ty: &Type, own: &[Location]) -> bool {
 /// or one the call leaves unresolved, which gives it no value: GEN-8, "A
 /// call rejects when it leaves a generic parameter unresolved".
 fn defaulted_value(
+    program: &crate::Program,
     value: ConstantValue,
     index: usize,
     own: &[Location],
     found: &[Option<Argument>],
 ) -> Option<ConstantValue> {
+    if matches!(
+        value,
+        ConstantValue::Type(_) | ConstantValue::InstanceTypeQuery { .. }
+    ) {
+        let unavailable: Vec<_> = own
+            .iter()
+            .enumerate()
+            .filter_map(|(i, at)| {
+                (i == index || found.get(i).is_none_or(Option::is_none)).then_some(*at)
+            })
+            .collect();
+        if value.names_one_of(&unavailable) {
+            return None;
+        }
+        let map: Vec<_> = own
+            .iter()
+            .zip(found)
+            .filter_map(|(&at, given)| Some((at, given.as_ref()?)))
+            .collect();
+        return Some(program.specialize_query(&value, &map));
+    }
     // What the call gives the parameter declared at `at`: none for the
     // one whose default this is.
     let given = |at: Location| -> Option<ConstantValue> {

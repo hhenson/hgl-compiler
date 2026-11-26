@@ -100,7 +100,7 @@ pub(crate) enum QueryType {
     /// Checking the operand emitted a diagnostic (ERR-9).
     Reported,
     /// The ordinary reader deferred selecting an operator until instantiation.
-    InstanceDependent,
+    InstanceDependent(Vec<(Location, Argument)>),
     /// Checking the operand emitted no error, yet produced no resolved type.
     Unresolved,
 }
@@ -631,17 +631,23 @@ fn value(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Ty
         SyntaxKind::Literal => literal_constant(node, expected),
         SyntaxKind::TypeOfExpr => {
             let at = Location::new(scope.file, node.span());
+            let read = |known: QueryType| match known {
+                QueryType::Resolved(ty) => Ok(Typed::of(
+                    ConstantValue::Type(Box::new(ty)),
+                    Some(Type::TypeValue),
+                )),
+                QueryType::InstanceDependent(bindings) => Ok(Typed::of(
+                    scope.program.specialize_query(
+                        &ConstantValue::InstanceTypeQuery { at, bindings },
+                        scope.arguments,
+                    ),
+                    Some(Type::TypeValue),
+                )),
+                QueryType::Reported => Err(Fault::Reported),
+                QueryType::Unresolved => Ok(Typed::unevaluated(Some(Type::TypeValue))),
+            };
             if let Some(known) = scope.constants.remembered_type(at) {
-                return match known {
-                    QueryType::Resolved(ty) => Ok(Typed::of(
-                        ConstantValue::Type(Box::new(ty)),
-                        Some(Type::TypeValue),
-                    )),
-                    QueryType::Reported => Err(Fault::Reported),
-                    QueryType::Unresolved | QueryType::InstanceDependent => {
-                        Ok(Typed::unevaluated(Some(Type::TypeValue)))
-                    }
-                };
+                return read(known);
             }
             if scope.constants.defer_type_queries {
                 return Ok(Typed::of(
@@ -649,16 +655,7 @@ fn value(node: &SyntaxNode, expected: Option<&Type>, scope: &Scope) -> Result<Ty
                     Some(Type::TypeValue),
                 ));
             }
-            match crate::values::query_type(scope.program, scope.file, node) {
-                QueryType::Resolved(ty) => Ok(Typed::of(
-                    ConstantValue::Type(Box::new(ty)),
-                    Some(Type::TypeValue),
-                )),
-                QueryType::Reported => Err(Fault::Reported),
-                QueryType::Unresolved | QueryType::InstanceDependent => {
-                    Ok(Typed::unevaluated(Some(Type::TypeValue)))
-                }
-            }
+            read(crate::values::query_type(scope.program, scope.file, node))
         }
         // EXPR-1: "Parentheses select grouping": `(2.0)` is `2.0`.
         SyntaxKind::ParenExpr => match node.children().next() {
