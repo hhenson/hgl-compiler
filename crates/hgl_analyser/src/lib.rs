@@ -565,6 +565,8 @@ pub mod codes {
     /// A sequence's entries give no type, and nothing is expected
     /// of it (EXPR-9).
     pub const SEQUENCE_CONTEXT: &str = "sequence.context_type";
+    /// Two entries of a written dictionary have the same constant key (EXPR-9).
+    pub const DICT_DUPLICATE_KEY: &str = "dict.duplicate_key";
     /// Two entries of a written set are the same constant (EXPR-9).
     pub const SET_DUPLICATE_MEMBER: &str = "set.duplicate_member";
     /// A call of an operator, by symbol or by name, that no candidate
