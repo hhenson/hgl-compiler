@@ -1407,15 +1407,15 @@ pub(super) fn check_instances(
     let mut forwarding = program.callback_phase_bodies.clone();
     let mut callers = HashMap::<_, Vec<_>>::new();
     // GEN-5 and GEN-7: a call whose candidate each instance selects may
-    // select one that forwards; each candidate of its operator is called.
-    let mut candidates = HashMap::<(usize, usize), Vec<(usize, usize)>>::new();
+    // select one that forwards; keep its operator's candidates and their roles.
+    let mut candidates = HashMap::<_, Vec<_>>::new();
     for (module, unit) in program.modules.iter().enumerate() {
         for (declaration, declared) in unit.declarations.iter().enumerate() {
-            if let Some((_, Some(operator))) = declared.kind.candidate() {
+            if let Some((role, Some(operator))) = declared.kind.candidate() {
                 candidates
                     .entry((operator.module, operator.declaration))
                     .or_default()
-                    .push((module, declaration));
+                    .push((role, (module, declaration)));
             }
         }
     }
@@ -1433,8 +1433,13 @@ pub(super) fn check_instances(
             });
             for selected in unit.selecting.get(declaration).into_iter().flatten() {
                 let operator = (selected.operator.module, selected.operator.declaration);
-                for &candidate in candidates.get(&operator).into_iter().flatten() {
-                    callers.entry(candidate).or_default().push(owner);
+                for &(role, candidate) in candidates.get(&operator).into_iter().flatten() {
+                    // GEN-5: a call outside graph composition can only run a
+                    // value candidate. An unrelated temporal pack body cannot
+                    // make this declaration a forwarding body.
+                    if selected.graph || role == crate::Role::Value {
+                        callers.entry(candidate).or_default().push(owner);
+                    }
                 }
             }
         }

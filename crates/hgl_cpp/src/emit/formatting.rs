@@ -105,7 +105,7 @@ impl Emitter<'_> {
                             let Some(source) = cycle_time.as_ref() else {
                                 return self.missing(
                                     pattern.value.at,
-                                    "an {engine_time} format place without a cycle time",
+                                    "an {engine_time} format place without a lifted node's cycle context",
                                 );
                             };
                             (&mut engine_time, source.as_str())

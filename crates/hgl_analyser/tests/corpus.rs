@@ -60,18 +60,11 @@ const STATED_IN_PROSE: &[(&str, &[(usize, &str)])] = &[(
 )];
 
 /// Named specification examples that still need pending syntax or analysis.
-const PENDING_MODULES: &[(&str, &str, &str)] = &[
-    (
-        "hgl_core/spec/diagnostics.md",
-        "examples.diagnostics",
-        "DBG-1 to DBG-6 (#434, #435)",
-    ),
-    (
-        "hgl_core/spec/formatting.md",
-        "examples.formatting",
-        "FMT-6 and FMT-8 graph candidate (#434)",
-    ),
-];
+const PENDING_MODULES: &[(&str, &str, &str)] = &[(
+    "hgl_core/spec/diagnostics.md",
+    "examples.diagnostics",
+    "DBG-1 to DBG-6 (#434, #435)",
+)];
 
 /// The rejection cases of core the compiler does not yet reject, each as
 /// `(file, declaration)`, the file under `tests/conformance/`: the
