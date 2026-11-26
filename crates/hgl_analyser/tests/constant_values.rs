@@ -1133,6 +1133,28 @@ fn a_local_list_size_uses_the_resolved_value_of_a_switch_selector() {
         expect(&program(selector, label, argument), &[]);
     }
     expect(&program("INDEX - 1", "7", "0"), &["9 list.size"]);
+
+    let aliases = |initializer: &str, selector: &str| {
+        format!(
+            "const INDEX: i64 = 7\n\
+             fn measured(input: i64) -> i64 {{\n\
+                 let configured = {initializer}\n\
+                 let selected = configured\n\
+                 let count = (fn(key: i64) -> i64 {{\n\
+                     switch {selector} {{ case 7: return 3\n\
+                                         default: return input }}\n\
+                 }})(selected)\n\
+                 var held: list<i64, count>\n\
+                 return input\n\
+             }}\n"
+        )
+    };
+    for initializer in ["INDEX", "7", "INDEX + 0"] {
+        expect(&aliases(initializer, "key"), &[]);
+        expect(&aliases(initializer, "selected"), &[]);
+    }
+    expect(&aliases("INDEX - 1", "key"), &["10 list.size"]);
+    expect(&aliases("input", "key"), &["10 list.size"]);
 }
 
 /// TYPE-10 and FN-17: a static callback can still capture a connection.

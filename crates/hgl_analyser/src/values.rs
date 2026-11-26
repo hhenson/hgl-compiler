@@ -33,7 +33,7 @@
 //! it was found, and never again where it is used (ERR-9).
 
 use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Diagnostics, Location};
@@ -45,7 +45,7 @@ use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
 };
 use crate::types::{Argument, CallArguments, Detail, Scalar, Signature, Type};
-use anonymous::Anonymous;
+use anonymous::{Anonymous, ImmediateBindings};
 use control::label;
 use dependent_packs::MemberFault;
 use endpoints::endpoint_argument;
@@ -829,6 +829,9 @@ struct Typer<'a> {
     signature: &'a Signature,
     /// Absent while reading the enclosing declaration itself.
     anonymous: Option<Anonymous>,
+    /// Known immutable graph bindings needed by direct anonymous calls.
+    /// Initialized only for a graph that writes such a call.
+    graph_immediate_values: OnceCell<Option<ImmediateBindings>>,
     bindings: &'a HashMap<(FileId, u32), &'a Binding>,
     written: &'a HashMap<(FileId, u32), &'a Type>,
     /// Locations where the instance has no type for a written generic.
@@ -1153,6 +1156,7 @@ impl<'a> Typer<'a> {
             declaration,
             signature,
             anonymous: None,
+            graph_immediate_values: OnceCell::new(),
             bindings: tables.bindings,
             written: tables.written,
             absent_type_uses: None,
@@ -1466,6 +1470,13 @@ impl<'a> Typer<'a> {
                 .anonymous
                 .as_mut()
                 .and_then(|scope| scope.immediate_values.as_mut())
+            {
+                known.retain(|(local, _)| *local < mark.locals);
+            }
+            if let Some(known) = self
+                .graph_immediate_values
+                .get_mut()
+                .and_then(Option::as_mut)
             {
                 known.retain(|(local, _)| *local < mark.locals);
             }

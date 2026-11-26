@@ -531,16 +531,9 @@ impl<'a> Typer<'a> {
             _ => ValueCategory::Value,
         };
         if kind == LocalKind::Let
-            && let Some(known) = self
-                .anonymous
-                .as_mut()
-                .and_then(|scope| scope.immediate_values.as_mut())
-            && let Some(value) = value.as_ref().and_then(|value| {
-                super::lifting::ImmediateValues::new(self.program, &self.instance, known)
-                    .read(value)
-            })
+            && let Some(value) = &value
         {
-            known.push((local, std::rc::Rc::new(value)));
+            self.remember_immediate_local(local, value);
         }
         Stmt::Declare { local, value }
     }

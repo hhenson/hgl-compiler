@@ -18,10 +18,13 @@ use crate::hir::{
 };
 use crate::program::LocalKind;
 use crate::read::is_type;
-use crate::syntax::{child, tokens};
+use crate::syntax::{child, tokens, ungrouped};
 use crate::types::Type;
 
 mod flow;
+
+/// Ordinary fixed values known by an immediate call, by their lexical local.
+pub(super) type ImmediateBindings = Vec<(LocalId, Rc<Expr>)>;
 
 /// What belongs to the anonymous function currently being checked.
 #[derive(Clone, PartialEq)]
@@ -31,7 +34,7 @@ pub(super) struct Anonymous {
     /// FN-17: infer whether a complete, unwritten result exists.
     pub(super) infer_result: bool,
     /// Known ordinary values of a direct call's inputs and immutable locals.
-    pub(super) immediate_values: Option<Vec<(LocalId, Rc<Expr>)>>,
+    pub(super) immediate_values: Option<ImmediateBindings>,
     /// The first of its own locals. Earlier locals would be captures.
     pub(super) first_local: LocalId,
 }
@@ -43,6 +46,47 @@ pub(super) struct AnonymousDefinition {
 }
 
 impl Typer<'_> {
+    /// Keep an immutable value that later direct calls can read. A graph
+    /// with no such call needs no additional constant evaluation.
+    pub(super) fn remember_immediate_local(&mut self, local: LocalId, value: &Expr) {
+        if !self.graph
+            || self.type_query
+            || self.locals[local].category == ValueCategory::Connection
+        {
+            return;
+        }
+        let known = match self
+            .anonymous
+            .as_mut()
+            .and_then(|scope| scope.immediate_values.as_mut())
+        {
+            Some(known) => Some(known),
+            None => {
+                self.graph_immediate_values.get_or_init(|| {
+                    self.declaration
+                        .syntax
+                        .descendants()
+                        .any(|node| {
+                            node.kind() == SyntaxKind::CallExpr
+                                && super::calls::call_callee(&node).is_some_and(|callee| {
+                                    ungrouped(callee).kind() == SyntaxKind::FnExpr
+                                })
+                        })
+                        .then(Vec::new)
+                });
+                self.graph_immediate_values
+                    .get_mut()
+                    .and_then(Option::as_mut)
+            }
+        };
+        if let Some(known) = known
+            && let Some(value) =
+                ImmediateValues::new(self.program, &self.instance, known).read(value)
+        {
+            known.push((local, Rc::new(value)));
+        }
+    }
+
     /// A name from an enclosing scope is captured (FN-14).
     pub(super) fn is_capture(&self, local: LocalId) -> bool {
         self.anonymous
@@ -140,7 +184,9 @@ impl Typer<'_> {
                 let mut known = self
                     .anonymous
                     .as_ref()
-                    .and_then(|outer| outer.immediate_values.clone())
+                    .and_then(|outer| outer.immediate_values.as_ref())
+                    .or_else(|| self.graph_immediate_values.get().and_then(Option::as_ref))
+                    .cloned()
                     .unwrap_or_default();
                 for argument in arguments {
                     if let Some(parameter) = argument.parameter
