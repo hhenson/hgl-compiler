@@ -113,6 +113,7 @@ analyser: partial
 
 - Packs have no defaults and are not const. A fixed parameter after either pack reports `pack.order`. A named pack names a type pack of its declaration.
 - Function and operator calls bind leftover positional and named arguments to their corresponding packs and check the known element type. The HIR keeps each argument's pack slot and position or source name.
+- A native value declaration can borrow a homogeneous positional pack or capture heterogeneous positional and named endpoint packs. Reflected keys and types describe the original payloads (TIME-9).
 - A second positional pack or a second named pack in one declaration reports `pack.duplicate` at its parameter name. A declaration may have one of each kind.
 - A dependent call matches the supplied arguments to the selected callback, excluding the parameters named by `without`. A defaulted parameter is reflected and contributes no argument unless supplied.
 - Candidate inference reads the default of a `without` parameter before projecting a reflected pack. A written exclusion overrides that default (GEN-8).
@@ -299,6 +300,8 @@ parser: partial
 - Reads a pack comprehension as a primary expression.
 
 analyser: partial
+
+- In a node hook a whole temporal pack forwards borrowed views to endpoint parameters. A matched ordinary value slot requires the corresponding input read guard.
 
 - Reads a parameter pack entry by a constant name or position. The instance supplies the entry type. A missing key reports `pack.name` using its written spelling, with an instantiated generic parameter shown as the value supplied (GEN-17, UNIT-13).
 - A selected pack-key branch can read the entry's value and its member type. A projection in an untaken branch does not ask for the key (CTRL-16, GEN-17).

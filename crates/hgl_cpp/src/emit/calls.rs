@@ -249,11 +249,21 @@ impl Emitter<'_> {
                 if Some(module) != program.core() || !(self.provides)(&name) {
                     return self.missing(at, &format!("the native function `{}`", declared.name));
                 }
-                let Some(templated) = self.templated(&names::native(&name), &[], generics, at)
-                else {
-                    return "0".to_string();
+                let name = names::native(&name);
+                // TIME-9: the adapter deduces its view types from the borrows.
+                let name = if declared_signature
+                    .parameters
+                    .iter()
+                    .any(|p| matches!(p.ty, Type::Endpoint(_)))
+                {
+                    name
+                } else {
+                    let Some(name) = self.templated(&name, &[], generics, at) else {
+                        return "0".to_string();
+                    };
+                    name
                 };
-                (templated, declared_signature)
+                (name, declared_signature)
             }
             _ => return self.missing(at, "a call of a temporal function"),
         };
@@ -359,6 +369,21 @@ impl Emitter<'_> {
             };
             let parameter = &signature.parameters[index];
             if let Type::Endpoint(payload) = &parameter.ty {
+                if callee.declaration().is_some_and(|(module, declaration)| {
+                    matches!(
+                        program.modules[module].declarations[declaration].kind,
+                        DeclarationKind::NativeFunction(_)
+                    )
+                }) {
+                    let view = self.expression(scope, &argument.value);
+                    written.push((
+                        index,
+                        view,
+                        self.may_fail_here(&argument.value),
+                        Held::Value("auto".to_string()),
+                    ));
+                    continue;
+                }
                 // A hidden FN-14 capture passes the selector itself,
                 // without checking its position or reading its payload (ERR-14).
                 let value = match argument.value.kind {

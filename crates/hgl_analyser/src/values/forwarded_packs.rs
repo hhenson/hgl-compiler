@@ -87,6 +87,8 @@ pub(crate) fn defer_pack_branch_reports(
 pub(super) struct ForwardedArgument {
     /// The source pack key before binding to the destination.
     pub(super) key: PackKey,
+    /// The node's temporal input pack when forwarding its entries wholesale.
+    pub(super) input: Option<LocalId>,
     /// Where the spread's pack expression is written.
     pub(super) source: SyntaxNode,
     /// The typed read of the entry in the enclosing instance.
@@ -751,6 +753,7 @@ impl<'a> Typer<'a> {
                 let at = self.at(&source);
                 forwarded.extend(entries.iter().map(|(key, entry)| ForwardedArgument {
                     key: key.clone(),
+                    input: None,
                     source: source.clone(),
                     value: Expr {
                         kind: ExprKind::Local(*entry),
@@ -762,6 +765,7 @@ impl<'a> Typer<'a> {
                 continue;
             }
             let category = self.locals[local].category;
+            let temporal = (self.hook.is_some() && self.is_temporal_input(local)).then_some(local);
             for input in inputs
                 .values
                 .iter()
@@ -779,6 +783,7 @@ impl<'a> Typer<'a> {
                 };
                 forwarded.push(ForwardedArgument {
                     key,
+                    input: temporal,
                     source: source.clone(),
                     value,
                 });
@@ -815,7 +820,12 @@ impl<'a> Typer<'a> {
                         .push((name.text().to_string(), key.clone()));
                     self.report_pack_branch(&source);
                     let value = self.expression(&source, None);
-                    forwarded.push(ForwardedArgument { key, source, value });
+                    forwarded.push(ForwardedArgument {
+                        key,
+                        input: None,
+                        source,
+                        value,
+                    });
                     self.pack_passes.pop();
                     self.bound.truncate(before);
                 }
@@ -1264,7 +1274,9 @@ impl crate::Program {
                     },
                     &|constant| constant.value.key().is_none(),
                 );
-                let ty = if unresolved {
+                let ty = if matches!(declared.ty, Type::Endpoint(_)) {
+                    argument.value.ty.clone()
+                } else if unresolved {
                     argument
                         .value
                         .ty

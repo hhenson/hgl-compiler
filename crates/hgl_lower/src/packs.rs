@@ -250,6 +250,19 @@ impl Captures {
                 match &mut expression.kind {
                     ExprKind::Call { callee, .. } => remap_captures(callee),
                     ExprKind::StaticCallable(callee) => remap_captures(callee),
+                    // FN-19: remap a borrowed entry to the endpoint of the
+                    // expanded temporal formal, without a payload read.
+                    ExprKind::ChildEndpointOf(inner)
+                        if matches!(inner.kind, ExprKind::PackEntry { .. }) =>
+                    {
+                        if let ExprKind::PackEntry { pack, key } = &inner.kind
+                            && let Some(local) = entry(*pack, key)
+                        {
+                            expression.kind = ExprKind::EndpointOf(local);
+                        } else {
+                            unsupported.get_or_insert(expression.at);
+                        }
+                    }
                     ExprKind::PackEntry { pack, key } => {
                         if let Some(local) = entry(*pack, key) {
                             expression.kind = ExprKind::Local(local);

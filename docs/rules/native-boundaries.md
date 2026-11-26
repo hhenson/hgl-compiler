@@ -55,7 +55,7 @@ transpiler: partial
 analyser: partial
 
 - A native value function's contract injects nothing (`node.in_value_function`, with FN-9)
-- Left: borrowed access stated in the contract; a scalar parameter gains no endpoint privilege
+- Fixed and packed endpoint parameters borrow hook inputs. An ordinary parameter receives a payload and follows the same read checks as ordinary HGL code (FN-8, TIME-9).
 
 ## NATIVE-6
 

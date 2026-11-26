@@ -1643,7 +1643,10 @@ impl<'a> Typer<'a> {
             .map(|parameter| Slot {
                 name: &parameter.name,
                 configuration: parameter.configuration,
-                ty: Type::Unknown,
+                ty: match &parameter.ty {
+                    Type::Endpoint(_) => Type::Endpoint(Box::new(Type::Unknown)),
+                    _ => Type::Unknown,
+                },
                 required: required(parameter),
                 pack: parameter.pack,
                 pack_bounds: read_pack_bounds(parameter, written_pack.as_ref()),
@@ -1701,6 +1704,11 @@ impl<'a> Typer<'a> {
                                 written.and_then(|pack| pack.types.get(position))
                             {
                                 ty.clone()
+                            } else if matches!(parameter.ty, Type::Endpoint(_)) {
+                                match &argument.value.ty {
+                                    Type::Endpoint(payload) => payload.as_ref().clone(),
+                                    _ => Type::Unknown,
+                                }
                             } else if evaluating {
                                 trace_pack_type(&argument.value.ty)
                                     .cloned()
@@ -1716,7 +1724,12 @@ impl<'a> Typer<'a> {
                         })
                         .collect();
                     let mut pack = hir::TypePackArgument::keyed(index, entries);
-                    pack.infer_from_arguments = self.graph
+                    let deferred_borrow = arguments.iter().any(|argument| {
+                        argument.parameter == Some(slot)
+                            && matches!(&argument.value.kind, ExprKind::ChildEndpointOf(entry)
+                                if matches!(entry.kind, ExprKind::DeferredPackRead))
+                    });
+                    pack.infer_from_arguments = (self.graph || deferred_borrow)
                         && !self.signature.generics.is_empty()
                         && !evaluating
                         && written.is_none()
@@ -2304,10 +2317,11 @@ impl<'a> Typer<'a> {
                 }
                 for (ty, argument) in pack.types.iter_mut().zip(captured) {
                     if !whole(ty) {
-                        fill_type(
-                            ty,
-                            self.inferred_from(listed, &argument.value, Takes::Parameters),
-                        );
+                        let actual = match &argument.value.ty {
+                            Type::Endpoint(payload) => payload.as_ref().clone(),
+                            _ => self.inferred_from(listed, &argument.value, Takes::Parameters),
+                        };
+                        fill_type(ty, actual);
                     }
                 }
             }

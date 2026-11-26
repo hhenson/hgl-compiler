@@ -3734,3 +3734,45 @@ fn type_queries_of_untyped_primitive_calls_decline_cleanly() {
         );
     }
 }
+
+/// FN-8, FN-19, TIME-9: each native pack entry receives its own
+/// endpoint view, in binding order, even when the node admits invalid inputs.
+#[test]
+fn native_endpoint_packs_expand_to_views() {
+    let made = emit_with(
+        &[
+            (
+                "inspect.hgl",
+                r#"module core part inspection
+export native const fn inspect_views<...As, ...Ks>(
+    const label: str, args: ...endpoint<As>, kwargs: ...{endpoint<Ks>}) -> i64"#,
+            ),
+            (
+                "quote.hgl",
+                r#"module quote
+fn pass<...As, ...Ks>(args: ...As, kwargs: ...{Ks}) -> i64 {
+    when valid([]) { return inspect_views("quote", ...args, ...kwargs) }
+}
+fn quote(px: i64, bid: str) -> i64 => pass(px, 7.0, side: bid)
+test views { assert eval quote(px: [7], bid: ["bid"]) == [1] }"#,
+            ),
+        ],
+        &|name| name == "fn_inspect_views" || hgl_cpp::runtime::provides(name),
+    );
+    assert_eq!(made.blocked("views"), None, "{:?}", made.reported);
+    let unit = made
+        .output
+        .files
+        .iter()
+        .find(|f| f.path == "modules/mod-quote.cpp")
+        .unwrap();
+    let call = unit
+        .text
+        .lines()
+        .find(|line| line.contains("::hglrt::fn_inspect_views("))
+        .unwrap();
+    for name in ["pack_0_0", "pack_0_1", "pack_1_0_side"] {
+        assert!(call.contains(name), "{call}");
+    }
+    assert!(!call.contains("checked_value"), "{call}");
+}
