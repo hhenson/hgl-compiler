@@ -194,6 +194,8 @@ pub mod codes {
     pub const PROPERTY_DUPLICATE: &str = "property.duplicate";
     /// A candidate declares a fixed parameter in its operator's pack slot (GEN-6).
     pub const IMPL_PACK: &str = "impl.pack";
+    /// A candidate disagrees with a parameter in its operator's declaration (GEN-6).
+    pub const IMPL_PARAMETER: &str = "impl.parameter";
     /// A candidate's result disagrees with its operator's result for its parameters (GEN-6).
     pub const IMPL_RESULT: &str = "impl.result";
     /// A candidate's parameter types fall outside its operator's stated type set (GEN-6).
