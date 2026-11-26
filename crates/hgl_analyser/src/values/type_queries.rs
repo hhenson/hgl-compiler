@@ -182,12 +182,30 @@ fn query_type_with_bindings(
         && !type_has_deferred_query(&ty)
         && !selecting.borrow().is_empty()
     {
-        // An omitted generic value default sees preceding generic parameters.
-        // The parameter it supplies cannot be one of the inputs it waits for.
-        let visible = signature.generics.iter().take_while(|generic| {
-            super::constants::generic_default(&declaration.syntax, generic).is_none_or(|default| {
-                default.span().start > query.span().start || query.span().end > default.span().end
+        // Capture only parameters used by the operand. The argument taking
+        // this default is not an input unless the default actually names it.
+        let used: HashSet<_> = module
+            .uses
+            .iter()
+            .filter_map(|used| {
+                if used.at.file != file
+                    || used.at.span.start < query.span().start
+                    || query.span().end < used.at.span.end
+                {
+                    return None;
+                }
+                match &used.binding {
+                    Binding::Local { at, .. } => Some(*at),
+                    _ => None,
+                }
             })
+            .collect();
+        let visible = signature.generics.iter().filter(|generic| {
+            used.contains(&generic.at)
+                || signature.parameters.iter().any(|parameter| {
+                    used.contains(&parameter.at)
+                        && super::inference::mentions(&parameter.ty, &[generic.at])
+                })
         });
         let bindings = visible
             .map(|g| {
