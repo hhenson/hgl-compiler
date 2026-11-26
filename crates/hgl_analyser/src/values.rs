@@ -520,6 +520,7 @@ pub(crate) struct InstanceSites {
 }
 
 type Site = ((FileId, u32), usize);
+type GuardedPackFaults = HashMap<(FileId, u32), (Location, MemberFault)>;
 
 impl InstanceSites {
     fn new(module: &Module) -> Self {
@@ -805,7 +806,7 @@ struct Typer<'a> {
     /// Locations where the instance has no type for a written generic.
     absent_type_uses: Option<&'a HashMap<(FileId, u32), Location>>,
     /// Written pack lookups reported only when their guard selects them (CTRL-16).
-    guarded_pack_faults: Option<&'a HashMap<(FileId, u32), (Location, MemberFault)>>,
+    guarded_pack_faults: Option<&'a GuardedPackFaults>,
     /// The generic arguments each call writes, by where its callee
     /// starts (GEN-8).
     calls: &'a HashMap<(FileId, u32), &'a CallArguments>,
