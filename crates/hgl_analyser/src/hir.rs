@@ -81,6 +81,7 @@ impl DefaultExpr {
     /// Cold Type queries also need their existing instance-specific read.
     pub fn needs_contextual_specialization(&self, expected: &Type) -> bool {
         self.needs_type_specialization()
+            || self.has_deferred_pack_condition()
             || matches!(
                 self.value.kind,
                 ExprKind::Sequence(_) | ExprKind::Tuple(_) | ExprKind::Pairs(_)
@@ -131,6 +132,31 @@ impl DefaultExpr {
         self.value
             .walk(&mut |value| found = found || depends(value));
         found
+    }
+
+    /// CTRL-16 and UNIT-8: a pack guard in an omitted default needs the
+    /// concrete keys of the call, including inside an anonymous value.
+    pub(crate) fn has_deferred_pack_condition(&self) -> bool {
+        fn find(value: &Expr, pending: &mut bool) {
+            if *pending {
+                return;
+            }
+            let callee = match &value.kind {
+                ExprKind::DeferredPackCondition => {
+                    *pending = true;
+                    return;
+                }
+                ExprKind::Call { callee, .. } => callee,
+                ExprKind::StaticCallable(callee) => callee.as_ref(),
+                _ => return,
+            };
+            if let Callee::Anonymous(function) = callee {
+                walk_statements(&function.body.statements, &mut |value| find(value, pending));
+            }
+        }
+        let mut pending = false;
+        self.value.walk(&mut |value| find(value, &mut pending));
+        pending
     }
 
     /// Treat the expression as a body for specialization and analysis of its locals.

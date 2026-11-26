@@ -66,6 +66,7 @@ pub(super) fn check(
 struct Defaults {
     seen: Vec<DefaultUse>,
     pending: Vec<Expr>,
+    pack_conditions_only: bool,
 }
 
 #[derive(PartialEq)]
@@ -83,8 +84,38 @@ fn check_expression(
     made: &mut Vec<Made>,
     diagnostics: &mut Diagnostics,
 ) {
-    let mut defaults = Defaults::default();
+    follow_defaults(program, value, made, diagnostics, Defaults::default());
+}
+
+/// A call first resolved in a forwarded pack body can omit a pack-guarded
+/// default. Ordinary default checking retains its existing traversal.
+pub(super) fn check_forwarded_default(
+    program: &Program,
+    value: &Expr,
+    made: &mut Vec<Made>,
+    diagnostics: &mut Diagnostics,
+) {
+    follow_defaults(
+        program,
+        value,
+        made,
+        diagnostics,
+        Defaults {
+            pack_conditions_only: true,
+            ..Defaults::default()
+        },
+    );
+}
+
+fn follow_defaults(
+    program: &Program,
+    value: &Expr,
+    made: &mut Vec<Made>,
+    diagnostics: &mut Diagnostics,
+    mut defaults: Defaults,
+) {
     defaults.visit(program, value, diagnostics);
+    defaults.pack_conditions_only = false;
     while let Some(default) = defaults.pending.pop() {
         concrete_default_calls(program, &default, made);
         default.walk(&mut |value| defaults.visit(program, value, diagnostics));
@@ -102,8 +133,8 @@ impl Defaults {
                         .iter()
                         .any(|argument| argument.parameter == Some(slot))
                 };
-                check_declared_defaults(program, self, callee, supplied, diagnostics);
-                check_inherited_defaults(program, self, callee, supplied, diagnostics);
+                check_declared_defaults(program, self, (callee, value.at), supplied, diagnostics);
+                check_inherited_defaults(program, self, (callee, value.at), supplied, diagnostics);
             }
             ExprKind::StaticCallable(callee)
                 if let Callee::Anonymous(function) = callee.as_ref() =>
@@ -231,7 +262,7 @@ pub(super) fn check_instance(
 fn check_declared_defaults(
     program: &Program,
     checking: &mut Defaults,
-    callee: &Callee,
+    (callee, at): (&Callee, Location),
     supplied: impl Fn(usize) -> bool,
     diagnostics: &mut Diagnostics,
 ) {
@@ -283,7 +314,7 @@ fn check_declared_defaults(
         checking.specialize(
             program,
             (owner, generics, callee.type_packs()),
-            (default, &concrete),
+            (default, &concrete, at),
             diagnostics,
         );
     }
@@ -293,7 +324,7 @@ fn check_declared_defaults(
 fn check_inherited_defaults(
     program: &Program,
     checking: &mut Defaults,
-    callee: &Callee,
+    (callee, at): (&Callee, Location),
     supplied: impl Fn(usize) -> bool,
     diagnostics: &mut Diagnostics,
 ) {
@@ -351,7 +382,7 @@ fn check_inherited_defaults(
         checking.specialize(
             program,
             (*operator, operator_generics, &packs),
-            (default, &concrete),
+            (default, &concrete, at),
             diagnostics,
         );
     }
@@ -363,16 +394,30 @@ impl Defaults {
         &mut self,
         program: &Program,
         (owner, generics, type_packs): ((usize, usize), &[Argument], &[hir::TypePackArgument]),
-        (default, parameter): (&hir::DefaultExpr, &Parameter),
+        (default, parameter, at): (&hir::DefaultExpr, &Parameter, Location),
         diagnostics: &mut Diagnostics,
     ) {
-        let type_packs = if default.needs_type_specialization() {
+        let pack_condition = default.has_deferred_pack_condition();
+        if self.pack_conditions_only && !pack_condition {
+            return;
+        }
+        let type_packs = if pack_condition || default.needs_type_specialization() {
             // A generic caller can forward its own parameters here. Its
             // concrete call will visit this default with the chosen types.
-            if !generics
-                .iter()
-                .all(super::requirements::resolved_default_argument)
-            {
+            if !generics.iter().enumerate().all(|(index, argument)| {
+                if pack_condition
+                    && let Some(pack) = type_packs.iter().find(|pack| pack.parameter == index)
+                {
+                    // The type argument slot is a placeholder. The pack
+                    // carries the resolved keys, including an empty pack.
+                    return !pack.infer_from_arguments
+                        && pack.forwarded_from.is_none()
+                        && pack
+                            .types_with_prefix()
+                            .all(|ty| whole(ty) && !names_parameter(ty));
+                }
+                super::requirements::resolved_default_argument(argument)
+            }) {
                 return;
             }
             type_packs
@@ -405,8 +450,14 @@ impl Defaults {
             });
         }
         for report in reports.as_slice() {
-            if !diagnostics.as_slice().contains(report) {
-                diagnostics.emit(report.clone());
+            let mut report = report.clone();
+            if pack_condition {
+                let selected = report.primary;
+                report.primary = at;
+                report = report.with_related(selected, "in the selected arm of the default");
+            }
+            if !diagnostics.as_slice().contains(&report) {
+                diagnostics.emit(report);
             }
         }
         if !reports.has_errors() {
@@ -424,6 +475,7 @@ fn dependent_default(parameter: &Parameter, default: &hir::DefaultExpr) -> bool 
         || crate::constant::type_has_instance_query(&parameter.ty)
         || reads_generic_value(default)
         || default.needs_type_specialization()
+        || default.has_deferred_pack_condition()
 }
 
 fn reads_generic_value(default: &hir::DefaultExpr) -> bool {

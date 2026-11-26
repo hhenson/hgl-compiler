@@ -53,7 +53,9 @@ use crate::program::{Binding, DeclarationKind, Program, Role};
 use crate::read::{default_of, parameters};
 use crate::syntax::pack_key_branches;
 use crate::types::{Detail, Type};
-use crate::values::{ForwardingInstance, has_forwarded_calls};
+use crate::values::{
+    ForwardingInstance, ParameterDefaultRead, has_forwarded_calls, reread_parameter_default,
+};
 use crate::{codes, error};
 use callbacks::CallbackUses;
 
@@ -563,10 +565,22 @@ fn parts_of(
             _ => {
                 for (parameter, default) in defaults.iter().enumerate() {
                     if let Some(default) = default {
-                        parts.push((
-                            Part::Default(declared, parameter),
-                            gather(&[&default.value], packs),
-                        ));
+                        // CTRL-16 omits unchecked arms from the default's
+                        // HIR. UNIT-8 still counts their written calls, so
+                        // recover edges without publishing trial reports.
+                        let lexical = if default.has_deferred_pack_condition() {
+                            reread_parameter_default(
+                                program,
+                                declared,
+                                default,
+                                ParameterDefaultRead::LexicalDependencies,
+                                &mut Diagnostics::new(),
+                            )
+                        } else {
+                            None
+                        };
+                        let value = &lexical.as_ref().unwrap_or(default).value;
+                        parts.push((Part::Default(declared, parameter), gather(&[value], packs)));
                     }
                 }
             }

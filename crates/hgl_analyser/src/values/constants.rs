@@ -6,6 +6,7 @@
 //! comes to is worked out by [`crate::constant`].
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
@@ -14,13 +15,15 @@ use hgl_source::FileId;
 use super::expressions::written_null;
 use super::fit::{not_null, whole};
 use super::inference::placed;
-use super::{Tables, Typer, tables};
+use super::{InstanceSites, PackInputs, PackTypes, Tables, Typer, sites_in, tables};
 use crate::constant::{Fault, Scope, Typed};
 use crate::declared::{names_parameter, substitute_within};
-use crate::hir::{Body, Callee, DefaultExpr, Expr, ExprKind, Value, walk_statements_mut};
+use crate::hir::{
+    Body, Callee, DefaultExpr, Expr, ExprKind, TypePackArgument, Value, walk_statements_mut,
+};
 use crate::program::{Declaration, Program, Role};
 use crate::read::{default_of, parameters};
-use crate::syntax::{child, name_token, tokens};
+use crate::syntax::{child, name_token, pack_key_branches, tokens};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, Field, FieldRef, GenericKind,
     GenericParameter, Parameter, Signature, StructType, Type,
@@ -741,15 +744,26 @@ impl<'a> Typer<'a> {
     }
 }
 
-/// TYPE-18, UNIT-7: a cold query in an omitted default must select its
-/// operand with the defining callable's concrete generic arguments.
-/// Reuse the default reader so no formal argument enters that scope.
+/// Read a default in its definition, for an omission or for cycle detection.
+pub(crate) enum ParameterDefaultRead<'a> {
+    /// An omission supplies the concrete generics and the selected place.
+    Specialization {
+        arguments: &'a [Argument],
+        type_packs: &'a [TypePackArgument],
+        project: &'a dyn Fn(&Type) -> Type,
+    },
+    /// An untaken arm still contributes the dependencies it writes (UNIT-8).
+    LexicalDependencies,
+}
+
+/// UNIT-7: reuse the default's defining scope without any formal arguments.
+/// CTRL-16 selects an arm for a concrete omission. UNIT-8 reads both arms
+/// to find lexical dependencies independently of that selection.
 pub(crate) fn reread_parameter_default(
     program: &Program,
     (module, declaration): (usize, usize),
-    arguments: &[Argument],
     default: &DefaultExpr,
-    project: &dyn Fn(&Type) -> Type,
+    reading: ParameterDefaultRead<'_>,
     diagnostics: &mut Diagnostics,
 ) -> Option<DefaultExpr> {
     let owner = &program.modules[module];
@@ -769,6 +783,18 @@ pub(crate) fn reread_parameter_default(
                     && default.value.at.span.start < span.end)
                     .then_some((index, initialized))
             })?;
+    let identity: &dyn Fn(&Type) -> Type = &Type::clone;
+    let no_arguments: &[Argument] = &[];
+    let no_packs: &[TypePackArgument] = &[];
+    let lexical = matches!(reading, ParameterDefaultRead::LexicalDependencies);
+    let (arguments, type_packs, project) = match reading {
+        ParameterDefaultRead::Specialization {
+            arguments,
+            type_packs,
+            project,
+        } => (arguments, type_packs, project),
+        ParameterDefaultRead::LexicalDependencies => (no_arguments, no_packs, identity),
+    };
     let map: Vec<_> = read
         .generics
         .iter()
@@ -782,20 +808,54 @@ pub(crate) fn reread_parameter_default(
         ty: project(&read.parameters[index].ty),
         ..read.parameters[index].clone()
     }];
-    let (bindings, mut written, mut calls) = tables(owner);
     let span = initialized.span();
     let within =
         |(file, start)| file == default.value.at.file && (span.start..span.end).contains(&start);
-    let types: Vec<_> = written
+    let fallback;
+    let sites = if let Some(sites) = program.instance_sites.get(module) {
+        sites
+    } else {
+        fallback = InstanceSites::new(owner);
+        &fallback
+    };
+    let bindings = sites_in(&sites.bindings, declared)
         .iter()
-        .filter(|&(&at, _)| within(at))
-        .map(|(&at, ty)| (at, project(ty)))
+        .map(|&(at, index)| (at, &owner.uses[index].binding))
         .collect();
-    written.extend(types.iter().map(|(at, ty)| (*at, ty)));
-    let applied_calls: Vec<_> = calls
+    let packs = PackTypes::new(&signature.generics, type_packs);
+    let guarded: Vec<_> = if type_packs.is_empty() {
+        Vec::new()
+    } else {
+        pack_key_branches(&initialized)
+            .map(|arm| arm.span())
+            .collect()
+    };
+    let mut guarded_pack_faults = HashMap::new();
+    let mut project_written = |key: (FileId, u32), at: Location, ty: &Type| {
+        if guarded
+            .iter()
+            .any(|arm| arm.start <= at.span.start && at.span.end <= arm.end)
+            && let Err(fault) = packs.project(ty, &map)
+        {
+            guarded_pack_faults.entry(key).or_insert((at, fault));
+            return Type::Unknown;
+        }
+        project(ty)
+    };
+    let types: Vec<_> = sites_in(&sites.written, declared)
         .iter()
-        .filter(|&(&at, _)| within(at))
-        .map(|(&at, call)| {
+        .filter(|&&(at, _)| within(at))
+        .map(|&(key, index)| {
+            let written = &owner.written[index];
+            (key, project_written(key, written.at, &written.ty))
+        })
+        .collect();
+    let written = types.iter().map(|(at, ty)| (*at, ty)).collect();
+    let applied_calls: Vec<_> = sites_in(&sites.calls, declared)
+        .iter()
+        .filter(|&&(at, _)| within(at))
+        .map(|&(at, index)| {
+            let call = &owner.call_arguments[index];
             (
                 at,
                 CallArguments {
@@ -803,11 +863,13 @@ pub(crate) fn reread_parameter_default(
                     arguments: call
                         .arguments
                         .iter()
-                        .map(|(at, argument)| {
+                        .map(|(location, argument)| {
                             (
-                                *at,
+                                *location,
                                 match argument {
-                                    Argument::Type(ty) => Argument::Type(project(ty)),
+                                    Argument::Type(ty) => {
+                                        Argument::Type(project_written(at, *location, ty))
+                                    }
                                     _ => crate::instance::placed(argument, &map),
                                 },
                             )
@@ -817,7 +879,7 @@ pub(crate) fn reread_parameter_default(
             )
         })
         .collect();
-    calls.extend(applied_calls.iter().map(|(at, call)| (*at, call)));
+    let calls = applied_calls.iter().map(|(at, call)| (*at, call)).collect();
     let selecting = RefCell::new(Vec::new());
     let mut typer = Typer::bare(
         program,
@@ -836,6 +898,16 @@ pub(crate) fn reread_parameter_default(
         .iter()
         .map(|(at, argument)| (*at, (*argument).clone()))
         .collect();
+    typer.lexical_default_dependencies = lexical;
+    typer.guarded_pack_faults = Some(&guarded_pack_faults);
+    if !type_packs.is_empty() {
+        // UNIT-7: the types and keys are visible, but the formal pack's
+        // values are still out of scope.
+        typer.pack_inputs = Some(PackInputs {
+            values: &[],
+            types: &packs,
+        });
+    }
     typer.defaults().pop().flatten()
 }
 

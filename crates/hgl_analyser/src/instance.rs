@@ -219,7 +219,8 @@ impl Program {
 
     /// Places a default in its defining callable's scope and fits it
     /// against the selected parameter type (UNIT-7, UNIT-8). A cold type
-    /// query also receives the call's bound type packs (GEN-10, TYPE-18).
+    /// query or pack-key guard receives the call's bound type packs
+    /// (GEN-10, TYPE-18, CTRL-16).
     pub fn specialize_parameter_default(
         &self,
         default: &DefaultExpr,
@@ -282,9 +283,12 @@ impl Program {
             crate::values::reread_parameter_default(
                 self,
                 operator,
-                generics,
                 default,
-                &|ty| instance.project(ty),
+                crate::values::ParameterDefaultRead::Specialization {
+                    arguments: generics,
+                    type_packs,
+                    project: &|ty| instance.project(ty),
+                },
                 &mut reports.borrow_mut(),
             )
             .unwrap_or_else(|| default.clone())

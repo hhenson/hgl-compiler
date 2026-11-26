@@ -1758,6 +1758,23 @@ pub(super) fn check_instances(
                             ),
                             Some(here.clone()),
                         );
+                        let mut default_reports = hgl_diagnostics::Diagnostics::new();
+                        super::operator_defaults::check_forwarded_default(
+                            program,
+                            value,
+                            discovered,
+                            &mut default_reports,
+                        );
+                        if !default_reports.as_slice().is_empty() {
+                            let path: Vec<_> = via.calls().cloned().collect();
+                            for report in default_reports.as_slice() {
+                                emit_instance_report(
+                                    report.clone(),
+                                    std::slice::from_ref(&path),
+                                    diagnostics,
+                                );
+                            }
+                        }
                         super::requirements::made_forwarded_callee(
                             callee,
                             child.constants.clone(),

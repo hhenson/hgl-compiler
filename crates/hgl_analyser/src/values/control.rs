@@ -439,7 +439,9 @@ impl<'a> Typer<'a> {
         };
         let otherwise = parts.next();
         let guard = ungrouped(condition.clone());
-        let selected = if guard.kind() == SyntaxKind::PackKeyMembership {
+        let selected = if self.lexical_default_dependencies {
+            None
+        } else if guard.kind() == SyntaxKind::PackKeyMembership {
             let (kind, _) = self.pack_key_membership(&guard);
             match kind {
                 ExprKind::Literal(hir::Value::Bool(selected)) => Some(selected),

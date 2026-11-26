@@ -51,7 +51,7 @@ use dependent_packs::MemberFault;
 use endpoints::endpoint_argument;
 
 pub(crate) use candidates::{Selecting, select_in_instance};
-pub(crate) use constants::{generic_default, reread_parameter_default};
+pub(crate) use constants::{ParameterDefaultRead, generic_default, reread_parameter_default};
 pub(crate) use lifting::record;
 
 // The bodies of anonymous functions and their direct calls (FN-7, FN-14).
@@ -1019,6 +1019,8 @@ struct Typer<'a> {
     const_inputs: Vec<(Location, Expr)>,
     /// Concrete value and type pack entries of the enclosing instance.
     pack_inputs: Option<PackInputs<'a>>,
+    /// UNIT-8 reads dependency edges from both arms of a parameter default.
+    lexical_default_dependencies: bool,
     /// Compile-time callbacks available to forwarded calls.
     pack_functions: Vec<(usize, hir::Callee)>,
     /// Active computed-pack passes, from the outermost to the current one.
@@ -1209,6 +1211,7 @@ impl<'a> Typer<'a> {
             instance: Vec::new(),
             const_inputs: Vec::new(),
             pack_inputs: None,
+            lexical_default_dependencies: false,
             pack_functions: Vec::new(),
             pack_passes: Vec::new(),
             bound_packs: HashMap::new(),

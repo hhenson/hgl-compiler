@@ -85,3 +85,22 @@ test only_the_selected_branch_assigns {
 test an_untaken_branch_contributes_no_constant_cycle {
     assert acyclic == 7
 }
+
+const fn quote<...Ps>{price: i64 = if first_key in arg_keys(Ps) { 11 } else { 7 }}(items: ...Ps) -> i64 => price
+const fn relay<...Ps>(items: ...Ps) -> i64 => quote(...items)
+const fn named_quote<const Key: str = "discount", ...Ps>{
+    price: i64 = if Key in arg_keys(Ps) { 11 } else { 7 }
+}(items: ...{Ps}) -> i64 => price
+const fn ordinary_quote<...Ps>(price: i64 = if first_key in arg_keys(Ps) { "wrong" } else { 7 }, items: ...Ps) -> i64 => price
+
+test omitted_defaults_choose_their_pack_arm {
+    assert ordinary_quote() == 7
+    assert ordinary_quote(23) == 23
+    assert quote() == 7
+    assert quote(true) == 11
+    assert quote{price: 23}(true) == 23
+    assert relay() == 7
+    assert relay(true) == 11
+    assert named_quote(other: true) == 7
+    assert named_quote(discount: true) == 11
+}

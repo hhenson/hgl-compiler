@@ -106,6 +106,78 @@ fn an_omitted_default_fits_the_concrete_parameter_type() {
     );
 }
 
+/// CTRL-16 and UNIT-8: only an omitted default reads the selected pack arm.
+/// Report a rejected arm at the call that supplies its keys (GEN-7).
+#[test]
+fn an_omitted_default_checks_the_pack_arm_at_the_making_call() {
+    let defaults = concat!(
+        "const First: i64 = 0\n",
+        "const fn price<...Ps>(value: i64 = if First in arg_keys(Ps) { 11 } else { \"wrong\" }, items: ...Ps) -> i64 => value\n",
+        "const fn config<...Ps>{value: i64 = if First in arg_keys(Ps) { 11 } else { \"wrong\" }}(items: ...Ps) -> i64 => value\n",
+        "const fn forward<...Ps>(items: ...Ps) -> i64 => config(...items)\n",
+    );
+    let accepted = module(&format!(
+        "{defaults}\
+         const fn explicit() -> i64 => price(23)\n\
+         const fn selected() -> i64 => config(true) + forward(true)\n"
+    ));
+    assert!(accepted.summary().is_empty(), "{}", accepted.report);
+    let rejected = module(&format!(
+        "{defaults}\
+         const fn direct() -> i64 => price()\n\
+         const fn nested() -> i64 => forward()\n"
+    ));
+    assert_eq!(
+        rejected.summary(),
+        [
+            "m.hgl:6:29 type/type.mismatch EXPR-5",
+            "m.hgl:7:29 type/type.mismatch EXPR-5",
+        ],
+        "{}",
+        rejected.report
+    );
+    assert!(
+        rejected
+            .report
+            .contains("in the selected arm of the default")
+    );
+}
+
+/// UNIT-8: the omitted default's dependency cycle reads even an arm
+/// absent in every making instance. A call giving the argument is safe.
+#[test]
+fn a_pack_guarded_default_keeps_its_written_dependencies() {
+    let checked = module(concat!(
+        "const First: i64 = 0\n",
+        "const fn price<...Ps>(value: i64 = if First in arg_keys(Ps) { relay() } else { 7 }, items: ...Ps) -> i64 => value\n",
+        "const fn relay() -> i64 => price()\n",
+        "const fn safe<...Ps>(value: i64 = if First in arg_keys(Ps) { safe(3) } else { 7 }, items: ...Ps) -> i64 => value\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:36 name/default.cycle UNIT-8"],
+        "{}",
+        checked.report
+    );
+    assert!(checked.report.contains("through `relay`"));
+}
+
+/// UNIT-7: a selected pack arm still has no formal argument in scope.
+#[test]
+fn a_selected_default_arm_cannot_read_a_formal_argument() {
+    let checked = module(concat!(
+        "const First: i64 = 0\n",
+        "const fn price<...Ps>{value: i64 = if First in arg_keys(Ps) { formal } else { 7 }}(formal: i64, items: ...Ps) -> i64 => value\n",
+        "const fn invalid() -> i64 => price(23, true)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:30 name/default.formal_argument UNIT-7"],
+        "{}",
+        checked.report
+    );
+}
+
 /// UNIT-8 and EXPR-5: an aggregate literal takes the omitted parameter's
 /// instantiated element types, rather than keeping its declaration-time i64s.
 #[test]
