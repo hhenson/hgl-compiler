@@ -3274,7 +3274,7 @@ pub(super) fn instances_hold(
                     (&made.generics, &made.answers),
                     inputs,
                     &mut instance_calls,
-                    diagnostics,
+                    (diagnostics, &|| chain.paths(program, &root_calls)),
                     &mut body_reports,
                 )
             } else if recheck_graph
@@ -3888,6 +3888,21 @@ pub(super) fn emit_instance_report(
     paths: &[Vec<MakingCall>],
     diagnostics: &mut Diagnostics,
 ) {
+    emit_labeled_instance_report(
+        report,
+        paths,
+        diagnostics,
+        "the instance's body rejects here",
+    );
+}
+
+/// Report an instance error with a label that identifies its failing source.
+pub(super) fn emit_labeled_instance_report(
+    report: Diagnostic,
+    paths: &[Vec<MakingCall>],
+    diagnostics: &mut Diagnostics,
+    source: &str,
+) {
     let mut groups = HashMap::<Location, Vec<&[MakingCall]>>::new();
     for path in paths {
         if let Some(outer) = path.last() {
@@ -3897,9 +3912,7 @@ pub(super) fn emit_instance_report(
     let mut groups: Vec<_> = groups.into_iter().collect();
     groups.sort_by_key(|(at, _)| (at.file, at.span.start, at.span.end));
     for (at, paths) in groups {
-        let mut here = report
-            .clone()
-            .with_related(report.primary, "the instance's body rejects here");
+        let mut here = report.clone().with_related(report.primary, source);
         here.primary = at;
         for call in paths.into_iter().flatten() {
             let message = format!("this call makes the instance `{}`", call.instance);
