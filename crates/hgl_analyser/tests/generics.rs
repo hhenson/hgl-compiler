@@ -169,6 +169,72 @@ fn written_operator_inputs_keep_extents_inside_literals() {
     );
 }
 
+/// TYPE-10 and ERR-2: an inline result tag preserves a compatible list
+/// extent during the public input check. Ordinary assignments and the
+/// candidate's own input still require their concrete types.
+#[test]
+fn written_operator_inputs_keep_extents_inside_result_tags() {
+    let checked = module(concat!(
+        "operator success<T>(value: result<list<T>, error>) -> i64\n",
+        "impl const fn success(value: result<list<i64, 2>, error>) -> i64 => 1\n",
+        "operator failure<T>(value: result<bool, list<T>>) -> i64\n",
+        "impl const fn failure(value: result<bool, list<i64, 2>>) -> i64 => 2\n",
+        "operator nested<T>(value: tuple<str, result<list<T>, error>>) -> i64\n",
+        "impl const fn nested(value: tuple<str, result<list<i64, 2>, error>>) -> i64 => 3\n",
+        "const fn good(row: list<i64, 2>) {\n",
+        "    let a = success<i64>(ok(row))\n",
+        "    let b = failure<i64>(err(row))\n",
+        "    let c = nested<i64>((\"slot\", ok(row)))\n",
+        "    let d = success(ok(row))\n",
+        "    let e = failure(err(row))\n",
+        "}\n",
+        "const fn wrong_element(row: list<str, 2>) -> i64 => success<i64>(ok(row))\n",
+        "const fn wrong_candidate_size(row: list<i64, 3>) -> i64 => failure<i64>(err(row))\n",
+        "const fn ordinary(row: list<i64, 2>) -> result<list<i64>, error> => ok(row)\n",
+    ));
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "type/type.mismatch",
+            "operator/operator.no_candidate",
+            "type/type.mismatch",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
+/// TYPE-11 and FN-12: a matching window can be read as a list. Writing
+/// a generic type argument leaves that admission to candidate selection.
+#[test]
+fn written_operator_inputs_keep_window_lifting_available() {
+    let checked = module(concat!(
+        "operator first<T>(items: list<T>) -> i64\n",
+        "impl const fn first(items: list<i64>) -> i64 => items[0]\n",
+        "fn written(items: rolling_window<i64, 3, 2>) -> i64 => first<i64>(items)\n",
+        "fn inferred(items: rolling_window<i64, 3, 2>) -> i64 => first(items)\n",
+        "fn wrong(items: rolling_window<i64, 3, 2>) -> i64 => first<str>(items)\n",
+    ));
+    assert_eq!(
+        checked
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "operator/operator.no_candidate",
+            "operator/operator.no_candidate",
+            "type/type.mismatch",
+        ],
+        "{}",
+        checked.report,
+    );
+}
+
 /// The message of each finding, in order.
 fn messages(checked: &Checked) -> Vec<&str> {
     checked

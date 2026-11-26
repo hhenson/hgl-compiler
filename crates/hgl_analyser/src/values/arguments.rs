@@ -10,6 +10,7 @@ use hgl_source::Span;
 
 use super::Typer;
 use super::evals::{holds_trace, publications};
+use super::expressions::ExpressionFit;
 use super::fit::whole;
 use super::inference::{Inferred, Places, fixed, infer, mentions, placed};
 use crate::declared::{agree, is_optional};
@@ -55,7 +56,7 @@ impl<'a> Typer<'a> {
                 )
                 .with_note("a result's types come from the `result<T, E>` its place expects"),
             );
-            if let Some(form) = self.result_form(&name, &list, expected) {
+            if let Some(form) = self.result_form(&name, &list, expected, ExpressionFit::Value) {
                 return form;
             }
         }

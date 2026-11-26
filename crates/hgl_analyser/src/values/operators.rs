@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use hgl_diagnostics::{Category, Diagnostic, Location, Severity};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
+use super::arguments::Takes;
 use super::callback_evidence::CallbackEvidence;
 use super::calls::arguments_of;
 use super::candidates::{
@@ -1914,9 +1915,14 @@ impl<'a> Typer<'a> {
                 } else {
                     argument.value.clone()
                 };
-                let ty = fitted_input_pattern(&value.ty, &ty).unwrap_or(ty);
-                let place = format!("the parameter `{}`", parameter.name);
-                self.fit_input(value, &ty, &place);
+                // TYPE-11: a lifted value candidate can read a window
+                // as a list. The candidate still decides whether it can
+                // take that connection (FN-12).
+                if !self.lifted_window(&ty, true, &value, Takes::Parameters) {
+                    let ty = fitted_input_pattern(&value.ty, &ty).unwrap_or(ty);
+                    let place = format!("the parameter `{}`", parameter.name);
+                    self.fit_input(value, &ty, &place);
+                }
             }
             rejected.extend(
                 self.diagnostics.as_slice()[mark.diagnostics..]

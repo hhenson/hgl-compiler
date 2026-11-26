@@ -183,7 +183,7 @@ impl<'a> Typer<'a> {
             SyntaxKind::PackKeyMembership => self.pack_key_membership(node),
             SyntaxKind::UnaryExpr => self.unary(node, expected),
             SyntaxKind::BinaryExpr => self.binary(node, expected),
-            SyntaxKind::CallExpr => self.call(node, expected, value_use.is_used()),
+            SyntaxKind::CallExpr => self.call(node, expected, value_use.is_used(), fit),
             SyntaxKind::TypedConstructor => self.typed_constructor(node, expected),
             SyntaxKind::DeltaConstructor => self.delta_constructor(node),
             SyntaxKind::UndecidedConstructor => {
@@ -857,11 +857,18 @@ impl<'a> Typer<'a> {
             })
     }
 
-    fn read_literal_part(&mut self, node: &SyntaxNode, ty: &Type, fit: ExpressionFit) -> Expr {
+    /// Read a literal component with the fit of the enclosing operand.
+    pub(super) fn read_literal_part(
+        &mut self,
+        node: &SyntaxNode,
+        ty: &Type,
+        fit: ExpressionFit,
+    ) -> Expr {
         self.expression_with_fit(node, Some(ty), ValueUse::Required, fit)
     }
 
-    fn fit_literal_part(
+    /// Fit a literal component after it has been read.
+    pub(super) fn fit_literal_part(
         &mut self,
         value: Expr,
         expected: &Type,
