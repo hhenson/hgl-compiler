@@ -29,7 +29,7 @@ use super::lifting::preferred_call_role;
 use super::operators::{
     ReflectedCall, Requested, core_dictionary_fallback, dictionary_fallback_type, unreadable,
 };
-use super::requirements::{Condition, holds};
+use super::requirements::{Condition, holds, passes_value_on};
 use super::{Candidate, Typer};
 use crate::constant::Fault;
 use crate::declared::{
@@ -2085,23 +2085,38 @@ impl<'a> Typer<'a> {
                 &|_| false,
             )
         });
-        let member_dependencies = self.stated_member_dependencies(&evidence_types);
-        // Ordinary memberships can constrain the call directly or through
-        // the stated type or key of one of its reflected members.
+        // A value supplied as a key argument can restrict its possible values.
+        // A key occurring only in a projected type identifies that pack member.
+        let supplied: Vec<_> = given
+            .iter()
+            .filter_map(|arg| self.read_constant(&arg.node, None).ok())
+            .collect();
+        let values: Vec<_> = own
+            .iter()
+            .copied()
+            .filter(|parameter| {
+                supplied
+                    .iter()
+                    .any(|value| value.names_one_of(&[*parameter]))
+                    || passes_value_on(operator_generics, *parameter)
+            })
+            .collect();
+        let member_dependencies = self.stated_member_dependencies(&evidence_types, &values);
+        let relevant: Vec<_> = own
+            .iter()
+            .copied()
+            .filter(|parameter| {
+                values.contains(parameter)
+                    || evidence_types.iter().any(|ty| mentions(ty, &[*parameter]))
+            })
+            .collect();
         let domains = self.finite_domains();
-        let memberships: Vec<(Location, Vec<Argument>)> = domains
+        let memberships: Vec<_> = domains
             .memberships()
             .into_iter()
-            .filter(|(parameter, _)| {
-                let one = [*parameter];
-                member_dependencies.contains(parameter)
-                    || given.iter().any(|given| {
-                        mentions(given.ty(), &one)
-                            || self
-                                .read_constant(&given.node, None)
-                                .is_ok_and(|value| value.names_one_of(&one))
-                    })
-                    || wanted.place.is_some_and(|place| mentions(place, &one))
+            .filter(|(parameter, choices)| {
+                relevant.contains(parameter)
+                    || (!choices.is_empty() && member_dependencies.contains(parameter))
             })
             .collect();
         let admits_without_membership =
@@ -2197,7 +2212,7 @@ impl<'a> Typer<'a> {
             let projected = domains.with_trial_keys(&bindings);
             let domains = projected.as_ref().unwrap_or(&domains);
             let Some(member_choices) =
-                self.stated_member_choices(&evidence_types, &bindings, domains)
+                self.stated_member_choices(&evidence_types, &bindings, &relevant, &values, domains)
             else {
                 continue;
             };

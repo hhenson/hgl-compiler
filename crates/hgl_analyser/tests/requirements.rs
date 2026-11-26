@@ -365,6 +365,89 @@ fn only_linked_named_members_constrain_an_ordinary_trial() {
     assert_eq!(unrelated.summary(), NONE, "{}", unrelated.report);
 }
 
+/// GEN-3, GEN-7 and GEN-17: a contradiction in an equality class does
+/// not change what an ordinary argument or an independent pack key proves.
+#[test]
+fn a_contradictory_reflected_class_only_excludes_related_trials() {
+    let definitions = concat!(
+        "const a: str = \"a\"\nconst b: str = \"b\"\nconst c: str = \"c\"\n",
+        "const fn float<X>(x: X) -> X requires X in {bool, str, f64} => x\n",
+        "operator choose<X>(x: X) -> X\nimpl const fn choose(x: f64) -> f64 => x\n",
+        "impl const fn choose(x: bool) -> bool => x\nimpl const fn choose(x: str) -> str => x\n",
+    );
+    for contradiction in [
+        "P[a] == bool && P[b] == str && P[a] == P[b]",
+        "P[b] == P[a] && P[b] == str && P[a] == bool",
+        "key == \"a\" && P[key] == bool && P[b] == str && P[key] == P[b]",
+    ] {
+        for (ty, condition, accepted) in [
+            ("T", "T in {f64}", true),
+            ("P[c]", "P[c] == f64", true),
+            ("P[a]", "T in {f64}", false),
+            ("P[b]", "T in {f64}", false),
+            ("T", "T in {f64} && T == P[a]", false),
+        ] {
+            for (callee, code) in [
+                ("float", "constraint/requires.unmet"),
+                ("choose", "operator/operator.no_candidate"),
+            ] {
+                let checked = module(&format!(
+                    "{definitions}const fn proof<T, ...P, const key: str>(f: const fn(...{{P}}) -> i64, x: {ty}) -> {ty}\n\
+                     requires {condition} && {contradiction} => {callee}(x)\n"
+                ));
+                if accepted {
+                    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+                } else {
+                    assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+                    assert_eq!(checked.findings[0].code, code, "{}", checked.report);
+                }
+            }
+        }
+    }
+}
+
+/// GEN-3 and GEN-7: sharing a key across two packs does not connect their
+/// member types. A value used as a callee argument is still constrained by
+/// the reflected facts for that key in each ordinary trial.
+#[test]
+fn reflected_contradictions_follow_the_pack_and_resolved_key() {
+    let declarations = concat!(
+        "const a: str = \"spot\"\nconst b: str = \"rate\"\nconst c: str = \"price\"\n",
+        "const fn allowed<X>(x: X) -> X requires X in {bool, str, f64} => x\n",
+        "operator choose<X>(x: X) -> X\nimpl const fn choose(x: f64) -> f64 => x\n",
+        "impl const fn choose(x: bool) -> bool => x\nimpl const fn choose(x: str) -> str => x\n",
+    );
+    for (ty, extra, accepted) in [
+        ("Q[k]", "Q[k] == f64", true),
+        ("Q[k]", "Q[k] == f64 && Q[k] == P[k]", false),
+        ("P[c]", "P[c] == f64", true),
+        ("P[a]", "P[c] == f64", false),
+    ] {
+        for (callee, code) in [
+            ("allowed", "constraint/requires.unmet"),
+            ("choose", "operator/operator.no_candidate"),
+        ] {
+            let checked = module(&format!(
+                "{declarations}const fn proof<U, ...Q, ...P, const k: str>(q: const fn(...{{Q}}) -> i64, p: const fn(...{{P}}) -> i64, x: {ty}) -> {ty}\n\
+                 requires k == \"spot\" && P[k] == U && U == str && U == bool && {extra} => {callee}(x)\n"
+            ));
+            if accepted {
+                assert_eq!(checked.summary(), NONE, "{}", checked.report);
+            } else {
+                assert_eq!(checked.findings.len(), 1, "{}", checked.report);
+                assert_eq!(checked.findings[0].code, code, "{}", checked.report);
+            }
+        }
+    }
+    let key_as_value = module(concat!(
+        "const a: str = \"a\"\n",
+        "const fn only<const K: str>(x: i64) -> i64 requires K == \"b\" => x\n",
+        "const fn proof<...P, const K: str>(f: const fn(...{P}) -> i64, x: i64) -> i64\n",
+        "requires K in {\"a\", \"b\"} && P[K] == bool && P[a] == str => only<K>(x)\n",
+    ));
+    assert_eq!(key_as_value.summary(), NONE, "{}", key_as_value.report);
+}
+
 /// GEN-3, GEN-7 and GEN-10: positive constraints on the same reflected key
 /// admit their intersection in any conjunction order, for both generic calls
 /// and operators, while retaining rejections when a failing type remains or

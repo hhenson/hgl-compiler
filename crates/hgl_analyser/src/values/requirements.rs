@@ -699,21 +699,32 @@ impl<'a> Typer<'a> {
             })
             .chain(type_packs.iter().flat_map(|pack| &pack.types))
             .collect::<Vec<_>>();
-        let dependencies = self.stated_member_dependencies(&evidence_types);
+        let values: Vec<_> = own
+            .iter()
+            .copied()
+            .filter(|at| passes_value_on(generics, *at))
+            .collect();
+        let dependencies = self.stated_member_dependencies(&evidence_types, &values);
         let reflected = evidence_types.iter().any(|ty| {
             ty.any_part(
                 &|part| matches!(part, Type::PackMember { pack, .. } if own.contains(pack)),
                 &|_| false,
             )
         });
+        let relevant: Vec<_> = own
+            .iter()
+            .copied()
+            .filter(|parameter| {
+                passes_on(generics, &[*parameter]) || packs_pass_on(type_packs, &[*parameter])
+            })
+            .collect();
         let domains = self.finite_domains();
-        let memberships: Vec<(Location, Vec<Argument>)> = domains
+        let memberships: Vec<_> = domains
             .memberships()
             .into_iter()
-            .filter(|(parameter, _)| {
-                dependencies.contains(parameter)
-                    || passes_on(generics, &[*parameter])
-                    || packs_pass_on(type_packs, &[*parameter])
+            .filter(|(parameter, choices)| {
+                relevant.contains(parameter)
+                    || (!choices.is_empty() && dependencies.contains(parameter))
             })
             .collect();
         if memberships.iter().any(|(_, choices)| choices.is_empty()) {
@@ -752,7 +763,8 @@ impl<'a> Typer<'a> {
                 .collect();
             let projected = domains.with_trial_keys(&given);
             let domains = projected.as_ref().unwrap_or(&domains);
-            let Some(member_choices) = self.stated_member_choices(&evidence_types, &given, domains)
+            let Some(member_choices) =
+                self.stated_member_choices(&evidence_types, &given, &relevant, &values, domains)
             else {
                 continue;
             };
@@ -994,7 +1006,11 @@ impl<'a> Typer<'a> {
     /// Ordinary parameters that supply a reflected member's stated type
     /// or key. Their memberships also constrain a call using that member
     /// (GEN-3, GEN-7, GEN-17).
-    pub(super) fn stated_member_dependencies(&self, types: &[&Type]) -> Vec<Location> {
+    pub(super) fn stated_member_dependencies(
+        &self,
+        types: &[&Type],
+        values: &[Location],
+    ) -> Vec<Location> {
         let bounds = self.stated_pack_members();
         if bounds.is_empty() {
             return Vec::new();
@@ -1006,7 +1022,7 @@ impl<'a> Typer<'a> {
             .map(|slot| slot.at)
             .filter(|at| types.iter().any(|ty| mentions(ty, &[*at])))
             .collect();
-        let (_, keys) = self.stated_member_keys(types, &ordinary, &bounds, &|_| None);
+        let (_, keys) = self.stated_member_keys(types, &ordinary, values, &bounds, &|_| None);
         let used: Vec<_> = bounds
             .iter()
             .filter(|member| {
@@ -1042,6 +1058,7 @@ impl<'a> Typer<'a> {
         &self,
         types: &[&Type],
         ordinary: &[Location],
+        values: &[Location],
         bounds: &[StatedPackMember],
         constant_at: &impl Fn(Location) -> Option<ConstantValue>,
     ) -> (usize, Vec<(Location, Constant)>) {
@@ -1082,7 +1099,7 @@ impl<'a> Typer<'a> {
         for bound in bounds {
             let binds_type = bound.types.values().iter().any(|ty| mentions(ty, ordinary));
             match &bound.key {
-                StatedPackKey::One(key) if binds_type || key.value.names_one_of(ordinary) => {
+                StatedPackKey::One(key) if binds_type || key.value.names_one_of(values) => {
                     remember(&mut keys, bound.pack, key);
                 }
                 StatedPackKey::Every(_) if binds_type => {
@@ -1107,10 +1124,12 @@ impl<'a> Typer<'a> {
         &self,
         types: &[&Type],
         given: &[(Location, &Argument)],
+        relevant: &[Location],
+        values: &[Location],
         domains: &FiniteDomains,
     ) -> Option<Vec<MemberChoices>> {
         let mut bounds = self.stated_pack_members();
-        domains.add_member_bounds(&mut bounds, given)?;
+        domains.add_member_bounds(&mut bounds, given, relevant)?;
         if bounds.is_empty() {
             return Some(Vec::new());
         }
@@ -1118,8 +1137,7 @@ impl<'a> Typer<'a> {
             Argument::Constant(constant) => Some(constant.value.clone()),
             Argument::Type(_) | Argument::NoResult => None,
         };
-        let ordinary: Vec<_> = given.iter().map(|(at, _)| *at).collect();
-        let (used, keys) = self.stated_member_keys(types, &ordinary, &bounds, &constant_at);
+        let (used, keys) = self.stated_member_keys(types, relevant, values, &bounds, &constant_at);
         let mut choices = Vec::new();
         for (index, (pack, key)) in keys.into_iter().enumerate() {
             let matching = bounds
@@ -4368,6 +4386,13 @@ fn applied_in(ty: &Type, at: Location, made: &mut Vec<Made>) {
             });
         }
     }
+}
+
+/// A key supplied as a value argument can constrain that argument's own trials.
+pub(super) fn passes_value_on(generics: &[Argument], parameter: Location) -> bool {
+    generics.iter().any(
+        |arg| matches!(arg, Argument::Constant(value) if value.value.names_one_of(&[parameter])),
+    )
 }
 
 /// True where a generic argument names one of `declared`, the generic

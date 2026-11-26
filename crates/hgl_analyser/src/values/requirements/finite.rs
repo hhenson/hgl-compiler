@@ -247,11 +247,13 @@ impl FiniteDomains {
     }
 
     /// Propagate each class's finite bounds and the ordinary types fixed for
-    /// this trial to its reflected slots. Disjoint bounds exclude the trial.
+    /// this trial to its reflected slots. Keep an empty bound on its keys so
+    /// it rules out the trial only when the call uses that evidence (GEN-7).
     pub(super) fn add_member_bounds(
         &self,
         bounds: &mut Vec<StatedPackMember>,
         given: &[(Location, &Argument)],
+        relevant: &[Location],
     ) -> Option<()> {
         for domain in &self.0 {
             if domain.slots.len() < 2
@@ -273,7 +275,12 @@ impl FiniteDomains {
                 }
             }
             let Some(choices) = choices else { continue };
-            if choices.is_empty() {
+            if choices.is_empty()
+                && domain
+                    .slots
+                    .iter()
+                    .any(|slot| matches!(slot, FiniteSlot::Parameter(at) if relevant.contains(at)))
+            {
                 return None;
             }
             let types: Vec<_> = choices
