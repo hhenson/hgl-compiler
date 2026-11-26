@@ -2816,6 +2816,34 @@ export fn fixed_local(items: list<i64, 3>) -> list<i64, 3> {
     );
 }
 
+/// MAP-5, MAP-7 and TIME-10: keep joins current through sparse edits,
+/// invalidation and sampled rebinding.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn keyed_map_membership_changes_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("keyed-map-key-changes");
+    let file = write(
+        &root,
+        "demo.keyed_map_key_changes.hgl",
+        include_str!("../../hgl_cpp/tests/fixtures/demo.keyed_map_key_changes.hgl"),
+    );
+    let tested = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&tested.stdout);
+    assert_eq!(
+        tested.status.code(),
+        Some(0),
+        "{stdout}{}",
+        text(&tested.stderr)
+    );
+    assert!(
+        stdout.ends_with("executable cases: 3 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// RED-5 and TYPE-14: a plain seed widens to the selected nullable accumulator.
 #[test]
 #[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]

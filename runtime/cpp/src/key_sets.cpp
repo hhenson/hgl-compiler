@@ -26,40 +26,83 @@ struct JoinSplitKeys {
 
     static void eval(hgraph::In<"left", Keys, hgraph::InputValidity::Unchecked> left_input,
                      hgraph::In<"right", Keys, hgraph::InputValidity::Unchecked> right_input,
+                     hgraph::State<hgraph::Int> prior_validity,
                      hgraph::Out<Keys> result) {
         const hgraph::TSSInputView& left = left_input;
         const hgraph::TSSInputView& right = right_input;
         const hgraph::TSSOutputView& out = result;
+        const bool left_valid = left.valid();
+        const bool right_valid = right.valid();
+        const hgraph::Int validity = (left_valid ? 1 : 0) | (right_valid ? 2 : 0);
         const auto included = [&](const hgraph::ValueView& key) {
-            const bool in_left = left.valid() && left.contains(key);
-            const bool in_right = right.valid() && right.contains(key);
+            const bool in_left = left_valid && left.contains(key);
+            const bool in_right = right_valid && right.contains(key);
             return Outer ? in_left || in_right : in_left && in_right;
         };
-        // Snapshot removals before mutating the set being traversed.
-        std::vector<hgraph::Value> removed;
-        for (const auto& key : out.values()) {
-            if (!included(key)) {
-                removed.emplace_back(key);
+        const auto now = out.evaluation_time();
+        const bool initial = !out.valid();
+        auto output = out.begin_mutation(now);
+        const auto refresh = [&](const hgraph::ValueView& key) {
+            const bool present = output.contains(key);
+            if (included(key)) {
+                if (!present) {
+                    static_cast<void>(output.add(key));
+                }
+            } else if (present) {
+                static_cast<void>(output.remove(key));
             }
-        }
-        auto output = out.begin_mutation(out.evaluation_time());
-        for (const auto& key : removed) {
-            static_cast<void>(output.remove(key.view()));
-        }
-        const auto add_from = [&](const hgraph::TSSInputView& input) {
-            if (input.valid()) {
-                for (const auto& key : input.values()) {
-                    if (!output.contains(key) && included(key)) {
-                        static_cast<void>(output.add(key));
+        };
+
+        // A validity change or sampled binding can replace all input keys.
+        if (initial || validity != prior_validity.get() || left.base().delta_is_sampled_rebind()
+            || right.base().delta_is_sampled_rebind()) {
+            prior_validity.set(validity);
+            // Snapshot removals before mutating the set being traversed.
+            std::vector<hgraph::Value> removed;
+            for (const auto& key : out.values()) {
+                if (!included(key)) {
+                    removed.emplace_back(key);
+                }
+            }
+            for (const auto& key : removed) {
+                static_cast<void>(output.remove(key.view()));
+            }
+            if (left_valid) {
+                for (const auto& key : left.values()) {
+                    refresh(key);
+                }
+            }
+            if constexpr (Outer) {
+                if (right_valid) {
+                    for (const auto& key : right.values()) {
+                        refresh(key);
                     }
                 }
             }
-        };
-        add_from(left);
-        if constexpr (Outer) {
-            add_from(right);
+        } else {
+            // The source's sparse cursors visit only this cycle's membership
+            // changes, including removals that still retain their keys.
+            const auto apply_changes = [&](const hgraph::TSSInputView& input) {
+                if (!input.valid() || !input.modified()) {
+                    return;
+                }
+                const auto data = input.base().bound_output().data_view().as_set();
+                if (!data.modified(now)) {
+                    return;
+                }
+                for (auto slot = data.next_added_slot(); slot != hgraph::TS_DATA_NO_CHILD_ID;
+                     slot = data.next_added_slot(slot)) {
+                    refresh(data.at_slot(slot));
+                }
+                for (auto slot = data.next_removed_slot(); slot != hgraph::TS_DATA_NO_CHILD_ID;
+                     slot = data.next_removed_slot(slot)) {
+                    refresh(data.at_slot(slot));
+                }
+            };
+            apply_changes(left);
+            apply_changes(right);
         }
-        if (!out.valid()) {
+        if (initial) {
             output.touch();
         }
     }
