@@ -93,6 +93,44 @@ fn explicitly_equal_keys_share_one_trial_type() {
     }
 }
 
+/// GEN-3, GEN-7 and GEN-17: substituting a finite key value can join
+/// two previously separate equality classes. A different possible key
+/// still allows independent types for the fixed keys.
+#[test]
+fn a_trial_joins_bounds_that_name_the_same_key() {
+    let declarations = concat!(
+        "const a: str = \"spot\"\nconst b: str = \"rate\"\n",
+        "operator pair<X, Y>(x: X, y: Y) -> i64\n",
+        "impl const fn pair(x: i64, y: i64) -> i64 => 1\n",
+        "impl const fn pair(x: f64, y: f64) -> i64 => 2\n",
+        "const fn proof<...P, const k: str>(cb: const fn(...{P}) -> i64, x: P[a], y: P[b]) -> i64\n",
+    );
+    for (condition, accepted) in [
+        (
+            "P[a] in {i64, f64} && P[k] == P[b] && P[k] in {i64, f64} && k in {\"spot\"}",
+            true,
+        ),
+        (
+            "k in {\"spot\"} && P[k] in {i64, f64} && P[k] == P[b] && P[a] in {i64, f64}",
+            true,
+        ),
+        (
+            "P[a] in {i64, f64} && P[k] == P[b] && P[k] in {i64, f64} && k in {\"spot\", \"other\"}",
+            false,
+        ),
+    ] {
+        let checked = module(&format!(
+            "{declarations}    requires {condition} => pair(x, y)\n"
+        ));
+        if accepted {
+            assert_eq!(checked.summary(), NONE, "{condition}\n{}", checked.report);
+        } else {
+            assert_eq!(checked.findings.len(), 1, "{condition}\n{}", checked.report);
+            assert_eq!(checked.findings[0].code, "operator/operator.no_candidate");
+        }
+    }
+}
+
 /// GEN-3, GEN-7 and GEN-17: a reflected member's stated type can
 /// authorize arithmetic. Every alternative must admit it.
 #[test]

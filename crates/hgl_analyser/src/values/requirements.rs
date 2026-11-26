@@ -750,8 +750,9 @@ impl<'a> Typer<'a> {
                 .chain(combination)
                 .map(|(at, argument)| (*at, argument))
                 .collect();
-            let Some(member_choices) =
-                self.stated_member_choices(&evidence_types, &given, &domains)
+            let projected = domains.with_trial_keys(&given);
+            let domains = projected.as_ref().unwrap_or(&domains);
+            let Some(member_choices) = self.stated_member_choices(&evidence_types, &given, domains)
             else {
                 continue;
             };
@@ -780,7 +781,7 @@ impl<'a> Typer<'a> {
                 });
                 return true;
             }
-            let mut member_trials = domains.member_trials(&member_choices, &given);
+            let mut member_trials = domains.member_trials(&member_choices);
             if member_choices.is_empty() {
                 member_trials.push(Vec::new());
             }
@@ -1109,7 +1110,7 @@ impl<'a> Typer<'a> {
         domains: &FiniteDomains,
     ) -> Option<Vec<MemberChoices>> {
         let mut bounds = self.stated_pack_members();
-        domains.add_member_bounds(&mut bounds, given);
+        domains.add_member_bounds(&mut bounds, given)?;
         if bounds.is_empty() {
             return Some(Vec::new());
         }

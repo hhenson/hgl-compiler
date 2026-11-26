@@ -2194,12 +2194,14 @@ impl<'a> Typer<'a> {
                 .chain(combination)
                 .map(|(at, arg)| (*at, arg))
                 .collect();
+            let projected = domains.with_trial_keys(&bindings);
+            let domains = projected.as_ref().unwrap_or(&domains);
             let Some(member_choices) =
-                self.stated_member_choices(&evidence_types, &bindings, &domains)
+                self.stated_member_choices(&evidence_types, &bindings, domains)
             else {
                 continue;
             };
-            let mut member_trials = domains.member_trials(&member_choices, &bindings);
+            let mut member_trials = domains.member_trials(&member_choices);
             if member_choices.is_empty() {
                 if memberships.is_empty() {
                     failed = Some((Vec::new(), Vec::new(), unsettled(self)));

@@ -111,15 +111,15 @@ struct FiniteDomain {
 }
 
 impl FiniteDomain {
-    fn restrict(&mut self, choices: Vec<Argument>) {
-        if let Some(bound) = &mut self.choices {
+    fn intersect(bound: &mut Option<Vec<Argument>>, choices: Vec<Argument>) {
+        if let Some(bound) = bound {
             bound.retain(|arg| {
                 choices
                     .iter()
                     .any(|other| same_argument(arg, other) != Some(false))
             });
         } else {
-            self.choices = Some(choices);
+            *bound = Some(choices);
         }
     }
 }
@@ -157,13 +157,13 @@ impl FiniteDomains {
         let other = self.0.remove(second);
         self.0[first].slots.extend(other.slots);
         if let Some(choices) = other.choices {
-            self.0[first].restrict(choices);
+            FiniteDomain::intersect(&mut self.0[first].choices, choices);
         }
     }
 
     fn restrict(&mut self, slot: FiniteSlot, choices: Vec<Argument>) {
         let index = self.insert(slot);
-        self.0[index].restrict(choices);
+        FiniteDomain::intersect(&mut self.0[index].choices, choices);
     }
 
     /// The finite alternatives of each ordinary parameter relevant to a trial.
@@ -181,51 +181,95 @@ impl FiniteDomains {
         result
     }
 
-    /// Add the bounds shared with other slots, after fixing ordinary trial types.
+    /// A trial can make two source keys denote the same member. Unite their
+    /// classes before checking any of the call's ordinary or reflected slots.
+    pub(in crate::values) fn with_trial_keys(
+        &self,
+        given: &[(Location, &Argument)],
+    ) -> Option<Self> {
+        if !given
+            .iter()
+            .any(|(_, arg)| matches!(arg, Argument::Constant(_)))
+        {
+            return None;
+        }
+        let constant_at = |at| {
+            given.iter().find_map(|(other, arg)| match arg {
+                Argument::Constant(value) if *other == at => Some(value.value.clone()),
+                _ => None,
+            })
+        };
+        let mut projected = Self::default();
+        for domain in &self.0 {
+            let mut slots = domain.slots.iter().map(|slot| match slot {
+                FiniteSlot::Member(pack, key) => FiniteSlot::Member(
+                    *pack,
+                    Constant {
+                        text: key.text.clone(),
+                        value: key.value.substituted(&constant_at),
+                    },
+                ),
+                FiniteSlot::Parameter(at) => FiniteSlot::Parameter(*at),
+            });
+            let Some(first) = slots.next() else { continue };
+            for next in slots {
+                projected.join(first.clone(), next);
+            }
+            if let Some(choices) = &domain.choices {
+                projected.restrict(first, choices.clone());
+            }
+        }
+        Some(projected)
+    }
+
+    /// Propagate each class's finite bounds and the ordinary types fixed for
+    /// this trial to its reflected slots. Disjoint bounds exclude the trial.
     pub(super) fn add_member_bounds(
         &self,
         bounds: &mut Vec<StatedPackMember>,
         given: &[(Location, &Argument)],
-    ) {
+    ) -> Option<()> {
         for domain in &self.0 {
-            if domain.slots.len() < 2 {
+            if domain.slots.len() < 2
+                || !domain
+                    .slots
+                    .iter()
+                    .any(|slot| matches!(slot, FiniteSlot::Member(..)))
+            {
                 continue;
             }
-            let bound = domain
-                .slots
-                .iter()
-                .find_map(|slot| {
-                    let FiniteSlot::Parameter(at) = slot else {
-                        return None;
-                    };
-                    given.iter().find_map(|(other, arg)| match arg {
-                        Argument::Type(ty) if other == at => Some(vec![ty.clone()]),
-                        _ => None,
-                    })
+            let mut choices = domain.choices.clone();
+            for (at, value) in given {
+                if domain
+                    .slots
+                    .iter()
+                    .any(|slot| matches!(slot, FiniteSlot::Parameter(other) if other == at))
+                {
+                    FiniteDomain::intersect(&mut choices, vec![(*value).clone()]);
+                }
+            }
+            let Some(choices) = choices else { continue };
+            if choices.is_empty() {
+                return None;
+            }
+            let types: Vec<_> = choices
+                .into_iter()
+                .filter_map(|choice| match choice {
+                    Argument::Type(ty) => Some(ty),
+                    _ => None,
                 })
-                .or_else(|| {
-                    domain.choices.as_ref().map(|choices| {
-                        choices
-                            .iter()
-                            .filter_map(|choice| match choice {
-                                Argument::Type(ty) => Some(ty.clone()),
-                                _ => None,
-                            })
-                            .collect()
-                    })
-                });
-            if let Some(types) = bound {
-                for slot in &domain.slots {
-                    if let FiniteSlot::Member(pack, key) = slot {
-                        bounds.push(StatedPackMember {
-                            pack: *pack,
-                            key: StatedPackKey::One(key.clone()),
-                            types: StatedMemberTypes::Alternatives(types.clone()),
-                        });
-                    }
+                .collect();
+            for slot in &domain.slots {
+                if let FiniteSlot::Member(pack, key) = slot {
+                    bounds.push(StatedPackMember {
+                        pack: *pack,
+                        key: StatedPackKey::One(key.clone()),
+                        types: StatedMemberTypes::Alternatives(types.clone()),
+                    });
                 }
             }
         }
+        Some(())
     }
 
     /// Joint bindings of ordinary arguments consistent with the equalities.
@@ -244,18 +288,12 @@ impl FiniteDomains {
     pub(in crate::values) fn member_trials(
         &self,
         choices: &[MemberChoices],
-        given: &[(Location, &Argument)],
     ) -> Vec<Vec<((Location, Constant), Type)>> {
-        let constant_at = |at| {
-            given.iter().find_map(|(other, arg)| match arg {
-                Argument::Constant(value) if *other == at => Some(value.value.clone()),
-                _ => None,
-            })
-        };
-        self.trials(choices, |(pack, key)| self.0.iter().position(|domain|
-            domain.slots.iter().any(|slot| matches!(slot, FiniteSlot::Member(at, source)
-                if at == pack && source.value.substituted(&constant_at).same(&key.value) == Some(true)))
-        ), same_type)
+        self.trials(
+            choices,
+            |(pack, key)| self.group(&FiniteSlot::Member(*pack, key.clone())),
+            same_type,
+        )
     }
 
     /// Enumerate once per class, then assign that choice to each used slot.
