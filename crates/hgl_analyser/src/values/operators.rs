@@ -1325,10 +1325,13 @@ impl<'a> Typer<'a> {
                         return false;
                     }
                     candidates.iter().filter_map(|&(_, _, candidate)| {
-                        let index = public
-                            .candidate_parameters(candidate)
-                            .nth(public_slot?)
-                            .flatten()?;
+                        // GEN-6: a named option can exist only in the
+                        // candidate. Its own slot supplies the FN-17 template.
+                        let index = match public_slot {
+                            Some(slot) => public.candidate_parameters(candidate).nth(slot).flatten(),
+                            None if key.name().is_some() => key.public_parameter(candidate),
+                            None => None,
+                        }?;
                         Some(&candidate.parameters[index].ty)
                     }).any(|ty| {
                         // FN-17: a reflected anonymous input takes its

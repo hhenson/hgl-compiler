@@ -3283,6 +3283,62 @@ test bounded_reflection_uses_the_anonymous_parameters {
     );
 }
 
+/// A named option uses the selected candidate's callable template
+/// (FN-17, GEN-6) even when the public operator omits that option.
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn candidate_only_callable_options_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("candidate-only-callable-options");
+    let file = write(
+        &root,
+        "demo.candidate_callable_options.hgl",
+        r#"module demo.candidate_callable_options
+
+const fn plus_two(value: i64) -> i64 => value + 2
+const fn wrong_result(value: i64) -> bool => value > 0
+
+operator bump<T>(value: T) -> i64
+impl const fn bump(value: i64) -> i64 => value + 3
+impl const fn bump(value: str) -> i64 => 11
+
+operator transform<T>(value: T) -> i64
+impl const fn transform(value: i64, mapper: const fn(i64) -> i64) -> i64 => mapper(value)
+impl const fn transform(value: str, mapper: i64) -> i64 => mapper
+
+test options {
+    assert transform(5, mapper: plus_two) == 7
+    assert transform{mapper: plus_two}(5) == 7
+    assert transform(5, mapper: bump) == 8
+    assert transform(5, mapper: fn(value) => value + 4) == 9
+    assert transform("value", mapper: 4) == 4
+    let plus_two = 5
+    assert transform("value", mapper: plus_two) == 5
+}
+
+const fn wrong_callback_shape() -> i64 {
+    # expect-error(type, "type.mismatch")
+    return transform(5, mapper: wrong_result)
+}
+
+const fn wrong_option_kind() -> i64 {
+    # expect-error(operator, "operator.no_candidate")
+    return transform("value", mapper: plus_two)
+}
+"#,
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.contains("rejection cases: 2 passed, 0 failed\n")
+            && stdout.ends_with("executable cases: 1 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-17: a finite chain of static wrappers and a recursive call that
 /// forwards the same target both specialize and run.
 #[test]
