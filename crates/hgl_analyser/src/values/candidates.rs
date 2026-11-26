@@ -3942,7 +3942,21 @@ fn candidate_bindings(
                     .unwrap_or(Argument::Type(Type::Unknown))
             })
             .collect();
-        let slots: Vec<_> = bound.iter().map(|place| place.parameter()).collect();
+        let slots: Vec<_> = bound
+            .iter()
+            .zip(given)
+            .map(|(place, argument)| {
+                let slot = place.parameter()?;
+                // Read a candidate-only anonymous callback before
+                // checking its reflected suffix (FN-17, GEN-17).
+                let unread_reflection = argument.by_function
+                    && matches!(argument.value.kind, ExprKind::Unread)
+                    && matches!(&signature.parameters[slot].ty,
+                        Type::Function(template) if template.named_pack.is_some())
+                    && ungrouped(argument.node.clone()).kind() == SyntaxKind::FnExpr;
+                (!unread_reflection).then_some(slot)
+            })
+            .collect();
         let reflected = operator_packs(
             typer.program,
             (module, signature),

@@ -131,11 +131,9 @@ transpiler: partial
   when the change cancels inside a nested keyed entry. The staging records only
   keys named by the writes. A scalar dictionary entry that is withdrawn and
   restored during the evaluation publishes its final value. Output validity,
-  modification and its clock are visible to the handlers as they write.
-  Single-write nodes keep direct publication.
-- Left: An evaluation that reads `all_valid(out)` or `delta_value(out)`
-  still publishes as it writes and can tick with an empty delta (#878).
-  A whole assignment to `out`, invalidation, other output observations or
+  `all_valid`, modification, delta, and modification time are visible to the
+  handlers as they write. Single-write nodes keep direct publication.
+- Left: A whole assignment to `out`, invalidation, other output observations or
   tuple-valued dictionary entries keep their existing keyed publication path.
   Unsupported reads and writes of `out` and its children are reported.
   Other publication forms are under TYPE-9 and window observation limits are under END-9.

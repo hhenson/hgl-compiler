@@ -116,6 +116,7 @@
 #undef published_null
 #undef read_before
 #undef reads
+#undef removed
 #undef rhs
 #undef round
 #undef rounds
@@ -130,6 +131,7 @@
 #undef side_named
 #undef side_of
 #undef size
+#undef size_modified
 #undef std
 #undef stretched
 #undef structs_are_values
@@ -139,6 +141,7 @@
 #undef tags
 #undef total
 #undef unchanged
+#undef updated
 #undef value
 #undef wanted
 #undef word

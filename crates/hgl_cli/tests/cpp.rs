@@ -3154,6 +3154,63 @@ fn function_parameters_run_on_the_sdk() {
     );
 }
 
+/// An anonymous callback can take its result and unwritten input types
+/// from an operator candidate (FN-17).
+#[test]
+#[ignore = "needs hgraph's C++ SDK, named by HGL_HGRAPH_SDK"]
+fn candidate_only_anonymous_callbacks_run_on_the_sdk() {
+    if !sdk_named() {
+        return;
+    }
+    let root = scratch("candidate_only_anonymous_callbacks");
+    let file = write(
+        &root,
+        "demo.candidate_anonymous.hgl",
+        r#"module demo.candidate_anonymous
+operator choose<F>(cb: F, x: i64) -> i64
+impl fn choose(cb: fn(i64) -> i64, x: i64) -> i64 => cb(x)
+fn entry(x: i64) -> i64 => choose(fn(n: i64) => n + 2, x)
+fn grouped(x: i64) -> i64 => choose((fn(n) => n + 3), x)
+
+operator reflected<F,T>(cb: F, tag: T) -> i64
+impl const fn reflected<...Ps>(cb: const fn(...{Ps}) -> i64, tag: i64) -> i64 => tag
+const fn through_reflected(x: i64) -> i64 => reflected(fn(n: i64) => n + 2, x)
+
+operator one<F,M>(cb: F, mark: M) -> i64
+impl const fn one<...Ps{1}>(cb: const fn(...{Ps}) -> i64, mark: i64) -> i64 => 70
+operator two<F,M>(cb: F, mark: M) -> i64
+impl const fn two<...Ps{2}>(cb: const fn(...{Ps}) -> i64, mark: i64) -> i64 => 80
+operator at_least_one<F,M>(cb: F, mark: M) -> i64
+impl const fn at_least_one<...Ps{1:*}>(cb: const fn(...{Ps}) -> i64, mark: i64) -> i64 => 90
+
+test reads_result_from_candidate {
+    assert eval entry(x: [1, 2]) == [3, 4]
+}
+
+test reads_grouped_input_from_candidate {
+    assert eval grouped(x: [1, 2]) == [4, 5]
+}
+
+test reads_written_inputs_at_a_reflected_template {
+    assert through_reflected(7) == 7
+}
+
+test bounded_reflection_uses_the_anonymous_parameters {
+    assert one(fn(n: i64) => n + 3, 0) == 70
+    assert two(fn(n: i64, k: i64) => n + k, 0) == 80
+    assert at_least_one(fn(n: i64, k: i64) => n + k, 0) == 90
+}
+"#,
+    );
+    let output = hgl_in(&["test", &file, "--target", "cpp"], &[], &[]);
+    let stdout = text(&output.stdout);
+    assert!(output.status.success(), "{stdout}{}", text(&output.stderr));
+    assert!(
+        stdout.ends_with("executable cases: 4 passed, 0 failed, 0 not run\n"),
+        "{stdout}"
+    );
+}
+
 /// FN-17: a finite chain of static wrappers and a recursive call that
 /// forwards the same target both specialize and run.
 #[test]
@@ -4111,9 +4168,50 @@ fn keyed_temporal_code_runs_on_the_sdk() {
         text(&output.stderr)
     );
     assert!(
-        stdout.ends_with("executable cases: 21 passed, 0 failed, 0 not run\n"),
+        stdout.ends_with("executable cases: 26 passed, 0 failed, 0 not run\n"),
         "{stdout}"
     );
+}
+
+/// TIME-7: output all_valid and delta_value observers keep staged keyed writes.
+#[test]
+fn keyed_output_observers_use_staging() {
+    let root = scratch("keyed-output-observers");
+    let source = write(
+        &root,
+        "src/demo.keyed_output_observers.hgl",
+        r#"module demo.keyed_output_observers
+export fn observes_all_valid(step: i64) -> dict<i64, i64> {
+    inject out
+    when {
+        if step == 1 { return [5: 1] }
+        out = delta<dict<i64, i64>>(updated: [8: step])
+        if all_valid(out) { out = delta<dict<i64, i64>>(removed: [8]) }
+    }
+}
+
+export fn observes_delta(step: i64) -> dict<i64, i64> {
+    inject out
+    when {
+        if step == 1 { return [5: 1] }
+        let change = delta<dict<i64, i64>>(updated: [8: step])
+        out = change
+        if delta_value(out) == change { out = delta<dict<i64, i64>>(removed: [8]) }
+    }
+}
+"#,
+    );
+    let out = root.join("out");
+    let result = hgl_in(
+        &["emit", &source, "--target", "cpp", "--out", &argument(&out)],
+        &[],
+        &[],
+    );
+    assert!(result.status.success(), "{}", text(&result.stderr));
+    let cpp = fs::read_to_string(out.join("modules/mod-demo-keyed_output_observers.cpp")).unwrap();
+    assert_eq!(cpp.matches("::hglrt::KeyedEvaluation<").count(), 2, "{cpp}");
+    assert!(cpp.contains("::hglrt::fn_all_valid(out_)"), "{cpp}");
+    assert!(cpp.contains("::hglrt::fn_delta_value(out_)"), "{cpp}");
 }
 
 /// TIME-7: mutually exclusive writes still use the single-write path.

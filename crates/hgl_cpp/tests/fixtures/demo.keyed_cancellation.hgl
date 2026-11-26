@@ -137,11 +137,308 @@ fn observes_delta(step: i64) -> dict<i64, i64> {
     }
 }
 
-# TIME-7: these observers still see the earlier write. Their otherwise
-# cancelling evaluation still ticks with an empty delta (#878).
-test direct_output_observers_keep_the_existing_delta {
-    assert eval observes_all_valid(step: [1, 2]) == [[5: 1], delta<dict<i64, i64>>()]
-    assert eval observes_delta(step: [1, 2]) == [[5: 1], delta<dict<i64, i64>>()]
+fn two_handlers_observe_and_cancel(step: i64) -> dict<i64, i64> {
+    inject out
+    when {
+        if step == 1 { return [5: 1] }
+        out = delta<dict<i64, i64>>(updated: [8: step])
+    }
+    when {
+        if all_valid(out) && modified(out) {
+            if delta_value(out) == delta<dict<i64, i64>>(updated: [8: step]) {
+                out = delta<dict<i64, i64>>(removed: [8])
+            }
+        }
+    }
+}
+
+fn observe_all_valid(step: i64) -> bool => dictionary_wake(observes_all_valid(step))
+fn observe_delta(step: i64) -> bool => dictionary_wake(observes_delta(step))
+fn observe_two_handlers(step: i64) -> bool => dictionary_wake(two_handlers_observe_and_cancel(step))
+
+# TIME-7, TIME-9 and END-3: reading all_valid(out) or delta_value(out) sees the
+# staged write while an otherwise cancelling evaluation stays silent.
+test output_all_valid_and_delta_observers_cancel_silently {
+    assert eval observes_all_valid(step: [1, 2]) == [[5: 1], _]
+    assert eval observe_all_valid(step: [1, 2]) == [true, _]
+    assert eval observes_delta(step: [1, 2]) == [[5: 1], _]
+    assert eval observe_delta(step: [1, 2]) == [true, _]
+    assert eval two_handlers_observe_and_cancel(step: [1, 2]) == [[5: 1], _]
+    assert eval observe_two_handlers(step: [1, 2]) == [true, _]
+}
+
+fn observer_read_results(step: i64) -> dict<i64, i64> {
+    inject out
+    when {
+        if step == 1 {
+            let before_all_valid = all_valid(out)
+            let before_delta: delta<dict<i64, i64>>? = delta_value(out)
+            let change = delta<dict<i64, i64>>(updated: [8: 1])
+            out = change
+            let mid_all_valid = all_valid(out)
+            let mid_result: result<delta<dict<i64, i64>>, error> = delta_value(out)
+            out = delta<dict<i64, i64>>(removed: [8])
+            let after_all_valid = all_valid(out)
+            let after_delta = delta_value(out)
+            if !before_all_valid && before_delta == null && mid_all_valid &&
+               is_ok(mid_result) && after_all_valid && after_delta == delta<dict<i64, i64>>() {
+                return delta<dict<i64, i64>>()
+            }
+            return [99: 1]
+        }
+        if step == 2 { return [5: 1] }
+        if step == 3 {
+            let before_result: result<delta<dict<i64, i64>>, error> = delta_value(out)
+            let before_time = last_modified(out)
+            let change = delta<dict<i64, i64>>(updated: [8: 3])
+            out = change
+            let mid_nullable: delta<dict<i64, i64>>? = delta_value(out)
+            out = delta<dict<i64, i64>>(removed: [8])
+            let after_result: result<delta<dict<i64, i64>>, error> = delta_value(out)
+            let after_nullable: delta<dict<i64, i64>>? = delta_value(out)
+            let ok_reads = is_err(before_result) && mid_nullable == change &&
+                !modified(out) && last_modified(out) == before_time &&
+                all_valid(out) && is_err(after_result) && after_nullable == null
+            if !ok_reads {
+                out = delta<dict<i64, i64>>(updated: [99: 3])
+            }
+        }
+        if step == 4 {
+            out = delta<dict<i64, i64>>(removed: [5])
+            let saw_removed = delta_value(out) == delta<dict<i64, i64>>(removed: [5])
+            out = delta<dict<i64, i64>>(updated: [5: 2])
+            let saw_restored = delta_value(out) == delta<dict<i64, i64>>(updated: [5: 2])
+            if !(saw_removed && saw_restored) {
+                out = delta<dict<i64, i64>>(updated: [99: 4])
+            }
+        }
+        if step == 5 {
+            out = delta<dict<i64, i64>>(updated: [5: 3])
+            let saw_updated = delta_value(out) == delta<dict<i64, i64>>(updated: [5: 3])
+            out = delta<dict<i64, i64>>(removed: [5])
+            let saw_removed = delta_value(out) == delta<dict<i64, i64>>(removed: [5])
+            if !(saw_updated && saw_removed) {
+                out = delta<dict<i64, i64>>(updated: [99: 5])
+            }
+        }
+    }
+}
+
+fn observe_read_results(step: i64) -> bool => dictionary_wake(observer_read_results(step))
+
+# TIME-7, TIME-9, END-3 and ERR-14: plain, result and nullable delta_value(out)
+# and all_valid(out) match the staged state before, between and after writes.
+test output_observer_read_results_track_staged_state {
+    assert eval observer_read_results(step: [1, 2, 3, 4, 5]) == [
+        [],
+        [5: 1],
+        _,
+        delta<dict<i64, i64>>(updated: [5: 2]),
+        delta<dict<i64, i64>>(removed: [5]),
+    ]
+    assert eval observe_read_results(step: [1, 2, 3, 4, 5]) == [true, true, _, true, true]
+}
+
+fn observes_equal_publication(step: i64) -> dict<i64, i64> {
+    inject out
+    when {
+        if step == 1 { return [5: 1] }
+        let first = delta<dict<i64, i64>>(updated: [5: 1, 8: step])
+        out = first
+        if all_valid(out) && delta_value(out) == first {
+            out = delta<dict<i64, i64>>(removed: [8])
+            if delta_value(out) != delta<dict<i64, i64>>(updated: [5: 1]) {
+                out = delta<dict<i64, i64>>(updated: [99: 1])
+            }
+        }
+    }
+}
+
+fn observe_equal_publication(step: i64) -> bool => dictionary_wake(observes_equal_publication(step))
+
+# TIME-7 and END-5: repeated equal dictionary updates stay visible to
+# delta_value(out) and still wake downstream when a sibling key cancels.
+test output_observers_preserve_equal_dictionary_publication {
+    assert eval observes_equal_publication(step: [1, 2]) == [
+        [5: 1],
+        delta<dict<i64, i64>>(updated: [5: 1]),
+    ]
+    assert eval observe_equal_publication(step: [1, 2]) == [true, true]
+}
+
+fn set_observes_delta(step: i64) -> set<i64> {
+    inject out
+    when {
+        if step == 1 { return [5] }
+        if step == 2 {
+            let first = delta<set<i64>>(added: [8])
+            out = first
+            if delta_value(out) == first {
+                out = delta<set<i64>>(removed: [8])
+                let after: delta<set<i64>>? = delta_value(out)
+                if modified(out) || after != null {
+                    out = delta<set<i64>>(added: [99])
+                }
+            }
+        }
+        if step == 3 {
+            let first = delta<set<i64>>(removed: [5])
+            out = first
+            if delta_value(out) == first {
+                out = delta<set<i64>>(added: [5])
+            }
+        }
+        if step == 4 {
+            out = delta<set<i64>>(added: [6, 8])
+            if delta_value(out) == delta<set<i64>>(added: [6, 8]) {
+                out = delta<set<i64>>(removed: [8])
+                if delta_value(out) != delta<set<i64>>(added: [6]) {
+                    out = delta<set<i64>>(added: [99])
+                }
+            }
+        }
+    }
+}
+
+fn observe_set_delta(step: i64) -> bool => set_wake(set_observes_delta(step))
+
+# TIME-7 and END-3: set delta_value(out) sees intermediate changes and stays
+# silent when membership returns to its starting state.
+test set_delta_observer_cancels_silently {
+    assert eval set_observes_delta(step: [1, 2, 3, 4]) == [
+        [5], _, _, delta<set<i64>>(added: [6]),
+    ]
+    assert eval observe_set_delta(step: [1, 2, 3, 4]) == [true, _, _, true]
+}
+
+fn nested_observes_out(step: i64) -> dict<i64, dict<i64, i64>> {
+    inject out
+    when {
+        if step == 1 { return [5: [1: 3]] }
+        if step == 2 {
+            let first = delta<dict<i64, dict<i64, i64>>>(
+                updated: [5: delta<dict<i64, i64>>(updated: [8: 2])],
+            )
+            out = first
+            if all_valid(out) && delta_value(out) == first {
+                out = delta<dict<i64, dict<i64, i64>>>(
+                    updated: [5: delta<dict<i64, i64>>(removed: [8])],
+                )
+            }
+        }
+        if step == 3 {
+            let first = delta<dict<i64, dict<i64, i64>>>(
+                updated: [5: delta<dict<i64, i64>>(updated: [1: 3, 8: 2])],
+            )
+            out = first
+            if delta_value(out) == first {
+                out = delta<dict<i64, dict<i64, i64>>>(
+                    updated: [5: delta<dict<i64, i64>>(removed: [8])],
+                )
+                let expected = delta<dict<i64, dict<i64, i64>>>(
+                    updated: [5: delta<dict<i64, i64>>(updated: [1: 3])],
+                )
+                if delta_value(out) != expected {
+                    out = delta<dict<i64, dict<i64, i64>>>(
+                        updated: [99: delta<dict<i64, i64>>(updated: [1: 1])],
+                    )
+                }
+            }
+        }
+    }
+}
+
+fn nested_set_observes_out(step: i64) -> dict<i64, set<i64>> {
+    inject out
+    when {
+        if step == 1 { return [5: [1]] }
+        let first = delta<dict<i64, set<i64>>>(updated: [5: delta<set<i64>>(added: [8])])
+        out = first
+        if all_valid(out) && delta_value(out) == first {
+            out = delta<dict<i64, set<i64>>>(updated: [5: delta<set<i64>>(removed: [8])])
+        }
+    }
+}
+
+fn nested_set_wake(book: dict<i64, set<i64>>) -> bool {
+    when valid([]) { return valid(book) }
+}
+
+fn observe_nested_out(step: i64) -> bool => nested_wake(nested_observes_out(step))
+fn observe_nested_set_out(step: i64) -> bool => nested_set_wake(nested_set_observes_out(step))
+
+fn nested_set_withdraw_restore(step: i64) -> dict<i64, set<i64>> {
+    inject out
+    when {
+        if step == 1 { return [5: [1]] }
+        if step == 2 {
+            out = delta<dict<i64, set<i64>>>(removed: [5])
+            if delta_value(out) == delta<dict<i64, set<i64>>>(removed: [5]) {
+                out = delta<dict<i64, set<i64>>>(updated: [5: delta<set<i64>>(added: [8])])
+                let expected = delta<dict<i64, set<i64>>>(
+                    updated: [5: delta<set<i64>>(added: [8], removed: [1])],
+                )
+                if delta_value(out) != expected {
+                    out = delta<dict<i64, set<i64>>>(updated: [99: delta<set<i64>>(added: [1])])
+                }
+            }
+        }
+        if step == 3 {
+            # Removing and re-adding the exact same member leaves the set unchanged.
+            out = delta<dict<i64, set<i64>>>(removed: [5])
+            out = delta<dict<i64, set<i64>>>(updated: [5: delta<set<i64>>(added: [8])])
+        }
+    }
+}
+
+fn nested_dict_withdraw_restore(step: i64) -> dict<i64, dict<i64, i64>> {
+    inject out
+    when {
+        if step == 1 { return [5: [1: 3, 2: 4]] }
+        if step == 2 {
+            out = delta<dict<i64, dict<i64, i64>>>(removed: [5])
+            out = delta<dict<i64, dict<i64, i64>>>(
+                updated: [5: delta<dict<i64, i64>>(updated: [8: 2])],
+            )
+            let expected = delta<dict<i64, dict<i64, i64>>>(
+                updated: [5: delta<dict<i64, i64>>(updated: [8: 2], removed: [1, 2])],
+            )
+            if delta_value(out) != expected {
+                out = delta<dict<i64, dict<i64, i64>>>(
+                    updated: [99: delta<dict<i64, i64>>(updated: [1: 1])],
+                )
+            }
+        }
+    }
+}
+
+fn observe_nested_set_restore(step: i64) -> bool => nested_set_wake(nested_set_withdraw_restore(step))
+
+# TIME-7, TIME-9 and END-3: nested keyed observers see intermediate inner
+# deltas, stay silent on inner cancellation, and preserve equal inner updates.
+test nested_output_observers_cancel_silently_and_keep_equal_updates {
+    assert eval nested_observes_out(step: [1, 2, 3]) == [
+        [5: [1: 3]], _,
+        delta<dict<i64, dict<i64, i64>>>(updated: [5: delta<dict<i64, i64>>(updated: [1: 3])]),
+    ]
+    assert eval observe_nested_out(step: [1, 2, 3]) == [true, _, true]
+    assert eval nested_set_observes_out(step: [1, 2]) == [[5: [1]], _]
+    assert eval observe_nested_set_out(step: [1, 2]) == [true, _]
+}
+
+# TIME-7 and END-3: removing and restoring a keyed child resets prior members
+# instead of leaking them into the restored child.
+test nested_withdraw_and_restore_resets_child_members {
+    assert eval nested_set_withdraw_restore(step: [1, 2, 3]) == [
+        [5: [1]],
+        [5: [8]],
+        _,
+    ]
+    assert eval observe_nested_set_restore(step: [1, 2, 3]) == [true, true, _]
+    assert eval nested_dict_withdraw_restore(step: [1, 2]) == [
+        [5: [1: 3, 2: 4]],
+        [5: [8: 2]],
+    ]
 }
 
 fn nan_dictionary(step: i64) -> dict<f64, i64> {
@@ -150,7 +447,12 @@ fn nan_dictionary(step: i64) -> dict<f64, i64> {
         if step == 1 { return [5.0: 1] }
         let key = 0.0 / 0.0
         out = delta<dict<f64, i64>>(updated: [key: 1])
-        out = delta<dict<f64, i64>>(removed: [key])
+        if all_valid(out) {
+            let current: delta<dict<f64, i64>>? = delta_value(out)
+            if current != null {
+                out = delta<dict<f64, i64>>(removed: [key])
+            }
+        }
     }
 }
 
@@ -160,7 +462,10 @@ fn nan_set(step: i64) -> set<f64> {
         if step == 1 { return [5.0] }
         let key = 0.0 / 0.0
         out = delta<set<f64>>(added: [key])
-        out = delta<set<f64>>(removed: [key])
+        let current: delta<set<f64>>? = delta_value(out)
+        if current != null {
+            out = delta<set<f64>>(removed: [key])
+        }
     }
 }
 
