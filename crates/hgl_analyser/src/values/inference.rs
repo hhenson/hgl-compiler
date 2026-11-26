@@ -505,17 +505,13 @@ impl<'a> Typer<'a> {
             let expected = type_of(index, found);
             match self.unfit_default(declaration, &default, &expected, declared) {
                 Some(Ok(value)) => {
-                    let Some(value) = defaulted_value(self.program, value, index, &own, found)
-                    else {
-                        found[index] = None;
-                        continue;
-                    };
                     // The default as a value of the type the call
                     // resolves (EXPR-5): the `f64` 2 where `T` is one.
-                    found[index] = Some(Argument::Constant(Constant {
+                    let constant = Constant {
                         text: constant_text(&default),
                         value,
-                    }));
+                    };
+                    found[index] = defaulted_argument(self.program, constant, index, &own, found);
                 }
                 Some(Err(described)) => {
                     self.diagnostics.emit(error(
@@ -1325,13 +1321,10 @@ impl<'a> Typer<'a> {
         for (index, default) in defaults.iter().enumerate() {
             if found[index].is_none()
                 && let Some(default) = default
-                && let Some(value) =
-                    defaulted_value(self.program, default.value.clone(), index, &own, &found)
+                && let Some(argument) =
+                    defaulted_argument(self.program, default.clone(), index, &own, &found)
             {
-                found[index] = Some(Argument::Constant(Constant {
-                    text: default.text.clone(),
-                    value,
-                }));
+                found[index] = Some(argument);
                 defaulted.push(index);
             }
         }
@@ -2313,58 +2306,37 @@ pub(super) fn placed(ty: Type, own: &[Location]) -> Type {
     }
 }
 
-/// The default `value` of the generic value parameter at `index`, of a
+/// The default argument for the generic value parameter at `index`, of a
 /// declaration whose generic parameters are declared at `own`, with what
 /// a call has `found` for the others in place. A default that names a
 /// parameter before its own, `<const N: i64 = 1, const M: i64 = N>`, is
 /// of what the call gives that one. `None` for one that names its own,
 /// or one the call leaves unresolved, which gives it no value: GEN-8, "A
 /// call rejects when it leaves a generic parameter unresolved".
-fn defaulted_value(
+pub(super) fn defaulted_argument(
     program: &crate::Program,
-    value: ConstantValue,
+    mut constant: Constant,
     index: usize,
     own: &[Location],
     found: &[Option<Argument>],
-) -> Option<ConstantValue> {
-    if matches!(
-        value,
-        ConstantValue::Type(_) | ConstantValue::InstanceTypeQuery { .. }
-    ) {
-        let unavailable: Vec<_> = own
-            .iter()
-            .enumerate()
-            .filter_map(|(i, at)| {
-                (i == index || found.get(i).is_none_or(Option::is_none)).then_some(*at)
-            })
-            .collect();
-        if value.names_one_of(&unavailable) {
-            return None;
-        }
-        let map: Vec<_> = own
-            .iter()
-            .zip(found)
-            .filter_map(|(&at, given)| Some((at, given.as_ref()?)))
-            .collect();
-        return Some(program.specialize_query(&value, &map));
-    }
-    // What the call gives the parameter declared at `at`: none for the
-    // one whose default this is.
-    let given = |at: Location| -> Option<ConstantValue> {
-        let other = own.iter().position(|own| *own == at)?;
-        match found.get(other)? {
-            Some(Argument::Constant(given)) if other != index => Some(given.value.clone()),
-            _ => None,
-        }
-    };
-    // The default is asked of what it names before what the call gives
-    // is put in its place: a call in the function's own body may give
-    // `N` its own `N`, `rec<N>(v)`, which is then no default left
-    // unresolved.
-    let unresolved: Vec<Location> = own
+) -> Option<Argument> {
+    // Check the original references first. A recursive or forwarded call
+    // can legitimately bind a parameter to a symbolic argument of its caller.
+    let unavailable: Vec<_> = own
         .iter()
-        .copied()
-        .filter(|at| given(*at).is_none())
+        .enumerate()
+        .filter_map(|(i, at)| {
+            (i == index || found.get(i).is_none_or(Option::is_none)).then_some(*at)
+        })
         .collect();
-    (!value.names_one_of(&unresolved)).then(|| value.substituted(&given))
+    if constant.value.names_one_of(&unavailable) {
+        return None;
+    }
+    let map: Vec<_> = own
+        .iter()
+        .zip(found)
+        .filter_map(|(&at, given)| Some((at, given.as_ref()?)))
+        .collect();
+    constant.value = program.specialize_constant(&constant.value, &map);
+    Some(Argument::Constant(constant))
 }

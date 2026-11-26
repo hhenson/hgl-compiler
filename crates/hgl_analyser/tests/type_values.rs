@@ -215,6 +215,71 @@ test late_queries {
     );
 }
 
+/// GEN-5, GEN-8, TYPE-18: an operator's default constrains the requested
+/// output with the descriptor selected by its ordinary input.
+#[test]
+fn an_aggregate_operator_default_selects_the_requested_result() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn rows<T>() -> list<T> => []
+struct Tag<const Ks: list<Type>> { n: i64 }
+operator labelled<T, const Ks: list<Type> = [type(rows<T>())]>(x: T) -> Tag<Ks>
+impl const fn labelled(x: i64) -> Tag<[type(rows<i64>())]> => Tag<[type(rows<i64>())]>(n: 1)
+impl const fn labelled(x: i64) -> Tag<[type(5)]> => Tag<[type(5)]>(n: 2)
+const fn read_label(t: Tag<[type(rows<i64>())]>) -> i64 => t.n
+operator inspect<T, const Ks: list<Type> = [type(rows<T>())]>(f: const fn(T) -> T) -> Tag<Ks>
+impl const fn inspect(f: const fn(i64) -> i64) -> Tag<[type(rows<i64>())]> => Tag<[type(rows<i64>())]>(n: 1)
+impl const fn inspect(f: const fn(i64) -> i64) -> Tag<[type(5)]> => Tag<[type(5)]>(n: 2)
+test selected {
+    let tag = labelled(1)
+    assert read_label(tag) == 1
+    let callback_tag = inspect(fn(x) => x)
+    assert read_label(callback_tag) == 1
+}
+"#,
+    )]);
+    assert!(checked.findings.is_empty(), "{}", checked.report);
+}
+
+/// GEN-2, GEN-8, TYPE-18: aggregate defaults can use only the type and
+/// value arguments the call resolves independently of that default.
+#[test]
+fn aggregate_query_defaults_require_their_generic_arguments() {
+    let checked = check(&[(
+        "m.hgl",
+        r#"module m
+const fn rows<T>() -> list<T> => []
+const fn missing_type<T, const Ks: list<Type> = [type(rows<T>())]>() -> bool => true
+const fn missing_value<T, const N: i64, const Ks: tuple<i64, Type> = (N, type(rows<T>()))>(x: T) -> bool => true
+struct Tag<const Ks: list<Type>> { n: i64 }
+operator tagged<T, const Ks: list<Type> = [type(rows<T>())]>(x: i64) -> Tag<Ks>
+impl const fn tagged(x: i64) -> Tag<[type(1)]> => Tag<[type(1)]>(n: 1)
+test t {
+    assert missing_type()
+    assert missing_value(1)
+    let tag = tagged(1)
+}
+"#,
+    )]);
+    let unresolved: Vec<_> = checked
+        .findings
+        .iter()
+        .filter(|finding| finding.code == "type/generic.unresolved" && finding.rule == "GEN-8")
+        .map(|finding| finding.message.as_str())
+        .collect();
+    assert_eq!(checked.findings.len(), 3, "{}", checked.report);
+    assert!(
+        unresolved.iter().any(|m| m.contains("`T`, `Ks`"))
+            && unresolved.iter().any(|m| m.contains("`N`, `Ks`"))
+            && unresolved
+                .iter()
+                .any(|m| m.contains("leaves `Ks` unresolved")),
+        "{}",
+        checked.report
+    );
+}
+
 /// TYPE-18, GEN-8: cold queries in a chain of written results have the
 /// operand's type once each declaration they refer to has its signature.
 #[test]

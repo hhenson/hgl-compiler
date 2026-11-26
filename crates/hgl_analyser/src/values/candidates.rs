@@ -21,7 +21,8 @@ use super::fit::{
 };
 use super::function_arguments::{CallbackInputs, matches_template};
 use super::inference::{
-    bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed, type_pack,
+    bare_parameter, defaulted_argument, infer, infer_from_place, mentions, pack_bounds, placed,
+    type_pack,
 };
 use super::lifting::preferred_call_role;
 use super::operators::{
@@ -134,7 +135,7 @@ impl<'a> Typer<'a> {
         given: &[Given],
         wanted: &Wanted,
     ) -> (Vec<Chosen<'a>>, bool) {
-        self.admitted_with_function_errors(operator, candidates, given, wanted)
+        self.admitted_with_function_errors(operator, candidates, given, wanted, None)
             .0
     }
 
@@ -148,7 +149,7 @@ impl<'a> Typer<'a> {
         wanted: &Wanted,
         role: Role,
     ) -> (Vec<Chosen<'a>>, bool) {
-        self.admit_candidates(operator, candidates, given, wanted, Some(role))
+        self.admit_candidates(operator, candidates, given, wanted, Some(role), None)
             .0
     }
 
@@ -160,8 +161,9 @@ impl<'a> Typer<'a> {
         candidates: &[Candidate<'a>],
         given: &[Given],
         wanted: &Wanted,
+        pending_default: Option<&ReflectedCall>,
     ) -> ((Vec<Chosen<'a>>, bool), Vec<Diagnostic>) {
-        self.admit_candidates(operator, candidates, given, wanted, None)
+        self.admit_candidates(operator, candidates, given, wanted, None, pending_default)
     }
 
     fn admit_candidates(
@@ -171,6 +173,7 @@ impl<'a> Typer<'a> {
         given: &[Given],
         wanted: &Wanted,
         template_role: Option<Role>,
+        pending_default: Option<&ReflectedCall>,
     ) -> ((Vec<Chosen<'a>>, bool), Vec<Diagnostic>) {
         let has_checked_children = given.iter().any(Given::reads_child);
         let has_results = given
@@ -183,7 +186,7 @@ impl<'a> Typer<'a> {
         let function_trials = given
             .iter()
             .any(|argument| argument.by_function)
-            .then(|| self.function_trials(operator, candidates, given, wanted));
+            .then(|| self.function_trials(operator, candidates, given, wanted, pending_default));
         let forms = if has_forms {
             &[
                 ArgumentForms::Whole,
@@ -286,7 +289,7 @@ impl<'a> Typer<'a> {
                 operand.value.ty = Type::Unknown;
             }
             trials.failed = self
-                .function_trials(operator, candidates, &operands, wanted)
+                .function_trials(operator, candidates, &operands, wanted, pending_default)
                 .failed;
         }
         let errors = if trials.failed.len() == 1 {
@@ -359,6 +362,7 @@ impl<'a> Typer<'a> {
         candidates: &[Candidate<'a>],
         given: &[Given],
         wanted: &Wanted,
+        pending_default: Option<&ReflectedCall>,
     ) -> FunctionTrials<'a> {
         let program = self.program;
         let Some(Detail::Callable(public)) = program.modules[operator.module]
@@ -383,7 +387,9 @@ impl<'a> Typer<'a> {
                 Some(Ok(mut arguments)) => {
                     let call = arguments
                         .iter()
-                        .find_map(|argument| argument.dependent_callback.as_ref()?.call.clone());
+                        .find_map(|argument| argument.dependent_callback.as_ref()?.call.as_ref())
+                        .or(pending_default)
+                        .cloned();
                     let request = match call {
                         Some(call) => {
                             let mark = self.mark();
@@ -3532,18 +3538,24 @@ fn instance<'s>(
         (widens, converting),
         choose,
     )?;
+    let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
     let mut defaulted = Vec::new();
     for (index, generic) in generics.iter().enumerate() {
         if found[index].is_some() || !matches!(generic.kind, GenericKind::Value(_)) {
             continue;
         }
         if let Some(default) = defaults(generic) {
-            found[index] = Some(Argument::Constant(default));
+            found[index] = Some(defaulted_argument(
+                typer.program,
+                default,
+                index,
+                &own,
+                &found,
+            )?);
             defaulted.push(index);
         }
     }
     let mut resolved: Vec<Argument> = found.into_iter().collect::<Option<_>>()?;
-    let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
     if let Some(callback) = &wanted.callback {
         let map: Vec<_> = own.iter().copied().zip(&resolved).collect();
         let mut fitted = Vec::new();

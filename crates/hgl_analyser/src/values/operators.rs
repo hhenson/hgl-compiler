@@ -21,8 +21,8 @@ use super::expressions::written_null;
 use super::fit::{is_integer_literal, negated, open, whole};
 use super::function_arguments::CallbackInputs;
 use super::inference::{
-    ExplicitGenerics, bare_parameter, infer, infer_from_place, mentions, pack_bounds, placed,
-    unsaid,
+    ExplicitGenerics, bare_parameter, defaulted_argument, infer, infer_from_place, mentions,
+    pack_bounds, placed, unsaid,
 };
 use super::lifting::contextual_type_is_pending;
 use super::{Candidate, Typer};
@@ -163,14 +163,21 @@ impl<'a> Typer<'a> {
         let mut asked = said;
         // The operator's generic value parameters that take their
         // defaults, each with the default.
+        let own_generics: Vec<Location> =
+            public.generics.iter().map(|generic| generic.at).collect();
         let mut defaulted: Vec<(usize, SyntaxNode)> = Vec::new();
-        for (index, (generic, found)) in public.generics.iter().zip(found.iter_mut()).enumerate() {
-            if found.is_none()
+        for (index, generic) in public.generics.iter().enumerate() {
+            if found[index].is_none()
                 && let Some(default) = generic_default(operator_syntax, generic)
             {
-                *found = self
-                    .default_constant(operator_declaration, generic)
-                    .map(Argument::Constant);
+                if let Some(constant) = self.default_constant(operator_declaration, generic) {
+                    let Some(argument) =
+                        defaulted_argument(program, constant, index, &own_generics, &found)
+                    else {
+                        return Requested::rejected(Unfit::Unresolved { generic: index });
+                    };
+                    found[index] = Some(argument);
+                }
                 asked = true;
                 defaulted.push((index, default));
             }
@@ -190,8 +197,6 @@ impl<'a> Typer<'a> {
                 })
             })
             .collect();
-        let own_generics: Vec<Location> =
-            public.generics.iter().map(|generic| generic.at).collect();
         let map: Vec<(Location, &Argument)> = public
             .generics
             .iter()
@@ -211,18 +216,11 @@ impl<'a> Typer<'a> {
             if let Some(Err(described)) =
                 self.unfit_default(operator_declaration, &default, &resolved, declared)
             {
-                return Requested {
-                    place: None,
-                    among: None,
-                    generics: Vec::new(),
-                    call_generics: Vec::new(),
-                    type_packs: Vec::new(),
-                    unfit: Some(Unfit {
-                        generic: index,
-                        described,
-                        resolved,
-                    }),
-                };
+                return Requested::rejected(Unfit::Mismatch {
+                    generic: index,
+                    described,
+                    resolved,
+                });
             }
         }
         // The output requested, as far as it is known: a `list<T, 3>`
@@ -564,16 +562,28 @@ impl<'a> Typer<'a> {
         // agree with (GEN-8).
         let said = generics.is_some() || named_generics;
         let written_generics = said.then(|| found.clone());
+        // A candidate can supply the type of a contextual callback. Keep
+        // the original request if a reflected pack or a public default
+        // may need the completed callback signature (FN-17, GEN-8).
+        let dependent_callback = given
+            .iter()
+            .any(|argument| argument.dependent_callback.is_some());
+        let can_supply_default = public
+            .generics
+            .iter()
+            .any(|generic| matches!(generic.kind, GenericKind::Value(_)))
+            && given.iter().any(|argument| argument.by_function);
+        let trial_call = (dependent_callback || can_supply_default).then(|| ReflectedCall {
+            name: name.clone(),
+            list: list.clone(),
+            found: found.clone(),
+            said,
+        });
         if let Some(callback) = given
             .iter_mut()
             .find_map(|argument| argument.dependent_callback.as_mut())
         {
-            callback.call = Some(ReflectedCall {
-                name: name.clone(),
-                list: list.clone(),
-                found: found.clone(),
-                said,
-            });
+            callback.call = trial_call.clone();
         }
 
         // Then its arguments, in the order the operator declares its
@@ -596,15 +606,16 @@ impl<'a> Typer<'a> {
         // as the call resolves it: the `2` of
         // `operator choose<T, const fallback: T = 2>` is no `str`. One
         // that is not of the type as it is declared is reported there.
-        if let Some(unfit) = unfit {
-            let at = Location::new(self.file, name.span());
-            self.diagnostics.emit(unfit.diagnostic(public, at));
-            return (self.unselected(given, Form::Named), Type::Unknown);
-        }
-        let deferred_callback = given
-            .iter()
-            .any(|argument| argument.dependent_callback.is_some());
-        if !deferred_callback && reflects(unit, public) {
+        let pending_default = match unfit {
+            Some(Unfit::Unresolved { .. }) if trial_call.is_some() => trial_call.as_ref(),
+            Some(unfit) => {
+                self.diagnostics
+                    .emit(unfit.diagnostic(public, Location::new(self.file, name.span())));
+                return (self.unselected(given, Form::Named), Type::Unknown);
+            }
+            None => None,
+        };
+        if !dependent_callback && pending_default.is_none() && reflects(unit, public) {
             match self.reflected_operator_call(
                 (operator, public, dependent),
                 (name, list),
@@ -673,8 +684,13 @@ impl<'a> Typer<'a> {
             written: result_written,
             callback: None,
         };
-        let ((mut selected, untold), function_errors) =
-            self.admitted_with_function_errors(operator, &candidates, &given, &wanted);
+        let ((mut selected, untold), function_errors) = self.admitted_with_function_errors(
+            operator,
+            &candidates,
+            &given,
+            &wanted,
+            pending_default,
+        );
         // EXPR-12: "Resolve configuration that selects an expression's
         // source result type during source checking." An option a
         // candidate's condition reads is given here as no constant this
@@ -805,6 +821,9 @@ impl<'a> Typer<'a> {
             return Err(());
         }
         let unit = &self.program.modules[operator.module];
+        if !reflects(unit, public) {
+            return Ok(request);
+        }
         let dependent = dependent_slot(unit, public);
         let reflected = self.reflected_operator_call(
             (operator, public, dependent),
@@ -2312,40 +2331,68 @@ pub(super) struct Requested {
     pub(super) call_generics: Vec<Argument>,
     /// Public keyed packs resolved by the same callback trial (GEN-6, GEN-17).
     pub(super) type_packs: Vec<hir::TypePackArgument>,
-    /// A default the call takes that is not of its parameter's type as
-    /// the call resolves it (GEN-13). Nothing is then requested.
+    /// Failure to specialize or fit a default the call takes (GEN-8, GEN-13).
     pub(super) unfit: Option<Unfit>,
 }
 
-/// A generic value parameter's default that does not fit where a call
-/// takes it.
-pub(super) struct Unfit {
-    /// The parameter's position among the operator's generics.
-    generic: usize,
-    /// What the default is, for the message: `an \`i64\``.
-    described: String,
-    /// The parameter's type as the call resolves it.
-    resolved: Type,
+impl Requested {
+    fn rejected(unfit: Unfit) -> Self {
+        Self {
+            place: None,
+            among: None,
+            generics: Vec::new(),
+            call_generics: Vec::new(),
+            type_packs: Vec::new(),
+            unfit: Some(unfit),
+        }
+    }
+}
+
+/// A generic value default the operator call cannot take.
+pub(super) enum Unfit {
+    /// GEN-8: an argument referenced by the default has no binding.
+    Unresolved { generic: usize },
+    /// GEN-13: the default does not fit the parameter's concrete type.
+    Mismatch {
+        generic: usize,
+        described: String,
+        resolved: Type,
+    },
 }
 
 impl Unfit {
-    /// GEN-13: a default does not fit the type the operator requested.
+    /// Report the failed default at the operator call.
     pub(super) fn diagnostic(&self, public: &Signature, at: Location) -> Diagnostic {
-        let parameter = &public.generics[self.generic].name;
-        let Self {
-            described,
-            resolved,
-            ..
-        } = self;
-        error(
-            Category::Type,
-            codes::TYPE_MISMATCH,
-            at,
-            format!(
-                "this leaves `{parameter}` to its default, {described}, and `{parameter}` is `{resolved}` here"
-            ),
-            "GEN-13",
-        )
+        match self {
+            Self::Unresolved { generic } => {
+                let parameter = &public.generics[*generic].name;
+                error(
+                    Category::Type,
+                    codes::GENERIC_UNRESOLVED,
+                    at,
+                    format!(
+                        "this call leaves `{parameter}` unresolved: its default needs an unresolved generic argument"
+                    ),
+                    "GEN-8",
+                )
+            }
+            Self::Mismatch {
+                generic,
+                described,
+                resolved,
+            } => {
+                let parameter = &public.generics[*generic].name;
+                error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    at,
+                    format!(
+                        "this leaves `{parameter}` to its default, {described}, and `{parameter}` is `{resolved}` here"
+                    ),
+                    "GEN-13",
+                )
+            }
+        }
     }
 }
 

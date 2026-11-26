@@ -337,6 +337,11 @@ test specific_candidate_field_layout {
 const fn default_kind<T, const Kind: Type = type(cold_sample(cold_make<T>()))>(x: T) -> Type => Kind
 const fn reordered_default<const Kind: Type = type(cold_sample(cold_make<T>())), T>(x: T) -> Type => Kind
 const fn forwarded_default<T>(x: T) -> Type => default_kind(x)
+const fn default_kinds<T, const Ks: list<Type> = [type(cold_make<T>()), type(cold_sample(cold_make<T>()))]>(x: T) -> list<Type> => Ks
+const fn default_group<const N: i64 = 3, const Group: tuple<list<Type>, i64> = ([type(cold_make<T>()), type(cold_sample(cold_make<T>()))], N + 1), T>(x: T) -> tuple<list<Type>, i64> => Group
+const fn forward_group<T>(x: T) -> tuple<list<Type>, i64> => default_group(x)
+operator candidate_kinds<T>(x: T) -> list<Type>
+impl const fn candidate_kinds<T, const Ks: list<Type> = [type(cold_sample(cold_make<T>()))]>(x: T) -> list<Type> => Ks
 struct DefaultLabel<T, const Kind: Type = type(cold_sample(cold_make<T>()))> {
     item: T
     label: Tagged<Kind>?
@@ -347,6 +352,10 @@ test default_selected_in_instance {
     assert default_kind<str, type(1)>("text") == type(1)
     assert forwarded_default("text") == type((true, false))
     assert reordered_default("text") == type((true, false))
+    assert default_kinds(1) == [type(cold_make<i64>()), type(cold_sample(cold_make<i64>()))]
+    assert default_kinds<str, [type(1)]>("text") == [type(1)]
+    assert forward_group("text") == ([type(cold_make<str>()), type((true, false))], 4)
+    assert candidate_kinds("text") == [type((true, false))]
     let selected = DefaultLabel(item: "text")
     assert type(selected) == type(DefaultLabel<str, type((true, false))>(item: "text"))
     assert type(selected) != type(DefaultLabel<str, type(1)>(item: "text"))

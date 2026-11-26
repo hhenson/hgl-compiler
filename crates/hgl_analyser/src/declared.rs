@@ -792,6 +792,24 @@ impl Program {
         }
     }
 
+    /// Place the call's arguments in an entire generic constant. Both value
+    /// parameters and type descriptors can occur inside aggregate elements.
+    pub(crate) fn specialize_constant(
+        &self,
+        value: &ConstantValue,
+        map: &[(Location, &Argument)],
+    ) -> ConstantValue {
+        value.substituted_with_types(
+            &|at| {
+                map.iter().find_map(|(own, given)| match given {
+                    Argument::Constant(given) if *own == at => Some(given.value.clone()),
+                    _ => None,
+                })
+            },
+            &|descriptor| self.specialize_query(descriptor, map),
+        )
+    }
+
     /// Specialize a type-valued generic argument in its lexical environment.
     pub(crate) fn specialize_query(
         &self,

@@ -4274,15 +4274,7 @@ fn given_in(
     match argument {
         Argument::Constant(constant) => Argument::Constant(Constant {
             text: constant.text.clone(),
-            value: constant.value.substituted_with_types(
-                &|at| {
-                    map.iter().find_map(|(own, given)| match given {
-                        Argument::Constant(given) if *own == at => Some(given.value.clone()),
-                        _ => None,
-                    })
-                },
-                &|descriptor| program.specialize_query(descriptor, map),
-            ),
+            value: program.specialize_constant(&constant.value, map),
         }),
         Argument::Type(ty) => Argument::Type(placed(program.specialize_type(ty, map), declared)),
         Argument::NoResult => Argument::NoResult,

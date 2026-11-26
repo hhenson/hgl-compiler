@@ -1128,13 +1128,15 @@ fn place_callee(
     };
     let place = |argument: &Argument| match argument {
         Argument::Type(ty) => Argument::Type(place_type(ty)),
-        Argument::Constant(c) if matches!(c.value, ConstantValue::InstanceTypeQuery { .. }) => {
-            Argument::Constant(Constant {
-                text: c.text.clone(),
-                value: instance.program.specialize_query(&c.value, instance.types),
-            })
+        Argument::Constant(c) if matches!(c.value, ConstantValue::Parameter { .. }) => {
+            placed(argument, instance.types)
         }
-        Argument::Constant(_) => placed(argument, instance.types),
+        Argument::Constant(c) => Argument::Constant(Constant {
+            text: c.text.clone(),
+            value: instance
+                .program
+                .specialize_constant(&c.value, instance.types),
+        }),
         Argument::NoResult => Argument::NoResult,
     };
     if let Callee::Function { type_packs, .. } | Callee::Candidate { type_packs, .. } = callee {
